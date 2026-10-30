@@ -59,10 +59,6 @@ inline constexpr bool kTwoHartAmoPassed = true;
 // MimirCacheProbe.EightHartLaunch: harts 0-7 of one CCE ran a kernel and posted status. Gates every 8-hart case.
 inline constexpr bool kEightHartLaunchPassed = true;
 
-// Not a probe result: the expected behaviour per GRENSV-2290 (chippy cce_xcce_snoop_dma sets the iDMA snoop packet tag
-// the same way and passes only if the snooped write refreshes the reader's cache).
-inline constexpr bool kIdmaSnoopRefreshesHartCache = true;
-
 // L1 accumulate formats (Quasar noc_parameters.h:379-385, cce-dv software/lib/include/cce_dv.hpp:396-401) and the
 // one operation the emulator reference runs (emu_l1_atomic.cpp:230,239). INT32 and INT8 are sign-magnitude.
 inline constexpr uint32_t kFormatFp32 = 0, kFormatFp16A = 1, kFormatFp16B = 2, kFormatInt32 = 0b011,
@@ -1319,6 +1315,7 @@ TEST_P(MimirAtomicLocal, CleanDirtyLine) {
         record_leg(leg_name, "result", result);
         log_info(tt::LogTest, "MM42 {}: {}", label, result);
         EXPECT_EQ(status[abi::kStatusObservedFirst], new_lines[0]) << label << ": TL1 before the AMO";
+        EXPECT_EQ(control, old_lines[line_words]) << label << ": the hart did not hold its lines across launches";
         if (invalidates) {
             EXPECT_EQ(returned, new_lines[0]) << label << ": " << result;
             std::vector<uint32_t> expected(new_lines.begin(), new_lines.begin() + line_words);
@@ -1328,18 +1325,18 @@ TEST_P(MimirAtomicLocal, CleanDirtyLine) {
                 expected,
                 read_cce_tl1(device, cce_index, layout.target, abi::kLineBytes)));
         } else {
-            record_leg(
-                leg_name,
-                "host_view",
-                fmt::format(
-                    "word 0 after the flush 0x{:08x}", read_cce_tl1(device, cce_index, layout.target, 4).front()));
+            EXPECT_EQ(returned, old_lines[0])
+                << label << ": host writes are not snooped, so the AMO sees the stale line";
+            EXPECT_EQ(read_cce_tl1(device, cce_index, layout.target, 4).front(), old_lines[0] + kValue)
+                << label << ": word 0 after the flush";
         }
     }
 }
 
 // CleanDirtyLine's snoop-enabled leg: the sibling CCE's iDMA (snoop bit set) writes the line while this hart holds it
-// cached, between launches; the AMO then runs with no invalidate. Asserts the fresh value, the behaviour GRENSV-2290
-// expects (kIdmaSnoopRefreshesHartCache). Own hang-prone row (iDMA snoop bit).
+// cached, between launches; the AMO then runs with no invalidate. Asserts the fresh value: the iDMA snoop tag applies
+// to writes from a sibling CCE into this CCE's TL1 (GRENSV-3774, GRENSV-1577); own-CCE iDMA writes into own TL1 are
+// never snooped. Own hang-prone row (iDMA snoop bit).
 TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
     constexpr uint32_t kValue = 5;
     const uint32_t cce_index = GetParam();
@@ -1403,11 +1400,9 @@ TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
     RecordProperty("result", result);
     log_info(tt::LogTest, "MM42 {}: {}", label, result);
     EXPECT_EQ(status[abi::kStatusObservedFirst], new_line[0]) << label << ": the iDMA write did not land in TL1";
-    if (kIdmaSnoopRefreshesHartCache) {
-        EXPECT_EQ(returned, new_line[0])
-            << label << ": iDMA snoop packet tag not honoured; expected per GRENSV-2290 (chippy cce_xcce_snoop_dma); "
-            << "seen on the mimir_2x_package emulator 2026-10-22. " << result;
-    }
+    EXPECT_EQ(returned, new_line[0])
+        << label << ": iDMA snoop packet tag not honoured for a sibling-CCE write (GRENSV-3774, GRENSV-1577); "
+        << "seen on the mimir_2x_package emulator 2026-10-22. " << result;
 }
 
 // The model of kModeStorm / kModeSoak: replays every participant's draws over the initial region. Swap slots keep
@@ -1833,8 +1828,8 @@ class MimirAccumProbe : public MimirAtomicCceTest {};
 // UINT32 is commented out there and the Quasar register docs call it unsupported); INT32_COMPL, FP32, FP16_A and
 // FP16_B with op 0x9, and INT32 with every other operation, are recorded by what the destination held. The first point,
 // INT32 op 0x9, also records whether an accumulate acks at all on BE5. Stops at the first point that did not ack
-// (MIM-601). Records only, except that the first point must land. Own hang-prone row: an unsupported (format,
-// operation) may never ack.
+// (MIM-601). Records only, except that every modeled INT32, INT8 and UINT8 add point must land and match the model.
+// Own hang-prone row: an unsupported (format, operation) may never ack.
 TEST_P(MimirAccumProbe, FmtOpMatrix) {
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
@@ -1905,6 +1900,13 @@ TEST_P(MimirAccumProbe, FmtOpMatrix) {
             RecordProperty(
                 "accumulate_acks_on_be5", (status[idma_abi::kStatusFlags] & idma_abi::kFlagAcked) != 0 ? "yes" : "no");
             EXPECT_EQ(code, idma_abi::kCodeLanded) << label << ": " << result << idma_code_note(code);
+        }
+        const bool asserts_model = modeled && point.format != kFormatUint32;
+        if (asserts_model) {
+            if (index != 0) {
+                EXPECT_EQ(code, idma_abi::kCodeLanded) << label << ": " << result << idma_code_note(code);
+            }
+            EXPECT_TRUE(compare_words(label, expected, observed));
         }
         if ((status[idma_abi::kStatusFlags] & idma_abi::kFlagAcked) == 0) {
             std::string not_run;
