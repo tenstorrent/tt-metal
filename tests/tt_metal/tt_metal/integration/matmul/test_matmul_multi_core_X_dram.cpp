@@ -61,7 +61,7 @@ struct MatmulConfig {
 };
 
 std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -74,7 +74,7 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

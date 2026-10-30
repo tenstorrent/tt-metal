@@ -15,19 +15,21 @@ class ControlPlane;
 
 // Is this egress one of the Y resources dimension order protects?
 //
-// Same-mesh N/S and express-chord edges are protected Y resources. An intermesh egress leaves the
-// mesh, so it is excluded regardless of direction; this keeps E/W exit routers wired to the boundary.
-bool is_protected_y_egress(RoutingDirection egress, EdgeCapability egress_capability);
+// Same-mesh N/S edges are protected Y resources, and so is the express chord when the chords run
+// along Y. An intermesh egress leaves the mesh, so it is excluded regardless of direction
+bool is_protected_y_egress(RoutingDirection egress, EdgeCapability egress_capability, ExpressAxis express_axis);
 
 // Would forwarding from `ingress` to `egress` violate the fixed Y-before-X dimension order?
 //
-// Forbids a same-mesh X ingress from turning back into protected Y. An intermesh ingress is exempt,
-// even on E/W, because a boundary landing is a new route root and may begin Y.
+// Forbids a same-mesh X ingress (E/W, and Z when the chords run along X) from turning back into
+// protected Y. An intermesh ingress is exempt, even on E/W, because a boundary landing is a new route
+// root and may begin Y.
 bool is_static_dor_forbidden(
     RoutingDirection ingress,
     EdgeCapability ingress_capability,
     RoutingDirection egress,
-    EdgeCapability egress_capability);
+    EdgeCapability egress_capability,
+    ExpressAxis express_axis);
 
 // What one wired producer does to protected-ring occupancy.
 //
@@ -50,6 +52,7 @@ struct ProtectedRingQueries {
     std::function<bool(RoutingDirection egress)> is_protected_ring_edge;
     std::function<bool(RoutingDirection ingress, RoutingDirection egress)> are_same_directed_ring_edges;
     std::function<bool(RoutingDirection ingress, RoutingDirection egress)> continuation_allowed;
+    ExpressAxis express_axis = ExpressAxis::NONE;
 };
 
 // Per-chip facts bound once and shared by every router on that chip: discovered edge capabilities
