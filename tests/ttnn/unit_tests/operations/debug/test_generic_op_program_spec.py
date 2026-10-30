@@ -254,11 +254,10 @@ def exp_inputs(device, num_tiles):
     return torch_input, input_tensor, ttnn.allocate_tensor_on_device(input_tensor.spec, device)
 
 
-def test_exp_from_the_design_example(device, expect_error):
+def test_exp_in_place(device, expect_error):
+    # The guide example runs the program out of place; see test_the_guide_example.
     torch_input, input_tensor, output_tensor = exp_inputs(device, 8)
     spec, run_args = exp_program(input_tensor, output_tensor)
-    result = E.generic_op([input_tensor, output_tensor], spec, run_args)
-    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(result), 0.999)
 
     # A tensor bound to two parameters must be listed twice, so io_tensors holding only the output is rejected.
     in_place_run_args = E.ProgramRunArgs(
@@ -276,6 +275,94 @@ def test_exp_from_the_design_example(device, expect_error):
     in_place_run_args.tensor_args = {"tensor": input_tensor}
     result = E.generic_op([input_tensor], spec, in_place_run_args)
     assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(result), 0.999)
+
+
+def guide_example(device):
+    """The example in docs/source/ttnn/ttnn/generic_op_program_spec.rst, which includes the lines between the markers."""
+    # [guide-example-start]
+    E = ttnn.experimental
+    KERNELS = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels"
+    TILE_BYTES = 2 * 32 * 32  # one bfloat16 tile
+
+    num_tiles = 8
+    torch_input = torch.rand([1, num_tiles, 32, 32]).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    # generic_op does not create its output: preallocate it.
+    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, device)
+
+    grid = device.compute_with_storage_grid_size()
+    _, cores, group_1, group_2, tiles_1, tiles_2 = ttnn.split_work_to_cores(grid, num_tiles)
+
+    dm_schema = E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_pages", "start_id"])
+    spec = E.ProgramSpec(
+        name="exp",
+        kernels=[
+            E.KernelSpec(
+                unique_id="reader",
+                source=f"{KERNELS}/dataflow/reader_unary_interleaved_start_id_metal2.cpp",
+                dfb_bindings=[E.producer_of("in", "in")],
+                tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="src")],
+                runtime_arg_schema=dm_schema,
+                hw_config=E.create_reader_datamovement_config(),
+            ),
+            E.KernelSpec(
+                unique_id="writer",
+                source=f"{KERNELS}/dataflow/writer_unary_interleaved_start_id_metal2.cpp",
+                dfb_bindings=[E.consumer_of("out", "out")],
+                tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="dst")],
+                runtime_arg_schema=dm_schema,
+                hw_config=E.create_writer_datamovement_config(),
+            ),
+            E.KernelSpec(
+                unique_id="compute",
+                source=f"{KERNELS}/compute/eltwise_sfpu_metal2.cpp",
+                compiler_options=E.KernelSpec.CompilerOptions(
+                    defines={"SFPU_OP_EXP_INCLUDE": "1", "SFPU_OP_CHAIN_0": "exp_tile_init(); exp_tile(0);"}
+                ),
+                dfb_bindings=[E.consumer_of("in", "in"), E.producer_of("out", "out")],
+                runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles"]),
+                hw_config=E.ComputeHardwareConfig(),
+            ),
+        ],
+        dataflow_buffers=[
+            E.DataflowBufferSpec(
+                unique_id=name, entry_size=TILE_BYTES, num_entries=2, data_format_metadata=ttnn.bfloat16
+            )
+            for name in ("in", "out")
+        ],
+        tensor_parameters=[
+            E.TensorParameter(unique_id="input", spec=input_tensor.spec),
+            E.TensorParameter(unique_id="output", spec=output_tensor.spec),
+        ],
+        work_units=[E.WorkUnitSpec(name="exp", kernels=["reader", "writer", "compute"], target_nodes=cores)],
+    )
+
+    # The values of this call, by argument name and then by core. Tensors are bound by name.
+    num_pages, start_id, start = {}, {}, 0
+    for group, n in ((group_1, tiles_1), (group_2, tiles_2)):
+        for core in ttnn.corerange_to_cores(group):
+            num_pages[core], start_id[core] = n, start
+            start += n
+    dm_args = {"num_pages": num_pages, "start_id": start_id}
+    run_args = E.ProgramRunArgs(
+        kernel_run_args=[
+            E.KernelRunArgs(kernel="reader", runtime_arg_values=dm_args),
+            E.KernelRunArgs(kernel="writer", runtime_arg_values=dm_args),
+            E.KernelRunArgs(kernel="compute", runtime_arg_values={"num_tiles": num_pages}),
+        ],
+        tensor_args={"input": input_tensor, "output": output_tensor},
+    )
+
+    output_tensor = E.generic_op([input_tensor, output_tensor], spec, run_args)
+    # [guide-example-end]
+    return torch_input, output_tensor
+
+
+def test_the_guide_example(device):
+    torch_input, output_tensor = guide_example(device)
+    assert_with_pcc(torch.exp(torch_input), ttnn.to_torch(output_tensor), 0.999)
 
 
 def test_two_compute_threads_on_quasar(device):
