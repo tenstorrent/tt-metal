@@ -425,7 +425,7 @@ def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
     faces = _run(
         _config(
             GENERALIZED_MOE_GATE(
-                mode=MODE_GATE, topk=topk, eps=_bits(EPS), scale=_bits(SCALE)
+                mode=MODE_GATE, topk=topk, eps=fp32_bits(EPS), scale=fp32_bits(SCALE)
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
