@@ -70,6 +70,27 @@ def truncate_mantissa(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     return (raw & ~((1 << (FP32_MANTISSA_BITS - keep_bits)) - 1)).view(torch.float32)
 
 
+def round_mantissa_away(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
+    """Round to `keep_bits` mantissa bits, ties away from zero.
+
+    IEEE and torch both round ties to *even*. Some FPUs round ties away from
+    zero instead, which only shows up when the dropped bits are exactly half an
+    ULP. Random data almost never lands there, but an add or subtract of two
+    datums already on the target grid lands there often.
+
+    Adding half an ULP to the bit pattern and truncating gives ties-away,
+    because a float is sign-magnitude: the add grows the magnitude whatever the
+    sign. Carries into the exponent are correct, so a round up at the top of a
+    binade moves to the next one.
+    """
+    dropped = FP32_MANTISSA_BITS - keep_bits
+    wide = values.to(torch.float32)
+    raw = wide.contiguous().view(torch.int32)
+    rounded = ((raw + (1 << (dropped - 1))) & ~((1 << dropped) - 1)).view(torch.float32)
+    # Inf and NaN have no mantissa to round, and the add would corrupt them.
+    return torch.where(torch.isfinite(wide), rounded, wide)
+
+
 def truncate_src_mantissa(values: torch.Tensor) -> torch.Tensor:
     """Keep the top 10 mantissa bits, truncating as the unpacker does."""
     return truncate_mantissa(values, SRC_MANT_BITS)
@@ -179,17 +200,27 @@ def to_src_storage(
     return values.to(format_dict[src_format])
 
 
-def to_dest_storage(values: torch.Tensor, dest_format: DataFormat) -> torch.Tensor:
+def to_dest_storage(
+    values: torch.Tensor, dest_format: DataFormat, ties_away: bool = False
+) -> torch.Tensor:
     """Round `values` to what a Dest slot can hold.
 
     The FPU writes no denormal, so anything below the format's smallest normal
     lands as zero. In practice only a Float16 Dest reaches that threshold.
+
+    `ties_away` picks the rounding mode, and is per architecture. The default
+    is the IEEE one torch gives, ties to even. Blackhole rounds ties away from
+    zero on a 16-bit Dest write.
     """
     if not isinstance(values, torch.Tensor):
         values = torch.tensor(values)
     target = format_dict[dest_format]
     if not target.is_floating_point:
         return saturate_to_integer(values, target, dest_format)
+    keep = DEST_MANTISSA_BITS.get(dest_format)
+    if ties_away and keep is not None:
+        # Already on the target grid, so the cast below cannot round again.
+        values = round_mantissa_away(values, keep)
     return flush_subnormals(values.to(target))
 
 
