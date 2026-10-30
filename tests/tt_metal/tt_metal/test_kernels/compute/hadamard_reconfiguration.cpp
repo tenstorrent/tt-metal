@@ -11,6 +11,7 @@
 void kernel_main() {
     constexpr std::uint32_t count = get_compile_time_arg_val(0);
     constexpr bool normalize = get_compile_time_arg_val(1) != 0;
+    constexpr std::uint32_t input_pages = get_compile_time_arg_val(2);
     CircularBuffer input(tt::CBIndex::c_0);
     CircularBuffer weights(tt::CBIndex::c_1);
     CircularBuffer copy_input(tt::CBIndex::c_2);
@@ -36,7 +37,7 @@ void kernel_main() {
         copy_input.pop_front(1);
         copy_output.push_back(1);
 
-        input.wait_front(1);
+        input.wait_front(input_pages);
         output.reserve_back(1);
         tile_regs_acquire();
         // Hadamard needs a clean tile, including its scratch face. Only clear
@@ -61,7 +62,7 @@ void kernel_main() {
         tile_regs_wait();
         pack_tile(0, tt::CBIndex::c_16);
         tile_regs_release();
-        input.pop_front(1);
+        input.pop_front(input_pages);
         output.push_back(1);
         // The next iteration switches back to full-tile BF16 copy and reuses
         // DEST, exercising both the entry and exit of the Hadamard micro-op.
