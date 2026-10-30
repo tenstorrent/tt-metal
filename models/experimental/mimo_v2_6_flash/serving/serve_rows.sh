@@ -28,6 +28,8 @@
 #                    starts (chip ids depend on the machine); it opens the whole mesh, so nothing else may use it then
 #   BASE_PORT        default 8000; SEQS: --max-num-seqs per engine (default 4; 8 for MIMO_SPEC_SLOTS=8)
 #   MNBT             --max-num-batched-tokens, the prefill chunk (default 4096, as tt-inference-server's MiMo spec)
+#   APC_RETENTION    --prefix-cache-retention-interval (default 1024; vLLM's 0 keeps a SWA layer's cached KV only at the
+#                    end of each prompt, see doc/vllm_integration/README.md)
 #   MIMO_KV_GB_PER_CHIP  the model's KV pool per chip; unset, the model's default (6.7 with the global KV pair split,
 #                    vLLM's default: 4 x 1M per row), which is what tt-inference-server's MiMo spec sets
 #   STOP_TIMEOUT     seconds the engines get to stop on SIGINT before SIGKILL (default 120)
@@ -91,6 +93,7 @@ for r in $ROWS; do
     --served-model-name XiaomiMiMo/MiMo-V2.6-Flash-MOPD --trust-remote-code \
     --data-parallel-size 1 --max-num-seqs "${SEQS:-4}" --max-model-len "$MAX_LEN" --block-size 64 \
     --enable-chunked-prefill --max-num-batched-tokens "${MNBT:-4096}" --enable-prefix-caching \
+    --prefix-cache-retention-interval "${APC_RETENTION:-1024}" \
     --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice \
     --port $((BASE_PORT + 1 + r)) --additional-config "{\"tt\": $TT_CONFIG}" "$@" > "$LOGS/row$r.log" 2>&1 &
   ENGINES+=($!)
