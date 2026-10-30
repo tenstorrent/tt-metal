@@ -1332,11 +1332,11 @@ def test_native_l1_interleaved_borrows_in_place(case, cores, threads):
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("case, cores", _L1_INTERLEAVED_DM_NOC, ids=[c[0][0] for c in _L1_INTERLEAVED_DM_NOC])
 def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
-    """An indivisible tile count per cluster or a partial grid must keep the NoC path, and run the rule's 4,4,2
-    there.
+    """An indivisible tile count per cluster under the rule's minimum, or a partial grid, must keep the NoC path, and
+    run the rule's 4,4,2 there.
 
-    A borrowed ring must divide by the compute count, and the L1-interleaved path has no tail rings, so a
-    borrowed ring of 5, 2 or 1 tiles at C = 4 dies on the DFB host assertion. On a grid that is not the
+    A borrowed ring must divide by the compute count, so a slice that 4 does not divide sends its last tiles
+    through the tail rings, whose setup a slice of 5, 2 or 1 tiles does not repay. On a grid that is not the
     bank cores, the pages of the banks outside it would never be computed.
     """
     p = _run_shard_arm(
@@ -1352,6 +1352,47 @@ def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
         },
     )
     _check_arm(p, f"{case[0]} on the NoC path at the rule's 4,4,2")
+
+
+# Slices that 4 does not divide, at or above the rule's 96 tiles per bank. l1_4128 gives every bank 129 pages;
+# l1_4097_pad gives bank 0 129 and every other bank 128 and a pad slot.
+_L1_UNEVEN_BORROWED = [
+    ("l1_4128", "l1", None, None, (32, 4128 * 32)),
+    ("l1_4097_pad", "l1", None, None, (32, 4097 * 32)),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("case", _L1_UNEVEN_BORROWED, ids=[c[0] for c in _L1_UNEVEN_BORROWED])
+def test_native_l1_interleaved_borrows_uneven_slices(case):
+    """On the FPU kernel, a slice of 96 tiles per bank or more that 4 does not divide must be borrowed at 1,4,1 on all
+    32 clusters, its last tiles going through the tail rings."""
+    p = _run_shard_arm(
+        [case],
+        expect="qsr",
+        timeout=900,
+        knobs={
+            **_COMPUTE_BATCH_1,
+            "TT_METAL_DEVICE_PROFILER": "1",
+            "ARM_EXPECT_DMS": "2",
+            "ARM_EXPECT_NEOS": "4",
+            "ARM_EXPECT_CORES": "32",
+        },
+    )
+    _check_arm(p, f"{case[0]} borrowed with tail rings")
+
+
+# The NoC-path slices and an fp32 one, which TTNN_QSR_SLICE_TAIL_MIN=1 borrows with tail rings.
+_L1_UNEVEN_FORCED = _L1_INTERLEAVED_NOC + [("l1_160/fp32", "l1", None, None, (5 * 32, 32 * 32), {"dtype": "float32"})]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", [("rule", {}), ("tails-from-1", {"TTNN_QSR_SLICE_TAIL_MIN": "1"})])
+def test_native_l1_interleaved_uneven_slices_are_bit_exact(name, knobs):
+    """Uneven slices must be bit-exact borrowed with tail rings or moved over the NoC: at the rule, and with
+    TTNN_QSR_SLICE_TAIL_MIN=1, which borrows slices of 5, 2 and 1 tiles per bank and an fp32 one."""
+    p = _run_shard_arm(_L1_UNEVEN_BORROWED + _L1_UNEVEN_FORCED, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"uneven slices, {name}")
 
 
 _L1_INTERLEAVED_PARTIAL_ROUTES = [
