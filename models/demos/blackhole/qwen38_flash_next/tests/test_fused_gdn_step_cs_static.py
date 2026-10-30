@@ -124,7 +124,10 @@ def test_default_kernels_untouched():
     init = Path(module.__file__).read_text()
     assert init.count("QWEN38_GDN_CONV_SPLIT") == 1 and "conv_split.admits(rows, mesh)" in init
     # selection only on =="1" (flag unset/0 = today's program) and never with debug taps
-    assert re.search(r'QWEN38_GDN_CONV_SPLIT.*in \("1", "2"\) and debug is None', init) and cs.enabled.__doc__ is None
+    assert (
+        re.search(r'QWEN38_GDN_CONV_SPLIT.*in \("1", "2", "3", "4"\) and debug is None', init)
+        and cs.enabled.__doc__ is None
+    )
 
 
 def test_kernel_sources_exist_and_have_arg_counts():

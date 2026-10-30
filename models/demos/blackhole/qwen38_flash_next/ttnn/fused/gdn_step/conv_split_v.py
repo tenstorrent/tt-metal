@@ -29,6 +29,8 @@ from .. import program as fp
 from .conv_split import CONV_ROWS, CONV_TILES, SEM_QK, SEM_V
 
 SEM_X = 2
+SPLIT_ENV = "QWEN38_GDN_CONV_SPLIT"
+FACE = 256
 HEAD_COLUMNS = 6
 CONV_X0, CONV_COLUMNS = 6, 4
 CB_QKV, CB_OBF, CB_OMINE, CB_SQO = 11, 10, 29, 30
@@ -38,6 +40,66 @@ ROWS_SUPPORTED = (1, 2, 4)
 
 def decay_first() -> bool:
     return os.environ.get("QWEN38_GDN_CS_DECAY_FIRST", "0") == "1"
+
+
+def early_reader() -> bool:
+    """Split 3: the same program as split 2 with ``reader_vb3.cpp`` (all reads in one batch, the scaler and mask tiles
+    read from DRAM instead of built with word loops) and the decay-first compute order."""
+
+    return os.environ.get(SPLIT_ENV, "2") == "3"
+
+
+def face_element(row: int, col: int) -> int:
+    return ((row >> 4) * 2 + (col >> 4)) * FACE + (row & 15) * 16 + (col & 15)
+
+
+def scaler_tile_words() -> list[list[int]]:
+    """The two fp32 reduce scaler tiles of ``reader_vb.cpp`` (1024 words each): 1.0 for sums, 1/128 for means."""
+
+    return [[0x3F800000] * 1024, [0x3C000000] * 1024]
+
+
+def mask_tile_halfwords(lane: int) -> list[int]:
+    """The bf16 row mask tile of ``reader_vb.cpp`` for ``lane`` in tile (face) order: 1.0 over the 32 columns of row
+    ``lane``, 0 elsewhere (1024 half words)."""
+
+    tile = [0] * 1024
+    left = face_element(lane, 0)
+    for c in range(16):
+        tile[left + c] = 0x3F80
+        tile[left + FACE + c] = 0x3F80
+    return tile
+
+
+def _reader_constants(mesh):
+    """(scalers, masks) DRAM tensors replicated on the mesh, built once per mesh: ``scalers`` [2, 32, 32] fp32 tiles
+    (0 = 1.0, 1 = 1/128), ``masks`` [4, 32, 32] bf16 tiles (tile ``lane`` has the ones in row ``lane``).  The bytes
+    are the tiles ``reader_vb.cpp`` writes with word loops."""
+
+    cached = getattr(mesh, "_qwen38_gdn3_reader_constants", None)
+    if cached is not None:
+        return cached
+    import torch
+
+    scalers = torch.tensor([w[0] for w in scaler_tile_words()], dtype=torch.int32).view(torch.float32)
+    scalers = scalers.view(2, 1, 1).expand(2, fp.TILE, fp.TILE).contiguous()
+    masks = torch.zeros(max(ROWS_SUPPORTED), fp.TILE, fp.TILE, dtype=torch.float32)
+    for lane in range(max(ROWS_SUPPORTED)):
+        masks[lane, lane, :] = 1.0
+    made = []
+    for host, dtype in ((scalers, ttnn.float32), (masks, ttnn.bfloat16)):
+        made.append(
+            ttnn.from_torch(
+                host,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+        )
+    mesh._qwen38_gdn3_reader_constants = tuple(made)
+    return mesh._qwen38_gdn3_reader_constants
 
 
 def vb_for(rows: int, grid_x: int, grid_y: int) -> int:
@@ -91,6 +153,13 @@ def run_vb(m, projected, older, newest, taps, constants, norm, recurrent, out):
     rows = fp.rows_of(projected)
     mesh = projected.device()
     grid = mesh.compute_with_storage_grid_size()
+    if os.environ.get(SPLIT_ENV, "2") == "4":
+        # split 4 (helper cores for the gates and the l2 norms) at rows 1; rows 2 and 4 run split 2 (the helper rectangles
+        # would overlap the head rectangle)
+        from . import conv_split_v4
+
+        if conv_split_v4.admits(rows, grid.x, grid.y):
+            return conv_split_v4.run_vb4(m, projected, older, newest, taps, constants, norm, recurrent, out)
     vb = vb_for(rows, grid.x, grid.y)
     vt = 4 // vb
     st = 4 * vt
@@ -114,6 +183,12 @@ def run_vb(m, projected, older, newest, taps, constants, norm, recurrent, out):
         norm.buffer_address(),
         recurrent.buffer_address(),
     ]
+    early = early_reader()
+    extra_io = []
+    if early:
+        scalers, masks = extra_io = list(_reader_constants(mesh))
+        for tensor in extra_io:
+            reader_cta.extend(fp.accessor_args(tensor))
     writer_cta = [rows, HEADS, vt, vb, *fp.accessor_args(recurrent), *fp.accessor_args(out)]
     writer_addrs = [recurrent.buffer_address(), out.buffer_address()]
     defines = [("INP_FLOAT32", "1")]
@@ -150,10 +225,10 @@ def run_vb(m, projected, older, newest, taps, constants, norm, recurrent, out):
         return [v for s in range(vb) for v in noc[cores_of[(lane, head, s)]]]
 
     reader = fp.reader_kernel(
-        fp.kernel_source(m.NAME, "reader_vb.cpp"),
+        fp.kernel_source(m.NAME, "reader_vb3.cpp" if early else "reader_vb.cpp"),
         head_set,
         reader_cta,
-        [(core(cores_of[i]), [*reader_addrs, 1, *i]) for i in items],
+        [(core(cores_of[i]), [*reader_addrs, 1, *i, *(t.buffer_address() for t in extra_io)]) for i in items],
         defines=defines,
     )
     writer = fp.writer_kernel(
@@ -168,7 +243,7 @@ def run_vb(m, projected, older, newest, taps, constants, norm, recurrent, out):
         head_set,
         [vt],
         [(core(cores_of[i]), [1, i[2]]) for i in items],
-        defines=[*defines, *(("DECAY_FIRST", "1"),) * decay_first()],
+        defines=[*defines, *(("DECAY_FIRST", "1"),) * (decay_first() or early)],
         fidelity=ttnn.MathFidelity.HiFi4,
         fp32_dest=True,
         unpack_to_dest_fp32=m.FP32_COPY_CBS,
@@ -214,7 +289,7 @@ def run_vb(m, projected, older, newest, taps, constants, norm, recurrent, out):
         unpack_to_dest_fp32=m.FP32_COPY_CBS,
     )
 
-    io = [projected, *older, *taps, constants, norm, recurrent, newest]
+    io = [projected, *older, *taps, constants, *extra_io, norm, recurrent, newest]
     meta = fp.program_meta(
         m.NAME,
         "step_v_split",

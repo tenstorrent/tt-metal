@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device test of the GDN step split stages on the TP=8 mesh: today's program, stage 1 (=1), stage 2 (=2, decay-first off (default) and on) on identical copies of the same inputs; the gated output, the new state and the newest ring slot must match
+"""Device test of the GDN step split stages on the TP=8 mesh: today's program, stage 1 (=1), stage 2 (=2, decay-first off (default) and on), stage 3 (=3, early reader), stage 4 (=4, gate and norm helper cores at rows 1) on identical copies of the same inputs; the gated output, the new state and the newest ring slot must match
 today's BIT FOR BIT on every die for STEPS consecutive steps.  Then the traced time per op of today / stage 1 / stage 1
 with idle conv cores (QWEN38_GDN_CS_NOWORK=1, the dispatch-cost probe) / stage 2 / stage 2 with decay-first.
 Run: QWEN38_FUSED_DEVICE_TEST=1 MESH_DEVICE=P150x8 TT_VISIBLE_DEVICES=0..7 pytest this_file -s."""
@@ -33,6 +33,8 @@ MODES = {  # name: env (None = unset)
     "s1": {ENV: "1"},
     "s2": {ENV: "2"},
     "s2_df": {ENV: "2", "QWEN38_GDN_CS_DECAY_FIRST": "1"},
+    "s4": {ENV: "4"},  # s3 with the gates and the l2 norms on helper cores (rows 1; rows 2 and 4 run split 2)
+    "s3": {ENV: "3"},  # s2 with reader_vb3.cpp (one read batch, scaler and mask tiles from DRAM) and decay first
 }
 TIMED = {
     **MODES,
