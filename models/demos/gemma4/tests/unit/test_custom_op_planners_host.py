@@ -264,13 +264,15 @@ def test_splitfree_sliding_layer(grid):
 
 def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
     """The chunk is decided by head dim, cache format and arch (never batch or grid): bfp8 at head_dim 512 takes
-    256 on both archs; bf16 still fits 256 on Blackhole (1,343,616 of 1,369,560 B) and drops to 128 on Wormhole;
-    the env caps it; the unit stays 4096."""
+    256 on both archs; bf16 still fits 256 on Blackhole (1,362,048 of 1,369,560 B with the fp32 scores and scaler CBs) and
+    drops to 128 on Wormhole; the env caps it; the unit stays 4096."""
     bfp8 = {(g, b): _plan(g, b) for g in GRIDS for b in (1, 32)}
     assert {p.chunk for p in bfp8.values()} == {256} and {p.unit for p in bfp8.values()} == {4096}
     assert all(p.fits for p in bfp8.values())
     bf16 = sp.plan_splitfree((13, 10), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", env={})
-    assert bf16.chunk == 256 and bf16.unit == 4096 and bf16.fits and bf16.partial_cb_bytes == 1_343_616
+    assert bf16.chunk == 256 and bf16.unit == 4096 and bf16.fits and bf16.partial_cb_bytes == 1_362_048
+    bf16_qk = sp.plan_splitfree((13, 10), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", env={sp.QK_FP32_ENV: "0"})
+    assert bf16_qk.qk_tile_bytes == 2048 and bf16_qk.partial_cb_bytes == 1_343_616 and bf16_qk.chunk == 256
     wh = sp.plan_splitfree((8, 8), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", arch="Arch.WORMHOLE_B0", env={})
     assert wh.chunk == 128 and wh.fits and wh.budget_bytes == 1_305_990
     capped = _plan((13, 10), 32, env={sp.CHUNK_ENV: "64", sp.UNIT_ENV: "2048"})
@@ -279,9 +281,13 @@ def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
         _plan((13, 10), 1, env={sp.CHUNK_ENV: "48"})
     with pytest.raises(ValueError, match="one core per"):  # allow-pytest.raises (pure)
         sp.plan_splitfree((4, 4), 32, 1, 4, 512, CTX_256K, env={})
-    # the bytes behind the choice: bfp8 chunk 256 at head_dim 512 on the Blackhole budget
+    # the bytes behind the choice: bfp8 chunk 256 at head_dim 512 on the Blackhole budget (fp32 scores: 16 KB
+    # over the bf16 scores CB the stock keeps, which cannot hold a 256K row's scores to 0.999)
     p = bfp8[((13, 10), 32)]
-    assert p.partial_cb_bytes == sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0) == 852_096
+    assert (
+        p.qk_tile_bytes == 4096 and p.partial_cb_bytes == sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0, 4096) == 870_528
+    )
+    assert sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0) == 852_096
     assert p.combine_cb_bytes == sp.combine_cb_bytes(16, 128) == 340_096
     assert "chunk 256 x 16 = unit 4096, 64 units, 64 slots" in p.describe()
 

@@ -27,9 +27,16 @@ bfloat8_b TILE (the cache view may be overridden by ``num_kv_heads`` / ``block_s
 override does), ``page_table [B, max_blocks]`` int32 ROW_MAJOR, ``cur_pos [B]`` int32 ROW_MAJOR (-1 = padding row,
 its output rows untouched), ``scale``, ``sliding_window`` (None: attend everything), ``cache_position_modulo``
 (the bounded ring of a sliding layer). Output ``[1, B, Hq, D]`` bf16 TILE in ``memory_config`` (default DRAM).
-Compute: HiFi2 with fp32 dest accumulation (the stock op's fidelity, the model's fp32 setting), exact exp.
+Compute: fp32 dest accumulation, exact exp, the scores and the reduce scaler in fp32 CBs and HiFi4 (default;
+``GEMMA4_SDPA_SPLITFREE_FIDELITY`` overrides). The stock decode op keeps the scores in bf16 and runs HiFi2: at
+head_dim 512 and scale 1 a row's scores sit at |s| ~ 100 where a bf16 ulp is 0.5, and the row max / sum reduces
+read the scores through the source registers at the fidelity's mantissa width, so the 0.5-level truncation of
+the max (then exp's clamp of s - m > 0) costs the stock op pcc 0.9984 (4K) / 0.9991 (256K) against fp32 torch;
+fp32 scores and scaler at HiFi2 still truncate the max at the bf16 ulp (0.9985 at 256K), HiFi4 keeps the tf32
+width (0.99999). HiFi4 costs the lone-row 256K op 8 % (1.20 -> 1.30 ms on P150, stock cap 16: 1.39 ms).
 """
 
+import os
 import struct
 from pathlib import Path
 
@@ -46,6 +53,8 @@ BF16_TILE = 2048
 F32_TILE = 4096
 DST_TILES = 4  # fp32 dest accumulation: four tiles per dest window (the stock dst_size)
 KV_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b)
+FIDELITY_ENV = "GEMMA4_SDPA_SPLITFREE_FIDELITY"  # HiFi4 (default) / HiFi3 / HiFi2 / LoFi: matmul + reduce fidelity
+DEFAULT_FIDELITY = "HiFi4"
 
 # CB indices: kernels/splitfree_common.hpp
 CB_Q, CB_K, CB_V, CB_MASK, CB_WMASK, CB_SCALE, CB_ZERO, CB_POS_C, CB_POS_D, CB_PT = range(10)
@@ -333,6 +342,9 @@ class SdpaDecodeSplitfree:
         core_set = core_range_set(cores)
         kv_fmt = k_cache.dtype
         kv_tile = plan.kv_tile_bytes
+        qk_fmt = ttnn.float32 if plan.qk_tile_bytes == F32_TILE else ttnn.bfloat16
+        env_fidelity = str((os.environ if env is None else env).get(FIDELITY_ENV, "") or "").strip()
+        fidelity = getattr(ttnn.MathFidelity, env_fidelity or DEFAULT_FIDELITY)
 
         def cb(idx, pages, page, fmt):
             return ttnn.CBDescriptor(
@@ -348,7 +360,7 @@ class SdpaDecodeSplitfree:
             return args
 
         compute_cfg = ttnn.ComputeConfigDescriptor(
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi2),
+            math_fidelity=sdpa_math_fidelity(fidelity),
             fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             math_approx_mode=False,
             dst_full_sync_en=False,
@@ -371,7 +383,7 @@ class SdpaDecodeSplitfree:
             cb(CB_V, 2 * SK * DHt, kv_tile, kv_fmt),
             cb(CB_MASK, SK, BF16_TILE, ttnn.bfloat16),
             cb(CB_WMASK, SK, BF16_TILE, ttnn.bfloat16),
-            cb(CB_SCALE, 1, BF16_TILE, ttnn.bfloat16),
+            cb(CB_SCALE, 1, plan.qk_tile_bytes, qk_fmt),  # the reduces' second operand: the scores' format
             cb(CB_ZERO, 1, BF16_TILE, ttnn.bfloat16),
             cb(CB_POS_C, 1, pos_stick, ttnn.int32),
             cb(CB_POS_D, 1, pos_stick, ttnn.int32),
@@ -379,7 +391,7 @@ class SdpaDecodeSplitfree:
             cb(CB_OUT_O, DHt, F32_TILE, ttnn.float32),
             cb(CB_OUT_M, 1, F32_TILE, ttnn.float32),
             cb(CB_OUT_L, 1, F32_TILE, ttnn.float32),
-            cb(CB_QK, SK, BF16_TILE, ttnn.bfloat16),
+            cb(CB_QK, SK, plan.qk_tile_bytes, qk_fmt),
             cb(CB_OUT_IM, DHt, F32_TILE, ttnn.float32),
             cb(CB_OUT_ACC, DHt, F32_TILE, ttnn.float32),
         ] + [cb(i, 1, F32_TILE, ttnn.float32) for i in (CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD)]

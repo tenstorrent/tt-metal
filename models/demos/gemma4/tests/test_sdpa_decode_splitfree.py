@@ -96,6 +96,41 @@ def _to_rows(out, B, H_q):
     return ttnn.to_torch(out)[0, :B, :H_q, :].contiguous()
 
 
+def _model_compute_config(mesh_device):
+    """The compute config the model's stock decode SDPA takes (tt/attention/decode.py): HiFi2 with fp32 dest
+    accumulation (the op default leaves the dest in bf16, which the long-context scores cannot afford)."""
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+def _stock(case, tt_q, tt_pos, tt_tab, cap, compute_kernel_config):
+    """The stock paged decode SDPA on the case's caches at ``cap`` cores per head."""
+    grid = case.device.compute_with_storage_grid_size()
+    pc = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+        q_chunk_size=32,
+        k_chunk_size=64,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=cap,
+    )
+    return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        tt_q,
+        case.k_cache,
+        case.v_cache,
+        cur_pos_tensor=tt_pos,
+        page_table_tensor=tt_tab,
+        scale=1.0,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=pc,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
 @gated
 @pytest.mark.parametrize("S", [4096, 131072, 262144])
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
@@ -186,15 +221,18 @@ def test_splitfree_row_bits_independent_of_batch_and_grid(mesh_device, device_pa
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
 def test_splitfree_timing_vs_stock(mesh_device, device_params, reset_seeds):
     """(c) ms per op at S = GEMMA4_SDPA_TEST_CACHE for the padded batches 1 / 8 / 32 with row 0 live at S-1 and
-    the other rows padding (the lone-user scenario the pin punishes): the custom op against the stock op at the
-    caps 3 (the Galaxy pin), 16 (the op default) and 32. Asserted: the stock op at cap 3 gives row 0 the same
-    bytes in every padded batch (the pin's purpose, as the earlier core-split harness checked), the custom op
-    does so without any pin, and -- loosely -- the custom op at B=1 runs within 2x of the stock at cap 16."""
+    the other rows padding (the lone-user scenario the pin punishes): the custom op against the stock op (the
+    model's compute config) at the caps 3 (the Galaxy pin), 16 (the op default) and 32, every output's pcc
+    against the torch golden logged. Asserted: the custom op meets PCC_MIN, the stock op at cap 3 gives row 0
+    the same bytes in every padded batch (the pin's purpose, as the earlier core-split harness checked), the
+    custom op does so without any pin, and -- loosely -- the custom op at B=1 runs within 2x of the stock at
+    cap 16."""
     S = int(os.environ[CACHE_ENV])
     case = _Case(mesh_device, S, H_q=4, H_kv=1, D=512)
-    grid = mesh_device.compute_with_storage_grid_size()
+    ckc = _model_compute_config(mesh_device)
     q0 = torch.randn(4, 512, dtype=torch.bfloat16)
     table = torch.arange(case.num_blocks, dtype=torch.int32)
+    ref0 = case.golden(q0.reshape(1, 1, 4, 512), torch.tensor([S - 1]), table.unsqueeze(0))[0, 0]
     times, bits = {}, {}
     reps = 10
     for B in (1, 8, 32):
@@ -209,23 +247,7 @@ def test_splitfree_timing_vs_stock(mesh_device, device_params, reset_seeds):
             return case.run(tt_q, tt_pos, tt_tab)
 
         def stock(cap):
-            pc = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
-                q_chunk_size=32,
-                k_chunk_size=64,
-                exp_approx_mode=False,
-                max_cores_per_head_batch=cap,
-            )
-            return ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                tt_q,
-                case.k_cache,
-                case.v_cache,
-                cur_pos_tensor=tt_pos,
-                page_table_tensor=tt_tab,
-                scale=1.0,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                program_config=pc,
-            )
+            return _stock(case, tt_q, tt_pos, tt_tab, cap, ckc)
 
         runs = {
             "custom": custom,
@@ -245,9 +267,12 @@ def test_splitfree_timing_vs_stock(mesh_device, device_params, reset_seeds):
             times[(B, name)] = (time.perf_counter() - t0) * 1e3 / reps
             outs[name] = _to_rows(o, B, 4)[0].contiguous()
             o.deallocate(True)
+        pccs = {name: _pcc(outs[name], ref0) for name in runs}
         for name in runs:
-            logger.info(f"  S={S} B={B:2d} {name:13s}: {times[(B, name)]:7.2f} ms/op")
-        assert _pcc(outs["custom"], outs["stock cap 16"]) > PCC_MIN
+            logger.info(f"  S={S} B={B:2d} {name:13s}: {times[(B, name)]:7.2f} ms/op, pcc vs golden {pccs[name]:.6f}")
+        assert (
+            pccs["custom"] > PCC_MIN
+        ), f"S={S} B={B}: custom pcc {pccs['custom']:.5f} (stock cap 16 {pccs['stock cap 16']:.5f})"
         bits[B] = {name: outs[name].view(torch.int16).clone() for name in ("custom", "stock cap 3")}
     for B in (8, 32):
         assert torch.equal(bits[B]["stock cap 3"], bits[1]["stock cap 3"]), f"stock cap 3: row 0 differs at B={B}"
@@ -260,3 +285,68 @@ def test_splitfree_timing_vs_stock(mesh_device, device_params, reset_seeds):
     assert (
         times[(1, "custom")] <= 2.0 * times[(1, "stock cap 16")]
     ), f"custom B=1 {times[(1, 'custom')]:.2f} ms vs stock cap 16 {times[(1, 'stock cap 16')]:.2f} ms"
+
+
+@gated
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_splitfree_partials_vs_torch(mesh_device, device_params, reset_seeds):
+    """(d) Where an error lives, at S = GEMMA4_SDPA_TEST_CACHE, B=1, 4 heads, head_dim 512, row 0 at S-1 on a
+    random page table: the unit partials (m, l, O) read back from the scratch against a torch flash model of the
+    same units on fp32 scores (m_dev - m_ref is the device's score error at the row max: a bf16 ulp is 0.5 there,
+    a tf32 ulp 1/16), the combine (the device partials merged in torch against the output), the output against
+    the golden (asserted at PCC_MIN), and the stock op against the golden under the model's compute config
+    (HiFi2, fp32 dest accumulation) and the op default (bf16 dest), logged as the reference the stock reaches."""
+    S = int(os.environ[CACHE_ENV])
+    case = _Case(mesh_device, S, H_q=4, H_kv=1, D=512)
+    q = torch.randn(1, 4, 512, dtype=torch.bfloat16)
+    cur_pos = torch.tensor([S - 1])
+    tables = case.random_tables(1, seed=1)
+    tt_q, tt_pos, tt_tab = case.inputs(1, cur_pos, tables, q)
+    out = case.run(tt_q, tt_pos, tt_tab)
+    got = _to_rows(out, 1, 4)[0].float()
+    ref = case.golden(q, cur_pos, tables)[0, 0]
+    plan = SdpaDecodeSplitfree.plan(mesh_device, tt_q, case.k_cache, tt_pos, tt_tab)
+    logger.info(f"S={S}: {plan.describe()}")
+    blocks = tables[0].long()
+    K = case.k_ref[blocks, 0].reshape(S, 512)
+    V = case.v_ref[blocks, 0].reshape(S, 512)
+    s = q[0].float() @ K.T  # [4, S] fp32 scores
+    scratch = ttnn.to_torch(case.scratch)
+    dm, lr, opcc, parts = [], [], [], []
+    for u in plan.live_units(S - 1):
+        page0 = plan.slot(0, 0, u) * plan.tiles_per_slot
+        tile = lambda t: scratch[(page0 + t) * 32 : (page0 + t) * 32 + 4]  # the 4 head rows of page t
+        m_dev, l_dev = tile(0)[:, 0], tile(1)[:, 0]
+        O_dev = torch.cat([tile(2 + c) for c in range(16)], dim=1)
+        su = s[:, u * plan.unit : (u + 1) * plan.unit]
+        m_ref = su.amax(1)
+        p = torch.exp(su - m_ref[:, None])
+        O_ref = p @ V[u * plan.unit : (u + 1) * plan.unit]
+        dm.append(m_dev - m_ref)
+        lr.append(l_dev / p.sum(1))
+        opcc.append(_pcc(O_dev, O_ref))
+        parts.append((m_dev, l_dev, O_dev))
+    dm, lr = torch.stack(dm), torch.stack(lr)
+    logger.info(
+        f"S={S}: {len(parts)} units; m_dev - m_ref: max |dm| {dm.abs().max():.4f}, mean {dm.mean():+.4f}, "
+        f"rms {dm.pow(2).mean().sqrt():.4f}; l_dev / l_ref: min {lr.min():.4f} max {lr.max():.4f}; "
+        f"pcc(O_dev, O_ref): min {min(opcc):.6f} mean {sum(opcc) / len(opcc):.6f}"
+    )
+    logger.info(f"S={S}: unit 0 dm per head {dm[0].tolist()}, l ratio {lr[0].tolist()}")
+    m, l, O = parts[0]
+    for mu, lu, Ou in parts[1:]:
+        mn = torch.maximum(m, mu)
+        a, au = torch.exp(m - mn), torch.exp(mu - mn)
+        l, O, m = l * a + lu * au, O * a[:, None] + Ou * au[:, None], mn
+    comb = O / l[:, None]
+    logger.info(
+        f"S={S}: pcc(out, golden) {_pcc(got, ref):.6f}; pcc(device partials combined in torch, golden) "
+        f"{_pcc(comb, ref):.6f}; pcc(out, that) {_pcc(got, comb):.6f}; per-head pcc(out, golden) "
+        f"{[round(_pcc(got[h], ref[h]), 5) for h in range(4)]}"
+    )
+    for name, ckc in (("model cfg (HiFi2, fp32 dest)", _model_compute_config(mesh_device)), ("op default", None)):
+        for cap in (3, 16):
+            o = _stock(case, tt_q, tt_pos, tt_tab, cap, ckc)
+            logger.info(f"S={S}: stock cap {cap:2d} {name}: pcc vs golden {_pcc(_to_rows(o, 1, 4)[0], ref):.6f}")
+            o.deallocate(True)
+    assert _pcc(got, ref) > PCC_MIN, f"S={S}: pcc {_pcc(got, ref):.5f}"

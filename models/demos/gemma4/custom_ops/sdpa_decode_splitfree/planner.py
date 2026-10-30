@@ -37,6 +37,7 @@ from models.demos.gemma4.custom_ops.grid import grid_cores, sdpa_decode_cb_budge
 UNIT_ENV = "GEMMA4_SDPA_SPLITFREE_UNIT"
 CHUNK_ENV = "GEMMA4_SDPA_SPLITFREE_CHUNK"
 READS_ENV = "GEMMA4_SDPA_SPLITFREE_READS"  # K/V tile reads a core keeps in flight (default 16)
+QK_FP32_ENV = "GEMMA4_SDPA_SPLITFREE_QK_FP32"  # "0": the scores CB in bf16 (the stock's im_df); default fp32
 DEFAULT_UNIT = 4096
 DEFAULT_CHUNK = 256
 DEFAULT_READS = 16
@@ -62,17 +63,20 @@ def ceil_div(a, b):
     return -(-int(a) // int(b))
 
 
-def partial_cb_bytes(dht, sk, kv_tile_bytes, window, pos_stick, pt_stick):
+def partial_cb_bytes(dht, sk, kv_tile_bytes, window, pos_stick, pt_stick, qk_tile_bytes=BF16_TILE_BYTES):
     """Phase-1 (partials) circular buffers of one core: q; K and V double-buffered over one chunk in the cache
-    format; the causal mask (and the window mask); the reduce scaler and the zero tile; the bf16 scores; the
-    fp32 PV output and accumulator; five fp32 statistics (cur / prev max, cur / prev sum, exp max diff); the
-    fp32 unit output (O, m, l); the cur_pos stick for the compute and the page-table row."""
+    format; the causal mask (and the window mask); the zero tile; the scores (one chunk, ``qk_tile_bytes`` per
+    tile: fp32 by default, see ``QK_FP32_ENV``) and the reduce scaler in the scores' format (the row reduces
+    move the scores through both source registers: a bf16 scaler would truncate fp32 scores to bf16 in the
+    max and unpack them as bf16 in the sum); the fp32 PV output and accumulator; five fp32 statistics (cur /
+    prev max, cur / prev sum, exp max diff); the fp32 unit output (O, m, l); the cur_pos stick for the compute
+    and the page-table row."""
     return (
         dht * BF16_TILE_BYTES
         + 4 * sk * dht * kv_tile_bytes
         + (2 if window else 1) * sk * BF16_TILE_BYTES
-        + 2 * BF16_TILE_BYTES
-        + sk * BF16_TILE_BYTES
+        + BF16_TILE_BYTES
+        + (sk + 1) * qk_tile_bytes
         + 2 * dht * F32_TILE_BYTES
         + 5 * F32_TILE_BYTES
         + (dht + 2) * F32_TILE_BYTES
@@ -109,6 +113,7 @@ class SplitfreePlan:
     n_slots: int
     modulus: int
     kv_tile_bytes: int
+    qk_tile_bytes: int  # the scores CB: 4096 (fp32) or 2048 (bf16)
     reads_in_flight: int
     partial_cb_bytes: int
     combine_cb_bytes: int
@@ -262,12 +267,13 @@ def plan_splitfree(
     chunk_cap = _env_int(env, CHUNK_ENV, DEFAULT_CHUNK, TILE)
     unit_cfg = _env_int(env, UNIT_ENV, DEFAULT_UNIT, TILE)
     reads = _env_int(env, READS_ENV, DEFAULT_READS)
+    qk_tile = BF16_TILE_BYTES if str(env.get(QK_FP32_ENV, "") or "").strip() == "0" else F32_TILE_BYTES
     dht = head_dim // TILE
     chosen = None
     for c in CHUNK_LADDER:
         if c > chunk_cap:
             continue
-        pcb = partial_cb_bytes(dht, c // TILE, kv_tile, window, pos_stick, pt_stick)
+        pcb = partial_cb_bytes(dht, c // TILE, kv_tile, window, pos_stick, pt_stick, qk_tile)
         chosen = (c, pcb)
         if pcb <= budget:
             break
@@ -293,6 +299,7 @@ def plan_splitfree(
         n_slots=n_slots,
         modulus=modulus,
         kv_tile_bytes=kv_tile,
+        qk_tile_bytes=qk_tile,
         reads_in_flight=reads,
         partial_cb_bytes=pcb,
         combine_cb_bytes=combine_cb_bytes(dht, pos_stick),
