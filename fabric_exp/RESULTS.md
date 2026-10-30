@@ -8501,6 +8501,26 @@ in a group with four stream-register reads, each local-memory (stack) load adds 
 one, -> 7 with three), with no four-in-flight penalty (an L1 word: 4 -> 14). A header L1 read through a slot held in
 local memory: +1 cycle when the slot loads with the group, +2 when it loads right before.
 
+**Sender state by access class: v4pl2, v4pl3** (2026-10-30, jobs 217-228; `consolidation/V4_STATE.md` §8-10). v4pl2
+(v4pl1 + compile-time worker connection semaphore address) against v4pl1: flat to -0.9% (best on VC2 and one ERISC), VC1
+split +0.8% (1-hop 140.9 -> 143.0, cause unknown). v4pl3 (+ uniform channel/VC presence, connection check before the
+credit call, send path kept in memory, send gate reordered): 2D +2.6%, mix +5.2%, VC1 split +6.0% (3-hop write +13,
+VC1 1-hop +16 cycles/packet); rejected. The earlier estimate "parking costs a few cycles per packet" is WRONG. Isolated by
+row-first A/Bs (jobs 229-230): without the parking (`v4pl3n`) the rows equal v4pl2 (1-hop 127.1 / 127.2, 3-hop 146.0 /
+145.9, VC1 split 161.9 / 162.3), so the parking is the whole cost; the mechanism: parked state is in memory, and the
+send's fence pairs make the compiler store and reload it around each one. Copying the send path in and out of locals
+(`v4pl4`) recovers ~60% (3-hop 151.4, VC1 1-hop 151.0). The send path stays with the compiler. VC1 1-hop
+under v4pl2 (+2): the compile-time semaphore address adds a `lui` where the read cannot share its base (the idle worker,
+every pass on VC1 1-hop); restoring the runtime pointer (`v4pl3p`, job 231) takes VC1 1-hop 142.3 -> 140.0, the rest
+unchanged. Kept: the runtime pointer (VC1 is production; the address had bought VC2 under 1%).
+
+**v4pl5 / v4pl6** (2026-10-30, jobs 232-257; `consolidation/V4_STATE.md` §13-16). v4pl5 (v4pl1 + uniform channel/VC
+presence on sender and receiver + the credit path decided before the connection call + the send gate testing
+`has_packet` first): two ERISCs flat, VC2 -0.3% to -1.0%, one ERISC +0.7% to +1.0%; isolated (one-ERISC rows, job 246):
+the credit-path order costs ~4 cycles there (and measured nothing on two ERISCs), the presence cleanup is free. v4pl6 =
+v4pl5 without it: every two-ERISC suite 0.0%, one ERISC -0.2% to -0.3%, VC2 0.0% to -0.9%, no row worse than 1%.
+**Lead: v4pl6.**
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then

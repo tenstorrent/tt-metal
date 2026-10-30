@@ -2,7 +2,8 @@
 """pcs_row_lines.py CACHE GDIR PREFIX ROW... [--erisc 0|1] [--top N]: per source line, where the busiest sending router ERISC
 of each sampled row spends its time (innermost inline frame), as a share of its kernel samples and that share times the
 row's cycles/packet. Same sample mapping as pcs_profile.py (pcsv_runs.sh samples, -g twins from pcs_sections.py twins);
-the busiest sender is the target with the most samples in the send (v4 `sender::send<`)."""
+the busiest target is the one with the most samples in --pick (default the send, `sender::send<`; `receiver::`
+for receivers)."""
 import argparse, collections, csv, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -12,6 +13,7 @@ import pcs_profile as pp  # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("cache"); ap.add_argument("gdir"); ap.add_argument("prefix"); ap.add_argument("rows", nargs="+")
 ap.add_argument("--erisc", type=int, default=0); ap.add_argument("--top", type=int, default=25)
+ap.add_argument("--pick", default="sender::send<", help="function substring whose samples pick the busiest target")
 a = ap.parse_args()
 for row in a.rows:
     vals = [float(r["avg_packets_per_s"]) for r in csv.DictReader(open(f"{ps.RES}/{a.prefix}_{row}_13129088_trial.csv"))]
@@ -29,7 +31,7 @@ for row in a.rows:
         need = sorted(set(addrs) - set(cache))
         if need:
             cache.update(ps.a2l(twin, need))
-        sends = sum(1 for x in addrs if any("sender::send<" in f for f, _, _ in cache.get(x, [])))
+        sends = sum(1 for x in addrs if any(a.pick in f for f, _, _ in cache.get(x, [])))
         if best is None or sends > best[0]:
             best = (sends, tgt, [cache.get(x, []) for x in addrs])
     if best is None:
@@ -40,6 +42,6 @@ for row in a.rows:
     for fr in frames:
         f, fl, ln = fr[0] if fr else ("?", "?", 0)
         lines[f"{fl}:{ln}"] += 1
-    print(f"\n### {row}: {cpp:.1f} cycles/packet; E{tgt['erisc']} chip {tgt['chip']} chan {tgt['chan']}, {n} samples ({100*sends/n:.0f}% in send)")
+    print(f"\n### {row}: {cpp:.1f} cycles/packet; E{tgt['erisc']} chip {tgt['chip']} chan {tgt['chan']}, {n} samples ({100*sends/n:.0f}% in {a.pick})")
     for k, c in lines.most_common(a.top):
         print(f"  {c / n * cpp:6.1f}  {100 * c / n:5.1f}%  {k}")

@@ -153,3 +153,118 @@ Sender pass (instructions / stack loads / stores; v4pl2 in brackets): 2D 534/58/
 state (both workers' counts, `in_flight`) no longer touches the stack anywhere; the send path is loaded and stored where
 used; a few ring-bound constants and the round state still spill. Device: jobs 217-228 (validation of v4pl3 and v4pl2;
 census and VC2 A/B, v4pl1 / v4pl2 / v4pl3 in the same jobs, two passes).
+
+## 10. Device: v4pl1 / v4pl2 / v4pl3 (jobs 217-228; two passes agreeing within 0.001)
+
+Validation 13/13 for v4pl3 and v4pl2. Census suite means against v4pl1: v4pl2 2D +0.1%, mix +0.2%, VC1 split +0.8%
+(1-hop and burst rows 140.9 -> 143.0; cause unknown), one ERISC -0.2% to -0.4%, VC2 on two ERISCs -0.3% to -0.9%, one
+ERISC -0.5%; the rest flat. v4pl3: 2D +2.6%, mix +5.2%, Y-torus +1.7%, VC1 split +6.0%, trimmed +3.3%, one ERISC +0.3%
+to +0.7%, VC2 two ERISCs +0.2% to +0.8%, one ERISC -1.2%. v4pl3's losses sit on the forwarding-heavy send-bound rows
+(3-hop write 146.0 -> 159.4, multicast write 141.9 -> 152.0, VC1 1-hop and burst 141 -> 157, 1-hop write +2.7); it gains
+on VC1 2-hop merge (-4.6) and VC1 multicast (-2.3). **v4pl3 rejected.** **WRONG (§7 and chat, 2026-10-30):** "parking
+the cursors costs a few cycles per packet on 2D" (an estimate from grouped loads): +3.7 to +16 cycles per packet.
+Hypothesis (not isolated): v4pl3 lets the compiler load the parked far ring and slot at their use, behind the send's
+outstanding hardware reads (§17: +6 to +14), not in a group; and v4pl3 bundles three other changes (uniform presence,
+the credit-path order, the send-gate order). Isolating A/B next: v4pl3 without the parking, against v4pl2.
+
+## 11. Isolating v4pl3's loss (jobs 229-230; row-first A/B, user's direction)
+
+Why parking cost so much (static, v4pl3 2D): the send groups its hardware reads between `std::atomic_signal_fence` pairs;
+the fences are compiler barriers for everything in memory, and parked state is in memory, so the parked far ring and
+slot are stored before and reloaded after each fence (the far ring's next slot is loaded twice per send; the free count
+is reloaded right behind the visit's in-flight L1 reads). Variants: `v4pl3n` = v4pl3 without the parking (presence,
+credit-path order, send-gate order kept); `v4pl4` = v4pl3 with the send path copied into locals where a visit first
+needs it and written back once if it changed (the send works on locals, which the fences leave alone).
+
+Rows (`row_ab_runs.sh`, `row_ab_report.py`; two repetitions agreeing exactly), cycles/packet, v4pl2 / v4pl3 / v4pl3n /
+v4pl4: 1-hop write 127.2 / 129.8 / 127.1 / 128.8; 3-hop write 145.9 / 159.0 / 146.0 / 151.4; multicast write 142.3 /
+152.0 / 142.7 / 145.4. VC1 split (`census_vc1_runs.sh pl4a`): suite 162.3 / 170.5 / 161.9 / 167.4; 1-hop and burst rows
+143.0 / 157.0 / 142.3 / 151.0; inter-mesh flat. So the parking is v4pl3's whole cost (v4pl3 against v4pl3n changes
+only that); copying in and out recovers about 60% of it and still costs 1.6-8 cycles per packet, VC1 included. **The
+"send path parked" class is rejected**: the send path stays with the compiler (it spills only where the state does not
+fit: VC2). v4pl3n's readability changes cost nothing on these rows. Open: VC1 1-hop 142.3 (v4pl3n) against 140.9
+(v4pl1): the v4pl2 step (compile-time semaphore address) appears to cost VC1 ~1.4 cycles; cause unknown.
+
+## 12. VC1 1-hop under v4pl2: the compile-time semaphore address (job 231)
+
+Static (VC1 sender): the semaphore read has three sites; where it cannot share its address base with the completion
+counter read (the worker idle, or just sent), the compile-time address costs a `lui` (v4pl1: `lw t3,0(s2)`; v4pl2:
+`lui a5,0x16; lw a5,-736(a5)`). On VC1 1-hop rows VC0's worker on the sending router is idle, so that is every pass.
+Isolating A/B: `v4pl3p` = v4pl3n with only the runtime pointer restored. VC1 1-hop and burst rows 142.1-142.4 (v4pl3n)
+-> 139.9-140.2 (v4pl3p), other VC1 rows unchanged, suite 161.9 -> 160.5, inter-mesh 339.1 / 338.9, 2D 3-hop 146.0 /
+145.9. So the compile-time address is what cost VC1 1-hop (~2.2 cycles); the extra `lui` per pass is the likely
+mechanism (hypothesis). It had bought VC2 -0.3% to -0.9% and one ERISC -0.2% to -0.4% (v4pl2 against v4pl1). VC1 is a
+production config and VC2 opt-in: keep the runtime pointer. v4pl3p = v4pl1 + uniform presence + the credit path decided
+before the call + the send-gate order (+ `in_flight` separate): the candidate for the next full census.
+
+## 13. `v4pl5`: the candidate (v4pl3p cleaned up)
+
+v4pl1 + uniform presence for every VC and worker channel on the sender (`Present`/`Absent`/`present<>()`, router_common.hpp)
+and the receiver (VC0's three objects, VC1's and VC2's records; `NoChannelState`/`NoVc2ChannelState` gone) + the
+connection check deciding its path before the credit call + the send gate testing `has_packet` first + `in_flight` as
+its own local. State classes: left to the compiler: `Workers` (slot, counts, connection semaphore pointer, expected
+value), `FarRings`, `in_flight`; parked: the forwarding records; in memory: the interfaces. Gone: `SendPath` (the slot is
+back in `Worker`; user, 2026-10-30), the compile-time semaphore address and its init check, the isolation notes. Built
+1214/1214. Against v4pl3p: two-ERISC receivers byte-identical; senders the same instructions at the same addresses but
+commuted compare operands and two init instructions reordered; one-ERISC passes the same instruction counts (state
+record offsets changed); trimmed one-ERISC init 61 -> 50 instructions (absent VC0 state not initialized). Device:
+validation and full census + VC2 A/B against v4pl1, two passes (jobs 232-242).
+
+## 14. The receiver (started 2026-10-30, while v4pl5's census runs; the receiver's code is unchanged since v4pl1)
+
+Inventory (receiver::run): VC0's `Position` {available, slot, index} and `CompletionCounts` {uncompleted, idle passes}
+(per packet), VC0's `SlotRecords` (a byte per ring slot, indexed at run time), VC1's and VC2's `ChannelState` records
+(the same three parts each), the credit sender (the credit counts and frame), `frame_due`, the downstream tables (passed
+in from kernel_main: memory by design), `me`, the round and pass counts.
+
+Placement (DWARF, v4pl5): VC0's position, counts and `frame_due` split (callee-saved registers where tracked, never the
+stack); `records0`, the credit sender, `round` frame objects; VC1's and VC2's records frame objects (the runtime-indexed
+records inside keep the whole record in memory: GCC does not split an aggregate with a variable-offset access, a
+compiler behavior, not a guarantee); `me` and the pass count optimized out. Budget: the 2D receiver writes 5
+callee-saved registers in its loop and holds 6 more invariant (constants 0xFFB91000, 0x16000, 0x01010101, 0xFFECC0A0
+and two pointers): room to spare; the VC1 receiver uses all 12 and spills two constants. Calls in the pass:
+`deliver_other` (out of line), `end_round` (per round).
+
+Where the time goes (PC samples of v4pl1, busiest receiver ERISC, `pcs_row_lines.py --erisc 1 --pick receiver::`;
+these rows are send-bound, so this is the receiver's own cost, not the bound side), cycles/packet, 1-hop write / 3-hop
+write: packets-received register poll 12.7 / 4.5; a wait landing at the end of the receive step 11.7 / 12.5; local
+write waiting for the NoC command buffer 9.0 / -; NoC command register writes 7.3 / 14; the NoC API's software write
+counters (`noc_*_writes_num_issued`, `noc_nonposted_writes_acked`: a load and a store each per write) ~7 / ~7; the
+completion check (writes left for a transaction ID) 9.7 / -; retire 7.2 / 4.8; the downstream cursors (next slot, free
+count, from the table in memory) - / ~28 (where the waits land, not pure cursor traffic); the route lookup 3.2 / 3.7.
+Receiver-bound rows (scatter, fused, atomic, ring, 1D half-ring and multicast) are being sampled (jobs 243-245).
+Candidate levers (hypotheses): the NoC API's software counters, if the router's transaction-ID completion tracking makes
+them unnecessary and the API has a variant without them; the downstream cursors' loads on the forward path.
+
+Receiver-bound rows (v4pl5, jobs 243-245; `results/prof_lines_r5_rx.txt`), busiest receiver, cycles/packet:
+scatter 142.0 / atomic 129.5 / ring 1-hop 150.7 / half-ring 182.4 / 1D multicast 142.8. NoC command buffer waits and
+register writes 34 / 19 / 15 / 23 / 17; the NoC API's software counters 8.3 / 4.2 / 8.6 / 6.7 / 2.9; on atomic rows the
+flushed-atomic wait on `noc_nonposted_writes_acked` (`ncrisc_noc_nonposted_writes_flushed`) and the flush test 13.6; the
+credit sender's per-channel counters in memory (`ack_counters[src]`, `completion_counters[src]`) 12.1 on ring 1-hop, 9.3+
+on half-ring; the admit test 10.3 / 10.0 on scatter / atomic; header decode, ack loop and slot records ~6 / ~6 / 26 /
+24 / 10; downstream cursors ~22 on 1D multicast; completion checks 2.8-8.6. NoC counters (who reads them): the posted
+counter is read only by the posted barrier (teardown, after `ncrisc_noc_counters_init()` resyncs from hardware), so its
+increment on every forward is dead work; of the non-posted pair only `acked` is read during operation (the mesh/line
+flush before a flushed atomic: hardware ack count == `acked`); `num_issued` only at teardown. Levers (hypotheses):
+forwards with `update_counter=false`; local writes counting only `acked`; later, batching `acked` until something reads
+it; the credit sender's counters.
+
+## 15. v4pl5's acceptance run, and the one-ERISC isolation (jobs 232-242, 246)
+
+v4pl5 against v4pl1 (two passes agreeing within 0.001; validation 13/13): two ERISCs flat (2D +0.1%, 1D, mix, burst,
+ring 0.0%, Y-torus +0.1%, trimmed 0.0%, mux -0.2%), VC1 split -0.3%, inter-mesh +0.1%, VC2 on -0.3% to -1.0%; one ERISC
+2D +1.0%, 1D +0.8%, ring +0.7% (multicast, bidirectional and 1D rows +1.0% to +1.5%): not accepted. Isolation (one
+ERISC, `row_ab_runs.sh pl5i`, two repetitions agreeing exactly), cycles/packet, 1-hop write / multicast write: v4pl1
+200.3 / 323.5; v4pl5 202.3 / 327.7; v4pl5c (the credit and the connection check back in v4pl1's sequence) 198.4 / 324.3;
+v4pl5g (the send gate back in v4pl1's order) 204.2 / 326.8; v4pl5r (the receiver as in v4pl1) 202.3 / 327.7. So the
+credit-path reorder (step 2.1) costs one ERISC (~4 cycles on both rows) and measured nothing on two ERISCs (v4pl3n against
+v4pl2): dropped. The receiver presence cleanup is free; the send-gate order helps one-ERISC 1-hop by ~2 cycles and costs
+multicast ~1. Why 2.1 costs one ERISC: hypothesis (duplicated credit code in the out-of-line, mostly idle, sender pass).
+Next: v4pl6 = v4pl5 with v4pl1's credit sequence (v4pl5c, cleaned), full census against v4pl1.
+
+## 16. v4pl6 accepted (jobs 247-257; two passes agreeing within 0.001)
+
+v4pl6 = v4pl5 with v4pl1's credit and connection sequence (step 2.1 dropped). Validation 13/13. Against v4pl1: every
+two-ERISC suite 0.0% (2D, 1D, mix, burst, ring, Y-torus, trimmed, mux; VC1 split and inter-mesh), one ERISC 2D -0.3%,
+1D -0.2%, ring -0.3%, VC2 on two ERISCs 0.0% to -0.1%, one ERISC -0.9%; no row worse than 1% (MixCmd excluded, as in
+every census), six one-ERISC rows better than 1%. Accepted: **lead `v4pl6`** (from v4sh2b, through v4pl1).

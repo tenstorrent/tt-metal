@@ -1,0 +1,80 @@
+
+### ewscatter: 142.0 cycles/packet; E1 chip 0 chan 6, 5372 samples (99% in receiver::)
+    19.4   13.7%  noc_nonblocking_api.h:1470
+    14.3   10.1%  noc_nonblocking_api.h:174
+    10.3    7.3%  router_receiver.hpp:278
+     4.6    3.2%  router_common.hpp:87
+     4.4    3.1%  router_local_delivery.hpp:129
+     4.3    3.1%  router_receiver.hpp:150
+     4.0    2.8%  noc_nonblocking_api.h:2275
+     3.9    2.7%  router_local_delivery.hpp:130
+     3.8    2.6%  noc_nonblocking_api.h:180
+     3.3    2.3%  router_receiver.hpp:149
+     3.3    2.3%  router_local_delivery.hpp:124
+     3.2    2.3%  router_local_delivery.hpp:126
+     3.1    2.2%  fabric_stream_regs.hpp:68
+     3.1    2.2%  router_routing.hpp:78
+
+### ewatomic: 129.5 cycles/packet; E1 chip 0 chan 6, 5616 samples (99% in receiver::)
+    11.4    8.8%  noc_nonblocking_api.h:174
+    10.0    7.7%  router_receiver.hpp:278
+     7.5    5.8%  fabric_edm_packet_transmission.hpp:116
+     7.3    5.6%  noc_nonblocking_api.h:1272
+     6.1    4.7%  router_local_delivery.hpp:74
+     5.2    4.0%  router_common.hpp:87
+     4.2    3.3%  router_receiver.hpp:150
+     4.2    3.2%  noc_nonblocking_api.h:1304
+     3.6    2.8%  router_routing.hpp:78
+     3.3    2.5%  fabric_stream_regs.hpp:68
+     3.1    2.4%  router_receiver.hpp:149
+     2.8    2.2%  router_completions.hpp:174
+     2.8    2.2%  router_local_delivery.hpp:141
+     2.7    2.1%  noc_nonblocking_api.h:1295
+
+### ring1: 150.7 cycles/packet; E1 chip 0 chan 6, 3692 samples (99% in receiver::)
+     8.8    5.8%  noc_nonblocking_api.h:1470
+     8.7    5.8%  tt_eth_api.h:27
+     8.7    5.7%  router_completions.hpp:113
+     8.6    5.7%  router_completions.hpp:183
+     8.0    5.3%  router_common.hpp:205
+     6.9    4.6%  router_receiver.hpp:214
+     6.9    4.6%  router_completions.hpp:70
+     6.4    4.3%  noc_nonblocking_api.h:174
+     5.9    3.9%  router_common.hpp:87
+     4.6    3.0%  noc_nonblocking_api.h:2243
+     4.0    2.7%  noc_nonblocking_api.h:2242
+     4.0    2.6%  router_completions.hpp:78
+     3.8    2.5%  router_receiver.hpp:212
+     3.4    2.2%  fabric_router_flow_control.hpp:38
+
+### halfring: 182.4 cycles/packet; E1 chip 1 chan 5, 8471 samples (99% in receiver::)
+    14.3    7.8%  noc_nonblocking_api.h:174
+     9.3    5.1%  router_completions.hpp:113
+     9.0    5.0%  noc_nonblocking_api.h:1470
+     8.6    4.7%  router_completions.hpp:183
+     7.9    4.4%  router_common.hpp:205
+     7.6    4.1%  tt_eth_api.h:27
+     7.4    4.0%  router_common.hpp:87
+     5.8    3.2%  router_receiver.hpp:214
+     5.7    3.2%  router_completions.hpp:70
+     4.1    2.2%  router_completions.hpp:78
+     4.0    2.2%  router_receiver.hpp:212
+     3.9    2.1%  router_downstream.hpp:230
+     3.4    1.9%  noc_nonblocking_api.h:2243
+     3.3    1.8%  noc_nonblocking_api.h:2242
+
+### linmcast: 142.8 cycles/packet; E1 chip 0 chan 7, 17908 samples (99% in receiver::)
+    11.5    8.1%  noc_nonblocking_api.h:174
+    10.4    7.3%  router_common.hpp:205
+     6.9    4.9%  router_downstream.hpp:270
+     6.9    4.8%  router_downstream.hpp:230
+     5.7    4.0%  noc_nonblocking_api.h:1470
+     5.3    3.7%  router_completions.hpp:52
+     4.7    3.3%  router_downstream.hpp:174
+     4.2    2.9%  fabric_stream_regs.hpp:68
+     3.5    2.5%  router_downstream.hpp:199
+     3.4    2.4%  router_completions.hpp:172
+     3.2    2.3%  noc_nonblocking_api.h:180
+     3.1    2.1%  router_receiver.hpp:393
+     2.9    2.0%  noc_nonblocking_api.h:1743
+     2.9    2.0%  router_receiver.hpp:150
