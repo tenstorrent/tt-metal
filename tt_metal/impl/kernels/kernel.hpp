@@ -123,8 +123,8 @@ struct DataflowBufferBindingHandle {
     bool consumes = false;
     uint8_t pap = 0;
     uint8_t cap = 0;
-    // Watcher: the nodes the DFB exists on, as NoC rectangles packed x_start, y_start, x_end, y_end from the top byte
-    // down. Empty without Watcher NoC sanitizing.
+    // Watcher: the nodes the DFB's address is reserved on, as NoC rectangles packed x_start, y_start, x_end, y_end
+    // from the top byte down. Empty without Watcher NoC sanitizing, or for a DFB borrowed from an interleaved tensor.
     std::vector<uint32_t> watcher_node_ranges;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;

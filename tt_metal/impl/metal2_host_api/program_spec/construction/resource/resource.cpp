@@ -4,6 +4,10 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
+#include <optional>
+
+#include <tt-metalium/buffer_distribution_spec.hpp>
+
 #include "impl/metal2_host_api/helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -33,7 +37,22 @@ WatcherNodeRanges MakeWatcherNodeRanges(
         return ranges;
     }
     for (const auto& [dfb_name, nodes] : collected.dfb_node_set) {
-        ranges.dfbs.emplace(dfb_name, PackWatcherNodeRanges(mesh_device, nodes));
+        const std::optional<TensorParamName>& borrowed_from = collected.dfb_by_name.at(dfb_name)->borrowed_from;
+        if (!borrowed_from.has_value()) {
+            ranges.dfbs.emplace(dfb_name, PackWatcherNodeRanges(mesh_device, nodes));
+            continue;
+        }
+        // A borrowed-memory DFB's address is reserved on its backing tensor's nodes, which may reach past the DFB's
+        // own. An interleaved backing tensor carries no node set, so a DFB in it isn't checked.
+        const TensorSpec& tensor_spec = collected.tensor_parameter_by_name.at(*borrowed_from)->spec;
+        if (!tensor_spec.memory_config().is_sharded()) {
+            continue;
+        }
+        if (const std::optional<BufferDistributionSpec> distribution =
+                tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec()) {
+            ranges.dfbs.emplace(
+                dfb_name, PackWatcherNodeRanges(mesh_device, NodeRangeSet(distribution->cores()).merge_ranges()));
+        }
     }
     for (const auto& sem : spec.semaphores) {
         ranges.semaphores.emplace(
