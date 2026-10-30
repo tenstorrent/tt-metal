@@ -67,6 +67,8 @@ class Gemma4Generator:
         # Speculative verify traces, keyed by id(CacheState); see spec_decode().
         self.spec_traces = {}
         self.spec_timing = {}
+        # Table groups for the verify trace; set by the serving adapter when speculation is enabled.
+        self.spec_groups = None
         # Keep explicit decode/sampler IO across conservative trace retirement.
         # The next capture gets a new entry object, so old handles stay invalid.
         self._entry_storage = None
@@ -1133,6 +1135,9 @@ class Gemma4Generator:
         if programs_before != programs_after:
             raise RuntimeError("Native program cache grew during trace capture")
         self.traces[key] = entry
+        if self.spec_groups is not None:
+            # The verify trace lives and retires with the plain decode trace.
+            self._spec_entry(state, self.spec_groups)
         if (self._serving_prefill_prepared_state is state and self._serving_prefill_has_real_work
                 and self._prepared_prefill_state is None):
             self.enable_prepared_prefill_trace_retention(state)
@@ -1414,7 +1419,8 @@ class Gemma4Generator:
             sample_step()
             ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
         finally:
-            self.mesh.set_program_cache_misses_allowed(True)
+            # Prepared prefill retention keeps program-cache misses forbidden for the rest of the server's life.
+            self.mesh.set_program_cache_misses_allowed(self._prepared_prefill_state is None)
         if self.mesh.num_program_cache_entries() != programs_before:
             raise RuntimeError("Native program cache grew during speculative trace capture")
         self.spec_traces[key] = entry

@@ -523,6 +523,26 @@ class Gemma4ForCausalLM:
         finally:
             self._allocation_probe_end()
 
+    def set_kv_layer_groups(self, layer_to_group):
+        """vLLM KV-cache group of every layer (plugin, before allocation). Layers of one group share a block table,
+        so the verify trace keeps one row table per group."""
+        groups = {}
+        for layer, group in enumerate(layer_to_group):
+            groups.setdefault(int(group), []).append(layer)
+        self._spec_groups = [groups[g] for g in sorted(groups)]
+
+    def _check_spec_groups(self):
+        groups = getattr(self, "_spec_groups", None)
+        if not groups or sorted(i for g in groups for i in g) != list(range(len(self.generator.model.layers))):
+            raise RuntimeError("Speculative verify needs the KV-cache layer groups from the plugin")
+        for g in groups:
+            kinds = {self.generator.model.layers[i].kind for i in g}
+            factors = {self._kv_alias_factors[i] for i in g}
+            bounds = {self._kv_alias_bounds[i] for i in g}
+            if len(kinds) != 1 or len(factors) != 1 or len(bounds) != 1:
+                raise RuntimeError("A KV-cache group mixes layer kinds or table translations")
+        return groups
+
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, k):
         from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
@@ -608,10 +628,7 @@ class Gemma4ForCausalLM:
                 r += 1
             if r >= 32:
                 break
-        groups = {}
-        for index, table in tables.items():
-            groups.setdefault(id(table), []).append(index)
-        groups = sorted(groups.values())
+        groups = self._check_spec_groups()
         sampled = self.generator.spec_decode(kv_cache, tokens=row_tokens, positions=row_pos, slots=row_slot,
                                              candidates=row_cand, host_tables=tables, groups=groups,
                                              sampling_params=row_params)
@@ -712,6 +729,9 @@ class Gemma4ForCausalLM:
         pass
 
     def warmup_model_decode(self, kv_cache, enable_trace, **kwargs):
+        if spec_ngram_enabled():
+            # The generator captures the verify trace together with every plain decode trace capture.
+            self.generator.spec_groups = self._check_spec_groups()
         self.generator._tables(kv_cache, kv_cache.page_tables)
         self.generator.configure_sampling(batch=self.max_batch_size, temperature=0)
         self.entry = self.generator._entry(kv_cache)
