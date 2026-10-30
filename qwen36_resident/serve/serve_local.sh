@@ -13,8 +13,9 @@
 #   multi: MAX_NUM_SEQS users (default 16) on the rows-mode build (launches of 8, paged KV pool), chunked prefill of
 #          PREFILL_CHUNK_TOKENS (default 1024) between decode steps. Needs vllm-tt-plugin branch resident-mu (TT chunk
 #          core). Host sampling unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).
-#   multi-long: multi without the 128 PP chunk (RESIDENT_PREFILL_CHUNKS 256,512,1024) and with a 30,016-block pool
-#          (RESIDENT_MAX_TOKENS_ALL_USERS 1,921,024): more long-context users, TTFT +49 ms at 128-token prompts.
+#   multi-long: multi without the 128 PP chunk (RESIDENT_PREFILL_CHUNKS 256,512,1024) and with a 29,440-block pool
+#          (RESIDENT_MAX_TOKENS_ALL_USERS 1,884,160; the plugin adds one block per slot, so the engine logs 29,456):
+#          7 users at 256K, 8 at 230K, 16 at 115K; TTFT +49 ms at 128-token prompts.
 #
 # env: HF_MODEL (required; a local checkpoint dir, or a repo id the offline HF cache resolves), PORT (8000),
 #   SERVED_MODEL_NAME (Qwen/Qwen3.8-27B), MAX_MODEL_LEN (32768), VLLM_VENV (a venv with vLLM 0.26 + vllm-tt-plugin),
@@ -50,8 +51,10 @@ case $PROFILE in
   dflash2) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentDFlashForCausalLM ;;
   multi | multi-long)
     if [ "$PROFILE" = multi-long ]; then
-      # long contexts: no 128 PP chunk (its small-matmul weight copies, 3.21 GB/chip) buys a 30,016-block pool
-      # (TTFT +49 ms at 128-token prompts, +20 ms at 512, none from 2K; accuracy-gated)
+      # long contexts: no 128 PP chunk (its small-matmul weight copies, 3.21 GB/chip) buys a 29,440-block pool of
+      # 64 positions (TTFT +49 ms at 128-token prompts, +20 ms at 512, none from 2K; accuracy-gated). The plugin adds
+      # max_num_seqs blocks of output reservation (16 -> 29,456 blocks), and 30,016 + 16 OOMs at build: launch 1's
+      # 288 MiB GDN state finds 37.06 MB/bank free of the 37.75 MB it needs; 29,440 passed the card churn (queue_wp8_r3)
       export RESIDENT_PREFILL_CHUNKS=${RESIDENT_PREFILL_CHUNKS:-256,512,1024}
       export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1921024}
     fi
