@@ -18,7 +18,8 @@ void kernel_main() {
     const auto target = TensorAccessor(tensor::target);
 
     Noc noc;
-    noc.async_write_multicast(
+    constexpr auto opts = get_arg(args::includes_sender) != 0 ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
+    noc.async_write_multicast<opts>(
         source,
         target,
         get_arg(args::size_bytes),

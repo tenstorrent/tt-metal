@@ -59,6 +59,12 @@ template <typename T>
 inline constexpr bool noc_addrgen_push_v<T, std::void_t<decltype(noc_traits_t<T>::may_push)>> =
     noc_traits_t<T>::may_push;
 
+// True when T has a Watcher check for its multicast rectangle, sanitize_dst_mcast.
+template <typename T, typename = void>
+inline constexpr bool noc_sanitize_dst_mcast_v = false;
+template <typename T>
+inline constexpr bool noc_sanitize_dst_mcast_v<T, std::void_t<decltype(&noc_traits_t<T>::sanitize_dst_mcast)>> = true;
+
 /**
  * @brief Compile-time bit-flags that control optional NoC transaction behaviours.
  *
@@ -506,6 +512,10 @@ public:
         NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
         auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
+        if constexpr (noc_sanitize_dst_mcast_v<Dst>) {
+            noc_traits_t<Dst>::sanitize_dst_mcast(
+                dst, *this, dst_args, dst_noc_addr, has_flag(opts, NocOptions::MCAST_INCL_SRC));
+        }
         if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
             noc_async_write_multicast_loopback_src_impl(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
         } else {
