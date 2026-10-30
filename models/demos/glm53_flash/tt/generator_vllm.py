@@ -283,9 +283,14 @@ def _dram_line(device) -> str:
         trace = f"; trace region {tv.total_bytes_allocated_per_bank / 2**20:.0f} of {tv.total_bytes_per_bank / 2**20:.0f} MiB per bank"
     except Exception:  # noqa: BLE001 - informational
         trace = ""
+    programs = ""
+    if hasattr(
+        device, "num_program_cache_entries"
+    ):  # a growing count = a new program variant per step (kernel binaries in DRAM)
+        programs = f"; programs {device.num_program_cache_entries()}"
     return (
         f"DRAM per bank: allocated {alloc / 2**20:.0f} MiB, free {free / 2**20:.0f} MiB, "
-        f"largest free block {largest / 2**20:.0f} MiB (x{mv.num_banks} banks){trace}"
+        f"largest free block {largest / 2**20:.0f} MiB (x{mv.num_banks} banks){trace}{programs}"
     )
 
 
