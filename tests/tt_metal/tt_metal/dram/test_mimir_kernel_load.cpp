@@ -68,10 +68,6 @@ std::vector<uint32_t> expected_echo_words(uint32_t hart, const EchoArguments& ar
     return words;
 }
 
-uint32_t echo_slot_base_address() {
-    return MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-}
-
 // The runtime places a kernel by logical core; this proves that core is CCE `cce_index`'s location.
 ::testing::AssertionResult check_logical_core_is_cce(
     IDevice* device, const CoreCoord& logical_core, uint32_t cce_index) {
@@ -93,12 +89,12 @@ uint32_t echo_slot_base_address() {
 
 void poison_echo_slots(IDevice* device, uint32_t cce_index) {
     const std::vector<uint32_t> poison(cce_hart_count() * kEchoSlotWords, kEchoSlotPoisonWord);
-    write_cce_tl1(device, cce_index, echo_slot_base_address(), poison);
+    write_cce_tl1(device, cce_index, tl1_test_base(), poison);
 }
 
 std::vector<uint32_t> read_echo_slots(IDevice* device, uint32_t cce_index) {
     const uint32_t echo_block_bytes = static_cast<uint32_t>(cce_hart_count() * kEchoSlotWords * sizeof(uint32_t));
-    return read_cce_tl1(device, cce_index, echo_slot_base_address(), echo_block_bytes);
+    return read_cce_tl1(device, cce_index, tl1_test_base(), echo_block_bytes);
 }
 
 std::vector<uint32_t> echo_slot_words(const std::vector<uint32_t>& echo_block, uint32_t hart) {
@@ -139,7 +135,7 @@ KernelHandle create_echo_kernel_from(
             .processor = static_cast<DataMovementProcessor>(hart),
             .noc = NOC::NOC_0,
             .compile_args = {
-                echo_slot_base_address(),
+                tl1_test_base(),
                 ct_marker,
                 kArgsEchoMagic,
                 static_cast<uint32_t>(kTl1EchoSlotBytes),

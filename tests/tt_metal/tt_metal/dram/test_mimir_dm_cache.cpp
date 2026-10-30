@@ -767,7 +767,7 @@ IdmaOperand own_tl1_operand(uint32_t cce_index, uint64_t offset) { return {idma_
 
 IdmaOperand sram_operand(uint32_t cce_index, uint64_t offset) { return {idma_abi::kKindSramSpa, cce_index, offset}; }
 
-IdmaOperand gddr_operand(const metal_SocDescriptor& soc, uint32_t issuing_cce, uint32_t view, uint64_t view_offset) {
+IdmaOperand gddr_operand(const metal_SocDescriptor& soc, uint32_t view, uint64_t view_offset) {
     return {idma_abi::kKindGddr, mimir_of_view(soc, view), chiplet_offset_of(soc, view, view_offset)};
 }
 
@@ -1627,7 +1627,7 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
                                           ? local_dram_view_for_cce(soc, cce_index)
                                           : base_dram_view_for_mimir(soc, next_mimir(mimir_index_for_cce(cce_index)));
                 mimir_contract::write_gddr_view(device_closer.mesh(), view, gddr_source_view_offset(), source);
-                batch.source = gddr_operand(soc, cce_index, view, gddr_source_view_offset());
+                batch.source = gddr_operand(soc, view, gddr_source_view_offset());
                 batch.host_verified = true;
                 batch.expected_xor = xor_of(source);
             }
@@ -2330,10 +2330,7 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
             .cce_index = sibling,
             .hart = kReaderHart,
             .source = gddr_operand(
-                soc,
-                sibling,
-                view,
-                gddr_source_view_offset() + static_cast<uint64_t>(round) * idma_abi::kMaxBytesInPacket),
+                soc, view, gddr_source_view_offset() + static_cast<uint64_t>(round) * idma_abi::kMaxBytesInPacket),
             .destination = sram_operand(cce_index, data_offset),
             .backend_vc = idma_abi::kBackendFromRemote,
             .len_bytes = idma_abi::kMaxBytesInPacket,

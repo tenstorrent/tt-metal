@@ -42,9 +42,9 @@ constexpr uint32_t kReinitCycles = 3;
 
 uint32_t emu_cce_count() { return topology_from(configured_soc_desc()).num_cces; }
 
-const HalJitBuildConfig& cce_jit_build_config(uint32_t hart = 0) {
+const HalJitBuildConfig& cce_jit_build_config() {
     const Hal& hal = MetalContext::instance().hal();
-    return hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, hart);
+    return hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, 0);
 }
 
 uint64_t mailbox_field(dev_msgs::mailboxes_t::Field field) {

@@ -55,7 +55,6 @@ public:
     ScopedSnoopMasterConfig& operator=(const ScopedSnoopMasterConfig&) = delete;
     ~ScopedSnoopMasterConfig();
 
-    uint32_t original() const { return original_; }
     uint32_t applied() const { return applied_; }
 
 private:

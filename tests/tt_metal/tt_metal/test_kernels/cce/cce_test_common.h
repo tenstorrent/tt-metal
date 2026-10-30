@@ -72,16 +72,4 @@ struct DataCheck {
     }
 };
 
-inline bool words_match(
-    const volatile uint32_t* expected_words,
-    const volatile uint32_t* observed_words,
-    uint32_t num_words,
-    DataCheck& check) {
-    check = DataCheck{};
-    for (uint32_t word = 0; word < num_words; ++word) {
-        check.record(word, observed_words[word], expected_words[word]);
-    }
-    return check.mismatched_words == 0;
-}
-
 }  // namespace cce_test

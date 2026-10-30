@@ -355,11 +355,6 @@ bool expect_words(
     return true;
 }
 
-void write_dram(
-    distributed::MeshDevice& unit_mesh, uint32_t view, uint64_t view_offset, const std::vector<uint32_t>& data) {
-    mimir_contract::write_gddr_view(unit_mesh, view, view_offset, data);
-}
-
 bool read_dram_and_expect(
     distributed::MeshDevice& unit_mesh,
     uint32_t view,
@@ -374,7 +369,7 @@ bool read_dram_and_expect(
 
 void write_guards(const RemoteDramRun& run, const std::vector<GuardRegion>& guards) {
     for (const GuardRegion& guard : guards) {
-        write_dram(run.unit_mesh, guard.view, guard.view_offset, guard.expected);
+        mimir_contract::write_gddr_view(run.unit_mesh, guard.view, guard.view_offset, guard.expected);
     }
 }
 
@@ -613,7 +608,7 @@ RunOutcome write_from_tl1_anchor(
             kEveryAnchorBytes,
             transfer.seed);
         log_transfer(transfer.record);
-        write_dram(
+        mimir_contract::write_gddr_view(
             run.unit_mesh,
             run.dest_view,
             transfer.view_offset,
@@ -677,7 +672,7 @@ RunOutcome read_to_tl1_anchor(
             transfer.seed);
         add_transfer_guards(run, transfer, guards, next_guard_tag);
         log_transfer(transfer.record);
-        write_dram(run.unit_mesh, run.dest_view, transfer.view_offset, transfer.pattern);
+        mimir_contract::write_gddr_view(run.unit_mesh, run.dest_view, transfer.view_offset, transfer.pattern);
         write_cce_tl1(run.device, run.source_cce, transfer.tl1_offset, make_guard(next_guard_tag++, kEveryAnchorWords));
 
         CceCopyLaunch launch;
@@ -749,7 +744,7 @@ RunOutcome round_trip_anchor(
         add_transfer_guards(run, transfer, guards, next_guard_tag);
         log_transfer(transfer.record);
         log_transfer(transfer.read_back_record);
-        write_dram(
+        mimir_contract::write_gddr_view(
             run.unit_mesh,
             run.dest_view,
             transfer.view_offset,
@@ -868,7 +863,7 @@ RunOutcome check_traffic_case(
         next_guard_tag);
 
     write_cce_tl1(run.device, run.source_cce, tl1_offset, pattern);
-    write_dram(run.unit_mesh, run.dest_view, view_offset, make_guard(case_index + 1, words));
+    mimir_contract::write_gddr_view(run.unit_mesh, run.dest_view, view_offset, make_guard(case_index + 1, words));
     write_guards(run, guards);
 
     CceCopyLaunch launch;
