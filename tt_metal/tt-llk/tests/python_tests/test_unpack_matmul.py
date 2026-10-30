@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     MatmulGolden,
@@ -10,12 +9,11 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestSync,
-    MathFidelity,
     StochasticRounding,
     Transpose,
-    format_dict,
 )
 from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
 from helpers.param_config import input_output_formats, parametrize
@@ -37,7 +35,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Generate format-aware combinations
 MATMUL_FORMATS = input_output_formats(
@@ -46,7 +44,6 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 STOCHASTIC_ROUNDING_MODES = [
     StochasticRounding.No,
     StochasticRounding.Fpu,
@@ -75,12 +72,7 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
 
 @pytest.mark.nightly
 @parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     matmul_config=MATMUL_COMBINATIONS + TINY_TILES_MATMUL_COMBINATIONS,
 )
 def test_unpack_matmul(
@@ -213,12 +205,7 @@ def test_unpack_matmul(
     )
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Convert golden tensor to L1 memory view for comparison
     golden_tensor = convert_to_l1_view(

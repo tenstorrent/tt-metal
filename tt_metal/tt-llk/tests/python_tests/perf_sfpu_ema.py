@@ -17,15 +17,11 @@ cycles/tile lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE).
 Both DEST widths are swept; the Float32 form unpacks straight to Dest and has no datacopy.
 """
 
-import struct
 
 import pytest
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import (
-    ApproximationMode,
-    DestAccumulation,
-    Transpose,
-)
+from helpers.llk_params import ApproximationMode, Transpose
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig, PerfRunType
 from helpers.stimuli_config import StimuliConfig
@@ -38,6 +34,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    fp32_bits,
 )
 
 # Same smoothing factor as the functional test, so the perf and correctness runs
@@ -46,24 +43,13 @@ EMA_ALPHA = 0.25
 EMA_BETA = 1.0 - EMA_ALPHA
 
 
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
-def _dest_acc_modes(formats):
-    # A Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST.
-    if formats.input_format.is_32_bit():
-        return [DestAccumulation.Yes]
-    return [DestAccumulation.No, DestAccumulation.Yes]
-
-
 @pytest.mark.perf
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
     ],
-    dest_acc=lambda formats: _dest_acc_modes(formats),
+    dest_acc=get_valid_dest_accumulation_modes,
     loop_factor=[16],  # amortise profiler overhead
     input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
@@ -92,7 +78,7 @@ def test_perf_sfpu_ema(
         templates=[
             APPROX_MODE(ApproximationMode.No),
             EMA_ALPHA_BETA(
-                alpha_bits=_f32_bits(EMA_ALPHA), beta_bits=_f32_bits(EMA_BETA)
+                alpha_bits=fp32_bits(EMA_ALPHA), beta_bits=fp32_bits(EMA_BETA)
             ),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),

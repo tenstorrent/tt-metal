@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -12,6 +11,8 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 
 
+# The RISC-DEST debug window is only available on Blackhole.
+@blackhole_only
 @parametrize(
     formats=input_output_formats(
         [
@@ -27,11 +28,7 @@ from helpers.test_config import TestConfig
     ),
 )
 def test_dump_dest(formats):
-
     formats = formats[0]
-
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
 
     input_dimensions = [32, 32]
 

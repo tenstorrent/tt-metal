@@ -725,6 +725,17 @@ MemoryBlockTable BankManager::get_memory_block_table(
     return {};
 }
 
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::get_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    const auto* alloc = this->get_allocator_from_id(allocator_id);
+    if (alloc == nullptr) {
+        return {};
+    }
+    auto ranges = alloc->allocated_addresses();
+    std::sort(ranges.begin(), ranges.end());
+    return ranges;
+}
+
 void BankManager::shrink_size(
     DeviceAddr shrink_size, bool bottom_up, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
     if (allocator_dependencies_.num_allocators() == 1 || allocator_id.get() != 0) {

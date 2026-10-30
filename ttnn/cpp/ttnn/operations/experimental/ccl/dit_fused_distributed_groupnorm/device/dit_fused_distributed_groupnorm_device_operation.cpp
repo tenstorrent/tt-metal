@@ -26,7 +26,7 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
     const auto& beta = tensor_args.beta;
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Input must be allocated");
+    TT_FATAL(input.is_allocated(), "Input must be allocated");
     TT_FATAL(input.layout() == Layout::TILE, "Input layout must be TILE, got {}", input.layout());
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Input dtype must be BFLOAT16 for v1, got {}", input.dtype());
     TT_FATAL(
@@ -72,7 +72,7 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
         const auto& mask = tensor_args.input_mask.value();
         TT_FATAL(mask.layout() == Layout::TILE, "input_mask layout must be TILE, got {}", mask.layout());
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "input_mask must be on device");
-        TT_FATAL(mask.buffer() != nullptr, "input_mask must be allocated");
+        TT_FATAL(mask.is_allocated(), "input_mask must be allocated");
         TT_FATAL(input.device() == mask.device(), "input and input_mask must be on the same device");
         TT_FATAL(
             mask.padded_shape()[1] == args.num_groups,
@@ -97,7 +97,7 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
     // Writer is the stock RM welford GN gamma/beta kernel: DRAM-packed row-major, last dim TILE_WIDTH.
     auto validate_affine = [&](const Tensor& t, const char* name) {
         TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be on device", name);
-        TT_FATAL(t.buffer() != nullptr, "{} must be allocated", name);
+        TT_FATAL(t.is_allocated(), "{} must be allocated", name);
         TT_FATAL(input.device() == t.device(), "{} must be on the same device as input", name);
         TT_FATAL(
             t.dtype() == DataType::BFLOAT16 || t.dtype() == DataType::FLOAT32,
@@ -143,7 +143,7 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
             e_shape[3]);
         const auto& buf = tensor_args.persistent_output_buffer.value();
         TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
-        TT_FATAL(buf.buffer() != nullptr, "persistent_output_buffer must be allocated");
+        TT_FATAL(buf.is_allocated(), "persistent_output_buffer must be allocated");
         TT_FATAL(input.device() == buf.device(), "persistent_output_buffer must be on the same device as input");
         TT_FATAL(
             buf.tensor_spec() == expected_spec,

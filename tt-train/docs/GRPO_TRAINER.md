@@ -431,7 +431,12 @@ progress bars, or dashboards belong in additional callbacks.
 
 ## Transformer Config
 
-Model architecture parameters passed as a plain dict. In YAML configs, the
+The completers read the model architecture from `model_source`'s `config.json`.
+The transformer config, a plain dict, sets only what that file does not:
+`LlamaGRPOCompleter` and `LlamaCompleterRemoteRollout` read
+`max_sequence_length`, `dropout_prob` and `runner_type` from it, and
+`Qwen3GRPOCompleter` reads `max_sequence_length`; architecture keys such as
+`num_heads` are ignored. In YAML configs, the
 transformer config can be provided inline under `transformer_config:` or as a
 path to a separate file via `transformer_config_path:`. The path may use
 `${TT_METAL_RUNTIME_ROOT}` (recommended, matching other tt-train configs) or
@@ -447,9 +452,9 @@ transformer_config_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_config
 
 # Option 2: inline (still supported)
 transformer_config:
-  model_type: "llama"
-  num_heads: 32
-  ...
+  max_sequence_length: 1024
+  dropout_prob: 0.0
+  runner_type: "default"
 ```
 
 ---
@@ -590,8 +595,12 @@ Each checkpoint directory contains:
 | `training_args.bin` | Full `GRPOConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
 | `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |
 
-To resume from a checkpoint, point `model_source` at the checkpoint directory
-(it contains `model.safetensors` and the tokenizer files).
+To resume a Llama run from a checkpoint, point `LlamaGRPOCompleter`'s `model_source`
+at the checkpoint directory. The completer recognises it by `trainer_state.json`, reads
+the architecture from `config.json` and the tokenizer from its files, and requires
+`model.safetensors` to hold every parameter of the model. Only `LlamaGRPOCompleter`
+resumes: `Qwen3GRPOCompleter` and `LlamaCompleterRemoteRollout` read `model_source` as a
+HuggingFace checkpoint, and the trainer saves its weights under TTML's parameter names.
 
 ---
 
