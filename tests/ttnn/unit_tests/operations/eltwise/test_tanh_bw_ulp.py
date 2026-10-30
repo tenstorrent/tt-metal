@@ -36,6 +36,7 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     sech2_exact,
     ulp_distance_bf16_daz,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def tanh_derivative_expected_bf16_daz(x: float) -> float:
@@ -364,27 +365,29 @@ def test_tanh_bw_cache_miss_same_volume_different_alignment(device):
     device.disable_and_clear_program_cache()
 
 
-def test_tanh_bw_cache_miss_same_padded_shape_different_logical_shape(device):
-    """Same padded shape, different logical shape, must be two cache entries.
+def test_tanh_bw_cache_hit_same_padded_shape_different_logical_shape(device):
+    """Same padded shape and layout, different logical shape, must share one cache entry and stay correct.
 
-    logical 30x30 and 32x32 both pad to 32x32 under the default tile alignment. Metal 2.0 compares every tensor's
-    layout exactly on a cache hit, so the key must cover the whole TensorSpec, not just the padded shape (#59915).
+    logical 30x30 and 32x32 both pad to 32x32 under the default tile alignment. The key matches each tensor the way
+    Metal 2.0's match_padded_shape_only relaxation does (whole TensorLayout plus padded shape), so the logical shape
+    stays out and the second call reuses the first call's program (#59915).
     """
     device.enable_program_cache()
 
-    def pair(logical):
-        grad = ttnn.from_torch(torch.rand(logical, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-        x = ttnn.from_torch(torch.rand(logical, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-        return grad, x
+    def run(logical):
+        grad = torch.rand(logical, dtype=torch.bfloat16)
+        x = torch.rand(logical, dtype=torch.bfloat16)
+        tt_grad = ttnn.from_torch(grad, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_x = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device)
+        assert list(tt_x.padded_shape) == [1, 1, 32, 32]
+        output = ttnn.to_torch(ttnn.tanh_bw(tt_grad, tt_x)[0])
+        expected = grad.float() * (1 - torch.tanh(x.float()) ** 2)
+        assert_with_pcc(expected, output.float(), 0.999)
 
     torch.manual_seed(0)
-    small = pair((1, 1, 30, 30))
-    full = pair((1, 1, 32, 32))
-    assert list(small[1].padded_shape) == list(full[1].padded_shape)
-
     device.clear_program_cache()
-    ttnn.tanh_bw(*small)
+    run((1, 1, 30, 30))
     assert device.num_program_cache_entries() == 1
-    ttnn.tanh_bw(*full)
-    assert device.num_program_cache_entries() == 2
+    run((1, 1, 32, 32))
+    assert device.num_program_cache_entries() == 1
     device.disable_and_clear_program_cache()

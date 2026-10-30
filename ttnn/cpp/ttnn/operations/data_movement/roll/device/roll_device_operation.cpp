@@ -5,6 +5,7 @@
 #include "roll_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -62,12 +63,16 @@ ttsl::hash::hash_t RollDeviceOperation::compute_program_hash(
     // padded_shape drives the N-D decomposition the factory writes into per-core runtime args, and it
     // changes their count, which override_runtime_arguments cannot resize. output_mem_config supplies
     // the output shard grid and orientation, which become the kernels' core ranges and select the
-    // shard-linear mapping; only the shard shape is re-checked on a hit. The input's whole TensorSpec
-    // is keyed, not just the fields read here: Metal 2.0 requires an exact layout match (Alignment
-    // included) on every cache hit, so a key that left any layout field free would turn a working hit
-    // into a throw once the op is ported (#59915).
+    // shard-linear mapping; only the shard shape is re-checked on a hit. The input is keyed as Metal 2.0
+    // matches it under match_padded_shape_only: its whole TensorLayout (Alignment included, which Metal 2.0
+    // requires to match exactly on every hit) plus its padded shape (#59915). Its logical shape is left
+    // out; validate_roll rejects any input whose logical and padded shapes differ, on hits too.
     return tt::tt_metal::operation::hash_operation<RollDeviceOperation>(
-        attrs.shift, attrs.dim, attrs.output_mem_config, args.input.tensor_spec());
+        attrs.shift,
+        attrs.dim,
+        attrs.output_mem_config,
+        tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
+            args.input.tensor_spec(), {.match_padded_shape_only = true}));
 }
 
 RollDeviceOperation::spec_return_value_t RollDeviceOperation::compute_output_specs(

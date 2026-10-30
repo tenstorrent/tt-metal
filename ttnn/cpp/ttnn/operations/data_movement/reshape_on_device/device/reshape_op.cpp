@@ -6,6 +6,7 @@
 #include "reshape_on_device/device/reshape_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -111,15 +112,16 @@ ttsl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input_tensor;
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
-    // The input's whole TensorSpec, not just the fields the factories read: Metal 2.0 requires an exact
-    // layout match (Alignment included) on every cache hit, so a key that left any layout field free
-    // would turn a working hit into a throw once the op is ported (#59915).
+    // The input is keyed as Metal 2.0 matches it under match_padded_shape_only: its whole TensorLayout
+    // (Alignment included, which Metal 2.0 requires to match exactly on every hit) plus its padded shape
+    // (#59915). Its logical shape is left out: the factories work only from the padded shape.
     return operation::hash_operation<ReshapeDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.padded_output_shape,
         operation_attributes.output_mem_config,
         program_factory.index(),
-        input_tensor.tensor_spec());
+        tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
+            input_tensor.tensor_spec(), {.match_padded_shape_only = true}));
 }
 
 ttnn::Tensor reshape_on_device(
