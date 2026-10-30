@@ -38,6 +38,8 @@ using experimental::NodeRangeSet;
 
 const std::string kMulticastKernel =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_multicast_writer.cpp";
+// Outside every rectangle below.
+const NodeCoord kSenderOutside{0, 1};
 
 // One 32x32 tile per node, height-sharded over `nodes`.
 TensorSpec MakeTileShardedSpec(const NodeRangeSet& nodes) {
@@ -53,10 +55,15 @@ TensorSpec MakeTileShardedSpec(const NodeRangeSet& nodes) {
             }));
 }
 
-// The sender on (0,1) multicasts its one-tile `source` over the rectangle from logical node (start_x,0) to (end_x,0) on
-// `noc`.
+// The sender multicasts its one-tile `source` over the rectangle from logical node (start_x,0) to (end_x,0) on `noc`. A
+// sender inside the rectangle is skipped by the multicast.
 void RunMulticastNodeSetTest(
-    distributed::MeshDevice& mesh_device, uint32_t start_x, uint32_t end_x, NOC noc, bool expect_error) {
+    distributed::MeshDevice& mesh_device,
+    NodeCoord sender,
+    uint32_t start_x,
+    uint32_t end_x,
+    NOC noc,
+    bool expect_error) {
     if (MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
         GTEST_SKIP();
     }
@@ -66,8 +73,6 @@ void RunMulticastNodeSetTest(
     }
     auto& cq = mesh_device.mesh_command_queue();
 
-    // The sender is outside every rectangle, so no case depends on whether the multicast includes it.
-    const NodeCoord sender{0, 1};
     const TensorSpec source_spec = MakeTileShardedSpec(NodeRangeSet(sender));
     const TensorSpec target_spec = MakeTileShardedSpec(NodeRangeSet(NodeRange({0, 0}, {1, 0})));
     MeshTensor source = MeshTensor::allocate_on_device(mesh_device, source_spec);
@@ -88,8 +93,12 @@ void RunMulticastNodeSetTest(
     // edge.
     const CoreCoord rect_start = mesh_device.worker_core_from_logical_core({start_x, 0});
     const CoreCoord rect_end = mesh_device.worker_core_from_logical_core({end_x, 0});
-    // The rectangle's nodes. A wrapping rectangle stops in the check before the multicast is issued.
-    const uint32_t num_targets = std::max(start_x, end_x) - std::min(start_x, end_x) + 1;
+    // The rectangle's nodes, less a sender inside it, which the multicast skips. A wrapping rectangle stops in the
+    // check before the multicast is issued.
+    const uint32_t first_x = std::min(start_x, end_x);
+    const uint32_t last_x = std::max(start_x, end_x);
+    const bool skips_sender = sender.y == 0 && sender.x >= first_x && sender.x <= last_x;
+    const uint32_t num_targets = last_x - first_x + 1 - (skips_sender ? 1u : 0u);
     const experimental::KernelSpecName kernel_name{"multicast_writer"};
     Program program = experimental::MakeProgramFromSpec(
         mesh_device,
@@ -163,17 +172,27 @@ void RunMulticastNodeSetTest(
 }  // namespace
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinShardedTensor) {
-    RunMulticastNodeSetTest(*this->devices_[0], /*start_x=*/0, /*end_x=*/1, NOC::NOC_0, /*expect_error=*/false);
+    RunMulticastNodeSetTest(
+        *this->devices_[0], kSenderOutside, /*start_x=*/0, /*end_x=*/1, NOC::NOC_0, /*expect_error=*/false);
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinShardedTensorNoc1) {
-    RunMulticastNodeSetTest(*this->devices_[0], /*start_x=*/1, /*end_x=*/0, NOC::NOC_1, /*expect_error=*/false);
+    RunMulticastNodeSetTest(
+        *this->devices_[0], kSenderOutside, /*start_x=*/1, /*end_x=*/0, NOC::NOC_1, /*expect_error=*/false);
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastPastShardedTensor) {
-    RunMulticastNodeSetTest(*this->devices_[0], /*start_x=*/0, /*end_x=*/2, NOC::NOC_0, /*expect_error=*/true);
+    RunMulticastNodeSetTest(
+        *this->devices_[0], kSenderOutside, /*start_x=*/0, /*end_x=*/2, NOC::NOC_0, /*expect_error=*/true);
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWrapAroundShardedTensor) {
-    RunMulticastNodeSetTest(*this->devices_[0], /*start_x=*/1, /*end_x=*/0, NOC::NOC_0, /*expect_error=*/true);
+    RunMulticastNodeSetTest(
+        *this->devices_[0], kSenderOutside, /*start_x=*/1, /*end_x=*/0, NOC::NOC_0, /*expect_error=*/true);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSenderInsideRectangle) {
+    // The sender on (2,0) holds no tile of `target`, but the multicast skips it.
+    RunMulticastNodeSetTest(
+        *this->devices_[0], /*sender=*/{2, 0}, /*start_x=*/0, /*end_x=*/2, NOC::NOC_0, /*expect_error=*/false);
 }

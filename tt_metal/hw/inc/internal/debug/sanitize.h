@@ -1139,14 +1139,29 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
         if (!is_worker(x_min, y_min)) {
             return;  // left to the generic multicast check
         }
+        // The sender's coordinates, in the frame of the rectangle and the tensor's nodes.
+#if defined(NOC_ATT_ENABLED)
+        const uint32_t sender_x = my_x[noc_id] - ACTIVE_ATT_MAP.node_id_offset_x;
+        const uint32_t sender_y = my_y[noc_id] - ACTIVE_ATT_MAP.node_id_offset_y;
+#else
+        const uint32_t sender_x = my_x[noc_id];
+        const uint32_t sender_y = my_y[noc_id];
+#endif
         // Assumes the tensor's nodes are distinct, or a duplicate inside the rectangle can hide a missing one. A
         // BufferDistributionSpec built from a CoreRangeSet satisfies this; one built from a core list is not checked.
         uint32_t num_inside = 0;
+        bool is_sender_node = false;
         for (uint32_t i = 0; i < num_nodes; ++i) {
             const uint32_t x = (packed_xy_coords[i] >> 8) & 0xFF;
             const uint32_t y = packed_xy_coords[i] & 0xFF;
             num_inside += x >= x_min && x <= x_max && y >= y_min && y <= y_max;
+            is_sender_node |= x == sender_x && y == sender_y;
         }
+        // A plain multicast skips the sender, so a sender inside the rectangle need not hold the tensor; only a worker
+        // sender is among the counted nodes. The check can't see a loopback multicast (MCAST_INCL_SRC), so a loopback
+        // into a sender without the tensor goes unreported.
+        num_inside += !is_sender_node && sender_x >= x_min && sender_x <= x_max && sender_y >= y_min &&
+                      sender_y <= y_max && is_worker(sender_x, sender_y);
         // Count worker nodes rather than take the area: worker coordinates have gaps (Blackhole's non-worker columns,
         // harvested rows or columns). Non-worker nodes come in whole rows and columns, so the count is the worker
         // columns along the first row times the worker rows along the first column.
