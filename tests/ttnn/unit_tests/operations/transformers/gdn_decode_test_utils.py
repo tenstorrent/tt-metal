@@ -259,23 +259,24 @@ def golden_cases():
             yield shape, B, T, with_state
 
 
-def _tree_sha():
+def _head_commit():
+    """The short hash of HEAD, with "-dirty" appended when the working tree has uncommitted changes, so the JSON records
+    which code produced the digests (a regeneration run is usually made before the commit that carries it)."""
     try:
-        return subprocess.run(
-            ["git", "rev-parse", "--short=11", "HEAD"],
-            cwd=GOLDENS_PATH.parent,
-            capture_output=True,
-            text=True,
-            check=True,
+        run = lambda *args: subprocess.run(
+            ["git", *args], cwd=GOLDENS_PATH.parent, capture_output=True, text=True, check=True
         ).stdout.strip()
+        head = run("rev-parse", "--short=11", "HEAD")
+        return head + ("-dirty" if run("status", "--porcelain") else "")
     except Exception:
         return "unknown"
 
 
 def assert_compatibility_golden(device, shape, B, T, with_state):
     """The op's digests on the case's fixed inputs against the stored goldens. GDN_GOLDENS_UPDATE=1 rewrites the case's
-    entry (digests, the PCC of each output against the golden, the tree, the device and the date) instead of checking.
-    """
+    entry (digests, the PCC of each output against the golden, the commit, the device and the date) and then checks it
+    like a normal run. Regeneration is refused under CI, and it rewrites the shared JSON file per case, so run it
+    serially (no pytest-xdist)."""
     sh = SHAPES[shape]
     skip_unless_fits(device, B, sh.num_value_heads)
     case = golden_case_id(shape, B, T, with_state)
@@ -285,6 +286,8 @@ def assert_compatibility_golden(device, shape, B, T, with_state):
     o, state = run_op(device, x, output_final_state=not per_token, output_per_token_state=per_token)
     got = {"o": golden_digest(o), "state": golden_digest(state)}
     if os.environ.get("GDN_GOLDENS_UPDATE"):
+        if os.environ.get("CI"):
+            pytest.fail("GDN_GOLDENS_UPDATE is set under CI: goldens are regenerated on a developer's machine only")
         o_ref, state_ref = ttnn.get_golden_function(OP)(
             x["q"],
             x["k"],
@@ -299,7 +302,7 @@ def assert_compatibility_golden(device, shape, B, T, with_state):
             **got,
             "pcc_o": round(metrics(o_ref, o)["pcc"], 7),
             "pcc_state": round(metrics(state_ref, state)["pcc"], 7),
-            "tree": _tree_sha(),
+            "commit": _head_commit(),
             "device": os.environ.get("GDN_GOLDENS_DEVICE", ttnn.get_arch_name()),
             "date": datetime.date.today().isoformat(),
         }
@@ -309,12 +312,13 @@ def assert_compatibility_golden(device, shape, B, T, with_state):
             else {"version": 1, "op": "ttnn.transformer.fused_recurrent_gated_delta_rule", "cases": {}}
         )
         doc["cases"][case] = entry
-        GOLDENS_PATH.write_text(json.dumps(doc, indent=1) + "\n")
-        return
+        tmp = GOLDENS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc, indent=1) + "\n")
+        os.replace(tmp, GOLDENS_PATH)  # the file is whole at every instant; the check below then reads it back
     stored = json.loads(GOLDENS_PATH.read_text())["cases"].get(case)
     assert stored is not None, f"{case}: no stored golden; GDN_GOLDENS_UPDATE=1 generates it"
     assert got == {"o": stored["o"], "state": stored["state"]}, (
-        f"{case}: digests differ from the goldens taken at {stored['tree']} on {stored['device']} ({stored['date']}); "
+        f"{case}: digests differ from the goldens taken at {stored['commit']} on {stored['device']} ({stored['date']}); "
         "GDN_GOLDENS_UPDATE=1 regenerates them when the change of bits is intended"
     )
 
