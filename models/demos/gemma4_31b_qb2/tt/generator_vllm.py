@@ -742,7 +742,7 @@ class Gemma4ForCausalLM:
             step[0] = bucket if step[0] is None else step[0]
             step[1] = getattr(self, "_gate_mode", True)
             step[3] = sum(int(accepted_counts[row]) for row in live_rows)
-        mode = spec_ngram.GATE.mode(bucket) if live_rows else True
+        mode = spec_ngram.GATE.mode(bucket, len(live_rows)) if live_rows else True
         self._gate_mode = mode
         drafts, valid, matched, full = spec_ngram.propose(
             histories, int(num_drafts), wide=self.generator.spec_wide, allow=mode

@@ -309,6 +309,9 @@ def _ctl():
     return _CTL["v"]
 
 
+MAX_BUSY = int(os.environ.get("GEMMA_SPEC_MAX_BUSY", "0"))
+
+
 class Gate:
     """Measured-throughput gate per batch bucket: committed tokens per second of clean step time (no prefill in the
     period) with drafting allowed vs not. Drafting is allowed in a bucket only while its measured rate beats the
@@ -340,7 +343,10 @@ class Gate:
         t, n = self.stats.get((bucket, mode), (0.0, 0.0))
         return (n / t if t > 0 else None), t
 
-    def mode(self, bucket):
+    def mode(self, bucket, live=None):
+        if MAX_BUSY and live is not None and live > MAX_BUSY:
+            # Static ceiling (measured on real agent traffic, S2 vs S1: >= 1.2x up to 12 busy, <= 1.0x above).
+            return False
         if not self.ENABLED:
             return True
         left = self.left.get(bucket, 0)
