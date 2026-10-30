@@ -13,8 +13,7 @@
 namespace ttnn::experimental::kda {
 
 std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
-    const ttnn::Tensor& a,
-    const ttnn::Tensor& b,
+    const ttnn::Tensor& summaries,
     uint32_t groups_per_head,
     const ttnn::Tensor& actual_start,
     uint32_t local_rows,

@@ -136,7 +136,7 @@ class TtNomicBertModel(LightweightModule):
             weight=weight,
             bias=bias,
             epsilon=self.config.layer_norm_epsilon,
-            memory_config=activation_memory_config(hidden),
+            memory_config=activation_memory_config(hidden.shape),
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
         ttnn.deallocate(hidden)
@@ -170,8 +170,7 @@ def encode(
 
     Row i is the embedding of texts[i]: padding is masked out at pooling, so a short text gets
     the same vector, to within 1e-2 in cosine, whether encoded alone or in a ragged batch. It is
-    not bit-identical, since the expert layout is chosen from the batch's token count and a
-    transposed expert pass shares bfloat8_b exponents across 16 neighbouring tokens. The dot
+    not bit-identical, since the matmul blockings are chosen from the batch's shape. The dot
     product of two rows is their cosine similarity.
 
     Args:

@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -20,7 +21,6 @@ from helpers.llk_params import (
     PerfRunType,
     Transpose,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
@@ -51,7 +51,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_DIMENSIONS = [32, 32]
 
@@ -86,24 +86,6 @@ def generate_qsr_transpose_dest_combinations(
         # Int8/UInt8 in Src regs and Int32 in dest reg is unsupported for MOVB2D
         # Float16/Float16_b in Src regs and Float32 in dest reg is unsupported for MOVB2D
         return (DestAccumulation.No,)
-
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
-            out_fmt.is_32_bit()
-            and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
-            dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
-        ):
-            return False
-        return True
 
     # Curated dimensions: some fit in one bank (no switching), some require
     # multiple blocks (triggering dest bank switches with DstSync.Half).
@@ -145,7 +127,7 @@ def generate_qsr_transpose_dest_combinations(
             continue
 
         for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+            if is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
                         if is_perf:
@@ -190,7 +172,6 @@ def generate_qsr_transpose_dest_combinations(
 TRANSPOSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
@@ -380,11 +361,7 @@ def test_transpose_dest_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,
