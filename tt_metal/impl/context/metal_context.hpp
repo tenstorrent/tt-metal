@@ -12,7 +12,7 @@
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/common_values.hpp"
@@ -82,17 +82,14 @@ public:
     // IDs are recycled after instances are destroyed.
     ContextId get_context_id() const { return context_id_; }
 
-    [[deprecated("Use MetalEnv instead")]] Cluster& get_cluster();
-    [[deprecated("Use MetalEnv instead")]] llrt::RunTimeOptions& rtoptions();
-    [[deprecated("Use MetalEnv instead")]] const Cluster& get_cluster() const;
-    [[deprecated("Use MetalEnv instead")]] const llrt::RunTimeOptions& rtoptions() const;
-    [[deprecated("Use MetalEnv instead")]] const Hal& hal() const;
+    Cluster& get_cluster();
+    llrt::RunTimeOptions& rtoptions();
+    const Cluster& get_cluster() const;
+    const llrt::RunTimeOptions& rtoptions() const;
+    const Hal& hal() const;
 
     // Returns the MetalEnv instance assigned to this context.
-    [[deprecated(
-        "Use MetalEnv directly instead. This is a temporary workaround until all code is migrated to use "
-        "MetalEnv.")]] tt::tt_metal::MetalEnv&
-    get_env();
+    tt::tt_metal::MetalEnv& get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
 

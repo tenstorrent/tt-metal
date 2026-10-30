@@ -8,11 +8,51 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
+
+
+class _FusedDistRMSNorm(RMSNorm):
+    """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
+    (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # The fused op wants gamma TILE [1,1,dim] sharded on dim 2 (weight_distributed is ROW_MAJOR [1,1,dim/32,32]).
+        dim, device, cache = kwargs["dim"], kwargs["device"], kwargs.get("weight_cache_path")
+        name = f"{kwargs['state_dict_prefix']}{kwargs['weight_key']}.weight"
+        self.weight_fused = ttnn.as_tensor(
+            kwargs["state_dict"][name].unsqueeze(0).view(1, 1, dim) + 1.0,  # same +1 as the base weight
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=None if cache is None else cache / (name + "_fused_tile"),
+            mesh_mapper=tpc.tp_shard_mapper(device, 2),
+        )
+
+    def _distributed_rmsnorm(
+        self,
+        inp,
+        epsilon=None,
+        weight=None,
+        program_config=None,
+        memory_config=None,
+        compute_kernel_config=None,
+        output_memory_config=None,
+    ):
+        assert program_config is None and memory_config is None, "Distributed RMSNorm does not support sharded I/O"
+        mc = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        shape = tuple(inp.shape)
+        x = inp if len(shape) == 4 else ttnn.reshape(inp, (1,) * (4 - len(shape)) + shape)  # the op needs rank 4
+        out = tpc.fused_distributed_rmsnorm(
+            x, self.weight_fused, epsilon, self.tt_ccl, self.ccl_topology, compute_kernel_config, mc
+        )
+        return out if len(shape) == 4 else ttnn.reshape(out, shape)
 
 
 class Qwen36DecoderLayer:
@@ -138,7 +178,13 @@ class Qwen36DecoderLayer:
         path used. The DistributedNorm wrapper (TP>1) mirrors tt_transformers
         decoder.py and handles the fractured->replicated transition.
         """
-        norm = RMSNorm(
+        fused = getattr(args, "prefill_fused_dist_norm", False) and self.num_devices > 1
+        # RMSNorm's distributed path gathers its statistics with no cluster_axis, i.e. over the whole mesh; on a
+        # 2D (rows, tp) mesh that mixes the rows' tokens, so only the fused norm (TP-axis gather) is correct there.
+        if tpc.is_2d_mesh(mesh_device) and not fused:
+            raise ValueError("2D meshes need the fused distributed RMSNorm (QWEN36_FUSED_DIST_NORM=1)")
+        norm_cls = _FusedDistRMSNorm if fused else RMSNorm
+        norm = norm_cls(
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
@@ -177,17 +223,31 @@ class Qwen36DecoderLayer:
         valid_len=None,
         gdn_collect=False,
         gdn_recurrent=False,
+        gdn_seed=False,
         decode_cfg=False,
-        exact_kv_pos=None,
-        exact_kv_pt=None,
         alias_kv_write=False,
         spec_verify_mode=False,
         spec_page_table=None,
+        spec_user_page_table=None,
+        n_users=1,
+        state_blk_idx=None,
+        conv_sel=None,
+        gdn_capture_state=True,
+        gdn_carry_state=True,
+        sp=None,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
+        # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
+        # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
+        # until capture_verify_trace allocates them.
+        # n_users / state_blk_idx / conv_sel: multi-user speculative verify. Bucket rows are n_users
+        # users x T = rows // n_users candidates, user-major (row u*T + j). GDN reshapes them to
+        # [n_users, T, C] and reads each user's initial state / conv window through the shared device
+        # selectors state_blk_idx / conv_sel; full attention groups the SDPA and the aliased KV write
+        # per user (spec_n_users, spec_user_page_table).
         # decode_cfg: run a SHORT prefill-mode forward (spec verify, <=TILE_SIZE rows) with the DECODE
         # matmul/norm configuration. Every matmul in the stack already selects decode-vs-prefill purely
         # on `x.shape[-2] <= TILE_SIZE`, so at a 32-row bucket they all pick the DRAM-sharded decode
@@ -201,9 +261,13 @@ class Qwen36DecoderLayer:
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
-            # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
+            # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM
+            # (DRAM above S=2048: the norm output stays resident through the whole attention, clashing with its CBs).
             if _norm_mode == Mode.PREFILL:
-                _attn_norm_config = {**_attn_norm_config, "distributed_output_mem_config": ttnn.L1_MEMORY_CONFIG}
+                _attn_norm_config = {
+                    **_attn_norm_config,
+                    "distributed_output_mem_config": tpc.prefill_act_mem(x.shape[-2], ttnn.L1_MEMORY_CONFIG),
+                }
             # DECODE ff_norm uses the attn_norm layout (act_shard_hidden, 32-core) so Qwen36MLP's input reshard is a no-op and the norm runs on 32 cores not 8; PREFILL keeps the framework ff config.
             if _norm_mode == Mode.DECODE:
                 _ff_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -235,14 +299,14 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
-                            exact_kv_pos=exact_kv_pos,
-                            exact_kv_pt=exact_kv_pt,
+                            sp=sp,
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
                 else:
-                    # alias_kv_write: the B rows share one sequence (spec verify's candidates as
-                    # pseudo-users), so the KV write must be per-row — see TPAttention.forward_decode.
+                    # alias_kv_write: the B rows are not independent users (spec verify's candidates
+                    # as pseudo-users), so the KV write cannot be one batched call — see
+                    # TPAttention._write_kv_aliased.
                     # spec_verify_mode/spec_page_table: additionally fold those rows into ONE SDPA
                     # batch row so the KV cache is read once per layer (same place).
                     attn_output = self.attention.forward_decode(
@@ -254,16 +318,29 @@ class Qwen36DecoderLayer:
                         alias_kv_write=alias_kv_write,
                         spec_verify_mode=spec_verify_mode,
                         spec_page_table=spec_page_table,
+                        spec_n_users=n_users,
+                        spec_user_page_table=spec_user_page_table,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
-                    if gdn_recurrent:
+                    if gdn_recurrent and gdn_seed:
+                        # Spec-decode seed: the verify's conv1d + fused recurrent arithmetic, run
+                        # against the durable state and without the deferred-commit selectors.
+                        attn_output = self.attention.forward_seed_recurrent(
+                            attn_input, valid_len, pre_gathered=decode_cfg, n_users=n_users
+                        )
+                    elif gdn_recurrent:
                         # Hybrid spec-decode verify: advance GDN recurrently (bit-exact to decode)
                         # over valid_len tokens while the rest of the stack runs batched.
                         attn_output = self.attention.forward_verify_recurrent(
-                            attn_input, valid_len, pre_gathered=decode_cfg
+                            attn_input,
+                            valid_len,
+                            pre_gathered=decode_cfg,
+                            n_users=n_users,
+                            state_blk_idx=state_blk_idx,
+                            conv_sel=conv_sel,
                         )
                     elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for
@@ -273,7 +350,12 @@ class Qwen36DecoderLayer:
                         )
                     else:
                         attn_output = self.attention.forward_prefill(
-                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                            attn_input,
+                            chunk_size=chunk_size,
+                            valid_len=valid_len,
+                            capture_state=gdn_capture_state,
+                            carry_state=gdn_carry_state,
+                            sp=sp,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)

@@ -17,8 +17,9 @@ namespace ckernel {
  * Performs elementwise multiply-accumulate (mac): out = a * b + c
  *
  * Must be called immediately after mac_tile_init(): the instruction sequence is
- * recorded into the replay buffer by mac_tile_init, and replay slots 0..6 are
- * shared with other SFPU ops. Any intervening SFPU op invalidates the recording.
+ * recorded into the replay buffer by mac_tile_init, and the replay slots it
+ * occupies (0..mac_replay_len-1, an arch-specific length) are shared with other
+ * SFPU ops. Any intervening SFPU op invalidates the recording.
  *
  * The tile indices below are fixed by that recording and cannot currently be
  * varied by the caller - operands are always read from tiles 0, 1, 2 and the
@@ -35,6 +36,18 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_mac,
+        (APPROX, DST_ACCUM_MODE, data_format, 32 /* ITERATIONS */),
+        idst0,
+        idst1,
+        idst2,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -45,6 +58,7 @@ ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst
         idst2,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 /**

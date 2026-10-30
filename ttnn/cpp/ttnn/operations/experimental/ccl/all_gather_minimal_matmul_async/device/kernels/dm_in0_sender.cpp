@@ -56,8 +56,10 @@ constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(26);
 #ifdef USE_MUX
 constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(27);
 constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(28);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(30);
+// The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map
+// address it publishes in semaphore fabric_mux_l1_base_semaphore_id.
+constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(29);
+constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(30);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(31);
 
 constexpr uint32_t mux_arg_count = 32;
@@ -109,6 +111,7 @@ void kernel_main() {
     const uint32_t in3_addr = get_common_arg_val<uint32_t>(cargidx++);
     size_t out_ready_sem_backward = get_common_arg_val<uint32_t>(cargidx++);
     size_t out_ready_sem_forward = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t barrier_sem = get_common_arg_val<uint32_t>(cargidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
@@ -171,12 +174,12 @@ void kernel_main() {
         mux_backward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in0_core_order_index, backward_in0_core_order_index);
-        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
+        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
     } else if (in0_core_order_index == forward_in0_core_order_index) {
         mux_forward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in0_core_order_index, forward_in0_core_order_index);
-        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
+        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
     }
 #endif
 
@@ -285,6 +288,36 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+
+    // A following gather may reuse DRAM owned by the preceding collective. Its
+    // remote writes must wait until every rank has entered this program. Data
+    // readiness semaphores protect reads within this gather, not prior owners.
+    // This barrier covers the Ring activation gather; Linear and FSDP are unchanged.
+    // Every in0 core on every rank runs it symmetrically: out_ready_sem_noc0_x/y are
+    // this core's own coordinates, so each core signals its counterpart on the
+    // num_devices - 1 peers and waits for exactly that many arrivals in its own L1.
+    if constexpr (topology == Topology::Ring && num_devices > 1) {
+        if (barrier_sem != 0) {
+            auto* barrier_connection =
+                mux_backward.connection_valid ? mux_connection_handle_backward : mux_connection_handle_forward;
+            auto* barrier_header = PacketHeaderPool::allocate_header();
+            const uint64_t barrier_noc_addr =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+            fabric_multicast_noc_unicast_atomic_inc(
+                barrier_connection,
+                barrier_header,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_noc_addr, 1},
+                static_cast<uint8_t>(1),
+                static_cast<uint8_t>(num_devices - 1));
+            noc_obj.async_writes_flushed();
+            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+            noc_semaphore_wait_min(barrier_ptr, num_devices - 1);
+            // Consume this launch's arrivals rather than resetting: a faster rank's
+            // next-launch arrival may already be here, and a reset would drop it.
+            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - (num_devices - 1));
+            noc_obj.async_atomic_barrier();
+        }
+    }
 #endif
 
     /**
@@ -713,7 +746,7 @@ void kernel_main() {
             mux_backward.num_mux_clients,
             mux_backward.fabric_mux_x,
             mux_backward.fabric_mux_y,
-            fabric_mux_termination_signal_address,
+            mux_backward.fabric_mux_l1_base + fabric_mux_termination_signal_offset,
             mux_backward.termination_master_noc_x,
             mux_backward.termination_master_noc_y);
     }
@@ -726,7 +759,7 @@ void kernel_main() {
             mux_forward.num_mux_clients,
             mux_forward.fabric_mux_x,
             mux_forward.fabric_mux_y,
-            fabric_mux_termination_signal_address,
+            mux_forward.fabric_mux_l1_base + fabric_mux_termination_signal_offset,
             mux_forward.termination_master_noc_x,
             mux_forward.termination_master_noc_y);
     }

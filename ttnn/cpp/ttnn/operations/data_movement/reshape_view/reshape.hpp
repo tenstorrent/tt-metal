@@ -40,7 +40,7 @@ ttnn::Tensor reshape(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<PadValue>& pad_value = std::nullopt,
     TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid = std::nullopt,
     bool skip_padding_fill = false);
 
 ttnn::Tensor reshape(
@@ -50,7 +50,7 @@ ttnn::Tensor reshape(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<PadValue>& pad_value = std::nullopt,
     TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid = std::nullopt,
     bool skip_padding_fill = false);
 
 ttnn::Tensor reshape(
@@ -59,7 +59,7 @@ ttnn::Tensor reshape(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<PadValue>& pad_value = std::nullopt,
     TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid = std::nullopt,
     bool skip_padding_fill = false);
 
 }  // namespace ttnn

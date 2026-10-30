@@ -22,7 +22,7 @@ The rule passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--port`, `--timeout`)
+- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -58,7 +58,7 @@ bash .cursor/scripts/run_test.sh <command> \
     --arch <arch> \
     --test <test_file> \
     [--maxfail N] [-k EXPR] [--test-id ID] \
-    [--no-split] [--port PORT] [--timeout SECS]
+    [--no-split] [--timeout SECS]
 ```
 
 Use a blocking shell invocation with a sufficiently high timeout (~30 minutes) so the command finishes before any terminal read. Synchronous, never run in background. If a retry is needed, re-run with a higher timeout rather than polling.
@@ -97,7 +97,7 @@ For deeper context, look for these blocks (each appears at most once):
 | 0    | PASS         | Report PASS                                                           |
 | 1    | FAIL         | Surface failing variants from `= FAILURES =` section                  |
 | 2    | COMPILE_FAIL | Surface compile error from compile phase output                       |
-| 3    | ENV_ERROR    | Likely venv missing, simulator port stuck, or `flock` timeout. Report root cause; do **not** retry blindly |
+| 3    | ENV_ERROR    | Likely venv missing or `flock` timeout. Report root cause; do **not** retry blindly |
 | 4    | BAD_ARGS     | Bug in the rule/agent invocation — surface and stop                   |
 | 5    | HANG         | Watchdog tripped or post-mortem detected `TENSIX TIMED OUT`. Surface the `RUN_LLK_TESTS_HANG` block (includes `tt-triage` output if available). Device has already been reset (`tt-smi -r`) and any stale `pytest --compile-consumer` killed. Do **not** retry — report HANG with the failing variant and the triage summary. |
 

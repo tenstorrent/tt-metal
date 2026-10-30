@@ -40,11 +40,13 @@ inline bool validate_workload_or_fail(const PerfParams& p) {
 
 // Resolve forwarding link and fail early if none found.
 inline bool pick_forwarding_link_or_fail(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& /*src*/,
     const tt::tt_fabric::FabricNodeId& /*dst*/,
     uint32_t& out_link_idx,
     const PerfParams& p) {
     auto links = tt::tt_fabric::get_forwarding_link_indices(
+        mesh_device,
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
 
@@ -54,18 +56,6 @@ inline bool pick_forwarding_link_or_fail(
         return false;
     }
     out_link_idx = links[0];
-    return true;
-}
-
-// Device lookup and basic existence check.
-inline bool lookup_devices_or_fail(
-    ChipId src_phys, ChipId dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
-    src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
-    dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return false;
-    }
     return true;
 }
 
@@ -104,17 +94,9 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = nullptr;
-    tt::tt_metal::IDevice* dst_dev = nullptr;
-    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
-        return PerfPoint{};
-    }
-
     if (!validate_workload_or_fail(p)) {
         return PerfPoint{};
     }
-
-    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // --- Mesh device + coords for per-shard IO ---
     auto mesh = fixture->get_mesh_device();
@@ -179,7 +161,7 @@ Notes:
 
     // Global semaphore so a remote chip can signal it.
     // Fabric guarantees payload is visible before the bump is seen.
-    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram(*mesh);
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemA;
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemB;
     // Create the semaphore on the specific receiver logical core of the *mesh*.
@@ -212,7 +194,7 @@ Notes:
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
-    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram(*mesh);
 
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
     const uint32_t CB_ID = tt::CBIndex::c_0;
@@ -255,10 +237,11 @@ Notes:
 
     // Resolve forwarding and append fabric connection args
     uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
+    if (!pick_forwarding_link_or_fail(*mesh, src, dst, link_idx, p)) {
         return PerfPoint{};
     }
 
+    tt::tt_metal::CoreCoord rx_xy = mesh->worker_core_from_logical_core(p.receiver_core);
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
         (uint32_t)p.mesh_id,           // 1: dst_mesh_id (logical)

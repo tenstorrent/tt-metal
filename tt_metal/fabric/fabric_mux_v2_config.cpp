@@ -9,9 +9,16 @@
 #include <limits>
 #include <unordered_map>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <hostdevcommon/fabric_mux_v2_common.h>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_mux_program_local_l1.hpp"
 
 namespace tt::tt_fabric {
 namespace {
@@ -58,8 +65,10 @@ struct FabricMuxV2ClientConnectionRtArgs {
     uint32_t flow_control_sem_id = 0;
     uint32_t teardown_sem_id = 0;
     uint32_t mux_status_address = 0;
+    // For a mux in program-local L1, the addresses above are offsets from the address the mux publishes here.
+    uint32_t l1_base_semaphore_id = kFabricMuxV2NoL1BaseSemaphore;
 
-    static constexpr size_t kWordCount = 11;
+    static constexpr size_t kWordCount = 12;
 
     std::array<uint32_t, kWordCount> serialize() const {
         return {
@@ -74,6 +83,7 @@ struct FabricMuxV2ClientConnectionRtArgs {
             flow_control_sem_id,
             teardown_sem_id,
             mux_status_address,
+            l1_base_semaphore_id,
         };
     }
 };
@@ -103,6 +113,7 @@ size_t FabricMuxV2Config::MemoryRegion::get_address(size_t offset) const {
 size_t FabricMuxV2Config::MemoryRegion::get_end_address() const { return base_address + (unit_size * num_units); }
 
 FabricMuxV2Config::FabricMuxV2Config(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     uint8_t num_channels,
     uint8_t num_buffers_per_channel,
     size_t channel_buffer_size_bytes,
@@ -117,11 +128,13 @@ FabricMuxV2Config::FabricMuxV2Config(
     TT_FATAL(num_buffers_per_channel_ > 0, "FabricMuxV2Config requires at least one buffer per channel");
     validate_forwarder_service_burst_size(forwarder_service_burst_size_);
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto& metal_env = mesh_device.impl().metal_env();
+    const auto& hal = metal_env.get_hal();
     noc_aligned_address_size_bytes_ = hal.get_alignment(tt::tt_metal::HalMemType::L1);
     per_channel_scalar_region_stride_bytes_ = noc_aligned_address_size_bytes_;
 
-    const size_t max_channel_buffer_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const size_t max_channel_buffer_size_bytes =
+        metal_env.get_control_plane().get_fabric_context().get_fabric_channel_buffer_size_bytes();
     TT_FATAL(
         channel_buffer_size_bytes_ <= max_channel_buffer_size_bytes,
         "FabricMuxV2 channel buffer size must be <= {}, got {}",
@@ -220,6 +233,9 @@ void FabricMuxV2Config::append_client_connection_rt_args(
     connection_rt_args.flow_control_sem_id = client_semaphores.flow_control_sem_id;
     connection_rt_args.teardown_sem_id = client_semaphores.teardown_sem_id;
     connection_rt_args.mux_status_address = to_uint32_checked(status_region_.get_address(), "mux_status_address");
+    if (in_program_local_l1_) {
+        connection_rt_args.l1_base_semaphore_id = l1_base_semaphore_id_;
+    }
 
     const auto serialized_rt_args = connection_rt_args.serialize();
     worker_args.insert(worker_args.end(), serialized_rt_args.begin(), serialized_rt_args.end());
@@ -247,7 +263,38 @@ std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_n
          to_uint32_checked(channel_buffer_size_bytes_, "channel_buffer_size_bytes")},
         {"fabric_mux_v2_per_channel_scalar_region_stride_bytes",
          to_uint32_checked(per_channel_scalar_region_stride_bytes_, "per_channel_scalar_region_stride_bytes")},
-        {"fabric_mux_v2_forwarder_service_burst_size", forwarder_service_burst_size_}};
+        {"fabric_mux_v2_forwarder_service_burst_size", forwarder_service_burst_size_},
+        {"fabric_mux_v2_in_program_local_l1", static_cast<uint32_t>(in_program_local_l1_)},
+        {"fabric_mux_v2_program_local_l1_cb_index", program_local_l1_cb_index_},
+        {"fabric_mux_v2_l1_base_semaphore_id", l1_base_semaphore_id_}};
+}
+
+uint32_t FabricMuxV2Config::validate_program_local_l1_placement() const {
+    TT_FATAL(!in_program_local_l1_, "FabricMuxV2 config is already placed in program-local L1");
+    TT_FATAL(
+        status_region_.base_address == 0,
+        "A FabricMuxV2 placed in program-local L1 must be configured with base_l1_address = 0 so its addresses are "
+        "offsets into the map, but its map starts at {}",
+        status_region_.base_address);
+    return to_uint32_checked(memory_map_end_address_, "memory_map_end_address");
+}
+
+void FabricMuxV2Config::place_in_program_local_l1(
+    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores) {
+    const uint32_t map_size = validate_program_local_l1_placement();
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(desc, mux_cores, map_size);
+    in_program_local_l1_ = true;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+}
+
+void FabricMuxV2Config::place_in_program_local_l1(
+    tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores) {
+    const uint32_t map_size = validate_program_local_l1_placement();
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(program, mux_cores, map_size);
+    in_program_local_l1_ = true;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
 }
 
 void add_fabric_mux_v2_to_program(
@@ -303,6 +350,77 @@ void add_fabric_mux_v2_to_program(
         forwarder_runtime_args,
         CoreType::WORKER);
     add_fabric_mux_v2_to_program(program, config, mux_logical_core, forwarder_runtime_args, forwarder_noc);
+}
+
+namespace {
+
+uint32_t add_mux_local_semaphore(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreCoord& core) {
+    const auto sem_id = desc.find_available_semaphore_id(core, CoreType::WORKER);
+    TT_FATAL(sem_id.has_value(), "No available semaphore id for the fabric mux v2 on core {}", core);
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = sem_id.value(),
+        .core_type = CoreType::WORKER,
+        .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(core, core)),
+        .initial_value = 0});
+    return sem_id.value();
+}
+
+}  // namespace
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const FabricMuxV2Config& config,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
+    const std::vector<uint32_t>& downstream_sender_rt_args,
+    tt::tt_metal::NOC forwarder_noc) {
+    const auto manager_noc = get_manager_noc_from_forwarder_noc(forwarder_noc);
+    auto named_compile_args = config.get_fabric_mux_v2_named_compile_time_args();
+    named_compile_args["fabric_mux_v2_forwarder_ready_sem_id"] = add_mux_local_semaphore(desc, mux_logical_core);
+    named_compile_args["fabric_mux_v2_manager_init_done_sem_id"] = add_mux_local_semaphore(desc, mux_logical_core);
+    // Sorted so the descriptor (and with it the program hash) does not depend on unordered_map iteration order.
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs named_args(
+        named_compile_args.begin(), named_compile_args.end());
+    std::sort(named_args.begin(), named_args.end());
+    const tt::tt_metal::CoreRangeSet mux_core_range(tt::tt_metal::CoreRange(mux_logical_core, mux_logical_core));
+
+    tt::tt_metal::KernelDescriptor forwarder;
+    forwarder.kernel_source = kFabricMuxV2KernelPath;
+    forwarder.core_ranges = mux_core_range;
+    forwarder.named_compile_time_args = named_args;
+    forwarder.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
+    forwarder.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = forwarder_noc};
+    forwarder.runtime_args.emplace_back(mux_logical_core, downstream_sender_rt_args);
+    desc.kernels.push_back(std::move(forwarder));
+
+    tt::tt_metal::KernelDescriptor manager;
+    manager.kernel_source = kFabricMuxV2KernelPath;
+    manager.core_ranges = mux_core_range;
+    manager.named_compile_time_args = std::move(named_args);
+    manager.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
+    manager.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = manager_noc};
+    desc.kernels.push_back(std::move(manager));
+}
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const FabricMuxV2Config& config,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    tt::tt_metal::NOC forwarder_noc) {
+    std::vector<uint32_t> forwarder_runtime_args;
+    append_fabric_connection_rt_args(
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        desc,
+        mux_logical_core,
+        forwarder_runtime_args,
+        CoreType::WORKER);
+    add_fabric_mux_v2_to_program(desc, config, mux_logical_core, forwarder_runtime_args, forwarder_noc);
 }
 
 size_t FabricMuxV2Config::get_memory_map_end_address() const { return memory_map_end_address_; }

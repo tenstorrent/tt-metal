@@ -50,6 +50,16 @@ struct ProgramCommandSequence {
         void* dst;
         uint32_t size;
     };
+    struct DataflowBufferConfigUpdate {
+        std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
+        // The logical core the payload was serialized for, so trace capture can re-serialize it.
+        CoreCoord logical_core;
+        uint8_t* dst;
+        uint32_t size;
+        // Sum of the DFBs' config generations when the payload was last serialized. Each generation only
+        // grows, so the sum changes exactly when one of the DFBs changed.
+        uint64_t last_config_generation;
+    };
     struct CircularBufferConfigUpdate {
         CircularBufferImpl* circular_buffer;
         uint32_t* dst;
@@ -88,10 +98,8 @@ struct ProgramCommandSequence {
     std::vector<std::vector<std::shared_ptr<CircularBufferImpl>>> circular_buffers_on_core_ranges;
     std::vector<CircularBufferConfigUpdate> local_cb_config_updates;
     std::vector<CircularBufferConfigUpdate> remote_cb_config_updates;
-    // Parallel to cb_configs_payloads/circular_buffers_on_core_ranges but for Dataflow Buffers.
-    std::vector<uint8_t*> dfb_configs_payloads;
-    std::vector<std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>>>
-        dataflow_buffers_on_core_ranges;
+    // Like cb_configs_payloads/circular_buffers_on_core_ranges, but for Dataflow Buffers.
+    std::vector<DataflowBufferConfigUpdate> dfb_config_updates;
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
@@ -100,7 +108,6 @@ struct ProgramCommandSequence {
     std::vector<CrossNodeConfigUpdate> cross_node_config_updates;
     std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
-    std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr{};
 
     bool prefetcher_cache_used = false;

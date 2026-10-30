@@ -16,6 +16,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
@@ -39,7 +40,8 @@ ReceiverConnections collect_receiver_connections(
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     ReceiverConnections connections;
     for (const auto& connection : mesh_socket.get_config().socket_connection_config) {
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        if (tt::tt_metal::internal::get_device(*socket_mesh_device, connection.receiver_core.device_coord)->id() ==
+            target_device->id()) {
             connections.core_coords.push_back(connection.receiver_core.core_coord);
             connections.receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
@@ -79,8 +81,8 @@ ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
 
     // cores must not exceed available fabric links
     {
-        auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
+        auto available_link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *output_tensor.device(), receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -142,7 +144,8 @@ ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
             output_tensor.buffer()->address(),           // output_base_addr
         };
 
-        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *output_tensor.device(), receiver_fabric_node_id, sender_fabric_node_id);
         TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];

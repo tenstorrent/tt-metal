@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     float_to_bf16_bits,
     bf16_bits_to_float,
 )
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 

@@ -13,6 +13,7 @@
 // Optional resource families are gated on preprocessor defines rather than on compile-time argument
 // values, because a Metal 2.0 binding token only exists when the host actually binds it:
 //   FUSE_BIAS / BIAS_SHARDED  -- dfb::bias, and tensor::bias on the non-sharded bias path
+//   BIAS_PER_GROUP            -- (with FUSE_BIAS, indexed sparse mode) bias tile row indices[bB] per group
 //   IN1_SHARDED               -- in1 arrives in the resident dfb::in1 shard; no tensor binding
 //   IN1_DRAM_WIDTH_SHARDED    -- in1 is read bank-by-bank from DRAM using tensor::in1's base address
 //   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
@@ -51,7 +52,6 @@
 #endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
 #ifdef ENABLE_GLOBAL_CB
 #include "api/remote_circular_buffer.h"
 #endif
@@ -59,12 +59,10 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 #ifdef ENABLE_PREFETCHER_PIPE
-#ifdef ARCH_QUASAR
-#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
-#endif
-#include "api/dataflow/prefetcher_pipe.h"
+#include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 #endif
 
 void kernel_main() {
@@ -74,11 +72,6 @@ void kernel_main() {
 #endif
     // in1 tensor args
     uint32_t in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
-    // in1 mcast args
-    const uint32_t in1_mcast_dest_noc_start_x = get_arg(args::in1_mcast_dest_noc_start_x);
-    const uint32_t in1_mcast_dest_noc_start_y = get_arg(args::in1_mcast_dest_noc_start_y);
-    const uint32_t in1_mcast_dest_noc_end_x = get_arg(args::in1_mcast_dest_noc_end_x);
-    const uint32_t in1_mcast_dest_noc_end_y = get_arg(args::in1_mcast_dest_noc_end_y);
 
     // WRITER
     // out tensor args
@@ -112,9 +105,6 @@ void kernel_main() {
     constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
     constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
 
-    // in1 mcast args
-    constexpr auto in1_mcast_num_dests = get_arg(args::in1_mcast_num_dests);
-    constexpr auto in1_mcast_num_cores = get_arg(args::in1_mcast_num_cores);
     // batch args
     constexpr auto KtNt = get_arg(args::KtNt);
     constexpr auto batch = get_arg(args::batch);
@@ -140,7 +130,7 @@ void kernel_main() {
     // batch args
     constexpr auto MtNt = get_arg(args::MtNt);  // if 0
     // Don't need batch; same as batch from READER args
-    constexpr bool compact_output = get_arg(args::compact_output);
+    constexpr bool compact_output = get_arg(args::compact_output) != 0;
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -162,12 +152,23 @@ void kernel_main() {
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    Semaphore sender_sem(sem::in1_mcast_sender);
-    Semaphore receiver_sem(sem::in1_mcast_receiver);
+    // The host attaches an absent channel when in1 is not multicast.
+    constexpr auto in1_mcast = MCAST_ARGS(in1_mcast);
+    auto sender = in1_mcast.optional_sender(noc);
+#if defined(ENABLE_PREFETCHER_PIPE) || defined(ENABLE_GLOBAL_CB)
+    // Pipe and global-CB delivery reach every worker directly; publish_in1_block_from_pipe relies on that,
+    // publishing each K-block to compute in the same step that waits for it.
+    static_assert(!in1_mcast.active, "in1 lands on every worker directly, so this kernel never multicasts it");
+#endif
 
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_start_tile_id = get_arg(args::in3_tensor_start_tile_id);
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
 
     constexpr auto in3_tensor_stride_w = get_arg(args::in3_tensor_stride_w);
 
@@ -255,11 +256,7 @@ void kernel_main() {
     dfb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
 #elif !defined(ENABLE_GLOBAL_CB)
     [[maybe_unused]] const auto s1 = TensorAccessor(tensor::in1);
-#if defined(IN1_DRAM_WIDTH_SHARDED) || defined(IN1_DRAM_HEIGHT_SHARDED)
-    // The DRAM-sharded paths below address banks directly rather than paging through the accessor,
-    // so they need in1's raw base address. It comes off the binding, never through a runtime arg.
-    const uint32_t in1_tensor_addr = s1.get_bank_base_address();
-#endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED
+    // The DRAM-sharded paths below read in1 by bank (BankView(s1)) rather than paging through the accessor.
 #endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED / ENABLE_GLOBAL_CB
 
 #ifdef ENABLE_GLOBAL_CB
@@ -282,16 +279,9 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(tensor::sparsity);
 #endif  // SPARSITY
 
-#ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = dfb_in1.get_write_ptr();
 #endif  // IN1_SHARDED
-#endif  // SKIP_MCAST
 
 #ifdef SPARSITY
     uint32_t l1_write_addr_sparsity = 0;
@@ -325,7 +315,7 @@ void kernel_main() {
         // Compute DRAM bank and offset for this batch
         uint32_t in1_dram_bank_id = b / in1_batches_per_bank;
         uint32_t in1_batch_in_shard = b % in1_batches_per_bank;
-        AllocatorBank<AllocatorBankType::DRAM> dram_src;
+        const BankView dram_src(s1);
         uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
@@ -341,11 +331,19 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t out_base_tile_id = out_tensor_start_tile_id;
 
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+#ifdef BIAS_PER_GROUP
+            // Per-group fused bias (sparse matmul, indexed mode): tile row `group_id` of the bias tensor,
+            // i.e. out_tensor_stride_h (= Nt) tiles per group.
+            uint32_t in3_group_tile_offset = 0;
+#endif
 #ifdef SPARSITY
             if constexpr (use_indices) {
                 // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
                 // compact output slot bB. Every iterated group is active, so nothing is skipped.
                 const uint32_t group_id = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB];
+#ifdef BIAS_PER_GROUP
+                in3_group_tile_offset = group_id * out_tensor_stride_h;
+#endif
                 // The ids are device-resident, so the host can only bound their count, not their
                 // values. An out-of-range id would silently read an unrelated weight block; assert
                 // loudly (under watcher) instead, as the in0 sender does for the exact-nnz contract.
@@ -369,7 +367,11 @@ void kernel_main() {
                 uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
                 uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
+#ifdef BIAS_PER_GROUP
+                uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id + in3_group_tile_offset;
+#else
                 uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
+#endif  // BIAS_PER_GROUP
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
@@ -381,16 +383,15 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+#ifndef IN1_SHARDED
+                        uint64_t in1_start_address = 0;
+#endif
 #ifdef FUSE_OP_ALL_GATHER
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
 #endif  // FUSE_OP_ALL_GATHER
 #if defined(ENABLE_PREFETCHER_PIPE)
-                        // One K-block of lookahead over the pipe: publish this block to compute, then
-                        // hand the previous block's entry back to the sender once compute has drained
-                        // it. One pipe entry is one K-block, published as its in1_block_num_tiles tiles.
-                        in1_relay.reserve_back(in1_block_num_tiles);
-                        pipe.wait_front(block == 0 ? 1u : 2u);
+                        publish_in1_block_from_pipe(pipe, in1_relay, noc, block, in1_block_num_tiles);
 #elif defined(ENABLE_GLOBAL_CB)
                         // The tensor prefetcher pushes this receiver's K-blocks in natural order.
                         // Keep one block of lookahead: publish the current block to compute, then
@@ -402,23 +403,23 @@ void kernel_main() {
                         // Operand 1 - DRAM width sharded
                         dfb_in1.reserve_back(in1_block_num_tiles);
 
-                        uint64_t in1_start_address =
+                        in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
                         uint32_t l1_write_addr_in1_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                        const BankView dram_bank(s1);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t shard_bank_id = get_vararg(next_bank_id_and_dram_stride_index + 1);
-                            uint32_t shard_base_addr = in1_tensor_addr;
+                            uint32_t shard_base_offset = 0;
                             if (i == 0) {
-                                shard_base_addr += dram_tensor_start_offset;
+                                shard_base_offset += dram_tensor_start_offset;
                             }
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
                                 in1_single_tile_size_bytes,
-                                {.bank_id = shard_bank_id, .addr = shard_base_addr},
+                                {.bank_id = shard_bank_id, .offset_bytes = shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
@@ -434,7 +435,8 @@ void kernel_main() {
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
+                                        {.bank_id = shard_bank_id,
+                                         .offset_bytes = shard_base_offset + l1_read_addr_in1_temp},
                                         {},
                                         NocOptVals{.vc = vc});
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
@@ -455,8 +457,7 @@ void kernel_main() {
                         dfb_in1.reserve_back(in1_block_num_tiles);
 
                         uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr();
-                        uint64_t in1_start_address =
-                            l1_write_addr_in1;  // copy start address of block, to be used for mcasting
+                        in1_start_address = l1_write_addr_in1;  // copy start address of block, to be used for mcasting
 
                         // Read in1 block from the correct DRAM bank
                         // Tile layout within a batch: row-major [K, N], same strides as interleaved
@@ -471,7 +472,7 @@ void kernel_main() {
                                         dram_src,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = in1_dram_bank_id, .addr = in1_tensor_addr + tile_byte_offset},
+                                        {.bank_id = in1_dram_bank_id, .offset_bytes = tile_byte_offset},
                                         {});
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
@@ -487,7 +488,7 @@ void kernel_main() {
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
-                        const uint64_t in1_start_address =
+                        in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
                         // Copy in1 block into the buffer, as the default kernel
@@ -514,61 +515,16 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB / IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
-#ifndef SKIP_MCAST
-                        // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in1_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the buffer's address, we can mcast to dests!
-                        const MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
-                            mcast_dst,
-                            in1_block_size_bytes,
-                            in1_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in1_mcast_dest_noc_start_x,
-                             .noc_y_start = in1_mcast_dest_noc_start_y,
-                             .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in1_start_address)},
-                            true);
-
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
-                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
-                        // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
-                        // which means data could be changed before
-                        //  write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in1_mcast_dest_noc_start_x,
-                            in1_mcast_dest_noc_start_y,
-                            in1_mcast_dest_noc_end_x,
-                            in1_mcast_dest_noc_end_y,
-                            in1_mcast_num_cores);
-#endif  // SKIP_MCAST
-
-#if defined(ENABLE_PREFETCHER_PIPE)
-                        // pop_front waits for compute to have popped that block's tiles out of in1
-                        // before acking it, so no free-space spin is needed. Publish only through the relay
-                        // view: pushing dfb_in1 as well would double the credit compute sees.
-                        in1_relay.push_back(in1_block_num_tiles);
-                        if (block >= 1) {
-                            pipe.pop_front(1, noc);
+                        if constexpr (in1_mcast.active) {
+                            sender->send(
+                                static_cast<uint32_t>(in1_start_address),
+                                static_cast<uint32_t>(in1_start_address),
+                                in1_block_size_bytes);
                         }
-#elif !defined(IN1_SHARDED)
+
+#if !defined(ENABLE_PREFETCHER_PIPE) && !defined(IN1_SHARDED)
                         dfb_in1.push_back(in1_block_num_tiles);
-#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
+#endif  // !ENABLE_PREFETCHER_PIPE && !IN1_SHARDED
 #ifdef ENABLE_GLOBAL_CB
                         if (block >= 1) {
                             while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
@@ -579,9 +535,7 @@ void kernel_main() {
 #endif
                     }
 #if defined(ENABLE_PREFETCHER_PIPE)
-                    if (num_blocks_inner_dim > 0) {
-                        pipe.pop_front(1, noc);
-                    }
+                    drain_in1_pipe_window(pipe, noc, num_blocks_inner_dim);
 #elif defined(ENABLE_GLOBAL_CB)
                     if (num_blocks_inner_dim > 0) {
                         while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
@@ -591,8 +545,9 @@ void kernel_main() {
                     }
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB
 #ifdef FUSE_BIAS
-                    // Only read bias on first batch, or we have multiple output blocks
-                    if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    // Only read bias on first batch, or we have multiple output blocks; a per-group bias
+                    // is re-read for every group (the compute kernel pops it after each group).
+                    if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                         // Operand 1
 #ifndef BIAS_SHARDED
                         dfb_in3.reserve_back(in1_block_w);
@@ -606,24 +561,22 @@ void kernel_main() {
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        // Bank-direct reads need bias's raw base address; it comes off the binding.
-                        const uint32_t in3_tensor_addr = s3.get_bank_base_address();
-
-                        AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
+                        // Bias is read by bank, like in1.
+                        const BankView bias_dram_bank(s3);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t bias_shard_bank_id = get_vararg(next_bank_id_and_dram_stride_index + 1);
-                            uint32_t bias_shard_base_addr = in3_tensor_addr;
+                            uint32_t bias_shard_base_offset = 0;
                             if (i == 0) {
                                 // dram_tensor_start_offset is in in1 tile bytes; convert to
                                 // bias tile bytes since bias_dtype may differ from in1_dtype.
-                                bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
-                                                        bias_single_tile_size_bytes;
+                                bias_shard_base_offset += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                          bias_single_tile_size_bytes;
                             }
 
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 bias_dram_bank,
                                 bias_single_tile_size_bytes,
-                                {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
+                                {.bank_id = bias_shard_bank_id, .offset_bytes = bias_shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in3 = 0;
@@ -638,7 +591,8 @@ void kernel_main() {
                                     bias_dram_bank,
                                     CoreLocalMem<uint32_t>(l1_write_addr_in3),
                                     bias_single_tile_size_bytes,
-                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
+                                    {.bank_id = bias_shard_bank_id,
+                                     .offset_bytes = bias_shard_base_offset + l1_read_addr_in3},
                                     {},
                                     NocOptVals{.vc = vc});
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
@@ -670,48 +624,12 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
-#ifndef SKIP_MCAST
-
-                        // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in1_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the buffer's address, we can mcast to dests!
-                        const MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
-                            mcast_dst,
-                            in3_block_size_bytes,
-                            in1_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in1_mcast_dest_noc_start_x,
-                             .noc_y_start = in1_mcast_dest_noc_start_y,
-                             .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in3_start_address)},
-                            true);
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
-                        // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
-                        // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
-                        // latency which means data could be changed before write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in1_mcast_dest_noc_start_x,
-                            in1_mcast_dest_noc_start_y,
-                            in1_mcast_dest_noc_end_x,
-                            in1_mcast_dest_noc_end_y,
-                            in1_mcast_num_cores);
-#endif  // SKIP_MCAST
+                        if constexpr (in1_mcast.active) {
+                            sender->send(
+                                static_cast<uint32_t>(in3_start_address),
+                                static_cast<uint32_t>(in3_start_address),
+                                in3_block_size_bytes);
+                        }
 
                         dfb_in3.push_back(in1_block_w);
 #else
@@ -815,8 +733,14 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint16_t out_num_tiles =
+        static_cast<uint16_t>(batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
@@ -827,4 +751,21 @@ void kernel_main() {
     // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
     noc.async_atomic_barrier();
     noc.async_write_barrier();
+
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+#endif
+
+    // The sparsity slot is reserved once to take its base address and is re-read by this kernel
+    // alone; it is never handed to a consumer, so complete the handshake here rather than leaving
+    // the reserve dangling. The guards match the ones on the reserve.
+#ifdef SPARSITY
+    if constexpr (batchB > 0) {
+        dfb_sparsity.push_back(1);
+    }
+#endif  // SPARSITY
 }

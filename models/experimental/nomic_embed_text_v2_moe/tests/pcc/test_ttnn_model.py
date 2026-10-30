@@ -87,6 +87,10 @@ COSINE_TOLERANCE = 0.01
 # tokenized sequence.
 MODEL_SHAPES = [(1, 128), (2, 512), (2, 37)]
 
+# MODEL_SHAPES plus 8x512, one routed window with the router's selection in L1 beside the whole
+# chain.
+LAST_HIDDEN_SHAPES = [*MODEL_SHAPES, (8, 512)]
+
 # Deliberately multilingual, and deliberately containing one cross-lingual near-duplicate:
 # entries 2 and 4 are the same statement in English and French, which this model embeds 0.0013
 # apart. See test_top1_retrieval_agrees_with_the_reference on why that is kept rather than removed.
@@ -120,8 +124,8 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     """Backbone then pooling, for the tests driven by token ids rather than text.
 
     encode() takes text, so it cannot express a controlled shape or a chosen padding pattern.
-    These three calls are the same stages encode() makes, in the same order, which is also how a
-    reference user reaches them: directly, not through a wrapper on the model.
+    These three calls are the stages embed() runs on each chunk, here on the whole batch at its full
+    S, which is also how a reference user reaches them: directly, not through a wrapper on the model.
     """
     kernel_config = tt_model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = tt_model(input_ids, attention_mask)
@@ -134,7 +138,7 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     )
 
 
-@pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", LAST_HIDDEN_SHAPES)
 def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     """The backbone, token ids in and one vector per token out, against the reference model."""
     input_ids, attention_mask = random_input_ids(batch, seqlen, config)
@@ -148,21 +152,25 @@ def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     assert_with_pcc(ref, got, MODEL_PCC)
 
 
-# B*S past MAX_TOKENS_PER_PASS, 4096, makes the expert bank split the token axis; see
-# tt/experts.py. 9x512 ends in a 512-token pass, 6x704 in a 128-token one, so its forward runs
-# both pass layouts. Kept out of MODEL_SHAPES, which several tests multiply over.
-CHUNKING_SHAPES = [(9, 512), (6, 704)]
+def test_a_small_input_still_returns_dram(config, tt_model):
+    """At 4 tile rows every block passes its output to the next in L1 (activation_memory_config),
+    but the model's output outlives the forward, and in L1 it would sit under ops that plan L1 as
+    free."""
+    out = tt_model(*random_input_ids(1, 128, config))
+    assert out.memory_config().buffer_type == ttnn.BufferType.DRAM
 
 
-@pytest.mark.parametrize("batch, seqlen", CHUNKING_SHAPES)
-def test_a_batch_that_chunks_the_expert_token_axis(config, reference_model, tt_model, batch, seqlen):
-    """Shapes past the expert bank's pass limit, which once hung rather than failed.
+# B*S past 4096 tokens, where the router's intermediates move from L1 to DRAM (tt/router.py). Kept
+# out of MODEL_SHAPES, which several tests multiply over.
+PAST_4096_SHAPES = [(9, 512), (6, 704)]
 
-    Same gates as the single-pass shapes. The split changes the arithmetic, since each pass
-    picks its own layout and K blocks: 4096 + 512 transposed at 9x512, 4096 transposed + 128
-    token-major at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
-    module level; this one exists for the shape, so a regression in the pass limit is caught end
-    to end.
+
+@pytest.mark.parametrize("batch, seqlen", PAST_4096_SHAPES)
+def test_a_batch_past_4096_tokens(config, reference_model, tt_model, batch, seqlen):
+    """Shapes past 4096 tokens, with the same gates as the smaller ones.
+
+    The dense experts once split these into passes of at most 4096 tokens, which hung rather than
+    failed; the routed experts run each as one window.
     """
     input_ids, attention_mask = random_input_ids(batch, seqlen, config, seed=0)
 

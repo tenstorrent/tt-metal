@@ -51,8 +51,8 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     CircularBuffer cb_in0(in0);
     CircularBuffer cb_in1(in1);
     // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
-    copy_tile_to_dst_init_short(in1);
+    copy_init(in0);
+    copy_init(in1);
     binary_max_tile_init();
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
@@ -82,7 +82,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     CircularBuffer cb_in1(in1);
     CircularBuffer cb_out(out_cb);
     // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
+    copy_init(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
@@ -227,7 +227,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         }
         reduce_uninit();
         if (do_eltwise_max) {
-            copy_tile_to_dst_init_short(prev_cb);
+            copy_init(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, vector_mode);
         }
@@ -256,7 +256,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     // The first-column helper uses SFPI, not full-tile LOADMACRO/replay state.
     MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::sfpu_reciprocal_init, (APPROX)));
     reconfig_data_format_srca(in_cb);
@@ -295,7 +295,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-    sub_bcast_cols_init_short(in0_cb, in1_cb);
+    sub_bcast_cols_init(in0_cb, in1_cb);
 
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
@@ -395,7 +395,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = rows * cols;
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
 
@@ -478,7 +478,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     constexpr uint32_t granularity = cols;
 #endif
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -519,7 +519,7 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
 #endif
 
     reconfig_data_format(in0_cb, in1_scalar_cb);
-    mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
+    mul_bcast_scalar_init(in0_cb, in1_scalar_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1_scalar.wait_front(1);
     uint32_t in0_index = 0;
@@ -552,7 +552,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
-    add_tiles_init(in0_cb, in1_cb);
+    add_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -583,7 +583,7 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -609,7 +609,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -652,7 +652,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE>();
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -685,7 +685,7 @@ void sub_exp_block_inplace_in0(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_ti
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
 
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE>();
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -761,7 +761,7 @@ void correction_block(
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_worker_max);
+        copy_init(cb_worker_max);
         exp_tile_init<EXP_APPROX_MODE>();
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
@@ -796,7 +796,7 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
 
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
 
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
@@ -823,7 +823,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
 #pragma GCC unroll 0
@@ -842,7 +842,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_out(out_cb);
-    copy_tile_to_dst_init_short(in_cb);
+    copy_init(in_cb);
     log_tile_init();
     cb_in.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
@@ -873,7 +873,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<false>();
     // recip_tile_first_column() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
@@ -883,11 +883,18 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -933,7 +940,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     softplus_tile_init();
     constexpr uint32_t const_1_fp32 = 0x3F800000;
     constexpr uint32_t const_20_fp32 = 0x41A00000;
@@ -972,7 +979,7 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -1052,7 +1059,7 @@ ALWI void matmul_blocks(
                 cb_mask.wait_front(out_subblock_num_tiles);
                 cb_zero.wait_front(1);
                 reconfig_data_format(zero_cb, mask_cb);
-                add_tiles_init(zero_cb, mask_cb, true);
+                add_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
@@ -1139,7 +1146,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
 
 /**
  * Batch-stamp a single tile onto a range of positions in out_cb using L1 accumulate.
- * Caller must have already called copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1).
+ * Caller must have already called copy_init and llk_pack_reconfig_l1_acc(1).
  *
  * @tparam dst_batch  Max tiles per DST cycle (DST register capacity, typically 8 for fp16b half-sync).
  */
@@ -1172,7 +1179,7 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     uint32_t start = num_cols - num_padded;
 
-    copy_tile_to_dst_init_short(neginf_cb);
+    copy_init(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
@@ -1202,7 +1209,7 @@ void apply_partial_mask_lightweight(
     uint32_t num_cols,
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
@@ -1238,7 +1245,7 @@ void apply_causal_mask_lightweight(
     uint32_t num_cols,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
-    copy_tile_to_dst_init_short(mask_cb);
+    copy_init(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {

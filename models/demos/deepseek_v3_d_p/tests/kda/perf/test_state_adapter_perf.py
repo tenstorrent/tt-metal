@@ -3,7 +3,7 @@
 """Real Kimi-K3 correctness and cost of the KDA state migration adapter.
 
 Two paths are measured against the layer they follow: the production per-layer slab export/import
-(`KdaStates.export_layer` / `import_layer`, what `KdaStateCache.commit` runs inside the trace) and the
+(`KdaStates.export_layer` / `import_layer`, what a K3 KDA layer runs inside the trace) and the
 whole-tensor native <-> single-layer contract conversion. Both must round-trip bit-identically.
 """
 
@@ -14,6 +14,7 @@ import os
 import statistics
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 import torch
@@ -22,11 +23,15 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _PCC_THRESHOLD, _trace_wall_samples_ms
+from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _trace_wall_samples_ms
+from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KIMI_K3_CONVOLUTION_NRMSE,
     KimiK3TestCase,
+    LayerNrmseThresholds,
     check_kimi_k3_accuracy,
     make_kimi_k3_device_case,
+    make_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
@@ -36,12 +41,11 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     allocate_native_state,
     contract_memory_configs,
     deallocate_state,
+    device_scalar,
     export_state,
     import_state,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
-
-pytest_plugins = ("models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf",)
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf]
 
@@ -67,6 +71,25 @@ _TIMING_SAMPLES = int(os.getenv("KDA_ADAPTER_TIMING_SAMPLES", "20"))
 _TIMING_REPETITIONS = int(os.getenv("KDA_ADAPTER_TIMING_REPS", "100"))
 _LAYER_REPETITIONS = int(os.getenv("PERF_REPS", "10"))
 _LAYER_IDX = 1
+_PCC_THRESHOLD = 0.9995
+
+
+@pytest.fixture(scope="session")
+def kimi_k3_production_reference(
+    kimi_k3_checkpoint_dir: Path,
+) -> Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]]:
+    """Return a lazy loader for the session-cached production-length CPU oracle."""
+    cached_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float] | None = None
+
+    def load() -> tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]:
+        nonlocal cached_reference
+        if cached_reference is None:
+            case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=_SEQUENCE)
+            golden_output, golden_state, elapsed = load_or_compute_cpu_reference(case)
+            cached_reference = case, golden_output, golden_state, elapsed
+        return cached_reference
+
+    return load
 
 
 def _summary(samples_ms: list[float]) -> dict[str, float | list[float]]:
@@ -199,6 +222,7 @@ def test_kimi_k3_state_adapter_cost(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )
     finally:
         ttnn.deallocate(output)
@@ -210,15 +234,16 @@ def test_kimi_k3_state_adapter_cost(
     ttnn.synchronize_device(mesh_device)
     allocation_ms = (time.perf_counter() - allocation_start) * 1e3
     physical = _physical_contract(contract, slabs, geometry)
+    slot = device_scalar(mesh_device, 0)  # the export reads its slot on device, as the traced commit does
 
     # Production path, cold: one export at the layer's commit and one import back.
     cold = {
-        "slab_export": _eager_ms(mesh_device, lambda: slabs.export_layer(real_state, 0, _LAYER_IDX)),
-        "slab_import": _eager_ms(mesh_device, lambda: slabs.import_layer(imported, 0, _LAYER_IDX)),
+        "slab_export": _eager_ms(mesh_device, lambda: slabs.export_layer(real_state, slot, _LAYER_IDX)),
+        "slab_import": _eager_ms(mesh_device, lambda: slabs.import_layer(imported, slot, _LAYER_IDX)),
         "contract_export": _eager_ms(mesh_device, lambda: export_state(real_state, contract, geometry)),
         "contract_import": _eager_ms(mesh_device, lambda: import_state(contract, imported, geometry)),
     }
-    slabs.import_layer(imported, 0, _LAYER_IDX)
+    slabs.import_layer(imported, slot, _LAYER_IDX)
     ttnn.synchronize_device(mesh_device)
     _assert_mesh_equal(real_state.recurrent, imported.recurrent, name=f"{layout} slab S round trip")
     _assert_mesh_equal(real_state.convolution, imported.convolution, name=f"{layout} slab conv round trip")
@@ -228,17 +253,17 @@ def test_kimi_k3_state_adapter_cost(
     _assert_mesh_equal(real_state.convolution, imported.convolution, name=f"{layout} contract conv round trip")
 
     patterned = _patterned_state(mesh_device, geometry)
-    slabs.export_layer(patterned, 0, _LAYER_IDX)
-    slabs.import_layer(imported, 0, _LAYER_IDX)
+    slabs.export_layer(patterned, slot, _LAYER_IDX)
+    slabs.import_layer(imported, slot, _LAYER_IDX)
     ttnn.synchronize_device(mesh_device)
     _assert_mesh_equal(patterned.recurrent, imported.recurrent, name=f"{layout} patterned slab S")
     _assert_mesh_equal(patterned.convolution, imported.convolution, name=f"{layout} patterned slab conv")
 
-    slabs.export_layer(real_state, 0, _LAYER_IDX)
+    slabs.export_layer(real_state, slot, _LAYER_IDX)
     export_state(real_state, contract, geometry)
     operations = {
-        "slab_export": lambda: slabs.export_layer(real_state, 0, _LAYER_IDX),
-        "slab_import": lambda: slabs.import_layer(imported, 0, _LAYER_IDX),
+        "slab_export": lambda: slabs.export_layer(real_state, slot, _LAYER_IDX),
+        "slab_import": lambda: slabs.import_layer(imported, slot, _LAYER_IDX),
         "contract_export": lambda: export_state(real_state, contract, geometry),
         "contract_import": lambda: import_state(contract, imported, geometry),
     }
@@ -276,4 +301,5 @@ def test_kimi_k3_state_adapter_cost(
     deallocate_state(initial_state)
     deallocate_state(real_state)
     slabs.deallocate()
+    ttnn.deallocate(slot)
     ttnn.deallocate(actual_start)

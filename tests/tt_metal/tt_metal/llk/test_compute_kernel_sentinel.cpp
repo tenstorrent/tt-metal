@@ -65,7 +65,7 @@ bool single_core_compute_kernel_sentinel(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -136,6 +136,9 @@ bool single_core_compute_kernel_sentinel(
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeKernelSentinel) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     unit_tests::compute::compute_kernel_sentinel::ComputeKernelSentinelTestConfig test_config = {
         .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};
 

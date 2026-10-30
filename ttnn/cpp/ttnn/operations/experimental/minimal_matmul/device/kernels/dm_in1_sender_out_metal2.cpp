@@ -73,7 +73,7 @@ void kernel_main() {
 
     // Tuple of output accessors, one per chunk. tensor::outputs is a TensorBindingSequence, which
     // is how a compile-time-variadic binding count is expressed: its size is N_chunks.
-    auto outputs_tuple = make_tensor_accessors(tensor::outputs);
+    [[maybe_unused]] auto outputs_tuple = make_tensor_accessors(tensor::outputs);
 
 #ifdef FUSE_BIAS
     const auto in2_reader = TensorAccessor(tensor::in2);
@@ -193,10 +193,10 @@ void kernel_main() {
 
     bool k_forward = true;
 
-    uint32_t defer_write_m_tile = 0;
-    uint32_t defer_write_m_tile_end = 0;
-    uint32_t defer_write_n_tile = 0;
-    uint32_t defer_write_n_tile_end = 0;
+    [[maybe_unused]] uint32_t defer_write_m_tile = 0;
+    [[maybe_unused]] uint32_t defer_write_m_tile_end = 0;
+    [[maybe_unused]] uint32_t defer_write_n_tile = 0;
+    [[maybe_unused]] uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
@@ -414,7 +414,8 @@ void kernel_main() {
              * of the next output block.
              */
             defer_write = !is_last_block;
-            defer_write = defer_write && !is_injector_core;
+            // Injectors defer too: writing synchronously here would hold the next block's in1 / in0 injection (and
+            // every core down its forwarding chain) behind this block's last subblock.
 
             if (!defer_write) {
 #ifdef IS_OUTPUT_WRITER

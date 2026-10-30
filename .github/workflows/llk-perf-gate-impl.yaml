@@ -75,12 +75,22 @@ on:
         default: L1_TO_L1
         type: string
       fail_on_regression:
-        description: "Fail the job on a regression. False reports to Slack only."
+        description: "Fail the job on a regression. False only reports it."
+        required: false
+        default: true
+        type: boolean
+      slack:
+        description: "Post the verdict to the LLK regressions channel"
+        required: false
+        default: false
+        type: boolean
+      slack_on_pass:
+        description: "With slack, also post when the gate passes. With slack, regressions and skips always post."
         required: false
         default: true
         type: boolean
       threshold:
-        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.08)"
+        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.13)"
         required: false
         default: "0.02"
         type: string
@@ -101,9 +111,8 @@ on:
         type: string
       pr_number:
         description: >-
-          The PR the compared runs came from. Only used to label the Slack
-          message when there is no pull_request event to read it from,
-          as on a pilot dispatch. Nothing is posted to the PR.
+          The PR the compared runs came from, when there is no pull_request
+          event to read it from. Labels the report only.
         required: false
         type: string
 
@@ -124,10 +133,15 @@ jobs:
       gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
+        # Only the scripts, with no history and no blobs. The full clone took up to 13 of
+        # the 15 minutes an ubuntu-slim job gets. The warehouse step fetches the history it needs.
         with:
-          fetch-depth: 0
+          sparse-checkout: |
+            .github/scripts
+            tt_metal/tt-llk/perf
+          filter: blob:none
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
@@ -142,6 +156,8 @@ jobs:
         id: measured
         env:
           MEASURE_RESULT: ${{ inputs.measure_result }}
+          ARCH: ${{ inputs.arch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           COMPLETE=true
           IFS=',' read -ra RESULTS <<< "$MEASURE_RESULT"
@@ -149,9 +165,42 @@ jobs:
             R=$(echo "$R" | xargs)
             case "$R" in ""|success|skipped) ;; *) COMPLETE=false ;; esac
           done
-          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
+
+          # measure_result covers every architecture. Look at this run's legs
+          # ("..._<arch> group N/M") to see whether it was this one that failed.
+          REASON=""
           if [ "$COMPLETE" != "true" ]; then
-            echo "::error::The measurement did not complete (${MEASURE_RESULT}), so the gate compares nothing."
+            LEGS=$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
+              --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\"))
+                    | [.name, .conclusion // \"in_progress\",
+                       (if .started_at and .completed_at
+                        then ((.completed_at | fromdate) - (.started_at | fromdate)) / 60 | floor
+                        else \"\" end)] | @tsv") || LEGS=""
+            if [ -z "$LEGS" ]; then
+              REASON="The measurement did not complete (${MEASURE_RESULT}), and no ${ARCH} leg was found in this run."
+            else
+              BAD=$(awk -F'\t' '$2 != "success" && $2 != "skipped"' <<< "$LEGS")
+              if [ -z "$BAD" ] && awk -F'\t' '$2 == "success" { found = 1 } END { exit !found }' <<< "$LEGS"; then
+                COMPLETE=true
+                echo "::notice::Every ${ARCH} leg succeeded, so the gate compares ${ARCH}. A leg of another architecture did not (${MEASURE_RESULT})."
+              else
+                while IFS=$'\t' read -r NAME CONCLUSION MINUTES; do
+                  LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
+                  # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
+                  if [ "$CONCLUSION" = cancelled ]; then LINE="${LINE}, most likely at its timeout"; fi
+                  REASON="${REASON:+${REASON}; }${LINE}"
+                done <<< "$BAD"
+                REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
+              fi
+            fi
+          fi
+
+          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
+          echo "result=$([ "$COMPLETE" = true ] && echo success || echo failure)" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          if [ "$COMPLETE" != "true" ]; then
+            echo "::error::${REASON} The gate compares nothing."
           fi
 
       - name: Read the baseline from the warehouse
@@ -172,6 +221,8 @@ jobs:
         run: |
           COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
+            # Commits and trees only: enough for the merge base and the 200 commits before it.
+            git fetch --no-tags --filter=blob:none --depth=250 origin "$(git rev-parse HEAD)"
             # An empty list is passed on, so the reader skips instead of taking any run.
             COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
               || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
@@ -189,8 +240,28 @@ jobs:
             --out baseline_perf/baseline.csv \
             --metadata baseline_metadata.json
 
+      # The REST budget belongs to the installation and is shared by every
+      # workflow in the repository, so a busy hour can refuse a download although
+      # the data is there. It resets on the hour, and the refusal we saw cleared
+      # 41 seconds later, so one wait and one more attempt are enough.
       - name: Download the baseline from a workflow run
+        id: baseline_run_download
         if: inputs.baseline_run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-${{ inputs.arch }}-*
+          merge-multiple: true
+          path: baseline_perf
+          run-id: ${{ inputs.baseline_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait, then download the baseline again
+        if: steps.baseline_run_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Download the baseline from a workflow run, second attempt
+        if: steps.baseline_run_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: perf-data-${{ inputs.arch }}-*
@@ -228,7 +299,21 @@ jobs:
           echo "Baseline commit: ${BASELINE_SHA:-unknown}"
 
       - name: Take the baseline from this run's artifacts
+        id: baseline_artifact_download
         if: inputs.baseline_artifact_pattern != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.baseline_artifact_pattern }}
+          merge-multiple: true
+          path: baseline_perf
+
+      - name: Wait, then take the baseline again
+        if: steps.baseline_artifact_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Take the baseline from this run's artifacts, second attempt
+        if: steps.baseline_artifact_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: ${{ inputs.baseline_artifact_pattern }}
@@ -254,6 +339,22 @@ jobs:
           echo "true" > have_baseline.txt
 
       - name: Download the PR's perf data
+        id: current_download
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
+          merge-multiple: true
+          path: current_perf
+          run-id: ${{ inputs.perf_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait, then download the PR's perf data again
+        if: steps.current_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Download the PR's perf data, second attempt
+        if: steps.current_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
@@ -328,6 +429,7 @@ jobs:
             --module-threshold "$MODULE_THRESHOLDS" \
             --report perf_gate_report.md \
             --test 'LLK perf' \
+            --arch '${{ inputs.arch }}' \
             --baseline-sha "$BASELINE_SHA" \
             --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
             --baseline-label "$BASELINE_LABEL" \
@@ -372,6 +474,7 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
       - name: Upload the gate report
+        id: report
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
@@ -398,10 +501,14 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
-          MEASURE_RESULT: ${{ inputs.measure_result }}
+          MEASURE_RESULT: ${{ steps.measured.outputs.result }}
+          MEASURE_REASON: ${{ steps.measured.outputs.reason }}
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The merge gate run has many jobs; the anchor scrolls to this job's summary.
+          REPORT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#summary-${{ job.check_run_id }}
+          ARTIFACT_URL: ${{ steps.report.outputs.artifact-url }}
           COMMIT_SHA: ${{ github.sha }}
           MODE: >-
             ${{ inputs.speed_of_light == 'true'
@@ -412,14 +519,11 @@ jobs:
                 || github.event_name == 'workflow_dispatch' && format('manual run on {0}', github.ref_name)
                 || github.event_name }}
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
+          SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
+          THRESHOLD: ${{ inputs.threshold }}
+          MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -z "$SLACK_CHANNEL_ID" ]; then
-            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
-            echo "should_post=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
           if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
             PR_NUMBER="${BASH_REMATCH[1]}"
             PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
@@ -460,7 +564,8 @@ jobs:
             --exit-code "${GATE_EXIT_CODE:-0}" \
             --comparison-finished "${COMPARISON_FINISHED:-true}" \
             --measure-result "$MEASURE_RESULT" \
-            --channel "$SLACK_CHANNEL_ID" \
+            --measure-reason "$MEASURE_REASON" \
+            --channel "${SLACK_CHANNEL_ID:-unset}" \
             --pr-number "$PR_NUMBER" \
             --pr-url "$PR_URL" \
             --pr-title "$PR_TITLE" \
@@ -468,22 +573,42 @@ jobs:
             --arch "$ARCH" \
             --run-types "$RUN_TYPES" \
             --run-url "$RUN_URL" \
+            --report-url "$REPORT_URL" \
+            --artifact-url "$ARTIFACT_URL" \
             --baseline-sha "$BASELINE_SHA" \
             --commit "$COMMIT_SHA" \
             --mode "$MODE" \
             --gate-name "$GATE_NAME" \
             --trigger "$TRIGGER" \
             --note "$NOTE" \
+            --post-pass "$SLACK_ON_PASS" \
+            --threshold "$THRESHOLD" \
+            --module-thresholds "$MODULE_THRESHOLDS" \
+            --part-out slack_part.json \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."
           echo "should_post=false" >> $GITHUB_OUTPUT
 
+      # The caller can post one message for all arches from these (gate_slack_combine.py).
+      - name: Upload the Slack part
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-slack-${{ inputs.arch }}
+          path: slack_part.json
+          if-no-files-found: ignore
+
       - name: Notify Slack
-        if: ${{ !cancelled() && steps.slack.outputs.should_post == 'true' }}
+        if: ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
         run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            exit 0
+          fi
           if [ -z "$SLACK_BOT_TOKEN" ]; then
             echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
             exit 0
@@ -505,12 +630,19 @@ jobs:
 
       - name: Gate verdict
         if: always()
+        env:
+          MEASURE_REASON: ${{ steps.measured.outputs.reason }}
         run: |
+          # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
+          if [ -f perf_gate_report.md ]; then
+            cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           HAVE_BASELINE=$(cat have_baseline.txt)
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
-            echo "::error::The measurement did not complete, so the gate compared nothing."
+            echo "::error::${MEASURE_REASON:-The measurement did not complete.} The gate compared nothing."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi
@@ -532,7 +664,7 @@ jobs:
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
               exit 1
             fi
-            echo "Report-only: Slack carries the verdict; the job does not fail."
+            echo "Report-only: the job does not fail."
             exit 0
           fi
 

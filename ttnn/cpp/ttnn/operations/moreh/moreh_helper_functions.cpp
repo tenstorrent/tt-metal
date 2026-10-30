@@ -11,6 +11,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "tt-metalium/hal.hpp"
 #include "ttnn/device_operation_detail.hpp"
@@ -260,7 +261,7 @@ void check_tensor(
             enchantum::to_string(layout));
     }
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} {} need to be on device!", op_name, tensor_name);
-    TT_FATAL(tensor.buffer() != nullptr, "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
+    TT_FATAL(tensor.is_allocated(), "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
 
     if (check_dtype) {
         bool dtype_supported = false;

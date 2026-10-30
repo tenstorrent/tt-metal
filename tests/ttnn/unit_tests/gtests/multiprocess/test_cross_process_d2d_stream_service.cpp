@@ -50,23 +50,29 @@
 // before its OUTBOUND sender, so the per-endpoint MeshSocket handshakes cascade
 // 0↔1, 1↔2, … without deadlock.
 //
-// Fixture: MeshDeviceExaboxFixture — each rank opens its local mesh_device_ on a
-// UBB Galaxy where world_size == number of meshes in the mesh-graph descriptor.
+// Fixture: CrossProcessD2DFixture — each rank opens its local mesh_device_, and world_size ==
+// number of meshes in the mesh-graph descriptor (a split Galaxy, or a QuietBox with one 1x1 mesh
+// per chip, chained over the ethernet links between them).
 //
 // Launch (no CI yet):
 //   tt-run --rank-binding <rank_binding.yaml> --mpi-args "--allow-run-as-root --tag-output"
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include "gtest/gtest.h"
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -80,6 +86,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
@@ -89,6 +96,7 @@
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/services/h2d_socket_service.hpp"
 #include "ttnn/services/d2h_socket_service.hpp"
@@ -127,6 +135,7 @@ using ::tt::tt_metal::distributed::EnqueueMeshWorkload;
 using ::tt::tt_metal::distributed::Finish;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshDevice;
+using ::tt::tt_metal::distributed::MeshDeviceConfig;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshWorkload;
 using ::tt::tt_metal::distributed::SocketMemoryConfig;
@@ -139,8 +148,35 @@ using ttnn::D2DStreamService;
 using ttnn::D2DStreamServiceReceiver;
 using ttnn::D2DStreamServiceSender;
 
-// Each rank owns its local mesh; world_size == number of meshes in the descriptor.
-using CrossProcessD2DFixture = tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture;
+// Each rank opens its whole local mesh with fabric on; world_size == number of meshes in the
+// descriptor. Unlike MeshDeviceExaboxFixture this doesn't require a UBB Galaxy, and unlike
+// MeshDeviceFixtureBase it allows a 1x1 mesh (its fabric links all go to other meshes), so it also
+// runs on a QuietBox with one chip per rank.
+class CrossProcessD2DFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto& context = tt::tt_metal::MetalContext::instance();
+        if (static_cast<size_t>(*context.global_distributed_context().size()) !=
+            context.get_control_plane().get_mesh_graph().get_mesh_ids().size()) {
+            GTEST_SKIP() << "Needs one mesh per rank in the mesh graph descriptor.";
+        }
+        tt::tt_fabric::SetFabricConfig(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(context.get_system_mesh().shape()));
+    }
+
+    void TearDown() override {
+        if (!mesh_device_) {
+            return;
+        }
+        mesh_device_->close();
+        mesh_device_.reset();
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+    }
+
+    std::shared_ptr<MeshDevice> mesh_device_;
+};
 
 const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};  // single worker core
 // ForwardChainStress uses a multi-core grid so the num_workers machinery is actually
@@ -365,7 +401,7 @@ MeshWorkload make_relay_like_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
         CoreCoord down_svc_phys{0, 0};
         uint32_t down_counter_addr = 0;
@@ -454,7 +490,7 @@ MeshWorkload make_d2h_relay_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
 
         const auto d2h_svc_phys = device->worker_core_from_logical_core(d2h_service->get_service_core(coord));
@@ -547,7 +583,7 @@ MeshWorkload make_stress_compute_workload(
                 .compile_args = ct_args,
                 .defines = {{"STRESS_MODE", "0"}}});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
         // Outbound D2D sender's metadata buffer (service-core L1) + its physical NoC —
         // the propagate target, producing stages only.
@@ -647,7 +683,7 @@ MeshWorkload make_stress_d2h_compute_workload(
                 .compile_args = ct_args,
                 .defines = {{"STRESS_MODE", "0"}}});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
         const auto d2h_svc_phys = device->worker_core_from_logical_core(d2h_service->get_service_core(coord));
         const uint32_t write_ack_addr = static_cast<uint32_t>(d2h_service->get_write_ack_counter_addr(coord));
@@ -697,7 +733,7 @@ MeshWorkload make_stress_signal_workload(D2DStreamServiceSender* outbound, const
                 .noc = NOC::RISCV_0_default,
                 .defines = {{"STRESS_MODE", "1"}}});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto down_svc_phys = device->worker_core_from_logical_core(outbound->get_service_core(coord));
         const uint32_t down_counter_addr = static_cast<uint32_t>(outbound->get_data_ready_counter_addr(coord));
         for (const auto& wc : worker_cores) {
@@ -764,7 +800,7 @@ MeshWorkload make_stub_fabric_workload(
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const tt::tt_fabric::FabricNodeId downstream_node(
             down_mesh_id, mesh_graph.coordinate_to_chip(down_mesh_id, coord, down_host_rank));
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(sender_node, downstream_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, sender_node, downstream_node);
         TT_FATAL(!links.empty(), "stub fabric op: no fabric link sender->downstream at coord {}", coord);
 
         auto kernel = CreateKernel(
@@ -803,7 +839,7 @@ MeshWorkload make_stress_fabric_workload(
     MeshWorkload workload;
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
         auto program = CreateProgram();
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto fabric_core_phys = device->worker_core_from_logical_core(fabric_core);
 
@@ -829,7 +865,7 @@ MeshWorkload make_stress_fabric_workload(
                 continue;
             }
             const tt::tt_fabric::FabricNodeId neighbor_node(sender_node.mesh_id, neighbors.front());
-            for (auto link : tt::tt_fabric::get_forwarding_link_indices(sender_node, neighbor_node)) {
+            for (auto link : tt::tt_fabric::get_forwarding_link_indices(*mesh, sender_node, neighbor_node)) {
                 conns.emplace_back(neighbor_node, link);
             }
         }
@@ -1267,6 +1303,128 @@ TEST_F(CrossProcessD2DFixture, ForwardChainStress) {
         ++case_idx;
         run_forward_chain_stress(mesh_device_, combo.global_shape, combo.worker_cores, combo.num_iters);
     }
+}
+
+// Every rank exports its inbound boundary; rank 0 gets the whole chain. Each boundary has two
+// channels, like the prefill runner's activations plus indexer indices: a gated one with
+// metadata, then a plain one.
+TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    const int rank = *ctx->rank();
+    if (world_size < 2) {
+        GTEST_SKIP() << "Pipeline export needs >= 2 ranks; got " << world_size;
+    }
+
+    constexpr uint32_t kMetadataBytes = 16;
+    const ttnn::D2DStageGateConfig gate_cfg{.num_gates = 2, .slot_id_offset_bytes = 0, .gate_mode_offset_bytes = 4};
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+    const D2DEndpointConfig from_prev{
+        .sender_rank = Rank{rank - 1}, .receiver_rank = Rank{rank}, .distributed_context = ctx};
+    const D2DEndpointConfig to_next{
+        .sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx};
+    // Channels between the same two ranks pair up in creation order, so every rank builds them
+    // in the same order: inbound before outbound, gated before plain.
+    std::vector<std::unique_ptr<D2DStreamServiceReceiver>> inbound;
+    std::vector<std::unique_ptr<D2DStreamServiceSender>> outbound;
+    for (const bool gated : {true, false}) {
+        const uint32_t metadata_bytes = gated ? kMetadataBytes : 0;
+        if (rank > 0) {
+            auto cfg = make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes);
+            if (gated) {
+                cfg.stage_gate = gate_cfg;
+            }
+            inbound.push_back(D2DStreamService::create_receiver(mesh_device_, std::move(cfg), from_prev));
+        }
+        if (rank + 1 < world_size) {
+            outbound.push_back(D2DStreamService::create_sender(
+                mesh_device_, make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes), to_next));
+        }
+    }
+
+    std::vector<std::vector<const D2DStreamServiceReceiver*>> boundaries;
+    if (!inbound.empty()) {
+        boundaries.push_back({inbound[0].get(), inbound[1].get()});
+    }
+    // Only the root writes, so its pid keeps the path unique.
+    auto file = D2DStreamService::export_pipeline_descriptor(
+        "gtest_cross_process_export_" + std::to_string(getpid()), boundaries, Rank{0}, ctx);
+    EXPECT_EQ(file != nullptr, rank == 0);
+    if (rank == 0) {
+        const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(file->path());
+        ASSERT_EQ(desc.ranks.size(), static_cast<size_t>(world_size));
+        // Ranks sharing a host each see their own chip as chip 0 (TT_VISIBLE_DEVICES), so the file
+        // must carry the physical PCIe device number. Otherwise every rank on a host would name the
+        // same device.
+        std::map<std::pair<std::string, uint32_t>, int> owner_of_device;
+        for (int r = 0; r < world_size; ++r) {
+            const auto& rd = desc.ranks[r];
+            EXPECT_EQ(rd.rank, r);
+            EXPECT_FALSE(rd.host_name.empty());
+            ASSERT_EQ(rd.boundaries.size(), r > 0 ? 1u : 0u);
+            if (rd.boundaries.empty()) {
+                continue;
+            }
+            const auto& receivers = rd.boundaries[0].receivers;
+            ASSERT_EQ(receivers.size(), 2u);
+            for (size_t i = 0; i < receivers.size(); ++i) {
+                const auto& rx = receivers[i];
+                const bool gated = i == 0;
+                EXPECT_EQ(rx.sender_rank, r - 1);
+                EXPECT_EQ(rx.metadata_size_bytes, gated ? kMetadataBytes : 0u);
+                EXPECT_EQ(rx.stage_gate, gated ? gate_cfg : ttnn::D2DStageGateConfig{});
+                EXPECT_EQ(rx.stage_gate_stride_bytes, gated ? tt::tt_metal::hal::get_l1_alignment() : 0u);
+                EXPECT_EQ(rx.metadata_addr != 0u, gated);
+                ASSERT_FALSE(rx.coords.empty());
+                for (const auto& c : rx.coords) {
+                    EXPECT_NE(c.backing_tensor_addr, 0u);
+                    EXPECT_EQ(c.stage_gate_base_addr != 0u, gated);
+                    EXPECT_EQ(c.metadata_core.has_value(), gated);
+                    EXPECT_NE(c.sender_fabric_node_id, c.fabric_node_id);
+                    const auto [it, inserted] =
+                        owner_of_device.try_emplace({rd.host_name, c.service_core.pcie_device_id}, r);
+                    EXPECT_TRUE(inserted || it->second == r)
+                        << "ranks " << it->second << " and " << r << " both name PCIe device "
+                        << c.service_core.pcie_device_id << " on host " << rd.host_name;
+                }
+            }
+            // Two channels into one chip use different service cores.
+            EXPECT_NE(receivers[0].coords.at(0).service_core, receivers[1].coords.at(0).service_core);
+        }
+    }
+    ctx->barrier();
+}
+
+// A bad call on any rank makes every rank throw. Before, the failing rank threw on its own
+// and the root waited for it forever. A regression here hangs instead of failing.
+TEST(CrossProcessD2DExport, BadCallFailsOnEveryRank) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    const int rank = *ctx->rank();
+    if (world_size < 2) {
+        GTEST_SKIP() << "Needs >= 2 ranks; got " << world_size;
+    }
+    const std::string service_id = "gtest_cross_process_export_fail_" + std::to_string(getpid());
+    const std::vector<std::vector<const D2DStreamServiceReceiver*>> none;
+
+    // Only the last rank fails, first on a null receiver, then on a boundary with no receivers.
+    const std::vector<std::vector<const D2DStreamServiceReceiver*>> null_receiver{{nullptr}};
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(
+        service_id, rank == world_size - 1 ? null_receiver : none, Rank{0}, ctx));
+    const std::vector<std::vector<const D2DStreamServiceReceiver*>> empty_boundary{{}};
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(
+        service_id, rank == world_size - 1 ? empty_boundary : none, Rank{0}, ctx));
+
+    // The ranks disagree on the root.
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{rank == 0 ? 1 : 0}, ctx));
+
+    // Every rank passes the same out-of-range root.
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{world_size}, ctx));
+
+    // A good call still works afterwards.
+    auto file = D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{0}, ctx);
+    EXPECT_EQ(file != nullptr, rank == 0);
+    ctx->barrier();
 }
 
 }  // namespace

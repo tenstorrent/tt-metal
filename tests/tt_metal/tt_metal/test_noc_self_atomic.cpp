@@ -40,6 +40,9 @@ protected:
     const std::string kernel_path_cas_drain = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_cas_drain.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
+    // NOC API v1 has no noc_fast_atomic_cas4 (semaphore_dm_impl.h gates its CAS lock on it too). An ATT map
+    // selects V3 whatever the configured version.
+    bool has_noc_cas4{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     uint32_t num_dms_{0};
     std::vector<uint32_t> result;
@@ -50,6 +53,9 @@ protected:
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         l1_unreserved_base = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
+        const auto& rtoptions = MetalContext::instance().rtoptions();
+        has_noc_cas4 =
+            is_quasar && (rtoptions.get_noc_att_map().has_value() || rtoptions.get_quasar_noc_api_version() >= 2);
         if (is_quasar) {
             // Metal 2.0 reserves DM0/DM1 for runtime; user kernels get at most 6 threads.
             num_dms_ = std::min(num_dms_, 6u);
@@ -60,7 +66,7 @@ protected:
     // `sem_addr`.
     void run_single_node(const std::string& kernel_src, uint32_t sem_addr) {
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -141,7 +147,7 @@ protected:
     // Launch the single-thread cache-line-width check on a core.
     void run_cacheline_probe(uint32_t base_addr, uint32_t report_addr, uint32_t residency_addr) {
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -184,7 +190,7 @@ protected:
         slow_dispatch::WriteToL1(*mesh_device_, core, l1_unreserved_base, init);
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -268,7 +274,7 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
     const CoreCoord node_0_virtual = mesh_device_->worker_core_from_logical_core(node_0);
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device_);
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -501,6 +507,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
     }
+    if (!has_noc_cas4) {
+        GTEST_SKIP() << "noc_fast_atomic_cas4 is not in Quasar NOC API v1 (TT_METAL_QUASAR_NOC_API_VERSION=1)";
+    }
     const uint32_t start = num_dms_ * iterations;
     const uint32_t observed = run_cas_lock(0 /*mode: pure drain*/, 0 /*pairs unused*/, start);
     log_info(
@@ -517,6 +526,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
 TEST_F(NocSelfAtomicFixture, TestSelfCasLockVsIncr) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
+    }
+    if (!has_noc_cas4) {
+        GTEST_SKIP() << "noc_fast_atomic_cas4 is not in Quasar NOC API v1 (TT_METAL_QUASAR_NOC_API_VERSION=1)";
     }
     const uint32_t pairs = num_dms_ / 2;
     if (pairs == 0) {

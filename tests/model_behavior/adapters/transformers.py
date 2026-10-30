@@ -399,27 +399,31 @@ class QwenAdapter(TransformersAdapter):
 
     def warmup(self):
         model = self.sampling_model
-        previous = model._bind_gdn_prefill_scratch()
-        try:
-            model.capture_prefill_trace_chunked(
-                self.generator.mesh_device,
-                self.page_table[:1],
-                chunk_size=2048,
-                capture_chunk_trace=True,
-            )
-        finally:
-            model._unbind_gdn_prefill_scratch(previous)
-        # Compile the complete sampling sweep and stage both decode variants
-        # before recording them, as TransformersAdapter does. Direct traced
-        # warmup can first encounter a penalty sampling program inside capture.
-        for enable_trace in (False, True) if self.enable_trace else (False,):
-            self.generator.warmup_model_decode(
-                self.kv_cache,
-                enable_trace,
-                self.capacity,
-                self.page_table.shape[1],
-                can_sample_on_device=True,
-            )
+        model.warmup_gdn_slot_ops()
+        for record in (False, True):
+            previous = model._bind_gdn_prefill_scratch()
+            try:
+                if record:
+                    model.record_prefill_trace_chunked(self.generator.mesh_device)
+                else:
+                    model.prepare_prefill_trace_chunked(
+                        self.generator.mesh_device,
+                        self.page_table[:1],
+                        chunk_size=2048,
+                    )
+            finally:
+                model._unbind_gdn_prefill_scratch(previous)
+            # Compile the complete sampling sweep and stage both decode variants
+            # before recording them, as TransformersAdapter does. Direct traced
+            # warmup can first encounter a penalty sampling program inside capture.
+            if self.enable_trace or not record:
+                self.generator.warmup_model_decode(
+                    self.kv_cache,
+                    record,
+                    self.capacity,
+                    self.page_table.shape[1],
+                    can_sample_on_device=True,
+                )
 
     def prefill(self, admitted):
         if any(s.request.prefill_chunk_ends for s in admitted):

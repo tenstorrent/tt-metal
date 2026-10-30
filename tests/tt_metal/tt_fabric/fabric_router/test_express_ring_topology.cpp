@@ -1,0 +1,628 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Golden expectations for the ring-family decomposition of each express-link fixture. Machine-free:
+// MeshGraph(ClusterType, path) needs no cluster, no discovery and no topology mapper, so these are
+// pure input -> expected-output tables. Edit the literals; the checker is generic.
+//
+// Everything is in AXIS COORDINATES (rows), not chip ids: chip = row * 4 + col, and the decomposition
+// is shared by all four columns (derivation rejects columns that disagree).
+
+#include <gtest/gtest.h>
+
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+
+#include "cluster.hpp"
+#include "fabric_fixture.hpp"
+#include "utils.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
+
+namespace tt::tt_fabric::express_ring_tests {
+namespace {
+
+constexpr int kNoContinueSrc = AxisRouteTopology::kNone;
+
+struct Rings {
+    std::vector<int> leaves;                       // ascending
+    std::vector<std::pair<int, int>> anchors;      // {leaf, its anchor}
+    std::vector<std::pair<int, int>> leaf_pairs;   // {leaf, its paired leaf}
+    std::vector<std::vector<int>> forward_cycles;  // domain -> canonical forward row order
+    int continue_src_domain = kNoContinueSrc;      // domain allowed to continue into the other
+    std::vector<std::pair<int, int>> crossovers;   // ordered {continue-src row, other-family row}
+};
+
+// {src, dst, expected next row on the canonical route}
+struct Hop {
+    int src;
+    int dst;
+    int next;
+};
+
+std::string fixture_path(const std::string& fixture) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    EXPECT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    return (std::filesystem::path(tt_metal_home == nullptr ? "" : tt_metal_home) /
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture)
+        .string();
+}
+
+AxisRouteTopology derive(const std::string& fixture) {
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, fixture_path(fixture));
+    auto topo = derive_express_ring_topology(mesh_graph, MeshId{0});
+    EXPECT_TRUE(topo.has_value()) << fixture << " derived no express rings";
+    return topo.value_or(AxisRouteTopology{});
+}
+
+// A ControlPlane can only be built when the running world matches the descriptor's declared host
+// ranks: fewer ranks cannot clear the single-host check, and one host's chips cannot back a mesh
+// spanning several.
+int world_size() {
+    return static_cast<int>(*tt::tt_metal::MetalContext::instance().full_world_distributed_context().size());
+}
+
+// The ControlPlane-backed tests below need real channel binding, unlike everything above them.
+bool cluster_available() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled() ||
+           tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
+               tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+}
+
+std::unique_ptr<ControlPlane> make_control_plane(
+    const std::string& fixture, FabricReliabilityMode reliability_mode, FabricConfig fabric_config) {
+    auto& metal = tt::tt_metal::MetalContext::instance();
+    auto control_plane = std::make_unique<ControlPlane>(
+        metal.get_cluster(),
+        metal.rtoptions(),
+        metal.hal(),
+        metal.full_world_distributed_context(),
+        fixture_path(fixture),
+        fabric_config,
+        reliability_mode);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    return control_plane;
+}
+
+void expect_rings(const AxisRouteTopology& t, const Rings& want) {
+    std::vector<int> leaves;
+    for (int r = 0; r < t.axis_len; r++) {
+        if (t.is_leaf(r)) {
+            leaves.push_back(r);
+        }
+    }
+    EXPECT_EQ(leaves, want.leaves) << "leaf set";
+    for (const auto& [leaf, anchor] : want.anchors) {
+        ASSERT_NE(t.leaf_run_of[leaf], AxisRouteTopology::kNone) << "row " << leaf << " is not a leaf";
+        const auto& run = t.leaf_runs[t.leaf_run_of[leaf]];
+        // The end a leaf attaches to: index 0 exits before its run, the last index exits after it.
+        EXPECT_EQ(t.leaf_index_of[leaf] == 0 ? run.anchor_before : run.anchor_after, anchor)
+            << "anchor of leaf " << leaf;
+    }
+    for (const auto& [leaf, pair] : want.leaf_pairs) {
+        ASSERT_NE(t.leaf_run_of[leaf], AxisRouteTopology::kNone) << "row " << leaf << " is not a leaf";
+        EXPECT_EQ(t.leaf_run_of[leaf], t.leaf_run_of[pair]) << leaf << " and " << pair << " share no run";
+        EXPECT_EQ(std::abs(t.leaf_index_of[leaf] - t.leaf_index_of[pair]), 1)
+            << leaf << " and " << pair << " are not adjacent in their run";
+    }
+    EXPECT_EQ(t.forward_cycle, want.forward_cycles) << "canonical forward cycles";
+    EXPECT_EQ(t.continue_src_domain, want.continue_src_domain);
+    EXPECT_EQ(t.crossovers, want.crossovers) << "ordered crossovers";
+}
+
+void expect_hops(const AxisRouteTopology& t, const std::vector<Hop>& hops) {
+    for (const auto& h : hops) {
+        EXPECT_EQ(t.next_row(h.src, h.dst), h.next) << "next row on " << h.src << " -> " << h.dst;
+    }
+}
+
+}  // namespace
+
+// 8x4: RING axis with a single span-4 chord 2<->5, its class closing one ring over the six transit
+// rows through the ordinary wrap. The pattern declares wrap: LINE, so no chord straddles the boundary.
+TEST(AxisRouteTopologyTest, Rings8x4) {
+    const Rings want{
+        .leaves = {3, 4},
+        .anchors = {{3, 2}, {4, 5}},
+        .leaf_pairs = {{3, 4}, {4, 3}},
+        .forward_cycles = {{0, 1, 2, 5, 6, 7}},
+        .continue_src_domain = kNoContinueSrc,
+        .crossovers = {},
+    };
+    const auto topo = derive("express_links_8x4_mesh_graph_descriptor.textproto");
+    expect_rings(topo, want);
+    expect_hops(
+        topo,
+        {
+            {1, 6, 2},  // exact 3-vs-3 tie: canonical forward wins (the t[4][24] == S case)
+            {2, 5, 5},  // ride the span-4 chord
+            {5, 3, 2},  // destination leaf reached via its anchor, never through leaf 4
+            {3, 4, 4},  // paired leaves use their direct base edge
+            {3, 6, 2},  // source leaf leaves via its anchor
+            {0, 4, 1},  // tie again, forward
+        });
+}
+
+TEST(AxisRouteTopologyTest, PlainFabric2DDerivesLineFromExpressMgd) {
+    MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        fixture_path("express_links_8x4_mesh_graph_descriptor.textproto"),
+        FabricConfig::FABRIC_2D);
+
+    EXPECT_FALSE(derive_express_ring_topology(mesh_graph, MeshId{0}).has_value());
+
+    const auto topo = derive_axis_topology(mesh_graph, MeshId{0}, 0);
+    EXPECT_EQ(topo.axis_dim, 0);
+    EXPECT_EQ(topo.axis_len, 8);
+    EXPECT_FALSE(topo.wraps);
+    EXPECT_TRUE(topo.leaf_runs.empty());
+    EXPECT_EQ(topo.forward_cycle, std::vector<std::vector<int>>({{0, 1, 2, 3, 4, 5, 6, 7}}));
+    EXPECT_EQ(topo.next_row(0, 7), 1);
+    EXPECT_EQ(topo.next_row(7, 0), 6);
+}
+
+// 16x4: LINE axis, span-4 chords 2<->5, 6<->9, 10<->13 and span-8 chords 0<->7, 8<->15. Single
+// spanning family -- note rows 1 and 14 are members despite owning no chord.
+TEST(AxisRouteTopologyTest, Rings16x4) {
+    const Rings want{
+        .leaves = {3, 4, 11, 12},
+        .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}},
+        .leaf_pairs = {{3, 4}, {11, 12}},
+        .forward_cycles = {{0, 1, 2, 5, 6, 9, 10, 13, 14, 15, 8, 7}},
+        .continue_src_domain = kNoContinueSrc,
+        .crossovers = {},
+    };
+    const auto topo = derive("express_links_16x4_mesh_graph_descriptor.textproto");
+    expect_rings(topo, want);
+    EXPECT_FALSE(topo.is_leaf(1)) << "row 1 is a chordless ring member, not a leaf";
+    EXPECT_FALSE(topo.is_leaf(14)) << "row 14 is a chordless ring member, not a leaf";
+    expect_hops(
+        topo,
+        {
+            {1, 2, 2},   // forward one hop
+            {1, 14, 0},  // reverse is shorter (5 hops vs 7)
+            {5, 3, 2},   // anchor, not through leaf 4
+        });
+}
+
+// 32x4: RING axis, so each class closes its own family. Domains are ordered by ascending span, so
+// domain 0 is the span-4 (ex4) ring and domain 1 the span-8 (ex8) ring; ex8 may continue into ex4
+// and the reverse crossing is terminal.
+TEST(AxisRouteTopologyTest, Rings32x4) {
+    const Rings want{
+        .leaves = {3, 4, 11, 12, 19, 20, 27, 28},
+        .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}, {19, 18}, {20, 21}, {27, 26}, {28, 29}},
+        .leaf_pairs = {{3, 4}, {11, 12}, {19, 20}, {27, 28}},
+        .forward_cycles =
+            {
+                {1, 2, 5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25, 26, 29, 30},  // ex4
+                {0, 7, 8, 15, 16, 23, 24, 31},                                // ex8
+            },
+        .continue_src_domain = 1,
+        .crossovers = {{0, 1}, {7, 6}, {8, 9}, {15, 14}, {16, 17}, {23, 22}, {24, 25}, {31, 30}},
+    };
+    const auto topo = derive("express_links_32x4_mesh_graph_descriptor.textproto");
+    expect_rings(topo, want);
+    expect_hops(
+        topo,
+        {
+            {0, 7, 7},  // ex8 chord
+            {0, 2, 1},  // ex8 -> ex4 late exit: cross at (0,1), which is right here
+            {2, 0, 1},  // ex4 -> ex8 is terminal: walk ex4 to the paired landing's source side
+            {3, 4, 4},  // paired leaves
+        });
+    // Every nontrivial dependency cycle is a protected ring; the two families and their crossovers
+    // introduce none outside them.
+    EXPECT_TRUE(topo.cyclic_non_ring_hops().empty()) << "unprotected dependency cycle on the two-family fixture";
+}
+
+TEST(AxisRouteTopologyTest, Rings4x32Dim1MatchesTransposed32x4) {
+    const auto dim0 = derive("express_links_32x4_mesh_graph_descriptor.textproto");
+    const auto dim1 = derive("express_links_4x32_mesh_graph_descriptor.textproto");
+
+    EXPECT_EQ(dim0.axis_dim, 0);
+    EXPECT_EQ(dim1.axis_dim, 1);
+    EXPECT_EQ(dim1.axis_len, dim0.axis_len);
+    EXPECT_EQ(dim1.wraps, dim0.wraps);
+    EXPECT_EQ(dim1.domain_of, dim0.domain_of);
+    EXPECT_EQ(dim1.leaf_run_of, dim0.leaf_run_of);
+    EXPECT_EQ(dim1.leaf_index_of, dim0.leaf_index_of);
+    ASSERT_EQ(dim1.leaf_runs.size(), dim0.leaf_runs.size());
+    for (std::size_t i = 0; i < dim0.leaf_runs.size(); ++i) {
+        EXPECT_EQ(dim1.leaf_runs[i].rows, dim0.leaf_runs[i].rows);
+        EXPECT_EQ(dim1.leaf_runs[i].anchor_before, dim0.leaf_runs[i].anchor_before);
+        EXPECT_EQ(dim1.leaf_runs[i].anchor_after, dim0.leaf_runs[i].anchor_after);
+    }
+    EXPECT_EQ(dim1.forward_cycle, dim0.forward_cycle);
+    EXPECT_EQ(dim1.pos_in_domain, dim0.pos_in_domain);
+    EXPECT_EQ(dim1.continue_src_domain, dim0.continue_src_domain);
+    EXPECT_EQ(dim1.crossovers, dim0.crossovers);
+    for (int src = 0; src < dim0.axis_len; ++src) {
+        for (int dst = 0; dst < dim0.axis_len; ++dst) {
+            if (src != dst) {
+                EXPECT_EQ(dim1.next_row(src, dst), dim0.next_row(src, dst));
+            }
+        }
+    }
+}
+
+using tt::tt_fabric::fabric_router_tests::ControlPlaneFixture;
+using tt::tt_fabric::fabric_router_tests::write_temp_descriptor;
+
+// The canonical logical route query must reconstruct the same path the table walks, and must complete
+// the express axis before turning onto X. chip = row*4 + col on the 8x4 fixture.
+TEST_F(ControlPlaneFixture, TestExpressCanonicalRoute8x4) {
+    if (!cluster_available()) {
+        GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
+    }
+    auto control_plane = make_control_plane(
+        "express_links_8x4_mesh_graph_descriptor.textproto",
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        FabricConfig::FABRIC_2D_TORUS_XY);
+
+    const auto node = [](int chip) { return FabricNodeId{MeshId{0}, static_cast<std::uint32_t>(chip)}; };
+    const auto chips = [&](const std::vector<FabricNodeId>& route) {
+        std::vector<int> out;
+        out.reserve(route.size());
+        for (const auto& n : route) {
+            out.push_back(static_cast<int>(n.chip_id));
+        }
+        return out;
+    };
+
+    EXPECT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
+
+    // Rows 0->5 on the single family [0,1,2,5,6,7]: an exact 3-vs-3 tie taking canonical forward, so
+    // the walk is rows 0,1,2 then the span-4 chord to 5.
+    EXPECT_EQ(chips(control_plane->get_canonical_intramesh_route(node(0), node(20))), (std::vector<int>{0, 4, 8, 20}));
+    // Same Y route, then one X hop -- Y must complete before X.
+    EXPECT_EQ(
+        chips(control_plane->get_canonical_intramesh_route(node(0), node(21))), (std::vector<int>{0, 4, 8, 20, 21}));
+    // Destination leaf row 3 is entered from its anchor row 2, never through paired leaf row 4.
+    EXPECT_EQ(chips(control_plane->get_canonical_intramesh_route(node(20), node(12))), (std::vector<int>{20, 8, 12}));
+}
+
+// The node/direction predicates on the two-family fixture: ex8 may continue into ex4, the reverse
+// crossing is terminal, and leaves carry no protected ring.
+TEST_F(ControlPlaneFixture, TestExpressRingPredicates32x4) {
+    if (!cluster_available()) {
+        GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
+    }
+    if (world_size() != 4) {
+        GTEST_SKIP() << "express_links_32x4 declares 4 host ranks; run under tt-run with 4 ranks";
+    }
+    auto control_plane = make_control_plane(
+        "express_links_32x4_mesh_graph_descriptor.textproto",
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        FabricConfig::FABRIC_2D_TORUS_XY);
+
+    using D = RoutingDirection;
+    using Dim = RoutingDimension;
+    const auto row = [](int r) {  // column 0
+        return FabricNodeId{MeshId{0}, static_cast<std::uint32_t>(r * 4)};
+    };
+
+    EXPECT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
+    EXPECT_TRUE(control_plane->has_protected_ring(row(2), Dim::Y));   // ex4 member
+    EXPECT_TRUE(control_plane->has_protected_ring(row(0), Dim::Y));   // ex8 member
+    EXPECT_FALSE(control_plane->has_protected_ring(row(3), Dim::Y));  // leaf
+    EXPECT_TRUE(control_plane->has_protected_ring(row(3), Dim::X));   // X closes at every row
+
+    // Row 0 rides ex8 over its chord to row 7; its S neighbour row 1 is ex4, so that edge is a
+    // crossover and belongs to neither ring.
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(row(0), D::Z));
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(row(0), D::S));
+
+    // Row 2 arrives from row 1 and leaves over the ex4 chord to row 5 -- one orientation, one ring.
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(row(2), D::Z));
+    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(row(2), D::N, D::Z));
+    EXPECT_FALSE(control_plane->are_same_directed_ring_edges(row(2), D::S, D::Z));
+    EXPECT_TRUE(control_plane->continuation_allowed(row(2), D::S, D::Z));
+
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(row(2), D::N));
+    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(row(2), D::Z, D::N));
+    EXPECT_TRUE(control_plane->continuation_allowed(row(2), D::S, D::N));
+
+    // ex8 -> ex4 may continue; ex4 -> ex8 is terminal.
+    EXPECT_TRUE(control_plane->continuation_allowed(row(1), D::N, D::S));
+    EXPECT_FALSE(control_plane->continuation_allowed(row(0), D::S, D::Z));
+    EXPECT_FALSE(control_plane->continuation_allowed(row(7), D::N, D::S));
+
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(row(3), D::N));
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(row(3), D::S));
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(row(3), D::E));
+
+    EXPECT_FALSE(control_plane->are_same_directed_ring_edges(row(2), D::N, D::N));
+
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::N));
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::E));
+
+    // Kernels are compiled for chords along N/S.
+    const auto defines = control_plane->get_fabric_kernel_defines();
+    EXPECT_TRUE(defines.contains("FABRIC_EXPRESS_ENABLED"));
+    ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
+    EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "0");
+}
+
+// The transpose of TestExpressRingPredicates32x4: the same two-family rings along the 32 columns, so
+// every assertion carries over with row r -> column c, N -> W, S -> E, and the Y and X dimensions
+// swapped. chip = row * 32 + col; these all sit on row 0.
+TEST_F(ControlPlaneFixture, TestExpressRingPredicates4x32) {
+    if (!cluster_available()) {
+        GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
+    }
+    if (world_size() != 4) {
+        GTEST_SKIP() << "express_links_4x32 declares 4 host ranks; run under tt-run with 4 ranks";
+    }
+    auto control_plane = make_control_plane(
+        "express_links_4x32_mesh_graph_descriptor.textproto",
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        FabricConfig::FABRIC_2D_TORUS_XY);
+
+    using D = RoutingDirection;
+    using Dim = RoutingDimension;
+    const auto col = [](int c) {  // row 0
+        return FabricNodeId{MeshId{0}, static_cast<std::uint32_t>(c)};
+    };
+
+    EXPECT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
+    EXPECT_TRUE(control_plane->has_protected_ring(col(2), Dim::X));   // ex4 member
+    EXPECT_TRUE(control_plane->has_protected_ring(col(0), Dim::X));   // ex8 member
+    EXPECT_FALSE(control_plane->has_protected_ring(col(3), Dim::X));  // leaf
+    EXPECT_TRUE(control_plane->has_protected_ring(col(3), Dim::Y));   // Y closes at every column
+
+    // Column 0 rides ex8 over its chord to column 7; its E neighbour column 1 is ex4, so that edge
+    // is a crossover and belongs to neither ring.
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(0), D::Z));
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(col(0), D::E));
+
+    // Column 2 arrives from column 1 and leaves over the ex4 chord to column 5.
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(2), D::Z));
+    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(col(2), D::W, D::Z));
+    EXPECT_FALSE(control_plane->are_same_directed_ring_edges(col(2), D::E, D::Z));
+    EXPECT_TRUE(control_plane->continuation_allowed(col(2), D::E, D::Z));
+
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(2), D::W));
+    EXPECT_TRUE(control_plane->are_same_directed_ring_edges(col(2), D::Z, D::W));
+    EXPECT_TRUE(control_plane->continuation_allowed(col(2), D::E, D::W));
+
+    // ex8 -> ex4 may continue; ex4 -> ex8 is terminal.
+    EXPECT_TRUE(control_plane->continuation_allowed(col(1), D::W, D::E));
+    EXPECT_FALSE(control_plane->continuation_allowed(col(0), D::E, D::Z));
+    EXPECT_FALSE(control_plane->continuation_allowed(col(7), D::W, D::E));
+
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(col(3), D::W));
+    EXPECT_FALSE(control_plane->is_protected_ring_edge(col(3), D::E));
+    EXPECT_TRUE(control_plane->is_protected_ring_edge(col(3), D::S));
+
+    EXPECT_FALSE(control_plane->are_same_directed_ring_edges(col(2), D::W, D::W));
+
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::W));
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::S));
+
+    // Kernels are compiled for chords along E/W.
+    const auto defines = control_plane->get_fabric_kernel_defines();
+    EXPECT_TRUE(defines.contains("FABRIC_EXPRESS_ENABLED"));
+    ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
+    EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "1");
+}
+
+// The express-axis kernel define follows the configuration: named for an express mesh, absent when
+// the same descriptor is brought up without express routing.
+TEST_F(ControlPlaneFixture, TestExpressAxisKernelDefine8x4) {
+    if (!cluster_available()) {
+        GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
+    }
+    {
+        auto control_plane = make_control_plane(
+            "express_links_8x4_mesh_graph_descriptor.textproto",
+            FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+            FabricConfig::FABRIC_2D_TORUS_XY);
+        ASSERT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
+        const auto defines = control_plane->get_fabric_kernel_defines();
+        EXPECT_TRUE(defines.contains("FABRIC_EXPRESS_ENABLED"));
+        ASSERT_TRUE(defines.contains("FABRIC_EXPRESS_AXIS"));
+        EXPECT_EQ(defines.at("FABRIC_EXPRESS_AXIS"), "0");
+    }
+    {
+        // Plain FABRIC_2D drops the express edges (see PlainFabric2DDerivesLineFromExpressMgd).
+        auto control_plane = make_control_plane(
+            "express_links_8x4_mesh_graph_descriptor.textproto",
+            FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+            FabricConfig::FABRIC_2D);
+        ASSERT_FALSE(control_plane->express_routing_enabled(MeshId{0}));
+        const auto defines = control_plane->get_fabric_kernel_defines();
+        EXPECT_TRUE(defines.contains("ROUTING_MODE")) << "premise: the fabric context computed its defines";
+        EXPECT_FALSE(defines.contains("FABRIC_EXPRESS_ENABLED"));
+        EXPECT_FALSE(defines.contains("FABRIC_EXPRESS_AXIS"));
+    }
+}
+
+TEST(AxisRouteTopologyTest, DoubleChordPerRowIsRejected) {
+    // A row terminating two chords (span 4 and span 8 both landing on row 2) cannot be identified
+    // by a bare Z command; derivation must refuse it rather than guess.
+    const auto path = write_temp_descriptor("express_links_16x4_double_chord.textproto", R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [16, 4] dim_types: [LINE, RING] }
+  host_topology   { dims: [2, 1] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0  pattern { start: 2  step: 4 } }
+  express_links { dim_idx: 0  pattern { start: 2  step: 8 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)");
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    EXPECT_ANY_THROW(derive_express_ring_topology(mesh_graph, MeshId{0}));
+}
+
+TEST(AxisRouteTopologyTest, ExpressLinksOnMultipleAxesAreRejected) {
+    const auto path = write_temp_descriptor("express_links_multiple_axes.textproto", R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [4, 4] dim_types: [RING, RING] }
+  host_topology   { dims: [1, 1] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0  pattern { start: 0  step: 4 } }
+  express_links { dim_idx: 1  pattern { start: 0  step: 4 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)");
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    EXPECT_ANY_THROW(derive_express_ring_topology(mesh_graph, MeshId{0}));
+}
+
+// A single wide pattern on the 32-row RING axis: each block skips six interior rows, so leaves form
+// runs of six rather than pairs. Exercises entering and leaving a long run one row at a time: each
+// hop must land on a physically adjacent row.
+TEST(AxisRouteTopologyTest, Rings32x4Ex8Only) {
+    MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        fixture_path("express_links_32x4_ex8_only_mesh_graph_descriptor.textproto"));
+    const auto topo = derive_express_ring_topology(mesh_graph, MeshId{0});
+    ASSERT_TRUE(topo.has_value());
+
+    // One ring over the block endpoints; four runs of six between them.
+    EXPECT_EQ(topo->forward_cycle, (std::vector<std::vector<int>>{{0, 7, 8, 15, 16, 23, 24, 31}}));
+    ASSERT_EQ(topo->leaf_runs.size(), 4u);
+    for (const auto& run : topo->leaf_runs) {
+        EXPECT_EQ(run.rows.size(), 6u) << "run bounded by " << run.anchor_before << "," << run.anchor_after;
+    }
+
+    // No dependency cycle may form through the run's leaf links.
+    EXPECT_TRUE(topo->cyclic_non_ring_hops().empty()) << "unprotected dependency cycle in the run-of-6 routes";
+}
+
+// An open X dimension yields no X ring state even alongside a live express (Y) axis: the ordinary
+// ring derivation reports "not closed", so the express mesh's X ring state stays empty.
+TEST(AxisRouteTopologyTest, OpenXRingReportsNoXAxisRing) {
+    const auto path = write_temp_descriptor("express_links_8x4_open_x.textproto", R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [8, 4] dim_types: [RING, LINE] }
+  host_topology   { dims: [1, 1] }
+  channels { count: 2 }
+  express_links { dim_idx: 0  pattern { start: 2  step: 4 } wrap: LINE}
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)");
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    // Against the derivations directly, not through RoutingTableGenerator: the generator only stores
+    // what these return, and reaching it from a test would need a MeshGraph-only constructor that
+    // exists for no other caller.
+    EXPECT_TRUE(derive_express_ring_topology(mesh_graph, MeshId{0}).has_value());  // Y carries the express ring
+    EXPECT_FALSE(derive_ordinary_ring_topology(mesh_graph, MeshId{0}, /*axis=*/1).has_value());  // X does not close
+}
+
+// A mesh that declares no express links derives no express ring state, which is what leaves it on the
+// base dimension-order policy. Its X ring state stays underived too, but that is the generator's
+// laziness (x_rings are only derived for express meshes) rather than a property of the derivation --
+// X closes on this fixture, so the ordinary derivation would answer here. The non-express X
+// flow-control answer comes from the topology token (see
+// FabricContext::need_deadlock_avoidance_support's fallthrough), not from these predicates.
+TEST(AxisRouteTopologyTest, NoExpressTopologyYieldsNoRingState) {
+    MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        fixture_path("bh_galaxy_single_4x4_subtorus_topology_mesh_graph_descriptor.textproto"));
+    EXPECT_FALSE(derive_express_ring_topology(mesh_graph, MeshId{0}).has_value());
+}
+
+// The case the topology token gets wrong: a LINE Y axis (no cardinal end wrap) whose retained
+// express chords still close one spanning protected ring. Deciding from the topology enum would
+// drop the bubble on a ring that needs it.
+TEST_F(ControlPlaneFixture, TestExpressCarveOutWithoutEndWrapStillReportsAYRing) {
+    if (!cluster_available()) {
+        GTEST_SKIP() << "needs a Blackhole Galaxy or TT_METAL_MOCK_CLUSTER_DESC_PATH";
+    }
+    if (world_size() != 2) {
+        GTEST_SKIP() << "express_links_16x4 declares 2 host ranks; run under tt-run with 2 ranks";
+    }
+    auto control_plane = make_control_plane(
+        "express_links_16x4_mesh_graph_descriptor.textproto",
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        FabricConfig::FABRIC_2D_TORUS_X);
+    using D = RoutingDirection;
+    using Dim = RoutingDimension;
+    const auto row = [](int r) { return FabricNodeId{MeshId{0}, static_cast<std::uint32_t>(r * 4)}; };
+
+    EXPECT_TRUE(control_plane->express_routing_enabled(MeshId{0}));
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::N));
+    EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::E));  // X is RING here
+    // Row 3 is a leaf amid a ringed axis: the per-node answer elides it, the per-mesh one doesn't.
+    EXPECT_FALSE(control_plane->has_protected_ring(row(3), Dim::Y));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Line axes: next_row must never step over the absent wrap edge
+// ---------------------------------------------------------------------------------------------
+
+// AxisRouteTopology::next_row() picks the shorter way around a ring using modular arithmetic. On a
+// LINE that arithmetic is wrong: rows 0 and n-1 are NOT adjacent, so a distant destination would be
+// routed "the short way" over an edge the axis does not have -- a hop into a link that isn't wired.
+// The `wraps` flag is what separates the two, and these tests pin both sides of it.
+//
+// Built by hand rather than derived from a descriptor: a single domain covering every row is exactly
+// what derive_line_axis_topology() produces, and constructing it here keeps the test machine-free.
+namespace {
+
+AxisRouteTopology make_single_domain_axis(int len, bool wraps) {
+    AxisRouteTopology t;
+    t.axis_dim = 0;
+    t.axis_len = len;
+    t.wraps = wraps;
+    t.domain_of.assign(len, 0);
+    t.leaf_run_of.assign(len, AxisRouteTopology::kNone);
+    t.leaf_index_of.assign(len, AxisRouteTopology::kNone);
+    t.pos_in_domain.resize(len);
+    std::vector<int> cycle(len);
+    for (int i = 0; i < len; i++) {
+        cycle[i] = i;
+        t.pos_in_domain[i] = i;
+    }
+    t.forward_cycle.push_back(std::move(cycle));
+    return t;
+}
+
+}  // namespace
+
+TEST(AxisRouteTopologyLine, LineNeverStepsOverTheAbsentWrapEdge) {
+    constexpr int kLen = 8;
+    const auto line = make_single_domain_axis(kLen, /*wraps=*/false);
+
+    for (int src = 0; src < kLen; src++) {
+        for (int dst = 0; dst < kLen; dst++) {
+            if (src == dst) {
+                continue;
+            }
+            const int next = line.next_row(src, dst);
+            EXPECT_EQ(next, dst > src ? src + 1 : src - 1)
+                << "line hop " << src << " -> " << dst << " must be a single step toward the destination";
+            EXPECT_GE(next, 0);
+            EXPECT_LT(next, kLen);
+        }
+    }
+}
+
+// The counterpart: with a closing edge present, the short way round is correct and expected. If this
+// ever matches the line answers, `wraps` has stopped doing anything.
+TEST(AxisRouteTopologyLine, RingTakesTheShortWayRound) {
+    constexpr int kLen = 8;
+    const auto ring = make_single_domain_axis(kLen, /*wraps=*/true);
+
+    EXPECT_EQ(ring.next_row(0, kLen - 1), kLen - 1);  // one hop backwards over the wrap
+    EXPECT_EQ(ring.next_row(kLen - 1, 0), 0);
+    EXPECT_EQ(ring.next_row(0, 1), 1);  // forward when that is nearer
+}
+
+}  // namespace tt::tt_fabric::express_ring_tests

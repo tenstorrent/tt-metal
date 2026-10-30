@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -35,9 +36,24 @@ void check_matching_dtype(
 void check_same_device(
     const Tensor& reference, const Tensor& candidate, std::string_view operation_name, std::string_view candidate_name);
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
+void check_device_scalar(
+    const Tensor& reference, const Tensor& scalar, std::string_view operation_name, std::string_view scalar_name);
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
+
+// Affine summaries are one tensor [S, N, K, K+V] holding K rows of [A | B] per transform: slot 0 holds head
+// transforms and slot 1, when present, tail transforms. Kernels address it by page through TensorAccessor.
+struct PackedSummaryShape {
+    uint32_t slots;
+    uint32_t transforms;
+    uint32_t key_dim;
+    uint32_t value_dim;
+};
+// Interleaved, height-sharded and ND-sharded placements are accepted.
+void check_summary_memory_layout(
+    const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name, std::string_view tensor_name);
+PackedSummaryShape check_packed_summaries(const Tensor& summaries, std::string_view operation_name);
 
 struct KdaPrepWorkDist {
     std::vector<tt::tt_metal::CoreCoord> cores;
@@ -46,6 +62,54 @@ struct KdaPrepWorkDist {
     tt::tt_metal::CoreRangeSet core_set;
 };
 
-KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap);
+// Row-major over the grid, skipping `excluded` (a core another kernel of the program occupies).
+KdaPrepWorkDist distribute_prep(
+    tt::tt_metal::CoreCoord grid,
+    uint32_t total,
+    uint32_t core_cap,
+    std::optional<tt::tt_metal::CoreCoord> excluded = std::nullopt);
+
+// One core per (head, value block). A head's state columns evolve independently, so its value tiles are split
+// across as many cores as fit. A head's blocks share one grid column (or, when no column split fits, one grid row) so
+// value block 0 can multicast the value-independent inputs to the rest.
+struct ValueBlockDistribution {
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    std::vector<uint32_t> head;
+    std::vector<uint32_t> value_block;
+    uint32_t value_blocks = 1;
+    uint32_t value_tiles_per_core = 1;
+    tt::tt_metal::CoreRangeSet core_set;
+};
+
+ValueBlockDistribution distribute_value_blocks(
+    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles);
+
+// The physical segment (one column, or one row) a core's value-block multicast addresses, ordered for NoC 0: value
+// block 0 (the sender) gets its siblings' segment, every other block gets the sender. All zero when a head has one
+// block.
+struct ValueBlockPeers {
+    uint32_t x0 = 0;
+    uint32_t y0 = 0;
+    uint32_t x1 = 0;
+    uint32_t y1 = 0;
+};
+
+template <typename Device>
+ValueBlockPeers value_block_peers(const Device& device, const ValueBlockDistribution& distribution, uint32_t index) {
+    if (distribution.value_blocks == 1) {
+        return {};
+    }
+    const uint32_t value_block = distribution.value_block[index];
+    const uint32_t sender_index = index - value_block;
+    const auto first =
+        device.worker_core_from_logical_core(distribution.cores[value_block == 0 ? sender_index + 1 : sender_index]);
+    const auto last =
+        device.worker_core_from_logical_core(distribution.cores[sender_index + distribution.value_blocks - 1]);
+    return {
+        static_cast<uint32_t>(first.x),
+        static_cast<uint32_t>(first.y),
+        static_cast<uint32_t>(last.x),
+        static_cast<uint32_t>(last.y)};
+}
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

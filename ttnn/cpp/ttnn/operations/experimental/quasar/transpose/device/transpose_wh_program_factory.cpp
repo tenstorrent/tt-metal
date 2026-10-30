@@ -12,6 +12,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <vector>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -40,7 +41,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     const uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     const uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
@@ -223,9 +224,6 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .runtime_arg_schema = {.runtime_arg_names = {"num_hw_blocks"}},
             .hw_config = compute_hw,
         };
-        if (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32) {
-            compute_spec.compiler_options.defines = {{"DST_ACCUM_MODE", "1"}};
-        }
 
         kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
 

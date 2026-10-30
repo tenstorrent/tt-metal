@@ -7,7 +7,7 @@ from tests.sweep_framework.sweeps.conv_transpose2d.short.conv_transpose2d_short_
     parameters as parameters_conv_transpose2d,
 )
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_wormhole_b0,
 )
 

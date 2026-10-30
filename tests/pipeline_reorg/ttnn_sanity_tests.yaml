@@ -130,8 +130,6 @@
 - name: "ttnn conv group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
   skus:
-    wh_n300_civ2:
-      timeout: 40
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -147,8 +145,6 @@
 - name: "ttnn pool group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
   skus:
-    wh_n300_civ2:
-      timeout: 40
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -164,8 +160,6 @@
 - name: "ttnn matmul group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
   skus:
-    wh_n300_civ2:
-      timeout: 40
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -181,16 +175,10 @@
 - name: "ttnn fused group 1"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
-    wh_n300_civ2:
-      timeout: 45
     bh_p100:
-      timeout: 40
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 40
-    sim_wh_n150:
-      timeout: 60
-    sim_bh_p150:
-      timeout: 60
+      timeout: 50
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -198,16 +186,55 @@
 - name: "ttnn fused group 2"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
-    wh_n300_civ2:
-      timeout: 45
     bh_p100:
-      timeout: 40
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 50
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+# The simulator runs the fused directory as four groups.
+- name: "ttnn fused sim group 1"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 4 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
     sim_wh_n150:
-      timeout: 60
+      timeout: 45
     sim_bh_p150:
-      timeout: 60
+      timeout: 45
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused sim group 2"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 4 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 45
+    sim_bh_p150:
+      timeout: 45
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused sim group 3"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 4 --group 3 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 45
+    sim_bh_p150:
+      timeout: 45
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused sim group 4"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 4 --group 4 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    sim_wh_n150:
+      timeout: 45
+    sim_bh_p150:
+      timeout: 45
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
@@ -232,8 +259,6 @@
 - name: "ttnn sdpa group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
   skus:
-    wh_n300_civ2:
-      timeout: 15
     bh_p100:
       timeout: 15
     bh_p150b_civ2:
@@ -252,8 +277,6 @@
 - name: "ttnn indexer_score group"
   cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k "accuracy and rank7" -xv'
   skus:
-    wh_n300_civ2:
-      timeout: 10
     bh_p100:
       timeout: 10
     bh_p150b_civ2:
@@ -269,8 +292,6 @@
 - name: "ttnn reduce group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
-    wh_n300_civ2:
-      timeout: 45
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -287,7 +308,7 @@
   # The device-perf tests in this directory shell out to `python3 -m tracy`, which needs a
   # Tracy-enabled build; this job runs from the wheel, so they fail on a missing profiler
   # rather than on anything they measure. The nightly entry in ops_unit_tests.yaml drops the
-  # same tests by --ignore'ing both files; deselecting the marker instead keeps the
+  # same tests by --ignore'ing these files; deselecting the marker instead keeps the
   # functional cases in test_chain_perf.py, which do run here.
   cmd: >-
     pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
@@ -322,7 +343,7 @@
       timeout: 40
   team: ttnn
   budget_type: sanity
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
 
 - name: "trace allocation tracker"
   cmd: |
@@ -330,7 +351,7 @@
     TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking' -xv
     TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking_acknowledgments_and_lifetime' -xv
   skus:
-    wh_n300_civ2:
+    bh_p150b_civ2:
       timeout: 10
     sim_wh_n150:
       timeout: 15
@@ -353,3 +374,63 @@
   team: ttnn
   budget_type: sanity
   owner_id: U08T3JQEB36 # stevendae
+
+- name: "ttnn deepseek_prefill group"
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_moe_post_combine_reduce.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_per_token_cast.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_swigluoai_routed_expert.py -k "(test_skip_nonlocal_experts and dsv3) or (test_moe_grouped_topk and deepseek-8g256e and sigmoid and in_bf16 and realistic and pad50) or (test_moe_grouped_topk and kimi-1g384e and sigmoid and in_bf16 and realistic and pad0) or (test_single_routed_expert_functional and x_rm and dsv3-isl-3001) or (test_swigluoai_routed_expert_m3_shapes and (t128 or t4k)) or (test_cast_to_fp8_scale_values and bfloat16 and TILE and 7168) or (test_round_trip_random and bfloat16 and TILE and 1152)" -v'
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U0976495SLU # Nikola Ostojic
+
+# ---------------------------------------------------------------------------------------------
+# Quasar simulator coverage. Every entry runs on the two-compute-node grid,
+# TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2"; the generated suites are executed with the `-m emulator`
+# switch.
+#
+# See tests/pipeline_reorg/ttsim-skip-list.yaml for the tests currently excluded from these runs.
+#
+# The sim leg runs each entry with xdist (-n 4). The model-op suites take a per-device lock in their
+# conftest, so their workers cannot share the device: they run serially (-n 0), which overrides the -n 4.
+# ---------------------------------------------------------------------------------------------
+
+- name: "ttnn quasar resnet50 ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape_tiled.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_padded_slice.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reallocate.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_sharded_to_interleaved.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_slice_write.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_tilize.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_layout.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_memory_config.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_untilize_with_unpadding.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_linear.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_avg_pool2d.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py
+  skus:
+    sim_quasar:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn quasar llama32_1b graph ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" MESH_DEVICE=N150 pytest --timeout 600 -v -n 0 -m emulator models/experimental/llama32_1b_quasar/tests/graph_ops/
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn quasar qwen3_vl ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/qwen3_vl_ops/
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn quasar yolo ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/yolo_ops/
+  skus:
+    sim_quasar:
+      timeout: 20
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel

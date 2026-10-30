@@ -11,12 +11,18 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 
-template <std::uint32_t TilesPerRow, std::uint32_t TileBytes, bool HasAlias, typename Accessor>
+template <
+    std::uint32_t TilesPerRow,
+    std::uint32_t TileBytes,
+    bool HasAlias,
+    typename Accessor,
+    typename InputDfb,
+    typename AliasDfb>
 inline void read_two_pass_stats_block(
     const Noc& noc,
     const Accessor& src,
-    DataflowBuffer& input,
-    DataflowBuffer& alias,
+    InputDfb& input,
+    AliasDfb& alias,
     std::uint32_t ring_end,
     std::uint32_t start_tile,
     std::uint32_t row_stride,
@@ -48,16 +54,16 @@ inline void read_two_pass_stats_block(
                 src,
                 CoreLocalMem<std::uint32_t>(address),
                 count * TileBytes,
-                {.page_id = start_tile + tile * row_stride},
+                {.page_id = start_tile + (tile * row_stride)},
                 {});
         } else {
             for (std::uint32_t i = 0; i < count; ++i) {
                 const std::uint32_t offset = tile + i;
                 noc.async_read<NocOptions::DEFAULT, TileBytes>(
                     src,
-                    CoreLocalMem<std::uint32_t>(address + i * TileBytes),
+                    CoreLocalMem<std::uint32_t>(address + (i * TileBytes)),
                     TileBytes,
-                    {.page_id = start_tile + (offset / TilesPerRow) * row_stride + offset % TilesPerRow},
+                    {.page_id = start_tile + ((offset / TilesPerRow) * row_stride) + (offset % TilesPerRow)},
                     {});
             }
         }

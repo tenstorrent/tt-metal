@@ -8,13 +8,15 @@
 #   unit_tests/invariant_tests/<header>/  which specs are accepted, per public header (mock device)
 #   unit_tests/                           other mock-device and host-only unit tests
 #   kernel_compilation_tests/             JIT-compile kernels against a mock device
-#   integration_tests/                    real Wormhole / Blackhole silicon
+#   integration_tests/                    real Wormhole / Blackhole silicon, or the Quasar emulator
 #
 # Paths are absolute (${CMAKE_CURRENT_LIST_DIR}) because this list is consumed in
 # the parent api/ scope, where a bare relative path would resolve against api/.
 list(
     APPEND
     UNIT_TESTS_API_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/arg_value/api_idioms.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/arg_value/arg_value.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/dfb_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/kernel_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/semaphore_advanced_options.cpp
@@ -57,6 +59,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/graph_tracking.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_args_layout.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_config.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/per_node_tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/prefetcher_pipe_slots.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/semaphore_scope.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/borrowed_dfb_attach.cpp
@@ -74,10 +77,12 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utility/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/get_token_if_present.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/llk_operand.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/per_node_tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/scratchpad_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/compile_time_varargs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/tt_kernel_shim.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
@@ -85,4 +90,5 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad_fast_dispatch.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/trisc0_rvv_vadd.cpp
 )

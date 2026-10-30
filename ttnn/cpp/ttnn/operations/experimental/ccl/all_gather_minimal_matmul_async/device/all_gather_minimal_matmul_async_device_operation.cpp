@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -11,6 +12,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -39,7 +42,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         act_tensor.device() == weight_tensor.device(),
         "all_gather_minimal_matmul_async inputs must reside on the same device");
     TT_FATAL(
-        act_tensor.buffer() != nullptr && weight_tensor.buffer() != nullptr,
+        act_tensor.is_allocated() && weight_tensor.is_allocated(),
         "all_gather_minimal_matmul_async inputs must be allocated in device buffers");
     if (has_bias) {
         const auto& bias_tensor = *bias_ptr;
@@ -50,8 +53,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             bias_tensor.device() == act_tensor.device(),
             "all_gather_minimal_matmul_async bias must be on the same device");
         TT_FATAL(
-            bias_tensor.buffer() != nullptr,
-            "all_gather_minimal_matmul_async bias must be allocated in a device buffer");
+            bias_tensor.is_allocated(), "all_gather_minimal_matmul_async bias must be allocated in a device buffer");
     }
 
     // Layout requirements: all inputs must be TILE layout
@@ -153,7 +155,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             "persistent_weight_buffer must be provided when fsdp_cluster_axis is set");
         const auto& pwb = tensor_args.persistent_weight_buffer.value();
         TT_FATAL(
-            pwb.storage_type() == StorageType::DEVICE && pwb.buffer() != nullptr,
+            pwb.storage_type() == StorageType::DEVICE && pwb.is_allocated(),
             "persistent_weight_buffer must be on device and allocated");
         TT_FATAL(pwb.layout() == Layout::TILE, "persistent_weight_buffer must be TILE layout");
         const auto& pwb_logical = pwb.logical_shape();
@@ -266,8 +268,8 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
         TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
         TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
-        TT_FATAL(ternary_a.buffer() != nullptr, "fused_ternary_input_a must be allocated");
-        TT_FATAL(ternary_b.buffer() != nullptr, "fused_ternary_input_b must be allocated");
+        TT_FATAL(ternary_a.is_allocated(), "fused_ternary_input_a must be allocated");
+        TT_FATAL(ternary_b.is_allocated(), "fused_ternary_input_b must be allocated");
 
         TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
         TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");
@@ -428,6 +430,54 @@ AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsync
     }
 
     return output_tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // Slots follow compute_output_specs: [0] the activation gather buffer (the caller's persistent buffer when given),
+    // [1] with FSDP the gathered weight buffer, then one matmul chunk per width resolve_chunk_sizes gives (the explicit
+    // chunk_sizes when given, else `chunks` of them), so the count follows from the attributes. A gather buffer carries
+    // its tensor's label with Replicate on the gather axis (`cluster_axis` for the activation's last dim,
+    // `fsdp_cluster_axis` for the weight's K dim). Every chunk is a column slice of the matmul of the gathered
+    // activation by the (gathered) weight, so it takes the union label of {gathered activation, (gathered) weight,
+    // bias, the fused addcmul's two ternary operands when present}, as launch() would give a plain matmul: the addcmul
+    // is elementwise on the result, so a ternary operand sharded on an axis the result replicates makes the chunk
+    // Shard there; SwiGLU acts on the result alone and adds nothing. With no honest gather label (nullopt, already
+    // reported) a gather slot keeps its tensor's label and the chunks take the union over those.
+    const TensorTopology activation_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(
+            tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1)
+            .value_or(tensor_args.input_tensor.tensor_topology());
+    const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
+    const TensorTopology weight_topology =
+        fsdp_fused ? ttnn::operations::ccl::common::all_gather_output_topology(
+                         tensor_args.weight_tensor, attributes.fsdp_cluster_axis, /*gathered_dim=*/-2)
+                         .value_or(tensor_args.weight_tensor.tensor_topology())
+                   : tensor_args.weight_tensor.tensor_topology();
+
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(activation_topology), std::cref(weight_topology)};
+    if (tensor_args.bias_tensor.has_value()) {
+        operands.emplace_back(tensor_args.bias_tensor->tensor_topology());
+    }
+    if (tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value()) {
+        operands.emplace_back(tensor_args.fused_ternary_input_a->tensor_topology());
+        operands.emplace_back(tensor_args.fused_ternary_input_b->tensor_topology());
+    }
+    const TensorTopology matmul_topology = ttnn::operations::ccl::common::union_topology(
+        operands, tensor_args.input_tensor.tensor_topology().mesh_coords());
+
+    const size_t num_chunks = attributes.chunk_sizes.empty() ? static_cast<size_t>(std::max(attributes.chunks, 0))
+                                                             : attributes.chunk_sizes.size();
+    std::vector<TensorTopology> topologies;
+    topologies.reserve(1 + (fsdp_fused ? 1 : 0) + num_chunks);
+    topologies.push_back(activation_topology);
+    if (fsdp_fused) {
+        topologies.push_back(weight_topology);
+    }
+    topologies.insert(topologies.end(), num_chunks, matmul_topology);
+    return topologies;
 }
 
 }  // namespace ttnn::experimental::prim
