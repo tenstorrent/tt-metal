@@ -15,6 +15,8 @@
 #include <utility>
 #include <unordered_set>
 #include <fstream>
+#include <iterator>
+#include <sstream>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -3155,6 +3157,1350 @@ TEST(MeshGraphDescriptorTests, ExpressLinks4x32Dim1) {
         }
     }
     EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
+}
+
+}  // namespace tt::tt_fabric::fabric_router_tests
+
+namespace {
+
+std::string mgd_with_pipelines(const std::string& pipelines) {
+    return R"proto(
+               mesh_descriptors {
+                 name: "M0"
+                 arch: BLACKHOLE
+                 device_topology { dims: [ 8, 4 ] }
+                 host_topology { dims: [ 2, 2 ] }
+                 channels { count: 2 policy: RELAXED }
+               }
+               top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+           )proto" +
+           pipelines;
+}
+
+const std::string kGptOssRing = R"proto(
+    pipeline_descriptors {
+      name: "gpt_oss_120b_single_galaxy"
+      stages {
+        id: 0
+        label: "Embedding"
+        shape { dims: [ 4, 2 ] }
+      }
+      stages {
+        id: 1
+        label: "Windowed"
+        shape { dims: [ 4, 2 ] }
+      }
+      stages {
+        id: 2
+        label: "Global"
+        shape { dims: [ 4, 2 ] }
+      }
+      stages {
+        id: 3
+        label: "LMHead"
+        shape { dims: [ 4, 2 ] }
+      }
+      edges { src: 0 dst: 1 }
+      edges { src: 1 dst: 2 }
+      edges { src: 2 dst: 3 }
+      edges { src: 3 dst: 0 loopback: true }
+    }
+)proto";
+
+// A ring of `wide` 4x2 stages followed by `narrow` 1x2 stages.
+std::string llama_8b_pod_pipeline(const int wide = 8, const int narrow = 32) {
+    const int stages = wide + narrow;
+    std::ostringstream out;
+    out << "pipeline_descriptors {\n  name: \"llama_8b_pod\"\n";
+    for (int stage = 0; stage < wide; ++stage) {
+        out << "  stages { id: " << stage << " label: \"Token4x2\" shape { dims: [ 4, 2 ] } }\n";
+    }
+    for (int stage = wide; stage < stages; ++stage) {
+        out << "  stages { id: " << stage << " label: \"Token1x2\" shape { dims: [ 1, 2 ] } }\n";
+    }
+    for (int stage = 0; stage < stages; ++stage) {
+        out << "  edges { src: " << stage << " dst: " << (stage + 1) % stages
+            << (stage + 1 == stages ? " loopback: true" : "") << " }\n";
+    }
+    out << "}\n";
+    return out.str();
+}
+
+// M0 has eight 4x2 slices, and M1 thirty-two 1x2 slices in one row, so a 4x2 stage only fits M0.
+const std::string kLlama8bPodMeshes = R"proto(
+    mesh_descriptors {
+      name: "M0"
+      arch: BLACKHOLE
+      device_topology { dims: [ 4, 16 ] }
+      host_topology { dims: [ 1, 8 ] }
+      channels { count: 2 policy: RELAXED }
+    }
+    mesh_descriptors {
+      name: "M1"
+      arch: BLACKHOLE
+      device_topology { dims: [ 1, 64 ] }
+      host_topology { dims: [ 1, 32 ] }
+      channels { count: 2 policy: RELAXED }
+    }
+    graph_descriptors {
+      name: "G0"
+      type: "FABRIC"
+      instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+      instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+      connections {
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+        channels { count: 2 policy: STRICT }
+      }
+    }
+    top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)proto";
+
+// A part MGD that merge accepts: one FABRIC graph, MGD 1.0 meshes, plus the given pipelines.
+std::string mergeable_with_pipelines(const std::string& pipelines) {
+    return R"proto(
+               mesh_descriptors {
+                 name: "M0"
+                 arch: WORMHOLE_B0
+                 device_topology {
+                   dims: [ 4, 4 ]
+                   dim_types: [ LINE, LINE ]
+                 }
+                 host_topology { dims: [ 2, 2 ] }
+                 channels { count: 2 policy: STRICT }
+               }
+               graph_descriptors {
+                 name: "G0"
+                 type: "FABRIC"
+                 instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+               }
+               top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+           )proto" +
+           pipelines;
+}
+
+// Two pods of one mesh each, joined by a one-channel CLUSTER connection. There is no FABRIC graph.
+std::string two_pods_with_pipelines(const std::string& pipelines) {
+    return R"proto(
+               mesh_descriptors {
+                 name: "M0"
+                 arch: WORMHOLE_B0
+                 device_topology { dims: [ 2, 4 ] }
+                 host_topology { dims: [ 1, 1 ] }
+                 channels { count: 2 policy: RELAXED }
+               }
+               graph_descriptors {
+                 name: "G0"
+                 type: "POD"
+                 instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+               }
+               graph_descriptors {
+                 name: "G1"
+                 type: "CLUSTER"
+                 instances { graph { graph_descriptor: "G0" graph_id: 0 } }
+                 instances { graph { graph_descriptor: "G0" graph_id: 1 } }
+                 graph_topology: {
+                   layout_type: ALL_TO_ALL
+                   channels { count: 1 }
+                 }
+               }
+               top_level_instance { graph { graph_descriptor: "G1" graph_id: 0 } }
+           )proto" +
+           pipelines;
+}
+
+void expect_pipeline_rejected(const std::string& pipelines, const std::string& reason) {
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(mgd_with_pipelines(pipelines)); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(reason)));
+}
+
+}  // namespace
+
+namespace tt::tt_fabric::fabric_router_tests {
+
+// A closing edge marked loopback makes a ring, and the mark is kept.
+TEST(MeshGraphDescriptorTests, GptOssRingParsesAndIsReadable) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing));
+    ASSERT_TRUE(desc.has_pipeline_descriptors());
+    ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
+
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.name, "gpt_oss_120b_single_galaxy");
+    ASSERT_EQ(pipeline.stages.size(), 4u);
+    EXPECT_EQ(pipeline.stages[0].id, 0u);
+    EXPECT_EQ(pipeline.stages[0].label, "Embedding");
+    EXPECT_EQ(pipeline.stages[0].dims, (std::vector<std::int32_t>{4, 2}));
+    EXPECT_EQ(pipeline.stages[3].id, 3u);
+    EXPECT_EQ(pipeline.stages[3].label, "LMHead");
+    ASSERT_EQ(pipeline.edges.size(), 4u);
+    EXPECT_EQ(pipeline.edges[0].src, 0u);
+    EXPECT_EQ(pipeline.edges[0].dst, 1u);
+    EXPECT_FALSE(pipeline.edges[0].loopback);
+    EXPECT_FALSE(pipeline.edges[2].loopback);
+    EXPECT_EQ(pipeline.edges[3].src, 3u);
+    EXPECT_EQ(pipeline.edges[3].dst, 0u);
+    EXPECT_TRUE(pipeline.edges[3].loopback);
+}
+
+// Stage count is not limited, and stages in one pipeline may have different shapes.
+// M0 holds the eight 4x2 stages (slice 4x2, eight slices). M1 holds the thirty-two 1x2 stages.
+TEST(MeshGraphDescriptorTests, Llama8bPodParsesFortyStages) {
+    const std::string text_proto = kLlama8bPodMeshes + llama_8b_pod_pipeline();
+    MeshGraphDescriptor desc(text_proto);
+    ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.name, "llama_8b_pod");
+    ASSERT_EQ(pipeline.stages.size(), 40u);
+    EXPECT_EQ(pipeline.stages[0].dims, (std::vector<std::int32_t>{4, 2}));
+    EXPECT_EQ(pipeline.stages[8].dims, (std::vector<std::int32_t>{1, 2}));
+    EXPECT_EQ(pipeline.stages[39].id, 39u);
+    ASSERT_EQ(pipeline.edges.size(), 40u);
+    EXPECT_EQ(pipeline.edges.back().src, 39u);
+    EXPECT_EQ(pipeline.edges.back().dst, 0u);
+}
+
+// A stage shape is rank 2, and two stages in one pipeline need not share a shape.
+TEST(MeshGraphDescriptorTests, JointStageShapeParses) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "joint_lm_head"
+          stages {
+            id: 0
+            label: "Embedding"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 7
+            label: "LMHead"
+            shape { dims: [ 4, 4 ] }
+          }
+          edges { src: 0 dst: 7 }
+          edges { src: 7 dst: 0 loopback: true }
+        }
+    )proto";
+    MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
+    const PipelineDescriptorData& stored = desc.pipeline_descriptors().front();
+    EXPECT_EQ(stored.stages[1].id, 7u);
+    EXPECT_EQ(stored.stages[1].dims, (std::vector<std::int32_t>{4, 4}));
+}
+
+// A fork and the edges that return from it are accepted. Returns that leave the mesh use declared channels.
+TEST(MeshGraphDescriptorTests, DflashForkWithFabricReturnsParses) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 8, 4 ] }
+          host_topology { dims: [ 2, 2 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        mesh_descriptors {
+          name: "M1"
+          arch: BLACKHOLE
+          device_topology { dims: [ 8, 4 ] }
+          host_topology { dims: [ 2, 2 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+            channels { count: 4 policy: STRICT }
+          }
+        }
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+        pipeline_descriptors {
+          name: "gpt_oss_dflash_router"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 2
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 3
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 1 dst: 2 }
+          edges { src: 2 dst: 0 loopback: true }
+          edges { src: 0 dst: 3 }
+          edges { src: 3 dst: 0 loopback: true }
+        }
+    )proto";
+    MeshGraphDescriptor desc(text_proto);
+    const PipelineDescriptorData& stored = desc.pipeline_descriptors().front();
+    EXPECT_EQ(stored.name, "gpt_oss_dflash_router");
+    EXPECT_EQ(stored.stages.size(), 4u);
+    EXPECT_EQ(stored.edges.size(), 5u);
+    EXPECT_EQ(stored.stages[0].label, "");
+}
+
+// Several pipelines stay separate records. A stage id only has to be unique inside its pipeline.
+TEST(MeshGraphDescriptorTests, TwoPipelinesInOneMgdParse) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(R"proto(
+        pipeline_descriptors {
+          name: "gpt_oss_120b_single_galaxy"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+        }
+        pipeline_descriptors {
+          name: "mixed4_b"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+        }
+    )proto"));
+    ASSERT_EQ(desc.pipeline_descriptors().size(), 2u);
+    EXPECT_EQ(desc.pipeline_descriptors()[0].name, "gpt_oss_120b_single_galaxy");
+    EXPECT_EQ(desc.pipeline_descriptors()[1].name, "mixed4_b");
+    EXPECT_EQ(desc.pipeline_descriptors()[1].stages[0].id, 0u);
+}
+
+// Repeating an edge declares another channel. It is not a duplicate to reject.
+TEST(MeshGraphDescriptorTests, RepeatedEdgeDeclaresAnotherChannel) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "two_channels"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 0 dst: 1 }
+        }
+    )proto";
+    MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
+    ASSERT_EQ(desc.pipeline_descriptors().front().edges.size(), 2u);
+    EXPECT_EQ(desc.pipeline_descriptors().front().edges[0].dst, 1u);
+    EXPECT_EQ(desc.pipeline_descriptors().front().edges[1].dst, 1u);
+}
+
+// Exactly one stage has no incoming edge besides loopbacks: the stage that owns host I/O. Two chains have two.
+TEST(MeshGraphDescriptorTests, RejectsTwoRoots) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "two_roots"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 1
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 2
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 3
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 1 }
+              edges { src: 2 dst: 3 }
+            }
+        )proto",
+        "pipeline 'two_roots': stages 0, 2 have no incoming edge besides loopbacks; exactly one may, the stage "
+        "that owns host I/O");
+}
+
+// A stage with no edges is a second root too.
+TEST(MeshGraphDescriptorTests, RejectsAStageWithNoEdges) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "stray"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 1
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 2
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 1 }
+            }
+        )proto",
+        "pipeline 'stray': stages 0, 2 have no incoming edge besides loopbacks");
+}
+
+// Out-degree is not limited.
+TEST(MeshGraphDescriptorTests, ThreeOutgoingEdgesParse) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "fan_out"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 2
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 3
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 0 dst: 2 }
+          edges { src: 0 dst: 3 }
+        }
+    )proto";
+    const std::string text_proto = R"proto(
+                                       mesh_descriptors {
+                                         name: "M0"
+                                         arch: BLACKHOLE
+                                         device_topology { dims: [ 12, 6 ] }
+                                         host_topology { dims: [ 3, 3 ] }
+                                         channels { count: 2 policy: RELAXED }
+                                       }
+                                       top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+                                   )proto" +
+                                   pipeline;
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+}
+
+// A branch may itself fork. The slices it uses have to be able to touch, so this fork is a tree.
+TEST(MeshGraphDescriptorTests, BranchStageWithOutDegreeTwoParses) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "fork_in_branch"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 2
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 3
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 4
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 0 dst: 4 }
+          edges { src: 1 dst: 2 }
+          edges { src: 1 dst: 3 }
+        }
+    )proto";
+    const std::string text_proto = R"proto(
+                                       mesh_descriptors {
+                                         name: "M0"
+                                         arch: BLACKHOLE
+                                         device_topology { dims: [ 12, 6 ] }
+                                         host_topology { dims: [ 3, 3 ] }
+                                         channels { count: 2 policy: RELAXED }
+                                       }
+                                       top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+                                   )proto" +
+                                   pipeline;
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+}
+
+// A branch that never returns is accepted.
+TEST(MeshGraphDescriptorTests, DeadEndBranchParses) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "dead_end"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 2
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 0 dst: 2 }
+          edges { src: 1 dst: 0 loopback: true }
+        }
+    )proto";
+    MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
+    EXPECT_EQ(desc.pipeline_descriptors().front().stages.size(), 3u);
+}
+
+// A pipeline name must be unique in the MGD.
+TEST(MeshGraphDescriptorTests, RejectsDuplicatePipelineName) {
+    expect_pipeline_rejected(
+        kGptOssRing + R"proto(
+            pipeline_descriptors {
+              name: "gpt_oss_120b_single_galaxy"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+            }
+        )proto",
+        "pipeline name 'gpt_oss_120b_single_galaxy' is empty or repeated");
+}
+
+// A pipeline name must be non-empty.
+TEST(MeshGraphDescriptorTests, RejectsEmptyPipelineName) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+            }
+        )proto",
+        "pipeline name '' is empty or repeated");
+}
+
+// A pipeline must declare at least one stage.
+TEST(MeshGraphDescriptorTests, RejectsPipelineWithNoStages) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors { name: "empty" }
+        )proto",
+        "pipeline 'empty': must declare at least one stage");
+}
+
+// A stage id must be unique inside its pipeline.
+TEST(MeshGraphDescriptorTests, RejectsDuplicateStageId) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "dup"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+            }
+        )proto",
+        "pipeline 'dup': stage id 0 is repeated");
+}
+
+// An omitted stage id is 0, so a second stage without one repeats it.
+TEST(MeshGraphDescriptorTests, RejectsOmittedStageIdThatRepeatsZero) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "blank"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages { shape { dims: [ 4, 2 ] } }
+            }
+        )proto",
+        "pipeline 'blank': stage id 0 is repeated");
+}
+
+// An edge must name stages declared in the same pipeline.
+TEST(MeshGraphDescriptorTests, RejectsUnknownStage) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "missing"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 9 }
+            }
+        )proto",
+        "pipeline 'missing': edge 0 -> 9 names an unknown stage");
+}
+
+// A stage may not have an edge to itself.
+TEST(MeshGraphDescriptorTests, RejectsSelfEdge) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "loop"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 0 }
+            }
+        )proto",
+        "pipeline 'loop': self-edge on stage 0");
+}
+
+// A stage shape must be rank 2.
+TEST(MeshGraphDescriptorTests, RejectsRank3Shape) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "rank3"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2, 1 ] }
+              }
+            }
+        )proto",
+        "pipeline 'rank3': stage 0 shape must be rank 2, dims > 0");
+}
+
+// Both shape dims must be greater than 0, and a rank other than 2 is rejected.
+TEST(MeshGraphDescriptorTests, RejectsNonPositiveShape) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "zero"
+              stages {
+                id: 0
+                shape { dims: [ 4, 0 ] }
+              }
+            }
+        )proto",
+        "pipeline 'zero': stage 0 shape must be rank 2, dims > 0");
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "line"
+              stages {
+                id: 0
+                shape { dims: [ 4 ] }
+              }
+            }
+        )proto",
+        "pipeline 'line': stage 0 shape must be rank 2, dims > 0");
+}
+
+// An explicit STRICT policy is accepted. The stored edge keeps only its endpoints.
+TEST(MeshGraphDescriptorTests, EdgePolicyStrictParses) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(R"proto(
+        pipeline_descriptors {
+          name: "strict_edge"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 policy: STRICT }
+        }
+    )proto"));
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.edges.front().src, 0u);
+    EXPECT_EQ(pipeline.edges.front().dst, 1u);
+}
+
+// An explicit policy other than STRICT is rejected. An omitted policy means STRICT.
+TEST(MeshGraphDescriptorTests, EdgePolicyRelaxedIsRejected) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "relaxed_edge"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 1
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 1 policy: RELAXED }
+            }
+        )proto",
+        "pipeline 'relaxed_edge': edge 0 -> 1 has policy RELAXED, which is not supported yet; omit the policy or use "
+        "STRICT");
+}
+
+// A cycle needs one edge marked loopback, because the edges not marked loopback must have no cycle.
+TEST(MeshGraphDescriptorTests, RejectsRingWithoutLoopback) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "unmarked_ring"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 1
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 2
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 1 }
+              edges { src: 1 dst: 2 }
+              edges { src: 2 dst: 0 }
+            }
+        )proto",
+        "pipeline 'unmarked_ring': cycle 0 -> 1 -> 2 -> 0 has no loopback edge; mark one of its edges loopback: "
+        "true");
+}
+
+// Each cycle needs its own loopback edge. Here the second return to the router is not marked.
+TEST(MeshGraphDescriptorTests, RejectsForkWithOneUnmarkedReturn) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "fork"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 1
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 2
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 1 }
+              edges { src: 1 dst: 0 loopback: true }
+              edges { src: 0 dst: 2 }
+              edges { src: 2 dst: 0 }
+            }
+        )proto",
+        "pipeline 'fork': cycle 0 -> 2 -> 0 has no loopback edge");
+}
+
+// A loopback edge must close a cycle: its dst reaches its src over the other edges.
+TEST(MeshGraphDescriptorTests, RejectsLoopbackThatClosesNoCycle) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "chain"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 1
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 1 loopback: true }
+            }
+        )proto",
+        "pipeline 'chain': loopback edge 0 -> 1 closes no cycle; 1 does not reach 0 over the other edges");
+}
+
+// The loopback edge may be any edge of the cycle, and a repeated loopback edge is another channel.
+TEST(MeshGraphDescriptorTests, LoopbackOnAnyEdgeOfTheCycleParses) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(R"proto(
+        pipeline_descriptors {
+          name: "ring"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 2
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 1 dst: 2 loopback: true }
+          edges { src: 1 dst: 2 loopback: true }
+          edges { src: 2 dst: 0 }
+        }
+    )proto"));
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    ASSERT_EQ(pipeline.edges.size(), 4u);
+    EXPECT_FALSE(pipeline.edges[0].loopback);
+    EXPECT_TRUE(pipeline.edges[1].loopback);
+    EXPECT_TRUE(pipeline.edges[2].loopback);
+    EXPECT_FALSE(pipeline.edges[3].loopback);
+}
+
+// An unknown field, a channel policy, and a comment are not pipeline-edge checks.
+TEST(MeshGraphDescriptorTests, UnknownFieldElsewhereStillParses) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          not_a_field: 3
+          arch: BLACKHOLE
+          device_topology { dims: [ 8, 4 ] }
+          host_topology { dims: [ 2, 2 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        pipeline_descriptors {
+          name: "solo"
+          stages {
+            id: 0
+            label: "only"
+            shape { dims: [ 4, 2 ] }
+          }
+          # policy: RELAXED is a comment, not a field
+        }
+    )proto";
+    MeshGraphDescriptor desc(text_proto);
+    EXPECT_TRUE(desc.has_pipeline_descriptors());
+    EXPECT_EQ(desc.pipeline_descriptors().front().name, "solo");
+}
+
+// An MGD with no pipeline_descriptors section has no pipelines.
+TEST(MeshGraphDescriptorTests, AbsentSectionIsUnchanged) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(""));
+    EXPECT_FALSE(desc.has_pipeline_descriptors());
+    EXPECT_TRUE(desc.pipeline_descriptors().empty());
+}
+
+// Shipped descriptors declare no pipelines and still parse.
+TEST(MeshGraphDescriptorTests, ShippedMeshGraphDescriptorsStillParse) {
+    const std::filesystem::path root = "tt_metal/fabric/mesh_graph_descriptors";
+    ASSERT_TRUE(std::filesystem::is_directory(root));
+    std::size_t parsed = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(root)) {
+        if (entry.path().extension() != ".textproto") {
+            continue;
+        }
+        MeshGraphDescriptor desc(entry.path());
+        EXPECT_FALSE(desc.has_pipeline_descriptors()) << entry.path();
+        ++parsed;
+    }
+    EXPECT_GT(parsed, 0u);
+}
+
+const std::string kMergeRing = R"proto(
+    pipeline_descriptors {
+      name: "ring"
+      stages {
+        id: 0
+        label: "Embedding"
+        shape { dims: [ 2, 2 ] }
+      }
+      stages {
+        id: 1
+        shape { dims: [ 2, 2 ] }
+      }
+      edges { src: 0 dst: 1 }
+      edges { src: 1 dst: 0 policy: STRICT loopback: true }
+    }
+)proto";
+
+const std::string kMergeOther = R"proto(
+    pipeline_descriptors {
+      name: "other"
+      stages {
+        id: 0
+        shape { dims: [ 2, 2 ] }
+      }
+      stages {
+        id: 1
+        shape { dims: [ 2, 4 ] }
+      }
+      edges { src: 0 dst: 1 }
+    }
+)proto";
+
+// One part is copied whole, so its pipeline is unchanged and the mesh name stays unprefixed.
+TEST(MeshGraphDescriptorTests, MergeOnePartKeepsItsPipeline) {
+    const MeshGraphDescriptor source(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&source});
+
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{0}), "M0");
+    ASSERT_EQ(merged.pipeline_descriptors().size(), 1u);
+    const PipelineDescriptorData& pipeline = merged.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.name, "ring");
+    ASSERT_EQ(pipeline.stages.size(), 2u);
+    EXPECT_EQ(pipeline.stages[0].label, "Embedding");
+    EXPECT_EQ(pipeline.stages[0].dims, (std::vector<std::int32_t>{2, 2}));
+    EXPECT_EQ(pipeline.stages[1].dims, (std::vector<std::int32_t>{2, 2}));
+    ASSERT_EQ(pipeline.edges.size(), 2u);
+    EXPECT_EQ(pipeline.edges[1].src, 1u);
+    EXPECT_EQ(pipeline.edges[1].dst, 0u);
+}
+
+// A pipeline declared on only one part is still present after the parts are merged.
+TEST(MeshGraphDescriptorTests, MergeKeepsAPipelineDeclaredOnOnePart) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(""));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right});
+
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{1}), "mgd1_M0");
+    ASSERT_EQ(merged.pipeline_descriptors().size(), 1u);
+    EXPECT_EQ(merged.pipeline_descriptors().front().name, "ring");
+    EXPECT_EQ(merged.pipeline_descriptors().front().stages[0].id, 0u);
+    EXPECT_EQ(merged.pipeline_descriptors().front().edges[0].dst, 1u);
+}
+
+// Each part's pipelines are appended in part order. Stage ids stay local, so both may use s0.
+TEST(MeshGraphDescriptorTests, MergeAppendsPipelinesFromEachPart) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(kMergeOther));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right});
+
+    ASSERT_EQ(merged.pipeline_descriptors().size(), 2u);
+    EXPECT_EQ(merged.pipeline_descriptors()[0].name, "ring");
+    EXPECT_EQ(merged.pipeline_descriptors()[0].stages[1].id, 1u);
+    EXPECT_EQ(merged.pipeline_descriptors()[1].name, "other");
+    EXPECT_EQ(merged.pipeline_descriptors()[1].stages[0].id, 0u);
+    EXPECT_EQ(merged.pipeline_descriptors()[1].stages[0].dims, (std::vector<std::int32_t>{2, 2}));
+    EXPECT_EQ(merged.pipeline_descriptors()[1].edges.front().src, 0u);
+}
+
+// The same pipeline name in two parts is a merge error, and the error names both parts.
+TEST(MeshGraphDescriptorTests, MergeRejectsAPipelineNameDeclaredInTwoParts) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(kMergeRing));
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor::merge({&left, &right}); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("pipeline name 'ring' is declared in descriptor 0 and descriptor 1")));
+}
+
+// Parts that declare no pipelines still merge, and the result has none.
+TEST(MeshGraphDescriptorTests, MergeWithoutPipelinesHasNone) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(""));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(""));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right});
+
+    EXPECT_FALSE(merged.has_pipeline_descriptors());
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{1}), "mgd1_M0");
+}
+
+// A shape that is not a whole number of any mesh's slices is rejected.
+TEST(MeshGraphDescriptorTests, TierBRejectsStageThatTilesNoMesh) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "sideways"
+              stages {
+                id: 0
+                shape { dims: [ 2, 4 ] }
+              }
+            }
+        )proto",
+        "pipeline 'sideways': stage 0 fits no declared mesh");
+}
+
+// Stages that each fit can still be too many slices together.
+TEST(MeshGraphDescriptorTests, TierBRejectsCombinedSliceDemand) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "five"
+              stages {
+                id: 0
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 1
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 2
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 3
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: 4
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: 0 dst: 1 }
+              edges { src: 1 dst: 2 }
+              edges { src: 2 dst: 3 }
+              edges { src: 3 dst: 4 }
+            }
+        )proto",
+        "pipelines need 5 slices and the descriptor declares 4");
+}
+
+// An edge whose stages can only sit on different meshes needs a declared connection.
+TEST(MeshGraphDescriptorTests, TierBRejectsACrossingWithNoConnection) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 4, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 policy: STRICT }
+        }
+        mesh_descriptors {
+          name: "M1"
+          arch: BLACKHOLE
+          device_topology { dims: [ 1, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 policy: STRICT }
+        }
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+        }
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+        pipeline_descriptors {
+          name: "split"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 1, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+        }
+    )proto";
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("has no declared connection"),
+            ::testing::AnyOf(
+                ::testing::HasSubstr("between stages 0 and 1"), ::testing::HasSubstr("between stages 1 and 0")))));
+}
+
+// More crossings than the connection's channel count are rejected.
+TEST(MeshGraphDescriptorTests, TierBRejectsTooManyCrossings) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 4, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 policy: STRICT }
+        }
+        mesh_descriptors {
+          name: "M1"
+          arch: BLACKHOLE
+          device_topology { dims: [ 1, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 policy: STRICT }
+        }
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+            channels { count: 1 policy: STRICT }
+          }
+        }
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+        pipeline_descriptors {
+          name: "split"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 1, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 0 dst: 1 }
+          edges { src: 1 dst: 0 loopback: true }
+        }
+    )proto";
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("needs 3 channels and 1 are declared")));
+}
+
+// Five stages that tile only M0 cannot use M1's slices, even though the two meshes together have enough.
+TEST(MeshGraphDescriptorTests, TierBRejectsStagesThatOnlyFitOneMesh) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 8, 4 ] }
+          host_topology { dims: [ 2, 2 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        mesh_descriptors {
+          name: "M1"
+          arch: BLACKHOLE
+          device_topology { dims: [ 1, 8 ] }
+          host_topology { dims: [ 1, 4 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+        }
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+        pipeline_descriptors {
+          name: "wide"
+          stages {
+            id: 0
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 2
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 3
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: 4
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: 0 dst: 1 }
+          edges { src: 1 dst: 2 }
+          edges { src: 2 dst: 3 }
+          edges { src: 3 dst: 4 }
+        }
+    )proto";
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("pipeline stages that only fit mesh 'M0' need 5 slices and it declares 4")));
+}
+
+namespace {
+
+// Two meshes in one FABRIC graph joined by four channels, and one pipeline that chains its stages in order.
+std::string two_meshes_with_stages(
+    const std::string& m0_device,
+    const std::string& m0_host,
+    const std::string& m1_device,
+    const std::string& m1_host,
+    const std::vector<std::string>& stage_dims) {
+    std::ostringstream text_proto;
+    const auto mesh = [&](const std::string& name, const std::string& device, const std::string& host) {
+        text_proto << "mesh_descriptors { name: \"" << name << "\" arch: BLACKHOLE device_topology { dims: " << device
+                   << " } host_topology { dims: " << host << " } channels { count: 1 policy: RELAXED } }\n";
+    };
+    mesh("M0", m0_device, m0_host);
+    mesh("M1", m1_device, m1_host);
+    text_proto << "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+                  "instances { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } } "
+                  "instances { mesh { mesh_descriptor: \"M1\" mesh_id: 1 } } "
+                  "connections { nodes { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } } "
+                  "nodes { mesh { mesh_descriptor: \"M1\" mesh_id: 1 } } channels { count: 4 policy: STRICT } } }\n";
+    text_proto << "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }\n";
+    text_proto << "pipeline_descriptors { name: \"packed\"\n";
+    for (std::size_t stage = 0; stage < stage_dims.size(); ++stage) {
+        text_proto << "  stages { id: " << stage << " shape { dims: " << stage_dims[stage] << " } }\n";
+    }
+    for (std::size_t stage = 1; stage < stage_dims.size(); ++stage) {
+        text_proto << "  edges { src: " << stage - 1 << " dst: " << stage << " }\n";
+    }
+    text_proto << "}\n";
+    return text_proto.str();
+}
+
+}  // namespace
+
+// A [2,4] stage is one slice on M0 and two on M1. Five of them need at least 5 of the 6 slices, so the count
+// passes, but M0 holds two and M1 holds two: no combination of meshes fits all five.
+TEST(MeshGraphDescriptorTests, TierBRejectsWhenNoCombinationOfMeshesFits) {
+    const std::vector<std::string> five(5, "[ 2, 4 ]");
+    EXPECT_THAT(
+        ([&]() {
+            MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 8 ]", "[ 1, 2 ]", "[ 2, 8 ]", "[ 1, 4 ]", five));
+        }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("no assignment of stages to meshes fits the declared slices and channels")));
+    const std::vector<std::string> four(4, "[ 2, 4 ]");
+    EXPECT_NO_THROW(
+        MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 8 ]", "[ 1, 2 ]", "[ 2, 8 ]", "[ 1, 4 ]", four)));
+}
+
+// Two meshes of six slices and a chain of stages of 3, 2, 3, 2, 2 slices that fit either. Following the chain
+// puts 3 + 2 on M0 and 3 + 2 on M1 and leaves no room for the last 2; only 3 + 3 and 2 + 2 + 2 fits, which the
+// search finds by undoing choices.
+TEST(MeshGraphDescriptorTests, TierBTriesEveryMeshAStageFits) {
+    const std::vector<std::string> stages = {"[ 2, 12 ]", "[ 2, 8 ]", "[ 2, 12 ]", "[ 2, 8 ]", "[ 2, 8 ]"};
+    EXPECT_NO_THROW(
+        MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 24 ]", "[ 1, 6 ]", "[ 2, 24 ]", "[ 1, 6 ]", stages)));
+}
+
+// Nine 4x2 and thirty-one 1x2 stages need 40 slices, which the two meshes have, but only M0 holds 4x2 stages.
+TEST(MeshGraphDescriptorTests, TierBRejectsLlama8bPodWithANinthWideStage) {
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(kLlama8bPodMeshes + llama_8b_pod_pipeline(9, 31)); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("pipeline stages that only fit mesh 'M0' need 9 slices and it declares 8")));
+}
+
+namespace {
+
+// The shipped ring of eight 4x4 meshes, with a ring of eight 4x4 stages, one per mesh.
+std::string subtorus_8stage_with_ring(const bool drop_closing_connection) {
+    std::ifstream file(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
+        "subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto");
+    std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (drop_closing_connection) {
+        const std::size_t closing =
+            text.find("mesh_id: 7 } }\n    nodes { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }");
+        const std::size_t begin = text.rfind("  connections {", closing);
+        const std::string end_marker = "assign_z_direction: true\n  }\n";
+        const std::size_t end = text.find(end_marker, closing) + end_marker.size();
+        text.erase(begin, end - begin);
+    }
+    std::ostringstream pipeline;
+    pipeline << "pipeline_descriptors {\n  name: \"ring8\"\n";
+    for (int stage = 0; stage < 8; ++stage) {
+        pipeline << "  stages { id: " << stage << " shape { dims: [ 4, 4 ] } }\n";
+    }
+    for (int stage = 0; stage < 8; ++stage) {
+        pipeline << "  edges { src: " << stage << " dst: " << (stage + 1) % 8
+                 << (stage + 1 == 8 ? " loopback: true" : "") << " }\n";
+    }
+    pipeline << "}\n";
+    return text + pipeline.str();
+}
+
+}  // namespace
+
+// Each stage fills one mesh, and each ring edge rides the connection between neighbouring meshes.
+TEST(MeshGraphDescriptorTests, TierBAcceptsTheSubtorusEightStageRing) {
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(subtorus_8stage_with_ring(false)));
+}
+
+// Without the 7-0 connection the meshes form a line, so the ring has one crossing with no connection.
+TEST(MeshGraphDescriptorTests, TierBRejectsTheSubtorusRingWithoutItsClosingConnection) {
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(subtorus_8stage_with_ring(true)); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no declared connection")));
+}
+
+// A connection between two pods is a connection between the meshes under them.
+TEST(MeshGraphDescriptorTests, TierBCountsConnectionsBetweenPods) {
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(two_pods_with_pipelines(R"proto(
+        pipeline_descriptors {
+          name: "across_pods"
+          stages {
+            id: 0
+            shape { dims: [ 2, 4 ] }
+          }
+          stages {
+            id: 1
+            shape { dims: [ 2, 4 ] }
+          }
+          edges { src: 0 dst: 1 }
+        }
+    )proto")));
+}
+
+// The pod connection's channel count still limits the crossings.
+TEST(MeshGraphDescriptorTests, TierBRejectsTooManyCrossingsBetweenPods) {
+    EXPECT_THAT(
+        ([&]() {
+            MeshGraphDescriptor desc(two_pods_with_pipelines(R"proto(
+                pipeline_descriptors {
+                  name: "across_pods"
+                  stages {
+                    id: 0
+                    shape { dims: [ 2, 4 ] }
+                  }
+                  stages {
+                    id: 1
+                    shape { dims: [ 2, 4 ] }
+                  }
+                  edges { src: 0 dst: 1 }
+                  edges { src: 1 dst: 0 loopback: true }
+                }
+            )proto"));
+        }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("needs 2 channels and 1 are declared")));
+}
+
+// A search that reaches its step limit accepts. 49 one-slice meshes in a 7x7 grid cannot hold a ring of 49
+// stages, because the grid has no odd cycle, but proving that means trying every path through it.
+TEST(MeshGraphDescriptorTests, TierBAcceptsWhenTheSearchRunsOutOfSteps) {
+    constexpr int kSide = 7;
+    constexpr int kMeshes = kSide * kSide;
+    std::ostringstream text_proto;
+    text_proto << R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 4 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: STRICT }
+        }
+    )proto";
+    text_proto << "graph_descriptors {\n  name: \"G0\"\n  type: \"FABRIC\"\n";
+    const auto node = [](const int mesh) {
+        return "nodes { mesh { mesh_descriptor: \"M0\" mesh_id: " + std::to_string(mesh) + " } } ";
+    };
+    for (int mesh = 0; mesh < kMeshes; ++mesh) {
+        text_proto << "instances { mesh { mesh_descriptor: \"M0\" mesh_id: " << mesh << " } }\n";
+    }
+    for (int mesh = 0; mesh < kMeshes; ++mesh) {
+        if (mesh % kSide + 1 < kSide) {
+            text_proto << "connections { " << node(mesh) << node(mesh + 1) << "channels { count: 1 } }\n";
+        }
+        if (mesh + kSide < kMeshes) {
+            text_proto << "connections { " << node(mesh) << node(mesh + kSide) << "channels { count: 1 } }\n";
+        }
+    }
+    text_proto << "}\ntop_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }\n";
+    text_proto << "pipeline_descriptors {\n  name: \"wide_ring\"\n";
+    for (int stage = 0; stage < kMeshes; ++stage) {
+        text_proto << "  stages { id: " << stage << " shape { dims: [ 2, 4 ] } }\n";
+    }
+    for (int stage = 0; stage < kMeshes; ++stage) {
+        text_proto << "  edges { src: " << stage << " dst: " << (stage + 1) % kMeshes
+                   << (stage + 1 == kMeshes ? " loopback: true" : "") << " }\n";
+    }
+    text_proto << "}\n";
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto.str()));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -164,6 +164,9 @@ using GroupingChipId = uint32_t;
 // by their name/type strings).
 using PhysicalGroupingId = uint32_t;
 
+// A pipeline stage's id, unique within its pipeline. Edges name their stages by it.
+using PipelineStageId = uint32_t;
+
 /**
  * @brief Represents a fabric node identifier combining mesh ID and logical chip ID
  */

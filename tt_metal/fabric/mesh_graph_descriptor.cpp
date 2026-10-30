@@ -167,6 +167,15 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
     return connections;
 }
 
+std::shared_ptr<proto::MeshGraphDescriptor> parse_mesh_graph_text_proto(const std::string& text_proto) {
+    auto temp_proto = std::make_shared<proto::MeshGraphDescriptor>();
+    google::protobuf::TextFormat::Parser parser;
+    parser.AllowUnknownField(true);
+    parser.AllowUnknownExtension(true);
+    TT_FATAL(parser.ParseFromString(text_proto, temp_proto.get()), "Failed to parse MeshGraphDescriptor textproto");
+    return temp_proto;
+}
+
 }  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(
@@ -178,6 +187,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
     proto_ = std::move(proto);
     populate();
+    check_pipeline_feasibility();
 
     if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
         const std::string prefix = "mgd" + std::to_string(*sid) + "_";
@@ -192,17 +202,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
-    MeshGraphDescriptor(
-        [&] {
-            auto temp_proto = std::make_shared<proto::MeshGraphDescriptor>();
-            google::protobuf::TextFormat::Parser parser;
-            parser.AllowUnknownField(true);
-            parser.AllowUnknownExtension(true);
-            TT_FATAL(
-                parser.ParseFromString(text_proto, temp_proto.get()), "Failed to parse MeshGraphDescriptor textproto");
-            return temp_proto;
-        }(),
-        backwards_compatible) {}
+    MeshGraphDescriptor(parse_mesh_graph_text_proto(text_proto), backwards_compatible) {}
 
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
@@ -405,6 +405,7 @@ MeshGraphDescriptor MeshGraphDescriptor::merge(
     }
 
     if (descriptors.size() == 1) {
+        // The whole proto is copied, so pipeline_descriptors is kept and names stay as written.
         auto proto = std::make_shared<proto::MeshGraphDescriptor>();
         proto->CopyFrom(*descriptors.front()->proto_);
         return MeshGraphDescriptor(std::move(proto), /*backwards_compatible=*/true);
@@ -415,6 +416,8 @@ MeshGraphDescriptor MeshGraphDescriptor::merge(
     fabric->set_name("G0");
     fabric->set_type("FABRIC");
     std::optional<proto::Policy> shared_connection_policy;
+    // Pipeline names are not remapped. The first part to declare a name owns it.
+    std::unordered_map<std::string, std::size_t> pipeline_name_part;
 
     for (std::size_t i = 0; i < descriptors.size(); ++i) {
         const std::string prefix = "mgd" + std::to_string(i) + "_";
@@ -435,6 +438,17 @@ MeshGraphDescriptor MeshGraphDescriptor::merge(
         }
         for (const auto& pin : part.pinnings()) {
             *merged->add_pinnings() = pin;
+        }
+        // A pipeline name must be unique across the parts. Stage ids stay local to their pipeline.
+        for (const auto& pipeline : part.pipeline_descriptors()) {
+            const auto [owner, inserted] = pipeline_name_part.emplace(pipeline.name(), i);
+            TT_FATAL(
+                inserted,
+                "MeshGraphDescriptor::merge: pipeline name '{}' is declared in descriptor {} and descriptor {}",
+                pipeline.name(),
+                owner->second,
+                i);
+            *merged->add_pipeline_descriptors() = pipeline;
         }
 
         const proto::NodeRef& top = part.top_level_instance();
@@ -948,6 +962,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
         validate_pinnings(proto, all_errors);
+        validate_pipeline_descriptors(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -965,7 +980,349 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
     return all_errors;
 }
 
+void MeshGraphDescriptor::check_pipeline_feasibility() const {
+    // Tier B. pipeline_descriptors_ is already populated. This checks counts only, against the meshes and
+    // connections this descriptor declares; where a stage sits inside its mesh is left to the mapper's solve.
+    // It writes nothing back. A descriptor with no pipelines is unchanged.
+    //   1. Binding: a stage fits a mesh when its shape is a whole number of that mesh's slices and fits the
+    //      host grid.
+    //   2. Capacity: each stage's smallest slice count, summed, fits the declared slices, and so do the stages
+    //      that fit only one mesh.
+    //   3. Assignment: some choice of one mesh per stage stays within every mesh's slices, and the edges that
+    //      cross between two meshes fit the channels declared between them.
+    // Step 3 stops at a step limit and then accepts, so the constructor always returns.
+    if (pipeline_descriptors_.empty()) {
+        return;
+    }
+
+    // Meshes a stage can bind to. A slice is the device dims divided by the host dims. Switches, and meshes that
+    // are not rank 2, are skipped.
+    struct MeshInfo {
+        std::string name;
+        int rows = 0;
+        int cols = 0;
+        int slice_rows = 0;
+        int slice_cols = 0;
+        int slices = 0;
+    };
+    std::vector<MeshInfo> meshes;
+    std::unordered_map<GlobalNodeId, int> mesh_index;
+    for (const GlobalNodeId mesh_gid : mesh_instances_) {
+        const InstanceData& instance = get_instance(mesh_gid);
+        if (instance.kind != NodeKind::Mesh) {
+            continue;
+        }
+        const DeclaredTopology topology = get_declared_topology(instance);
+        if (topology.dims.size() != 2 || topology.host_dims.size() != 2 || topology.host_dims[0] <= 0 ||
+            topology.host_dims[1] <= 0) {
+            continue;
+        }
+        MeshInfo mesh;
+        mesh.name = instance.name;
+        mesh.rows = topology.host_dims[0];
+        mesh.cols = topology.host_dims[1];
+        mesh.slice_rows = topology.dims[0] / topology.host_dims[0];
+        mesh.slice_cols = topology.dims[1] / topology.host_dims[1];
+        mesh.slices = mesh.rows * mesh.cols;
+        mesh_index.emplace(mesh_gid, static_cast<int>(meshes.size()));
+        meshes.push_back(std::move(mesh));
+    }
+    const int mesh_count = static_cast<int>(meshes.size());
+
+    // Channel count between each pair of meshes, from the connections of every graph, whatever its type. An end
+    // that is a graph stands for every mesh under it: Tier B cannot tell which of them the cable joins, so each
+    // pair gets the channels. Meshes joined through one switch get the smaller of their two counts. Both are
+    // upper bounds; Tier C checks the cables.
+    std::vector<std::vector<int>> cap(mesh_count, std::vector<int>(mesh_count, 0));
+    const auto meshes_under = [&](auto&& self, const GlobalNodeId node, std::vector<int>& out) -> void {
+        const InstanceData& instance = get_instance(node);
+        if (instance.kind == NodeKind::Mesh) {
+            if (const auto it = mesh_index.find(node); it != mesh_index.end()) {
+                out.push_back(it->second);
+            }
+        } else if (instance.kind == NodeKind::Graph) {
+            for (const GlobalNodeId child : instance.sub_instances) {
+                self(self, child, out);
+            }
+        }
+    };
+    std::unordered_map<GlobalNodeId, std::vector<std::pair<int, int>>> meshes_on_switch;
+    for (const auto& [connection_id, connection] : connections_) {
+        (void)connection_id;
+        if (get_instance(connection.parent_instance_id).kind != NodeKind::Graph) {
+            continue;
+        }
+        const int count = static_cast<int>(connection.count);
+        // Every direction of a connection is stored, each with a different node first. Count each pair once.
+        for (std::size_t other = 1; other < connection.nodes.size(); ++other) {
+            const GlobalNodeId a = connection.nodes[0];
+            const GlobalNodeId b = connection.nodes[other];
+            if (a > b) {
+                continue;
+            }
+            const bool a_is_switch = get_instance(a).kind == NodeKind::Switch;
+            const bool b_is_switch = get_instance(b).kind == NodeKind::Switch;
+            std::vector<int> a_meshes;
+            std::vector<int> b_meshes;
+            meshes_under(meshes_under, a, a_meshes);
+            meshes_under(meshes_under, b, b_meshes);
+            if (a_is_switch != b_is_switch) {
+                for (const int mesh : a_is_switch ? b_meshes : a_meshes) {
+                    meshes_on_switch[a_is_switch ? a : b].emplace_back(mesh, count);
+                }
+                continue;
+            }
+            for (const int src : a_meshes) {
+                for (const int dst : b_meshes) {
+                    if (src != dst) {
+                        cap[src][dst] += count;
+                        cap[dst][src] += count;
+                    }
+                }
+            }
+        }
+    }
+    for (const auto& [switch_id, attached] : meshes_on_switch) {
+        (void)switch_id;
+        for (std::size_t i = 0; i < attached.size(); ++i) {
+            for (std::size_t j = i + 1; j < attached.size(); ++j) {
+                const auto [src, src_count] = attached[i];
+                const auto [dst, dst_count] = attached[j];
+                if (src != dst) {
+                    cap[src][dst] += std::min(src_count, dst_count);
+                    cap[dst][src] += std::min(src_count, dst_count);
+                }
+            }
+        }
+    }
+
+    // Step 1. Binding. need[mesh] is the stage's slice count on that mesh, or -1 when it does not fit there.
+    struct StageInfo {
+        std::string pipeline;
+        PipelineStageId id = 0;
+        std::vector<int> need;
+        int min_need = 0;
+        int bindings = 0;                             // meshes the stage fits
+        std::vector<std::pair<int, int>> neighbours;  // (stage, edge copies in both directions)
+    };
+    std::vector<StageInfo> stages;
+    std::vector<std::unordered_map<PipelineStageId, int>> stage_index(pipeline_descriptors_.size());
+    for (std::size_t p = 0; p < pipeline_descriptors_.size(); ++p) {
+        const PipelineDescriptorData& pipeline = pipeline_descriptors_[p];
+        for (const PipelineDescriptorData::Stage& stage : pipeline.stages) {
+            StageInfo info;
+            info.pipeline = pipeline.name;
+            info.id = stage.id;
+            info.need.assign(mesh_count, -1);
+            for (int mesh = 0; mesh < mesh_count; ++mesh) {
+                const MeshInfo& grid = meshes[mesh];
+                if (stage.dims[0] % grid.slice_rows != 0 || stage.dims[1] % grid.slice_cols != 0) {
+                    continue;
+                }
+                const int rect_rows = stage.dims[0] / grid.slice_rows;
+                const int rect_cols = stage.dims[1] / grid.slice_cols;
+                if (rect_rows > grid.rows || rect_cols > grid.cols) {
+                    continue;
+                }
+                info.need[mesh] = rect_rows * rect_cols;
+                if (info.bindings == 0 || info.need[mesh] < info.min_need) {
+                    info.min_need = info.need[mesh];
+                }
+                ++info.bindings;
+            }
+            TT_FATAL(info.bindings > 0, "pipeline '{}': stage {} fits no declared mesh", info.pipeline, info.id);
+            stage_index[p].emplace(info.id, static_cast<int>(stages.size()));
+            stages.push_back(std::move(info));
+        }
+    }
+    const int stage_count = static_cast<int>(stages.size());
+
+    // Neighbours across every pipeline. A repeated edge is another channel. Pipelines do not gain edges between
+    // them; they only share the meshes and the connections.
+    std::map<std::pair<int, int>, int> copies;
+    for (std::size_t p = 0; p < pipeline_descriptors_.size(); ++p) {
+        for (const PipelineDescriptorData::Edge& edge : pipeline_descriptors_[p].edges) {
+            const int src = stage_index[p].at(edge.src);
+            const int dst = stage_index[p].at(edge.dst);
+            ++copies[{std::min(src, dst), std::max(src, dst)}];
+        }
+    }
+    for (const auto& [pair, between] : copies) {
+        stages[pair.first].neighbours.emplace_back(pair.second, between);
+        stages[pair.second].neighbours.emplace_back(pair.first, between);
+    }
+
+    // Step 2. Capacity.
+    int declared_slices = 0;
+    for (const MeshInfo& mesh : meshes) {
+        declared_slices += mesh.slices;
+    }
+    int needed_slices = 0;
+    std::vector<int> only_here(mesh_count, 0);
+    for (const StageInfo& stage : stages) {
+        needed_slices += stage.min_need;
+        if (stage.bindings == 1) {
+            const int mesh = static_cast<int>(
+                std::find_if(stage.need.begin(), stage.need.end(), [](const int need) { return need >= 0; }) -
+                stage.need.begin());
+            only_here[mesh] += stage.need[mesh];
+        }
+    }
+    TT_FATAL(
+        needed_slices <= declared_slices,
+        "pipelines need {} slices and the descriptor declares {}",
+        needed_slices,
+        declared_slices);
+    for (int mesh = 0; mesh < mesh_count; ++mesh) {
+        TT_FATAL(
+            only_here[mesh] <= meshes[mesh].slices,
+            "pipeline stages that only fit mesh '{}' need {} slices and it declares {}",
+            meshes[mesh].name,
+            only_here[mesh],
+            meshes[mesh].slices);
+    }
+
+    // Step 3. Assignment. Stages are taken most constrained first (fewest meshes, then most slices), then along
+    // edges, so a stage after the first usually has a placed neighbour and its crossings are checked at once.
+    // For each stage, a mesh that already holds a neighbour is tried first, then the mesh with the most free
+    // slices. The first assignment that fits is enough; it is not stored.
+    std::vector<int> by_constraint(stage_count);
+    std::iota(by_constraint.begin(), by_constraint.end(), 0);
+    std::stable_sort(by_constraint.begin(), by_constraint.end(), [&](const int lhs, const int rhs) {
+        if (stages[lhs].bindings != stages[rhs].bindings) {
+            return stages[lhs].bindings < stages[rhs].bindings;
+        }
+        return stages[lhs].min_need > stages[rhs].min_need;
+    });
+    std::vector<int> order;
+    order.reserve(stage_count);
+    std::vector<bool> queued(stage_count, false);
+    for (const int start : by_constraint) {
+        if (queued[start]) {
+            continue;
+        }
+        queued[start] = true;
+        const std::size_t first = order.size();
+        order.push_back(start);
+        for (std::size_t head = first; head < order.size(); ++head) {
+            for (const auto& [neighbour, ignored_copies] : stages[order[head]].neighbours) {
+                (void)ignored_copies;
+                if (!queued[neighbour]) {
+                    queued[neighbour] = true;
+                    order.push_back(neighbour);
+                }
+            }
+        }
+    }
+
+    std::vector<int> assigned(stage_count, -1);
+    std::vector<int> used(mesh_count, 0);
+    std::vector<std::vector<int>> crossings(mesh_count, std::vector<int>(mesh_count, 0));
+    // The channel shortfall seen deepest in the search is the reason reported.
+    std::string failure = "no assignment of stages to meshes fits the declared slices and channels";
+    int failure_depth = -1;
+    constexpr std::size_t kStepLimit = 1'000'000;
+    std::size_t steps = 0;
+    bool out_of_steps = false;
+
+    const auto search = [&](auto&& self, const int depth) -> bool {
+        if (depth == stage_count) {
+            return true;
+        }
+        if (++steps > kStepLimit) {
+            out_of_steps = true;
+            return false;
+        }
+        const StageInfo& stage = stages[order[depth]];
+
+        struct Candidate {
+            int mesh;
+            bool holds_neighbour;
+            int free;
+        };
+        std::vector<Candidate> candidates;
+        for (int mesh = 0; mesh < mesh_count; ++mesh) {
+            if (stage.need[mesh] < 0 || used[mesh] + stage.need[mesh] > meshes[mesh].slices) {
+                continue;
+            }
+            const bool holds_neighbour =
+                std::any_of(stage.neighbours.begin(), stage.neighbours.end(), [&](const auto& neighbour) {
+                    return assigned[neighbour.first] == mesh;
+                });
+            candidates.push_back({mesh, holds_neighbour, meshes[mesh].slices - used[mesh]});
+        }
+        std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate& lhs, const Candidate& rhs) {
+            if (lhs.holds_neighbour != rhs.holds_neighbour) {
+                return lhs.holds_neighbour;
+            }
+            return lhs.free > rhs.free;
+        });
+
+        for (const Candidate& candidate : candidates) {
+            const int mesh = candidate.mesh;
+            bool channels_ok = true;
+            for (const auto& [neighbour, between] : stage.neighbours) {
+                const int other = assigned[neighbour];
+                if (other < 0 || other == mesh || crossings[mesh][other] + between <= cap[mesh][other]) {
+                    continue;
+                }
+                channels_ok = false;
+                if (depth >= failure_depth) {
+                    failure_depth = depth;
+                    failure = cap[mesh][other] == 0
+                                  ? fmt::format(
+                                        "pipeline '{}': edge between stages {} and {} has no declared connection",
+                                        stage.pipeline,
+                                        stage.id,
+                                        stages[neighbour].id)
+                                  : fmt::format(
+                                        "pipeline '{}': edge between stages {} and {} needs {} channels and {} are "
+                                        "declared",
+                                        stage.pipeline,
+                                        stage.id,
+                                        stages[neighbour].id,
+                                        crossings[mesh][other] + between,
+                                        cap[mesh][other]);
+                }
+                break;
+            }
+            if (!channels_ok) {
+                continue;
+            }
+
+            const auto spend = [&](const int sign) {
+                for (const auto& [neighbour, between] : stage.neighbours) {
+                    const int other = assigned[neighbour];
+                    if (other >= 0 && other != mesh) {
+                        crossings[mesh][other] += sign * between;
+                        crossings[other][mesh] += sign * between;
+                    }
+                }
+                used[mesh] += sign * stage.need[mesh];
+            };
+            spend(+1);
+            assigned[order[depth]] = mesh;
+            if (self(self, depth + 1)) {
+                return true;
+            }
+            assigned[order[depth]] = -1;
+            spend(-1);
+            if (out_of_steps) {
+                return false;
+            }
+        }
+        return false;
+    };
+
+    const bool found = search(search, 0);
+    if (out_of_steps) {
+        return;
+    }
+    TT_FATAL(found, "{}", failure);
+}
+
 void MeshGraphDescriptor::populate() {
+    populate_pipeline_descriptors();
     populate_descriptors();
 
     populate_top_level_instance();
@@ -2438,6 +2795,29 @@ bool pinning_entry_uses_regex(const proto::AsicPinning& pinning) {
 }
 }  // namespace
 
+void MeshGraphDescriptor::populate_pipeline_descriptors() {
+    pipeline_descriptors_.clear();
+    pipeline_descriptors_.reserve(static_cast<std::size_t>(proto_->pipeline_descriptors_size()));
+    for (const auto& pipeline : proto_->pipeline_descriptors()) {
+        PipelineDescriptorData record;
+        record.name = pipeline.name();
+        record.stages.reserve(static_cast<std::size_t>(pipeline.stages_size()));
+        for (const auto& stage : pipeline.stages()) {
+            PipelineDescriptorData::Stage stored;
+            stored.id = stage.id();
+            stored.label = stage.label();
+            stored.dims.assign(stage.shape().dims().begin(), stage.shape().dims().end());
+            record.stages.push_back(std::move(stored));
+        }
+        record.edges.reserve(static_cast<std::size_t>(pipeline.edges_size()));
+        for (const auto& edge : pipeline.edges()) {
+            record.edges.push_back(
+                PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst(), .loopback = edge.loopback()});
+        }
+        pipeline_descriptors_.push_back(std::move(record));
+    }
+}
+
 void MeshGraphDescriptor::populate_pinnings() {
     pinnings_.clear();
 
@@ -2559,6 +2939,160 @@ void MeshGraphDescriptor::populate_pinnings() {
     // A logical fabric node may appear in several pinning groups. Each group is carried through as its own
     // constraint; the consumer filters out whatever is not present on the physical mesh being solved and
     // applies the rest, so a node listed in a wide group and in a 1:1 anchor is narrowed by the anchor.
+}
+
+void MeshGraphDescriptor::validate_pipeline_descriptors(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Each pipeline is checked on its own. A stage id only has to be unique inside that pipeline.
+    std::unordered_set<std::string> names;
+    for (const auto& pipeline : proto.pipeline_descriptors()) {
+        // A pipeline name must be non-empty and unique in the MGD.
+        if (pipeline.name().empty() || !names.insert(pipeline.name()).second) {
+            error_messages.push_back(fmt::format("pipeline name '{}' is empty or repeated", pipeline.name()));
+        }
+        // A pipeline must declare at least one stage.
+        if (pipeline.stages_size() == 0) {
+            error_messages.push_back(fmt::format("pipeline '{}': must declare at least one stage", pipeline.name()));
+        }
+
+        std::unordered_set<PipelineStageId> ids;
+        for (const auto& stage : pipeline.stages()) {
+            // A stage id must be unique inside its pipeline.
+            if (!ids.insert(stage.id()).second) {
+                error_messages.push_back(
+                    fmt::format("pipeline '{}': stage id {} is repeated", pipeline.name(), stage.id()));
+            }
+            // A stage shape must be rank 2, and both dims must be greater than 0.
+            const auto& dims = stage.shape().dims();
+            if (dims.size() != 2 || dims[0] <= 0 || dims[1] <= 0) {
+                error_messages.push_back(
+                    fmt::format("pipeline '{}': stage {} shape must be rank 2, dims > 0", pipeline.name(), stage.id()));
+            }
+        }
+
+        // In-degree, out-degree, forks, and dead ends are not text errors. A repeated edge is another
+        // channel, and feasibility counts each copy against the declared channels.
+        for (const auto& edge : pipeline.edges()) {
+            // An edge must name stages declared in the same pipeline.
+            if (!ids.contains(edge.src()) || !ids.contains(edge.dst())) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': edge {} -> {} names an unknown stage", pipeline.name(), edge.src(), edge.dst()));
+            }
+            // A stage may not have an edge to itself.
+            if (edge.src() == edge.dst()) {
+                error_messages.push_back(
+                    fmt::format("pipeline '{}': self-edge on stage {}", pipeline.name(), edge.src()));
+            }
+            // An omitted policy means STRICT. An explicit policy other than STRICT is rejected.
+            // TODO: Accept RELAXED once a pipeline edge may go over host MPI (plan P14).
+            if (edge.has_policy() && edge.policy() != proto::Policy::STRICT) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': edge {} -> {} has policy {}, which is not supported yet; omit the policy or use "
+                    "STRICT",
+                    pipeline.name(),
+                    edge.src(),
+                    edge.dst(),
+                    proto::Policy_Name(edge.policy())));
+            }
+        }
+
+        // The resolver orders stages along the edges not marked loopback, so those edges must have no cycle.
+        // Edges already reported above are left out.
+        std::unordered_map<PipelineStageId, std::vector<PipelineStageId>> forward;
+        for (const auto& edge : pipeline.edges()) {
+            if (!edge.loopback() && ids.contains(edge.src()) && ids.contains(edge.dst()) && edge.src() != edge.dst()) {
+                forward[edge.src()].push_back(edge.dst());
+            }
+        }
+        enum class Visit { kNew, kOnPath, kDone };
+        std::unordered_map<PipelineStageId, Visit> visit;
+        std::vector<PipelineStageId> path;
+        std::optional<std::string> cycle;
+        const auto find_cycle = [&](auto&& self, const PipelineStageId stage) -> void {
+            visit[stage] = Visit::kOnPath;
+            path.push_back(stage);
+            for (const PipelineStageId next : forward[stage]) {
+                if (cycle.has_value()) {
+                    return;
+                }
+                if (visit[next] == Visit::kOnPath) {
+                    const auto start = std::find(path.begin(), path.end(), next);
+                    std::string text;
+                    for (auto it = start; it != path.end(); ++it) {
+                        text += fmt::format("{} -> ", *it);
+                    }
+                    cycle = text + std::to_string(next);
+                    return;
+                }
+                if (visit[next] == Visit::kNew) {
+                    self(self, next);
+                }
+            }
+            path.pop_back();
+            visit[stage] = Visit::kDone;
+        };
+        for (const auto& stage : pipeline.stages()) {
+            if (!cycle.has_value() && visit[stage.id()] == Visit::kNew) {
+                find_cycle(find_cycle, stage.id());
+            }
+        }
+        if (cycle.has_value()) {
+            error_messages.push_back(fmt::format(
+                "pipeline '{}': cycle {} has no loopback edge; mark one of its edges loopback: true",
+                pipeline.name(),
+                *cycle));
+        } else {
+            // Exactly one stage has no incoming edge besides loopbacks. The resolver starts its stage order there
+            // and gives that stage host I/O, so a second such stage would leave the choice to its id.
+            std::unordered_set<PipelineStageId> fed;
+            for (const auto& [src, dsts] : forward) {
+                fed.insert(dsts.begin(), dsts.end());
+            }
+            std::unordered_set<PipelineStageId> seen;
+            std::string roots;
+            std::size_t root_count = 0;
+            for (const auto& stage : pipeline.stages()) {
+                if (!fed.contains(stage.id()) && seen.insert(stage.id()).second) {
+                    roots += fmt::format("{}{}", root_count++ == 0 ? "" : ", ", stage.id());
+                }
+            }
+            if (root_count > 1) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': stages {} have no incoming edge besides loopbacks; exactly one may, the stage "
+                    "that owns host I/O",
+                    pipeline.name(),
+                    roots));
+            }
+        }
+
+        // A loopback edge must close a cycle: its dst reaches its src over the other edges.
+        for (const auto& edge : pipeline.edges()) {
+            if (!edge.loopback() || !ids.contains(edge.src()) || !ids.contains(edge.dst()) ||
+                edge.src() == edge.dst()) {
+                continue;
+            }
+            std::unordered_set<PipelineStageId> reached = {edge.dst()};
+            std::vector<PipelineStageId> frontier = {edge.dst()};
+            while (!frontier.empty() && !reached.contains(edge.src())) {
+                const PipelineStageId stage = frontier.back();
+                frontier.pop_back();
+                for (const PipelineStageId next : forward[stage]) {
+                    if (reached.insert(next).second) {
+                        frontier.push_back(next);
+                    }
+                }
+            }
+            if (!reached.contains(edge.src())) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': loopback edge {} -> {} closes no cycle; {} does not reach {} over the other edges",
+                    pipeline.name(),
+                    edge.src(),
+                    edge.dst(),
+                    edge.dst(),
+                    edge.src()));
+            }
+        }
+    }
 }
 
 void MeshGraphDescriptor::validate_pinnings(
