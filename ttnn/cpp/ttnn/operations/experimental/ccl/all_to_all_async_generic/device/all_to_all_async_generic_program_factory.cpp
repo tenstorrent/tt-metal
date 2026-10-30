@@ -15,9 +15,12 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <algorithm>
 #include <cstddef>
+#include <numeric>
 #include <set>
 #include <unordered_set>
 
@@ -406,7 +409,14 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const auto sub_device_id = operation_attributes.sub_device_id.value_or(device->get_sub_device_ids().at(0));
     const auto available_worker_cores =
         device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id).num_cores();
-    const uint32_t page_size = op_config.get_page_size();
+    // A row-major input is tilized on the way: its row pages are fetched, and packets carry the output's tiles.
+    const bool tilize_input = tensor_args.input_tensor.layout() == Layout::ROW_MAJOR;
+    const uint32_t page_size = tilize_input ? tensor_return_value.buffer()->page_size() : op_config.get_page_size();
+    // The row-major input's geometry (used only with tilize_input): tiles per tile row, and bytes per input row.
+    const uint32_t tiles_per_row = input_shape[input_shape.size() - 1];
+    const uint32_t row_bytes = tensor_args.input_tensor.buffer()->page_size();
+    // Tile rows buffered between the reader, the tilize kernel and the writer, so each can work while the next waits.
+    constexpr uint32_t buffered_tile_rows = 2;
     const uint32_t max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t payload_capacity_pages = max_payload_size / page_size;
     const uint32_t num_dram_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
@@ -417,8 +427,10 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     // perf proxy isolate reader DRAM work without silently switching to a different worker/fabric program. Keep
     // the generic scatter schedule for small payloads and non-DRAM outputs. Link l owns banks
     // l, l + num_links, ...; this remains valid when bank count is not divisible by link count.
+    // A row-major input stays on the generic schedule: its tilize kernel converts whole tile rows in order.
     const bool use_bank_owned_schedule =
-        payload_capacity_pages > 4 && tensor_return_value.buffer()->buffer_type() == BufferType::DRAM &&
+        !tilize_input && payload_capacity_pages > 4 &&
+        tensor_return_value.buffer()->buffer_type() == BufferType::DRAM &&
         tensor_return_value.buffer()->buffer_layout() == TensorMemoryLayout::INTERLEAVED && num_dram_banks > 0 &&
         num_blocks >= num_dram_banks;
     const uint32_t number_pages_per_packet =
@@ -595,8 +607,13 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     // pair contiguous, while the writer drains the other two. Depth is counted in packets, independent of payload/page
     // geometry; a one-page payload still needs multiple slots to avoid fully serializing both kernels.
     constexpr uint32_t cb_depth = 4;
-    const uint32_t cb_size = cb_depth * number_pages_per_packet * page_size;
+    // With tilize_input the packet buffer holds one page per tile: a whole number of tile rows and of packets, at
+    // least buffered_tile_rows of them (all_to_all_tilize_common.hpp).
+    const uint32_t range_align_tiles = std::lcm(tiles_per_row, number_pages_per_packet);
+    const uint32_t cb_tiles = tt::round_up(buffered_tile_rows * tiles_per_row, range_align_tiles);
+    const uint32_t cb_size = tilize_input ? cb_tiles * page_size : cb_depth * number_pages_per_packet * page_size;
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
+    constexpr auto rows_cb = tt::CB::c_in1;
 
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cb_size,
@@ -604,9 +621,32 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CB::c_in0),
             .data_format = data_format,
-            .page_size = number_pages_per_packet * page_size,
+            .page_size = tilize_input ? page_size : number_pages_per_packet * page_size,
         }}},
     });
+    tt::tt_metal::KernelDescriptor::Defines tilize_defines;
+    if (tilize_input) {
+        TT_FATAL(
+            !reader_has_extra_half_tile && !writer_has_extra_half_tile &&
+                row_bytes * tt::constants::TILE_HEIGHT == tiles_per_row * page_size,
+            "all_to_all_async_generic: a row-major input needs whole tiles");
+        // The reader fetches one tile row of input rows while the tilize kernel converts the other.
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = buffered_tile_rows * tiles_per_row * page_size,
+            .core_ranges = sender_worker_core_range,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(rows_cb),
+                .data_format = data_format,
+                .page_size = page_size,
+            }}},
+        });
+        tilize_defines = {
+            {"TILIZE_INPUT", "1"},
+            {"ROW_BYTES", std::to_string(row_bytes)},
+            {"TILES_PER_ROW", std::to_string(tiles_per_row)},
+            {"ROWS_CB", std::to_string(static_cast<uint32_t>(rows_cb))},
+            {"RANGE_ALIGN_TILES", std::to_string(range_align_tiles)}};
+    }
 
     // Create CB for fabric
     const auto reserved_packet_header_CB_index = tt::CB::c_in4;
@@ -623,7 +663,10 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     });
 
     const uint32_t num_cores_per_blocks = routing.num_links;
-    const uint32_t blocks_per_core = num_blocks / num_cores_per_blocks;
+    // A row-major input is fetched a tile row at a time, so each link's share is whole tile rows.
+    const uint32_t tile_rows_per_link = num_blocks / tiles_per_row / num_cores_per_blocks;
+    const uint32_t blocks_per_core =
+        tilize_input ? tile_rows_per_link * tiles_per_row : num_blocks / num_cores_per_blocks;
     const size_t local_sender_stream = num_senders_per_link - 1;
 
     std::vector<uint32_t> sender_reader_compile_args = {
@@ -651,6 +694,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     sender_reader_kernel.core_ranges = sender_worker_core_range;
     sender_reader_kernel.compile_time_args = std::move(sender_reader_compile_args);
     sender_reader_kernel.config = tt::tt_metal::ReaderConfigDescriptor{};
+    sender_reader_kernel.defines = tilize_defines;
     const auto sender_reader_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(sender_reader_kernel));
 
@@ -683,6 +727,20 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const auto& block_strides = stream_schedule.block_strides;
     const auto& completion_flags = stream_schedule.completion_flags;
     const uint32_t semaphore_sent = stream_schedule.semaphore_sent;
+    std::optional<tt::tt_metal::KernelHandle> tilize_kernel_id;
+    if (tilize_input) {
+        tt::tt_metal::KernelDescriptor tilize_kernel;
+        tilize_kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/"
+            "all_to_all_tilize_compute.cpp";
+        tilize_kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        tilize_kernel.core_ranges = sender_worker_core_range;
+        tilize_kernel.compile_time_args = {
+            static_cast<uint32_t>(rows_cb), tt::CB::c_in0, tiles_per_row, range_align_tiles};
+        tilize_kernel.config = tt::tt_metal::ComputeConfigDescriptor{};
+        tilize_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(tilize_kernel));
+    }
     std::vector<CoreRangeSet> sender_stream_core_ranges(num_senders_per_link);
     for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
         const auto& core = sender_worker_cores[core_id];
@@ -923,6 +981,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         sender_writer_kernel.core_ranges = sender_stream_core_ranges[stream];
         sender_writer_kernel.compile_time_args = std::move(sender_writer_compile_args);
         sender_writer_kernel.config = tt::tt_metal::WriterConfigDescriptor{};
+        sender_writer_kernel.defines = tilize_defines;
         const auto sender_writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(sender_writer_kernel));
         sender_writer_kernel_ids.push_back(sender_writer_kernel_id);
@@ -972,6 +1031,29 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             tt::tt_metal::KernelDescriptor::RTArgList reader_rt_arg_list;
             reader_rt_arg_list.append(sender_reader_rt_args);
             desc.kernels[sender_reader_kernel_id].emplace_runtime_args(core, reader_rt_arg_list);
+        }
+        if (tilize_kernel_id.has_value()) {
+            // The tile rows of each of this stream's non-empty ranges, in order.
+            std::vector<uint32_t> range_tile_rows;
+            for (uint32_t i = 0; i < stream_device_offsets.size(); ++i) {
+                const uint32_t start = block_starts[sender_stream][link][i], end = block_ends[sender_stream][link][i];
+                if (start >= end) {
+                    continue;
+                }
+                TT_FATAL(
+                    block_strides[sender_stream][link][i] == 1 && start % tiles_per_row == 0 &&
+                        (end - start) % tiles_per_row == 0,
+                    "all_to_all_async_generic: a row-major input needs ranges of whole {}-tile rows, got [{}, {})",
+                    tiles_per_row,
+                    start,
+                    end);
+                range_tile_rows.push_back((end - start) / tiles_per_row);
+            }
+            // Runtime args: the number of ranges, then each range's tile rows.
+            tt::tt_metal::KernelDescriptor::RTArgList tilize_rt_args;
+            tilize_rt_args.append(std::vector<uint32_t>{static_cast<uint32_t>(range_tile_rows.size())});
+            tilize_rt_args.append(range_tile_rows);
+            desc.kernels[*tilize_kernel_id].emplace_runtime_args(core, tilize_rt_args);
         }
 
         std::vector<uint32_t> sender_writer_rt_args = {
