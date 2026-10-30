@@ -21,6 +21,10 @@
 #if !defined(COMPILE_FOR_TRISC) && defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && \
     !defined(FORCE_WATCHER_OFF)
 
+// The condition above in one name, for code outside this header that exists only for the NoC sanitizer, such as
+// sanitize_multicast_destination.h.
+#define DEBUG_SANITIZE_NOC_ENABLED
+
 #include "watcher_common.h"
 #include "internal/hw_thread.h"
 
@@ -1106,94 +1110,6 @@ inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
 }
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid) debug_sanitize_noc_txn_id(noc_id, trid)
 
-// Multicast into a sharded tensor: every worker node of the rectangle must be one of the tensor's nodes, given as
-// num_nodes packed bank coordinates (x in bits 8-15, y in bits 0-7).
-//
-// Takes the nodes as a pointer and count, not a template over the accessor, so Watcher builds carry one copy.
-void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
-    uint8_t noc_id,
-    uint64_t noc_addr,
-    uint32_t l1_addr,
-    uint32_t len,
-    uint32_t x_start,
-    uint32_t y_start,
-    uint32_t x_end,
-    uint32_t y_end,
-    const uint16_t* packed_xy_coords,
-    uint32_t num_nodes,
-    bool includes_sender) {
-    // NoC 0 runs from the start corner up to the end corner and NoC 1 down; corners given the other way round wrap
-    // around the grid edge.
-    const uint32_t x_min = noc_id == 0 ? x_start : x_end;
-    const uint32_t x_max = noc_id == 0 ? x_end : x_start;
-    const uint32_t y_min = noc_id == 0 ? y_start : y_end;
-    const uint32_t y_max = noc_id == 0 ? y_end : y_start;
-    // Under ATT the coordinates are in the map's frame, so a worker is what the map resolves, as in the generic check.
-    auto is_worker = [noc_id](uint32_t x, uint32_t y) {
-#if defined(NOC_ATT_ENABLED)
-        return noc_att::resolve(ACTIVE_ATT_MAP, noc_att::Address::worker(x, y, 0)).valid;
-#else
-        bool is_virtual_coord = false;
-        return get_core_type(noc_id, x, y, is_virtual_coord) == AddressableCoreType::TENSIX;
-#endif
-    };
-    bool covered = false;  // A wrapping rectangle is reported: the check does not model the torus.
-    if (x_min <= x_max && y_min <= y_max) {
-        if (!is_worker(x_min, y_min)) {
-            return;  // left to the generic multicast check
-        }
-        // The sender's coordinates, in the frame of the rectangle and the tensor's nodes.
-#if defined(NOC_ATT_ENABLED)
-        const uint32_t sender_x = my_x[noc_id] - ACTIVE_ATT_MAP.node_id_offset_x;
-        const uint32_t sender_y = my_y[noc_id] - ACTIVE_ATT_MAP.node_id_offset_y;
-#else
-        const uint32_t sender_x = my_x[noc_id];
-        const uint32_t sender_y = my_y[noc_id];
-#endif
-        // Assumes the tensor's nodes are distinct, or a duplicate inside the rectangle can hide a missing one. A
-        // BufferDistributionSpec built from a CoreRangeSet satisfies this; one built from a core list is not checked.
-        uint32_t num_inside = 0;
-        bool is_sender_node = false;
-        for (uint32_t i = 0; i < num_nodes; ++i) {
-            const uint32_t x = (packed_xy_coords[i] >> 8) & 0xFF;
-            const uint32_t y = packed_xy_coords[i] & 0xFF;
-            num_inside += x >= x_min && x <= x_max && y >= y_min && y <= y_max;
-            is_sender_node |= x == sender_x && y == sender_y;
-        }
-        // A plain multicast skips the sender, so a sender inside the rectangle need not hold the tensor; a loopback
-        // multicast (MCAST_INCL_SRC) writes it, so it must. Only a worker sender is among the counted nodes.
-        num_inside += !includes_sender && !is_sender_node && sender_x >= x_min && sender_x <= x_max &&
-                      sender_y >= y_min && sender_y <= y_max && is_worker(sender_x, sender_y);
-        // Count worker nodes rather than take the area: worker coordinates have gaps (Blackhole's non-worker columns,
-        // harvested rows or columns). Non-worker nodes come in whole rows and columns, so the count is the worker
-        // columns along the first row times the worker rows along the first column.
-        uint32_t num_worker_cols = 0;
-        for (uint32_t x = x_min; x <= x_max; ++x) {
-            num_worker_cols += is_worker(x, y_min);
-        }
-        uint32_t num_worker_rows = 0;
-        for (uint32_t y = y_min; y <= y_max; ++y) {
-            num_worker_rows += is_worker(x_min, y);
-        }
-        covered = num_inside == num_worker_cols * num_worker_rows;
-    }
-    if (!covered) {
-        debug_sanitize_post_addr_and_hang(
-            noc_id,
-            noc_addr,
-            l1_addr,
-            len,
-            DEBUG_SANITIZE_NOC_MULTICAST,
-            DEBUG_SANITIZE_NOC_WRITE,
-            DEBUG_SANITIZE_NOC_TARGET,
-            DebugSanitizeNocMulticastOutsideNodeSet);
-    }
-}
-#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(                                      \
-    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender) \
-    debug_sanitize_noc_multicast_rect_in_node_set(                                          \
-        noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender)
-
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
@@ -1246,7 +1162,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_L1_ADDR(addr, l)
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l)
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
-#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET( \
-    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender)
 
 #endif  // WATCHER_ENABLED
+
+#include "internal/debug/sanitize_multicast_destination.h"
