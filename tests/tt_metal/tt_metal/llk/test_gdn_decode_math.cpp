@@ -677,8 +677,8 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathUpdatePass) {
         double(twice.stats[1] - twice.stats[0]) / 4);
     log_info(
         tt::LogTest,
-        "update pass decomposition, cycles per S tile (groups of 3): seed + rank-1 + pack {:.1f}; seed + decay + pack "
-        "{:.1f}; seed + decay + rank-1 + pack {:.1f}",
+        "update pass decomposition, cycles per S tile (groups of 4, decay = load_scalar + mul_loaded_scalar): seed + "
+        "rank-1 + pack {:.1f}; seed + decay + pack {:.1f}; seed + decay + rank-1 + pack {:.1f}",
         double(no_decay.stats[1] - no_decay.stats[0]) / (kRepsPass * KV),
         double(no_rank1.stats[1] - no_rank1.stats[0]) / (kRepsPass * KV),
         cyc / KV);
