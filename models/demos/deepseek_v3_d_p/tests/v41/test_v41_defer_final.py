@@ -2,20 +2,33 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deferred final chunks through ``DeepseekV41ForCausalLM`` as the plugin drives it (``TT_V41_DEFER_FINAL=1``): a cohort of prompts of mixed length run (a) serially as today (every chunk of
-a prompt, then the next prompt; the joins at the first decode step) and (b) bulk / park / restore / final / decode
-(every prompt's chunks but the last, in admission order, which parks each one when the next takes the state; then
-the finals in the same order, each restoring its prefix from its slot; then decode), in one process, twice (a second
-cohort of other prompts reuses the slots of the first through the generator's LRU). Compared per prompt between (a)
-and (b): the first token (the argmax of the final chunk's logits), ``V41_DF_STEPS`` (8) greedy decode tokens, and the
-slot's pool rows after the decode steps (the compressed KV and index-K rows of every source, every layer's ring in a
-canonical frame, the candidate source's block pages, on the slot's rank's first chip), split at the rows the decode
-wrote: the prefill-written rows (the restored prefix, the final chunk, the carries) are the gate with the first
+"""Deferred final chunks through ``DeepseekV41ForCausalLM`` as the plugin drives it
+(``TT_V41_DEFER_FINAL=1``): a cohort of prompts of mixed length run (a) serially as today (every chunk of
+a prompt, then the next prompt; the joins at the first decode step) and (b) bulk / park / restore / final /
+decode
+(every prompt's chunks but the last, in admission order, which parks each one when the next takes the state;
+then
+the finals in the same order, each restoring its prefix from its slot; then decode), in one process, twice (a
+second
+cohort of other prompts reuses the slots of the first through the generator's LRU). Compared per prompt
+between (a)
+and (b): the first token (the argmax of the final chunk's logits), ``V41_DF_STEPS`` (8) greedy decode tokens,
+and the
+slot's pool rows after the decode steps (the compressed KV and index-K rows of every source, every layer's
+ring in a
+canonical frame, the candidate source's block pages, on the slot's rank's first chip), split at the rows the
+decode
+wrote: the prefill-written rows (the restored prefix, the final chunk, the carries) are the gate with the
+first
 token; the decode-written rows and the decode tokens are reported (two decodes of the same tokens at
-different global steps differ in those rows' low bits, and a greedy token flips now and then; ``V41_DF_CONTROL=1``
-runs the serial order twice on the first cohort to show that variation on its own). Timed per final: the restore
-(``last_restore``), the final call's wall, the first decode step's wall (it holds the finals' joins) against the
-later steps' median. ``V41_DF_PROMPTS`` (``1028,8196,12292,40964,131076,131076``: 1, 2, 3, 8, 26 and 26 chunks),
+different global steps differ in those rows' low bits, and a greedy token flips now and then;
+``V41_DF_CONTROL=1``
+runs the serial order twice on the first cohort to show that variation on its own). Timed per final: the
+restore
+(``last_restore``), the final call's wall, the first decode step's wall (it holds the finals' joins) against
+the
+later steps' median. ``V41_DF_PROMPTS`` (``1028,8196,12292,40964,131076,131076``: 1, 2, 3, 8, 26 and 26
+chunks),
 ``V41_DF_LAYERS`` (``all``), ``V41_DF_BATCH`` (8 slots: one a rank, so the second cohort reuses slots),
 ``V41_DF_MAX_SEQ`` (1,053,696, the served context). Results: ``V41_DF_OUT``."""
 
@@ -44,7 +57,7 @@ FP8 = MlaKvCacheFormat.SCALED_FP8.storage_dtype  # the packed KV rows' dtype (FP
 def _chip_rows(mesh_device, t, a: int, b: int, chip: int) -> torch.Tensor:
     """Rows ``[a, b)`` of ``t`` on ``chip`` as host bytes / values (FP8 bytes through the composer)."""
     shape = list(t.shape)
-    whole = a == 0 and b == shape[2] and shape[0] == 1  # the slice would be the tensor itself 
+    whole = a == 0 and b == shape[2] and shape[0] == 1  # the slice would be the tensor itself
     if whole:
         piece = t
     elif len(shape) == 4 and shape[0] > 1:  # [users, 1, rows, W]: the caller passes absolute rows of user 0's frame
@@ -62,9 +75,12 @@ def _chip_rows(mesh_device, t, a: int, b: int, chip: int) -> torch.Tensor:
 
 
 def _slot_rows(mesh_device, pool: V41DecodePool, slot: int, length: int, steps: int) -> tuple[dict, dict]:
-    """A prompt of ``length`` tokens plus ``steps`` decode tokens in pool slot ``slot`` on its rank's first chip (the
-    bytes as stored), and per key the row the decode-written rows start at: the prefill's rows (the restored prefix,
-    the final chunk, the carries) are the exactness gate, the decode's rows (the window rows and the compressed rows
+    """A prompt of ``length`` tokens plus ``steps`` decode tokens in pool slot ``slot`` on its rank's first
+    chip (the
+    bytes as stored), and per key the row the decode-written rows start at: the prefill's rows (the restored
+    prefix,
+    the final chunk, the carries) are the exactness gate, the decode's rows (the window rows and the
+    compressed rows
     of the ``steps`` tokens) are compared apart (they differ in their low bits between two decodes of the
     same tokens at different global steps, the serial path's own property)."""
     cfg = pool.config
@@ -81,7 +97,8 @@ def _slot_rows(mesh_device, pool: V41DecodePool, slot: int, length: int, steps: 
             bounds[f"kv[{src}]"] = length // ratio
         for layer in pool.slots[src].layers:
             first = base + pool.ring_row(layer)
-            # the ring in a canonical frame: position p sits at ring slot (step_join + p - start) % RING, and the
+            # the ring in a canonical frame: position p sits at ring slot (step_join + p - start) % RING, and
+            # the
             # two orders join at global steps 8 apart (every ring differed by the rotation), so the rows
             # are rolled by -pool.step, the same for both orders' readouts after the same number of steps; the
             # last ``steps`` rows of the frame are the decode's
@@ -147,7 +164,7 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
     monkeypatch.setenv("TT_V41_PREFILL_GENERIC", "1")
     monkeypatch.setenv("TT_V41_PREFILL_SLOTS", os.environ.get("TT_V41_PREFILL_SLOTS", "1"))
     monkeypatch.setenv("TT_V41_SHORT_CHUNK", os.environ.get("TT_V41_SHORT_CHUNK", "0"))
-    traced = os.environ.get("V41_DF_TRACE", "1") == "1"  # 0: no capture at all 
+    traced = os.environ.get("V41_DF_TRACE", "1") == "1"  # 0: no capture at all
     if "TT_V41_TRACE_PREFILL_LENGTHS" not in os.environ:
         monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", "1028,8196,131076" if traced else "")
         monkeypatch.setenv("TT_V41_TRACE_PREFILL_SLACK", "0")
@@ -238,7 +255,8 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
         return [int(out[i, 0].argmax()) for i in range(len(rows))], wall
 
     def run_order(order: str, prompts: list[tuple[int, torch.Tensor]]) -> dict:
-        """``prompts``: (block, tokens). Returns per block the first token, the decode tokens, the slot's rows."""
+        """``prompts``: (block, tokens). Returns per block the first token, the decode tokens, the slot's
+        rows."""
         rec = {"order": order, "finals": {}, "steps": [], "slots": {}, "bounds": {}}
         first: dict[int, int] = {}
         t_all = time.time()
@@ -268,7 +286,8 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
                     "restore": dict(model.decoder.last_restore) if prefix > 0 else None,
                 }
                 model.decoder.last_restore = {}
-            # the finals' phase: every restore, final chunk and join but the last request's (at the first step)
+            # the finals' phase: every restore, final chunk and join but the last request's (at the first
+            # step)
             rec["finals_phase_s"] = round(time.time() - t_finals, 3)
         rec["prefill_phase_s"] = round(time.time() - t_all, 2)
         fed = dict(first)
@@ -290,8 +309,10 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
         return rec
 
     def compare(cohort: int, name: str, want: dict, got: dict, prompts, control: dict | None) -> dict:
-        """``got`` (an order) against ``want`` (the serial order): per block the first token, the decode tokens,
-        the prefill-written slot rows and the decode-written rows. With ``control`` (the serial order's own repeat
+        """``got`` (an order) against ``want`` (the serial order): per block the first token, the decode
+        tokens,
+        the prefill-written slot rows and the decode-written rows. With ``control`` (the serial order's own
+        repeat
         compared the same way) this is the gate: the first token equal, and every prefill-row mismatch one the
         serial path shows against itself (an eager final chunk of 2,052 tokens leaves its last ~770
         rows and the rings different between two serial runs of the same prompt)."""
@@ -308,7 +329,8 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
             }
             if control is not None:
                 # a prompt the serial path does not reproduce itself (the eager 2,052-token final chunk's
-                # last rows, and which rings, vary run to run) is reported, not gated; the others must be exact
+                # last rows, and which rings, vary run to run) is reported, not gated; the others must be
+                # exact
                 cmp["control_clean"] = not control[str(b)]["slot_mismatches"]
                 cmp["beyond_control"] = prefill_bad if cmp["control_clean"] else []
             out[str(b)] = cmp
@@ -347,6 +369,7 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
     failures = []
     offset = 0
     control = os.environ.get("V41_DF_CONTROL", "1") == "1"  # the serial order twice per cohort: its own variation
+    slots_probe = os.environ.get("V41_DF_SLOTS", "0") == "1"  # the serial order in other slots
     for cohort in range(2):
         prompts = []
         for i, n in enumerate(lengths):
@@ -361,6 +384,31 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
             rec["serial2"] = summary(serial2)
             own = rec["compare_serial2"] = compare(cohort, "serial2", serial, serial2, prompts, None)
             del serial2
+        if slots_probe and cohort == 0:
+            # V41_DF_SLOTS=1 (the served serial path gave other outputs for the same prompts after a
+            # different first point, i.e. in other slots): the serial order on the same prompts under new keys
+            # pinned to the slots of the next prompt (another rank, another previous occupant), then under new
+            # keys pinned to each prompt's original slot (the same rank, the previous occupant now the prompt
+            # before it). serial3 != serial says the output depends on the slot; serial4 == serial then says
+            # it
+            # is the rank's arithmetic, serial4 != serial that the slot's previous occupant leaks into it.
+            n = len(prompts)
+            for name, shift, base in (("serial3", 1, 1000), ("serial4", 0, 2000)):
+                pinned = [(base + b, t) for b, t in prompts]
+                for i, (nb, _) in enumerate(pinned):
+                    model.slots[nb] = serial["slot_of"][prompts[(i + shift) % n][0]]
+                r = run_order(name, pinned)
+                r = {
+                    k: (
+                        {(b - base): v for b, v in val.items()}
+                        if k in ("finals", "slots", "bounds", "slot_of", "first", "tokens")
+                        else val
+                    )
+                    for k, val in r.items()
+                }
+                rec[name] = summary(r)
+                rec[f"compare_{name}"] = compare(cohort, name, serial, r, prompts, None)
+                del r
         deferred = run_order("defer", prompts)
         rec["defer"] = summary(deferred)
         rec["compare"] = compare(cohort, "defer", serial, deferred, prompts, own)
