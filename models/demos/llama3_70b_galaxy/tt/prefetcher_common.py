@@ -146,10 +146,12 @@ class TtLlamaPrefetcherSetup(LightweightModule):
                 buffer_address=buffer_address,
                 config_address=config_address,
             )
-            # We know these wont be overwritten by trace, because the original
-            # allocation happens before any traces are captured, and the address
-            # is always occupied whenever the decode SubDeviceManager is loaded.
+            # We know these wont be overwritten by decode trace, because the original
+            # allocation happens before any decode traces are captured, and we recreate it
+            # immediately when the decode SubDeviceManager is loaded.
             # The trace checker does not know we reuse the address.
+            # Prefill traces don't matter the GCB is deallocated whenever the
+            # prefill SubDeviceManager is loaded.
             self.global_circular_buffer.acknowledge_corruptible()
 
     def release_global_cb(self):
