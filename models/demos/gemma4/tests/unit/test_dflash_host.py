@@ -3387,10 +3387,11 @@ def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
 
 
 def _costed(adapter, monkeypatch):
-    """A contract model with the CI leg's costs, a three-step retry at a 1.2 overhead (two replays a trial) and no probe."""
+    """A contract model with the CI leg's costs, a three-step retry at a 1.2 overhead (the cycle: the bootstrap
+    replay and one record step) and no probe."""
     env = {
         "GEMMA4_SPEC_RETRY_STEPS": "3",
-        "GEMMA4_SPEC_RETRY_OVERHEAD": "1.2",  # the gate charges the whole one-step trial (two replays)
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "1.2",  # the gate charges the whole one-step trial cycle
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",  # the pinned sequences read the scripted table
         "GEMMA4_SPEC_MIN_GAIN": "1.10",  # the band mechanics below are written at the 1.10 bar (the default is 1.25)
@@ -3400,10 +3401,12 @@ def _costed(adapter, monkeypatch):
 
 
 def _inform_prior(model, cond):
-    """Give the batch prior the conditionals ``cond`` as if every position had been observed."""
+    """Give the batch prior the conditionals ``cond`` as if every position had been observed many times (an
+    engine that served other requests before: its evidence, not the new row's own, is what a row blends with)."""
     prior = model._spec_policy.prior
     prior.cond = list(cond)
     prior.informed = [True] * len(cond)
+    prior.observed = [100] * len(cond)
 
 
 def _dflash_rounds(model, accepted_per_round, key=10):
@@ -3459,26 +3462,27 @@ def _dflash_the_first_request_speculates_from_the_optimistic_prior_and_the_count
 
 
 def _dflash_rejections_end_the_session_and_the_request_runs_plain(adapter, monkeypatch, expect_error=None):
-    """From a 0.35 prior (1.53 tokens at 1.38x = 1.11x) the session starts; EWMA 0.1 on the first draft takes
-    the gain under 1.10x at once, the record is held through the hysteresis band down to 0.95x and for one
-    step below it, and the eighth proposal is the plain step: the session ends and every later step of the
-    request is the base decode."""
+    """From a 0.35 prior (1.53 tokens at 1.38x = 1.11x) the session starts; the record's own steps decide the
+    hold: the first verify commits one token (1.0 a step at 1.38x = 0.72x, below the exit gain, held once),
+    the second too, and the third proposal is the plain step: the session ends and every later step of the
+    request is the base decode. (Before the run credit the per-position EWMA at 0.1 held it seven steps.)"""
     costed = _costed(adapter, monkeypatch)
     _inform_prior(costed, [0.35] * 5)
-    assert _dflash_rounds(costed, [0] * 9) == [5] * 7 + [0] * 3
-    assert len(_names(costed, "replay")) == 8 and len(_names(costed, "release_decoder")) == 1
-    assert _names(costed, "decode") == [("decode", [850], [10]), ("decode", [851], [11])]
+    assert _dflash_rounds(costed, [0] * 9) == [5, 5] + [0] * 8
+    assert len(_names(costed, "replay")) == 3 and len(_names(costed, "release_decoder")) == 1
+    assert _names(costed, "decode") == [("decode", [350 + i], [5 + i]) for i in range(7)]
     assert not costed._spec_active and costed._dflash_stats is None
     prior = costed._spec_policy.prior
-    assert prior.effective_cond(5) == pytest.approx([0.35 * 0.9**7] + [0.35] * 4)
-    assert costed._spec_policy.declined == 3, "the decline and the two plain steps count toward the retry"
+    assert prior.effective_cond(5) == pytest.approx([0.35 * 0.9**2] + [0.35] * 4)
+    assert costed._spec_policy.declined == 8, "the exit and the seven plain steps count toward the retry"
     # the instrumentation: every closed interval is one step of the mode the proposal decided
     calib = costed._spec_policy.calibration
-    assert calib.modes[("step", (1, 5), 1024)].steps == 7 and calib.modes[("plain", 32)].steps == 2
+    assert calib.modes[("step", (1, 5), 1024)].steps == 2 and calib.modes[("plain", 32)].steps == 7
     assert calib.reseeds[(1, 5)][0] == 1, "the bootstrap is the entry, measured once"
-    assert costed._spec_policy.request_steps == 8.0, "the ended session's steps feed the entry horizon"
-    assert calib.phases["replay"][0] == 7 and calib.phases["refresh"][0] == 8 and calib.phases["host"][0] == 10
+    assert costed._spec_policy.request_steps == 3.0, "the ended session's steps feed the entry horizon"
+    assert calib.phases["replay"][0] == 2 and calib.phases["refresh"][0] == 3 and calib.phases["host"][0] == 10
     assert all(stats.wall_sum >= 0.0 for stats in calib.modes.values())
+    assert calib.last_run_mean(("step", (1, 5), 1024)) == 1.0, "the run that failed"
 
 
 def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_proposal_is_the_retry(
@@ -3492,10 +3496,11 @@ def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_propos
     _dflash_rounds(costed, [0] * 9)
     costed.release_request(0)
     _prefill(costed, key=20)
-    # three plain steps amortize the bootstrap replay plus one step at the fixture's 0.6 overhead:
-    # (46.9 + 46.9 - 34) / (3 x 34) = 0.59
-    assert _ordinary(costed, [3], [2], [20]).tolist() == [950], "the retry is due: the session starts"
-    proposal = _propose(costed, [[950] + [-1] * 5], [[3] + [-1] * 5])
+    # the retry cycle, as served: the bootstrap replay plus one step less the plain step (59.8) and one record
+    # step as a loss (12.9), 72.7 ms over the eight plain steps since = 0.27 of them, within the fixture's 1.2
+    first = _ordinary(costed, [3], [2], [20])
+    assert len(_names(costed, "bootstrap")) == 2, "the retry is due: the session starts"
+    proposal = _propose(costed, [[int(first[0])] + [-1] * 5], [[3] + [-1] * 5])
     assert proposal.num_valid.tolist() == [5] and costed._spec_policy.declined == 0 and costed._spec_policy.trial
     lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
     assert lines[0] == (
@@ -3506,9 +3511,12 @@ def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_propos
     assert lines[1].startswith(
         "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=5); EWMA accepted 0."
     )
-    assert "(retry; was K=0)" in lines[2] and "gain 0.91x" in lines[2]
-    # another rejection: the trial observed, the policy declines at once and the request runs plain
-    out = _verify(costed, [[950, 1001, 1002, 1003, 1004, 1005]], [list(range(3, 9))], [5], keys=[20])
+    assert "(retry; was K=0)" in lines[2] and "gain 1.04x" in lines[2]
+    # another rejection: the trial's own step commits one token (0.72x), the policy declines at once and the
+    # request runs plain
+    anchor = int(first[0])
+    drafts = proposal.draft_token_ids[0, :5].tolist()
+    out = _verify(costed, [[anchor] + drafts], [list(range(3, 9))], [5], keys=[20])
     ids = out.argmax_ids[0].tolist()
     proposal = _propose(costed, [[ids[0]] + [-1] * 5], [[4] + [-1] * 5], counts=[1])
     assert proposal.num_valid.tolist() == [0] and not costed._spec_active
@@ -3550,9 +3558,10 @@ def _dflash_a_new_request_skips_the_bootstrap_when_the_prior_says_the_replay_wou
 
 
 def _dflash_the_cost_table_is_consumed_as_measured(adapter, monkeypatch, expect_error=None):
-    """The same prior starts a session at the CI leg's replay cost (1.43x: the entry band), still starts one at a
-    dearer one as the request's trial (0.96x: above the trial gain) and not at all below the trial gain."""
-    for step_ms, cond, bootstraps in ((46.9, 0.5, True), (70.0, 0.5, True), (70.0, 0.1, False)):
+    """The same prior starts a session at the CI leg's replay cost (1.43x: the entry band), not at a dearer one
+    (0.96x: above the trial gain, but 1.97 tokens at 70 ms save nothing, so the bootstrap cannot pay) and not
+    at all below the trial gain."""
+    for step_ms, cond, bootstraps in ((46.9, 0.5, True), (70.0, 0.5, False), (70.0, 0.1, False)):
         model = _with_costs(build_model(adapter, monkeypatch), step_ms=step_ms)
         _inform_prior(model, [cond] * 5)  # 1.97 expected tokens: 1.43x at 46.9 ms, 0.96x at 70 ms; 1.11: 0.54x
         _prefill(model, prompt_len=2, key=10)
@@ -3647,11 +3656,12 @@ MTP_STEP_MS = {(1, 5): 50.0, (5, 5): 50.0, (8, 3): 35.0, (16, 1): 30.0}
 
 
 def _mtp_adaptive(adapter, monkeypatch, env=None):
-    """A model with the scripted cost table, a three-step retry at a 0.4 overhead (two replays a trial) and no probe."""
+    """A model with the scripted cost table, a three-step retry at a 0.4 overhead (the cycle: the reseed interval
+    and one record step) and no probe."""
     # the pinned sequences read the scripted table: the host walls never calibrate a mode
     env = {
         "GEMMA4_SPEC_RETRY_STEPS": "3",
-        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.4",  # the gate charges the whole one-step trial (two replays)
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.4",  # the gate charges the whole one-step trial cycle
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",
         "GEMMA4_SPEC_TRIAL_STEPS": "1",  # the scenarios describe one-step trials and retries
@@ -3698,19 +3708,34 @@ def _mtp_the_first_proposal_speculates_from_the_optimistic_prior_and_high_accept
 def _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_counts_at_once(
     adapter, monkeypatch, assistant_dir=None, expect_error=None
 ):
-    """Prior 0.3 at every position, the records costed as a one-row step on the device ((1,5) at 34 ms against a
-    20 ms plain step: 1.43 expected tokens = 0.84x, below the entry band, above the trial gain), so the first
-    proposal replays the cheapest record (entry plus step: (1,5) at 170 + 34) as the trial. Five accepted drafts
-    blend 0.25 x 1.0 + 0.75 x 0.37 = 0.53 into every position (2.07 tokens, 1.22x: the entry band) and the
-    request speculates on; a rejection blends to 0.20 (1.29 tokens, 0.76x) and the request runs plain, no retry
-    until the cadence allows."""
+    """Prior 0.3 at every position, the records costed as a one-row step on the device. With the (1,5) at 34 ms
+    against a 20 ms plain step (1.43 expected tokens = 0.84x, below the entry band, above the trial gain) and
+    a 170 ms reseed the first proposal is NO trial: 1.43 tokens at 34 ms save nothing, so the reseed cannot
+    pay, and the request runs plain (the 12B QB2 random c1 ran one such trial per request, 2026-10-30). With
+    the (1,5) at 26 ms (1.30x: 1.10x on the prior, under the 1.25 bar) and a 100 ms reseed the saving, 2.6 ms
+    a step over the 64-step horizon, covers the reseed: the first proposal replays it as the trial. Five
+    accepted drafts blend 0.4 x 1.0 + 0.6 x 0.43 = 0.66 into every position (2.5 tokens, 1.9x: the entry band)
+    and the request speculates on; a rejection blends to 0.20 (1.29 tokens, 0.99x: held once by the model),
+    the record's own next steps commit one token each (0.77x) and the request runs plain, no retry until the
+    cadence allows."""
     reseeds = {(1, 5): 170.0, (5, 5): 200.0, (8, 3): 250.0, (16, 1): 300.0}
     steps = {(1, 5): 34.0, (5, 5): 40.0, (8, 3): 45.0, (16, 1): 50.0}
+    model = _mtp_adaptive(adapter, monkeypatch, env={"GEMMA4_SPEC_MIN_GAIN": "1.10"})  # the 1.22x entry band
+    mh.install_decoder(model, step_ms=steps, plain_ms=mh.PLAIN_MS)
+    model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in reseeds.items()})
+    _inform_prior(model, [0.3] * 5)
+    mh._prefill(model)
+    mh._ordinary(model, [3], [2], [10], result=_tensor([150]))
+    proposal = mh._propose(model, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [0] and model._spec_policy.last_reason == "declined"
+    assert not model._mtp_sessions[0].trialed and mh._steps(model) == [], "the reseed cannot pay: no trial"
+    paying = {(1, 5): 100.0, (5, 5): 200.0, (8, 3): 250.0, (16, 1): 300.0}
+    cheaper = {(1, 5): 26.0, (5, 5): 40.0, (8, 3): 45.0, (16, 1): 50.0}
     outcomes = {}
     for name, rounds in (("accepted", [5, 5]), ("rejected", [0, 0, 0])):
-        model = _mtp_adaptive(adapter, monkeypatch, env={"GEMMA4_SPEC_MIN_GAIN": "1.10"})  # the 1.22x entry band
-        mh.install_decoder(model, step_ms=steps, plain_ms=mh.PLAIN_MS)
-        model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in reseeds.items()})
+        model = _mtp_adaptive(adapter, monkeypatch)
+        mh.install_decoder(model, step_ms=cheaper, plain_ms=mh.PLAIN_MS)
+        model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in paying.items()})
         messages = []
         monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
         monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
@@ -3726,12 +3751,12 @@ def _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_cou
         )
         assert model._mtp_sessions[0].trialed
     offered, lines, reason, trial, cond = outcomes["accepted"]
-    assert offered == [5, 5, 5] and "(trial; was none)" in lines[0] and "gain 0.84x" in lines[0]
-    assert len(lines) == 1 and reason == "gain" and not trial, "the draft length did not change: no second line"
+    assert offered == [5, 5, 5] and "(trial; was none)" in lines[0] and "gain 1.10x" in lines[0]
+    assert "entry 100.0 ms" in lines[0] and len(lines) == 1 and reason == "gain" and not trial
     assert cond == pytest.approx([0.4 * 1.0 + 0.6 * 0.433] * 5, abs=1e-3), "two own observations: 0.4 own, 0.6 prior"
     offered, lines, reason, trial, cond = outcomes["rejected"]
-    assert offered == [5, 0, 0, 0] and "(trial; was none)" in lines[0] and reason == "declined" and not trial
-    assert "-> plain step (declined; was K=5)" in lines[1] and "per-position 0.20/0.30/0.30/0.30/0.30" in lines[1]
+    assert offered == [5, 5, 5, 0] and "(trial; was none)" in lines[0] and reason == "exit" and not trial
+    assert "-> plain step (exit; was K=5)" in lines[1] and "per-position 0.22/0.30/0.30/0.30/0.30" in lines[1]
 
 
 def _mtp_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_drafts(
@@ -3743,9 +3768,9 @@ def _mtp_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_dra
     assert stats.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
     assert stats.ewma_accepted == 2.0
     assert adaptive._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]), "the batch prior learns too"
-    # one own observation at draft 3 (a rejection) counts 1 / (1 + 3) against the prior's 0.9: 0.675, and the
-    # unobserved tail is capped by it
-    assert stats.effective_cond(5) == pytest.approx([1.0, 1.0, 0.675, 0.675, 0.675])
+    # one own observation at draft 3 (a rejection): the prior's only evidence there is this row's, so the
+    # row's outcome counts alone, and the unobserved tail is capped by it
+    assert stats.effective_cond(5) == pytest.approx([1.0, 1.0, 0.0, 0.0, 0.0])
     assert adaptive._mtp_sessions[0].retained.verified == 0, "the new proposal is not verified yet"
 
 
@@ -3763,46 +3788,79 @@ def _mtp_a_draftless_verify_and_an_ordinary_step_observe_nothing(
 def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_plain_steps(
     adapter, monkeypatch, assistant_dir=None, expect_error=None
 ):
-    """EWMA 0.1 on the first draft only: K=5 keeps its 2.5x record above 1.10x for five rejections, then (8,3)
-    (1.75x) is the better gain for seven more, is held through the hysteresis band (gain between 0.95x and
-    1.10x, then one step below) for four, and the plain step follows. With the fixture's 0.2 retry overhead,
-    three plain steps amortize the cheapest record, (16, 1): its retry is a trial that observes one more
-    rejection and leaves at once, and the plain steps resume."""
+    """One verify at five accepted, then rejections of the first draft only, with 20 ms reseeds. The optimistic
+    prior's first proposal is a one-step trial of (1,5); the per-position EWMA at 0.1 keeps (8,3) (1.75x) the
+    best record, then (16,1) is held, and the record's OWN steps (one token each) end the hold after two
+    decisions below the exit gain. The model, whose deep positions were observed accepted once and never
+    reached again, still rates (1,5) at 1.71x after the cooldown's three plain steps, so the row re-enters
+    (the fixture never calibrates a pool: in serving the measured credit would refuse it), falls out the same
+    way, and after five plain steps the exploration retry replays the cheapest record, (16,1): its cycle, the
+    reseed interval (20 + 30 - 20) plus one record step (10), is 40 ms = 0.4 of five plain steps."""
     adaptive = _mtp_adaptive(adapter, monkeypatch)
-    assert _mtp_rounds(adaptive, [5] + [0] * 21) == [5] * 6 + [3] * 11 + [0] * 3 + [1] + [0] * 2
-    assert [s[1] for s in mh._steps(adaptive)] == [(1, 5)] * 6 + [(8, 3)] * 11 + [(16, 1)]
-    assert len(_names(adaptive, "decode")) == 1 + 4, "the first step and the four plain steps ran the base decode"
-    assert _names(adaptive, "reseed")[-1][1:3] == ((16, 1), [0]), "the retry reseeds after the plain steps"
-    assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**17)
-    assert adaptive._spec_policy.declined == 2 and not adaptive._spec_policy.trial
+    adaptive._spec_costs.update({("reseed", shape): CostLine.flat(20.0) for shape in mh.DEFAULT_SHAPES})
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    offered = _mtp_rounds(adaptive, [5] + [0] * 21)
+    assert offered == [5, 5, 3, 1, 1, 0, 0, 0, 0, 5, 3, 5, 1, 1, 0, 0, 0, 0, 0, 1, 3, 5, 1]
+    assert [s[1] for s in mh._steps(adaptive)] == [(1, 5), (1, 5), (8, 3), (16, 1), (16, 1)] + [
+        (1, 5),
+        (8, 3),
+        (1, 5),
+        (16, 1),
+        (16, 1),
+    ] + [(16, 1), (8, 3), (1, 5), (16, 1)]
+    assert len(_names(adaptive, "decode")) == 1 + 9, "the first step and the nine plain steps ran the base decode"
+    assert [r[1:3] for r in _names(adaptive, "reseed")] == [((1, 5), [0]), ((1, 5), [0]), ((16, 1), [0])]
+    assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**12)
+    assert adaptive._spec_policy.declined == 0 and not adaptive._spec_policy.trial
+    reasons = [
+        re.search(r"\((\w+); was", line).group(1) for line in messages if line.startswith("Gemma4MTP adaptive K:")
+    ]
+    assert reasons == [
+        "trial",
+        "gain",
+        "hold",
+        "exit",
+        "enter",
+        "gain",
+        "gain",
+        "hold",
+        "exit",
+        "retry",
+        "hold",
+        "hold",
+        "hold",
+    ]
+    assert "(trial; was none)" in messages[0] and "entry 20.0 ms" in messages[0], "the optimistic prior: a trial"
     # the instrumentation: the closed intervals by mode, clean only without a switch, a reseed or a prefill
     calib = adaptive._spec_policy.calibration
-    # an outlier (a host step over 3x the median) is a clean interval the window reports apart
     modes = {mode: (stats.steps, stats.clean + stats.outliers[0]) for mode, stats in calib.modes.items()}
-    assert modes[("step", (1, 5), 1024)] == (6, 5), "the first interval starts with a reseed"
-    assert modes[("step", (8, 3), 1024)] == (11, 10), "the first (8,3) interval starts at a switch"
-    assert modes[("plain", 32)] == (4, 2), "the plain steps after a record step are reported, never cost samples"
-    assert modes[("step", (16, 1), 1024)] == (1, 0), "the retry reseeds"
-    assert calib.reseeds[(1, 5)][0] == 1 and calib.reseeds[(16, 1)][0] == 1
+    assert modes[("step", (1, 5), 1024)] == (5, 1), "the first interval starts with a reseed"
+    assert modes[("step", (8, 3), 1024)] == (3, 0), "every (8,3) interval starts at a switch"
+    assert modes[("step", (16, 1), 1024)] == (5, 2)
+    assert modes[("plain", 32)] == (9, 7), "the plain steps after a record step are reported, never cost samples"
+    assert calib.reseeds[(1, 5)][0] == 2 and calib.reseeds[(16, 1)][0] == 1
     assert {name: calls for name, (calls, _ms) in calib.phases.items()} == {
-        "tables": 18,
+        "tables": 14,
         "refresh": 1,
-        "reseed": 2,
-        "replay": 18,
+        "reseed": 3,
+        "replay": 14,
         "host": 23,
         # the runner's call boundaries (8b3f194aca3): a gap per proposal-to-step and step-to-proposal, by the step's kind
-        "gap_pv_v": 18,
-        "gap_vp_v": 18,
-        "gap_pv_p": 4,
-        "gap_vp_p": 5,
-        "verify": 18,
+        "gap_pv_v": 13,
+        "gap_vp_v": 13,
+        "gap_pv_p": 9,
+        "gap_vp_p": 10,
+        "verify": 13,
     }
     assert calib.prefills == 1 and calib.window_prefills == 1
-    assert calib.total[0] == 22 and calib.total[2] == 6 + 16 + 5, "every closed interval, with its tokens"
+    assert calib.total[0] == 22 and calib.total[2] == 6 + 12 + 9, "every closed interval, with its tokens"
     assert (
         sum(entry[0] for entry in calib.dirty.values()) + sum(s.clean + s.outliers[0] for s in calib.modes.values())
         == 22
     )
+    assert {cause: entry[0] for cause, entry in calib.dirty.items()} == {"reseed": 3, "switch": 9}
 
 
 def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
@@ -3929,7 +3987,10 @@ def _mtp_a_bad_policy_knob_is_refused_when_the_adapter_is_built(
 def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain(
     adapter, monkeypatch, assistant_dir=None, expect_error=None
 ):
-    # the switch ladder of the batched records ((8,3) then (16,1) on the retry) at the 1.10 bar it documents
+    # the switch ladder of the batched records at the 1.10 bar it documents: the record's own one-token steps
+    # end each hold after two decisions below the exit gain, the model (the deep positions observed accepted
+    # once, never reached again; the fixture's reseeds cost nothing and no pool calibrates) re-enters at once
+    # and the ladder repeats until the exploration retry on the cheapest record, (16,1)
     adaptive = _mtp_adaptive(
         adapter, monkeypatch, env={"GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1", "GEMMA4_SPEC_MIN_GAIN": "1.10"}
     )
@@ -3942,21 +4003,30 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted prior, "
         "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain 20.0, pool none), gain 2.40x"
     )
-    assert [re.search(r"-> (record \(\d+, \d+\) S_k=\d+|plain step)", line).group(1) for line in lines] == [
+    targets = [re.search(r"-> (record \(\d+, \d+\) S_k=\d+|plain step)", line).group(1) for line in lines]
+    assert len(lines) == 17 and targets[:9] == [
         "record (1, 5) S_k=1024",
         "record (8, 3) S_k=1024",
+        "record (16, 1) S_k=1024",
         "plain step",
+        "record (1, 5) S_k=1024",
+        "record (8, 3) S_k=1024",
+        "record (1, 5) S_k=1024",
         "record (16, 1) S_k=1024",
         "plain step",
     ]
-    assert (
-        "(retry; was K=0)" in lines[3]
-        and "at 30.0 ms (1.50x plain 20.0, pool " in lines[3]
-        and "), gain 0.79x" in lines[3]
+    assert "per-position 0.50/1.00/1.00/1.00/1.00, expected 2.50 tokens/row at 35.0 ms" in lines[1], "its own outcome"
+    assert lines[3] == (
+        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=1); EWMA accepted 3.28, "
+        "per-position 0.66/1.00/1.00/1.00/1.00, plain 20.0 ms"
     )
-    assert lines[2] == (
-        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=3); EWMA accepted 0.93, "
-        "per-position 0.19/1.00/1.00/1.00/1.00, plain 20.0 ms"
+    assert (
+        "(gain; was K=0)" in lines[4] and ", pool 1.00/1), gain 1.71x" in lines[4]
+    ), "the pool shows, the model decides"
+    assert (
+        "(retry; was K=0)" in lines[13]
+        and "at 30.0 ms (1.50x plain 20.0, pool 1.00/5), gain 0.84x" in lines[13]
+        and targets[13] == "record (16, 1) S_k=1024"
     )
     assert [m for m in messages if "proposing nothing" in m] == [], "the policy's plain steps use their own line"
     # the stats line every GEMMA4_SPEC_STATS_STEPS proposals (window counters, then they start over)
@@ -4002,9 +4072,11 @@ def _mtp_record_switches_are_rate_limited_to_one_line_per_interval(
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
     monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 1.0)  # the module default; a block above zeroed it
-    _mtp_rounds(adaptive, [5] + [0] * 21)  # four switches after the first decision, within the 1 s interval
+    # fifteen switches after the first decision, within the 1 s interval: the record's own one-token steps end
+    # each hold after two decisions and the model (the fixture's reseeds cost nothing) re-enters at once
+    _mtp_rounds(adaptive, [5] + [0] * 21)
     assert len([m for m in messages if m.startswith("Gemma4MTP adaptive K:")]) == 1
-    assert adaptive._spec_policy_logged[0] == 5 and adaptive._spec_policy_logged[2] == 4
+    assert adaptive._spec_policy_logged[0] == 5 and adaptive._spec_policy_logged[2] == 15
 
 
 def _mtp_the_session_summary_reports_the_accepted_drafts_ewma(

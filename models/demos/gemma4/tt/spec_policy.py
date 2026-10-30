@@ -33,11 +33,15 @@ tokens for the row in expectation (the ``1`` is the bonus or correction
 token). A row blends its own observations with the batch prior, the same
 EWMAs over every row's observations: at a position it has ``n`` own
 observations of, fewer than ``ROW_MIN_OBSERVATIONS``, it reads
-``n / (n + ROW_MIN_OBSERVATIONS)`` of its own mean outcome and the rest of
-the prior (one verify at 3-5 accepted moves a row most of the way), and
-from ``ROW_MIN_OBSERVATIONS`` on its own EWMA; the prior starts optimistic
-(every ``c = 1``) so the first steps of a server speculate at the largest
-record and learn from there. A request that stays plain verifies nothing
+``n / (n + others)`` of its own mean outcome and the rest of the prior,
+``others`` being the prior's observations beyond the row's own (which
+feed the prior too), at most ``ROW_MIN_OBSERVATIONS`` (one verify at 3-5
+accepted moves a row most of the way; with no other evidence the row's
+outcome counts alone), and from ``ROW_MIN_OBSERVATIONS`` on its own
+EWMA. The prior starts
+optimistic (every ``c = 1``), a default and not evidence: the first step of
+a server is a one-step trial at the largest record (never an entry), and
+its verify decides. A request that stays plain verifies nothing
 and so contributes nothing to the prior. A position
 nobody has observed yet is taken to be no easier than the position before
 it: ``c_eff[j] = min(c[j], c_eff[j-1])``.
@@ -63,49 +67,74 @@ when ``gain >= GEMMA4_SPEC_MIN_GAIN`` and the saving over the next
 
     H * (T(R) * plain - step(R)) >= entry(R)
 
-Once speculating (no reseed this step) the best record is *held* while its
-gain stays at or above ``GEMMA4_SPEC_EXIT_GAIN``, and the batch leaves for
-the plain step only after ``EXIT_STEPS`` consecutive decisions below it,
-never on one noisy step. The decision is per step for the whole batch: the
-fused replay evaluates every row's ``K_v`` columns whatever a row offers, so
-a zero-draft row inside the replay saves nothing, and a row left out of it
-costs an extra plain decode.
+and, unless serving has measured the record, only on informed statistics:
+the optimistic default prior credits every draft, and a record it alone
+recommends gets a one-step trial instead (the 12B QB2 entered its 256K
+record on the prior at an expected 6 tokens a row, served 20 steps at
+0.8-0.9x and left). Once speculating (no reseed this step) the best record
+is *held* while its gain stays at or above ``GEMMA4_SPEC_EXIT_GAIN``, and
+the batch leaves for the plain step only after ``EXIT_STEPS`` consecutive
+decisions below it, never on one noisy step. While the batch holds a record
+its credit is what the current run delivered (``Calibration``: the mean
+tokens per row of the run's own steps, not the pool of earlier runs and not
+the rows' per-position model, which is mostly the prior after a few
+verifies), so the hold does not end on the noise of its first steps. The
+decision is per step for the whole batch: the fused replay evaluates every
+row's ``K_v`` columns whatever a row offers, so a zero-draft row inside the
+replay saves nothing, and a row left out of it costs an extra plain decode.
 
 Retrying
 --------
 
 While the plain step serves, no draft is verified and the statistics do not
-move. A retry replays the cheapest candidate (entry plus step) once its
-overhead is amortized: at least ``GEMMA4_SPEC_RETRY_STEPS`` plain steps
-since the last speculative one, and
+move. A retry replays a candidate once at least ``GEMMA4_SPEC_RETRY_STEPS``
+plain steps passed since the last speculative one, in one of two ways. A
+record serving has measured at break-even or better re-enters as soon as
+its retry cycle pays over the entry horizon (``entry_pays`` with the cycle
+as the entry; the horizon is capped by the record's measured run length, so
+marginal random prompts, whose runs are a few steps, cannot amortize it and
+prose, whose runs are a request, can at once) -- unless its last run failed
+(the pool's older samples describe another text). Otherwise the cheapest
+candidate (entry plus step) is exploration, within a budget:
 
-    (entry + step - plain) / (plain steps since * plain) <= GEMMA4_SPEC_RETRY_OVERHEAD
+    cycle / (plain steps since * plain) <= GEMMA4_SPEC_RETRY_OVERHEAD
 
-with the candidate's own gain estimate at least ``min_gain / 4`` (a record
-the statistics already rule out is not worth a replay). On the MTP rail a
-declined row reseeds and resumes within the request; on the dFlash rail a
-plain step gives the drafter no residual tap, so a decline ends the
-request's session and the retry lands on the first step of a later request
-(``note_plain_steps`` counts the plain steps in between). Independently of
-that cadence, a new request gets one *trial* at its first proposal: the
-cheapest candidate (entry plus step) replays once when the prior's gain
-estimate is at least ``GEMMA4_SPEC_TRIAL_GAIN`` (the reseed is the only
-extra cost; a prior below that is the random-prompt regime learned on this
-engine, and the request stays plain). A record serving has measured at the
-rung gets no trial below the entry bar: its measured tokens per row say what
-its replays deliver, a wave of new rows cannot argue with it, and a trial
-that clears the bar is an entry anyway (the 12B Galaxy at 32 users
-re-trialed the (8,3) at every arrival wave of random prompts, a 250 ms
-reseed each, and left it within seconds; the measured 2.36 tokens a row
-realized 1.9-2.0 against a 1.9x step).
-A trial is never held: the next decision continues only on the entry gain,
-which the trial's own verify feeds through the blend above. A batch that
-just left a record waits ``retry_steps`` plain steps before any reseeding
-entry (an enter, a trial or a retry; the retry's cadence counts the same
-steps): those waves ran enter-exit-enter cycles a few steps apart. While speculating
-below the rows-based cap, after ``GEMMA4_SPEC_PROBE_STEPS`` consecutive such
-steps one step is replayed at the next larger draft length (no reseed), so
-deeper positions are re-observed (``0`` disables the probe).
+where the cycle is what a retry costs as served under asynchronous
+scheduling: the interval that starts with the reseed (the reseed and the
+replay the in-flight plain step overtakes, measured per shape, else the
+table's entry plus step), the plain step after a record step (the runner's
+reload, measured), each less the plain step it stands in for, and
+``GEMMA4_SPEC_TRIAL_STEPS`` record steps charged as a loss; a candidate the
+statistics already rule out (gain under ``min_gain / 4``) is not worth a
+replay. On the MTP rail a declined row reseeds and resumes within the
+request; on the dFlash rail a plain step gives the drafter no residual tap,
+so a decline ends the request's session and the retry lands on the first
+step of a later request (``note_plain_steps`` counts the plain steps in
+between). Independently of that cadence, a new request gets one *trial* at
+its first proposal: the cheapest candidate replays once when its gain
+estimate clears ``GEMMA4_SPEC_TRIAL_GAIN`` -- ``GEMMA4_SPEC_MIN_GAIN`` once
+serving has ``calib_min`` samples of the record at the rung, fresh or
+stale: its measured tokens per row are not argued with wave after wave, and
+the prior the model falls back to on a stale pool was learned from the same
+text (the 12B QB2 random c1 ran one trial per request at a predicted
+0.64-1.00x, ~150 ms each) -- and its reseed pays over the horizon at that
+estimate. A prior below the floor is the random-prompt regime learned on
+this engine, and the request stays plain. In a batch that is not all new the trial also needs
+its hypothesis (the new rows accept every draft on an unmeasured record) to
+clear the entry bar, since it reseeds every row. A trial or retry holds its
+record for ``trial_steps`` steps (one from an uninformed prior) and then
+continues under the hold rule on what those steps delivered: the entry bar
+covered the reseed it already paid, and a record at 1.0-1.25x measured was
+dropped for 240 plain steps a request on the 12B QB2 prose c1. A trial whose
+replay the runner overtook and whose first draft missed the committed token
+ends there (one reseed per trial); a match seeds the next replay without one.
+A batch that just left a record waits ``retry_steps`` plain steps before any
+reseeding entry (an enter, a trial or a retry): those waves ran
+enter-exit-enter cycles a few steps apart. While speculating below the
+rows-based cap, after ``GEMMA4_SPEC_PROBE_STEPS`` consecutive such steps
+one step is replayed at the next larger draft length (no reseed), so deeper
+positions are re-observed and the larger record's pool is fed (``0``
+disables the probe).
 
 Calibration
 -----------
@@ -125,7 +154,14 @@ too). The measured tokens per row are pooled over the records of one draft
 length at a rung: the drafter's acceptance does not depend on the record's
 rows, so a sibling record reads the calibrated one's instead of the model
 (which the batch prior inflates at the deep positions) and cannot outrank
-it on the model alone. The decision reads the TOTAL wall of the mode in
+it on the model alone. Every counted step feeds the pool except the one
+right after a reseed (a fresh seed accepts few), a switch included: the
+replay continues the seed, and the probe of the next draft length is such
+a step. While a run serves, its own steps are the credit (the last
+``CALIB_WINDOW`` of them); between runs the whole mean of the last run when
+it had ``calib_min`` samples, else the last ``CALIB_WINDOW`` samples across
+runs; a pool no step fed for ``GEMMA4_SPEC_POOL_STALE_STEPS`` intervals is
+stale and the model decides. The decision reads the TOTAL wall of the mode in
 force: every interval counts, dirty ones included (a prefill ran inside
 it, the mode changed or a reseed ran at its start, the live rows changed),
 because the served latency carries them -- an arrival's prefill stalls a
@@ -143,11 +179,14 @@ counted samples the decision reads the table scaled by its ratio and the
 measured tokens per row instead of the acceptance model; the entry rule
 compares that against the measured plain step, with the reseed as served,
 over a horizon capped by the measured request length in steps
-(``note_request_steps``): a short request cannot amortize a reseed a long
-one can. While one mode serves,
-after ``GEMMA4_SPEC_CALIB_PROBE_STEPS`` steps without a sample of the other
-one a bounded probe of the other mode (one step, overhead-gated like the
-retry) keeps both estimates fresh.
+(``note_request_steps``) and by the record's measured run length (the
+longest of its last ``RUN_LENGTH_RUNS`` runs; a declined trial is none): a
+short request cannot amortize a reseed a long one can, nor can a record the
+batch keeps leaving. While a record serves, after
+``GEMMA4_SPEC_CALIB_PROBE_STEPS`` steps without a clean plain sample one
+plain step (overhead-gated like the retry) refreshes the plain estimate and
+the hold resumes its record, reseeding, under the hold rule: the probe is
+not an exit.
 
 Joining rows
 ------------
@@ -228,6 +267,8 @@ ROW_MIN_OBSERVATIONS = 3
 EXIT_STEPS = 2
 #: A retry needs a gain estimate of at least this fraction of the entry gain.
 RETRY_MIN_GAIN_FRACTION = 0.25
+#: Runs of a shape (steps between its reseeds) the entry horizon's run-length cap looks back over.
+RUN_LENGTH_RUNS = 4
 
 
 def _env_float(env, name, default, *, low, high=None):
@@ -440,13 +481,20 @@ class AcceptanceStats:
 
     def _source(self, j):
         """``(cond, informed)`` at position ``j``: the row's own EWMA once it has ``min_obs`` observations, else
-        its own mean outcome weighted ``n / (n + min_obs)`` against the prior's value."""
+        its own mean outcome weighted ``n / (n + others)`` against the prior's value, where ``others`` is the
+        prior's evidence beyond this row's own observations (which feed the prior too), at most ``min_obs``;
+        with none the row's outcome counts alone. The prior's value at a position only this row observed is
+        the optimistic default, not evidence: weighted three to one it read a rejected first draft as 0.68
+        and held a 256K record three more steps (2026-10-30)."""
         n = self.observed[j]
         if self.prior is None or n >= self.min_obs:
             return self.cond[j], self.informed[j]
         if n == 0:
             return self.prior.cond[j], self.prior.informed[j]
-        weight = n / (n + self.min_obs)
+        others = min(self.min_obs, max(0, self.prior.observed[j] - n))
+        if others == 0:
+            return self.own_sum[j] / n, True
+        weight = n / (n + others)
         return weight * (self.own_sum[j] / n) + (1.0 - weight) * self.prior.cond[j], True
 
     def effective_cond(self, k):
@@ -487,6 +535,7 @@ class RecordCandidate:
     entry_ms: float = 0.0
     members: tuple | None = None
     tokens_per_row: float | None = None  # measured in serving (a calibrated mode); None = the acceptance model
+    run: bool = False  # the credit is the current run's own steps (set by the policy): no per-row bound
 
 
 @dataclasses.dataclass(frozen=True)
@@ -550,10 +599,14 @@ def rank_records(candidates, rows, plain_ms, optimistic=()):
         inside = range(n) if members is None else members
         if cand.tokens_per_row is not None:
             # the measured credit, bounded per row by what the row's OWN verifies say it accepts; a row without
-            # a verify of its own (the batch prior only) takes the measurement as it stands
+            # a verify of its own (the batch prior only) takes the measurement as it stands, and so does every
+            # row when the credit is the current run's (``run``): the run is the rows' own measurement, and the
+            # per-position EWMA that would bound it is still mostly the prior after a few verifies (an eight-row
+            # prose wave read 1.4 tokens a row against a run at 3.0 and left, 2026-10-30 replay)
             m = float(cand.tokens_per_row)
             tokens = sum(
-                min(m, rows[i].expected_tokens(k_v)) if rows[i].ewma_accepted is not None else m for i in inside
+                min(m, rows[i].expected_tokens(k_v)) if (rows[i].ewma_accepted is not None and not cand.run) else m
+                for i in inside
             ) + (n - len(inside))
         else:
             hoped = sum(1 for i in inside if i in optimistic)
@@ -736,6 +789,7 @@ class Calibration:
         self.modes = {}
         self.window = {}
         self.reseeds = {}  # shape -> [count, ms_sum, ratios]
+        self.shape_runs = {}  # shape -> [steps since its last reseed, the lengths of its last runs]
         self.window_reseeds = [0, 0.0]
         self.phases = {}  # name -> [calls, ms_sum] (engine life)
         self.window_phases = {}
@@ -746,11 +800,23 @@ class Calibration:
         self.total = [0, 0.0, 0]  # steps, ms, tokens
         self.window_total = [0, 0.0, 0]
         self.steps_since = {}  # mode kind ("plain" / "step") -> steps since its last clean sample
-        # The measured tokens per live row the decision reads, as an EWMA (``alpha``) over the counted samples
-        # of a pool: the records of one draft length at one rung share a pool (the drafter's acceptance does
-        # not depend on the record's rows), the plain step at a bucket is its own. [ewma, samples, interval of the
-        # last sample]: a pool no step fed for ``pool_stale`` intervals is stale and the model decides again.
+        # The measured tokens per live row the decision reads: the records of one draft length at one rung
+        # share a pool (the drafter's acceptance does not depend on the record's rows), the plain step at a
+        # bucket is its own. [samples (the last CALIB_WINDOW, across runs), count, interval of the last sample]:
+        # the credit between runs is the samples' mean, the count every clean step ever pooled, and a pool no
+        # step fed for ``pool_stale`` intervals is stale and the model decides again.
         self.tokens_pool = {}
+        # The current run: per pool the samples since the batch entered a record (the last CALIB_WINDOW of them,
+        # their count and their sum); the decision reads the window's mean while the run serves (``end_run``
+        # closes it and keeps each pool's whole-run mean in ``last_run``: a run long enough to measure prices
+        # the next entry, and one that failed says the pool's older samples describe another text).
+        self.run = {}
+        self.last_run = {}
+        # The walls a retry cycle pays under asynchronous scheduling, as served: per shape the interval that
+        # starts with a reseed (the reseed and the replay the in-flight plain step overtakes), and the plain
+        # step right after a record step (the runner's reload and the drained pipeline bubble); [count, ms].
+        self.reseed_steps = {}
+        self.after_record = [0, 0.0]
 
     def note_step(self, mode, wall_ms, tokens, clean, table_ms, live_rows=1, cause=None, idle=False):
         """One served step of ``mode`` (``("plain", bucket)`` or ``("step", shape, width)``) whose wall is
@@ -770,20 +836,38 @@ class Calibration:
         # the step right after a reseed carries the entry (charged as entry_ms): it is reported, never a cost
         # sample, else a run of one-step retries measures the mode at reseed + step and declines every next one
         uncounted = cause == "reseed" or probe
+        if mode[0] == "step":
+            self.shape_runs.setdefault(tuple(mode[1]), [0, collections.deque(maxlen=RUN_LENGTH_RUNS)])[0] += 1
+        if cause == "reseed" and mode[0] == "step":
+            entry = self.reseed_steps.setdefault(tuple(mode[1]), [0, 0.0])
+            entry[0] += 1
+            entry[1] += float(wall_ms)
+        if probe:
+            self.after_record[0] += 1
+            self.after_record[1] += float(wall_ms)
         counted = False
         for table in (self.modes, self.window):
             counted = table.setdefault(mode, ModeStats()).note(
                 wall_ms, tokens, clean, table_ms, live_rows, idle, uncounted=uncounted
             )
-        if counted and clean:
-            # the acceptance pool is steady-state: a dirty step (the one right after a reseed, a switch, a prefill)
-            # calibrates the wall but not the tokens per row, else a retry's single first step (reseed + the
-            # drafts from a fresh seed) ratchets the pool down and the next retry is declined before it runs
-            pool = self.tokens_pool.setdefault(self._tokens_pool_key(mode), [None, 0, 0])
+        if counted:
+            # the acceptance pool is steady-state: the step right after a reseed (uncounted above) drafts from a
+            # fresh seed and accepts few, and a retry's single first step ratcheted the pool down so the next
+            # retry was declined before it ran; a switch or a prefill inside the interval moves the wall, not
+            # the acceptance (the replay continues the seed), so those steps feed the pool -- the probe of the
+            # next draft length is one such step, and a pool it never fed kept its low reading from an earlier
+            # run and lost the ranking to its sibling for the rest of the request (2026-10-30 replay)
+            key = self._tokens_pool_key(mode)
             per_row = float(tokens) / max(int(live_rows), 1)
-            pool[0] = per_row if pool[0] is None else pool[0] + self.alpha * (per_row - pool[0])
+            pool = self.tokens_pool.setdefault(key, [collections.deque(maxlen=CALIB_WINDOW), 0, 0])
+            pool[0].append(per_row)
             pool[1] += 1
             pool[2] = self.intervals
+            if mode[0] == "step":
+                run = self.run.setdefault(key, [collections.deque(maxlen=CALIB_WINDOW), 0, 0.0])
+                run[0].append(per_row)
+                run[1] += 1
+                run[2] += per_row
         for total in (self.total, self.window_total):
             total[0] += 1
             total[1] += float(wall_ms)
@@ -800,6 +884,53 @@ class Calibration:
             else:
                 self.steps_since[kind] = self.steps_since.get(kind, 0) + 1
 
+    def end_run(self, trial=False):
+        """The batch left its record (or reseeds into another one): the run's samples stop deciding, each pool
+        the run fed keeps the run's mean as its last run, and the steps served on each shape since the last run
+        ended are one run of the shape for ``run_length`` -- unless the run was a ``trial`` that failed: a
+        declined trial is exploration, not a record the batch kept leaving."""
+        for key, (_window, count, total) in self.run.items():
+            self.last_run[key] = (total / count, count)
+        self.run = {}
+        for runs in self.shape_runs.values():
+            if runs[0] > 0 and not trial:
+                runs[1].append(runs[0])
+            runs[0] = 0
+
+    def last_run_mean(self, mode):
+        """The mean tokens per row over the whole of the last run that fed ``mode``'s pool, or None."""
+        last = self.last_run.get(self._tokens_pool_key(mode))
+        return None if last is None else last[0]
+
+    def pool_credit(self, mode):
+        """``(credit, samples)`` of ``mode``'s pool as the stats line shows it: the mean of its last samples
+        (None without one) and the clean steps ever pooled."""
+        pool = self.tokens_pool.get(self._tokens_pool_key(mode))
+        if pool is None or not pool[0]:
+            return None, 0 if pool is None else pool[1]
+        return sum(pool[0]) / len(pool[0]), pool[1]
+
+    def run_samples(self, mode):
+        """Clean samples the current run has of ``mode``'s pool."""
+        run = self.run.get(self._tokens_pool_key(mode))
+        return 0 if run is None else run[1]
+
+    def pool_known(self, mode):
+        """Whether serving has ``min_samples`` clean samples of ``mode``'s pool at all, fresh or stale: a record
+        serving has measured gets no trial below the entry bar, however long ago."""
+        pool = self.tokens_pool.get(self._tokens_pool_key(mode))
+        return pool is not None and pool[1] >= self.min_samples
+
+    def reseed_step_ms(self, shape):
+        """The mean wall of the intervals that started with a reseed of ``shape`` (the reseed and its replay,
+        overtaken by the in-flight plain step under asynchronous scheduling), or None before one was served."""
+        entry = self.reseed_steps.get(tuple(shape))
+        return entry[1] / entry[0] if entry and entry[0] else None
+
+    def after_record_ms(self):
+        """The mean wall of the plain step right after a record step, or None before one was served."""
+        return self.after_record[1] / self.after_record[0] if self.after_record[0] else None
+
     def note_reseed(self, shape, ms, table_ms=None):
         """A reseed (or bootstrap) of ``shape`` took ``ms``; ``table_ms`` is the warmup line at its position."""
         entry = self.reseeds.setdefault(tuple(shape), [0, 0.0, collections.deque(maxlen=CALIB_WINDOW)])
@@ -811,17 +942,19 @@ class Calibration:
         self.window_reseeds[1] += float(ms)
 
     def run_length(self, shape):
-        """The measured steps one entry of ``shape`` serves before the batch leaves it: the steps served on the
-        shape's records (every rung) per reseed of the shape, once two reseeds were measured; else None. The
-        entry horizon is capped by it (``SpecPolicy.entry_pays``): a record the batch keeps leaving after ten
-        steps cannot amortize a 250 ms reseed over the configured 64 (the Galaxy c32 point: 4-9 reseeds per
-        256 steps at eight rows, every entry on a prior or a window mean a few verifies then undid)."""
-        shape = tuple(shape)
-        entries = self.reseeds.get(shape)
-        if entries is None or entries[0] < 2:
+        """The measured steps one entry of ``shape`` serves before the batch leaves it: the longest of the
+        shape's last ``RUN_LENGTH_RUNS`` runs (the steps served on its records, every rung, from one
+        ``end_run`` to the next; a declined trial is none), or None before one ended. The entry horizon is
+        capped by it (``SpecPolicy.entry_pays``): a record the batch keeps leaving after ten steps cannot
+        amortize a 250 ms reseed over the configured 64 (the Galaxy c32 point: 4-9 reseeds per 256 steps at
+        eight rows, every entry on a prior or a window mean a few verifies then undid). The last runs, not the
+        engine-life steps per reseed: the one-step trials of a random-prompt point pinned the 12B QB2's (8,3)
+        at one step a reseed, and the prose point after it could not enter a record measured at 1.4x because
+        no entry could lengthen the run (2026-10-30 replay)."""
+        runs = self.shape_runs.get(tuple(shape))
+        if runs is None or not runs[1]:
             return None
-        steps = sum(stats.steps for mode, stats in self.modes.items() if mode[0] == "step" and mode[1] == shape)
-        return steps / entries[0]
+        return float(max(runs[1]))
 
     def note_phase(self, name, ms):
         for table in (self.phases, self.window_phases):
@@ -855,19 +988,35 @@ class Calibration:
         return mode
 
     def tokens_per_row(self, mode):
-        """The measured tokens per row and step of ``mode`` once its pool holds ``min_samples`` counted samples,
-        else None (the model decides): an EWMA (``alpha``) over the samples in the order served, so it follows
-        the regime in a handful of steps (a 32-sample mean carried the random-prompt c1 point into the prose
-        point that followed and kept it plain, the 12B Galaxy 2026-10-29). A record's samples are pooled over
-        the records of its draft length at its rung (``("step", (rows, k), width)`` for every ``rows``): the
+        """The measured tokens per row and step of ``mode``, or None (the model decides). While the batch serves
+        a record, the mean of the last ``CALIB_WINDOW`` counted steps of the current run on ``mode``'s pool (one
+        sample is enough: the run says what the record delivers now, and the window bounds how long a text
+        that stopped accepting is held); between runs the pool's credit, once it holds ``min_samples`` samples
+        in all. A record's samples are pooled over the
+        records of its draft length at its rung (``("step", (rows, k), width)`` for every ``rows``): the
         drafter's acceptance does not depend on the record's rows, so a record the serving never replayed
-        reads its calibrated sibling's. A pool no step fed for ``pool_stale`` intervals is stale (None): the
-        last samples before an exit are the low ones that caused it, and a stale reading of them ranked the
-        31B QB2's K=5 record (1.54 a row, frozen) under its K=3 sibling (3.55) for the rest of the server's
-        life while the rows' observed acceptance said 3.3 (2026-10-29 sweep)."""
-        pool = self.tokens_pool.get(self._tokens_pool_key(mode))
-        if pool is not None and pool[1] >= self.min_samples and self.intervals - pool[2] <= self.pool_stale:
-            return pool[0]
+        reads its calibrated sibling's. Means, not an EWMA over the last samples: the steps before an exit
+        are the low ones that caused it, and an EWMA of them read the 12B QB2's (1,5) record at 2.2-2.8 tokens
+        a row (0.86-1.1x) after runs that averaged 3.3-4.2 (2026-10-30 prose c1), so no request after the
+        first re-entered. Between runs the credit is the whole mean of the last run when that run had
+        ``min_samples`` samples (a run long enough to measure speaks for itself), else the mean of the pool's
+        last ``CALIB_WINDOW`` samples across runs: one short run at the tail of a request (a single one-token
+        step) does not price the next entry, and an eight-row wave's tail, which is what a window of the last
+        samples holds when the wave ends, does not either (2026-10-30 replay). A pool no step
+        fed for ``pool_stale`` intervals is stale (None): a stale reading ranked the 31B QB2's K=5 record
+        (1.54 a row, frozen) under its K=3 sibling (3.55) for the rest of the server's life while the rows'
+        observed acceptance said 3.3 (2026-10-29 sweep)."""
+        key = self._tokens_pool_key(mode)
+        run = self.run.get(key)
+        if run is not None and run[1] > 0:
+            return sum(run[0]) / len(run[0])
+        pool = self.tokens_pool.get(key)
+        if pool is not None and pool[0] and pool[1] >= self.min_samples:
+            if self.intervals - pool[2] <= self.pool_stale:
+                last = self.last_run.get(key)
+                if last is not None and last[1] >= self.min_samples:
+                    return last[0]  # a run long enough to measure speaks for itself
+                return sum(pool[0]) / len(pool[0])
         return None
 
     def reseed_ms(self, shape, prior):
@@ -957,8 +1106,8 @@ class SpecPolicy:
     consecutive speculative steps below the rows-based cap (the probe), and
     ``last_k`` is the draft length of the previous decision (0 for a plain
     step, None before the first), and ``trial`` says that decision was a
-    retry or a new request's trial: one observation, continued only when its
-    gain clears the entry threshold, never held.
+    retry or a new request's trial: held for ``trial_limit`` steps, then
+    continued under the hold rule on what its own steps delivered.
     """
 
     def __init__(self, config, k_max):
@@ -974,7 +1123,9 @@ class SpecPolicy:
         self.last_reason = None  # why the last decision was what it was ("gain", ..., "exit", "calibrate", "declined")
         self.request_steps = None  # EWMA of the steps a request lived (the entry horizon of a joining row)
         self.trial_age = 0  # steps the current trial / retry has held its record
+        self.trial_limit = int(config.trial_steps)  # steps the current trial holds (one from an uninformed prior)
         self.since_exit = None  # plain steps since the batch left a record (the entry cooldown); None once back in
+        self.probing = False  # the last decision was the plain probe of a hold: the next resumes the record
 
     def new_row(self):
         return self.prior.child()
@@ -989,10 +1140,13 @@ class SpecPolicy:
         self.declined += int(n)
         if self.since_exit is not None:
             self.since_exit += int(n)
+        if self.speculating or self.probing:
+            self.calibration.end_run(trial=self.trial)
         self.below_cap = 0
         self.below_exit = 0
         self.last_k = 0
         self.trial = False
+        self.probing = False
 
     def note_overtaken(self):
         """The last decision's replay was never verified: an ordinary decode the runner had in flight committed
@@ -1042,39 +1196,85 @@ class SpecPolicy:
             horizon = min(horizon, max(1, int(round(run))))
         return horizon * saving >= choice.entry_ms
 
+    @staticmethod
+    def informed(rows):
+        """Whether any row's statistics rest on an observation (its own or the prior's): the optimistic default
+        prior credits every draft, and a record it alone recommends is not entered, only trialed for one step."""
+        return any(any(s.informed) for s in rows)
+
+    def retry_cycle_ms(self, choice, plain_ms):
+        """What one retry of ``choice`` costs over the plain steps it replaces, as served under asynchronous
+        scheduling: the interval that starts with its reseed (the reseed and the replay the in-flight plain
+        step overtakes, measured per shape, else the table's entry plus step) and the plain step after a record
+        step (the runner's reload; measured, else nothing), each less the plain step they stand in for."""
+        plain_ms = float(plain_ms)
+        reseed_step = self.calibration.reseed_step_ms(choice.shape)
+        if reseed_step is None:
+            reseed_step = choice.entry_ms + choice.cost_ms
+        after = self.calibration.after_record_ms()
+        if after is None:
+            after = plain_ms
+        return max(0.0, reseed_step - plain_ms) + max(0.0, after - plain_ms)
+
     def retry_choice(self, ranked, plain_ms):
-        """The retry for a plain-serving batch, or None: the cheapest candidate (entry plus step) once at least
-        ``retry_steps`` plain steps passed and its overhead over them is within ``retry_overhead``."""
+        """The retry for a plain-serving batch, or None, once at least ``retry_steps`` plain steps passed: the
+        best record serving has measured at break-even or better whose retry cycle pays over the entry horizon
+        (a re-entry on the pool's credit: the trial that follows measures it again before the hold), else the
+        cheapest candidate (entry plus step) once the cycle's overhead over the plain steps since is within
+        ``retry_overhead``."""
         cfg = self.config
         if cfg.retry_steps <= 0 or self.declined < cfg.retry_steps:
             return None
+        plain_ms = float(plain_ms)
+        # A record whose last steps paid for themselves re-enters as soon as its cycle (the reseed, the overtaken
+        # replay and the reload) pays over the horizon, capped by its measured run length: marginal random
+        # text (runs of a few steps) cannot amortize it, prose (runs of a request) can at once. The 12B QB2
+        # prose c1 waited 337 plain steps after a 1.1x run under the overhead bound alone (2026-10-30).
+        for choice in ranked:
+            if choice.measured and choice.gain >= 1.0:
+                last = self.calibration.last_run_mean(("step", choice.shape, choice.width))
+                failed = last is not None and last * plain_ms / choice.cost_ms < cfg.exit_gain
+                cycle = self.retry_cycle_ms(choice, plain_ms)
+                # a pool whose last run failed describes the text before it (prose, then random prompts): the
+                # exploration cadence below decides, not the older samples
+                if not failed and self.entry_pays(dataclasses.replace(choice, entry_ms=cycle), plain_ms):
+                    return dataclasses.replace(choice, reason="retry")
+                break
         cheapest = _cheapest(ranked)
         if cheapest.gain < cfg.min_gain * RETRY_MIN_GAIN_FRACTION:
             return None
-        # A retry is a whole trial, not one step: under asynchronous scheduling its first replay is overtaken by
-        # the plain step in flight (reseed + record for one token), the next replay reseeds again when the first
-        # draft missed, and ``trial_steps`` record steps follow before the gain decides. Charged as one step, the
-        # cadence cost the 26B QB2 8-9 % at 128K/256K random prompts against a 3 % bound (2026-10-30).
-        cycle = 1 + int(cfg.trial_steps)
-        overhead = cycle * (cheapest.entry_ms + cheapest.cost_ms - float(plain_ms)) / (self.declined * float(plain_ms))
-        if overhead > cfg.retry_overhead:
+        # Otherwise a retry is exploration: a whole cycle, not one step, charged as served. Under asynchronous
+        # scheduling its first replay is overtaken by the plain step in flight (the interval that starts with
+        # the reseed), ``trial_steps`` record steps follow before the gain decides, and the plain step after a
+        # record step carries the runner's reload. Charged as one table step, the cadence cost the 26B QB2
+        # 8-9 % at 128K/256K random prompts against a 3 % bound (2026-10-30).
+        cycle = self.retry_cycle_ms(cheapest, plain_ms) + cfg.trial_steps * max(0.0, cheapest.cost_ms - plain_ms)
+        if cycle > cfg.retry_overhead * self.declined * plain_ms:
             return None
         return dataclasses.replace(cheapest, reason="retry")
 
     def trial_choice(self, ranked, plain_ms=None, hypothetical=None, remaining=None):
-        """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate is
-        at least ``trial_gain`` (``min_gain`` for a record serving has measured: its measured tokens per row are
-        not argued with wave after wave), never while the batch cools after an exit, and, for a batch that is not
-        all new, its hypothesis holds: ``hypothetical`` (the
-        same candidates ranked with the new rows accepting every draft on a record serving has not measured at
-        the rung; a measured record keeps its measured tokens per row) clears ``min_gain`` and its entry pays
-        over the horizon. A batch of informed rows a new row cannot lift above the entry bar, or a record whose
-        replays already measured below it, has nothing to learn from a trial that reseeds the whole batch;
-        independent of the retry cadence, the reseed is its only extra cost."""
+        """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate
+        clears ``trial_gain``, or ``min_gain`` for a record serving has ever measured ``calib_min`` steps of
+        at its rung (fresh or stale: its measured tokens per row are not argued with wave after wave, and the
+        prior the model falls back to on a stale pool was learned from the same text); never while the batch
+        cools after an exit; and only when its entry pays over the horizon: at the hypothesis for a batch that
+        is not all new (``hypothetical``: the same candidates ranked with the new rows accepting every draft on
+        a record serving has not measured at the rung; a measured record keeps its measured tokens per row),
+        which must clear ``min_gain`` too, else at the candidate's own estimate. A trial below break-even on
+        the engine's own prior (the 12B QB2 random c1 ran one per request at 0.64-1.00x, ~150 ms each under
+        asynchronous scheduling, 2026-10-30) reseeds for nothing. Independent of the retry cadence, the reseed
+        is the trial's only extra cost."""
         if self.cooling():
             return None
         cheapest = _cheapest(ranked)
-        bar = max(self.config.trial_gain, self.config.min_gain) if cheapest.measured else self.config.trial_gain
+        mode = ("step", cheapest.shape, cheapest.width)
+        known = self.calibration.pool_known(mode)
+        bar = (
+            max(self.config.trial_gain, self.config.min_gain)
+            if (cheapest.measured or known)
+            else self.config.trial_gain
+        )
         if cheapest.gain < bar:
             return None
         if hypothetical is not None:
@@ -1082,7 +1282,21 @@ class SpecPolicy:
             hoped = next(c for c in hypothetical if (c.shape, c.width, c.members) == same)
             if hoped.gain < self.config.min_gain or not self.entry_pays(hoped, plain_ms, remaining):
                 return None
+        elif plain_ms is not None and not self.entry_pays(cheapest, plain_ms, remaining):
+            return None
         return dataclasses.replace(cheapest, reason="trial")
+
+    def _tag_runs(self, candidates):
+        """The candidates credited the current run's own steps where the run has any (``run`` set): what the
+        adapter's ``Calibration.tokens_per_row`` hands it while a run serves, filled in here so that a caller
+        passing the table alone reads the run too."""
+        out = []
+        for c in candidates:
+            mode = ("step", c.shape, c.width)
+            if self.calibration.run_samples(mode) > 0:
+                c = dataclasses.replace(c, tokens_per_row=self.calibration.tokens_per_row(mode), run=True)
+            out.append(c)
+        return out
 
     @staticmethod
     def _hypothetical(candidates, rows, plain_ms, fresh):
@@ -1120,27 +1334,36 @@ class SpecPolicy:
         candidates = self.viable(candidates, plain_ms)
         if not candidates:
             return False
-        ranked = rank_records(candidates, rows, plain_ms)
-        if self.admissible(ranked, plain_ms, remaining) is not None:
+        ranked = rank_records(self._tag_runs(candidates), rows, plain_ms)
+        if self.probing:
+            return ranked[0].gain >= self.config.exit_gain
+        if self.admissible(ranked, plain_ms, remaining, informed=self.informed(rows)) is not None:
             return True
         held = self.holdable(ranked)
-        if self.speculating and not self.trial and held is not None and held.gain >= self.config.exit_gain:
-            return True
+        if self.speculating and held is not None:
+            if self.trial and self.trial_age < self.trial_limit:
+                return True
+            return held.gain >= self.config.exit_gain or (not self.trial and self.below_exit + 1 < EXIT_STEPS)
         if self.retry_choice(ranked, plain_ms) is not None:
             return True
         if not fresh_indices(fresh, len(rows)):
             return False
-        hypothetical = self._hypothetical(candidates, rows, plain_ms, fresh)
+        if not self.informed(rows) and self.admissible(ranked, plain_ms, remaining, informed=True) is not None:
+            return True
+        hypothetical = self._hypothetical(self._tag_runs(candidates), rows, plain_ms, fresh)
         return self.trial_choice(ranked, plain_ms, hypothetical, remaining) is not None
 
-    def admissible(self, ranked, plain_ms, remaining=None, cooling=None):
+    def admissible(self, ranked, plain_ms, remaining=None, cooling=None, informed=True):
         """The best candidate that clears the entry gain and whose entry (if any) pays over the horizon; one that
-        reseeds is passed over while the batch cools after an exit (``cooling``, None = as the policy stands)."""
+        reseeds is passed over while the batch cools after an exit (``cooling``, None = as the policy stands),
+        and, unless serving measured it, while the rows' statistics are the optimistic default (``informed``
+        false: the 12B QB2 entered its 256K record on the prior alone at an expected 6 tokens a row, served 20
+        steps at 0.8-0.9x and left, 2026-10-30; such a record gets a one-step trial instead)."""
         if cooling is None:
             cooling = self.cooling()
         for choice in ranked:
             if choice.gain >= self.config.min_gain and self.entry_pays(choice, plain_ms, remaining):
-                if cooling and choice.entry_ms > 0.0:
+                if choice.entry_ms > 0.0 and (cooling or (not informed and not choice.measured)):
                     continue
                 return choice
         return None
@@ -1161,10 +1384,13 @@ class SpecPolicy:
         entry horizon by the steps the entering rows are expected to live.
         ``fresh`` names the rows that are new requests without a trial yet
         (``True``: every row): declined otherwise, the step is their trial
-        when the prior's gain clears ``trial_gain`` and, with other rows in the
-        batch, the hypothesis that the new rows accept every draft clears the
-        entry bar (reason "trial", never held). For ``retry_steps`` plain
-        steps after an exit no entry reseeds (reason "cooldown").
+        when the gain estimate clears the trial bar and the reseed pays and,
+        with other rows in the batch, the hypothesis that the new rows accept
+        every draft clears the entry bar (reason "trial"; held for
+        ``trial_steps`` steps, one from an uninformed prior, then continued
+        under the hold rule on what its own steps delivered). For
+        ``retry_steps`` plain steps after an exit no entry reseeds (reason
+        "cooldown").
         """
         cfg = self.config
         candidates = list(candidates)
@@ -1176,36 +1402,56 @@ class SpecPolicy:
         if not candidates:
             # every record is hopeless at its cost: the plain step, with none of the retry/trial bookkeeping a
             # declined step keeps (nothing could ever be retried)
+            if self.speculating or self.probing:
+                self.calibration.end_run(trial=self.trial)
             self.below_cap = 0
             self.below_exit = 0
             self.last_k = 0
             self.trial = False
             self.trial_age = 0
+            self.probing = False
             self.last_reason = "hopeless"
             return None
-        ranked = rank_records(candidates, rows, plain_ms)
-        best = self.admissible(ranked, plain_ms, remaining)
+        ranked = rank_records(self._tag_runs(candidates), rows, plain_ms)
+        informed = self.informed(rows)
+        best = self.admissible(ranked, plain_ms, remaining, informed=informed)
         held = self.holdable(ranked)
         if best is None and self.cooling() and self.admissible(ranked, plain_ms, remaining, cooling=False) is not None:
             reason = "cooldown"
-        if best is not None:
+        if self.probing:
+            # The plain probe served: the hold resumes its record (every row reseeds, which the probe's budget
+            # charged) under the hold rule, never through the entry or retry gates. A probe was a full exit
+            # before (the 26B QB2 served 27 probes in one window and re-entered each by a retry, 2026-10-30).
+            self.probing = False
+            if ranked[0].gain >= cfg.exit_gain:
+                choice = dataclasses.replace(ranked[0], reason="resume")
+                self.below_exit = 0
+            else:
+                reason = "exit"
+        elif best is not None:
             choice = dataclasses.replace(best, reason="enter" if best.entry_ms > 0.0 else "gain")
             self.below_exit = 0
-        elif self.speculating and self.trial and self.trial_age < cfg.trial_steps:
-            # A trial (a retry, or a new request's first proposal) holds its record for ``trial_steps`` steps
+        elif self.speculating and self.trial and self.trial_age < self.trial_limit:
+            # A trial (a retry, or a new request's first proposal) holds its record for ``trial_limit`` steps
             # before the gain decides: its first step follows the reseed and accepts few drafts, and a one-step
-            # trial judged on it never refreshes the acceptance pool it is judged by (the 12B rows sweeps).
-            # A trial whose rows must reseed again (its replay was overtaken by a plain step the runner had in
-            # flight, or a slot moved) holds the cheapest candidate, entry included: under asynchronous
-            # scheduling a retry from the plain regime is ALWAYS overtaken once (the runner drains and asks
-            # again), and a trial that could not reseed never got verified.
-            choice = dataclasses.replace(held if held is not None else _cheapest(ranked), reason="trial")
-        elif self.speculating and not self.trial and held is not None:
-            # Hysteresis: a speculating batch holds its best entry-free record above the exit gain, and
-            # leaves only after EXIT_STEPS consecutive decisions below it. A retry is a trial and gets no hold.
+            # trial judged on it never refreshes the acceptance pool it is judged by (the 12B rows sweeps). A
+            # trial whose rows must reseed again (its replay was overtaken by a plain step the runner had in
+            # flight and the first draft missed the token it committed, or a slot moved) ends: the reseed was
+            # its one extra cost, and a second one per request is what the random-prompt points paid for
+            # (2026-10-30); a first draft that matched seeds the next replay without one and the trial goes on.
+            if held is not None:
+                choice = dataclasses.replace(held, reason="trial")
+        elif self.speculating and held is not None:
+            # Hysteresis: a speculating batch holds its best entry-free record above the exit gain, and leaves
+            # only after EXIT_STEPS consecutive decisions below it. A trial that served its steps continues
+            # under the same rule on what those steps delivered (the run's own credit): the entry bar covered
+            # the reseed it already paid, and a record at 1.0-1.25x measured was dropped for 240 plain steps
+            # a request on the 12B QB2 prose c1 (2026-10-30). A trial below the exit gain is declined at once.
             if held.gain >= cfg.exit_gain:
                 self.below_exit = 0
                 choice = dataclasses.replace(held, reason="hold")
+            elif self.trial:
+                reason = "declined"
             else:
                 self.below_exit += 1
                 if self.below_exit < EXIT_STEPS:
@@ -1215,8 +1461,14 @@ class SpecPolicy:
         else:
             choice = self.retry_choice(ranked, plain_ms)
             if choice is None and fresh_indices(fresh, len(rows)):
-                hypothetical = self._hypothetical(candidates, rows, plain_ms, fresh)
-                choice = self.trial_choice(ranked, plain_ms, hypothetical, remaining)
+                if not informed:
+                    # the optimistic default prior's one-step trial replays the record it recommends (every
+                    # position observed by its verify), not the cheapest one
+                    hopeful = self.admissible(ranked, plain_ms, remaining, informed=True)
+                    choice = None if hopeful is None else dataclasses.replace(hopeful, reason="trial")
+                if choice is None:
+                    hypothetical = self._hypothetical(self._tag_runs(candidates), rows, plain_ms, fresh)
+                    choice = self.trial_choice(ranked, plain_ms, hypothetical, remaining)
         if choice is not None and choice.reason in ("gain", "hold") and self.plain_probe_due(choice, plain_ms):
             choice, reason = None, "calibrate"
         if choice is None:
@@ -1225,19 +1477,27 @@ class SpecPolicy:
                 self.since_exit = 0
             elif self.since_exit is not None:
                 self.since_exit += 1
+            if reason != "calibrate" and (self.speculating or self.probing):
+                self.calibration.end_run(trial=self.trial)
+            self.probing = reason == "calibrate"
             self.below_cap = 0
-            self.below_exit = 0
+            if reason != "calibrate":
+                self.below_exit = 0
             self.last_k = 0
             self.trial = False
             self.trial_age = 0
             self.last_reason = reason
             return None
+        if choice.entry_ms > 0.0 and choice.reason != "resume":
+            self.calibration.end_run()  # the run the batch leaves (a reseed into another record, or none)
         self.last_reason = choice.reason
         self.declined = 0
         self.since_exit = None
         was_trial = self.trial
         self.trial = choice.reason in ("retry", "trial")
         self.trial_age = self.trial_age + 1 if (self.trial and was_trial) else (1 if self.trial else 0)
+        if self.trial and not was_trial:
+            self.trial_limit = cfg.trial_steps if (informed or choice.measured) else 1
         if int(choice.shape[1]) < int(k_cap) and choice.entry_ms <= 0.0:
             self.below_cap += 1
             if cfg.probe_steps > 0 and self.below_cap >= cfg.probe_steps:

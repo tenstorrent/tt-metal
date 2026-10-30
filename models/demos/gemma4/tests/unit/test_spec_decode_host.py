@@ -887,6 +887,7 @@ def test_auto_draft_len_batched_env_override_wins(monkeypatch, expect_error):
     # -- the acceptance-adaptive policy: the measured cost table, the entry cost and the amortized retry
     _policy_the_cost_table_is_consumed_as_measured(expect_error)
     _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length()
+    _policy_prose_dwells_on_its_record_and_random_text_stays_plain()
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
@@ -2278,8 +2279,10 @@ def _cands(costs, n=1, width=2048):
 
 
 def _row(cond, alpha=0.2):
+    """A row whose conditionals were observed at ``cond`` (every position informed, as verifies would leave it)."""
     stats = AcceptanceStats(5, alpha)
     stats.cond = list(cond)
+    stats.informed = [True] * 5
     return stats
 
 
@@ -2372,10 +2375,12 @@ def _policy_a_new_row_starts_from_the_batch_prior_and_the_prior_learns_from_ever
     policy.observe(second, accepted=5, verified=5)
     assert first.cond[0] == 0.5 and second.cond[0] == 0.75 and policy.prior.cond[0] == 0.75
     # a row's own observations count at once: at a position with n < ROW_MIN_OBSERVATIONS of its own it reads
-    # n / (n + 3) of its own mean outcome and the rest of the prior (one verify at 5 accepted moves it most of
-    # the way), from three on its own EWMA as before; a request that stays plain observes nothing
+    # n / (n + others) of its own mean outcome and the rest of the prior, others being the prior's evidence
+    # beyond the row's own (at most 3; one verify at 5 accepted moves it most of the way), from three on its
+    # own EWMA as before; a request that stays plain observes nothing
     informed = SpecPolicy(SpecPolicyConfig(ewma=0.5), 5)
     informed.prior.cond, informed.prior.informed = [0.2] * 5, [True] * 5
+    informed.prior.observed = [100] * 5  # other rows' evidence
     row = informed.new_row()
     assert row.effective_cond(5) == pytest.approx([0.2] * 5) and row.own_sum == [0.0] * 5
     informed.observe(row, accepted=5, verified=5)
@@ -2391,6 +2396,15 @@ def _policy_a_new_row_starts_from_the_batch_prior_and_the_prior_learns_from_ever
     assert row.effective_cond(1) == pytest.approx([0.15]), "three own observations: the row's own EWMA, as before"
     untouched = informed.new_row()
     assert untouched.effective_cond(1) == pytest.approx([informed.prior.cond[0]]) and untouched.spec_steps == 0
+    # the prior's evidence is what other rows observed: a row alone on a fresh engine reads its own outcome
+    alone = SpecPolicy(SpecPolicyConfig(ewma=0.5), 5)
+    only = alone.new_row()
+    alone.observe(only, accepted=2, verified=5)
+    assert alone.prior.observed == [1, 1, 1, 0, 0] and only.observed == [1, 1, 1, 0, 0]
+    assert only.effective_cond(5) == [1.0, 1.0, 0.0, 0.0, 0.0], "no evidence beyond its own: the outcome alone"
+    peer = alone.new_row()
+    alone.observe(peer, accepted=5, verified=5)
+    assert only.effective_cond(3) == pytest.approx([1.0, 1.0, 0.5 * 0.0 + 0.5 * 0.75]), "one other verify: 1/(1+1)"
 
 
 def _policy_rank_records_scores_expected_tokens_per_cost_relative_to_the_plain_step(expect_error=None):
@@ -2529,50 +2543,83 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert probe.modes[("plain", 1)].steps == 2 and probe.dirty == {"switch": [2, 98.0]}
     assert probe.step_ms(("plain", 1), 20.0) == 20.0, "the reload bubble never reaches the plain estimate"
     assert calib.dirty == {"prefill": [1, 90.0]} and calib.total == [3, 270.0, 9]
-    # the measured tokens per row are a recency-weighted throughput (an EWMA at 0.25 over the counted samples in
-    # the order served; never the median: a row taking 1,1,1,5,6 tokens on five verifies commits tokens where the
-    # median 1 read the record as a loss), pooled over the records of one draft length at the rung: the drafter's
-    # acceptance does not depend on the record's rows, so an unreplayed sibling reads the calibrated one's
-    # instead of the model (whose deep positions sit at the prior) and cannot outrank it on the model alone.
-    # Recency: a 32-sample mean carried the random-prompt regime into the prose point that followed and kept it
-    # plain (the 12B Galaxy, 2026-10-29); the EWMA follows a new regime in a handful of verifies.
+    # the measured tokens per row are a throughput (a mean; never the median: a row taking 1,1,1,5,6 tokens on
+    # five verifies commits tokens where the median 1 read the record as a loss), pooled over the records of
+    # one draft length at the rung: the drafter's acceptance does not depend on the record's rows, so an
+    # unreplayed sibling reads the calibrated one's instead of the model (whose deep positions sit at the
+    # prior) and cannot outrank it on the model alone. While the batch serves a record the credit is the
+    # current run's own steps (one sample is enough: the run says what the record delivers now)
     skew = Calibration(5)
     for tokens in (1, 1, 1, 5, 6):
         skew.note_step(("step", (1, 5), 263168), 150.0, tokens, True, 150.0, 1)
-    ewma = 0.0
-    for first, tokens in enumerate((1, 1, 1, 5, 6)):
-        ewma = tokens if first == 0 else ewma + 0.25 * (tokens - ewma)
-    assert ewma == pytest.approx(3.0)
-    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(3.0)
-    assert skew.tokens_per_row(("step", (5, 5), 263168)) == pytest.approx(3.0), "same draft length, same rung"
+    assert skew.run_samples(("step", (1, 5), 263168)) == 5
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(2.8)
+    assert skew.tokens_per_row(("step", (5, 5), 263168)) == pytest.approx(2.8), "same draft length, same rung"
     assert skew.tokens_per_row(("step", (8, 3), 263168)) is None, "another draft length is its own"
     assert skew.tokens_per_row(("step", (1, 5), 2048)) is None, "another rung is its own"
     assert not skew.calibrated(("step", (5, 5), 263168)), "its step cost still reads the table"
     skew.note_step(("step", (5, 5), 263168), 200.0, 10, True, 200.0, 5)  # 2 per row joins the pool
-    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(3.0 + 0.25 * (2.0 - 3.0))
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(16 / 6)
+    # a switch (or a prefill) inside the interval moves the wall, not the acceptance: the replay continues the
+    # seed, so the step feeds the pool (the probe of the next draft length is such a step, and a pool the
+    # probe never fed kept a low reading from an earlier run for the rest of the request); the step right
+    # after a reseed drafts from a fresh seed and feeds nothing
+    skew.note_step(("step", (1, 5), 263168), 160.0, 4, False, 150.0, 1, cause="switch")
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(20 / 7)
+    skew.note_step(("step", (1, 5), 263168), 200.0, 6, False, 150.0, 1, cause="reseed")
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(20 / 7), "the post-reseed step: no sample"
+    # the run ends: a run with min_samples prices the next entry by its whole mean (the steps before an exit
+    # are the low ones that caused it: an EWMA of them read the 12B QB2's (1,5) at 2.2-2.8 tokens a row after
+    # runs that averaged 3.3-4.2, and no request after the first re-entered, 2026-10-30)
+    skew.end_run()
+    assert skew.run_samples(("step", (1, 5), 263168)) == 0
+    assert skew.last_run_mean(("step", (1, 5), 263168)) == pytest.approx(20 / 7)
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(20 / 7)
+    assert skew.pool_credit(("step", (1, 5), 263168)) == (pytest.approx(20 / 7), 7)
+    assert skew.pool_known(("step", (5, 5), 263168)) and not skew.pool_known(("step", (8, 3), 263168))
+    # a run too short to measure (one one-token step at a request's tail) does not price the next entry: the
+    # pool's last CALIB_WINDOW samples across runs do
+    skew.note_step(("step", (1, 5), 263168), 150.0, 1, True, 150.0, 1)
+    skew.end_run()
+    assert skew.last_run_mean(("step", (1, 5), 263168)) == 1.0
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(21 / 8)
     # a pool no step fed for pool_stale intervals is stale: the model decides again (the K=5 pool the 31B QB2
     # froze at 1.54 after an exit outranked by its K=3 sibling for the server's life); any noted step is the clock
     stale = Calibration(2, pool_stale=3)
     for tokens in (3, 3):
         stale.note_step(("step", (1, 5), 2048), 50.0, tokens, True, 45.0, 1)
+    stale.end_run()
     assert stale.tokens_per_row(("step", (1, 5), 2048)) == 3.0
     for _ in range(3):
         stale.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
     assert stale.tokens_per_row(("step", (1, 5), 2048)) == 3.0, "fed 3 intervals ago: fresh"
     stale.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
     assert stale.tokens_per_row(("step", (1, 5), 2048)) is None, "4 intervals: stale"
+    assert stale.pool_known(("step", (1, 5), 2048)), "stale, but known: a trial on it needs the entry bar"
     stale.note_step(("step", (1, 5), 2048), 50.0, 4, True, 45.0, 1)
-    assert stale.tokens_per_row(("step", (1, 5), 2048)) == pytest.approx(3.25), "one fresh sample revives it"
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) == 4.0, "one fresh sample: a run, which reads its own step"
     assert SpecPolicyConfig.from_env({"GEMMA4_SPEC_POOL_STALE_STEPS": "7"}).pool_stale == 7
     assert SpecPolicy(SpecPolicyConfig(pool_stale=9), 5).calibration.pool_stale == 9
-    regime = Calibration(2)  # four random-prompt verifies at 1.5 a row, then prose at 3.3: the estimate follows
+    regime = Calibration(2)  # four random-prompt verifies at 1.5 a row, then prose at 3.3: the run decides
     for tokens in (1.5, 1.5, 1.5, 1.5):
         regime.note_step(("step", (1, 5), 2048), 50.0, tokens, True, 45.0, 1)
-    for _ in range(4):
+    regime.end_run()
+    assert regime.tokens_per_row(("step", (1, 5), 2048)) == 1.5
+    for _ in range(2):
         regime.note_step(("step", (1, 5), 2048), 50.0, 3.3, True, 45.0, 1)
     assert regime.tokens_per_row(("step", (1, 5), 2048)) == pytest.approx(
-        2.73, abs=0.01
-    ), "four prose verifies lift a random-regime pool from 1.5 to 2.7 (a 32-sample mean would sit at 2.4)"
+        3.3
+    ), "a new run reads its own steps at once, whatever the pool held"
+    regime.end_run()
+    assert regime.tokens_per_row(("step", (1, 5), 2048)) == pytest.approx(3.3), "two samples: enough to measure here"
+    # the walls a retry cycle pays, as served: the interval that starts with a reseed (per shape) and the plain
+    # step after a record step
+    assert regime.reseed_step_ms((1, 5)) is None and regime.after_record_ms() is None
+    regime.note_step(("step", (1, 5), 2048), 80.0, 2, False, 45.0, 1, cause="reseed")
+    regime.note_step(("step", (1, 5), 2048), 76.0, 2, False, 45.0, 1, cause="reseed")
+    regime.note_step(("plain", 1), 46.0, 1, False, 20.0, 1, cause="switch")
+    assert regime.reseed_step_ms((1, 5)) == 78.0 and regime.reseed_step_ms((8, 3)) is None
+    assert regime.after_record_ms() == 46.0
     skew.note_step(("plain", 1), 80.0, 1, True, 80.0, 1)
     assert skew.tokens_per_row(("plain", 1)) is None, "the plain step pools nothing and needs its own samples"
     # an outlier: a clean sample above 3x the running median once four samples exist; reported, never averaged in
@@ -2615,22 +2662,32 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     short.note_request_steps(20)
     assert short.decide(entering, [row], _PLAIN, 3) is None, "the measured request length caps the horizon"
     assert not short.would_speculate(entering, [row], _PLAIN) and short.would_speculate(entering, [row], _PLAIN, 64)
-    # the shape's measured run length caps it too: steps served on the shape's records per reseed of the shape,
-    # from the second reseed on. Two reseeds and 20 steps (a run of 10: 157 ms of saving) refuse the 500 ms
-    # entry, 80 steps (a run of 40: 628 ms) take it; one reseed measures nothing
-    churn = SpecPolicy(SpecPolicyConfig(), 5)
-    churn.calibration.note_reseed((8, 3), 250.0, 250.0)
-    assert churn.calibration.run_length((8, 3)) is None and churn.decide(entering, [row], _PLAIN, 3).reason == "enter"
-    churn.calibration.note_reseed((8, 3), 250.0, 250.0)
-    for _ in range(20):
-        churn.calibration.note_step(("step", (8, 3), 2048), 60.0, 16, True, 57.0, 8)
-    assert churn.calibration.run_length((8, 3)) == 10.0
+    # the shape's measured run length caps it too: the longest of its last RUN_LENGTH_RUNS runs (the steps served
+    # on its records between one end_run and the next). A run of 10 (157 ms of saving) refuses the 500 ms
+    # entry, one of 40 (628 ms) takes it; no run ended measures nothing, and a declined trial is no run (the
+    # one-step trials of a random-prompt point pinned a record at one step a reseed for the prose after it)
+    churn = SpecPolicy(SpecPolicyConfig(), 5)  # the served steps commit 3 tokens a row: 25 ms saved a step
+    for _ in range(10):
+        churn.calibration.note_step(("step", (8, 3), 2048), 60.0, 24, True, 57.0, 8)
+    assert churn.calibration.run_length((8, 3)) is None
+    assert churn.decide(entering, [row], _PLAIN, 3).reason == "enter", "no run ended: the configured horizon"
+    assert churn.calibration.run_length((8, 3)) == 10.0, "the entry ended the run of 10"
     assert churn.decide(entering, [row], _PLAIN, 3) is None and not churn.would_speculate(entering, [row], _PLAIN)
     assert churn.entry_pays(rank_records([RecordCandidate((8, 3), 2048, 35.0, 150.0)], [row], _PLAIN)[0], _PLAIN)
-    for _ in range(60):
-        churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 16, False, 57.0, 8, cause="rows")
+    for _ in range(40):
+        churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 24, False, 57.0, 8, cause="rows")
+    churn.calibration.end_run()
     assert churn.calibration.run_length((8, 3)) == 40.0 and churn.decide(entering, [row], _PLAIN, 3).reason == "enter"
-    assert churn.calibration.run_length((16, 1)) is None, "another shape's reseeds are its own"
+    for _ in range(2):
+        churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 24, True, 57.0, 8)
+    churn.calibration.end_run(trial=True)
+    assert churn.calibration.run_length((8, 3)) == 40.0, "a declined trial is no run"
+    for length in (3, 4, 5, 6):
+        for _ in range(length):
+            churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 24, True, 57.0, 8)
+        churn.calibration.end_run()
+    assert churn.calibration.run_length((8, 3)) == 6.0, "the 40 fell out of the last four runs"
+    assert churn.calibration.run_length((16, 1)) is None, "another shape's runs are its own"
     # the measured tokens per row of a calibrated record replace the acceptance model
     measured = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=1.2)]
     assert rank_records(measured, [row], _PLAIN)[0].expected_tokens == pytest.approx(1.2)
@@ -2652,7 +2709,8 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
 
 
 def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):
-    # a one-step trial charges two replays: 2 x (30 - 20) / (3 x 20) = 0.33 within a 0.4 overhead at the 4th decision
+    # the exploration retry: a one-step trial's cycle is the reseed interval (entry + step, 30, less the plain
+    # step) plus one record step as a loss: 20 / (3 x 20) = 0.33 within a 0.4 overhead at the 4th decision
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
     row = _row([0.4] * 5)  # (16,1): 1.4 tokens at 1.5x = 0.93x, the cheapest record and above min_gain / 4
     kinds = []
@@ -2661,37 +2719,103 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
         kinds.append(None if choice is None else (choice.shape, choice.reason))
     assert kinds == [None, None, None, ((16, 1), "retry"), None, None, None, ((16, 1), "retry")]
     assert policy.declined == 0 and policy.last_k == 1 and policy.trial
-    assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
-    # a longer trial holds its record for trial_steps steps; a step whose rows must reseed (every candidate
-    # carries an entry: the replay was overtaken by a plain step the runner had in flight, contract s.4d) holds
-    # the cheapest candidate, entry included, and an overtaken step does not age the trial
-    held = SpecPolicy(
-        SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5
-    )  # 3 replays a trial
+    assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the exit gain is not held"
+    assert policy.last_reason == "declined" and policy.since_exit is None, "a failed trial is no exit: no cooldown"
+    # a longer trial holds its record for trial_steps steps, then the hold rule decides on what its steps
+    # delivered; an overtaken step (the replay never verified: a plain step the runner had in flight committed
+    # past it, contract s.4d) does not age the trial, and the trial goes on when the row continues (its first
+    # draft matched the committed token) but ends when every candidate carries an entry again (a miss: the row
+    # must reseed, and one reseed per trial is what the random-prompt points can afford)
+    held = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
     assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None
     assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry" and held.trial_age == 1
     held.note_overtaken()
     assert held.trial_age == 0
-    reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
-    again = held.decide(reseeding, [row], _PLAIN, 5)
-    assert (again.shape, again.reason, again.entry_ms) == ((16, 1), "trial", 30.0) and held.trial_age == 1
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "trial" and held.trial_age == 1
     assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "trial" and held.trial_age == 2
-    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "trial_steps held: the gain decides"
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "trial_steps held: the hold rule decides"
     held.note_overtaken()
     assert held.trial_age == 0 and not held.trial, "nothing to un-age once declined"
-    # the overhead gate charges the whole trial cycle (1 + trial_steps replays): 2 x (30 - 20) / (N x 20) <= 0.03
-    # needs 34 plain steps, whatever retry_steps says, so the retry is the 35th decision
+    missed = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
+    missed.decide(_cands(_COSTS), [row], _PLAIN, 5)
+    assert missed.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry"
+    missed.note_overtaken()
+    reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
+    assert missed.decide(reseeding, [row], _PLAIN, 5) is None and missed.last_reason == "declined" and not missed.trial
+    # a trial that clears the exit gain on its own steps continues as a hold: the entry bar covered the reseed
+    # it already paid (a record at 1.0-1.25x measured was dropped for 240 plain steps a request on the 12B QB2
+    # prose c1, 2026-10-30); the hold then leaves after EXIT_STEPS decisions below the exit gain
+    dwell = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
+    dwell.decide(_cands(_COSTS), [row], _PLAIN, 5)
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry"
+    k1 = ("step", (16, 1), 2048)
+    dwell.calibration.note_step(k1, 30.0, 1, True, 30.0, 1)  # the trial's steps: 1 token (0.67x: held), then 2
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "trial"
+    dwell.calibration.note_step(k1, 30.0, 2, True, 30.0, 1)
+    continued = dwell.decide(_cands(_COSTS), [row], _PLAIN, 5)  # 1.5 tokens at 1.5x = 1.0x on the run's own steps
+    assert (continued.reason, continued.tokens_per_row, continued.gain) == ("hold", 1.5, pytest.approx(1.0))
+    assert continued.measured and not dwell.trial and dwell.calibration.run_samples(k1) == 2
+    for _ in range(3):
+        dwell.calibration.note_step(k1, 30.0, 1, True, 30.0, 1)  # 1,2,1,1,1: 1.2 = 0.8x
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "hold" and dwell.below_exit == 1
+    dwell.calibration.note_step(k1, 30.0, 1, True, 30.0, 1)
+    assert dwell.decide(_cands(_COSTS), [row], _PLAIN, 5) is None and dwell.last_reason == "exit"
+    assert dwell.calibration.run_samples(k1) == 0, "the exit ends the run"
+    assert dwell.calibration.last_run_mean(k1) == pytest.approx(7 / 6)
+    # two tokens a step on the trial's own steps (1.33x) clear the entry bar: the trial is a gain at once
+    again = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5)
+    again.decide(_cands(_COSTS), [row], _PLAIN, 5)
+    assert again.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry"
+    again.calibration.note_step(k1, 30.0, 2, True, 30.0, 1)
+    assert again.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "gain" and not again.trial
+    # the exploration cadence charges the cycle as served: a one-step trial on the table ((30 - 20) + 10) over
+    # 3 % of the plain steps since needs 34 of them, whatever retry_steps says, so the retry is the 35th
+    # decision; with the measured async walls (the reseed interval 80, the plain step after a record step 45)
+    # the cycle is 60 + 25 + 10 = 95 and the retry waits 159 steps
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
     first = next(i for i in range(1, 60) if policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None)
     assert first == 35
-    # a reseed is part of the overhead: 2 x (900 + 30 - 20) / (N x 20) <= 0.4 needs 228 plain steps
+    served = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    served.calibration.note_step(("step", (16, 1), 2048), 80.0, 1, False, 30.0, 1, cause="reseed")
+    served.calibration.note_step(("plain", 1), 45.0, 1, False, 20.0, 1, cause="switch")
+    k1_choice = rank_records([RecordCandidate((16, 1), 2048, 30.0)], [row], _PLAIN)[0]
+    assert served.retry_cycle_ms(k1_choice, _PLAIN) == pytest.approx(85.0)
+    assert next(i for i in range(1, 200) if served.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None) == 160
+    # a reseed is part of the cycle: (900 + 30 - 20) + 10 over 0.4 of the plain steps needs 115 of them
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
     reseeding = [RecordCandidate(s, 1024, ms, 900.0) for s, ms in _COSTS.items()]
-    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(228))
+    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(115))
     assert policy.decide(reseeding, [row], _PLAIN, 5).reason == "retry"
-    # a three-step trial charges four replays: (30 - 20) x 4 / (N x 20) <= 0.03 needs 67 plain steps
+    # a three-step trial charges three record steps: 10 + 30 over 3 % needs 67 plain steps
     longer = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=3), 5)
     assert next(i for i in range(1, 90) if longer.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None) == 68
+    # a record serving has measured at break-even or better re-enters once its cycle pays over the horizon
+    # (the 12B QB2 prose c1 waited 337 plain steps after a 1.1x run under the overhead bound alone): (8,3)
+    # measured at 2.0 tokens (1.14x) with a 230 ms reseed saves 5 ms a step, 320 over the horizon against a
+    # 245 ms cycle, so the retry is the 4th decision; at 1.6 tokens (0.91x) it is exploration: the cycle plus
+    # one record step as a loss, 260 ms, over 3 % of the plain steps since needs 434 of them
+    paid = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.0)]
+    quick = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    assert [quick.decide(paid, [row], _PLAIN, 3) is None for _ in range(3)] == [True] * 3
+    assert quick.decide(paid, [row], _PLAIN, 3).reason == "retry"
+    short = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.6)]
+    slow = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    assert all(slow.decide(short, [row], _PLAIN, 3) is None for _ in range(434))
+    assert slow.decide(short, [row], _PLAIN, 3).reason == "retry"
+    # ... unless its last run failed (the pool's older samples describe the text before it: prose, then random
+    # prompts) or its measured run length cannot amortize the cycle (marginal random prompts: runs of a few steps)
+    failed = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    for _ in range(2):
+        failed.calibration.note_step(("step", (8, 3), 2048), 35.0, 1, True, 35.0, 1)
+    failed.calibration.end_run(trial=True)
+    assert failed.calibration.last_run_mean(("step", (8, 3), 2048)) == 1.0
+    assert all(failed.decide(paid, [row], _PLAIN, 3) is None for _ in range(10))
+    brief = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    for _ in range(3):
+        brief.calibration.note_step(("step", (8, 3), 2048), 35.0, 2, True, 35.0, 1)
+    brief.calibration.end_run()
+    assert brief.calibration.run_length((8, 3)) == 3.0
+    assert all(brief.decide(paid, [row], _PLAIN, 3) is None for _ in range(10)), "3 x 5 ms cannot pay 245"
     # a record the statistics rule out (gain below min_gain / 4) is never retried
     hopeless = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
     assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))
@@ -2710,11 +2834,12 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     never = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=0, retry_overhead=1.0), 5)
     assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
     # a new request's trial: declined otherwise, a fresh step replays the cheapest record (entry plus step) once
-    # when the prior's gain clears trial_gain, whatever the retry cadence says; never held, reason "trial"
+    # when the gain estimate clears trial_gain and the reseed pays over the horizon, whatever the retry cadence
+    # says; reason "trial", continued only under the hold rule
     fresh = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0, trial_steps=1), 5)
     trial = fresh.decide(_cands(_COSTS), [row], _PLAIN, 5, fresh=True)
     assert (trial.shape, trial.reason, trial.gain) == ((16, 1), "trial", pytest.approx(1.4 * 20 / 30)) and fresh.trial
-    assert fresh.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
+    assert fresh.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the exit gain is not held"
     assert fresh.would_speculate(_cands(_COSTS), [row], _PLAIN, fresh=True)
     assert not fresh.would_speculate(_cands(_COSTS), [row], _PLAIN)
     dear = [RecordCandidate((16, 1), 2048, 50.0)]  # 2 tokens at most at 2.5x plain: 0.8x, hopeless at its cost
@@ -2727,8 +2852,29 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
         .reason
         == "trial"
     )
+    # a trial with a reseed below break-even on the engine's own estimate reseeds for nothing (the 12B QB2
+    # random c1 ran one per request at 0.64-1.00x, ~150 ms each under asynchronous scheduling): the reseed
+    # must pay over the horizon at that estimate. The row's 1.66 tokens at (1,5)'s 50 ms save nothing; a 0.6
+    # row (2.18 tokens on (8,3): 1.25x, under the 1.25 bar) saves 8.6 ms a step, 550 over the horizon
     with_entry = [RecordCandidate((1, 5), 2048, 50.0, 170.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
-    assert fresh.decide(with_entry, [row], _PLAIN, 5, fresh=True).shape == (1, 5), "cheapest entry plus step"
+    assert fresh.decide(with_entry, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "declined"
+    mid = _row([0.6] * 5)
+    assert fresh.decide([RecordCandidate((8, 3), 2048, 35.0, 100.0)], [mid], _PLAIN, 3, fresh=True).reason == "trial"
+    assert fresh.decide([RecordCandidate((8, 3), 2048, 35.0, 600.0)], [mid], _PLAIN, 3, fresh=True) is None
+    # a record serving has ever measured calib_min steps of at its rung gets no trial below the entry bar, fresh
+    # or stale (the measured credit when fresh, the model's estimate when stale)
+    known = SpecPolicy(SpecPolicyConfig(retry_steps=0, probe_steps=0, trial_steps=1, calib_min=2, pool_stale=3), 5)
+    for _ in range(2):
+        known.calibration.note_step(("step", (16, 1), 2048), 30.0, 2, True, 30.0, 1)  # 2 tokens: 1.33x
+    known.calibration.end_run()
+    measured_now = known.calibration.tokens_per_row(("step", (16, 1), 2048))
+    assert measured_now == 2.0
+    for _ in range(4):
+        known.calibration.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    assert known.calibration.tokens_per_row(("step", (16, 1), 2048)) is None, "stale"
+    assert known.decide(_cands(_COSTS), [row], _PLAIN, 5, fresh=True) is None, "0.93x on the model: under the bar"
+    rich = _row([0.9] * 5)  # (16,1): 1.9 tokens at 1.5x = 1.27x on the model, at the bar
+    assert known.decide(_cands(_COSTS), [rich], _PLAIN, 5, fresh=True).reason == "gain"
     # a batch that is not all new: its trial needs the hypothesis that the new rows accept every draft to clear
     # the entry bar, since the trial reseeds every row. Eight rows at a 0.3 conditional (1.42 tokens a step at
     # K=3) on the (8,3) at 35 ms (1.75x plain): the prior's gain 0.81 clears trial_gain, but one new row at 4
@@ -2744,8 +2890,9 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert hyped[0].expected_tokens == pytest.approx(7 * 1.417 + 4, abs=1e-2)
     assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0,)) is None and eight.last_reason == "declined"
     assert not eight.would_speculate(only83, batch, _PLAIN, fresh=(0,))
-    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
     assert eight.would_speculate(only83, batch, _PLAIN, fresh=(0, 1, 2))
+    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
+    assert not eight.would_speculate(only83, batch, _PLAIN), "the one-step trial served: 0.81x ends it next"
     # with the (16,1) at 30 ms beside it (1.3 tokens at 1.5x: 0.87x, the cheapest) one new row makes 0.93x and
     # three 1.04x: still declined; five new rows of eight make 1.14x
     both = _cands(_COSTS, n=8)
@@ -2758,7 +2905,9 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     )
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
     assert eight.decide(reseeding8, batch, _PLAIN, 3, remaining=10, fresh=(0, 1, 2)) is None
-    assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=True).reason == "trial", "a batch all new: the floor"
+    assert (
+        eight.decide(reseeding8, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
+    ), "a batch all new: 1.42 tokens at 35 ms save nothing, the reseed cannot pay"
     # a record serving measured at the rung keeps its measured tokens per row for the new rows too: seven new
     # rows of eight (the 26B's arrival waves) no longer re-trial an (8,3) measured at 1.46 tokens a row (0.83x),
     # while the same record unmeasured is their trial; the floor still refuses a measured record below it
@@ -2783,20 +2932,50 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert rank_records(even, batch, _PLAIN)[0].measured and not rank_records(reseeding8, batch, _PLAIN)[0].measured
     with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)
         eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(8,))
+    # an unmeasured record is not entered on the optimistic default prior alone (no position observed, the
+    # 12B QB2's 256K record: 6 tokens a row expected, 0.8-0.9x served for 20 steps): the step is a one-step
+    # trial, and its verify decides at once, the row's own outcome counting alone at positions the prior never
+    # observed
+    blank = SpecPolicy(SpecPolicyConfig(probe_steps=0), 5)
+    naive = blank.new_row()
+    assert not SpecPolicy.informed([naive]) and SpecPolicy.informed([row])
+    reseeding = [RecordCandidate((1, 5), 2048, 50.0, 20.0)]
+    assert blank.decide(reseeding, [naive], _PLAIN, 5) is None and blank.last_reason == "declined"
+    assert not blank.would_speculate(reseeding, [naive], _PLAIN)
+    assert blank.would_speculate(reseeding, [naive], _PLAIN, fresh=True)
+    first = blank.decide(reseeding, [naive], _PLAIN, 5, fresh=True)
+    assert (first.reason, first.gain, blank.trial_limit) == ("trial", pytest.approx(6.0 / 2.5), 1)
+    blank.observe(naive, 0, 5)  # the one step: nothing accepted
+    assert naive.effective_cond(5) == [0.0] * 5 and naive.expected_tokens(5) == 1.0
+    assert blank.decide(_cands(_COSTS), [naive], _PLAIN, 5) is None and blank.last_reason == "declined"
+    keen = SpecPolicy(SpecPolicyConfig(probe_steps=0), 5)
+    eager_row = keen.new_row()
+    keen.decide(reseeding, [eager_row], _PLAIN, 5, fresh=True)
+    keen.observe(eager_row, 4, 5)  # four of five: 5 tokens at 2.5x = 2.0x, the hold continues
+    assert eager_row.effective_cond(5) == [1.0, 1.0, 1.0, 1.0, 0.0]
+    assert keen.decide(_cands(_COSTS), [eager_row], _PLAIN, 5).reason == "gain" and not keen.trial
+    free = SpecPolicy(SpecPolicyConfig(), 5)  # entry-free (no reseed to pay): the default prior may replay
+    assert free.decide([RecordCandidate((1, 5), 2048, 50.0, 0.0)], [free.new_row()], _PLAIN, 5).reason == "gain"
     # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
-    # a clean plain sample and the probe's cost (the reseed to resume, the tokens forgone) is amortized
+    # a clean plain sample and the probe's cost (the reseed to resume, the tokens forgone) is amortized; the
+    # hold then resumes its record (reseeding) under the hold rule, no exit and no retry (a probe was a full
+    # exit before: the 26B QB2 served 27 in a window and re-entered each by a retry, 2026-10-30)
     probing = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=3, retry_overhead=2.0, probe_steps=0), 5)
     rows = [_row([1.0] * 5)]
     kinds = []
-    for _ in range(5):
-        choice = probing.decide(_cands(_COSTS), rows, _PLAIN, 5)
+    for _ in range(6):
+        reseeds = (
+            [RecordCandidate(s, 2048, ms, 20.0) for s, ms in _COSTS.items()] if probing.probing else _cands(_COSTS)
+        )
+        choice = probing.decide(reseeds, rows, _PLAIN, 5)
         kinds.append(None if choice is None else choice.reason)
         if choice is not None:
             probing.calibration.note_step(("step", choice.shape, choice.width), 50.0, 6, True, 50.0, 1)
         else:
             probing.calibration.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
-    assert kinds == ["gain", "gain", "gain", None, "gain"] and probing.last_reason == "gain"
-    assert probing.calibration.steps_without("plain") == 1
+    assert kinds == ["gain", "gain", "gain", None, "resume", "gain"] and probing.last_reason == "gain"
+    assert probing.calibration.steps_without("plain") == 2 and probing.declined == 0 and not probing.trial
+    assert probing.calibration.run_samples(("step", (1, 5), 2048)) == 5, "the probe did not end the run"
     never = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=0, probe_steps=0), 5)
     for _ in range(6):
         assert never.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
@@ -2805,6 +2984,139 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     for _ in range(6):  # 5 tokens forgone x 20 ms over 3+ steps is far above 3 % of them: no probe
         assert costly.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
         costly.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True, 50.0, 1)
+
+
+def _serve(policy, requests, length, costs, reseeds, plain_ms, rows=1, dirty_every=37):
+    """Drive ``policy`` the way the MTP adapter does over a stream of requests (one wave of ``rows`` rows at a
+    time, each ``length`` tokens, their accepted drafts per verify from ``requests``): the first proposal is
+    fresh and every candidate carries the reseed; a row verified on the last replay continues entry-free; the
+    step after a reseed is uncounted and a record switch dirty (``Calibration.note_step`` as the adapter
+    calls it); every ``dirty_every``-th record step has a prefill inside it; a record chosen from the plain
+    regime mid-request is overtaken once (one plain token, one observation of its first draft, the trial goes
+    on when it matched). Returns ``(steps, record steps, trial episodes, reseeds)``."""
+    steps = spec = episodes = entries = 0
+    last_mode = None
+    overtaken_pending = False
+    for req in requests:
+        rows_ = [[list(seq), 0, 0, policy.new_row(), False] for seq in req]  # seq, index, committed, stats, trialed
+        first = True
+        continuing = False
+        while any(r[2] < length for r in rows_):
+            n = len(rows_)
+            stats = [r[3] for r in rows_]
+            fresh = tuple(i for i, r in enumerate(rows_) if r[3].spec_steps == 0 and not r[4] and not continuing)
+            if overtaken_pending:
+                policy.note_overtaken()
+                overtaken_pending = False
+            cands = [
+                RecordCandidate(
+                    shape,
+                    2048,
+                    cost,
+                    0.0 if continuing else reseeds[shape],
+                    tokens_per_row=policy.calibration.tokens_per_row(("step", shape, 2048)),
+                )
+                for shape, cost in costs.items()
+                if shape[0] >= n
+            ]
+            choice = policy.decide(cands, stats, plain_ms, 5 if n == 1 else 3, fresh=fresh)
+            steps += 1
+            if choice is None:
+                mode = ("plain", 1 if n == 1 else 32)
+                for r in rows_:
+                    r[2] += 1
+                cause = "switch" if (last_mode is not None and last_mode[0] == "step") else None
+                policy.calibration.note_step(mode, plain_ms, n, cause is None, plain_ms, n, cause)
+                continuing = False
+            else:
+                for i in fresh:
+                    rows_[i][4] = True
+                spec += 1
+                if policy.last_reason in ("trial", "retry") and (last_mode is None or last_mode[0] == "plain"):
+                    episodes += 1  # a trial or retry taken from the plain regime (its overtaken step continues it)
+                k = choice.shape[1]
+                mode = ("step", choice.shape, 2048)
+                entry = choice.entry_ms > 0.0
+                if entry:
+                    entries += 1
+                    policy.calibration.note_reseed(choice.shape, reseeds[choice.shape], reseeds[choice.shape])
+                overtaken = entry and not first and last_mode is not None and last_mode[0] == "plain"
+                if overtaken:
+                    matched = True
+                    for r in rows_:
+                        a = r[0][r[1]] if r[1] < len(r[0]) else 0
+                        r[1] += 1
+                        policy.observe(r[3], 1 if a >= 1 else 0, 1)
+                        r[2] += 1
+                        matched = matched and a >= 1
+                    policy.calibration.note_step(
+                        mode, reseeds[choice.shape] + choice.cost_ms, n, False, costs[choice.shape], n, "reseed"
+                    )
+                    overtaken_pending = True
+                    continuing = matched
+                else:
+                    tokens = 0
+                    for r in rows_:
+                        a = min(r[0][r[1]] if r[1] < len(r[0]) else 0, k)
+                        r[1] += 1
+                        policy.observe(r[3], a, k)
+                        r[2] += a + 1
+                        tokens += a + 1
+                    if entry:
+                        cause = "reseed"
+                    elif last_mode != mode:
+                        cause = "switch"
+                    elif spec % dirty_every == 0:
+                        cause = "prefill"
+                    else:
+                        cause = None
+                    wall = choice.cost_ms + (reseeds[choice.shape] if entry else 0.0)
+                    policy.calibration.note_step(mode, wall, tokens, cause is None, costs[choice.shape], n, cause)
+                    continuing = True
+            last_mode = mode
+            first = False
+        for r in rows_:
+            policy.note_request_steps(steps)
+        policy.calibration.note_step(last_mode, 500.0, n, False, None, n, "prefill", idle=True)
+    return steps, spec, episodes, entries
+
+
+def _policy_prose_dwells_on_its_record_and_random_text_stays_plain(expect_error=None):
+    """The served traces of the 12B QB2 (2026-10-30) at its cost table, as the adapter drives the policy: prose
+    at 3-4 tokens a step with occasional dirty steps speculates almost every step once a request has measured
+    the record; random text at 1.0-1.3 tokens a step stays plain but for the exploration cadence, with at most
+    one trial per request and one reseed per trial; prose after random waits one exploration retry."""
+    costs = {(1, 3): 51.1, (1, 5): 55.5, (5, 3): 53.4, (5, 5): 56.5, (8, 3): 60.0}  # the 2048 rung, one row
+    reseeds = {(1, 3): 20.6, (1, 5): 21.0, (5, 3): 29.1, (5, 5): 30.2, (8, 3): 34.4}
+    plain = 21.6
+    # prose: the answer's start accepts less (5,2,2,2,1,1 on the log's requests), the body 2-5 drafts a verify
+    # (3-6 tokens a step at K=5), the tail little
+    body = [5, 2, 3, 4, 2, 3, 5, 2, 2, 4, 3, 5, 1, 3, 4, 2, 5, 3, 2, 4]
+    prose = [5, 2, 2, 2, 1, 1] + body * 6 + [1, 1, 0, 1, 0]
+    policy = SpecPolicy(SpecPolicyConfig(), 5)
+    policy.prior.cond, policy.prior.informed = [0.5] * 5, [True] * 5  # an engine that served other text before
+    policy.prior.observed = [100] * 5
+    warm = _serve(policy, [[prose]], 255, costs, reseeds, plain)
+    steps, spec, episodes, entries = _serve(policy, [[prose]] * 6, 255, costs, reseeds, plain)
+    assert spec / steps >= 0.9, (warm, steps, spec, episodes, entries)
+    assert entries <= 6 + 2 and episodes <= 2, "one reseed per request (its entry), re-entries only after a dip"
+    # the record delivered: (1,5) at 55.5 ms commits ~3.8 tokens a step against the 21.6 ms plain step
+    assert policy.calibration.tokens_per_row(("step", (1, 5), 2048)) > 3.0
+    # random text: a draft lands now and then (1.2 tokens a step); one trial per request at most, one reseed
+    # per trial, under 5 % of the steps on a record (the exploration retry at 3 % of the plain steps)
+    noise = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 1]
+    random_text = noise * 7
+    policy = SpecPolicy(SpecPolicyConfig(), 5)
+    policy.prior.cond, policy.prior.informed = [0.5] * 5, [True] * 5
+    policy.prior.observed = [100] * 5
+    _serve(policy, [[random_text]], 127, costs, reseeds, plain)
+    steps, spec, episodes, entries = _serve(policy, [[random_text]] * 8, 127, costs, reseeds, plain)
+    assert spec / steps < 0.05, (steps, spec, episodes, entries)
+    assert episodes <= 8 and entries <= episodes + 1, "at most one trial a request, one reseed a trial"
+    # prose after random: the first request's exploration retry re-enters the record (its own steps clear the
+    # exit gain) and the next requests enter at once on the run's measured credit
+    steps, spec, episodes, entries = _serve(policy, [[prose]] * 4, 255, costs, reseeds, plain)
+    assert spec / steps >= 0.5 and episodes <= 2 and entries <= 4 + 2, (steps, spec, episodes, entries)
 
 
 def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps(expect_error=None):

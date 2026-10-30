@@ -5099,8 +5099,12 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
             entry = f", entry {choice.entry_ms:.1f} ms" if choice.entry_ms > 0.0 else ""
             members = f" for {len(choice.members)}/{n} rows" if choice.members is not None else ""
             calib = self._spec_policy.calibration
-            pool = calib.tokens_pool.get(calib._tokens_pool_key(("step", tuple(choice.shape), int(choice.width))))
-            pool_text = f", pool {pool[0]:.2f}/{pool[1]}" if pool and pool[0] is not None else ", pool none"
+            mode = ("step", tuple(choice.shape), int(choice.width))
+            credit, samples = calib.pool_credit(mode)
+            pool_text = f", pool {credit:.2f}/{samples}" if credit is not None else ", pool none"
+            run = calib.run_samples(mode)
+            if run:
+                pool_text += f", run {calib.tokens_per_row(mode):.2f}/{run}"
             logger.info(
                 f"{prefix} adaptive K: {n} rows, cap {cap_text} -> record {choice.shape} S_k={choice.width}{members} "
                 f"({choice.reason}; was {was}{skipped}); EWMA accepted {accepted}, per-position {cond_text}, "
@@ -6555,17 +6559,29 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 # read once at adapter construction (``Gemma4SpecContractBase._spec_init_state``):
 #   GEMMA4_SPEC_ADAPTIVE=1        0 = the fixed behaviour: the smallest record covering the live rows (MTP),
 #                                 every solo greedy request speculates (dFlash)
-#   GEMMA4_SPEC_MIN_GAIN=1.10     enter a record only when expected tokens per cost beat the plain step by this
+#   GEMMA4_SPEC_MIN_GAIN=1.25     enter a record only when expected tokens per cost beat the plain step by this
 #                                 factor and the saving over GEMMA4_SPEC_ENTRY_HORIZON=64 steps covers the reseed
-#   GEMMA4_SPEC_EXIT_GAIN=0.95    hold the record while its gain stays above this; leave after two steps below
-#   GEMMA4_SPEC_RETRY_STEPS=8     the fewest plain steps before a retry (the cheapest record, with reseed)...
-#   GEMMA4_SPEC_RETRY_OVERHEAD=0.03  ...whose cost over those plain steps is at most this fraction of them
-#   GEMMA4_SPEC_TRIAL_GAIN=0.6    a new request's first proposal replays the cheapest record once (its trial, no
-#                                 hold) when the prior's gain is at least this, whatever the retry cadence says;
-#                                 below it the request runs plain until the retry. In a batch with informed rows
-#                                 the trial also needs its hypothesis (the new rows accept every draft) to clear
-#                                 GEMMA4_SPEC_MIN_GAIN with the reseed paying over the horizon: the trial reseeds
+#                                 (an unmeasured record only on informed statistics: the optimistic default
+#                                 prior gets a one-step trial instead)
+#   GEMMA4_SPEC_EXIT_GAIN=0.95    hold the record while its gain stays above this; leave after two steps below.
+#                                 While a record serves, its credit is what the current run delivered (the mean
+#                                 tokens per row of its own steps), not the pool of earlier runs
+#   GEMMA4_SPEC_RETRY_STEPS=8     the fewest plain steps before a retry: a record measured at break-even or
+#                                 better re-enters once its retry cycle (reseed + overtaken replay + reload, as
+#                                 served) pays over the horizon, unless its last run failed; else the cheapest
+#                                 record is exploration...
+#   GEMMA4_SPEC_RETRY_OVERHEAD=0.03  ...whose cycle (with GEMMA4_SPEC_TRIAL_STEPS record steps as a loss) over
+#                                 those plain steps is at most this fraction of them
+#   GEMMA4_SPEC_TRIAL_GAIN=0.6    a new request's first proposal replays the cheapest record once (its trial)
+#                                 when the gain estimate is at least this -- GEMMA4_SPEC_MIN_GAIN once serving has
+#                                 GEMMA4_SPEC_CALIB_MIN samples of the record at the rung, fresh or stale -- and
+#                                 the reseed pays over the horizon at that estimate; below it the request runs
+#                                 plain until the retry. In a batch with informed rows the trial also needs its hypothesis (the
+#                                 new rows accept every draft) to clear GEMMA4_SPEC_MIN_GAIN: the trial reseeds
 #                                 every row, and a row joining a batch that measured below plain cannot lift it
+#   GEMMA4_SPEC_TRIAL_STEPS=3     steps a trial or retry holds its record (one from an uninformed prior) before
+#                                 the hold rule decides on what those steps delivered; a trial whose overtaken
+#                                 replay's first draft missed the committed token ends (one reseed per trial)
 #   GEMMA4_SPEC_PROBE_STEPS=32    after this many steps below the cap, one step at the next larger draft length (0 = off)
 #   GEMMA4_SPEC_VERIFY_CHECK=0    the first N served replays of every (shape, rung) also run a plain forward of each
 #                                 row's anchor and log whether its argmax matches the packed verify's row 0 (a
@@ -6580,10 +6596,14 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #                                 ones included (the prefill, switch, reseed or row change inside it is the
 #                                 served cost of the mode in force), except idle intervals (the batch emptied)
 #                                 and clean outliers above 3x, which are reported, never used; the measured
-#                                 tokens per row (the window mean, pooled over the records of one draft length
-#                                 at the rung) and the reseed as served follow
+#                                 tokens per row (pooled over the records of one draft length at the rung: the
+#                                 current run's own steps while it serves, the last run's mean between runs)
+#                                 and the reseed as served follow
+#   GEMMA4_SPEC_POOL_STALE_STEPS=128  intervals without a sample after which a pool is stale and the acceptance
+#                                 model decides for its records (a trial on it still needs GEMMA4_SPEC_MIN_GAIN)
 #   GEMMA4_SPEC_CALIB_PROBE_STEPS=256  steps a speculating batch serves without a plain sample before one plain
-#                                 step refreshes the plain estimate (overhead-gated like the retry; 0 = off)
+#                                 step refreshes the plain estimate (overhead-gated like the retry; 0 = off); the
+#                                 hold then resumes its record (reseeding) under the hold rule, no exit
 #   GEMMA4_SPEC_STATS_STEPS=256   proposals per "adaptive stats:" line (steps, tokens, clean walls per mode,
 #                                 reseeds, phases, prefills); "adaptive summary:" on release covers the engine life
 # Without a cost table (the decoder could not measure, and no plain cost is
