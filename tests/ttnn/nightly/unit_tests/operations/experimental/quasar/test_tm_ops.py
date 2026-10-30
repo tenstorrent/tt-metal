@@ -970,6 +970,26 @@ def test_quasar_untilize_with_unpadding_rank_gt_4_rejects_non_prefix_crop(device
         ttnn.experimental.quasar.untilize_with_unpadding(ttnn_in, output_end)
 
 
+# An end past any dim must be rejected. On rank > 4 an overshoot on a leading dim must not be hidden by fusion:
+# [0, 3, 3, 63, 63] fuses to an extent of 4, which still fits in the input's 6.
+@pytest.mark.parametrize(
+    "shape, output_end, bad_dim",
+    [
+        ([2, 3, 4, 64, 64], [0, 3, 3, 63, 63], 1),
+        ([2, 3, 4, 64, 64], [0, 0, 9, 63, 63], 2),
+        ([2, 3, 4, 64, 64], [0, 0, 3, 63, 64], 4),
+        ([2, 4, 64, 64], [0, 4, 63, 63], 1),
+        ([1, 4, 64, 64], [0, 3, 64, 63], 2),
+    ],
+    ids=["rank5_leading", "rank5_h", "rank5_w", "rank4_c", "rank4_h"],
+)
+def test_quasar_untilize_with_unpadding_rejects_out_of_range_end(device, shape, output_end, bad_dim, expect_error):
+    ttnn_in = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, f"out of range for dimension {bad_dim}"):
+        ttnn.experimental.quasar.untilize_with_unpadding(ttnn_in, output_end)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
     tile_dim, out_tile_bytes = 32, 2048  # untilize emits bfloat16 for both input dtypes

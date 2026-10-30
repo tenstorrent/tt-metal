@@ -88,7 +88,16 @@ Tensor untilize_with_unpadding(
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
+    const auto& input_padded_shape = input_tensor.padded_shape();
     for (auto index = 0; index < input_shape.rank(); ++index) {
+        // Unpadding only shrinks. An end past the input would ask the prim for a larger output than it has,
+        // and on rank > 4 the fusion below would hide an overshoot on one leading dim behind the others.
+        TT_FATAL(
+            output_tensor_end[index] < input_padded_shape[index],
+            "untilize_with_unpadding: output_tensor_end {} is out of range for dimension {} of input {}",
+            output_tensor_end,
+            index,
+            input_padded_shape);
         output_end_vector.push_back(output_tensor_end[index]);
     }
 
