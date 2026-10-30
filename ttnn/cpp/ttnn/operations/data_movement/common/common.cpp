@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -699,12 +700,23 @@ uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) 
 
 uint32_t pack_pad_value(DataType dtype, float pad_value) {
     switch (dtype) {
-        case DataType::INT32: return static_cast<uint32_t>(static_cast<int32_t>(pad_value));
-        case DataType::UINT32: return static_cast<uint32_t>(pad_value);
+        case DataType::INT32:
+        case DataType::UINT32: {
+            // NaN has no integer value, and out-of-range float-to-int casts are undefined behaviour.
+            if (std::isnan(pad_value)) {
+                return 0;
+            }
+            constexpr double kLimit = 4611686018427387904.0;  // keeps the int64 cast defined
+            const double clamped = std::clamp(std::trunc(static_cast<double>(pad_value)), -kLimit, kLimit);
+            return static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(clamped)) & 0xFFFFFFFFull);
+        }
         case DataType::FLOAT32: return std::bit_cast<uint32_t>(pad_value);
         case DataType::UINT16:
             return pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-        default: return pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+        case DataType::BFLOAT16:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: return pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+        default: TT_THROW("pack_pad_value: unsupported dtype {}", dtype);
     }
 }
 
