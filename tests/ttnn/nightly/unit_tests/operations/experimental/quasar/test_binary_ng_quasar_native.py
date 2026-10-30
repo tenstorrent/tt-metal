@@ -863,11 +863,12 @@ def _config_params(configs, cases):
 # the placement the output must take. A placement in an option may add a fourth element, "col", for column-major shard
 # order. For a broadcast, "a_shape" and "b_shape" give a or b its own shape, and the entry's shape is the output's;
 # "modes" lists the [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the op's compute kernel must be built with,
-# all 0 for a dense program, read from the kernel's JIT defines. An entry's tensors stay alive to the end when a later
-# entry repeats its spec, so the repeat lands at new addresses and must hit the program cache; the other entries'
-# tensors are freed, so that many cases fit in L1 one after another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the
-# device profiler on), every core must show that many Neos running the compute, or DM cores running a reader or writer
-# thread; ARM_EXPECT_CORES names how many cores must report.
+# all 0 for a dense program, read from the kernel's JIT defines. "scalar" runs tensor-scalar: b is that Python float,
+# which reaches the kernel in the operands' format. An entry's tensors stay alive to the end when a later entry repeats
+# its spec, so the repeat lands at new addresses and must hit the program cache; the other entries' tensors are freed,
+# so that many cases fit in L1 one after another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the device profiler on),
+# every core must show that many Neos running the compute, or DM cores running a reader or writer thread;
+# ARM_EXPECT_CORES names how many cores must report.
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
@@ -1044,12 +1045,21 @@ try:
         fp32 = opts.get("dtype") == "float32"
         dtype = DTYPES[opts.get("dtype", "bfloat16")]
         cfg = dict(dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
-        # a and b take the output's shape unless a broadcast option gives them their own.
+        # a and b take the output's shape unless a broadcast option gives them their own. A scalar b has no tensor; the
+        # host packs it to the operands' format, rounding to nearest even.
+        scalar = opts.get("scalar")
         ta = ttnn.from_torch(torch.randn(opts.get("a_shape", shape), dtype=torch.float32), memory_config=mem, **cfg)
-        tb = ttnn.from_torch(torch.randn(opts.get("b_shape", shape), dtype=torch.float32), memory_config=b_mem, **cfg)
+        tb = None
+        if scalar is None:
+            tb = ttnn.from_torch(
+                torch.randn(opts.get("b_shape", shape), dtype=torch.float32), memory_config=b_mem, **cfg
+            )
+            b_golden = ttnn.to_torch(tb).float()
+        else:
+            b_golden = torch.tensor(scalar, dtype=torch.float32).to(torch.float32 if fp32 else torch.bfloat16).float()
         op_fn, op_extra, exact, rounding = (OPS_FP32 if fp32 else OPS)[opts.get("op", "add")]
         act_kwargs, model = (ACTS_FP32 if fp32 else ACTS)[opts.get("act")]
-        golden = model(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float(), exact, rounding)
+        golden = model(ttnn.to_torch(ta).float(), b_golden, exact, rounding)
         cached = device.num_program_cache_entries()
         logged = len(kernels_logged())
         op_kwargs = {}
@@ -1066,7 +1076,7 @@ try:
                     torch.zeros(shape), memory_config=memory_config(*opts["output_tensor"]), **cfg)
             if out_mem is not None:
                 op_kwargs["memory_config"] = out_mem
-            out = op_fn(ta, tb, dtype=dtype, **op_extra, **act_kwargs, **op_kwargs)
+            out = op_fn(ta, tb if scalar is None else scalar, dtype=dtype, **op_extra, **act_kwargs, **op_kwargs)
         if "resolved_out" in opts and out.memory_config() != memory_config(*opts["resolved_out"]):
             failures.append("{}: the output took {}".format(name, out.memory_config()))
         spec = json.dumps(entry[1:])
@@ -2057,23 +2067,28 @@ def _walk(a=0, b=0, out=0, pads=0):
     return {"a": a, "b": b, "out": out, "pads": pads}
 
 
-# No case here borrows b, so b is 0 in every walk. In the b cases b is the broadcast operand, which is never borrowed.
+# No tensor b is borrowed, so b is 0 in these walks. In the b cases b is the broadcast operand, which is never borrowed.
 # The a cases run in DRAM, where nothing is borrowed.
 _NOC_WALK = _walk()  # every operand moves over the NoC
 _ANCHORED_WALK = _walk(a=1, out=1)  # an anchor borrows a and the output; b moves in the anchor's tile order
 _PADDED_WALK = _walk(a=1, out=1, pads=1)  # the anchor has pad slots, which the reader skips
+# A tensor-scalar program binds no b tensor, which dataflow_walk reads as a borrowed b.
+_SCALAR_NOC_WALK = _walk(b=1)
+_SCALAR_ANCHORED_WALK = _walk(a=1, b=1, out=1)
 # In L1 the bank walk gives a cluster 2 tiles of _OUTER_SHAPE, which 4 compute threads do not divide: these cases take
-# the NoC path at C = 4 and the slice anchor at C = 1, so they declare no walk. The VALUE L1 cases join them for the
-# same reason. The held L1 cases do not: a held operand refuses an anchor with pad slots, so they take the NoC path in
-# every configuration, and declare it.
+# the NoC path at C = 4 and the slice anchor at C = 1, so they declare no walk. The VALUE and tensor-scalar L1 cases
+# join them for the same reason. The held L1 cases do not: a held operand refuses an anchor with pad slots, so they
+# take the NoC path in every configuration, and declare it.
 _BCAST_WALK_BY_CONFIG = frozenset(
     {
         "outer_b_L1",
         "row_b_L1",
         "row_b_L1/multiply",
         "value_b_L1/divide",
+        "scalar_L1/multiply",
         *(f"outer_b/fp32/{op}" for op in _FP32_OPS),
         *(f"value_b/fp32/{op}" for op in _FP32_OPS),
+        *(f"scalar/fp32/{op}" for op in _FP32_OPS),
     }
 )
 
@@ -2665,6 +2680,42 @@ def test_native_mixed_broadcast_matches_the_oracle(name, knobs):
     _check_arm(p, f"mixed broadcast, {name}")
 
 
+def _scalar(name, shape, scalar, a=_IDRAM, out=_IDRAM, **opts):
+    """A _SHARD_ARM_SRC entry for tensor-scalar: a and the output in their placements, b the Python float `scalar`."""
+    return (name, *a, list(shape), {"scalar": scalar, "out": out, "modes": _modes(b="VALUE"), **opts})
+
+
+# Tensor-scalar: the scalar is VALUE, which the reader fills from the packed scalar, once per tile counter. bf16 and
+# fp32; 0.1 is not exact in bf16, so its golden takes the host's rounding. Beside a borrowed a no operand is read per
+# tile; with one output tile per cluster three Neos take only their entry; SQUARE on a runs per tile.
+# scalar_borrowed_a_2_shards takes its 2-shard anchor only because production, with no b, borrows those shards too.
+_SCALAR_OP = (
+    [
+        _scalar("scalar/add", _OUTER_SHAPE, 3.0, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/subtract", _OUTER_SHAPE, 0.1, op="subtract", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/multiply", _OUTER_SHAPE, -1.5, op="multiply", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar/divide", _OUTER_SHAPE, -0.75, op="divide", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_L1/multiply", _OUTER_SHAPE, 2.5, a=_IL1, out=_IL1, op="multiply"),
+        _scalar("scalar_borrowed_a", [2, 1, 2048, 32], 2.5, a=_H32_4, out=_H32_4, walk=_SCALAR_ANCHORED_WALK),
+        _scalar("scalar_one_tile", [1, 1, 32, 32], 3.5, walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_lhs_act", _OUTER_SHAPE, 3.0, act="lhs", walk=_SCALAR_NOC_WALK),
+    ]
+    + [_scalar(f"scalar/fp32/{op}", _OUTER_SHAPE, -2.5, a=_IL1, out=_IL1, op=op, dtype="float32") for op in _FP32_OPS]
+    + [
+        _scalar("scalar/multiply_fast", _OUTER_SHAPE, -1.5, op="multiply_fast", walk=_SCALAR_NOC_WALK),
+        _scalar("scalar_borrowed_a_2_shards", [1, 1, 1024, 448], 2.5, a=_H2_14, out=_H2_14, walk=_SCALAR_ANCHORED_WALK),
+    ]
+)
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_tensor_scalar_matches_the_oracle(name, knobs):
+    """Tensor-scalar must run native, in bf16 and fp32, with the reader's fill, and give the oracle's bits."""
+    p = _run_shard_arm(_SCALAR_OP, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"tensor-scalar, {name}")
+
+
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
 # programs apart where the clusters do not, as both bind the same kernel sources.
 _MIXED_ROUTED = (
@@ -2905,6 +2956,7 @@ _BCAST_TABLES = {
     "held": _HELD,
     "value": _VALUE + _VALUE_FP32,
     "mixed": _MIXED_BCAST,
+    "scalar": _SCALAR_OP,
 }
 
 

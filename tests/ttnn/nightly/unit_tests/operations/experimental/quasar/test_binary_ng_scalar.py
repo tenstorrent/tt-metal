@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Tensor-SCALAR for the Quasar binary_ng DFB path (writer-fill of the RHS scalar tile).
+"""Tensor-scalar for the Quasar binary_ng DFB factories (native and Metal 2.0).
 
 Black-box, same op/golden/PCC as the no-broadcast suite, but the RHS is a Python number instead of a
-tensor. On the DFB path the writer becomes the producer of the RHS input DFB (in1) and fills it ONCE
+tensor. On Quasar the native gate goes first and takes the cases it admits, unless TTNN_QSR_NATIVE=0: its reader
+fills one full tile of the RHS input DFB (in1) per Neo with the packed scalar, inside scoped_write_lock. On the
+Metal 2.0 path the writer becomes the producer of the RHS input DFB (in1) and fills it ONCE
 with the packed scalar via a coherent store (the non-cacheable L1 alias on Quasar DM cores, since the
 DM write-back D$ is incoherent with the TL1 the compute consumer reads); the reader produces in0 only;
 the compute waits on in1 once and reuses tile index 0. This is the make-or-break coherence proof: a
@@ -13,13 +15,14 @@ add/subtract are bf16-FPU. The metal_v2 / DFB tensor-scalar path is arch-portabl
 Wormhole/Blackhole, overlay-backed on Quasar -- and the is_scalar gate admits interleaved + sharded
 scalar ops to it with no arch check, so these tests run on all three.
 
-Routing: on Quasar a PASS implicitly proves v2 routing, because the descriptor path cannot run at all
+Routing: on Quasar a PASS proves that a DFB factory ran (native by default, Metal 2.0 with TTNN_QSR_NATIVE=0),
+because the descriptor path cannot run at all
 (DataMovementKernel/ComputeKernel hard-throw on Quasar). On WH/BH both factories run, and nothing here
 asserts which one was chosen -- there is no Python-visible factory signal. In particular the program-cache
 test below does NOT distinguish them: this op's operation_attributes_t::attribute_values() already
 includes `scalar` (unlike production binary_ng, which excludes it and patches it as a runtime arg), and
 the adapter's default compute_program_hash folds the whole attribute tuple, so a distinct scalar mints a
-distinct program on EITHER factory. What that test does guard is the property that makes the v2 path safe:
+distinct program on EITHER factory. What that test does guard is the property that makes both DFB paths safe:
 the packed scalar is baked into the program, so it must participate in the cache key.
 
 Run on the Quasar simulator:
@@ -135,8 +138,8 @@ def test_scalar_lhs_activation_several_tiles_per_core(device, op_name):
 
 # --- The packed scalar must participate in the program-cache key ----------------------------------------
 def test_scalar_participates_in_program_cache_key(device):
-    # The DFB tensor-scalar path BAKES the packed scalar into the program (the writer's packed_scalar arg,
-    # filled once into in1), and the metal_v2 cache-hit adapter refreshes only tensor bindings -- it does
+    # Both DFB factories BAKE the packed scalar into the program (a packed_scalar arg: the native reader's,
+    # or the Metal 2.0 writer's), and the cache-hit adapter refreshes only tensor bindings -- it does
     # not re-emit that arg. So a cached program is only reusable for the scalar it was built with, and the
     # scalar MUST be part of the cache key or a second call with a different scalar would silently reuse
     # the stale baked value. Assert exactly that, on the SAME shape:

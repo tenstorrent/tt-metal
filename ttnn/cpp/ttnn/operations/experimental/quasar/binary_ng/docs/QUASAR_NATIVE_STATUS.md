@@ -17,6 +17,123 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-26 — broadcast runs native
+
+## 1. TL;DR
+
+- **Outer-dim broadcast runs native** in every dim through −6, in bf16 and fp32. The reader reads each operand through
+  its Map (its page strides over the output's dims, 0 in a broadcast dim), with one cursor per tile counter.
+- **ROW, COL, SCALAR and mixed subtile broadcast run native**, in bf16. They expand with `unary_bcast`, which takes no
+  32-bit operand on Quasar.
+- **A tensor whose every dim is 1 (VALUE) runs native**, in bf16 and fp32. Each Neo gets one full tile, which the
+  reader fills inside `scoped_write_lock`. The Neo reads that tile for all its tiles.
+- **Tensor-scalar runs native**, in bf16 and fp32. The scalar is VALUE: the reader fills the tile from the packed
+  scalar. The writer stays output-only.
+- **fp32 ROW, COL and mixed, and fp32 SCALAR above one element, do not run on Quasar yet.** The native gate refuses
+  them. The Metal 2.0 gate admits subtile broadcast in bf16 only, so they reach the descriptor factory, which does not
+  run on Quasar. The roadmap's milestone 3 waits for them.
+- **The batch size changed for every placement.** The DM batch is the max batch size, in L1 and in DRAM. A dense
+  program compiles to the same instructions as it did right after that change (30 disassemblies).
+- **Verified** on craq-sim `b9d8e2f4`: the native module 193 passed, 1 skipped, 2 strict expected failures. Five of
+  the six other suite files pass. The activation-format file has the same 10 BFP8 and BFP4 failures as at the base.
+  Slide 3 gives each run, and slide 4 the planted defects.
+
+---
+
+## 2. Changes
+
+- **Batch size** (`resolve_native_config`; the commit "the batch size is the max batch size, beside every placement"):
+  the DM batch was 8 in L1 and 1 beside a DRAM operand. It is now the tiles that one DST section holds, as the
+  compute batch is: 8 on the FPU kernel, 4 on the SFPU kernel in a 16-bit DST, 2 in a 32-bit DST. Each ring holds two
+  batches per thread. The compute batches only where its batches come out right.
+- **Walk header** (`kernels_qsr/common/operand_walk.hpp`; the commit "outer-dim broadcast runs native"): each operand
+  has a mode (FULL, ROW, COL, SCALAR or VALUE) and a Map. A cursor per tile counter keeps the output position as
+  mixed-radix digits, and each operand's page there. A step is adds and one compare per digit, so no kernel divides per
+  tile. Dim −6 is a digit of its own. A dense program defines no mode.
+- **Reader** (`reader_binary_dfb.cpp`): it reads each operand through its Map. A held operand (COL, SCALAR) moves only
+  where its page changed, and every other entry of its ring is a credit only: a push that carries no new data. A VALUE
+  operand fills one full tile per Neo inside `scoped_write_lock`: from page 0 of a tensor whose every dim is 1, or,
+  for tensor-scalar, from the packed scalar (the define `B_VALUE_FROM_SCALAR` and the argument `packed_scalar`).
+- **Compute kernels** (`eltwise_binary_dfb.cpp`, `eltwise_binary_sfpu_dfb.cpp`): the FPU kernel expands each batch of
+  ROW tiles with `unary_bcast` into a staging ring. The SFPU kernel expands a ROW tile straight into the operand's DST
+  slot. For a held operand, the compute expands each new page once into a held ring of two entries per Neo, with the
+  operand's activation. A batch ends at the next multiple of the batch size, or earlier where a held page changes. Each
+  Neo waits once for its VALUE entry, so tensor-scalar needs no compute code of its own.
+- **Factory** (`create_native_artifacts`): only an operand whose Map is the identity is borrowed. No anchor with pad
+  slots goes beside a held operand. R must not exceed C beside a held or VALUE operand. The legacy cluster count
+  follows production's broadcast rule, and its rule for a scalar, where b is `nullptr`. The FPU kernel gets a staging
+  ring per ROW operand, and the packer's RELU stays off beside a subtile broadcast. The writer has no `in1` binding and
+  no scalar argument.
+- **Gate** (`matches_quasar_native_slice`): no full-rank shape equality. ROW, COL and mixed broadcast need bf16, and
+  SCALAR needs bf16 or one value. Tensor-scalar needs subtile type NONE, bf16 or fp32, and a scalar that packs in a's
+  format. R must not exceed C beside a COL, SCALAR, VALUE or scalar operand.
+- **Tests and docs**: each broadcast case declares its walk: the operands that it borrows, and whether its reader skips
+  pad slots. The arm reads them from the generated headers, and the table test makes every case declare one (the
+  commit "binary_ng tests: check each broadcast case's borrowing; uneven shards and fast multiply beside ROW").
+  Tensor-scalar has its own table, in bf16 and fp32, on both kernels and beside a borrowed a. The design doc and
+  this page state each kind's support.
+
+---
+
+## 3. Verification
+
+The numbers below are lines of the untracked run log. Every run used craq-sim `b9d8e2f4`, except the runs on
+`67b8926b` that the first bullet names. `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory as the reference arm.
+
+- **The default craq-sim moved.** The new default `67b8926b` rounds a bf16 FPU add twice, as the hardware does. This
+  branch's oracle rounds once, so it needs main's two-rounding model, which a rebase brings. On `67b8926b`, two
+  mixed-broadcast cases differ by one ULP in the FPU add (`row_a_col_b_act` 2 of 60 tiles, `row_a_col_b_split` 3 of
+  480), and the four mixed configurations fail: 4 failed, 1 passed. The same command passes on `b9d8e2f4`: 5 passed. A
+  probe finds the device output equal to the two-rounding model at every element on `67b8926b`, in both factories, and
+  equal to this branch's oracle at every element on `b9d8e2f4`.
+- **Tensor-scalar, red then green.** Before the code, the four configurations fail, because every op binds the Metal
+  2.0 kernels: 4 failed, 1 passed. With the code, all pass: 5 passed. The cases include 0.1, which bf16 cannot hold:
+  the golden takes the host's rounding to nearest even.
+- **A plant in the borrow decision beside a scalar.** A `legacy_borrows_output_shard` that returns false for a scalar
+  fails all four configurations on `scalar_borrowed_a_2_shards` alone: the reader walks the NoC where the anchored walk
+  is expected. `scalar_borrowed_a` passes, because both decisions give it the same cluster count. That run: 4 failed.
+  With the plant removed, 5 passed.
+- **The scalar suite runs native.** One process per case: 27 of 27 pass with the native path on, and the compile
+  commands of all 27 cases carry `-DB_VALUE_FROM_SCALAR=1`. With `TTNN_QSR_NATIVE=0`, 8 of 8 chosen cases pass and bind
+  only Metal 2.0 kernels. The program-cache test is one of the 27: the same scalar adds no cache entry, and a new
+  scalar adds one.
+- **Module and suites**, native on, before the last edits to comments, docs, one gate check and one assert, and
+  before one new test case: the native module 193 passed, 1 skipped, 2 strict expected failures; no_bcast 104
+  passed, 2 expected failures; resnet_add 10; descriptor_cache_hit 4; bcast 134; scalar 27; activation formats 112
+  passed and 10 failed, the same 10 BFP8 and BFP4 cases as at the base. With `TTNN_QSR_NATIVE=0`: the module 1
+  passed, 195 skipped; no_bcast 104 passed, 2 expected failures; bcast 134; scalar 27.
+- **After those edits**, the tensor-scalar tests pass again (5 passed, with the new case), and the scalar suite
+  passes (27 passed).
+- **Dense programs**: the 30 disassemblies equal the baseline's, taken after the batch-size change, once the
+  comparison script masks objdump's trailing label notes and the `.LM` label numbers: IDENTICAL.
+- **clang-tidy**: 0 findings in the factory and the gate, before and after those edits. On scratch copies with a
+  planted `else` after an early return, it finds 2 and 3, so the instrument works.
+- **Not run**: any performance measurement (the native path is the best-performance option by rule, with no
+  measurement); a Wormhole or Blackhole device; tensor-scalar with an RHS or post activation, which neither the
+  module's table nor the scalar suite covers (both cover an activation on a only).
+
+---
+
+## 4. Planted defects in the earlier commits
+
+Each plant broke what the table names, and the named test caught it. Each revert built, and the test passed
+again.
+
+| Commit | Plant | What it broke | Caught by | Result |
+|---|---|---|---|---|
+| the batch size is the max batch size, beside every placement | the SFPU kernel's DM batch fixed at 8 | the settings line shows `dm_batch=8` for the SFPU kernel | `test_native_tuning_log_names_each_source[name=rule]` | 1 failed; 6 passed after the revert |
+| outer-dim broadcast runs native | b's N stride without the `bN > 1` factor | 11 cases; `outer_b` 30 of 60 tiles | `test_native_outer_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| ROW broadcast runs native | the packer's RELU kept on beside a subtile broadcast | `row_b/relu` 60 of 60 tiles | `test_native_row_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| binary_ng tests: check each broadcast case's borrowing; uneven shards and fast multiply beside ROW | `eligible` returns false at once, so no anchor | the reader walks the NoC: 4 outer-dim cases and 3 ROW cases fail the walk check, and every value stays exact | the walk check in the outer-dim and ROW tests at `[rule]` | 1 failed in each; after the revert the outer-dim test passed, and the module run passed the ROW test |
+| same commit | the FPU kernel's per-batch re-init skipped beside a ROW b | 7 ROW cases wrong at `[R1C1W1]`, `row_b` 60 of 60 tiles | `test_native_row_broadcast_matches_the_oracle[R1C1W1]` | 1 failed; 1 passed after the revert |
+| COL and SCALAR broadcast, and a one-element tensor, run native | pad slots allowed beside a held operand | `col_b_uneven_shard` walks with pad slots; at `[R1C1W1]` also 3 L1 cases, and `col_b_uneven_shard` 20 of 420 tiles | the walk check in `test_native_held_broadcast_matches_the_oracle` | 2 failed; 2 passed after the revert. With the factory's `TT_FATAL` for it: 2 failed, then 2 passed |
+| same commit | the reader reads a held page only for the first tile of each tile counter | 8 held cases, `col_b_shard_walk` 384 of 512 tiles | `test_native_held_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| same commit | the compute expands only a held operand's first page | the same 8 cases, the same counts | `test_native_held_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| same commit | the VALUE fill stores through the cached address, outside `scoped_write_lock` | all 11 b-side VALUE cases, every tile (`value_b` 60 of 60) | `test_native_value_broadcast_matches_the_oracle[rule]` | 1 failed; 1 passed after the revert |
+| same commit | a held compute batch takes the full batch size, so it can cross a multiple of it | `col_b_split/multiply` 324 of 448 tiles at `[rule]` | `test_native_held_broadcast_matches_the_oracle[rule]` and `[R1C1W1]` | 2 failed; 2 passed after the revert |
+
+---
+
 # ► Week of 2026-10-19, part 2 — the native factory is the default on Quasar
 
 ## 1. TL;DR
@@ -2131,10 +2248,10 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | 2.1 | F13 | **outer-dim broadcast — done** | each operand is read through its Map, a cursor per tile counter, in bf16 and fp32; a dense program keeps its kernels byte for byte |
 | 2.2 | F8 | subtile broadcast ROW/COL/SCALAR — done | bf16; COL and SCALAR held, read and expanded once per page change; a tensor of all ones is one value, in bf16 and fp32 |
 | 2.3 | F9 | mixed broadcast — done | bf16; the ROW operand as ROW, the COL operand held; no reader fill |
-| 2.4 | F10 | tensor-scalar | writer fills `in1` once |
+| 2.4 | F10 | tensor-scalar — done | bf16 and fp32; the reader fills one full tile per Neo from the packed scalar; the writer stays output-only |
 | 2.5 | F14 | **per-operand reader allocation** | **emulator-only** — no roofline gain (per-core reads are `T/2` either way); the case is DRAM/NoC locality, which craq-sim cannot price. Hypothesis: tile-split pairs `in0[k]`/`in1[k]` on the **same bank**. Proportional allocation matters from F4 (mixed layouts) onward, not just broadcast. STRIDED rule limits splits to `p in {1,2,4}` at `C=4` |
 | 2.6 | F15 | **in-flight concurrency** (`implicit_sync`, ring depth, batching) | **batching PULLED FORWARD and measured on craq-sim: 1.81x at `1,1,1`, n=1 -> n=8** (research §5.0.8-§5.0.13) — the "no latency to hide" reasoning held for `implicit_sync` and ring depth, not for batching. **The two knobs ship together.** Dataflow batching works at every clean `(R,C,W)` with a counter-major walk (a batch from one counter strides by `num_tcs * num_threads`; 260 runs bit-exact). Compute batching is correct only at ring stride 1 until tt-metal#56194 lands. **The deliverable is `4,4,2` n=8: 26.56 cyc/tile measured vs n=1's 44.00 on the same basis — 1.66x — blocked only by #56194**, which therefore gates the op's largest available speedup. `2,2,2` n=8 (48.70 projected) is an engine-constrained option. **Above stride 1 compute batching is not "blocked" — it DATA-CORRUPTS, silently.** At `2,2,2` n=8 the dataflow half is bit-exact; the compute half writes 50% of each batch to the wrong L1 offset and returns wrong data with no error, hang or warning. Our factory `TT_FATAL`s so the corruption cannot escape, which is the only reason it looks like a refusal. ONE bug: the metal LLK pack path adds +1 entry per tile where the cursor converter divides by `stride_size_tiles`, so a batch of n at stride S covers only `ceil(n/S)` slots (**tt-metal#56194**, `hw/ckernels/quasar/metal/llk_api/llk_pack_tile_api.h:58-74`). `implicit_sync` and ring depth remain emulator-only, same campaign as F14. One axis, not three (`capacity >= 2n`). Writer batching is a known negative |
-| **3.0** | — | **milestone 3 — once F10 lands** | broadcast-complete; the rest is the long tail |
+| **3.0** | — | **milestone 3 — once F8 and F9 run in fp32** | broadcast-complete; the rest is the long tail |
 | 3.1 | F11 | row-major | 16-byte RM shard-width alignment |
 | 3.2 | F12 | where / quantization / int32 | own kernel families; int32 blocked on the DFB-compute bug |
 | 3.3 | F6 | MX formats | **last**; cost is dominated by work outside this op |

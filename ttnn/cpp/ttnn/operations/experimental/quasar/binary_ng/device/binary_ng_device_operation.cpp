@@ -638,9 +638,9 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. The broadcast
-    // and tensor-scalar rejections are also preconditions of create_native_artifacts, which asserts them. The others
-    // keep the slice to what has been validated on Quasar.
+    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. Its refusals by
+    // broadcast type are also preconditions of create_native_artifacts, which asserts them. The others keep the slice
+    // to what has been validated on Quasar.
     // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
     // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
     const auto& a = tensor_args.input_tensor_a;
@@ -652,11 +652,14 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (!tuning.enabled) {
         return false;
     }
-    // MUST precede every input_tensor_b dereference below.
-    if (!tensor_args.input_tensor_b.has_value()) {
+    // A missing b is tensor-scalar: b is the scalar argument, one value for the whole op (VALUE). A scalar has
+    // subtile broadcast type NONE, so the switch below reads no b for it; every other use of b checks is_scalar.
+    const bool is_scalar = !tensor_args.input_tensor_b.has_value();
+    if (is_scalar &&
+        (!attributes.scalar.has_value() || attributes.subtile_broadcast_type != SubtileBroadcastType::NONE)) {
         return false;
     }
-    const auto& b = *tensor_args.input_tensor_b;
+    const auto* b = is_scalar ? nullptr : &*tensor_args.input_tensor_b;
 
     // where-op / quantization carry their own kernels, none of which were copied.
     if (attributes.is_where_op || attributes.is_quant_op) {
@@ -683,7 +686,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
             }
             break;
         case SubtileBroadcastType::SCALAR_B:
-            if (a.dtype() != DataType::BFLOAT16 && b.logical_shape().volume() != 1) {
+            if (a.dtype() != DataType::BFLOAT16 && b->logical_shape().volume() != 1) {
                 return false;
             }
             break;
@@ -699,7 +702,12 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // a and b in one format, bf16 or fp32; the output's format is checked below. Mixed formats are not validated on
     // Quasar.
     const DataType dtype = a.dtype();
-    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32) || b.dtype() != dtype) {
+    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32) || (!is_scalar && b->dtype() != dtype)) {
+        return false;
+    }
+    // The factory packs a scalar in a's format into the ring of b, whose format is derived: a's on the SFPU kernel,
+    // else bf16. The two must agree, as in the Metal 2.0 slice. The kernel check below implies it today.
+    if (is_scalar && ((attributes.is_sfpu && !is_block_float(dtype)) ? dtype : DataType::BFLOAT16) != dtype) {
         return false;
     }
     // Implied by the format, but checked, so that a routing change falls back instead of running untested: fp32 runs
@@ -716,14 +724,14 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
         return false;
     }
     // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
-    if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
+    if (attributes.input_layout_a != Layout::TILE || (!is_scalar && attributes.input_layout_b != Layout::TILE) ||
         attributes.output_layout != Layout::TILE) {
         return false;
     }
-    const auto& a_tile = a.tensor_spec().tile();
-    const auto& b_tile = b.tensor_spec().tile();
-    if (a_tile.get_height() != tt::constants::TILE_HEIGHT || a_tile.get_width() != tt::constants::TILE_WIDTH ||
-        b_tile.get_height() != tt::constants::TILE_HEIGHT || b_tile.get_width() != tt::constants::TILE_WIDTH) {
+    const auto is_32x32 = [](const tt::tt_metal::Tile& tile) {
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    if (!is_32x32(a.tensor_spec().tile()) || (!is_scalar && !is_32x32(b->tensor_spec().tile()))) {
         return false;
     }
 
@@ -750,7 +758,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const auto placement_ok = [](const tt::tt_metal::MemoryConfig& mc) {
         return CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(mc) || CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(mc);
     };
-    if (!placement_ok(a.memory_config()) || !placement_ok(b.memory_config()) ||
+    if (!placement_ok(a.memory_config()) || (!is_scalar && !placement_ok(b->memory_config())) ||
         !placement_ok(out_spec.memory_config())) {
         return false;
     }
@@ -768,10 +776,11 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const NativeConfig noc = resolve_native_config(tuning, {.inputs = true, .output = true});
     const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
     // A COL, SCALAR or VALUE operand needs each compute thread to own one tile counter of its input ring, so R <= C.
-    // Every type but NONE and ROW has one. The rule never sets R above C; a set R can.
+    // A scalar has one, and so does every type but NONE and ROW. The rule never sets R above C; a set R can.
     const SubtileBroadcastType type = attributes.subtile_broadcast_type;
-    const bool one_entry_operand = type != SubtileBroadcastType::NONE && type != SubtileBroadcastType::ROW_A &&
-                                   type != SubtileBroadcastType::ROW_B;
+    const bool one_entry_operand =
+        is_scalar || (type != SubtileBroadcastType::NONE && type != SubtileBroadcastType::ROW_A &&
+                      type != SubtileBroadcastType::ROW_B);
     return ratio_ok(noc.reader_threads, noc.compute_threads) && ratio_ok(noc.compute_threads, noc.writer_threads) &&
            (!one_entry_operand || noc.reader_threads <= noc.compute_threads);
 }
