@@ -212,8 +212,8 @@ struct BoundTensorFootprint {
     BufferType buffer_type = BufferType::DRAM;
     DeviceAddr address = 0;
     DeviceAddr size_per_bank = 0;
-    // Buffer::unique_id() of the allocation that backed the tensor when it was bound. Empty when the tensor does not
-    // own its allocation.
+    // MeshBuffer::unique_id() of the tensor's allocation when it was bound. Empty when the tensor does not own its
+    // allocation.
     std::optional<size_t> buffer_id;
 };
 
