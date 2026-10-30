@@ -123,6 +123,30 @@ def continuation_window_plan(chunk_start, seq_len, sliding_window, block_size, a
     return origin // block_size, cols, rel_start
 
 
+def drop_leading_null_blocks(row, first_block, rel_start, block_size, chunk_block):
+    """Advance the frame past vLLM's null blocks at its head: ``(first_block, rel_start)`` moved up by every
+    leading column of ``row`` that is the null block 0, whole blocks only and never onto the chunk's own first
+    block ``chunk_block``.
+
+    A prefix-cache hit aligned down to the SDPA chunk (``align_num_cached_tokens_to_sdpa``) starts up to one block
+    before the window vLLM kept for the sliding group (its ``SlidingWindowManager`` nulls the blocks before
+    ``num_computed - window + 1``), so the plain frame read block 0 (vLLM's null block, the lane scratch block) as
+    the first window keys. Dropping the block shortens the first queries' window by it instead, as the legacy
+    planner did (``_paged_tail_block_range``); ``rel_start`` stays a multiple of the block, hence of the tile.
+    A block that is not a tile multiple keeps the frame as planned.
+    """
+    first_block, rel_start, block_size, chunk_block = (
+        int(v) for v in (first_block, rel_start, block_size, chunk_block)
+    )
+    if block_size <= 0 or block_size % TILE:
+        return first_block, rel_start
+    width = int(row.shape[-1])
+    while first_block < min(chunk_block, width) and rel_start >= block_size and int(row[first_block]) == 0:
+        first_block += 1
+        rel_start -= block_size
+    return first_block, rel_start
+
+
 def continuation_window_table(table, first_block, cols, valid_cols=None):
     """Columns ``[first_block, first_block + cols)`` of every row of the host page table ``table`` (``[rows, w]``):
     the first ``valid_cols`` (default all) copied, the rest the null block 0 (also past the table's width), so the
@@ -389,6 +413,11 @@ class PrefillContinuation:
         first_block, cols, rel_start = continuation_window_plan(
             self.chunk_start, self.seq_len, sliding_window, block_size, align
         )
+        if int(table.shape[0]) == 1:
+            # The served path (one row: the user's); a multi-row table shares one frame, so it keeps the plan.
+            first_block, rel_start = drop_leading_null_blocks(
+                table[0], first_block, rel_start, block_size, self.chunk_start // int(block_size)
+            )
         cache_key = (key, "window", int(block_size), int(sliding_window), int(align))
         entry = self._cache.get(cache_key)
         if entry is None:

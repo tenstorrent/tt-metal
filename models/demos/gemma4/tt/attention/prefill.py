@@ -83,6 +83,25 @@ def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_de
     )
 
 
+def continuation_fill_rows(valid_seq_len, rows, host_cut):
+    """Rows of the padded chunk the unbounded K/V fill writes, or None for the whole chunk.
+
+    With the continuation's host fill cut (``PrefillContinuation.fill_table`` with ``valid_cols``) the columns
+    past the prompt's real blocks are the null block 0, so the chunk is filled whole: one ``paged_fill_cache``
+    program per bucket, where the tile-rounded valid length keyed a kernel build per new prompt length (its
+    writer compiles per input height; 12B P300X2 2026-10-30: 0.8-2.1 s on the first hit of each length). The
+    legacy device-sliced, batched and demo tables may hold real blocks past the prompt, so they keep the
+    tile-rounded cap (``0 < cap < rows``; None when the cap covers the chunk or no length is known).
+    """
+    if valid_seq_len is None or host_cut is not None:
+        return None
+    rows = int(rows)
+    v = min(int(valid_seq_len), rows)
+    # Tile-ceil so the writer sees a legal RM height; unused rows inside the last tile sit on pad columns (0).
+    tile_end = min(((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT, rows)
+    return tile_end if 0 < tile_end < rows else None
+
+
 def _merge_bounded_boundary_fill(tt_x, valid_seq_len, modulo):
     """Restore wrap-window rows into the newest tile's padding slots.
 
@@ -1374,24 +1393,19 @@ def _prefill_forward_single(
                 # Extra columns pad with 0 (vLLM null block).
                 k_fill, v_fill = tt_k, tt_v
                 # The host fill cut already routes the rows past the prompt's blocks to the null block, so the
-                # padded chunk is filled whole (a fixed height per bucket; see ``_host_cut`` above).
-                if valid_seq_len is not None and _host_cut is None:
-                    v = min(int(valid_seq_len), int(tt_k.shape[-2]))
-                    # Tile-ceil so the writer sees a legal RM height; unused
-                    # rows inside the last tile sit on pad columns (0).
-                    tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
-                    tile_end = min(tile_end, int(tt_k.shape[-2]))
-                    if 0 < tile_end < int(tt_k.shape[-2]):
-                        k_fill = ttnn.slice(
-                            tt_k,
-                            [0, 0, 0, 0],
-                            [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
-                        )
-                        v_fill = ttnn.slice(
-                            tt_v,
-                            [0, 0, 0, 0],
-                            [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
-                        )
+                # padded chunk is filled whole (a fixed height per bucket; ``continuation_fill_rows``).
+                tile_end = continuation_fill_rows(valid_seq_len, int(tt_k.shape[-2]), _host_cut)
+                if tile_end is not None:
+                    k_fill = ttnn.slice(
+                        tt_k,
+                        [0, 0, 0, 0],
+                        [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
+                    )
+                    v_fill = ttnn.slice(
+                        tt_v,
+                        [0, 0, 0, 0],
+                        [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
+                    )
                 _paged_fill_cache(
                     k_cache,
                     k_fill,

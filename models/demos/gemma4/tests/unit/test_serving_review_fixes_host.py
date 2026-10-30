@@ -893,6 +893,21 @@ def test_continuation_records_the_same_programs_at_two_positions_over_two_block_
     # 7 null columns the fill never writes (it writes seq_len rows), the 6 covered frame columns plus 2 null ones
     # the K walk never reads (it stops at rel_start + seq_len)
     assert a["fill"] == [blocks_a[9]] + [0] * 7 and b["fill"] == [blocks_b[33]] + [0] * 7
+    # The K/V fill takes the whole padded chunk: the host cut nulls the columns past the prompt's real blocks
+    # (``valid_cols``), so the fill height is the bucket's, never the prompt's tile-rounded valid length (one
+    # paged_fill_cache program per bucket; its writer compiles per input height, 0.8-2.1 s per new length on the
+    # 12B P300X2, 2026-10-30). The legacy device-sliced / batched / demo tables keep the tile-rounded cap.
+    cont = continuation_mod.PrefillContinuation(
+        "mesh", None, chunk_start=4608, seq_len=1024, legacy_table=torch.arange(1, 101).view(1, 100)
+    )
+    cut = cont.for_layer(0).fill_table(64, 72, 16, valid_cols=15)  # 937 real tokens past 4608: 15 blocks
+    assert cut.host[0].tolist() == list(range(73, 88)) + [0], "the chunk's real blocks, then the null block"
+    assert cont.for_layer(0).fill_table(64, 72, 16).host[0].tolist() == list(range(73, 89)), "keyed on valid_cols"
+    fill_rows = prefill_mod.continuation_fill_rows
+    assert fill_rows(937, 1024, cut) is None and fill_rows(41, 128, cut) is None, "the whole bucket with the cut"
+    assert fill_rows(937, 1024, None) == 960 and fill_rows(41, 128, None) == 64, "the legacy tables keep the cap"
+    assert fill_rows(1024, 1024, None) is None and fill_rows(None, 1024, None) is None
+    cont.release()
     assert a["chunks"] == b["chunks"] == (128, 128), "the SDPA chunks are capped at the hit alignment"
     # frame A: origin 1280 = block 5 (window start 1408 aligned down to the 256-block / 128-chunk lcm), start 1152;
     # frame B: origin 7424 = block 29 (a block boundary), start 1024
@@ -955,6 +970,23 @@ def test_continuation_window_plan_is_a_fixed_number_of_sticks_and_covers_the_win
         if seq_len == 128:
             assert widths == {expected_widths[block_size]}
     assert plan(128, 128, _WINDOW, 256, 128)[:1] == (0,), "a hit inside the first window starts at position 0"
+    # A hit aligned down to the SDPA chunk (5056 -> 4992) starts one block before the window vLLM kept for the
+    # sliding group (its SlidingWindowManager nulls the blocks before num_computed - window + 1): the frame drops
+    # its leading null blocks instead of reading block 0 as window keys (the legacy planner's null-block drop),
+    # whole blocks only, never onto the chunk's own first block; a block off the tile keeps the plan.
+    drop = continuation_mod.drop_leading_null_blocks
+    row = torch.tensor([0] * 63 + list(range(201, 218)) + [0] * 8, dtype=torch.int32)  # kept blocks 63..79
+    assert drop(row, 62, 1024, 64, 78) == (63, 960)
+    assert drop(row, 63, 1024, 64, 79) == (63, 1024), "a frame starting on a kept block is unchanged"
+    assert drop(torch.zeros(4, dtype=torch.int32), 0, 128, 64, 2) == (2, 0), "never onto the chunk's own block"
+    assert drop(torch.zeros(4, dtype=torch.int32), 0, 128, 48, 2) == (0, 128), "a block off the tile: as planned"
+    cont = continuation_mod.PrefillContinuation(
+        "mesh", None, chunk_start=4992, seq_len=128, legacy_table=row.view(1, -1)
+    )
+    window, start, rel_start, cols = cont.for_layer(0).sliding_inputs(64, _WINDOW, 32)
+    assert (rel_start, int(start.host.item()), cols) == (960, 960, 24), "the frame starts on the first kept block"
+    assert window.host[0, :17].tolist() == list(range(201, 218)) and int(window.host[0, 17:].max()) == 0
+    cont.release()
     assert continuation_mod.pad_page_table_cols(66) == 72 and continuation_mod.pad_page_table_cols(8) == 8
     cut = continuation_mod.continuation_window_table
     assert cut(torch.tensor([[7, 8, 9]]), 0, 8).tolist() == [[7, 8, 9, 0, 0, 0, 0, 0]]
