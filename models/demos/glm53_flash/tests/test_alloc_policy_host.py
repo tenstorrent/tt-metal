@@ -59,13 +59,18 @@ def test_frozen_flag_and_transients_are_shared_per_device(monkeypatch):
     y = b.lazy(cache, ("k", 2), make)
     assert ("k", 2) not in cache, "built under live traces: a chunk transient, never cached"
     y2 = b.lazy(cache, ("k", 2), make)
-    assert y2 is not y, "rebuilt per use"
+    assert y2 is y and len(made) == 2, "served within the step (a chunk's geometry asked for by every layer)"
     lst = c.lazy(cache, ("list",), lambda: [_Buf(), _Buf()])
-    assert isinstance(lst, list) and ("list",) not in cache
+    assert isinstance(lst, list) and ("list",) not in cache and c.lazy(cache, ("list",), make) is lst
     assert a.lazy(cache, ("k", 1), make) is x, "the pre-capture entry still serves"
-    assert d.release_transients() == 4
-    assert all(not t.allocated for t in [y, y2] + lst) and x.allocated
+    assert d.release_transients() == 3
+    assert all(not t.allocated for t in [y] + lst) and x.allocated
     assert a.release_transients() == 0 and other.release_transients() == 0
+    y3 = b.lazy(cache, ("k", 2), make)
+    assert y3 is not y and y3.allocated and ("k", 2) not in cache, "rebuilt after the step's release"
+    y3.allocated = False  # a caller freed it early: the next asker gets a fresh build, not a dead buffer
+    y4 = b.lazy(cache, ("k", 2), make)
+    assert y4 is not y3 and y4.allocated and a.release_transients() == 1 and not y4.allocated
     # mesh.const follows the same rule; lazy_const without a mesh (single-chip tests) caches
     k = a.const(("c",), make)
     assert ("c",) not in a._consts and k.allocated

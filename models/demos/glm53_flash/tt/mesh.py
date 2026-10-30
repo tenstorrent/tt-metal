@@ -80,7 +80,8 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
 
 # Per-device runtime state shared by every GLMMesh built over the same mesh device (``GLMMesh.__post_init__``):
 # ``frozen`` = [bool] (a trace exists), ``transients`` = the lazily built device buffers made under that rule since
-# the last ``GLMMesh.release_transients``, ``logged`` = the keys whose post-capture build was reported once.
+# the last ``GLMMesh.release_transients``, ``memo`` = those transients by key (one build per key per step: a chunk's
+# geometry constants are asked for by every layer), ``logged`` = the keys whose post-capture build was reported once.
 _RUNTIME: dict[tuple, dict] = {}
 
 
@@ -94,8 +95,14 @@ def _runtime_key(device) -> tuple:
     return ("object", id(device))
 
 
+def _allocated(t) -> bool:
+    """True when ``t`` (a tensor or a list of tensors from ``GLMMesh.lazy``) still holds its device buffers."""
+    items = list(t) if isinstance(t, (list, tuple)) else [t]
+    return all(getattr(i, "is_allocated", None) is not None and i.is_allocated() for i in items)
+
+
 def _runtime_state(device) -> dict:
-    return _RUNTIME.setdefault(_runtime_key(device), {"frozen": [False], "transients": [], "logged": set()})
+    return _RUNTIME.setdefault(_runtime_key(device), {"frozen": [False], "transients": [], "memo": {}, "logged": set()})
 
 
 def lazy_const(mesh: "GLMMesh | None", cache: dict, key, make: Callable[[], object]):
@@ -144,11 +151,14 @@ class GLMMesh:
     allocations_frozen: list = field(default=None, repr=False, compare=False)
     # the device buffers ``lazy`` built under live traces since the last ``release_transients`` (shared per device)
     _transients: list = field(default=None, repr=False, compare=False)
+    # the live transients by key (shared per device): a key asked for again within the step is served, not rebuilt
+    _transient_memo: dict = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         state = _runtime_state(self.device)
         object.__setattr__(self, "allocations_frozen", state["frozen"])  # frozen dataclass
         object.__setattr__(self, "_transients", state["transients"])
+        object.__setattr__(self, "_transient_memo", state["memo"])
 
     @classmethod
     def from_device(cls, mesh_device, topology=None) -> "GLMMesh":
@@ -311,16 +321,23 @@ class GLMMesh:
         ``decode_step``), so no buffer allocated after a capture outlives the next replay (the tt-metal allocator's
         "potentially unsafe" warning names exactly that: a buffer allocated under an active trace is corrupted by
         the trace's execution unless it is released before then; the 2026-10-27 served hang was ``scalar(49152)``
-        allocated after the captures). The first post-capture build of a key is logged once at INFO: a served log
-        then names the chunk geometries the boot warm-up (``GLM53_VLLM_WARMUP_PREFILL`` + the buckets) left out."""
+        allocated after the captures). Within a step a transient is built once per key and served to the later
+        askers (a chunk's geometry constants are asked for by every layer: one upload instead of one per layer, as
+        the cached path before the captures), unless a caller freed it. The first post-capture build of a key is
+        logged once at INFO: a served log then names the chunk geometries the boot warm-up
+        (``GLM53_VLLM_WARMUP_PREFILL`` + the buckets) left out."""
         t = cache.get(key)
         if t is not None:
             return t
-        t = make()
         if self.allocations_frozen[0]:
+            t = self._transient_memo.get(key)
+            if t is not None and _allocated(t):
+                return t
+            t = make()
             self._note_transient(key, t)
-        else:
-            cache[key] = t
+            self._transient_memo[key] = t
+            return t
+        t = cache[key] = make()
         return t
 
     def _note_transient(self, key, t) -> None:
@@ -341,6 +358,7 @@ class GLMMesh:
                 ttnn.deallocate(t)
                 n += 1
         self._transients.clear()
+        self._transient_memo.clear()
         return n
 
     # ------------------------------------------------------------------ readback
