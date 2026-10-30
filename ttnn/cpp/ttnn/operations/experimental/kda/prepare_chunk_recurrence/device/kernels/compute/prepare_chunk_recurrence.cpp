@@ -8,6 +8,10 @@
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=exp(G_last).
+// The centered exponent G-a = (gate_tril - gate_ones/2)@g is formed and exponentiated in DST (FP32), so it never
+// passes through a TF32 source register; k_dec = k*exp(a-G)*exp(a) then reuses the anchored factors. Formed from a
+// G-a rounded in a source register, k_dec came out biased low by about one TF32 ulp of |G_last|/2
+// (tt_metal_tracker-g1b.4.18).
 // dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
@@ -115,6 +119,8 @@ void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
 }
 
 // Multiply one selected source-tile pair and publish the result.
+// Mask products pass the exact mask first: a multiply's first operand lands in SrcA (8 explicit mantissa bits),
+// its second in SrcB (10 bits at HiFi3/4), so the FP32 data keeps the wider multiplier input.
 template <typename DFB0, typename DFB1, typename DFB2>
 void multiply_selected_tile(DFB0& a, uint32_t a_tile, DFB1& b, uint32_t b_tile, DFB2& o) {
     const uint32_t a_id = a.get_id();
@@ -216,6 +222,37 @@ void multiply_by_half(DFB0& in, DFB1& o, uint32_t n) {
         tile_regs_release();
     }
     o.push_back(n);
+}
+
+// o[Ct,Kt] = exp(mask @ g) for Ct = 1, with the product kept in DST (FP32) through the exponential, so the exponent
+// never passes through a source register.
+template <uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
+void exponential_of_mask_products(DFB0& mask, DFB1& g, DFB2& o) {
+    const uint32_t mask_id = mask.get_id();
+    const uint32_t g_id = g.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(Kt);
+    for (uint32_t block_start = 0; block_start < Kt; block_start += max_dst_tiles) {
+        const uint32_t block_tiles = (Kt - block_start < max_dst_tiles) ? Kt - block_start : max_dst_tiles;
+        tile_regs_acquire();
+        reconfig_data_format(g_id, mask_id);  // matmul: mask->srcB, g->srcA
+        matmul_block_init(mask_id, g_id, false, 1, 1, 1);
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            matmul_block(mask_id, g_id, 0, block_start + tile, tile, false, 1, 1, 1);
+        }
+        exp_tile_init();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            exp_tile<false, false, InputClamping::ClampToNegative>(tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, o_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    o.push_back(Kt);
 }
 
 template <typename DFB0, typename DFB1>
@@ -320,7 +357,7 @@ void invert_block_nested(
     DFB4& matrix,
     DFB5& total,
     DFB6& product) {
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);  // N1
+    multiply_selected_tile(block_masks, 0, negative_strict_lower_akk, 0, matrix);  // N1
     matrix.wait_front(1);
     elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, total, 1);
     total.wait_front(1);
@@ -336,7 +373,7 @@ void invert_block_nested(
     }
     matrix.pop_front(1);  // total holds A
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, matrix);  // L2
+    multiply_selected_tile(block_masks, 1, negative_strict_lower_akk, 0, matrix);  // L2
     matrix.wait_front(1);
     matmul_blocks<1, 1, 1, false>(total, matrix, product);  // M2 = A L2
     product.wait_front(1);
@@ -349,7 +386,7 @@ void invert_block_nested(
     total.pop_front(1);
     matrix.pop_front(1);
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 2, product);  // L3
+    multiply_selected_tile(block_masks, 2, negative_strict_lower_akk, 0, product);  // L3
     product.wait_front(1);
     // -strict_lower(Akk) is dead after extracting L3. Reuse its one-tile DFB
     // below for I+M3; all transactions remain one tile wide.
@@ -500,7 +537,7 @@ template <
     typename DFB7>
 void prepare_gate_factors(
     DFB0& g,
-    DFB1& prefix_sum_mask,
+    DFB1& centered_mask,
     DFB2& sum_broadcast_matrix,
     DFB3& centered_decay,
     DFB4& centered_inverse_decay,
@@ -513,8 +550,9 @@ void prepare_gate_factors(
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
     // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
-    // unchanged, while realistic KDA gates no longer overflow exp(-G).
-    matmul_blocks<Ct, Ct, Kt, false>(prefix_sum_mask, g, centered_decay);
+    // unchanged, while realistic KDA gates no longer overflow exp(-G). G - anchor = centered_mask @ g is formed and
+    // exponentiated in DST (FP32), so the exponent never passes through a source register.
+    exponential_of_mask_products<Kt>(centered_mask, g, centered_decay);  // exp(G - anchor)
     centered_decay.wait_front(chunk_key_tiles);
 
     matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
@@ -524,17 +562,8 @@ void prepare_gate_factors(
     multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
     anchor_g.wait_front(chunk_key_tiles);
 
-    {
-        auto& centered_g = anchor_decay;
-        elementwise_binary<ElementwiseBinaryOp::Subtract>(centered_decay, anchor_g, centered_g, chunk_key_tiles);
-        centered_g.wait_front(chunk_key_tiles);
-        centered_decay.pop_front(chunk_key_tiles);
-        exponential_tiles(centered_g, centered_decay, chunk_key_tiles);
-        centered_decay.wait_front(chunk_key_tiles);
-        reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
-        centered_inverse_decay.wait_front(chunk_key_tiles);
-        centered_g.pop_front(chunk_key_tiles);
-    }
+    reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
+    centered_inverse_decay.wait_front(chunk_key_tiles);
 
     // exp(G_last/2) is row-replicated and the broadcasts read only row 0, so only the face rows holding it are
     // computed. That takes two SFPU iterations: one leaves part of row 0 unwritten, and kd, q_decay, k_dec_t and
@@ -636,7 +665,7 @@ void prepare_pairwise_matrices(
         matmul_blocks<Ct, Kt, Ct, true>(q_pairwise, k_pairwise, aqk);
         aqk.wait_front(chunk_matrix_tiles);  // raw q_i*k_j*exp(G_i-G_j)
         q_pairwise.pop_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(aqk, causal_mask, intra, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(causal_mask, aqk, intra, chunk_matrix_tiles);
         aqk.pop_front(chunk_matrix_tiles);
     }
 }
@@ -669,10 +698,10 @@ void prepare_t_inv(
         auto& diagonal_akk = scratch_1;
 
         // T_inv = (I + strictly_lower(Akk))^-1.
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(akk, causal_mask, lower_akk, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(causal_mask, akk, lower_akk, chunk_matrix_tiles);
         lower_akk.wait_front(chunk_matrix_tiles);  // lower(A), including diagonal
         akk.pop_front(chunk_matrix_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(lower_akk, identity, diagonal_akk, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(identity, lower_akk, diagonal_akk, chunk_matrix_tiles);
         diagonal_akk.wait_front(chunk_matrix_tiles);  // diag(A)
         elementwise_binary<ElementwiseBinaryOp::Subtract>(diagonal_akk, lower_akk, akk, chunk_matrix_tiles);
         akk.wait_front(chunk_matrix_tiles);  // -strictly_lower(A)
@@ -751,6 +780,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     // Semantic intermediates.
     DataflowBuffer centered_inverse_decay(dfb::centered_inverse_decay);
     DataflowBuffer anchor_decay(dfb::anchor_decay);
+    DataflowBuffer gate_centered(dfb::gate_centered);
     DataflowBuffer normalized_q(dfb::normalized_q);
     DataflowBuffer normalized_k(dfb::normalized_k);
     DataflowBuffer tile_workspace_0(dfb::tile_workspace_0);
@@ -772,6 +802,13 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     ones.wait_front(chunk_matrix_tiles);
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
+    // The gate-scaled centered mask (gate_tril - gate_ones / 2, exact in FP32) forms G - G_last/2; held for the whole
+    // kernel. PACK is in the FP32 workspace format from the startup.
+    multiply_by_half(gate_ones, tile_workspace_0, chunk_matrix_tiles);
+    tile_workspace_0.wait_front(chunk_matrix_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_tril, tile_workspace_0, gate_centered, chunk_matrix_tiles);
+    gate_centered.wait_front(chunk_matrix_tiles);
+    tile_workspace_0.pop_front(chunk_matrix_tiles);
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
@@ -810,7 +847,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         auto& g_last = workspace_3;
         prepare_gate_factors<Ct, Kt>(
             g,
-            gate_tril,
+            gate_centered,
             gate_ones,
             centered_decay,
             centered_inverse_decay,
