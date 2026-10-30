@@ -830,6 +830,11 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
+        # RC experiment: every run type the test declares, for LLK_RC_PRE preludes.
+        self.rc_all_configs = [
+            (templates.copy() + [PERF_RUN_TYPE(rt)], runtimes.copy(), rt)
+            for rt in run_types
+        ]
 
         super().__init__(
             test_name,
@@ -975,6 +980,38 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _rc_run_unrecorded(self, templates, runtimes, run_type):
+        self.current_run_type = run_type
+        self.templates = templates
+        self.runtimes = runtimes
+        self.generate_variant_hash()
+        self.write_runtimes_to_L1()
+        self.run_elf_files()
+        self.wait_for_tensix_operations_finished()
+
+    def _rc_prelude(self):
+        """RC experiment. LLK_RC_PRE: comma list of this test's run types, run unrecorded before the measured
+        pass (unknown names are an error). LLK_RC_HOOK: python file with hook(location), called after the
+        prelude, right before the measured kernel. LLK_RC_LOG: append one line per step."""
+        pre = [n.strip() for n in os.environ.get("LLK_RC_PRE", "").split(",") if n.strip()]
+        by_name = {rt.name: (t, r, rt) for t, r, rt in self.rc_all_configs}
+        log = os.environ.get("LLK_RC_LOG")
+        for name in pre:
+            if name not in by_name:
+                raise ValueError(f"LLK_RC_PRE: {name} not declared by this test ({sorted(by_name)})")
+            self._rc_run_unrecorded(*by_name[name])
+            if log:
+                with open(log, "a") as f:
+                    f.write(f"pre {self.test_name} {name} {self.variant_id}\n")
+        hook = os.environ.get("LLK_RC_HOOK")
+        if hook:
+            ns = {}
+            exec(compile(open(hook).read(), hook, "exec"), ns)
+            ns["hook"](TestConfig.TENSIX_LOCATION)
+            if log:
+                with open(log, "a") as f:
+                    f.write(f"hook {hook}\n")
+
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
@@ -1002,6 +1039,8 @@ class PerfConfig(TestConfig):
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
         PerfConfig.TEST_COUNTER += 1
+
+        self._rc_prelude()
 
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
