@@ -53,19 +53,9 @@ uint64_t mailbox_field(dev_msgs::mailboxes_t::Field field) {
 }
 
 uint8_t read_go_signal(const tt::Cluster& cluster, ChipId chip, uint32_t cce_index) {
-    const Hal& hal = MetalContext::instance().hal();
-    dev_msgs::go_msg_t go_message =
-        hal.get_dev_msgs_factory(HalProgrammableCoreType::DRAM).create<dev_msgs::go_msg_t>();
-    TT_FATAL(go_message.size() == sizeof(uint32_t), "go_msg_t is {} bytes, not one word", go_message.size());
     const std::vector<uint32_t> words = read_cce_tl1(
-        cluster,
-        chip,
-        cce_index,
-        hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG),
-        static_cast<uint32_t>(go_message.size()),
-        Tl1Range::WholeTl1);
-    std::memcpy(go_message.data(), words.data(), go_message.size());
-    return go_message.view().signal();
+        cluster, chip, cce_index, go_message_tl1_offset(), static_cast<uint32_t>(sizeof(uint32_t)), Tl1Range::WholeTl1);
+    return go_signal_of(words.front());
 }
 
 CoreCoord read_core_info_xy(IDevice* device, uint32_t cce_index) {
@@ -131,13 +121,10 @@ std::vector<uint32_t> read_mailbox(IDevice* device, uint32_t cce_index) {
 }
 
 void expect_cce_initialized(IDevice* device, uint32_t cce_index) {
-    const Hal& hal = MetalContext::instance().hal();
     const tt::Cluster& cluster = MetalContext::instance().get_cluster();
     const ChipId chip = device->id();
     const metal_SocDescriptor& soc = soc_desc_of(device);
-    const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const uint32_t expected_reset_vector =
-        hal.get_jit_build_config(dram_core_type_index, kDramDmProcessorClass, 0).fw_launch_addr_value;
+    const uint32_t expected_reset_vector = cce_jit_build_config().fw_launch_addr_value;
 
     EXPECT_EQ(read_globals_ready(device, cce_index), dev_msgs::SHARED_GLOBALS_READY_GO) << "CCE " << cce_index;
     EXPECT_EQ(read_subordinate_sync(device, cce_index), dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE)
@@ -236,8 +223,7 @@ TEST(MimirFwLoad, ImageManifest) {
     const std::string binary_path =
         BuildEnvManager::get_instance(context.get_context_id())
             .get_firmware_binary_path(device->id(), dram_core_type_index, kDramDmProcessorClass, 0);
-    const HalJitBuildConfig& jit_build_config =
-        hal.get_jit_build_config(dram_core_type_index, kDramDmProcessorClass, 0);
+    const HalJitBuildConfig& jit_build_config = cce_jit_build_config();
     const std::vector<CceFwSpan> spans = cce_fw_spans(binary_path);
     const uint64_t firmware_window_begin = jit_build_config.fw_base_addr;
     const uint64_t firmware_window_end = firmware_window_begin + MEM_CCE_FIRMWARE_SIZE;
