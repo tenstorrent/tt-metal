@@ -128,7 +128,10 @@ class AcceptanceModel:
         return (self.s[b, k] + PRIOR_WEIGHT * prior) / (self.n[b, k] + PRIOR_WEIGHT)
 
     def summary(self):
-        return {"attempts": self.n.sum(axis=0).astype(int).tolist(), "accepted": self.s.sum(axis=0).astype(int).tolist()}
+        return {
+            "attempts": self.n.sum(axis=0).astype(int).tolist(),
+            "accepted": self.s.sum(axis=0).astype(int).tolist(),
+        }
 
 
 MODEL = AcceptanceModel()
@@ -214,16 +217,44 @@ def allocate(proposals, contexts, row_budget=ROW_BUDGET, overhead_ms=None, model
     return best
 
 
+_CTL = {"path": os.environ.get("GEMMA_SPEC_CTL"), "t": 0.0, "v": {}}
+
+
+def _ctl():
+    """Local A/B knob (only when GEMMA_SPEC_CTL names a JSON file): {"disable": bool, "max_draft": int,
+    "overhead_p4_ms": float, "overhead_p8_ms": float}, re-read every 2 s. Never set on CI."""
+    global OVERHEAD_P4_MS, OVERHEAD_P8_MS
+    if not _CTL["path"]:
+        return {}
+    import json
+    import time
+
+    now = time.monotonic()
+    if now - _CTL["t"] > 2.0:
+        _CTL["t"] = now
+        try:
+            with open(_CTL["path"]) as h:
+                _CTL["v"] = json.load(h)
+        except (OSError, ValueError):
+            _CTL["v"] = {}
+        v = _CTL["v"]
+        OVERHEAD_P4_MS = float(v.get("overhead_p4_ms", os.environ.get("GEMMA_SPEC_OVERHEAD_P4_MS", "5.0")))
+        OVERHEAD_P8_MS = float(v.get("overhead_p8_ms", os.environ.get("GEMMA_SPEC_OVERHEAD_P8_MS", "8.0")))
+    return _CTL["v"]
+
+
 def propose(histories, k_max, wide=False):
     """histories: list (per row) of 1-D int arrays, or None for rows with nothing to draft.
 
     Returns (drafts [rows][k_max] int list padded with 0, num_valid [rows]).
     """
-    k_max = min(k_max, MAX_DRAFT)
-    live = [i for i, h in enumerate(histories) if h is not None and len(h) >= 2]
+    ctl = _ctl()
+    width = k_max
+    k_max = min(k_max, MAX_DRAFT, int(ctl.get("max_draft", MAX_DRAFT)))
+    live = [] if ctl.get("disable") else [i for i, h in enumerate(histories) if h is not None and len(h) >= 2]
     props = [propose_one(histories[i], k_max) for i in live]
     take = allocate_best(props, [len(histories[i]) for i in live], wide=wide)
-    drafts = [[0] * k_max for _ in histories]
+    drafts = [[0] * width for _ in histories]
     valid = [0] * len(histories)
     matched = [0] * len(histories)
     full = [[] for _ in histories]
