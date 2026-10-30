@@ -898,7 +898,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@a2be4643430b57d1b34c038cae64174e2ef56bf7 # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -973,7 +973,7 @@ jobs:
         with:
           name: sweeps-vectors
           path: /tmp/vectors
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@a2be4643430b57d1b34c038cae64174e2ef56bf7 # cachew checkout
         timeout-minutes: 20
         with:
           clean: false
@@ -1063,7 +1063,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@a2be4643430b57d1b34c038cae64174e2ef56bf7 # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -1306,7 +1306,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@a2be4643430b57d1b34c038cae64174e2ef56bf7 # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |
