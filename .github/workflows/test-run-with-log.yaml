@@ -11,7 +11,7 @@ jobs:
   success-case:
     runs-on: ubuntu-slim
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
       - uses: ./.github/actions/run-with-log
         with:
           working-directory: ${{ github.workspace }}
@@ -28,7 +28,7 @@ jobs:
   failure-case:
     runs-on: ubuntu-slim
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
       - uses: ./.github/actions/run-with-log
         id: run
         continue-on-error: true
@@ -46,7 +46,7 @@ jobs:
   timeout-case:
     runs-on: ubuntu-slim
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
       - uses: ./.github/actions/run-with-log
         id: run
         continue-on-error: true
@@ -71,7 +71,7 @@ jobs:
   no-trailing-newline-case:
     runs-on: ubuntu-slim
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
       - uses: ./.github/actions/run-with-log
         with:
           working-directory: ${{ github.workspace }}

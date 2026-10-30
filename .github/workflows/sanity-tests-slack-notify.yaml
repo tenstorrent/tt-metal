@@ -181,7 +181,7 @@ jobs:
       # composite action used after it.
       - name: Checkout notify scripts and resolve-slack-mentions action
         if: steps.claim.outputs.already_notified != 'true'
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         timeout-minutes: 5
         with:
           sparse-checkout: |

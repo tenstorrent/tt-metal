@@ -45,7 +45,7 @@ jobs:
       wormhole: ${{ steps.filter.outputs.wormhole_any_changed }}
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         with:
           fetch-depth: 200
 
@@ -246,7 +246,7 @@ jobs:
       image: ${{ needs.build-images.outputs.docker-image }}
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
       - name: Install SFPI
         shell: bash
         run: |

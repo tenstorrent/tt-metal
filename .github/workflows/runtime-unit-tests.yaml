@@ -207,7 +207,7 @@ jobs:
       actions: read # download the per-leg ai_job_summary artifacts
       contents: read # a job-level block zeroes every scope it omits, incl. checkout's
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         timeout-minutes: 20
         with:
           filter: blob:none

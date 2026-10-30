@@ -92,7 +92,7 @@ jobs:
     steps:
       # Main's copy of the tool, for the path classifier the auto arch uses.
       - name: Checkout main
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         timeout-minutes: 20
         with:
           persist-credentials: false
@@ -181,7 +181,7 @@ jobs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     steps:
       - name: Checkout the repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         timeout-minutes: 20
         with:
           persist-credentials: false
@@ -219,7 +219,7 @@ jobs:
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
       - name: Checkout main (the tool revision)
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         timeout-minutes: 20
         with:
           persist-credentials: false
@@ -268,7 +268,7 @@ jobs:
       pull-requests: write # post the report; this job runs no PR code
     steps:
       - name: Checkout main
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         timeout-minutes: 20
         with:
           persist-credentials: false

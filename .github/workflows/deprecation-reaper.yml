@@ -24,7 +24,7 @@ jobs:
   reap:
     runs-on: ubuntu-slim
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
       - name: Reap overdue deprecations
         env:
           GH_TOKEN: ${{ github.token }}
