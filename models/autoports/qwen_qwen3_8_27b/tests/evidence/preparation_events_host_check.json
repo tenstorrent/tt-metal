@@ -1,0 +1,480 @@
+{
+  "status": "pass",
+  "scope": "host-only AST-extracted prepare_decode with fake tensor/trace operations; no hardware validation",
+  "checks": [
+    "successful capture signatures and IDs",
+    "per-bucket warmup timing",
+    "idempotent preparation preserves events",
+    "failed capture retains partial events and actual cleanup count",
+    "retry appends a new attempt"
+  ],
+  "successful_events": [
+    {
+      "attempt": 1,
+      "phase": "prepare",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "generator",
+        "layer_indices": [
+          0
+        ],
+        "strategy": "topk",
+        "context_length": 256
+      },
+      "host_start_ms": 0.005279900506138802,
+      "trace_id": null,
+      "timing_basis": "Host wall preparation/JIT/dispatch and capture API time, not device time; no per-phase synchronization added. Prefill warmup timings include reset and both logits modes, not isolated compiler time.",
+      "host_elapsed_ms": 0.514384126290679,
+      "attempt_status": "complete",
+      "completed_captures": 3,
+      "completed_cleanup_releases": 0
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "initial_decode_and_sampling",
+        "masked": false,
+        "strategy": "topk"
+      },
+      "host_start_ms": 0.4611220210790634,
+      "trace_id": null,
+      "host_elapsed_ms": 0.006812857463955879,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "prefill",
+        "physical_length": 32,
+        "start_alignments": [
+          0,
+          128
+        ],
+        "return_all_logits_modes": [
+          true,
+          false
+        ],
+        "layer_indices": [
+          0
+        ]
+      },
+      "host_start_ms": 0.4761309828609228,
+      "trace_id": null,
+      "host_elapsed_ms": 0.018925871700048447,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "decode",
+        "masked": false
+      },
+      "host_start_ms": 0.4960589576512575,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0010719522833824158,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": false
+      },
+      "host_start_ms": 0.4975020419806242,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0011618249118328094,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": true,
+        "output_window": 128
+      },
+      "host_start_ms": 0.4991949535906315,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0008218921720981598,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 1,
+      "phase": "capture",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "decode",
+        "masked": false
+      },
+      "host_start_ms": 0.5024010315537453,
+      "trace_id": "0",
+      "host_elapsed_ms": 0.00678282231092453,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 1,
+      "phase": "capture",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": false
+      },
+      "host_start_ms": 0.509775010868907,
+      "trace_id": "1",
+      "host_elapsed_ms": 0.002495013177394867,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 1,
+      "phase": "capture",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": true,
+        "output_window": 128
+      },
+      "host_start_ms": 0.512600876390934,
+      "trace_id": "2",
+      "host_elapsed_ms": 0.0015131663531064987,
+      "attempt_status": "complete"
+    }
+  ],
+  "failed_then_retried_events": [
+    {
+      "attempt": 1,
+      "phase": "prepare",
+      "status": "failed",
+      "signature": {
+        "batch": 1,
+        "kind": "generator",
+        "layer_indices": [
+          0
+        ],
+        "strategy": "topk",
+        "context_length": 256
+      },
+      "host_start_ms": 0.0023939646780490875,
+      "trace_id": null,
+      "timing_basis": "Host wall preparation/JIT/dispatch and capture API time, not device time; no per-phase synchronization added. Prefill warmup timings include reset and both logits modes, not isolated compiler time.",
+      "host_elapsed_ms": 0.12639188207685947,
+      "error": "RuntimeError",
+      "attempt_status": "failed",
+      "completed_captures": 1,
+      "completed_cleanup_releases": 2
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "initial_decode_and_sampling",
+        "masked": false,
+        "strategy": "topk"
+      },
+      "host_start_ms": 0.08147582411766052,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0020940788090229034,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "prefill",
+        "physical_length": 32,
+        "start_alignments": [
+          0,
+          128
+        ],
+        "return_all_logits_modes": [
+          true,
+          false
+        ],
+        "layer_indices": [
+          0
+        ]
+      },
+      "host_start_ms": 0.08877995423972607,
+      "trace_id": null,
+      "host_elapsed_ms": 0.01164199784398079,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "decode",
+        "masked": false
+      },
+      "host_start_ms": 0.10117283090949059,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0008121132850646973,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": false
+      },
+      "host_start_ms": 0.10232580825686455,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0005711335688829422,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": true,
+        "output_window": 128
+      },
+      "host_start_ms": 0.1033879816532135,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0008309725672006607,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "capture",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "decode",
+        "masked": false
+      },
+      "host_start_ms": 0.10587181895971298,
+      "trace_id": "0",
+      "host_elapsed_ms": 0.003307126462459564,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "capture",
+      "status": "failed",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": false
+      },
+      "host_start_ms": 0.10975985787808895,
+      "trace_id": "1",
+      "host_elapsed_ms": 0.0052300747483968735,
+      "error": "RuntimeError",
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "release",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "failed_preparation_cleanup"
+      },
+      "host_start_ms": 0.12008985504508018,
+      "trace_id": "0",
+      "host_elapsed_ms": 0.0017229467630386353,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 1,
+      "phase": "release",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "failed_preparation_cleanup"
+      },
+      "host_start_ms": 0.12209289707243443,
+      "trace_id": "1",
+      "host_elapsed_ms": 0.0009119976311922073,
+      "attempt_status": "failed"
+    },
+    {
+      "attempt": 2,
+      "phase": "prepare",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "generator",
+        "layer_indices": [
+          0
+        ],
+        "strategy": "topk",
+        "context_length": 256
+      },
+      "host_start_ms": 0.0014530960470438004,
+      "trace_id": null,
+      "timing_basis": "Host wall preparation/JIT/dispatch and capture API time, not device time; no per-phase synchronization added. Prefill warmup timings include reset and both logits modes, not isolated compiler time.",
+      "host_elapsed_ms": 0.036349985748529434,
+      "attempt_status": "complete",
+      "completed_captures": 3,
+      "completed_cleanup_releases": 0
+    },
+    {
+      "attempt": 2,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "initial_decode_and_sampling",
+        "masked": false,
+        "strategy": "topk"
+      },
+      "host_start_ms": 0.017734011635184288,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0010421499609947205,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 2,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "prefill",
+        "physical_length": 32,
+        "start_alignments": [
+          0,
+          128
+        ],
+        "return_all_logits_modes": [
+          true,
+          false
+        ],
+        "layer_indices": [
+          0
+        ]
+      },
+      "host_start_ms": 0.02008909359574318,
+      "trace_id": null,
+      "host_elapsed_ms": 0.006451969966292381,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 2,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "decode",
+        "masked": false
+      },
+      "host_start_ms": 0.02713198773562908,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0006421469151973724,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 2,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": false
+      },
+      "host_start_ms": 0.02804398536682129,
+      "trace_id": null,
+      "host_elapsed_ms": 0.000541098415851593,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 2,
+      "phase": "warm",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": true,
+        "output_window": 128
+      },
+      "host_start_ms": 0.02881605178117752,
+      "trace_id": null,
+      "host_elapsed_ms": 0.0006009358912706375,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 2,
+      "phase": "capture",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "decode",
+        "masked": false
+      },
+      "host_start_ms": 0.03069918602705002,
+      "trace_id": "2",
+      "host_elapsed_ms": 0.001642853021621704,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 2,
+      "phase": "capture",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": false
+      },
+      "host_start_ms": 0.032703159376978874,
+      "trace_id": "3",
+      "host_elapsed_ms": 0.0012218952178955078,
+      "attempt_status": "complete"
+    },
+    {
+      "attempt": 2,
+      "phase": "capture",
+      "status": "complete",
+      "signature": {
+        "batch": 1,
+        "kind": "sampling",
+        "strategy": "topk",
+        "buffered": true,
+        "output_window": 128
+      },
+      "host_start_ms": 0.03416603431105614,
+      "trace_id": "4",
+      "host_elapsed_ms": 0.0015529803931713104,
+      "attempt_status": "complete"
+    }
+  ]
+}

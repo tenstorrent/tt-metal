@@ -1,0 +1,9 @@
+{
+  "base": "18b718f8cc9c9f15ecec754e28489d1dc915dd81",
+  "file": "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp",
+  "before_sha256": "1569ce3b73b84a41295121443265f91f5102691c9c25f59cdbdbbdfd6f7edead",
+  "after_sha256": "be0d9ed714cfd13cb8129985fe8f9a5a2b92cdbe184587cc38b6c545d72ba54c",
+  "patch_sha256": "39caa9d6bc9ca57ac0ac85c05918977d9e0916658d83268f7b7cc0e8282bd7f9",
+  "origin_commit": "ae5dbc16dc8",
+  "reason": "Exact inherited rotary compute fidelity used by current full model; no new numeric change"
+}
