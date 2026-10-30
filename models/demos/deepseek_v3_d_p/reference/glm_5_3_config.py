@@ -30,12 +30,9 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
-    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced and untraced). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
-    # Also overlaps untraced forwards, where the overlapped program now costs less host time than the separate ops.
-    # Every other overlapping config overlaps traced forwards only.
-    ROUTED_EXPERT_COMBINE_OVERLAP_EAGER = True
     # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
     # True = use them if the mesh allows, False = use older ops
     MOE_FABRIC2D_TRANSPORT = True

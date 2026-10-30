@@ -59,13 +59,6 @@ def routed_expert_combine_overlap_arg(model_cfg):
     return None if routed_expert_combine_overlap_enabled(model_cfg) else False
 
 
-def routed_expert_combine_overlap_eager_enabled(model_cfg) -> bool:
-    """TtMoe's overlap_routed_expert_with_combine_eager for ``model_cfg``: whether untraced forwards overlap too, not
-    only traced ones. Off unless the config names ROUTED_EXPERT_COMBINE_OVERLAP_EAGER = True (Kimi K2.7 and GLM 5.3
-    today). Every TtMoe builder passes it next to routed_expert_combine_overlap_arg."""
-    return getattr(model_cfg, "ROUTED_EXPERT_COMBINE_OVERLAP_EAGER", False)
-
-
 def moe_fabric2d_transport_enabled(model_cfg) -> bool:
     """Whether the model opts into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d). Off unless the
     config names MOE_FABRIC2D_TRANSPORT = True (Kimi K2.7 and GLM 5.3 today)."""

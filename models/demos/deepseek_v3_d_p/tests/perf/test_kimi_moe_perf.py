@@ -32,10 +32,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    routed_expert_combine_overlap_arg,
-    routed_expert_combine_overlap_eager_enabled,
-)
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import routed_expert_combine_overlap_arg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -208,7 +205,6 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         **case.extra,
         measure=measure,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(case.config),
-        overlap_routed_expert_with_combine_eager=routed_expert_combine_overlap_eager_enabled(case.config),
     )
 
     assert replays_ns, f"no traced replay was timed for the {case.label} MoE forward"
