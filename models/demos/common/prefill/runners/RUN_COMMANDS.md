@@ -76,7 +76,8 @@ python3 $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py \
 ```
 
 The mesh-graph descriptor is per-SKU, not per-model; `sc4_mgd.textproto` is shared
-across models. For glm53, swap the manifest path to `glm53.json`.
+across models. For glm53, swap the manifest path to `glm53.json`, or use the
+static binding in 3b.
 
 The runner allocates, captures its trace, warms up, logs `setup complete,
 entering request loop`, and then blocks there until requests arrive. That idle
@@ -89,6 +90,43 @@ run it somewhere writable.
 `PREFILL_MANIFEST` must be exported inside the `bash -lc` string. Passed through
 `--mpi-args -x` it reaches only the local rank, and the other ranks fall back to
 defaults — which shows up much later as a D2D chunk plan mismatch.
+
+## 3b. GLM-5.3 from a static rank binding
+
+Deployments that pin hosts instead of running discovery launch from
+`topology_configuration/glm53_4rank.yaml`. Rank N runs mesh N of `ci/sc4_mgd.textproto`,
+the same descriptor CI uses.
+
+```bash
+cd $TT_METAL_HOME && source python_env/bin/activate
+export PYTHONPATH=$TT_METAL_HOME
+python3 ttnn/ttnn/distributed/ttrun.py \
+  --tcp-interface ens5f0np0 \
+  --rank-binding models/demos/common/prefill/runners/topology_configuration/glm53_4rank.yaml \
+  --mpi-args "--host host0:1,host1:1,host2:1,host3:1 --map-by slot --bind-to none --tag-output -x PATH" \
+  -- python3 -m models.demos.common.prefill.runners.prefill_runner
+```
+
+Run it on `host0`. The `--host` order is the pipeline order from the prerequisites:
+rank 0 first, each next host one cable further along the ring.
+
+`glm53.json` is the configuration: fabric mode, shared-expert overlap, trace,
+layer acks, sequence length, user count, chunk timeout. The runner applies it
+with `setdefault`, so any of those variables already set in the environment
+silently wins over the manifest. Leave them unset. The torus fabric with
+`PREFILL_OVERLAP_SHARED_EXPERT=0`, and the `2d` fabric, are not what CI runs.
+
+Set only what is specific to the deployment, in the binding's `global_env`.
+`ttrun` does not forward `PREFILL_*` variables from the launching shell, so an
+export there reaches rank 0 only.
+
+- `PREFILL_NUM_USERS`, when the decode side caps slots below the manifest's 54.
+- `PREFILL_H2D_SERVICE_ID`, matching the producer.
+- Migration: `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1`,
+  `PREFILL_MIGRATION_TABLE_PATH` on storage all hosts share, and
+  `PREFILL_MIGRATION_DEVICE_MAP_PATH` on host-local storage.
+- `PREFILL_HF_MODEL` / `PREFILL_TTNN_CACHE`, when the weights are not at the
+  adapter defaults.
 
 ## Teardown
 
