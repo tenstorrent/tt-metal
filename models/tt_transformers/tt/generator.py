@@ -1255,7 +1255,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 and not self._defer_trace_recording
                 and not self._defer_prefill_recording
                 and not self._any_trace_captured()
-                and not self._will_row_shard_prefill(tokens, sampling_params, prompt_lens)
                 and not self._overrides_prefill_capture()
             )
             if prepare_decode:
@@ -1278,10 +1277,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and not self._defer_trace_recording
             and not self._defer_prefill_recording
             and not self._any_trace_captured()
-            # Excluded: the row-sharded batched path deadlocks either way round -- once a decode program is
-            # compiled its MoE dispatch can no longer be trace-captured, and compiling decode before any
-            # prefill deadlocks in the MoE combine. It keeps main's late decode compile.
-            and not self._will_row_shard_prefill(tokens, sampling_params, prompt_lens)
             # Excluded: models that customise the capture step. Deferred recording prepares through the
             # base helper and records later, which skips whatever a _capture_trace_prefill override does
             # between its compile pass and its capture.

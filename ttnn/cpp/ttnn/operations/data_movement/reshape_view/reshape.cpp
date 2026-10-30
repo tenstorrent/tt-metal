@@ -425,7 +425,8 @@ ttnn::Tensor reshape_tiled(
             // ignored for block-float: shared exponent over 16-elem sub-blocks would otherwise
             // let unfilled padding corrupt logical lanes. See skip_padding_fill docstring.
             if (detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+                output_tensor_3d =
+                    ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt, sub_core_grid);
             }
             output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
             if (memory_config.is_sharded()) {
@@ -487,10 +488,11 @@ ttnn::Tensor reshape_tiled(
                 const auto sharded_mem_config = output_tensor_3d.memory_config();
                 MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
                 auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
-                interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
+                interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt, sub_core_grid);
                 output_tensor_3d = ttnn::interleaved_to_sharded(interleaved, sharded_mem_config, std::nullopt);
             } else {
-                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+                output_tensor_3d =
+                    ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt, sub_core_grid);
             }
         }
 
@@ -548,7 +550,7 @@ ttnn::Tensor reshape_tiled(
     const bool is_block_float_output = is_block_float(tensor.dtype());
     const bool should_fill = is_block_float_output || (pad_value_explicit && !skip_padding_fill);
     if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt, sub_core_grid);
     }
 
     if (is_block_float(tensor.dtype())) {

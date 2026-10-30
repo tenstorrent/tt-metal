@@ -21,6 +21,7 @@ void bind_clone_operation(nb::module_& mod) {
         Keyword Args:
             dtype (ttnn.DataType, optional): the target data type of the cloned tensor. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Cores allowed to run the clone. Must contain all shard cores for sharded tensors.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
 
         Returns:
@@ -40,6 +41,7 @@ void bind_clone_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("dtype") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::clone

@@ -964,7 +964,9 @@ class TtTransformer(LightweightModule):
                 self.lm_head.tt_ccl = self.tt_ccl
                 if self.use_prefetcher:
                     self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                    self.prefetcher_setup.create_global_cb()
+                    # Prefill sampling also enters decode mode without using the GCB.
+                    # Allocate it at the first forward; later setup_decode calls
+                    # restore the saved addresses before other decode allocations.
                 else:
                     # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
@@ -989,12 +991,6 @@ class TtTransformer(LightweightModule):
                     # No-prefetcher path reuses the cached prefill CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
 
-    def prepare_decode_global_cb(self):
-        """Keep the prepared GCB addresses fixed before the first trace capture."""
-        if self.use_prefetcher and self._global_cb_addresses is None:
-            global_cb = self.prefetcher_setup.global_circular_buffer
-            self._global_cb_addresses = (global_cb.buffer_address(), global_cb.config_address())
-
     def forward(
         self,
         x: ttnn.Tensor,
@@ -1012,6 +1008,11 @@ class TtTransformer(LightweightModule):
     ):
         if mode == "decode" and self.use_prefetcher:
             self.prefetcher_setup.create_global_cb()
+            if self._global_cb_addresses is None:
+                # Eager decode programs cache these addresses too. Freeze the
+                # first pair before any program can bind it, not only at capture.
+                global_cb = self.prefetcher_setup.global_circular_buffer
+                self._global_cb_addresses = (global_cb.buffer_address(), global_cb.config_address())
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
                 num_layers=self.n_layers,

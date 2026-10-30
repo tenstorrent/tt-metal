@@ -517,13 +517,14 @@ class Prefetcher(LightweightModule):
                 config_address=config_address,
             )
             self.global_cb.acknowledge_corruptible()
+            if self._global_cb_addresses is None:
+                # Programs bind the GCB during eager warmup as well as capture.
+                self._global_cb_addresses = (self.global_cb.buffer_address(), self.global_cb.config_address())
 
     def prepare_trace(self):
-        """Fix the GCB placement after warmup and before the first decode capture."""
+        """Restore the GCB placement fixed by the first decode warmup."""
         assert self.mode == Mode.DECODE, "Decode mode must be active before preparing the prefetcher trace"
         self._create_global_cb()
-        if self._global_cb_addresses is None:
-            self._global_cb_addresses = (self.global_cb.buffer_address(), self.global_cb.config_address())
 
     def run(self):
         """

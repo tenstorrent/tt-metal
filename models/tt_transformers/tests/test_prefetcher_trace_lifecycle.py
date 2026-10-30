@@ -59,14 +59,16 @@ def test_worker_sub_device_follows_the_loaded_manager(prefetcher, monkeypatch):
     assert prefetcher.worker_sub_device_id == 1
 
 
-def test_warmup_can_move_gcb_then_capture_fixes_both_addresses(prefetcher):
+def test_first_warmup_fixes_gcb_addresses_before_any_capture(prefetcher):
     prefetcher._create_global_cb()
     warmup_cb = prefetcher.global_cb
-    assert prefetcher._global_cb_addresses is None
+    assert prefetcher._global_cb_addresses == (8192, 4096)
     prefetcher.init(Mode.PREFILL)
     warmup_cb.deallocate.assert_called_once_with()
     prefetcher.init(Mode.DECODE)
-    assert prefetcher.global_cb is None
+    ttnn.create_global_circular_buffer.assert_called_with(
+        prefetcher.mesh_device, prefetcher.sender_receiver_mapping, 4096, buffer_address=8192, config_address=4096
+    )
     prefetcher.prepare_trace()
     addresses = prefetcher._global_cb_addresses
     assert addresses == (8192, 4096)

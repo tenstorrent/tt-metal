@@ -17,8 +17,10 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
     not trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup"
 )
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": True, "trace_region_size": 16000000}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": True, "trace_region_size": 16000000, "l1_small_size": 0}], indirect=True
+)
 def test_blackhole_prefetcher_prefill_then_decode_trace(mesh_device, reset_seeds, monkeypatch, tmp_path):
     if "blackhole" not in str(mesh_device.arch()).lower():
         pytest.skip("Requires the Blackhole Llama-8B DRAM prefetcher")
@@ -74,9 +76,10 @@ def test_blackhole_prefetcher_prefill_then_decode_trace(mesh_device, reset_seeds
         # Compile eager readback and obtain a reference before any trace exists.
         expected_prefill = prefill(False)
         expected_decode = decode(False)
-        assert prefetcher._global_cb_addresses is None
+        # Eager programs bind the first GCB too, before any trace is captured.
+        assert prefetcher._global_cb_addresses is not None
         saved_ids = None
-        saved_addresses = None
+        saved_addresses = prefetcher._global_cb_addresses
         for _ in range(3):
             actual_prefill = prefill(True)
             assert generator._trace_io_buffers._frozen
@@ -89,10 +92,10 @@ def test_blackhole_prefetcher_prefill_then_decode_trace(mesh_device, reset_seeds
             assert torch.isfinite(actual_decode).all()
             addresses = (prefetcher.global_cb.buffer_address(), prefetcher.global_cb.config_address())
             assert addresses == prefetcher._global_cb_addresses
+            assert addresses == saved_addresses
             ids = (dict(generator.trace_id_prefill), dict(generator.trace_ids_decode[False]))
             if saved_ids is not None:
                 assert ids == saved_ids
-                assert addresses == saved_addresses
             saved_ids, saved_addresses = ids, addresses
     finally:
         generator.release_persistent_capture()
