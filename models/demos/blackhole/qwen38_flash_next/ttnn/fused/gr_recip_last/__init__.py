@@ -295,7 +295,9 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
 
 
 def _front_v3_on() -> bool:
-    return os.environ.get("QWEN38_GR_FRONT_V3") == "1"
+    # default on: bitwise to the default front; batch-1 decode on the 1x8 line 15.53/15.46 -> 14.78/14.84 ms/token, batched
+    # B=2/4/8 clear the prefill L1 check now that the landing buffers are made at construction (prepare_front)
+    return os.environ.get("QWEN38_GR_FRONT_V3", "1") == "1"
 
 
 def _front_v2_on() -> bool:

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""No-device contract of the GR front v3 (QWEN38_GR_FRONT_V3=1): sources, the selection hook, the token protocol's ordering rules, the
+"""No-device contract of the GR front v3 (QWEN38_GR_FRONT_V3, default on): sources, the selection hook, the token protocol's ordering rules, the
 slot size that carries the token, the reader's reorder."""
 
 from pathlib import Path
@@ -20,7 +20,7 @@ def test_sources_and_hook():
     for name in ("transport4.cpp", "front_reader3.cpp", "mcast_writer5.cpp", "raw_writer3.cpp", "mcast_reader4.cpp"):
         assert (KERNELS / name).is_file()
     init = Path(grl.__file__).read_text()
-    assert init.count("QWEN38_GR_FRONT_V3") == 1 and 'os.environ.get("QWEN38_GR_FRONT_V3") == "1"' in init
+    assert init.count("QWEN38_GR_FRONT_V3") == 1 and 'os.environ.get("QWEN38_GR_FRONT_V3", "1") == "1"' in init
     assert front3.ENV == "QWEN38_GR_FRONT_V3" and not front3._STATE3 is None
     src = Path(front3.__file__).read_text()
     assert "+ 16  # + the call token" in src and "my_tiles * pack_tile + 16 <=" in src
