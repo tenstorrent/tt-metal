@@ -178,9 +178,7 @@ _WH_BH_EARLY_CONVERSION = {
 }
 
 # The multiplier's phase split, as (srcA, srcB) mantissa bits per phase, with
-# srcA reaching only 9 of the 10 the register holds. That dropped bit is why no
-# fidelity here is exact, unlike Quasar, where all four phases rebuild the
-# operands. Public in the ISA documentation for the src registers.
+# srcA reaching only 9 of the 10 the register holds.
 _WH_BH_MANTISSA_SPLIT = (4, 6)
 _WH_BH_MULTIPLIER_SRCA_BITS = 9
 
