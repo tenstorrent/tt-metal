@@ -29,8 +29,6 @@
 
 namespace tt::tt_metal::mimir_test::host_tl1 {
 
-// No protection is documented and no firmware is loaded, so every region is assumed host RW.
-constexpr const char* kAssumedHostPermission = "host RW";
 constexpr std::array<uint32_t, 5> kVisibilitySizes = {4, 16, 64, 4096, 32768};
 constexpr uint32_t kVisibilityPoisonWord = 0xBADC0DE5;
 constexpr uint32_t kBoundaryWindowBytes = 16;
@@ -266,16 +264,14 @@ std::vector<uint8_t> read_preflight_chunk(
     return bytes;
 }
 
-TEST(MimirHostTl1, DiscoverCceTl1Map) {
+TEST(MimirHostTl1, Tl1MapLayout) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    if (!mimir_identity_result().empty()) {
-        GTEST_SKIP() << mimir_identity_result();
-    }
+    MIMIR_REQUIRE_IDENTITY();
 
     constexpr ChipId chip = 0;
     Cluster& cluster = MetalContext::instance().get_cluster();
@@ -289,13 +285,6 @@ TEST(MimirHostTl1, DiscoverCceTl1Map) {
         EXPECT_GT(region.size, 0u) << region.name << " is empty";
         EXPECT_GE(region.begin, previous_end) << region.name << " overlaps or precedes the region before it";
         EXPECT_LE(region.begin + region.size, cce_tl1_end()) << region.name << " does not fit in CCE TL1";
-        log_info(
-            tt::LogTest,
-            "{}: [0x{:x}, 0x{:x}) permission {} (assumed)",
-            region.name,
-            region.begin,
-            region.begin + region.size,
-            kAssumedHostPermission);
         previous_end = region.begin + region.size;
     }
     EXPECT_GE(tl1_test_base(), previous_end) << "Test TL1 layout starts inside the firmware-reserved range";
@@ -303,16 +292,6 @@ TEST(MimirHostTl1, DiscoverCceTl1Map) {
     EXPECT_EQ(tl1_test_base() % hal.get_alignment(HalMemType::DRAM), 0u);
 
     const std::vector<HalDramL1Region> hal_regions = dram_hal_l1_regions(hal);
-    for (const HalDramL1Region& region : hal_regions) {
-        log_info(
-            tt::LogTest,
-            "HAL DRAM {}: [0x{:x}, 0x{:x}) permission {} (assumed)",
-            region.name,
-            region.begin,
-            region.begin + region.size,
-            kAssumedHostPermission);
-    }
-    log_info(tt::LogTest, "CCE TL1 host access granularity: 4 B words; the start offset must be 4 B aligned.");
     const HalDramL1Region& barrier_region = hal_region_of(hal_regions, HalL1MemAddrType::BARRIER);
     EXPECT_GE(barrier_region.begin, regions.front().begin);
     EXPECT_LE(barrier_region.begin + barrier_region.size, regions.front().begin + regions.front().size);
