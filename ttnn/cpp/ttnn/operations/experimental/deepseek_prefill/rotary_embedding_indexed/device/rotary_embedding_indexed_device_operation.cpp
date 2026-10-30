@@ -295,6 +295,18 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
             input.dtype() == DataType::BFLOAT16,
             "rotary_embedding_indexed row_major_output needs a bfloat16 input, got {}",
             input.dtype());
+        // The writer writes every padded row, one full-width row per output page.
+        TT_FATAL(
+            input.logical_shape() == input_shape &&
+                tensor_args.concat_prefix->logical_shape() == tensor_args.concat_prefix->padded_shape(),
+            "rotary_embedding_indexed row_major_output needs an unpadded input and concat_prefix (input {} padded to "
+            "{})",
+            input.logical_shape(),
+            input_shape);
+        TT_FATAL(
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "rotary_embedding_indexed row_major_output needs an interleaved output, got {}",
+            args.output_mem_config.memory_layout());
     }
 
     validate_runtime_args(args, tensor_args);
@@ -513,10 +525,14 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     if (row_major_output) {
         // Two tile rows of each, so the reader and writer overlap compute.
         constexpr uint32_t buffered_tile_rows = 2;
+        // Without reload, compute waits for all of a core's sin/cos rows before it takes any prefix, and the reader
+        // pushes each row's sin/cos after that row's prefix, so the prefix buffer holds all of them.
+        const uint32_t prefix_tile_rows =
+            use_reload_impl ? buffered_tile_rows : std::max(buffered_tile_rows, num_sin_cos_rows_per_core);
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = PREFIX_DFB,
             .entry_size = input_single_tile_size,
-            .num_entries = buffered_tile_rows * prefix_head_dim_t,
+            .num_entries = prefix_tile_rows * prefix_head_dim_t,
             .data_format_metadata = input_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = ROWS_DFB,
