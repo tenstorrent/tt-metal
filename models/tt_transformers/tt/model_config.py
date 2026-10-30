@@ -1189,23 +1189,7 @@ class ModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
-            def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer
-                # divide 0, which would build a 0-row shard config; clamp to one KV head/device.
-                M = max(1, self.n_kv_heads // self.num_devices) * seq_len
-                cores_x, cores_y = self.find_grid(M // ttnn.TILE_SIZE)
-                return ttnn.create_sharded_memory_config(
-                    (
-                        nearest_32(M // (cores_x * cores_y)),
-                        self.head_dim,
-                    ),
-                    ttnn.CoreGrid(y=cores_y, x=cores_x),
-                    ttnn.ShardStrategy.HEIGHT,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
+            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = self.get_xattn_kv_prefill_mem_config
 
             if self.is_multimodal:
                 self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
@@ -3856,12 +3840,26 @@ class ModelArgs:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
 
+    def get_xattn_kv_prefill_mem_config(self, seq_len):
+        M = max(1, self.n_kv_heads // self.num_devices) * seq_len
+        rows, cols = self.find_grid(M // ttnn.TILE_SIZE)
+        return ttnn.create_sharded_memory_config(
+            (
+                nearest_32(M // (rows * cols)),
+                self.head_dim,
+            ),
+            ttnn.CoreGrid(y=rows, x=cols),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     def find_grid(self, N):
         """
         Find the number of rows and columns for a grid of cores such that
         the total number of tiles N can be evenly divided among the cores.
         Each core will have the same integer number of tiles.
-        The grid size is limited to a maximum of 2 rows and 8 columns.
+        The grid is limited to 8x8 on Wormhole and to the device grid (at most 10 rows and 12 columns) on Blackhole.
 
         Parameters:
             N (int): Total number of tiles to be distributed.
@@ -3872,7 +3870,7 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        # Harvested Blackhole boards (p150b: 11 columns) have a smaller grid than 10x12.
+        # Harvested Blackhole parts (P100, some P150) expose fewer than 12 columns.
         max_rows = 8 if is_wormhole_b0() else min(10, self.max_grid_size.y)
         max_cols = 8 if is_wormhole_b0() else min(12, self.max_grid_size.x)
         max_cores = max_rows * max_cols

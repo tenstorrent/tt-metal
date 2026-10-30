@@ -223,19 +223,41 @@ def test_compute_galaxy_width_shard_cores_rejects_non_positive_width(expect_erro
 
 
 @pytest.mark.parametrize(
-    ("grid_x", "grid_y", "n_tiles"),
+    ("grid_x", "grid_y", "n_tiles", "expected"),
     [
-        (11, 10, 48),  # Qwen2.5-1.5B dim on a p150b
-        (11, 10, 72),  # Gemma-2-2B dim on a p150b
-        (12, 10, 48),
+        (11, 10, 48, (3, 8)),  # Qwen2.5-1.5B dim on a p150b
+        (11, 10, 72, (4, 9)),  # Gemma-2-2B dim on a p150b
+        (12, 10, 48, (2, 12)),
+        (13, 10, 48, (2, 12)),
     ],
 )
-def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles):
+def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles, expected):
     monkeypatch.setattr("models.tt_transformers.tt.model_config.is_wormhole_b0", lambda: False)
     args = SimpleNamespace(max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y))
     rows, cols = ModelArgs.find_grid(args, n_tiles)
+    assert (rows, cols) == expected
     assert rows <= grid_y and cols <= grid_x
     assert n_tiles % (rows * cols) == 0
+
+
+@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4])
+@pytest.mark.parametrize("num_devices", [1, 2, 4, 8])
+@pytest.mark.parametrize(
+    ("grid_x", "grid_y", "wormhole"), [(8, 8, True), (11, 10, False), (12, 10, False), (13, 10, False)]
+)
+def test_xattn_kv_prefill_mem_cfg_fits_the_device_grid(monkeypatch, grid_x, grid_y, wormhole, num_devices, num_chunks):
+    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_wormhole_b0", lambda: wormhole)
+    args = SimpleNamespace(
+        max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y), n_kv_heads=8, num_devices=num_devices, head_dim=128
+    )
+    args.find_grid = MethodType(ModelArgs.find_grid, args)
+    seq_len = num_chunks * 1632
+    mem_cfg = ModelArgs.get_xattn_kv_prefill_mem_config(args, seq_len)
+    shard_spec = mem_cfg.shard_spec
+    size = shard_spec.grid.bounding_box().grid_size()
+    assert size.x <= grid_x and size.y <= grid_y
+    rows = max(1, 8 // num_devices) * seq_len
+    assert shard_spec.shape[0] * shard_spec.grid.num_cores() == rows
 
 
 @pytest.mark.parametrize(
