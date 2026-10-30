@@ -5,6 +5,7 @@ import fcntl
 import glob
 import os
 import re
+import secrets
 import shlex
 import shutil
 import struct
@@ -222,8 +223,9 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
-    # The readout token of the last counting launch (counters.h launch_word), 1..0xFFFF.
-    _LAUNCH_TOKEN: ClassVar[int] = 0
+    # The readout token of the last counting launch (counters.h launch_word), 1..0xFFFF. It starts at a random value in each
+    # process, so a readout an earlier session left in L1 does not carry the token a rerun expects.
+    _LAUNCH_TOKEN: ClassVar[int] = secrets.randbelow(0xFFFF)
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
     # Quasar has no L1 counter bank; one l1_client event (subport*8 + event, -1 = none) rides in its slot.
