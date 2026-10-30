@@ -666,7 +666,7 @@ MATMUL_INT4_FORMAT = InputOutputFormat(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
     matmul_tile_dims=runtime(
         lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
