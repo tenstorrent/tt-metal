@@ -234,10 +234,11 @@ void run_argmax(benchmark::State& state) {
     auto value = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(
         ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.F, 1.F, 2026U), shape, device);
     for ([[maybe_unused]] auto _ : state) {
-        const double elapsed_us = ttml::benchmark_utils::time_device_avg_us(*device, kWarmup, kIterations, [&]() {
-            auto result = ttnn::argmax(value, test_case.dim, /* keepdim */ true);
-            benchmark::DoNotOptimize(result);
-        });
+        const double elapsed_us =
+            ttml::benchmark_utils::time_device_avg_us(*device, test_case.warmup, test_case.iterations, [&]() {
+                auto result = ttnn::argmax(value, test_case.dim, /* keepdim */ true);
+                benchmark::DoNotOptimize(result);
+            });
         state.SetIterationTime(elapsed_us / 1e6);
         state.counters["Time_us"] = elapsed_us;
     }
@@ -270,6 +271,11 @@ int main(int argc, char** argv) {
             ->UseManualTime()
             ->Iterations(1)
             ->Repetitions(kSamples);
+        benchmark::RegisterBenchmark("LogSoftmaxNanoLlama3Argmax", run_argmax)
+            ->Arg(6)
+            ->UseManualTime()
+            ->Iterations(1)
+            ->Repetitions(kCases[6].samples);
         benchmark::RunSpecifiedBenchmarks();
         benchmark::Shutdown();
         ttml::autograd::ctx().close_device();
