@@ -173,6 +173,7 @@ def _declared_type(var: CallstackEntryVariable) -> str | None:
 def serialize_variables(variables: list[CallstackEntryVariable], highlight: str = "") -> str:
     """One "- type name = value" line per named variable ("?" if no value); names found in `highlight` are colored."""
     result = ""
+    highlighted_words = set(re.findall(r"\w+", highlight))
     for var in variables:
         var_name = var.name
         if not var_name:
@@ -180,7 +181,7 @@ def serialize_variables(variables: list[CallstackEntryVariable], highlight: str 
         var_type = _declared_type(var)
         type_prefix = f"{escape(var_type)} " if var_type else ""
         var_value = format_variable_value(var)
-        if var_name in highlight:
+        if var_name in highlighted_words:
             serialized = f"- {type_prefix}[info]{escape(var_name)}[/] = [command]{escape(var_value)}[/]\n"
         else:
             serialized = f"- {type_prefix}{escape(var_name)} = {escape(var_value)}\n"

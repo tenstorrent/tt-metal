@@ -4,7 +4,7 @@
 
 #include "tunnels_from_mmio_device.hpp"
 #include <tt-umd/cluster_descriptor.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 
 
 #include <tt_stl/assert.hpp>

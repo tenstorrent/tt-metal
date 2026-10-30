@@ -6,6 +6,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_control_plane_local_mesh_binding.cpp
     test_distributed_coordinate_translator.cpp
     test_end_to_end_eltwise.cpp
+    test_explicit_cq_id.cpp
     test_distributed_host_buffer.cpp
     test_maybe_remote.cpp
     test_mesh_buffer.cpp
