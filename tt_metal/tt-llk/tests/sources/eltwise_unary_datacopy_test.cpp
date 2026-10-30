@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
                 formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-            _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+            _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
         }
         PROFILER_SYNC();
     }
@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 formats.unpack_A_dst,
                                 0 /* block_ct_dim */,
                                 FACE_R_DIM,
-                                4 /* num_faces */,
+                                num_faces,
                                 false /* narrow_tile */);
                         }
                     }
@@ -111,6 +111,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         PROFILER_SYNC();
+    }
+    if constexpr (tilize_en)
+    {
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
     }
 }
 

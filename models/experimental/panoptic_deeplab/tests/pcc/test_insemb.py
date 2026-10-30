@@ -20,6 +20,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    bf16_conv_via_fp32,
     check_ttnn_output,
     skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
@@ -142,7 +143,7 @@ def test_ttnn_insemb(device, pcc_values, skip_check, model_location_generator):
 
     # Test instance embedding head
     logger.info("Running PyTorch instance embedding head test...")
-    with torch.no_grad():
+    with torch.no_grad(), bf16_conv_via_fp32():
         torch_center_out, torch_offset_out, _, _ = pytorch_model.instance_head(torch_features)
 
     logger.info("Running TTNN instance embedding head test...")

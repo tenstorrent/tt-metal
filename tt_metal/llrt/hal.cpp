@@ -7,10 +7,11 @@
 #include <tt_stl/assert.hpp>
 
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <enchantum/iostream.hpp>
 
 #include "hal_types.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,14 +39,18 @@ Hal::Hal(
     uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) :
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_aerisc_ptp_trace,
+    IpVariant quasar_arch_variant) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
             initialize_wh(is_base_routing_fw_enabled, profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq);
             break;
 
-        case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq); break;
+        case tt::ARCH::QUASAR:
+            initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq, quasar_arch_variant);
+            break;
 
         case tt::ARCH::BLACKHOLE:
             initialize_bh(
@@ -53,7 +58,8 @@ Hal::Hal(
                 profiler_dram_bank_size_per_risc_bytes,
                 enable_dram_backed_cq,
                 is_simulator,
-                enable_blackhole_dram_programmable_cores);
+                enable_blackhole_dram_programmable_cores,
+                enable_aerisc_ptp_trace);
             break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
@@ -121,6 +127,22 @@ void assert_kernel_config_no_overlap(
         kernel_config_base + kernel_config_size);
 }
 
+uint32_t Hal::get_dma_write_min_bytes(tt::umd::IoOrdering ordering) const {
+    // DMA writes go through a Relaxed window, so writes that ask for Strict ordering stay on MMIO. Below 64 KiB the
+    // fixed cost of a DMA call makes it slower than a Relaxed MMIO write, per UMD's single-core write microbenchmark
+    // on a Wormhole Galaxy and a Blackhole P150 (see #60793).
+    const bool strict = ordering == tt::umd::IoOrdering::Strict;
+    switch (arch_) {
+        // Wormhole has always sent Strict writes of 32 B or more through its Relaxed DMA window. That stays until
+        // buffer data moves to Relaxed writes.
+        case tt::ARCH::WORMHOLE_B0: return strict ? 32 : 64 * 1024;
+        case tt::ARCH::BLACKHOLE: return strict ? UINT32_MAX : 64 * 1024;
+        default: return UINT32_MAX;
+    }
+}
+
+bool Hal::supports_dma_reads() const { return arch_ == tt::ARCH::WORMHOLE_B0; }
+
 uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
     uint32_t index = static_cast<uint32_t>(programmable_core_type_index);
 
@@ -138,6 +160,15 @@ uint32_t Hal::get_total_num_risc_processors() const {
         num_riscs += this->get_num_risc_processors(this->core_info_[core_idx].programmable_core_type_);
     }
     return num_riscs;
+}
+
+uint32_t Hal::get_num_physical_risc_processors(HalProgrammableCoreType programmable_core_type) const {
+    const uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_FATAL(
+        index < core_info_.size() && core_info_[index].num_physical_riscs_.has_value(),
+        "The HAL gives no RISC count for {} cores on this arch",
+        enchantum::to_string(programmable_core_type));
+    return *core_info_[index].num_physical_riscs_;
 }
 
 uint32_t HalCoreInfoType::get_processor_index(
@@ -260,16 +291,13 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
     return set;
 }
 
-uint32_t Hal::make_go_msg_u32(
-    uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const {
+uint32_t Hal::make_go_msg_u32(uint8_t signal, uint8_t dispatch_message_offset) const {
     uint32_t go_msg_u32_val = 0;
     // We know go_msg_t is the same for all core types, so we can use TENSIX's factory.
     auto go_msg = get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
                       .create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u32_val));
     TT_ASSERT(go_msg.size() == sizeof(uint32_t));
     go_msg.signal() = signal;
-    go_msg.master_x() = master_x;
-    go_msg.master_y() = master_y;
     go_msg.dispatch_message_offset() = dispatch_message_offset;
     return go_msg_u32_val;
 }

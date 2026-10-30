@@ -7,7 +7,8 @@ repos:
     - id: trailing-whitespace
       exclude: \.patch$
     - id: end-of-file-fixer
-      exclude: \.patch$
+      # Preserve the hashed, token-aligned book excerpt, including its missing final newline.
+      exclude: (\.patch$|^models/demos/llama_3p1_8b_d_p/tests/model/fixtures/book/pride_and_prejudice\.txt$)
     - id: check-yaml
       args: ["--unsafe"]
     - id: check-merge-conflict
@@ -56,15 +57,37 @@ repos:
       # Override on the same line:  with pytest.raises(...):  # allow-pytest.raises: <why>
 - repo: local
   hooks:
+    # models/tt_transformers moved to models/ttt_compat. Its import path is aliased
+    # (models/tt_transformers/__init__.py), but nothing else is: a file path into the old
+    # folder fails at run time, or in pytest with exit code 4.
+    - id: ttt-compat-file-paths
+      name: "models/tt_transformers moved: use models/ttt_compat/ in file paths"
+      language: pygrep
+      files: \.py$
+      entry: '["'']models/tt_transformers/|/\s*["'']tt_transformers["'']|["'']tt_transformers["''],\s*["'']'
+    - id: ttt-compat-ci-paths
+      name: "models/tt_transformers moved: use models/ttt_compat/ in commands"
+      language: pygrep
+      files: (\.sh$|^tests/pipeline_reorg/.*\.ya?ml$)
+      entry: '(^|[\s"''=])models/tt_transformers/'
+- repo: local
+  hooks:
     - id: check-large-files
       name: check for large files (>500 KB)
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
-    - id: validate-metalium-includes
-      name: validate-metalium-includes
-      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
+    - id: validate-metalium-api
+      name: validate-metalium-api
+      entry: python3 scripts/validate_api/validate_api.py tt_metal/api
       language: system
+      always_run: true
+      pass_filenames: false
+    - id: test-metalium-api
+      name: test-metalium-api
+      entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
+      language: system
+      files: ^scripts/validate_api/
       pass_filenames: false
 - repo: local
   hooks:
@@ -120,6 +143,20 @@ repos:
       types: [file]
       files: ^ttnn/.*/device/.*\.(cpp|hpp)$
       pass_filenames: true
+    - id: check-bool-from-arithmetic
+      name: Forbid a bool initialized from a multiplicative expression
+      entry: python3 scripts/check_bool_from_arithmetic.py
+      language: system
+      types: [file]
+      files: ^(tt_metal|ttnn|tt_stl|tt-train|tests)/.*\.(c|cc|cpp|cxx|h|hpp|inl)$
+      pass_filenames: true
+    - id: check-bool-from-arithmetic-tests
+      name: Run the bool-from-arithmetic checker's tests when it or they change
+      entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_bool_from_arithmetic.py
+      language: python
+      additional_dependencies: ["pytest==8.3.5"]
+      files: ^scripts/(test_)?check_bool_from_arithmetic\.py$
+      pass_filenames: false
 - repo: local
   hooks:
     - id: validate-golden-csv-columns
@@ -130,18 +167,195 @@ repos:
       files: ^tests/tt_metal/tt_fabric/test_infra/golden/.*bandwidth.*\.csv$
 - repo: local
   hooks:
+    - id: lint-pipeline-cmds
+      name: Pipeline cmd blocks stop at the first failed test command
+      entry: python3 .github/scripts/utils/lint_pipeline_cmds.py
+      language: system
+      pass_filenames: false
+      files: ^(tests/pipeline_reorg/.*\.yaml|\.github/pipeline_cmd_lint_baseline\.yaml|\.github/scripts/utils/lint_pipeline_cmds\.py)$
+- repo: local
+  hooks:
+    # The sweep workflows refuse to start when the generated trace allocation entries are stale.
+    - id: sync-trace-sweeps
+      name: Trace allocation sweeps match the e2e registry
+      entry: python3 .github/scripts/utils/model_trace_tests.py sync-sweeps
+      language: system
+      pass_filenames: false
+      files: ^(tests/pipeline_reorg/models_(e2e_tests|trace_config|sweep_tests)\.yaml|\.github/scripts/utils/model_trace_tests\.py)$
+- repo: local
+  hooks:
     - id: triage-type-check
       name: tt-triage type checks
       entry: tools/triage/run_type_checks.sh
       language: system
       pass_filenames: false
       files: ^tools/triage/
+- repo: local
+  hooks:
+    - id: compile-agentic-workflows
+      name: Regenerate agentic workflow lock files
+      entry: python3 .github/scripts/utils/update_agentic_workflows.py
+      language: system
+      files: ^\.github/workflows/[^/]+\.(md|lock\.yml)$
+      pass_filenames: true
+      require_serial: true
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
 # Metal's hooks above are excluded from that subtree; these entries replace them.
 - repo: local
   hooks:
+    - id: llk-mutex-balance
+      name: "llk: Tensix mutex acquire/release balance"
+      entry: python3 tt_metal/tt-llk/infra/check_mutex_balance.py
+      language: system
+      # All three architectures: the check is lexical and needs no per-arch tables.
+      files: ^tt_metal/tt-llk/tt_llk_.*\.(h|hpp)$
+    - id: llk-instr-encoding-args
+      name: "llk: STALLWAIT/SEMWAIT argument roles and instruction-scoped constants"
+      entry: python3 tt_metal/tt-llk/infra/check_instr_encoding_args.py
+      language: system
+      # Zero findings in both trees, so no baseline. A change to the checker, to its lexer
+      # (check_mutex_balance.py) or to a ckernel*_ops.h instruction-definition header rescans
+      # every header.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_.*\.(h|hpp)|
+          tt_metal/hw/ckernels/[^/]+/metal/.*\.h|
+          tt_metal/tt-llk/infra/check_instr_encoding_args\.py|
+          tt_metal/tt-llk/infra/check_mutex_balance\.py
+        )$
+    - id: llk-dest-to-src-wait
+      name: "llk: MOVD2A/MOVD2B source-bank wait (warning only)"
+      entry: python3 tt_metal/tt-llk/infra/check_dest_to_src_wait.py
+      language: system
+      # Advisory: the script always exits 0. A wait can sit in a caller or before a MOP/replay
+      # run, which a lexical check cannot see, so a finding must never block a commit. Output is
+      # shown even when it passes, so the warnings are seen rather than swallowed.
+      verbose: true
+      # Every run parses the whole tree for wait helpers; one run, not one per file batch.
+      require_serial: true
+      # All three architectures: each one's STALLWAIT names SRCA_VLD / SRCB_VLD, whatever the
+      # argument layout. The op-local LLK copies under ttnn kernel_includes/ too.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_.*\.(h|hpp)|
+          ttnn/.*/kernel_includes/.*\.(h|hpp)
+        )$
+    - id: llk-sticky-cfg-restore
+      name: "llk: sticky config fields restored after a fixed write"
+      entry: python3 tt_metal/tt-llk/infra/check_sticky_cfg_restore.py
+      language: system
+      # Fails only on findings in the touched headers; a commit touching a verdict input (the
+      # checker, the field table) is checked against the whole tree. Zero findings in both trees,
+      # so no baseline. Output is shown even when it passes, so writes whose value cannot be
+      # judged are seen.
+      verbose: true
+      require_serial: true
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_(wormhole_b0|blackhole)/.*\.(h|hpp)|
+          tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
+          tt_metal/tt-llk/infra/check_sticky_cfg_restore\.py|
+          tt_metal/tt-llk/infra/sticky_cfg_fields\.yaml
+        )$
+    - id: llk-format-field-mask
+      name: "llk: DataFormat masked before a shift into a 4-bit config field"
+      entry: python3 tt_metal/tt-llk/infra/check_format_field_mask.py
+      language: system
+      # Blocking. Fails only when a format value is shifted unmasked into a 4-bit field AND the
+      # write's mask covers the bit the spill (bit 4 of UInt8 = 30 / UInt32 = 24) lands on; a
+      # single-field RMW drops that bit at the register and is never a finding. A commit touching
+      # the checker is checked against the whole tree. Quasar's format fields are 5 bits wide and
+      # written through bitfields, so that tree is out of scope.
+      require_serial: true
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_(wormhole_b0|blackhole)/.*\.(h|hpp)|
+          tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
+          tt_metal/tt-llk/infra/check_format_field_mask\.py
+        )$
+    - id: llk-xthread-cfg-wormhole
+      name: "llk: cross-thread config write (wormhole)"
+      entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
+      language: system
+      # The touched files are passed so the check can scope its verdict: a commit fails only on
+      # findings at, or caused by, what it touched -- never on unrelated debt elsewhere -- and a
+      # commit touching a verdict input (checker, defs, consumers, baseline) is checked against
+      # the whole tree. Output is shown even when it passes, so the advisory findings and the
+      # unclassified-write note are seen rather than swallowed.
+      verbose: true
+      # Every run parses the whole tree for ownership, so parallel batches only repeat that work
+      # and print the same output several times: run once.
+      require_serial: true
+      args: ["--arch", "wormhole_b0",
+             "--defs", "tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h",
+             "--tree", "tt_metal/tt-llk/tt_llk_wormhole_b0",
+             "--baseline", "tt_metal/tt-llk/infra/xthread_cfg_baseline_wormhole_b0.txt"]
+      # Every input the verdict depends on, not just the tree: a change to the register
+      # definitions, the consumer table or the checker itself moves the answer on headers
+      # this commit does not touch.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_wormhole_b0/.*\.(h|hpp)|
+          tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h|
+          tt_metal/tt-llk/infra/cfg_consumers\.yaml|
+          tt_metal/tt-llk/infra/check_cross_thread_cfg\.py|
+          tt_metal/tt-llk/infra/xthread_cfg_baseline_wormhole_b0\.txt
+        )$
+    - id: llk-xthread-cfg-blackhole
+      name: "llk: cross-thread config write (blackhole)"
+      entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
+      language: system
+      # The touched files are passed so the check can scope its verdict: a commit fails only on
+      # findings at, or caused by, what it touched -- never on unrelated debt elsewhere -- and a
+      # commit touching a verdict input (checker, defs, consumers, baseline) is checked against
+      # the whole tree. Output is shown even when it passes, so the advisory findings and the
+      # unclassified-write note are seen rather than swallowed.
+      verbose: true
+      # Every run parses the whole tree for ownership, so parallel batches only repeat that work
+      # and print the same output several times: run once.
+      require_serial: true
+      args: ["--arch", "blackhole",
+             "--defs", "tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h",
+             "--tree", "tt_metal/tt-llk/tt_llk_blackhole",
+             "--baseline", "tt_metal/tt-llk/infra/xthread_cfg_baseline_blackhole.txt"]
+      # Quasar is deliberately absent: it writes config via cfg_rmw/RMWCIB, which this checker
+      # does not model, so it would report a vacuous zero. The script refuses that arch outright.
+      # Every input the verdict depends on, not just the tree: a change to the register
+      # definitions, the consumer table or the checker itself moves the answer on headers
+      # this commit does not touch.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_blackhole/.*\.(h|hpp)|
+          tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h|
+          tt_metal/tt-llk/infra/cfg_consumers\.yaml|
+          tt_metal/tt-llk/infra/check_cross_thread_cfg\.py|
+          tt_metal/tt-llk/infra/xthread_cfg_baseline_blackhole\.txt
+        )$
+    - id: llk-redundant-drain
+      name: "llk: drain that orders nothing (advisory)"
+      entry: python3 tt_metal/tt-llk/infra/check_redundant_drain.py
+      language: system
+      # Advisory only: the script always exits 0. A `mop_sync()` directly before a `tensix_sync()`,
+      # or a drain after which nothing in the function needs the RISC to wait, is printed so the
+      # author sees it at commit time; a drain that lands anyway is followed up by the
+      # llk-redundant-drain workflow, which files an issue against the merge that added it.
+      verbose: true
+      # One batch: the batch holding the checker or the baseline rescans the repository, and
+      # parallel batches would print findings and the summary more than once.
+      require_serial: true
+      args: ["--baseline", "tt_metal/tt-llk/infra/redundant_drain_baseline.txt"]
+      # The whole repository: LLK trees, ckernels, compute API, firmware and every compute
+      # kernel. The script reads only files that call a drain. Quasar's drains are a different
+      # mechanism and are skipped; vendored code is not ours.
+      files: |
+        (?x)^(
+          .*\.(h|hpp|cpp|cc)|
+          tt_metal/tt-llk/infra/check_redundant_drain\.py|
+          tt_metal/tt-llk/infra/redundant_drain_baseline\.txt
+        )$
+      exclude: ^tt_metal/third_party/
     - id: llk-fix-cstdint
       name: "llk: fix std::uint*_t and add cstdint include"
       entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py

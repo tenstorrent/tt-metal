@@ -26,13 +26,12 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SILU,
     ACTIVATION_SITU,
     ACTIVATION_SWIGLUOAI,
-    TorchExpert,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -43,6 +42,8 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _ISL_EXHAUSTIVE_SWEEP,
     _ISL_FUNCTIONAL_SWEEP,
     SINGLE_EXPERT_MODELS,
+    expert_golden,
+    expert_weights,
 )
 
 SINGLE_CHIP_MESH_PARAMS = [
@@ -81,6 +82,7 @@ def run_routed_expert_hybrid(
     threshold: Optional[int],
     active_tokens: int = None,
     x_row_major: bool = True,
+    weights_dram_sharded: bool = False,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -110,31 +112,15 @@ def run_routed_expert_hybrid(
 
     signpost(
         f"RoutedExpertHybrid {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=} "
-        f"{threshold=} {owner=} {activation=}"
+        f"{threshold=} {owner=} {weights_dram_sharded=} {activation=}"
     )
 
-    torch.manual_seed(42)
-    # torch.nn.Linear convention (out_features, in_features), which is what TorchExpert reads.
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
-    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
+    torch_active, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
+
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)
     torch_input[:active_tokens] = torch_active
-
-    with torch.no_grad():
-        torch_expert = TorchExpert(
-            emb_dim,
-            hidden_dim,
-            weights,
-            activation=torch_activation,
-            situ_beta=_SITU_BETA_GATE,
-            situ_linear_beta=_SITU_BETA_UP,
-        )
-        torch_output_active = torch_expert(torch_active)
 
     # TtRoutedExpert branches on x layout: ROW_MAJOR is bf16 (tilized and bf8-packed inside the op),
     # TILE is consumed directly as bf8. Pair dtype with layout so each variant drives its real path.
@@ -165,6 +151,9 @@ def run_routed_expert_hybrid(
         weights_dtype=weights_dtype,
         activation=activation,
         hybrid_token_threshold=threshold,
+        # One weight set serves both bands, so a placement is not a per-band choice: whichever band
+        # claims the count reads the weights in the layout the module built them in.
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
     tt_output = tt_expert(tt_input, idx_tensor([active_tokens]), idx_tensor([0]))
 
@@ -209,8 +198,8 @@ def _xfail_blackhole(request, silicon_arch_name):
 
 def _isl_params(active_sweep, only_models=None):
     """Per-model dims and shipped threshold crossed with a token sweep, all against the fixed
-    _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so non-baseline models stay gated
-    behind the extended_model marker; `only_models` restricts to a subset of model names.
+    _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so every model runs; `only_models`
+    restricts to a subset of model names.
 
     A model with no threshold is dropped rather than run at `None`: that is the single-op path
     test_single_routed_expert already grades, and it would not exercise a split at all.
@@ -220,7 +209,7 @@ def _isl_params(active_sweep, only_models=None):
     split either, so there would be nothing here for it to grade.
     """
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         threshold = _threshold_of(config)
@@ -234,7 +223,6 @@ def _isl_params(active_sweep, only_models=None):
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
                     threshold,
-                    marks=pytest.mark.extended_model if extended else (),
                     # "-t" keeps ids collision-free under -k: "512" is a substring of "5120".
                     id=f"{name}-t{active}",
                 )
@@ -246,10 +234,10 @@ def _isl_params(active_sweep, only_models=None):
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim, threshold", _isl_params(_ISL_FUNCTIONAL_SWEEP)
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="the hybrid dispatch is Blackhole-only")
 def test_tt_routed_expert_hybrid_functional(
     mesh_device,
@@ -277,11 +265,15 @@ def test_tt_routed_expert_hybrid_functional(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+# DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
+# of one per tile. Swept here rather than only per-op because the split hands the same weight
+# tensors to whichever band claims the count, so both ops must read the placement.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim, threshold",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="the hybrid dispatch is Blackhole-only")
 def test_tt_routed_expert_hybrid_isl_sweep(
     mesh_device,
@@ -292,10 +284,9 @@ def test_tt_routed_expert_hybrid_isl_sweep(
     hidden_dim: int,
     threshold: Optional[int],
     x_row_major: bool,
+    weights_dram_sharded: bool,
 ):
-    """The aligned sweep, which straddles each model's threshold in both directions: kimi_k26's
-    sentinel keeps every count fused, glm_51's 1792 puts 1024 and below in the fused band and 2048
-    and above in the composite's."""
+    """The aligned sweep, which straddles each model's threshold in both directions."""
     run_routed_expert_hybrid(
         mesh_device,
         allocated_tokens,
@@ -304,4 +295,5 @@ def test_tt_routed_expert_hybrid_isl_sweep(
         threshold,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        weights_dram_sharded=weights_dram_sharded,
     )

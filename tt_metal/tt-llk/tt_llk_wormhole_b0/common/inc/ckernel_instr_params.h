@@ -272,9 +272,6 @@ struct p_zeroacc
     constexpr static std::uint32_t CLR_ALL      = 0b011;
     constexpr static std::uint32_t CLR_HALF_32B = 0b110;
     constexpr static std::uint32_t CLR_ALL_32B  = 0b111;
-    // Value for the row-select operand -- `where` on Blackhole, `dst` on Wormhole -- that clears nothing,
-    // leaving the instruction a no-op apart from applying its AddrMode to the address counters.
-    constexpr static std::uint32_t WHERE_NOP = 0xff;
 };
 
 struct p_zerosrc
@@ -376,8 +373,9 @@ struct p_sfpswap
     constexpr static std::uint32_t ROWS_03_MAX     = 4;
     constexpr static std::uint32_t ROW_0_MAX       = 5;
     constexpr static std::uint32_t ROW_1_MAX       = 6;
-    constexpr static std::uint32_t ROW_2_MAX       = 5;
-    constexpr static std::uint32_t ROW_3_MAX       = 6;
+    // ROW_2_MAX/ROW_3_MAX were wrongly aliased to ROW_0/ROW_1 (5/6); the ISA (and the Quasar copy) define them as 7/8.
+    constexpr static std::uint32_t ROW_2_MAX = 7;
+    constexpr static std::uint32_t ROW_3_MAX = 8;
 };
 
 struct p_exp

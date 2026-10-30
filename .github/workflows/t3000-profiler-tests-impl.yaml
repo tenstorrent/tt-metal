@@ -47,23 +47,27 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        # "profiler" subheading is temporary while team / test-framework
-        # assignment is being settled, see
-        # https://github.com/tenstorrent/tt-metal/issues/44285
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "profiler"
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Build test matrix
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "wh_llmbox" \
-            ./.github/sku_config.yaml
+        uses: ./ci-main/.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "wh_llmbox"
+          sku-config: ./.github/sku_config.yaml
 
   t3000-profiler-tests:
     needs: load-test-matrix
@@ -117,7 +121,7 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          bash tests/scripts/t3000/run_t3000_profiler_tests.sh ${{ matrix.test-group.cmd }}
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

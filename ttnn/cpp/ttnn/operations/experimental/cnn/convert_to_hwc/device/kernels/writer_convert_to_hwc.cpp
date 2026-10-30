@@ -32,6 +32,7 @@ void kernel_main() {
     constexpr uint32_t input_num_blocks = get_compile_time_arg_val(11);
     constexpr uint32_t l1_write_output_addr_stride = get_compile_time_arg_val(12);
     constexpr uint32_t block_size_bytes = get_compile_time_arg_val(13);
+    constexpr auto input_args = TensorAccessorArgs<14>();
 
     constexpr uint32_t channel_size = num_output_channels_padded * element_size_bytes;
 
@@ -52,10 +53,13 @@ void kernel_main() {
     experimental::CB cb_out_obj(cb_out);
 
     const uint32_t base_l1_write_addr = cb_out_obj.get_write_ptr() + initial_l1_write_addr_offset;
-    uint32_t l1_output_write_addr = base_l1_write_addr;
 
     // Process each blocked transfer group
     for (uint32_t block_id = 0; block_id < num_blocks && block_id < input_num_blocks; block_id++) {
+        // Output write address for this block. Per-tile advance skips the other
+        // writer, so it is not used to move from one block to the next.
+        // Assumes equal-width blocks (select_block_size + TT_FATAL in the program factory).
+        uint32_t l1_output_write_addr = base_l1_write_addr + block_id * block_size_bytes;
         if constexpr (is_reader) {
             cb_in_batch_obj.reserve_back(input_block_size_sticks_per_core);
 
@@ -71,16 +75,18 @@ void kernel_main() {
 
                 // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
                 if constexpr (is_input_in_dram) {
-                    // DRAM bank-id read via the AllocatorBank<DRAM> endpoint. Folding src_offset_bytes into the
-                    // bank address offset is equivalent to the legacy bank-id addr-gen result plus
-                    // src_offset_bytes: both land the offset in the NOC address's low bits below
-                    // NOC_ADDR_COORD_SHIFT (see the DRAM bank-id addr-gen in dataflow_api_addrgen.h).
-                    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                    // DRAM bank-id read via a BankView of the input tensor: src_offset_bytes is the offset into
+                    // the tensor's region of bank bank_id. Folding it into the bank address offset is equivalent
+                    // to the legacy bank-id addr-gen result plus src_offset_bytes: both land the offset in the
+                    // NOC address's low bits below NOC_ADDR_COORD_SHIFT (see the DRAM bank-id addr-gen in
+                    // dataflow_api_addrgen.h).
+                    const auto input_accessor = TensorAccessor(input_args, dram_base_read_addr);
+                    const BankView dram_bank(input_accessor);
                     noc.async_read(
                         dram_bank,
                         cb_in_batch_obj,
                         transfer_size_bytes,
-                        {.bank_id = bank_id, .addr = dram_base_read_addr + src_offset_bytes},
+                        {.bank_id = bank_id, .offset_bytes = src_offset_bytes},
                         {.offset_bytes = dst_offset_bytes});
                 } else {
                     UnicastEndpoint src_ep;

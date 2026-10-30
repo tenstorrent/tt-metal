@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -34,7 +35,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -89,19 +90,22 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
 
     constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding output staging
+    // Count double buffering inside the budget. Applying it afterwards asks for twice the budget.
+    uint32_t buffering_size = 1;
+    if (!output_sharded && (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1)) {
+        buffering_size = 2;
+    }
     uint32_t chunk_size;
     uint32_t num_chunks;
     uint32_t last_chunk_size;
-    bool use_chunked = !output_sharded && rounded_weight_page_size > max_l1_budget_bytes;
+    bool use_chunked = !output_sharded && rounded_weight_page_size * buffering_size > max_l1_budget_bytes;
     if (use_chunked) {
-        chunk_size = (max_l1_budget_bytes / alignment) * alignment;
+        chunk_size = ((max_l1_budget_bytes / buffering_size) / alignment) * alignment;
         chunk_size = std::max(chunk_size, alignment);
         num_chunks = (rounded_weight_page_size + chunk_size - 1) / chunk_size;
         last_chunk_size = rounded_weight_page_size - (num_chunks - 1) * chunk_size;
@@ -115,7 +119,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     if (output_sharded) {
         out_dfb_total_size = output.buffer()->aligned_size_per_bank();
     } else {
-        uint32_t buffering_size = (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1) ? 2 : 1;
         out_dfb_total_size = buffering_size * chunk_size;
     }
 
@@ -130,8 +133,11 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     const KernelSpecName WRITER{"writer"};
 
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    // The reader's private copy of the weight rows it serves locally: it fills it and reads tokens
+    // back out of it, both over the NoC.
+    const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
+    // The reader's private page for the block of indices it is working through.
+    const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -143,55 +149,53 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // -----------------------------------------------------------------------
     // Dataflow buffers
     // -----------------------------------------------------------------------
-    // The staging buffer's total size has to divide evenly by its entry size. The two are derived from
-    // different alignments, the entry size from the index buffer's and the sharded total from the
-    // output shard's own, so they can disagree. Nothing downstream would catch a truncated entry
-    // count: when the output is sharded the reader stages one entry per output row and no kernel
-    // drains the buffer, so a short buffer stalls the reader partway through its rows.
+    // The output's total size has to divide evenly by the per-row stride. The two are derived from
+    // different alignments, the stride from the index buffer's and the sharded total from the output
+    // shard's own, so they can disagree.
     TT_FATAL(
         out_dfb_total_size % chunk_size == 0,
         "Embedding output staging buffer size {} B must be divisible by its entry size {} B",
         out_dfb_total_size,
         chunk_size);
 
-    DataflowBufferSpec out_dfb{
-        .unique_id = OUTPUT,
-        .entry_size = chunk_size,
-        .num_entries = out_dfb_total_size / chunk_size,
-        .data_format_metadata = weights_data_format,
-    };
     if (output_sharded) {
-        // The staging buffer *is* the output shard: it is built on the output tensor's own SRAM, so
-        // the rows the reader gathers land in place and no writer kernel is created below.
-        out_dfb.borrowed_from = OUTPUT_PARAM;
-    }
-    spec.dataflow_buffers.push_back(std::move(out_dfb));
-
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = INDEX_SCRATCH,
-        .entry_size = block_height * index_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
-    });
-
-    if (use_local_cache) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        // PADDED caches the single pad row; BINARY caches rows 0 and 1.
+        // The reader gathers its rows straight into the output shard, one chunk_size-strided row per
+        // output row, through a LocalTensorAccessor on the output tensor; there is no staging buffer
+        // and no writer kernel. Nothing on the device bounds those writes, so check here that this
+        // core's rows fit in the shard.
+        TT_FATAL(
+            num_blocks_per_core_group_1 * chunk_size <= out_dfb_total_size,
+            "Embedding sharded output: {} rows of {} B do not fit in the {} B output shard",
+            num_blocks_per_core_group_1,
+            chunk_size,
+            out_dfb_total_size);
+    } else {
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = WEIGHT_CACHE,
-            .entry_size = cache_page_size,
-            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
+            .unique_id = OUTPUT,
+            .entry_size = chunk_size,
+            .num_entries = out_dfb_total_size / chunk_size,
             .data_format_metadata = weights_data_format,
         });
+    }
+
+    uint32_t index_page_size = tt::round_up(input_element_size_bytes, 32u);
+    Group<ScratchpadSpec> scratchpads;
+    scratchpads.push_back(
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = block_height * index_page_size});
+
+    if (use_local_cache) {
+        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
+        // PADDED caches the single pad row; BINARY caches rows 0 and 1.
+        const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }
 
     // -----------------------------------------------------------------------
     // Tensor parameters
     //
     // The output parameter is declared in every configuration: the writer binds it when the output is
-    // interleaved, and the borrowed staging buffer resolves its address from it when the output is
-    // sharded.
+    // interleaved, and the reader binds it when the output is sharded.
     // -----------------------------------------------------------------------
     spec.tensor_parameters.push_back(
         TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
@@ -204,45 +208,32 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // Reader
     // -----------------------------------------------------------------------
     Group<DFBBinding> reader_dfb_bindings;
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = OUTPUT,
-        .accessor_name = "in0",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
+    Group<TensorBinding> reader_tensor_bindings = {
+        TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
+        TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
+    };
     if (output_sharded) {
-        // With no writer kernel the reader is the staging buffer's only endpoint, so it holds both
-        // roles.
+        // The reader writes its rows straight into its own output shard.
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "out_shard"});
+    } else {
+        // The reader stages rows for the writer kernel to drain.
         reader_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = OUTPUT,
             .accessor_name = "in0",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
-    });
-    if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel.
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
             .endpoint_type = DFBEndpointType::PRODUCER,
         });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+    }
+    // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
+    // reader's private scratchpad.
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    reader_scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
+    if (use_local_cache) {
+        // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
+        // another kernel, so it is the reader's private scratchpad too.
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
     }
 
     EmbeddingsIndexType embeddings_index_type;
@@ -252,14 +243,18 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a scratch:: handle exists only on the builds
     // where the host binds it, so the reader's reference to it is compiled out under the same defines
     // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
     };
+    if (output_sharded) {
+        // Selects the reader's output-shard path; it shares the condition of the out_shard binding.
+        embedding_defines.insert({"OUTPUT_SHARDED", "1"});
+    }
 
     Group<std::string> reader_rta_names = {"batch_offset", "weights_offset", "num_rows", "index_idx"};
     if (embeddings_type == EmbeddingsType::PADDED) {
@@ -271,11 +266,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
-        .tensor_bindings =
-            {
-                TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
-                TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
-            },
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
+        .tensor_bindings = std::move(reader_tensor_bindings),
         .compile_time_args =
             {
                 {"input_page_size", input_page_size},
@@ -287,8 +279,11 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
                 {"last_chunk_size", last_chunk_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
+
+    // The reader's index scratchpad, plus its weight cache under PADDED / BINARY.
+    spec.scratchpads = std::move(scratchpads);
 
     // -----------------------------------------------------------------------
     // Writer
@@ -320,7 +315,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
                         {"last_chunk_size", last_chunk_size},
                     },
                 .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_id"}},
-                .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+                .hw_config = ttnn::create_writer_datamovement_config(),
             });
         } else {
             spec.kernels.push_back(KernelSpec{
@@ -333,7 +328,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
                         TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
                     },
                 .runtime_arg_schema = {.runtime_arg_names = {"stick_size", "num_sticks", "start_id"}},
-                .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+                .hw_config = ttnn::create_writer_datamovement_config(),
             });
         }
     }

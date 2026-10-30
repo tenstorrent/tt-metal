@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -40,7 +41,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
     uint32_t output_element_size_bytes = output.element_size();
 
@@ -74,8 +74,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
@@ -91,8 +89,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     const KernelSpecName WRITER{"writer"};
 
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    const ScratchpadSpecName INDEX_SCRATCH{"index_scratch"};
+    const ScratchpadSpecName WEIGHT_CACHE{"weight_cache"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -117,22 +115,21 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .data_format_metadata = weights_data_format,
     });
 
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+    // The reader loads one full input page of indices (`input.get_aligned_page_size()`) into this scratch buffer,
+    // then decodes faces via face_offset. Size it to the input's aligned page size to avoid Watcher NOC sanitize overflows.
+    uint32_t index_tile_page_size = a.buffer()->aligned_page_size();
+    spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = INDEX_SCRATCH,
-        .entry_size = FACE_HEIGHT * index_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .size_per_node = index_tile_page_size,
     });
 
     if (use_local_cache) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
+        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
+        spec.scratchpads.push_back(ScratchpadSpec{
             .unique_id = WEIGHT_CACHE,
-            .entry_size = cache_page_size,
-            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
-            .data_format_metadata = weights_data_format,
+            .size_per_node = cache_entries * cache_page_size,
         });
     }
 
@@ -155,31 +152,16 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .accessor_name = "in0",
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
-    });
+    // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
+    // reader's private scratchpad.
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    reader_scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH, .accessor_name = "in1"});
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel.
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
+        // another kernel, so it is the reader's private scratchpad too.
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE, .accessor_name = "local_cache"});
     }
 
     EmbeddingsIndexType embeddings_index_type;
@@ -189,8 +171,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a scratch:: handle exists only on the builds
     // where the host binds it, so the reader's reference to it is compiled out under the same defines
     // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
@@ -207,6 +189,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
         .compiler_options = {.defines = std::move(embedding_defines)},
         .dfb_bindings = std::move(reader_dfb_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
@@ -220,7 +203,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"tile_offset", "face_offset", "num_rows", "curr_col", "starting_index"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // -----------------------------------------------------------------------
@@ -242,7 +225,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
                 TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"stick_size", "num_sticks", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     spec.work_units.push_back(WorkUnitSpec{

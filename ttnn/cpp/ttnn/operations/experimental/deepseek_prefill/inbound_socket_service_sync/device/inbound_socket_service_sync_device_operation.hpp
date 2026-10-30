@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -21,7 +22,7 @@ namespace ttnn::experimental::prim {
 struct InboundSocketServiceSyncOperation {
     using operation_attributes_t = InboundSocketServiceSyncParams;
     using tensor_args_t = InboundSocketServiceSyncInputs;
-    // tokens (always) + metadata (only when metadata_size_bytes > 0).
+    // tokens (always) + overhang (overhang_size_bytes > 0) + metadata (metadata_size_bytes > 0), in that order.
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<InboundSocketServiceSyncProgramFactory>;
@@ -46,14 +47,26 @@ namespace ttnn::prim {
 
 // Launch helper. Snapshots the per-coord service state out of `service`, then
 // runs the device operation (which builds-once / caches the program).
-// Returns [tokens] or [tokens, metadata] (when metadata_size_bytes > 0).
+//
+// The optional trailing arguments are caller-owned destinations, one per output;
+// see InboundSocketServiceSyncInputs.
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes);
+    const tt::tt_metal::H2DStreamService& service,
+    uint32_t metadata_size_bytes,
+    uint32_t overhang_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& overhang_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& metadata_out = std::nullopt);
 
 // Same op, draining a D2DStreamServiceReceiver's backing tensor (disaggregated-
 // prefill device->device path). The receiver exposes the same getters as
 // H2DStreamService, so it runs the identical device operation.
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes);
+    const ttnn::D2DStreamServiceReceiver& service,
+    uint32_t metadata_size_bytes,
+    uint32_t overhang_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& overhang_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& metadata_out = std::nullopt);
 
 }  // namespace ttnn::prim

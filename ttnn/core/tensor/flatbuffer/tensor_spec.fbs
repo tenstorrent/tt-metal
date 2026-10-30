@@ -83,7 +83,16 @@ enum DataType : ubyte {
     UInt16 = 6,
     Int32 = 7,
     Int8 = 8,
-    Invalid = 9
+    Invalid = 9,
+    // Appended after Invalid so existing serialized values keep their meaning.
+    MxFp8E4M3 = 10,
+    MxFp8E5M2 = 11,
+    MxFp6E2M3 = 12,
+    MxFp6E3M2 = 13,
+    MxFp4 = 14,
+    MxInt8 = 15,
+    MxInt4 = 16,
+    MxInt2 = 17
 }
 
 table RowMajorPageConfig {}
@@ -103,6 +112,7 @@ table MemoryConfig {
     nd_shard_spec: NdShardSpec;
     created_with_nd_shard_spec: bool;
     per_core_allocation: bool = false;
+    range_lockstep_allocation: bool = false;
 }
 
 table TensorLayout {

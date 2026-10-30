@@ -17,6 +17,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
 
@@ -67,6 +68,7 @@ extern const m2::DFBSpecName EX;             // combined E[x]
 extern const m2::DFBSpecName EX_EXTERNAL;    // partial E[x] gathered from the other cores
 extern const m2::DFBSpecName EX_PARTIAL2;    // this core's partial Var[x] (or E[x^2])
 extern const m2::DFBSpecName EX2;            // combined Var[x] (or E[x^2])
+extern const m2::DFBSpecName EX2_LOCAL;      // combined Var[x] (or E[x^2]) kept on the core that applies it
 extern const m2::DFBSpecName EX_EXTERNAL2;   // partial Var[x] gathered from the other cores
 extern const m2::DFBSpecName MASK_SCRATCH;   // column-masked copy of the input, for the E[x] reduce
 extern const m2::DFBSpecName EX_GLOBAL;      // final statistics, multicast to every core
@@ -187,6 +189,8 @@ struct DFBSizeParams {
     uint32_t block_wt_resharded = 0;
     uint32_t Kt = 0;
     uint32_t in_single_tile_size = 0;
+    // Tile size of the fused pre-add residual; it may differ from the input's dtype.
+    uint32_t residual_single_tile_size = 0;
     uint32_t single_tile_size = 0;
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
@@ -268,6 +272,9 @@ struct SpecConfig {
     // Exposes the Welford intake under a second buffer index configured for UnpackToDest, so
     // transpose_tile does not truncate Float32 input to TF32 on the SrcA path.
     bool welford_fp32_alias = false;
+    // The cross-core reduce runs in two stages. Only then does the non-distributed Var[x] reduce have a
+    // first-stage result for the reader to gather, so only then does it need the ex2 buffer.
+    bool use_two_stage_reduce = false;
 
     // Buffer sizes
     DFBSizeParams::Sizes sizes;
@@ -276,6 +283,7 @@ struct SpecConfig {
 
     // Data formats
     tt::DataFormat in_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat residual_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat dfb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat out_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat gamma_dfb_data_format = tt::DataFormat::Float16_b;
@@ -285,6 +293,7 @@ struct SpecConfig {
 
     // Tile sizes
     uint32_t in_single_tile_size = 0;
+    uint32_t residual_single_tile_size = 0;
     uint32_t single_tile_size = 0;
     uint32_t out_single_tile_size = 0;
     uint32_t gamma_single_tile_size = 0;
@@ -304,7 +313,6 @@ struct SpecConfig {
     uint32_t tile_width = 32;
     bool fp32_dest_acc_en = false;
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     float eps = 0.0f;
     uint32_t per_core_recip_lut_size = 0;
 
@@ -432,7 +440,7 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
+    const MeshDevice& device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,

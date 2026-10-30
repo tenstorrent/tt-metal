@@ -16,6 +16,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/layout/page_config.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn::prim::qsr {
 RmPlan make_rm_plan(

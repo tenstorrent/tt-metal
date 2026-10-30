@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_unified_program_factory.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -28,7 +29,8 @@ struct MatmulDeviceOperation {
         MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory,  // gather_in0 legacy path
         MatmulMultiCoreReuseMcast2DProgramFactory,
         MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
-        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>;
+        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory,
+        MatmulUnifiedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

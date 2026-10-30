@@ -10,6 +10,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 using fds_filter::kPayloadGo;
@@ -26,7 +27,7 @@ constexpr uint32_t kPulseRepeats = 8;
 
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
-    constexpr uint32_t worker_mask = get_named_compile_time_arg_val("worker_mask");
+    constexpr uint32_t worker_mask = overlay::fds_signalling::all_worker_lanes_mask;
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
 
     fds_kernel::status_ptr status = fds_kernel::begin_dispatch(l1_address, kNumSlots);
@@ -39,7 +40,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kSessionGo);
+    overlay::FdsDispatch::fds_go(kSessionGo);
 
     uint32_t result = kComplete;
     constexpr uint32_t num_steps = sizeof(kStepTokens) / sizeof(kStepTokens[0]);
@@ -62,7 +63,7 @@ void kernel_main() {
                 // would prove the filter; the repetition is for a filterless model, whose brief
                 // capture of a payload could fall between two of the worker's polls.
                 for (uint32_t i = 0; i < kPulseRepeats; i++) {
-                    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kPayloadGo);
+                    overlay::FdsDispatch::fds_go(kPayloadGo);
                     overlay::FdsDispatch::fds_clear_go();
                     overlay::FdsDispatch::fds_read_group_count(kTokenArmed);
                 }
@@ -70,12 +71,12 @@ void kernel_main() {
             case kTokenPulseChecked:
                 // The held value: stable until the worker reports capture, so the long filter must
                 // pass it.
-                overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kPayloadGo);
+                overlay::FdsDispatch::fds_go(kPayloadGo);
                 break;
             case kTokenRearmed:
                 // A fresh change for the floor-threshold capture.
                 overlay::FdsDispatch::fds_clear_go();
-                overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kPayloadGo);
+                overlay::FdsDispatch::fds_go(kPayloadGo);
                 break;
             case kTokenDone: overlay::FdsDispatch::fds_clear_go(); break;
         }

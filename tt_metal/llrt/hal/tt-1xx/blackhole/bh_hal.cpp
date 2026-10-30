@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "rtoptions.hpp"
@@ -91,10 +91,13 @@ namespace tt::tt_metal {
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 private:
     bool enable_2_erisc_mode_;
+    bool enable_aerisc_ptp_trace_;
 
 public:
-    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
-        HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
+    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode, bool enable_aerisc_ptp_trace) :
+        HalJitBuildQueryBase(hal),
+        enable_2_erisc_mode_(enable_2_erisc_mode),
+        enable_aerisc_ptp_trace_(enable_aerisc_ptp_trace) {}
 
     std::string linker_flags([[maybe_unused]] const Params& params) const override {
         // Suppress LTO false positive on the device-print lock's atomic exchange.
@@ -132,8 +135,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 8 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(11);
+        // Upper bound: 9 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(12);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
@@ -144,6 +147,7 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole/noc");
         includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/llk_lib");
+        includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -176,9 +180,11 @@ public:
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             if (enable_2_erisc_mode_) {
                 defines.push_back("ENABLE_2_ERISC_MODE");
-                defines.push_back("PHYSICAL_AERISC_ID=" + std::to_string(params.processor_id));
-            } else {
-                defines.push_back("PHYSICAL_AERISC_ID=1");
+            }
+            defines.push_back(
+                "PHYSICAL_AERISC_ID=" + std::to_string(hal_.get_active_eth_physical_erisc(params.processor_id)));
+            if (enable_aerisc_ptp_trace_) {
+                defines.push_back("AERISC_PTP_TRACE_SUPPORTED");
             }
         }
         return defines;
@@ -241,9 +247,7 @@ public:
     }
 
     std::string rvv_compile_flags(const Params& params) const override {
-        // Only the pack TRISC (TRISC2) fronts the Tensix vector unit on Blackhole.
-        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
-              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id == 2)) {
+        if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
         // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
@@ -254,7 +258,7 @@ public:
         // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
         // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
         // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
-        // The link itself stays stock (-flto=auto): a fat-free object simply opts out of LTO.
+        // The link itself stays stock: a fat-free object simply opts out of LTO.
         //
         // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reachable through
         // explicit intrinsics; keep the auto-vectorizers from touching scalar kernel/LLK code.
@@ -325,7 +329,8 @@ void Hal::initialize_bh(
     std::uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) {
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_aerisc_ptp_trace) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -333,17 +338,21 @@ void Hal::initialize_bh(
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
     HalCoreInfoType tensix_mem_map = blackhole::create_tensix_mem_map();
+    tensix_mem_map.num_physical_riscs_ = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
     this->core_info_.push_back(tensix_mem_map);
 
     HalCoreInfoType active_eth_mem_map = blackhole::create_active_eth_mem_map(enable_2_erisc_mode);
+    active_eth_mem_map.num_physical_riscs_ = static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_.push_back(active_eth_mem_map);
 
     HalCoreInfoType idle_eth_mem_map = blackhole::create_idle_eth_mem_map();
+    idle_eth_mem_map.num_physical_riscs_ = static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_.push_back(idle_eth_mem_map);
 
     if (!is_simulator && enable_blackhole_dram_programmable_cores) {
         // Dram cores are opt-in on Blackhole and are not yet supported in simulator.
         HalCoreInfoType dram_mem_map = blackhole::create_dram_mem_map();
+        dram_mem_map.num_physical_riscs_ = static_cast<uint32_t>(DramProcessorTypes::COUNT);
         this->core_info_.push_back(dram_mem_map);
     }
 
@@ -417,6 +426,8 @@ void Hal::initialize_bh(
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
+            (addr == RISCV_DEBUG_REG_WALL_CLOCK_L ||
+             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||                // read by the streaming profiler's clock sync
             (addr == IERISC_RESET_PC ||
              addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
             (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW
@@ -478,8 +489,16 @@ void Hal::initialize_bh(
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
+    this->noc_stream_remote_dest_words_free_width_ = REMOTE_DEST_WORDS_FREE_WIDTH;
+    this->noc_stream_remote_src_reg_index_ = STREAM_REMOTE_SRC_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
+    this->risc_soft_reset_addr_ = RISCV_DEBUG_REG_SOFT_RESET_0;
+    this->wall_clock_low_addr_ = RISCV_DEBUG_REG_WALL_CLOCK_L;
+    this->wall_clock_high_addr_ = RISCV_DEBUG_REG_WALL_CLOCK_H;
+    // In single-ERISC mode, base firmware keeps ERISC0 and the one processor runs on ERISC1.
+    this->active_eth_physical_eriscs_ = enable_2_erisc_mode ? std::vector<uint32_t>{0, 1} : std::vector<uint32_t>{1};
+    this->supports_fds_ = false;
     this->noc_topology_ = NoCTopologyType::TORUS;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
@@ -507,6 +526,9 @@ void Hal::initialize_bh(
     this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
     this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
     this->supports_64_bit_pcie_addressing_ = true;
+    // The top 512 MiB of the PCIe tile's NoC address space is its SerDes, PCIe controller and NIU configuration
+    // (same document as above).
+    this->pcie_tile_local_noc_addr_base_ = 0xFFFF'FFFF'E000'0000ULL;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -524,7 +546,8 @@ void Hal::initialize_bh(
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode);
+    this->jit_build_query_ =
+        std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode, enable_aerisc_ptp_trace);
 
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();

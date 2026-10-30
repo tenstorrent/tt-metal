@@ -5,9 +5,10 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/cluster.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
 #include <cstddef>
@@ -19,22 +20,21 @@
 #include <set>
 #include <tuple>
 #include <unordered_map>
+#include <filesystem>
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/chip_helpers/sysmem_buffer.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/types/host_memory.hpp>
+#include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/io_window_config.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/types/host_memory.hpp>
 
 namespace tt {
 namespace llrt {
@@ -64,6 +64,10 @@ public:
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
+    // Non-Quasar .so simulators and builds with ip_layout.yaml return an empty target set,
+    // leaving chip discovery and TT_VISIBLE_DEVICES filtering to UMD.
+    // Other builds, including Quasar .so simulators without a layout, target chip 0.
+    static std::unordered_set<ChipId> simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
@@ -124,6 +128,7 @@ public:
         ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
     const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_worker_cores(ChipId chip_id) const;
     const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_eth_cores(ChipId chip_id) const;
+    IpVariant get_quasar_ip_variant() const;
 
     uint32_t get_harvesting_mask(ChipId chip) const {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
@@ -141,13 +146,26 @@ public:
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
-        const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId device_id,
+        int dram_view,
+        uint64_t addr,
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
-    // Write to core. Accepts physical noc coordinates
-    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    // Without an explicit ordering, writes to DRAM cores are Relaxed and all others Strict. Large writes can go through
+    // PCIe DMA instead of MMIO, see Hal::get_dma_write_min_bytes. Relaxed writes are not ordered against any other
+    // write until a barrier.
+    void write_core(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        tt_cxy_pair core,
+        uint64_t addr,
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
 
-    // Access physical noc coordinates. Does write without effects of write combining
+    // Access physical noc coordinates. Does write without effects of write combining. On a remote chip a payload
+    // that lies in L1 or a DRAM bank goes out as a block; anything else keeps register-width writes.
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     // Write to core without effects of write combining
@@ -201,38 +219,6 @@ public:
         tt::tt_metal::CoreCoord core_end,
         uint64_t addr) const;
 
-    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
-        tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
-        return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
-    }
-
-    /**
-     * Returns a pointer to the static TLB window associated with the given target.
-     *
-     * Ownership:
-     *   - The returned TlbWindow is owned and managed by the underlying driver.
-     *   - Callers must not delete, free, or otherwise take ownership of the pointer.
-     *
-     * Lifetime:
-     *   - The pointer remains valid for as long as the underlying driver/device
-     *     context for this Cluster instance remains initialized and the static TLB
-     *     configuration is not torn down by the driver.
-     *   - Callers may cache the pointer, but must ensure they do not use it after
-     *     the Cluster/driver has been destroyed or the device has been deinitialized.
-     *
-     * Concurrency:
-     *   - The driver may return the same TlbWindow instance across multiple calls
-     *     (i.e., this is typically a cached/static window).
-     *   - It is safe to share the pointer across threads for read-only operations.
-     *   - If callers perform operations that mutate the TlbWindow or its underlying
-     *     mappings, they must provide appropriate external synchronization.
-     */
-    tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
-        tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_window(target.chip, target_coord);
-    }
-
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
         // Simulation/mock/emule chips do not have host NUMA affinity; UMD throws if queried.
         if (this->target_type_ != tt::TargetDevice::Silicon) {
@@ -268,6 +254,8 @@ public:
 
     void dram_barrier(ChipId chip_id) const;
     void l1_barrier(ChipId chip_id) const;
+    // Barrier on just these L1 cores, given as virtual coordinates. An empty set is a no-op.
+    void l1_barrier(ChipId chip_id, const std::set<tt::tt_metal::CoreCoord>& virtual_cores) const;
 
     uint32_t get_num_host_channels(ChipId device_id) const;
     uint32_t get_host_channel_size(ChipId device_id, uint32_t channel) const;
@@ -349,6 +337,12 @@ public:
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+
+    // Wormhole silicon only. Restricts the ethernet cores UMD uses for host transfers to the remote (non-MMIO) chips
+    // behind this MMIO chip to the given channels. UMD does not lock its core list against in-flight remote transfers,
+    // so call this before any other thread (e.g. the watcher) can access remote chips.
+    void configure_ethernet_cores_for_remote_transfers(
+        ChipId mmio_chip_id, const std::set<tt_fabric::chan_id_t>& eth_chans);
 
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
@@ -453,7 +447,9 @@ private:
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
 
-    bool supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const;
+    bool dma_available(ChipId chip_id) const;
+    bool use_dma_read(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr) const;
+    bool use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering) const;
 
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};

@@ -22,6 +22,7 @@
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 // Tests that exercise the NoC atomic decrement and the 4-bit
@@ -33,8 +34,10 @@ protected:
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_atomic_ops_probe.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
+    // NOC API v1 has no noc_fast_atomic_cas4 (semaphore_dm_impl.h gates its CAS lock on it too). An ATT map
+    // selects V3 whatever the configured version.
+    bool has_noc_cas4{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    IDevice* device_{nullptr};
     uint32_t num_dms_{0};
     std::vector<uint32_t> result;
 
@@ -44,10 +47,12 @@ protected:
             GTEST_SKIP() << "Probes target Blackhole/Quasar (Wormhole lacks RISC-V AMOs)";
         }
         mesh_device_ = devices_[0];
-        device_ = mesh_device_->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-        l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+        l1_unreserved_base = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
+        const auto& rtoptions = MetalContext::instance().rtoptions();
+        has_noc_cas4 =
+            is_quasar && (rtoptions.get_noc_att_map().has_value() || rtoptions.get_quasar_noc_api_version() >= 2);
         if (is_quasar) {
             num_dms_ = std::min(num_dms_, 6u);
         }
@@ -57,10 +62,10 @@ protected:
     // on all user DM cores, and returns the final word.
     uint32_t run(const std::string& mode_define, uint32_t init_value) {
         std::vector<uint32_t> init{init_value};
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, init);
+        slow_dispatch::WriteToL1(*mesh_device_, core, l1_unreserved_base, init);
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -83,7 +88,7 @@ protected:
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = {{mode_define, "1"}}},
                 .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             kernel_names.push_back(DM_KERNEL);
             params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
@@ -97,9 +102,12 @@ protected:
                     .compiler_options = {.defines = {{mode_define, "1"}}},
                     .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementGen1Config{
-                            .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
-                            .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                        experimental::DataMovementHardwareConfig{
+                            .config_1xx =
+                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                    .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
+                                    .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                                },
                         },
                 });
                 kernel_names.push_back(name);
@@ -114,7 +122,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, l1_unreserved_base, sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 1u);
         return result.empty() ? 0u : result[0];
     }
@@ -155,19 +163,22 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
     if (!is_quasar) {
         GTEST_SKIP() << "noc_fast_atomic_cas4 (RoCC builtin emit) is Quasar-only";
     }
+    if (!has_noc_cas4) {
+        GTEST_SKIP() << "noc_fast_atomic_cas4 is not in Quasar NOC API v1 (TT_METAL_QUASAR_NOC_API_VERSION=1)";
+    }
     constexpr uint32_t WORD2_OFF = 16u;
     constexpr uint32_t REPORT_OFF = 128u;
     constexpr uint32_t REPORT_WORDS = 7u;
 
     std::vector<uint32_t> word2_init{0x15u};
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base + WORD2_OFF, word2_init);
+    slow_dispatch::WriteToL1(*mesh_device_, core, l1_unreserved_base + WORD2_OFF, word2_init);
     std::vector<uint32_t> report_init(REPORT_WORDS, 0u);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base + REPORT_OFF, report_init);
+    slow_dispatch::WriteToL1(*mesh_device_, core, l1_unreserved_base + REPORT_OFF, report_init);
 
     run("PROBE_CAS_RET", 5u);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        device_, core, l1_unreserved_base + REPORT_OFF, REPORT_WORDS * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(
+        *mesh_device_, core, l1_unreserved_base + REPORT_OFF, REPORT_WORDS * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), REPORT_WORDS);
     log_info(
         LogTest,

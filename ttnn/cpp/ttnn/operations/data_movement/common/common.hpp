@@ -30,6 +30,37 @@ ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
 
+// True when a MemoryConfig is genuinely ND-sharded: ND_SHARDED, or an nd_shard_spec with no 2D
+// shard_spec. Reshape stages these through an interleaved intermediate rather than the 2D paths.
+bool is_nd_sharded_memory_config(const tt::tt_metal::MemoryConfig& mem_config);
+
+// True when two configs describe the same physical layout, ignoring how they were built.
+// MemoryConfig::operator== is provenance-sensitive: on mixed creation paths it compares both the 2D
+// shard_spec and the nd_shard_spec, so a tensor whose ND spec normalized to 2D (both specs
+// populated) never compares equal to an explicit 2D-sharded config with the same resolved
+// shard_spec, and a no-op gate keyed on operator== reshards into a byte-identical layout. Only that
+// mixed 2D case is relaxed; a genuinely ND config is still compared by operator== alone.
+bool is_functionally_same_memory_config(
+    const tt::tt_metal::MemoryConfig& config_a, const tt::tt_metal::MemoryConfig& config_b);
+
+// Drop a normalized config's nd_shard_spec, keeping the equivalent 2D shard_spec. A config built
+// from an NdShardSpec that TensorSpec normalized to 2D keeps both specs, and buffer creation always
+// prefers the nd spec, so a shape-changing op must drop the one sized for the old shape or
+// allocation aborts on its rank. Only fires when both specs are present; the allocation flags are
+// carried over by hand because the 3-arg MemoryConfig ctor does not.
+tt::tt_metal::MemoryConfig drop_normalized_nd_shard_spec(const tt::tt_metal::MemoryConfig& mem_config);
+
+// Re-derive an ND shard spec for a reshaped output when the ND config was inherited from the input.
+// The input's per-core shard was sized for the input shape, so reusing it over-pads a differently
+// shaped output; instead keep the grid/orientation/strategy and split the output into the same
+// number of shards per dim, adapting rank via squeeze/unsqueeze if the reshape changes rank. Tiled
+// inner dims are tile-aligned and clamped to the padded dim.
+tt::tt_metal::MemoryConfig derive_nd_shard_spec_for_reshaped_output(
+    const tt::tt_metal::MemoryConfig& src_cfg,
+    const ttnn::Shape& src_padded_shape,
+    const ttnn::Shape& out_padded_shape,
+    bool is_tiled);
+
 // Estimate NOC transfer cycles for a batch of transactions.
 // Returns {bw_cycles, latency_cycles} — BW is the steady-state transfer time,
 // latency is the per-transaction pipeline startup cost. Callers can model
@@ -56,6 +87,9 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t fixed_staging_bytes = 0);
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
+
+// L1 per worker core the allocator can ever hand out, independent of current occupancy.
+uint32_t get_static_l1_space(const Tensor& input_tensor_a);
 
 // One set of buffers, sized for a single block width.
 //
@@ -166,7 +200,13 @@ BlockPlan make_block_plan(
     uint32_t output_single_tile_size,
     uint32_t tile_height,
     uint32_t tile_width,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
+
+// Widest row-major block the Quasar unpacker may tilize in one pass. On the RTL emulator a
+// tilize_with_val_padding block of 191 or more tiles never completes (176 does; emu-quasar-2x3
+// sweep, #56622), so Quasar keeps every tilize block at or under this width.
+constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
 
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
@@ -207,7 +247,9 @@ bool is_enough_space(
     uint32_t reserved_l1_bytes_per_core = 0);
 
 // Per-core L1 footprint that `output_memory_config` will require for a tensor of
-// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1.
+// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1. Mirrors what the L1
+// allocator will actually take for the buffer (see the definition), so that a routing decision
+// made on this reservation is never more permissive than the program factory it predicts.
 //
 // If the TensorSpec cannot be constructed (unsupported dtype/layout combination) and
 // `require_constructible` is false, this falls back to reserving nothing -- the pre-existing
@@ -222,6 +264,14 @@ uint32_t get_pending_l1_output_reservation(
     DataType output_dtype,
     Layout output_layout,
     bool require_constructible = false);
+
+// The dtype the untilize family (untilize, untilize_with_unpadding and the codegen untilize) emits
+// for `input_dtype`: block floats cannot exist in ROW_MAJOR, so a BFLOAT8_B input is written out as
+// BFLOAT16. The device operations' compute_output_specs and the composites' L1 accounting (output
+// tile size, pending L1 output reservation) must all agree on this, so they all go through here.
+constexpr DataType untilize_output_dtype(DataType input_dtype) {
+    return input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
+}
 
 ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
@@ -395,5 +445,17 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
+
+// True for a BLOCK/WIDTH-sharded memory config whose shard row (shard width * element_size) is not a
+// multiple of the buffer alignment. For an RM buffer with such a config, one page is one shard row,
+// and the device stores pages at the aligned page size. The kernel-side TensorAccessor uses a single
+// page size both as the distance between pages and, in `noc_async_*_sharded`, as the bytes moved per
+// page, so one value is correct for both uses only when the shard row is a multiple of the alignment.
+// Always false for HEIGHT sharding. TensorSpec requires a HEIGHT-sharded tensor's shard width to equal
+// the tensor width, so for RM one page is a whole tensor row, which `noc_async_*_sharded` moves in a
+// single transfer of the size the caller asks for, using the page size only as the distance between pages.
+bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
+
+bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
 }  // namespace ttnn::operations::data_movement

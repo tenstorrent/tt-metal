@@ -19,7 +19,7 @@ void kernel_main() {
     if (get_my_thread_id() == 0u) {
         invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(word));
     }
-    sync_threads(0);
+    sync_threads();
 #endif
 
     // The credit wait is bounded.

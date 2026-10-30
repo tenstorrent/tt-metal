@@ -11,7 +11,6 @@
 #endif
 #include "internal/tensix_functions.h"
 #include "internal/risc_attribs.h"
-#include "api/compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "hostdev/rta_constants.h"
@@ -203,6 +202,21 @@ uint32_t firmware_config_init(
     return kernel_config_base[core_type_index];
 }
 
+// The go message for this core's current launch message slot, in its sub-device's go ring.
+FORCE_INLINE volatile tt_l1_ptr go_msg_t* current_go_message(tt_l1_ptr mailboxes_t* const mailboxes) {
+    return &mailboxes->go_messages[mailboxes->go_message_index].slot[mailboxes->launch_msg_rd_ptr % GO_RING_DEPTH];
+}
+
+// Marks every go message done, so a slot only holds a go once the dispatcher writes one there. Row 0 slot 0, which the
+// host polls for the end of firmware init, is written last.
+FORCE_INLINE void clear_go_messages(volatile tt_l1_ptr go_ring_t* go_messages) {
+    for (int32_t row = go_message_num_entries - 1; row >= 0; row--) {
+        for (int32_t slot = GO_RING_DEPTH - 1; slot >= 0; slot--) {
+            go_messages[row].slot[slot].signal = RUN_MSG_DONE;
+        }
+    }
+}
+
 FORCE_INLINE
 void wait_for_go_message() {
 #ifdef ARCH_QUASAR
@@ -210,12 +224,22 @@ void wait_for_go_message() {
 #else
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 #endif
-    uint32_t go_message_index = mailboxes->go_message_index;
-
-    while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
+    while (current_go_message(mailboxes)->signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
 }
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+FORCE_INLINE
+void zero_semaphore_regions() {
+    // Discard before zeroing: a dirty line at boot could otherwise write back over the zeros.
+    invalidate_l2_cache_range(MEM_SEM_REGIONS_BASE, MEM_SEM_REGIONS_SIZE);
+    volatile uint32_t* sem_words = reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_SEM_REGIONS_BASE);
+    for (uint32_t w = 0; w < MEM_SEM_REGIONS_SIZE / sizeof(uint32_t); w++) {
+        sem_words[w] = 0;
+    }
+}
+#endif  // ARCH_QUASAR && COMPILE_FOR_DM
 
 #if !defined(COMPILE_FOR_TRISC)
 #include "noc_address_backend.h"
@@ -267,9 +291,8 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
 FORCE_INLINE
 bool is_message_go() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-    uint32_t go_message_index = mailboxes->go_message_index;
 
-    return mailboxes->go_messages[go_message_index].signal == RUN_MSG_GO;
+    return current_go_message(mailboxes)->signal == RUN_MSG_GO;
 }
 
 #define EARLY_RETURN_FOR_DEBUG \

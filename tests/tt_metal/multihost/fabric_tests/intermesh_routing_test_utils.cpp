@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
 std::random_device rd;  // Non-deterministic seed source
@@ -52,10 +53,11 @@ WorkerMemMap generate_worker_mem_map(const std::shared_ptr<tt_metal::distributed
 }
 
 std::shared_ptr<tt_metal::Program> create_receiver_program(
+    tt_metal::distributed::MeshDevice& mesh_device,
     const std::vector<uint32_t>& compile_time_args,
     const std::vector<uint32_t>& runtime_args,
     const tt::tt_metal::CoreCoord& logical_core) {
-    auto recv_program = std::make_shared<tt_metal::Program>();
+    auto recv_program = std::make_shared<tt_metal::Program>(tt_metal::CreateProgram(mesh_device));
     auto recv_kernel = tt_metal::CreateKernel(
         *recv_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
@@ -90,9 +92,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     );
     // Randomly select a tx device
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
-    auto src_physical_device_id = devices[random_dev]->get_devices()[0]->id();
+    auto src_physical_device_id = devices[random_dev]->get_device_ids()[0];
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
-    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     const auto& sender_device = devices[random_dev];
     // Randomly select a tx core
     const auto& worker_grid_size = sender_device->compute_with_storage_grid_size();
@@ -131,7 +132,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address};
 
     // Create the sender program
-    auto sender_program = tt_metal::CreateProgram();
+    auto sender_program = tt_metal::CreateProgram(*sender_device);
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/multihost/fabric_tests/kernels/tt_fabric_2d_unicast_tx.cpp",
@@ -148,8 +149,6 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         num_packets,
         receiver_noc_encoding,
         time_seed,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
@@ -163,8 +162,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     // Validate status of sender
     std::vector<uint32_t> sender_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -211,7 +210,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
     // Randomly select an rx device
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
-    auto dst_physical_device_id = devices[random_dev]->get_devices()[0]->id();
+    auto dst_physical_device_id = devices[random_dev]->get_device_ids()[0];
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
     const auto& receiver_device = devices[random_dev];
 
@@ -244,7 +243,8 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
 
-    auto recv_program = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
+    auto recv_program =
+        create_receiver_program(*receiver_device, compile_time_args, receiver_runtime_args, receiver_logical_core);
 
     // Run receiver program
     tt_metal::LaunchProgram(*receiver_device, std::move(*recv_program));
@@ -252,8 +252,8 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     // Validate status of the receiver
     std::vector<uint32_t> receiver_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -330,7 +330,7 @@ void run_mcast_sender_step(
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address};
 
-    auto mcast_send_program = tt_metal::CreateProgram();
+    auto mcast_send_program = tt_metal::CreateProgram(*sender_device);
     auto mcast_send_kernel = tt_metal::CreateKernel(
         mcast_send_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_line_mcast_tx.cpp",
@@ -368,8 +368,8 @@ void run_mcast_sender_step(
 
     // Validate status of sender
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -452,9 +452,10 @@ void run_mcast_recv_step(
         recv_programs;
 
     recv_programs[mcast_start_device] =
-        create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
+        create_receiver_program(*mcast_start_device, compile_time_args, receiver_runtime_args, receiver_logical_core);
     for (const auto& dev : mcast_group_devices) {
-        recv_programs[dev] = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
+        recv_programs[dev] =
+            create_receiver_program(*dev, compile_time_args, receiver_runtime_args, receiver_logical_core);
     }
     // Run the mcast receiver programs
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
@@ -479,8 +480,8 @@ void run_mcast_recv_step(
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, _] : recv_programs) {
         std::vector<uint32_t> receiver_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

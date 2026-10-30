@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
@@ -130,9 +130,9 @@ FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encoding
 // Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
 // when the caller has already loaded these (e.g. via a packed 4B load).
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+// #ifndef FABRIC_2D
 FORCE_INLINE
-#endif
+    // #endif
     void
     execute_chip_unicast_to_local_chip_impl(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
@@ -257,7 +257,8 @@ FORCE_INLINE
                 chunk_size,
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
 
@@ -270,7 +271,8 @@ FORCE_INLINE
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
 
@@ -283,7 +285,8 @@ FORCE_INLINE
                         chunk_size,
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
-                        tt::tt_fabric::edm_to_local_chip_noc);
+                        tt::tt_fabric::edm_to_local_chip_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc);
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
                 }
@@ -301,7 +304,8 @@ FORCE_INLINE
                     final_chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
                 if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);
@@ -333,9 +337,9 @@ FORCE_INLINE
 // The caller-provided payload_size_bytes is still used (not the packed copy) to preserve
 // existing call-site semantics.
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+// #ifndef FABRIC_2D
 FORCE_INLINE
-#endif
+    // #endif
     void
     execute_chip_unicast_to_local_chip(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
@@ -431,24 +435,16 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = new_value;
 }
 
+// Destination-major 2D action maps are complete at injection and immutable in transit. These no-op
+// overloads keep the shared 1D/2D forwarding path well-formed when it resolves updates by header type;
+// the 1D overloads above still advance their routes.
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
-    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        packet_header->routing_fields.value = cached_routing_fields.value + 1;
-    }
-}
+    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* /*packet_header*/,
+    tt::tt_fabric::LowLatencyMeshRoutingFields /*cached_routing_fields*/) {}
 
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
-    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
-    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
-        std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
-        downstream_edm_interface.template update_edm_buffer_slot_word(
-            offset, value, tt::tt_fabric::edm_to_downstream_noc);
-    }
-}
+    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& /*downstream_edm_interface*/, uint32_t /*value*/) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring

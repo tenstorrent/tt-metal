@@ -1,39 +1,44 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Local real-weight and CI-synthetic performance acceptance for Kimi-K3 KDA."""
+"""Synthetic-weight performance acceptance for Kimi-K3 KDA."""
 
 from __future__ import annotations
 
-import hashlib
-import inspect
 import json
 import os
 import statistics
 import time
 from collections.abc import Callable
-from dataclasses import asdict
-from functools import partial
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric_1d_device_params,
+    torus_xy_device_params,
+    tp_axis_is_wrapped,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    KimiK3TestCase,
-    check_kimi_k3_accuracy,
+    KIMI_K3_CONVOLUTION_NRMSE,
+    LayerNrmseThresholds,
+    deallocate_state,
     make_kimi_k3_device_case,
-    make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE, l1_when_it_fits
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, reduce_scatter_tp_partials, ttKDA
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
+from models.tt_transformers.tt.ccl import TT_CCL
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [
     run_for_blackhole(),
@@ -41,301 +46,205 @@ pytestmark = [
     pytest.mark.timeout(900),
 ]
 
-_SEQUENCE = 5120
 _REPETITIONS = 10
 _TIMING_SAMPLES = 5
-_PCC_THRESHOLD = 0.9995
-_CPU_REFERENCE_CACHE_VERSION = 4
-_PERF_SKU = "bh_loudbox"
+_LOUDBOX_PERF_SKU = "bh_loudbox"
+_QUIETBOX_PERF_SKU = "bh_quietbox"
 _PERF_MARGIN = 0.03
-# LoudBox calibration at 350413d7a98e (2026-08-31): median across five independent
-# sessions, each using the median of five warm synchronized 10-replay samples.
+# Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
+# through device synchronization.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 9.597,
-    "SP2xTP4": 9.539,
-    "SP4xTP2": 9.991,
+    _LOUDBOX_PERF_SKU: {
+        "SP8xTP1": 1.432,
+        "TP4-linear": 0.188,
+    },
+    _QUIETBOX_PERF_SKU: {
+        "TP4-ring": 0.086,
+    },
 }
-# Blackhole Galaxy SP8xTP4 calibration at c4f8ddd0e377 (2026-09-02): median
-# of five warm synchronized 10-replay samples on the high-power CI lane.
-_GALAXY_PERF_REFERENCE_MS = 3.963
-
-
-def _tensor_sha256(tensor: torch.Tensor) -> str:
-    storage = tensor.detach().cpu().contiguous().view(torch.uint8).numpy()
-    return hashlib.sha256(memoryview(storage)).hexdigest()
-
-
-def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
-    reference_dir = Path(inspect.getfile(kda_forward_reference)).parent
-    fingerprint = hashlib.sha256()
-    fingerprint.update(f"v{_CPU_REFERENCE_CACHE_VERSION}".encode())
-    fingerprint.update(str(KIMI_K3_FIRST_KDA_LAYER).encode())
-    fingerprint.update(str(case.hidden.shape[1]).encode())
-    fingerprint.update(case.weights_identity.encode())
-    fingerprint.update(json.dumps(asdict(case.config), sort_keys=True).encode())
-    fingerprint.update(_tensor_sha256(case.hidden).encode())
-    for source_path in sorted(reference_dir.glob("*.py")):
-        fingerprint.update(source_path.name.encode())
-        fingerprint.update(source_path.read_bytes())
-    return (
-        Path(ttnn.CONFIG.model_cache_path)
-        / "kimi_k3"
-        / case.weights_identity
-        / "cpu_reference"
-        / f"layer_{KIMI_K3_FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
-    )
-
-
-def _reference_tensors(output: torch.Tensor, state: KDAReferenceState) -> dict[str, torch.Tensor]:
-    return {
-        "output": output.detach().clone(),
-        "recurrent": state.recurrent.detach().clone(),
-        "q_convolution": state.q_convolution.detach().clone(),
-        "k_convolution": state.k_convolution.detach().clone(),
-        "v_convolution": state.v_convolution.detach().clone(),
-    }
-
-
-def _validate_cached_reference(case: KimiK3TestCase, payload: dict[str, Any]) -> tuple[torch.Tensor, KDAReferenceState]:
-    tensors = {name: payload[name] for name in payload["digests"]}
-    expected_shapes = {
-        "output": (1, case.hidden.shape[1], case.config.hidden_size),
-        "recurrent": (1, case.config.num_heads, case.config.head_k_dim, case.config.head_v_dim),
-        "q_convolution": (1, case.config.conv_kernel_size - 1, case.config.q_dim),
-        "k_convolution": (1, case.config.conv_kernel_size - 1, case.config.k_dim),
-        "v_convolution": (1, case.config.conv_kernel_size - 1, case.config.v_dim),
-    }
-    assert set(tensors) == set(expected_shapes), f"unexpected CPU-reference cache tensors: {set(tensors)}"
-    for name, tensor in tensors.items():
-        assert isinstance(tensor, torch.Tensor), f"cached {name} is not a tensor"
-        assert (
-            tuple(tensor.shape) == expected_shapes[name]
-        ), f"cached {name} shape {tuple(tensor.shape)} != {expected_shapes[name]}"
-        assert _tensor_sha256(tensor) == payload["digests"][name], f"cached {name} checksum mismatch"
-    return tensors["output"], KDAReferenceState(
-        recurrent=tensors["recurrent"],
-        q_convolution=tensors["q_convolution"],
-        k_convolution=tensors["k_convolution"],
-        v_convolution=tensors["v_convolution"],
-    )
-
-
-def _load_or_compute_cpu_reference(case: KimiK3TestCase) -> tuple[torch.Tensor, KDAReferenceState, float]:
-    cache_path = _cpu_reference_cache_path(case)
-    start = time.perf_counter()
-    if cache_path.exists():
-        payload = torch.load(cache_path, map_location="cpu", weights_only=True)
-        output, state = _validate_cached_reference(case, payload)
-        elapsed = time.perf_counter() - start
-        logger.info(f"KDA T=5120 CPU reference cache hit: {cache_path}")
-        logger.info(f"KDA T=5120 CPU reference load completed in {elapsed:.3f} seconds")
-        return output, state, elapsed
-
-    output, state = kda_forward_reference(case.hidden, case.state_dict, case.config)
-    tensors = _reference_tensors(output, state)
-    payload = {**tensors, "digests": {name: _tensor_sha256(tensor) for name, tensor in tensors.items()}}
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        torch.save(payload, temporary_path)
-        temporary_path.replace(cache_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    elapsed = time.perf_counter() - start
-    logger.info(f"KDA T=5120 CPU reference cache miss: {cache_path}")
-    logger.info(f"KDA T=5120 CPU reference computation completed in {elapsed:.3f} seconds")
-    return output, state, elapsed
-
-
-@pytest.fixture(scope="session")
-def kimi_k3_production_reference(
-    kimi_k3_checkpoint_dir: Path,
-) -> Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]]:
-    """Return a lazy loader for the session-cached production-length CPU oracle."""
-    cached_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float] | None = None
-
-    def load() -> tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]:
-        nonlocal cached_reference
-        if cached_reference is None:
-            case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=_SEQUENCE)
-            golden_output, golden_state, elapsed = _load_or_compute_cpu_reference(case)
-            cached_reference = case, golden_output, golden_state, elapsed
-        return cached_reference
-
-    return load
+# Device time of one traced call: the sum over its programs of the slowest chip's realtime-profiler duration, the
+# median over _TIMING_SAMPLES single replays. As in the K3 MLA perf test, each replay is profiled on its own after a
+# discarded first one, never back to back: sustained replays push QuietBox to its power limit, and the firmware then
+# lowers the clock by an amount that varies by runner. The cross-chip programs' wait for their neighbours still moves
+# a single replay by a few percent, hence the wider margin.
+_DEVICE_PERF_MARGIN = 0.05
+_DEVICE_PERF_REFERENCE_MS = {
+    _QUIETBOX_PERF_SKU: {
+        "SP4xTP1": 1.437,
+    },
+}
+# Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
+_REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
+# The reduce-scatter takes a fraction of a layer, so its trace holds several calls to amortize the replay.
+_REDUCE_SCATTER_CALLS_PER_TRACE = 20
+# Overrides the chunk's start position for investigation; the performance gates are skipped when it is set.
+_ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
+# Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
+# prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
+# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
+_GALAXY_PERF_REFERENCE_MS = 1.456
+_GALAXY_TP = 4
+_GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
+_GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
+# QuietBox SP2xTP2 runs Galaxy's per-chip workload: 640 rows and 24 heads per chip, so the chunk shrinks to 1280
+# tokens and the synthetic config halves the global head count. Every per-chip shape, L1 placement and program
+# config then matches Galaxy, and the chunk starts 320 rows into a device as on Galaxy. The SP chain is 2 ranks
+# instead of 8, and the 11x10 grid splits each head's values over 2 cores instead of 4.
+_QUIETBOX_SEQUENCE = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP
+_QUIETBOX_NUM_HEADS = 2 * _GALAXY_HEADS_PER_CHIP
+_QUIETBOX_ACTUAL_START = PREFILL_CHUNK_TOKENS_PER_CHIP + 320
+# QuietBox SP4xTP1 runs the same per-chip workload over a 4-rank SP ring: 2560 tokens of Galaxy's 24 heads per chip.
+# With one TP rank the output projection writes its result to DRAM and skips the TP reduce-scatter;
+# test_kimi_k3_tp_reduce_scatter_perf times that collective on its own.
+_QUIETBOX_SP4_SEQUENCE = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP
+_QUIETBOX_SP4_NUM_HEADS = _GALAXY_HEADS_PER_CHIP
+_QUIETBOX_SP4_ACTUAL_START = PREFILL_CHUNK_TOKENS_PER_CHIP + 320
+# LoudBox SP4xTP2 runs the same per-chip workload on a 2560-token chunk. The SP chain is 4 ranks and the TP
+# reduce-scatter 2; the 11x10 grid splits each head's values over 2 cores as on QuietBox.
+_LOUDBOX_SEQUENCE = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP
+_LOUDBOX_NUM_HEADS = 2 * _GALAXY_HEADS_PER_CHIP
+_LOUDBOX_ACTUAL_START = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
+# LoudBox SP8xTP1 runs Galaxy's SP chain and chunk with Galaxy's 24 heads per chip. Its 8 chips close into a ring, as
+# Galaxy's SP axis does, and so do QuietBox SP4xTP1's 4; FABRIC_1D_RING rings only mesh axis 0, so SP takes that axis.
+# As on QuietBox SP4xTP1, it skips the TP reduce-scatter, which test_kimi_k3_tp_reduce_scatter_perf times on its own.
+# Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
+# they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
+# the warm-up compiled for.
+_L1_SMALL_SIZE = 1152
 
 
 def _perf_reference_ms(layout: str) -> float:
-    if os.environ.get("KDA_PERF_SKU") != _PERF_SKU:
-        raise ValueError(f"set KDA_PERF_SKU={_PERF_SKU} to opt in to this hardware-specific performance gate")
-    return _PERF_REFERENCE_MS[layout]
+    """Return the wall-time reference for a gated layout on the KDA_PERF_SKU it opts in to."""
+    if layout == "SP8xTP4":
+        return _GALAXY_PERF_REFERENCE_MS
+    skus = sorted(sku for sku, references in _PERF_REFERENCE_MS.items() if layout in references)
+    if not skus:
+        raise ValueError(f"{layout} has no host wall-time reference")
+    sku = os.environ.get("KDA_PERF_SKU")
+    if sku not in skus:
+        raise ValueError(f"set KDA_PERF_SKU to one of {skus} to opt in to this hardware-specific performance gate")
+    return _PERF_REFERENCE_MS[sku][layout]
+
+
+def _device_perf_reference_ms(layout: str) -> float | None:
+    """Return the device-time reference for a device-gated layout on its KDA_PERF_SKU, or None if it has none."""
+    skus = sorted(sku for sku, references in _DEVICE_PERF_REFERENCE_MS.items() if layout in references)
+    if not skus:
+        return None
+    sku = os.environ.get("KDA_PERF_SKU")
+    if sku not in skus:
+        raise ValueError(f"set KDA_PERF_SKU to one of {skus} to opt in to this hardware-specific performance gate")
+    return _DEVICE_PERF_REFERENCE_MS[sku][layout]
 
 
 def _allocate_state(layer: ttKDA) -> KdaState:
     return layer.allocate_state(batch_size=1)
 
 
-def _deallocate_state(state: KdaState) -> None:
-    ttnn.deallocate(state.recurrent)
-    ttnn.deallocate(state.convolution)
-
-
-def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
-    names = set()
-    for source in kernel_sources:
-        parts = source.replace("\\", "/").split("/")
-        if "operations" not in parts:
-            continue
-        index = parts.index("operations") + 1
-        experimental = index < len(parts) and parts[index] == "experimental"
-        if experimental:
-            index += 1
-        if index < len(parts):
-            name = f"{'experimental.' if experimental else ''}{parts[index]}"
-            if name.endswith(("kda", "ccl")) and index + 1 < len(parts):
-                name = f"{name}.{parts[index + 1]}"
-            names.add(name)
-    if names:
-        return "+".join(sorted(names))
-    basenames = {Path(source).stem for source in kernel_sources}
-    return "+".join(sorted(basenames)) if basenames else "unknown"
-
-
-def test_device_program_label_preserves_material_operation_identity() -> None:
-    assert (
-        _device_program_label(("src/operations/experimental/kda/recurrent_chunk_scan/kernel.cpp",))
-        == "experimental.kda.recurrent_chunk_scan"
-    )
-    assert _device_program_label(("src/operations/ccl/all_gather_async/kernel.cpp",)) == "ccl.all_gather_async"
-    assert _device_program_label(("src/operations/matmul/kernel.cpp",)) == "matmul"
-    assert _device_program_label(("src/operations/experimental/matmul/kernel.cpp",)) == "experimental.matmul"
-    assert (
-        _device_program_label(("src/operations/experimental/ccl/reduce_scatter/kernel.cpp",))
-        == "experimental.ccl.reduce_scatter"
-    )
-    assert _device_program_label(("src/reader.cpp", "src/writer.cpp")) == "reader+writer"
-    assert _device_program_label(()) == "unknown"
-
-
-def _synthetic_perf_reference_ms(layout: str) -> float:
-    if layout == "SP8xTP4":
-        return _GALAXY_PERF_REFERENCE_MS
-    return _perf_reference_ms(layout)
-
-
-def _assert_synthetic_performance(layout: str, median_wall_ms: float) -> None:
-    reference_ms = _synthetic_perf_reference_ms(layout)
-    lower = reference_ms * (1.0 - _PERF_MARGIN)
-    upper = reference_ms * (1.0 + _PERF_MARGIN)
-    assert lower <= median_wall_ms <= upper, (
-        f"{layout} median trace wall {median_wall_ms:.3f} ms is outside performance range "
+def _assert_within_margin(what: str, measured_ms: float, reference_ms: float, margin: float) -> None:
+    lower = reference_ms * (1.0 - margin)
+    upper = reference_ms * (1.0 + margin)
+    assert lower <= measured_ms <= upper, (
+        f"{what} {measured_ms:.3f} ms is outside performance range "
         f"[{lower:.3f}, {upper:.3f}] ms "
-        f"(reference {reference_ms:.3f} ms ± {_PERF_MARGIN:.0%})"
+        f"(reference {reference_ms:.3f} ms ± {margin:.0%})"
     )
 
 
-@pytest.mark.parametrize("layout", ["SP2xTP4", "SP8xTP4"])
-def test_synthetic_performance_uses_two_sided_margin(layout, monkeypatch, expect_error) -> None:
-    monkeypatch.setenv("KDA_PERF_SKU", _PERF_SKU)
-    reference_ms = _synthetic_perf_reference_ms(layout)
-    _assert_synthetic_performance(layout, reference_ms)
+@pytest.mark.parametrize(
+    "layout,sku",
+    [
+        ("SP8xTP1", _LOUDBOX_PERF_SKU),
+        ("TP4-linear", _LOUDBOX_PERF_SKU),
+        ("TP4-ring", _QUIETBOX_PERF_SKU),
+        # The Galaxy gate needs no KDA_PERF_SKU opt-in.
+        ("SP8xTP4", None),
+    ],
+)
+def test_synthetic_performance_uses_two_sided_margin(layout, sku, monkeypatch, expect_error) -> None:
+    if sku is None:
+        monkeypatch.delenv("KDA_PERF_SKU", raising=False)
+    else:
+        monkeypatch.setenv("KDA_PERF_SKU", sku)
+    reference_ms = _perf_reference_ms(layout)
+    margin = _PERF_MARGIN
+    _assert_within_margin(layout, reference_ms * (1 - 0.99 * margin), reference_ms, margin)
+    _assert_within_margin(layout, reference_ms * (1 + 0.99 * margin), reference_ms, margin)
     with expect_error(AssertionError, "outside performance range"):
-        _assert_synthetic_performance(layout, reference_ms * 0.96)
+        _assert_within_margin(layout, reference_ms * (0.99 - margin), reference_ms, margin)
     with expect_error(AssertionError, "outside performance range"):
-        _assert_synthetic_performance(layout, reference_ms * 1.04)
+        _assert_within_margin(layout, reference_ms * (1.01 + margin), reference_ms, margin)
 
 
-def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden: ttnn.Tensor, layout: str) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        raise RuntimeError(f"real-time profiler is inactive for the {layout} KDA e2e device-time breakdown")
-    state = _allocate_state(layer)
-    output = None
-    next_state = None
-    profiled_results: list[tuple[ttnn.Tensor, KdaState]] = []
+def test_synthetic_device_performance_uses_two_sided_margin(monkeypatch, expect_error) -> None:
+    monkeypatch.setenv("KDA_PERF_SKU", _QUIETBOX_PERF_SKU)
+    reference_ms = _device_perf_reference_ms("SP4xTP1")
+    _assert_within_margin("SP4xTP1", reference_ms * (1 + 0.99 * _DEVICE_PERF_MARGIN), reference_ms, _DEVICE_PERF_MARGIN)
+    with expect_error(AssertionError, "outside performance range"):
+        _assert_within_margin("SP4xTP1", reference_ms * (1.01 + _DEVICE_PERF_MARGIN), reference_ms, _DEVICE_PERF_MARGIN)
 
-    def run_profiled_forward() -> tuple[ttnn.Tensor, KdaState]:
-        result = layer.forward(hidden, state)
-        profiled_results.append(result)
-        return result
 
+def _profile_replay(mesh_device: ttnn.MeshDevice, trace_id: int) -> tuple[float, float]:
+    """Return the host wall and device time (ms) of one profiled trace replay."""
+
+    def replay() -> float:
+        start = time.perf_counter()
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - start) * 1e3
+
+    wall_ms, programs = profile_realtime_program_merged(mesh_device, replay)
+    return wall_ms, sum(program["duration_ns"] for program in programs.values()) / 1e6
+
+
+@dataclass
+class _LayerTrace:
+    """A traced layer call and the device buffers it holds until released."""
+
+    state: KdaState
+    trace_id: int | None = None
+    output: ttnn.Tensor | None = None
+    next_state: KdaState | None = None
+
+
+def _capture_layer_trace(
+    mesh_device: ttnn.MeshDevice,
+    layer: ttKDA,
+    hidden: ttnn.Tensor,
+    actual_start: int = 0,
+    actual_end: int | None = None,
+) -> _LayerTrace:
+    """Capture one layer call in a trace after a warm-up call, and replay it once."""
+    actual_start_tt = make_actual_start(mesh_device, actual_start)
+    actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
+    trace = _LayerTrace(state=_allocate_state(layer))
     try:
-        (output, next_state), records = profile_realtime_program(
-            mesh_device,
-            run_profiled_forward,
-            collect_all=True,
-            record_timeout_seconds=30.0,
-        )
-        per_program: dict[int, dict[str, Any]] = {}
-        for record in records:
-            runtime_id = record["runtime_id"]
-            if not runtime_id:
-                continue
-            entry = per_program.setdefault(
-                runtime_id,
-                {
-                    "duration_ns": 0.0,
-                    "kernel_sources": record["kernel_sources"],
-                    "chip_ids": set(),
-                    "record_count": 0,
-                },
-            )
-            entry["duration_ns"] = max(entry["duration_ns"], record["duration_ns"])
-            entry["chip_ids"].add(record["chip_id"])
-            entry["record_count"] += 1
-        if not per_program:
-            raise RuntimeError("real-time profiler returned no KDA program records")
-        expected_chip_count = mesh_device.get_num_devices()
-        programs: list[dict[str, Any]] = [
-            {
-                "sequence": sequence,
-                "name": _device_program_label(info["kernel_sources"]),
-                "device_time_ns": round(float(info["duration_ns"]), 3),
-                "chip_count": len(info["chip_ids"]),
-                "record_count": int(info["record_count"]),
-                "complete": len(info["chip_ids"]) == expected_chip_count,
-            }
-            for sequence, info in enumerate(per_program.values())
-        ]
-        incomplete_program_sequences = [program["sequence"] for program in programs if not program["complete"]]
-        durations_by_name: dict[str, list[float]] = {}
-        for program in programs:
-            durations_by_name.setdefault(program["name"], []).append(program["device_time_ns"])
-        operation_summary = [
-            {
-                "name": name,
-                "program_count": len(durations),
-                "median_device_time_ns": round(statistics.median(durations), 3),
-                "max_device_time_ns": round(max(durations), 3),
-            }
-            for name, durations in durations_by_name.items()
-        ]
-        print(
-            "KDA_LAYER_DEVICE_TIMES="
-            + json.dumps(
-                {
-                    "layout": layout,
-                    "measurement": "one warm eager forward outside gated trace samples",
-                    "duration_semantics": (
-                        "per-program max across reported chip records; programs may overlap and durations must not be summed"
-                    ),
-                    "chip_completeness": {
-                        "expected_chip_count": expected_chip_count,
-                        "incomplete_program_sequences": incomplete_program_sequences,
-                    },
-                    "operation_summary": operation_summary,
-                    "programs": programs,
-                },
-                sort_keys=True,
-            )
-        )
+        warm_output, warm_state = layer.forward(hidden, trace.state, actual_start_tt, actual_end_tt)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(warm_output)
+        deallocate_state(warm_state)
+
+        trace.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace.output, trace.next_state = layer.forward(hidden, trace.state, actual_start_tt, actual_end_tt)
+        ttnn.end_trace_capture(mesh_device, trace.trace_id, cq_id=0)
+        ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+    except BaseException:
+        _release_layer_trace(mesh_device, trace)
+        raise
+    return trace
+
+
+def _release_layer_trace(mesh_device: ttnn.MeshDevice, trace: _LayerTrace) -> None:
+    try:
+        if trace.trace_id is not None:
+            ttnn.release_trace(mesh_device, trace.trace_id)
     finally:
-        if profiled_results and output is None:
-            output, next_state = profiled_results[-1]
-        if output is not None:
-            ttnn.deallocate(output)
-        if next_state is not None:
-            _deallocate_state(next_state)
-        _deallocate_state(state)
+        if trace.output is not None:
+            ttnn.deallocate(trace.output)
+        if trace.next_state is not None:
+            deallocate_state(trace.next_state)
+        deallocate_state(trace.state)
 
 
 def _trace_wall_samples_ms(
@@ -344,181 +253,85 @@ def _trace_wall_samples_ms(
     hidden: ttnn.Tensor,
     repetitions: int,
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
+    actual_start: int = 0,
+    actual_end: int | None = None,
 ) -> tuple[list[float], dict[str, float] | None]:
-    state = None
-    warm_output = None
-    warm_state = None
-    trace_id = None
-    output = None
-    next_state = None
+    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end)
     try:
-        state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state)
-        ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(warm_output)
-        warm_output = None
-        _deallocate_state(warm_state)
-        warm_state = None
-
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
-        validation = validate_first_replay(next_state, output) if validate_first_replay is not None else None
+        validation = (
+            validate_first_replay(
+                trace.next_state,
+                trace.output,
+                nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+            )
+            if validate_first_replay is not None
+            else None
+        )
 
         samples_ms = []
         for _ in range(_TIMING_SAMPLES):
             start = time.perf_counter()
             for _ in range(repetitions):
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
         return samples_ms, validation
     finally:
-        try:
-            if trace_id is not None:
-                ttnn.release_trace(mesh_device, trace_id)
-        finally:
-            if warm_output is not None:
-                ttnn.deallocate(warm_output)
-            if warm_state is not None:
-                _deallocate_state(warm_state)
-            if output is not None:
-                ttnn.deallocate(output)
-            if state is not None:
-                _deallocate_state(state)
-            if next_state is not None:
-                _deallocate_state(next_state)
+        _release_layer_trace(mesh_device, trace)
 
 
-@pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis",
-    [((1, 8), 1), ((2, 4), 1), ((2, 4), 0)],
-    indirect=["mesh_device"],
-    ids=["SP1xTP8", "SP2xTP4", "SP4xTP2"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        # FABRIC_2D follow-up: SP1xTP8 hangs with a device timeout and failed
-        # Ethernet-core recovery. SP2xTP4/SP4xTP2 were correct but 0.05%/0.10%
-        # slower than FABRIC_1D; do not enable 2D until the SP1 failure is fixed.
-        pytest.param(
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            },
-            id="fabric_1d",
-        ),
-    ],
-    indirect=True,
-)
-def test_kimi_k3_layer_1_perf(
+def _trace_device_samples_ms(
     mesh_device: ttnn.MeshDevice,
-    tensor_parallel_axis: int,
-    kimi_k3_production_reference: Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]],
-) -> None:
-    """Compare production geometry with an independent CPU oracle before timing it."""
-    sequence = _SEQUENCE
-    sequence_parallel_axis = 1 - tensor_parallel_axis
-    mesh_shape = tuple(mesh_device.shape)
-    layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
-    repetitions = _REPETITIONS
-    reference_ms = _perf_reference_ms(layout)
-    case, golden_output, golden_state, cpu_reference_seconds = kimi_k3_production_reference()
-    layer, hidden_tt = make_kimi_k3_device_case(
-        mesh_device,
-        case,
-        tensor_parallel_axis=tensor_parallel_axis,
-    )
-
-    initial_state = _allocate_state(layer)
-    start = time.perf_counter()
-    with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, initial_state)
-    ttnn.synchronize_device(mesh_device)
-    device_forward_ms = (time.perf_counter() - start) * 1e3
+    layer: ttKDA,
+    hidden: ttnn.Tensor,
+    actual_start: int = 0,
+    actual_end: int | None = None,
+) -> tuple[list[float], list[float]]:
+    """Return the host wall and device time (ms) of single profiled trace replays, never back to back."""
+    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end)
     try:
-        pcc = check_kimi_k3_accuracy(
-            f"Kimi-K3 layer 1 T={sequence} {layout}",
-            case,
-            golden_output,
-            golden_state,
-            state,
-            output,
-            mesh_device,
-            tensor_parallel_axis,
-            pcc_threshold=_PCC_THRESHOLD,
-        )
+        _profile_replay(mesh_device, trace.trace_id)  # exclude first-replay jitter
+        samples = [_profile_replay(mesh_device, trace.trace_id) for _ in range(_TIMING_SAMPLES)]
     finally:
-        ttnn.deallocate(output)
-    _deallocate_state(initial_state)
-    _deallocate_state(state)
-
-    validate_trace_replay = partial(
-        check_kimi_k3_accuracy,
-        f"Kimi-K3 layer 1 T={case.hidden.shape[1]} {layout} trace replay",
-        case,
-        golden_output,
-        golden_state,
-        mesh_device=mesh_device,
-        tensor_parallel_axis=tensor_parallel_axis,
-        pcc_threshold=_PCC_THRESHOLD,
-    )
-    samples_ms, trace_pcc = _trace_wall_samples_ms(
-        mesh_device,
-        layer,
-        hidden_tt,
-        repetitions,
-        validate_first_replay=validate_trace_replay,
-    )
-    assert trace_pcc is not None
-    first_wall_ms = samples_ms[0]
-    median_wall_ms = statistics.median(samples_ms)
-    tail_wall_ms = max(samples_ms)
-    min_wall_ms = reference_ms * (1.0 - _PERF_MARGIN)
-    max_wall_ms = reference_ms * (1.0 + _PERF_MARGIN)
-    result = {
-        "fabric_config": ttnn.get_fabric_config().name,
-        "layout": layout,
-        "sequence": sequence,
-        "repetitions": repetitions,
-        "pcc": pcc,
-        "trace_pcc": trace_pcc,
-        "pcc_reference": "independent pure-Torch FP32 CPU reference",
-        "trace_wall_ms": median_wall_ms,
-        "first_trace_wall_ms": first_wall_ms,
-        "trace_wall_samples_ms": samples_ms,
-        "median_trace_wall_ms": median_wall_ms,
-        "tail_trace_wall_ms": tail_wall_ms,
-        "timing_sample_count": _TIMING_SAMPLES,
-        "reference_trace_wall_ms": reference_ms,
-        "perf_margin_pct": _PERF_MARGIN * 100.0,
-        "min_trace_wall_ms": min_wall_ms,
-        "max_trace_wall_ms": max_wall_ms,
-        "cpu_reference_seconds": cpu_reference_seconds,
-        "device_forward_ms": device_forward_ms,
-    }
-    print("KDA_LAYER_PERF=" + json.dumps(result, sort_keys=True))
-    if layout == "SP2xTP4":
-        try:
-            _log_device_program_times(mesh_device, layer, hidden_tt, layout)
-        except Exception as error:
-            print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
-    assert min_wall_ms <= median_wall_ms <= max_wall_ms, (
-        f"{layout} median trace wall {median_wall_ms:.3f} ms is outside LoudBox range "
-        f"[{min_wall_ms:.3f}, {max_wall_ms:.3f}] ms (reference {reference_ms:.3f} ms ± {_PERF_MARGIN:.0%})"
-    )
+        _release_layer_trace(mesh_device, trace)
+    return [wall for wall, _ in samples], [device for _, device in samples]
 
 
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d"),
+        pytest.param(
+            (2, 4),
+            0,
+            fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP4xTP2-fabric-1d",
+        ),
+        pytest.param(
+            (8, 1),
+            1,
+            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="SP8xTP1-ring",
+        ),
+        pytest.param(
+            (2, 2),
+            1,
+            fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="SP2xTP2-fabric-1d",
+        ),
+        pytest.param(
+            (4, 1),
+            1,
+            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="SP4xTP1-ring",
+        ),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
@@ -530,35 +343,199 @@ def test_synthetic_kimi_k3_perf(
     tensor_parallel_axis: int,
     device_params: dict,
 ) -> None:
-    """Gate checkpoint-free production K3 latency on LoudBox and Galaxy."""
+    """Gate checkpoint-free production K3 latency on LoudBox, QuietBox and Galaxy."""
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
-    reference_ms = _synthetic_perf_reference_ms(layout)
-    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
+    report_only = layout in _REPORT_ONLY_LAYOUTS
+    if layout == "SP8xTP4":
+        require_high_power(f"kimi_k3 KDA {layout} perf")
+    device_reference_ms = None if report_only else _device_perf_reference_ms(layout)
+    reference_ms = None if report_only or device_reference_ms is not None else _perf_reference_ms(layout)
+    sequence, num_heads, actual_start = {
+        "SP8xTP4": (PREFILL_CHUNK_TOKENS, None, _GALAXY_ACTUAL_START),
+        "SP4xTP2": (_LOUDBOX_SEQUENCE, _LOUDBOX_NUM_HEADS, _LOUDBOX_ACTUAL_START),
+        "SP8xTP1": (PREFILL_CHUNK_TOKENS, _GALAXY_HEADS_PER_CHIP, _GALAXY_ACTUAL_START),
+        "SP2xTP2": (_QUIETBOX_SEQUENCE, _QUIETBOX_NUM_HEADS, _QUIETBOX_ACTUAL_START),
+        "SP4xTP1": (_QUIETBOX_SP4_SEQUENCE, _QUIETBOX_SP4_NUM_HEADS, _QUIETBOX_SP4_ACTUAL_START),
+    }[layout]
+    if _ACTUAL_START_OVERRIDE is not None:
+        actual_start = int(_ACTUAL_START_OVERRIDE)
+    actual_end = None if actual_start == 0 else actual_start + sequence
+    case = make_synthetic_kimi_k3_test_case(sequence=sequence, num_heads=num_heads)
     layer, hidden_tt = make_kimi_k3_device_case(
         mesh_device,
         case,
         tensor_parallel_axis=tensor_parallel_axis,
         cache_weights=False,
     )
-    samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, _REPETITIONS)
+    assert (layer.active_seq_len_local, layer.config.num_heads) == (
+        PREFILL_CHUNK_TOKENS_PER_CHIP,
+        _GALAXY_HEADS_PER_CHIP,
+    ), f"{layout} must run Galaxy's per-chip workload"
+    if device_reference_ms is not None:
+        require_realtime_profiler(f"the {layout} device-time gate")
+    if device_reference_ms is not None:
+        samples_ms, device_samples_ms = _trace_device_samples_ms(
+            mesh_device, layer, hidden_tt, actual_start=actual_start, actual_end=actual_end
+        )
+    else:
+        samples_ms, _ = _trace_wall_samples_ms(
+            mesh_device, layer, hidden_tt, _REPETITIONS, actual_start=actual_start, actual_end=actual_end
+        )
+        device_samples_ms = None
     median_wall_ms = statistics.median(samples_ms)
+    median_device_ms = None if device_samples_ms is None else statistics.median(device_samples_ms)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
         "layout": layout,
-        "sequence": _SEQUENCE,
+        "sequence": sequence,
+        "num_heads": layer.config.num_heads * layer.tensor_parallel_size,
+        "actual_start": actual_start,
+        "actual_end": actual_end,
         "weights": "deterministic synthetic",
-        "repetitions": _REPETITIONS,
+        "repetitions": 1 if device_reference_ms is not None else _REPETITIONS,
         "trace_wall_samples_ms": samples_ms,
         "median_trace_wall_ms": median_wall_ms,
         "timing_sample_count": _TIMING_SAMPLES,
         "reference_trace_wall_ms": reference_ms,
         "perf_margin_pct": _PERF_MARGIN * 100.0,
+        "device_samples_ms": device_samples_ms,
+        "median_device_ms": median_device_ms,
+        "reference_device_ms": device_reference_ms,
+        "device_perf_margin_pct": _DEVICE_PERF_MARGIN * 100.0,
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
+    tp_wrapped = layout != "SP8xTP4" or tp_axis_is_wrapped(mesh_device)
+    gated = not report_only and _ACTUAL_START_OVERRIDE is None and tp_wrapped
+    if device_reference_ms is not None:
+        gated_ms, gated_reference_ms, gated_margin = median_device_ms, device_reference_ms, _DEVICE_PERF_MARGIN
+    else:
+        gated_ms, gated_reference_ms, gated_margin = median_wall_ms, reference_ms, _PERF_MARGIN
+    within_band = (
+        abs(gated_ms - gated_reference_ms) <= gated_reference_ms * gated_margin if gated_reference_ms else None
+    )
+    emit_perf_metrics(
+        f"kimi_k3_kda_layer_{layout}",
+        f"Kimi-K3 KDA layer perf ({layout})",
+        {**result, "gated": gated, "within_band": within_band if gated else None},
+    )
+    if report_only:
+        return
+    if _ACTUAL_START_OVERRIDE is not None:
+        pytest.skip(f"KDA_PERF_ACTUAL_START={_ACTUAL_START_OVERRIDE} overrides the gated start; not gating")
+    if not tp_wrapped:
+        pytest.skip(
+            f"TP axis not wrapped: measured {median_wall_ms:.3f} ms on Linear TP; "
+            "the Galaxy reference assumes the TP ring"
+        )
+    if device_reference_ms is not None:
+        _assert_within_margin(f"{layout} median device", median_device_ms, device_reference_ms, _DEVICE_PERF_MARGIN)
+    else:
+        _assert_within_margin(f"{layout} median trace wall", median_wall_ms, reference_ms, _PERF_MARGIN)
+
+
+@pytest.mark.parametrize(
+    "layout,mesh_device,cluster_axis,expected_topology,device_params",
+    [
+        pytest.param(
+            "TP4-ring",
+            (4, 1),
+            0,
+            ttnn.Topology.Ring,
+            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="TP4-ring",
+        ),
+        # LoudBox has no 4-chip ring, so its TP4 rows reduce-scatter over a line.
+        pytest.param(
+            "TP4-linear",
+            (2, 4),
+            1,
+            ttnn.Topology.Linear,
+            fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="TP4-linear",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_kimi_k3_tp_reduce_scatter_perf(
+    layout: str, mesh_device: ttnn.MeshDevice, cluster_axis: int, expected_topology: ttnn.Topology, device_params: dict
+) -> None:
+    """Gate Galaxy's TP reduce-scatter on 4 chips, with the layer's per-chip shapes and arguments.
+
+    The output projection's partial sums, [640, hidden] per chip in L1 as on Galaxy, are reduce-scattered over
+    4 TP ranks into DRAM. SP4xTP1 (QuietBox) and SP8xTP1 (LoudBox) skip this collective, so together with it they
+    cover Galaxy's per-chip layer.
+    """
+    reference_ms = _perf_reference_ms(layout)
+    tp_size = tuple(mesh_device.shape)[cluster_axis]
+    topology = per_axis_topology()[cluster_axis]
+    assert (tp_size, topology) == (
+        4,
+        expected_topology,
+    ), f"must reduce-scatter over 4 TP ranks on a {expected_topology}"
+    rows, hidden_size = PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE
+    input_memory_config = l1_when_it_fits(mesh_device, rows * hidden_size * 2, KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE)
+    assert input_memory_config == ttnn.L1_MEMORY_CONFIG, "Galaxy keeps the partial sums in L1"
+
+    torch.manual_seed(0)
+    partials = torch.randn(tp_size, 1, rows, hidden_size, dtype=torch.bfloat16)
+    partials_tt = ttnn.from_torch(
+        partials,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(0, None) if cluster_axis == 0 else (None, 0), mesh_shape=tuple(mesh_device.shape)
+        ),
+    )
+    tt_ccl = TT_CCL(mesh_device)
+    num_links = tt_ccl.get_num_links(cluster_axis)
+
+    def reduce_scatter() -> ttnn.Tensor:
+        return reduce_scatter_tp_partials(partials_tt, tt_ccl, cluster_axis, topology)
+
+    warm_output = reduce_scatter()
+    ttnn.synchronize_device(mesh_device)
+    output = ttnn.to_torch(warm_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    ttnn.deallocate(warm_output)
+    # Each TP group holds the full reduced output; replicas along the other axis follow one another.
+    expected = partials.float().sum(dim=0, keepdim=True).repeat(1, 1, 1, output.shape[-1] // hidden_size)
+    passed, pcc = comp_pcc(expected, output.float(), 0.9999)
+    assert passed, f"{layout} PCC {pcc}"
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(_REDUCE_SCATTER_CALLS_PER_TRACE):
+        # Released inside the trace, as the layer releases its reduced output after use.
+        ttnn.deallocate(reduce_scatter())
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     try:
-        _log_device_program_times(mesh_device, layer, hidden_tt, layout)
-    except Exception as error:
-        print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
-    _assert_synthetic_performance(layout, median_wall_ms)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        samples_ms = []
+        for _ in range(_TIMING_SAMPLES):
+            start = time.perf_counter()
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            samples_ms.append((time.perf_counter() - start) * 1e3 / _REDUCE_SCATTER_CALLS_PER_TRACE)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(partials_tt)
+    median_wall_ms = statistics.median(samples_ms)
+    result = {
+        "fabric_config": ttnn.get_fabric_config().name,
+        "layout": layout,
+        "input_shape": [1, 1, rows, hidden_size],
+        "num_links": num_links,
+        "topology": topology.name,
+        "pcc": pcc,
+        "calls_per_trace": _REDUCE_SCATTER_CALLS_PER_TRACE,
+        "trace_wall_samples_ms": samples_ms,
+        "median_trace_wall_ms": median_wall_ms,
+        "reference_trace_wall_ms": reference_ms,
+        "perf_margin_pct": _PERF_MARGIN * 100.0,
+    }
+    print("KDA_TP_REDUCE_SCATTER_PERF=" + json.dumps(result, sort_keys=True))
+    _assert_within_margin(f"{layout} median trace wall", median_wall_ms, reference_ms, _PERF_MARGIN)

@@ -479,3 +479,44 @@ def test_extract_stress_dram_utilization_single_expert(device, count):
     torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     original_slice = global_torch[starts[expert_id] : starts[expert_id] + rows, :].float()
     assert_with_pcc(original_slice, out_torch[:rows, :].float(), pcc=0.9999)
+
+
+def test_extract_program_cache_hit_patches_addresses(device):
+    """A second call with the same specs and new buffers must reuse the program and read the new buffers."""
+    device.enable_program_cache()
+    hidden_dim = 128
+    max_tokens = 64
+    expert_id = 0
+    global_rows = 160
+    cases = (
+        (0, [0, 32, 64, 96], [32, 32, 32, 32]),
+        (1, [16, 0, 64, 80], [48, 32, 32, 32]),
+    )
+    retained = []
+    snapshots = []
+    entries_after_miss = None
+
+    for seed, starts, counts in cases:
+        torch.manual_seed(seed)
+        global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+        g = _make_global_from_torch(device, global_torch)
+        s = _make_index_from_values(device, starts)
+        c = _make_index_from_values(device, counts)
+        retained.extend([g, s, c])
+
+        before = device.num_program_cache_entries()
+        out = _run(g, s, c, global_expert_id=expert_id, max_tokens=max_tokens)
+        if entries_after_miss is None:
+            entries_after_miss = device.num_program_cache_entries()
+            assert entries_after_miss > before
+        else:
+            assert device.num_program_cache_entries() == entries_after_miss
+
+        out_torch = ttnn.to_torch(out)
+        retained.append(out)
+        rows = _ceil_to_tile(counts[expert_id])
+        expected = ttnn.to_torch(g)[starts[expert_id] : starts[expert_id] + rows, :]
+        torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+        snapshots.append(out_torch[:rows, :].clone())
+
+    assert not torch.equal(snapshots[0], snapshots[1])

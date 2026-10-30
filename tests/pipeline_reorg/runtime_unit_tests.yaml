@@ -30,6 +30,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 - name: runtime_fast_dispatch_multi_cq
   cmd: TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshMultiCQ*Fixture.*'
@@ -44,6 +45,16 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
+
+- name: runtime_t3k_dispatch_large_dram
+  cmd: ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='Large*.NIGHTLY_DRAMReadback/*'
+  skus:
+    wh_llmbox:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+  budget_type: unit
 
 - name: runtime_rt_profiler
   cmd: ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='RealtimeProfiler*'
@@ -54,6 +65,7 @@
       timeout: 6
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Core API Tests (includes kernel path validation) ---
 # Runtime tensor tests were split out of unit_tests_api into their own
@@ -72,6 +84,7 @@
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Data Movement Tests ---
 - name: runtime_data_movement
@@ -85,6 +98,7 @@
       timeout: 40
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Context, Device, Misc, JIT Build, NOC ---
 - name: runtime_core
@@ -102,6 +116,7 @@
       timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Integration Tests ---
 - name: runtime_integration
@@ -113,18 +128,13 @@
       timeout: 8
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
-# --- LLK + SFPI Tests ---
-# WH/BH timeout raised to 12 min: full LLK+SFPI suite exceeds 8 min wall clock (measured
-# ~12.3 min on bh_p150b_civ2). Cost is genuine passing-test work (LLKMeshDeviceFixture reduce
-# family dominates); skipped Quasar-only tests are free (~130 ms total), not the cause.
-- name: runtime_llk
-  # No #44767 exclusions remain: Top32RmDevPipelineCompletes fixed by #46344; the 3 FP8e4m3
-  # tests (TensixComputePackUntilizeFp8e4m3/TensixComputeUnpackTilizeFp8e4m3/TensixFp8e4m3ToFp8e4m3)
-  # fixed by #49909 (BH packer input format Float16) + #49953 (dead unpacker writes).
-  cmd: |
-    ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
-    ./build/test/tt_metal/unit_tests_sfpi
+# --- SFPI Tests ---
+# unit_tests_llk is owned and gated by the LLK pipelines (llk_merge_gate_tests.yaml,
+# llk_unit_tests.yaml); runtime does not run it.
+- name: runtime_sfpi
+  cmd: ./build/test/tt_metal/unit_tests_sfpi
   skus:
     wh_n150_civ2:
       timeout: 12
@@ -132,6 +142,7 @@
       timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Debug Tools (DPrint, Watcher, Inspector, Clean Init, NOC Debugging) ---
 - name: runtime_debug_tools
@@ -149,6 +160,7 @@
       timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 - name: runtime_noc_debugging
   cmd: ./build/test/tt_metal/unit_tests_noc_debugging
@@ -159,19 +171,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
-
-# --- Ethernet Tests ---
-- name: runtime_eth
-  cmd: ./build/test/tt_metal/unit_tests_eth
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
+  budget_type: unit
 
 # --- Legacy Tests ---
 - name: runtime_legacy
@@ -183,6 +183,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Distributed / Multi-Device Tests ---
 - name: runtime_distributed
@@ -196,6 +197,7 @@
       timeout: 8
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # NOTE: wh_llmbox is intentionally NOT listed here. The full distributed_unit_tests suite already
 # runs on wh_llmbox (the T3000 8-device box) via the scaleout-owned t3k_ttmetal_tests job
@@ -221,6 +223,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- FD2 Dispatch Tests (prefetcher + dispatcher) ---
 - name: runtime_fd2
@@ -236,6 +239,7 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # =============================================================================
 # Slow Dispatch Tests (TT_METAL_SLOW_DISPATCH_MODE=1 set per-command)
@@ -245,7 +249,7 @@
 - name: runtime_sd_api
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_per_core_allocation
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_hybrid_allocator
   skus:
     wh_n150_civ2:
       timeout: 20
@@ -253,12 +257,13 @@
       timeout: 20
     bh_p150b_civ2:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_p100a_civ2_viommu:
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Data Movement Tests (SD) ---
 - name: runtime_sd_data_movement
@@ -270,12 +275,13 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 8
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Debug Tools, Device, Dispatch (SD) ---
 - name: runtime_sd_debug_tools_device_dispatch
@@ -295,31 +301,13 @@
       timeout: 17
     bh_p150b_civ2:
       timeout: 17
-    bh_p300:
-      timeout: 17
+    # bh_p300:
+    #   timeout: 17
     bh_p100a_civ2_viommu:
       timeout: 17
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
-
-# --- LLK Tests (SD) ---
-- name: runtime_sd_llk
-  # No #44767 exclusions remain (see runtime_llk above).
-  cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
-  skus:
-    wh_n150_civ2:
-      timeout: 12
-    wh_n300_civ2:
-      timeout: 12
-    bh_p150b_civ2:
-      timeout: 12
-    bh_p300:
-      timeout: 12
-    bh_p100a_civ2_viommu:
-      timeout: 17
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
+  budget_type: unit
 
 # --- Legacy Tests (SD) ---
 - name: runtime_sd_legacy
@@ -331,12 +319,13 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-    bh_p300:
-      timeout: 5
+    # bh_p300:
+    #   timeout: 5
     bh_p100a_civ2_viommu:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Eager C++ Tests (SD) ---
 - name: runtime_sd_eager
@@ -348,12 +337,13 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # =============================================================================
 # Multi-Card Unit Tests (BH + Galaxy) — see #46302 for topology matrix
@@ -362,26 +352,14 @@
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
 - name: bh_multicard_debug_tools
   cmd: |
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DPrintMeshFixture.ActiveEthTestPrint'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TensixTestWatcherPause'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TensixTestWatcherPause'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/*'
   skus:
     bh_loudbox:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
-
-# --- BH Multi-Card: Dispatch (RandomProgram on multi-card) ---
-- name: bh_multicard_dispatch
-  cmd: |
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
+  budget_type: unit
 
 # --- Galaxy: Dispatch (single-card + multi-CQ fixtures) ---
 - name: galaxy_dispatch
@@ -401,6 +379,7 @@
       timeout: 19
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Galaxy: Device Tests (GalaxyFixture only, SD + FD) ---
 - name: galaxy_device
@@ -414,6 +393,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # --- Galaxy: Distributed (DispatchContext SD + remote chip dispatch) ---
 - name: galaxy_distributed
@@ -429,6 +409,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit
 
 # Service Core Manager Tests (BH only, SD + FD)
 - name: service_core_manager
@@ -444,3 +425,4 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: unit

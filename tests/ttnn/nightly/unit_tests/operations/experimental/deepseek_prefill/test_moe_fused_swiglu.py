@@ -17,7 +17,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
@@ -25,14 +25,21 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SILU,
     ACTIVATION_SITU,
     ACTIVATION_SWIGLUOAI,
-    TorchExpert,
     apply_glu_activation,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     SINGLE_EXPERT_MODELS,
+    expert_golden,
+    expert_weights,
+    to_dram_nd_sharded,
 )
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 # Device activation -> the TorchExpert reference that must match it, so a case cannot grade one
 # activation against another's golden.
@@ -65,10 +72,10 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 #   289 -> m_t 10: a FULL block then a 2-tile tail, a different path from a lone short block
 #          because the tail reuses CB slots the full block already cycled.
 _ISL_SHORT_BLOCK_SWEEP = [67, 289]
-_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 # "kimi_k26" used to sit here and matched nothing: SINGLE_EXPERT_MODELS calls that shape
 # kimi_k2_7, so the sweep silently ran ONE model for however long the name was stale.
-_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
+_ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
 
 # SwiGLU-OAI's production shapes. Neither is reachable through SINGLE_EXPERT_MODELS at its real
 # dims (minimax_m3 is absent; gptoss is there but only ever runs SiLU), so the activation had no
@@ -88,6 +95,7 @@ def run_moe_fused_swiglu(
     hidden_dim: int,
     active_tokens: int = None,
     x_row_major: bool = True,
+    weights_dram_sharded: bool = False,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -96,6 +104,7 @@ def run_moe_fused_swiglu(
     gate_bias=None,
     up_bias=None,
     down_bias=None,
+    check_cache=False,
 ):
     """
     One chip, one expert, moe_fused_swiglu called directly.
@@ -120,13 +129,7 @@ def run_moe_fused_swiglu(
 
     signpost(f"MoeFusedSwiGlu {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=} {activation=}")
 
-    torch.manual_seed(42)
-    # torch.nn.Linear convention (out_features, in_features), which is what TorchExpert reads.
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
     torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)
@@ -134,15 +137,7 @@ def run_moe_fused_swiglu(
 
     with torch.no_grad():
         if gate_bias is None:
-            torch_expert = TorchExpert(
-                emb_dim,
-                hidden_dim,
-                weights,
-                activation=torch_activation,
-                situ_beta=_SITU_BETA_GATE,
-                situ_linear_beta=_SITU_BETA_UP,
-            )
-            torch_output_active = torch_expert(torch_active)
+            _, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
         else:
             # TorchExpert carries no bias, and the bias terms sit outside apply_glu_activation's
             # contract anyway -- gate/up before the activation, down after the down matmul -- so a
@@ -170,6 +165,14 @@ def run_moe_fused_swiglu(
     w_gate = to_device(weights["gate_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
     w_up = to_device(weights["up_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
     w_down = to_device(weights["down_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
+
+    if weights_dram_sharded:
+        # The same placement the composite's tests build, not one chosen here: this op reads
+        # whatever width it is handed, so a test-local spec would measure a layout the other op
+        # would reject. Built interleaved and resharded.
+        w_gate = to_dram_nd_sharded(w_gate, device)
+        w_up = to_dram_nd_sharded(w_up, device)
+        w_down = to_dram_nd_sharded(w_down, device)
 
     # ROW_MAJOR x is bf16 and tilized inside the op (the Blackhole production fast path); TILE x is
     # consumed directly as bf8. Pair dtype with layout so each variant drives its real device path.
@@ -201,6 +204,37 @@ def run_moe_fused_swiglu(
         up_biases=None if up_bias is None else [up_bias],
         down_biases=None if down_bias is None else [down_bias],
     )
+    if check_cache:
+        # Keep the original buffers live and change the down projection's sign.
+        # Reverse the active rows too, so stale input bindings fail the numerical check.
+        ttnn.synchronize_device(device)
+        fresh_input = torch_input.clone()
+        fresh_input[:active_tokens] = torch_active.flip(0)
+        fresh_x = to_device(fresh_input.reshape(tuple(x.shape)), x.dtype, x.layout)
+        fresh_counts, fresh_idx = ttnn.clone(counts), ttnn.clone(idx)
+        fresh_gate, fresh_up = ttnn.clone(w_gate), ttnn.clone(w_up)
+        fresh_down = to_device(-weights["down_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
+        fresh_biases = [None if bias is None else ttnn.clone(bias) for bias in (gate_bias, up_bias)]
+        fresh_down_bias = None if down_bias is None else ttnn.neg(down_bias)
+        entries = device.num_program_cache_entries()
+        fresh_output = ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
+            fresh_x,
+            [fresh_gate],
+            [fresh_up],
+            [fresh_down],
+            fresh_counts,
+            fresh_idx,
+            input_m_tiles=allocated_tokens // 32,
+            core_grid=core_grid,
+            activation=activation,
+            gate_biases=None if fresh_biases[0] is None else [fresh_biases[0]],
+            up_biases=None if fresh_biases[1] is None else [fresh_biases[1]],
+            down_biases=None if fresh_down_bias is None else [fresh_down_bias],
+        )
+        assert device.num_program_cache_entries() == entries
+        output = fresh_output
+        torch_output_active = -torch_output_active.flip(0)
+
     tt_output = ttnn.to_torch(output)[0, 0]
 
     if active_tokens == 0:
@@ -252,7 +286,7 @@ def _isl_params(active_sweep, only_models=None):
     7168 -> 3584 first, so EMB_SIZE would run it at 2x its real K. Its case is separate below.
     """
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
@@ -262,7 +296,6 @@ def _isl_params(active_sweep, only_models=None):
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    marks=pytest.mark.extended_model if extended else (),
                     # "-t" keeps ids collision-free under -k: "512" is a substring of "5120".
                     id=f"{name}-t{active}",
                 )
@@ -271,11 +304,11 @@ def _isl_params(active_sweep, only_models=None):
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_FUNCTIONAL_SWEEP + _ISL_SHORT_BLOCK_SWEEP),
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
 def test_moe_fused_swiglu_functional(
     device, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int, x_row_major: bool
@@ -291,16 +324,34 @@ def test_moe_fused_swiglu_functional(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
+# DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
+# of one per tile. Both placements are swept so the interleaved default stays covered.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
-def test_moe_fused_swiglu_isl_sweep(device, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int):
+def test_moe_fused_swiglu_isl_sweep(
+    device,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    weights_dram_sharded: bool,
+):
     """The aligned sweep the perf baselines are keyed on, x_rm only (the production path)."""
     _skip_if_grid_too_small(device)
-    run_moe_fused_swiglu(device, allocated_tokens, emb_dim, hidden_dim, active_tokens=active_tokens, x_row_major=True)
+    run_moe_fused_swiglu(
+        device,
+        allocated_tokens,
+        emb_dim,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=True,
+        weights_dram_sharded=weights_dram_sharded,
+    )
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("active_tokens", _ISL_EXHAUSTIVE_SWEEP, ids=[f"t{t}" for t in _ISL_EXHAUSTIVE_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("active_tokens", _ISL_EXHAUSTIVE_SWEEP, ids=[f"t{t}" for t in _ISL_EXHAUSTIVE_SWEEP])
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU is Blackhole-only")
 def test_moe_fused_swiglu_k3_situ(device, active_tokens: int, x_row_major: bool):
     """Kimi K3: SiTU-GLU at the post-projection dims, so K is ROUTED_EXPERT_HIDDEN_SIZE."""
@@ -355,6 +406,7 @@ def test_moe_fused_swiglu_bias(device, activation, live: str):
         gate_bias=_bias_tensor(device, hidden_dim, live in ("gate", "all")),
         up_bias=_bias_tensor(device, hidden_dim, live in ("up", "all")),
         down_bias=_bias_tensor(device, emb_dim, live in ("down", "all")),
+        check_cache=True,
     )
 
 
@@ -372,4 +424,20 @@ def test_moe_fused_swiglu_swigluoai(device, emb_dim: int, hidden_dim: int, activ
         active_tokens=active_tokens,
         x_row_major=True,
         activation=ttnn.RoutedExpertActivation.SwiGluOai,
+    )
+
+
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
+def test_moe_fused_swiglu_cached_multicast_args(device, x_row_major):
+    """Shared multicast metadata must survive cache hits with fresh activation/weight buffers."""
+    _skip_if_grid_too_small(device)
+    run_moe_fused_swiglu(
+        device,
+        allocated_tokens=256,
+        emb_dim=6144,
+        hidden_dim=2048,
+        active_tokens=67,
+        x_row_major=x_row_major,
+        check_cache=True,
     )

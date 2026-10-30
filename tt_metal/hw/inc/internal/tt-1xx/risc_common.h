@@ -12,6 +12,7 @@
 #include "eth_l1_address_map.h"
 #include "limits.h"
 #include "internal/mod_div_lib.h"
+#include "internal/tt-1xx/cache.h"
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "stream_io_map.h"
@@ -143,17 +144,6 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 
     while (true);
     return 0;
-}
-
-// Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
-// MMU or range registers).
-//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
-//  Need to invalidate any address written by noc that may have been previously read by riscv
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-#if defined(ARCH_BLACKHOLE)
-    asm("fence");
-#endif
 }
 
 template <bool enable = true>

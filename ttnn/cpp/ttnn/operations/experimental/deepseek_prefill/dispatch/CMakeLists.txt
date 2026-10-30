@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_deepseek_prefill_dispatch ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch ALIAS ttnn_op_experimental_deepseek_prefill_dispatch)
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_dispatch REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_dispatch TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_dispatch)
 
 set_target_properties(
@@ -13,6 +13,12 @@ set_target_properties(
             api
 )
 
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
+
 target_sources(
     ttnn_op_experimental_deepseek_prefill_dispatch
     PUBLIC
@@ -20,11 +26,25 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_DISPATCH_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_DISPATCH_SRCS}
 )
 
 target_link_libraries(ttnn_op_experimental_deepseek_prefill_dispatch PRIVATE TT::Metalium PUBLIC TTNN::Core)
+
+install(
+    TARGETS
+        ttnn_op_experimental_deepseek_prefill_dispatch
+    FILE_SET
+    kernels
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch
+        COMPONENT ttnn-runtime
+)
 
 install(TARGETS ttnn_op_experimental_deepseek_prefill_dispatch FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
 

@@ -25,7 +25,7 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_on_program_cache_miss(
 
     // TODO: See issue #1744
     TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
@@ -67,6 +67,7 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_specs(
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_tensors = tensor_args.output_tensors;
+    TT_FATAL(operation_attributes.num_heads > 0, "num_heads must be greater than 0");
 
     if (output_tensors.size() == 3 && output_tensors[0].has_value() && output_tensors[1].has_value() &&
         output_tensors[2].has_value()) {

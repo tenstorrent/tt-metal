@@ -24,9 +24,11 @@
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include "small_vector_caster.hpp"
@@ -42,7 +44,10 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
+#include <tt-metalium/experimental/operation_timeout.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
@@ -83,7 +88,7 @@ void ttnn_device(nb::module_& mod) {
 
             Keyword Args:
                 device_id (int): The device ID to open.
-                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
+                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`. The default is 0: ops that allocate from the L1_SMALL region (conv2d and pooling with kernel > 1, CCL semaphores) fail with an `L1_SMALL` out-of-memory error, or fall back to L1, unless this is large enough for their allocations. The conv and pool unit tests use 16384 or 32768; model demos under `models/` use 8192 to 131072.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
                 num_command_queues (int, optional): The number of command queues to open. Defaults to 1.
                 dispatch_core_config (ttnn.device.DispatchCoreConfig, optional): The dispatch core config to use. Defaults to a hardware-specific value.
@@ -459,14 +464,94 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.ClearKernelCache()
     )doc");
     m_device.def(
-        "initialize_fast_dispatch",
-        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device); },
+        "GetOperationTimeoutSeconds",
+        [](const MeshDevice& mesh_device) {
+            return tt::tt_metal::experimental::GetOperationTimeout(mesh_device).count();
+        },
+        nb::arg("mesh_device").noconvert(),
+        R"doc(
+        Get the operation timeout in seconds (0 = off), initialized from TT_METAL_OPERATION_TIMEOUT_SECONDS.
+
+        A command queue wait that sees no dispatch progress for this long runs
+        TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE (if set) and raises.
+
+        Args:
+            mesh_device (ttnn.MeshDevice): Selects the environment; all mesh devices in it share one timeout.
+
+        Example:
+            >>> import ttnn
+            >>> timeout_s = ttnn.device.GetOperationTimeoutSeconds(mesh_device)
+    )doc");
+    m_device.def(
+        "SetOperationTimeoutSeconds",
+        [](MeshDevice& mesh_device, float seconds) {
+            tt::tt_metal::experimental::SetOperationTimeout(mesh_device, std::chrono::duration<float>(seconds));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("seconds"),
+        R"doc(
+        Set the operation timeout in seconds (0 = off), overriding TT_METAL_OPERATION_TIMEOUT_SECONDS.
+
+        Each wait reads the value when it starts, so a wait already in progress keeps its old value.
+
+        Args:
+            mesh_device (ttnn.MeshDevice): Selects the environment; all mesh devices in it share one timeout.
+            seconds (float): The new timeout; 0 turns it off.
+
+        Example:
+            >>> import ttnn
+            >>> ttnn.device.SetOperationTimeoutSeconds(mesh_device, 300)
+    )doc");
+    m_device.def(
+        "get_dispatch_core_axis",
+        [](MeshDevice* device) {
+            return tt::tt_metal::experimental::DispatchContext::get().get_dispatch_core_axis(device);
+        },
         nb::arg("device").noconvert(),
+        R"doc(
+        Return the axis (ROW or COL) of the device's live dispatch-core configuration.
+
+        COL means dispatch sits on the last column of the worker grid (the Blackhole default); ROW means
+        the last row (Blackhole with fabric tensix enabled, or Wormhole). tt-blaze's two-phase upload uses
+        it to find that edge: cargo shards off the edge are written under Fast Dispatch, and shards on it
+        are written under Slow Dispatch after the session, because dispatch firmware occupies those cores
+        during it.
+
+        Args:
+            device (ttnn.Device): The mesh device to query.
+
+        Returns:
+            ttnn.device.DispatchCoreAxis: ROW or COL.
+    )doc");
+    m_device.def(
+        "initialize_fast_dispatch",
+        [](MeshDevice* device, bool allow_destructive) {
+            tt::tt_metal::experimental::FastDispatchSetupOptions options;
+            options.allow_destructive = allow_destructive;
+            tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device, options);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("allow_destructive") = false,
         R"doc(
         Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
 
+        Refuses, before any firmware is written, if an L1 or L1_SMALL allocation is resident on a core
+        that Fast Dispatch will claim; dispatch cores may not hold L1 allocations while Fast Dispatch is
+        active.
+
+        Limitations:
+            - Any interleaved L1 buffer resident when the session opens is refused, whatever its size:
+              its pages are spread over every L1 bank.
+            - A non-default sub-device manager still loaded on any view over an active chip is refused,
+              even with allow_destructive: the check sees only the default manager's allocations.
+              Sub-device managers aren't supported with manual Fast Dispatch; loading one during a
+              session raises.
+            - Every active device must be MMIO-attached; otherwise this raises before Fast Dispatch is
+              enabled.
+
         Args:
             device (ttnn.Device): The mesh device to enable Fast Dispatch on.
+            allow_destructive (bool): Warn and proceed instead of refusing. The resident L1 may be corrupted.
     )doc");
     m_device.def(
         "terminate_fast_dispatch",
@@ -582,6 +667,31 @@ void device_module(nb::module_& m_device) {
         nb::arg("buffer_type").noconvert(),
         get_allocator_base_address_doc.data());
 
+    constexpr std::string_view get_l1_occupied_ranges_doc = R"doc(
+        Experimental. Return the occupied L1 ``(start, end)`` byte ranges (end exclusive) on one device of the mesh:
+        lockstep allocations, the core's per-core allocations and persistent L1, sorted and coalesced.
+        With ``core``, returns a list for that core; without it, a dict mapping every L1-bank core to its list.
+        Requires the device to be opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``.
+    )doc";
+    m_device.def(
+        "ExperimentalGetL1OccupiedRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord, const CoreCoord& core) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_occupied_ranges(
+                mesh_device, device_coord, core);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("core"),
+        get_l1_occupied_ranges_doc.data());
+    m_device.def(
+        "ExperimentalGetL1OccupiedRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_occupied_ranges(mesh_device, device_coord);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        get_l1_occupied_ranges_doc.data());
+
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
@@ -625,6 +735,32 @@ void device_module(nb::module_& m_device) {
         // Release GIL: sync can block a long time; other threads need it to run Python (e.g. real-time profiler
         // callbacks).
         nb::call_guard<nb::gil_scoped_release>());
+    m_device.def(
+        "is_trace_capture_active",
+        [](MeshDevice* device) {
+            if (!device->is_initialized()) {
+                return false;
+            }
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                if (device->mesh_command_queue(cq_id).trace_id().has_value()) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        nb::arg("device"),
+        R"doc(
+                Returns True if a metal trace is currently being captured on any command queue of the device.
+
+                Operations that synchronize with host (event recording, reads, writes) are not supported while a
+                trace is being captured, so callers that would otherwise synchronize must skip doing so.
+
+                Args:
+                    device (ttnn.MeshDevice): The device to query.
+
+                Returns:
+                    `bool`: whether a trace capture is in progress.
+            )doc");
     m_device.def(
         "ReadDeviceProfiler",
         [](MeshDevice* mesh_device) {

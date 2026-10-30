@@ -57,12 +57,12 @@ using ttnn::test_utils::make_device_tensor;
 }  // namespace detail
 
 // ---------------------------------------------------------------------------
-// Generic reduce: sum and max/min on the tiled W / H / HW factories (SUM and
-// MAX / MIN-negate pool math). Integrated from the original test_reduction.cpp
-// parametrized suites: tall unaligned + aligned shapes per dim, positive and
-// negative data for the MIN-negate / pad-sentinel paths, and both the
-// single-tile HW single-core factory (30x30) and the multi-tile two-step
-// W-then-H path (64x64).
+// Generic reduce: sum and max/min on the tiled W / H / HW factories. Integrated
+// from the original test_reduction.cpp parametrized suites: tall unaligned +
+// aligned shapes per dim, positive and negative data for the pad-sentinel paths,
+// and both the single-tile HW single-core factory (30x30) and the multi-tile
+// two-step W-then-H path (64x64). bf16 min runs the SFPU MIN reduce, so its HW
+// cases take the two-step path rather than the single-core factory.
 // ---------------------------------------------------------------------------
 
 TEST_F(ReductionSmoke, SumReduceW) {
@@ -905,7 +905,7 @@ TEST_F(ReductionSmoke, ProdLastDim) {
 
 TEST_F(ReductionSmoke, CumsumLastDim) {
     auto& device = *device_;
-    // rank - dim < 4 takes the reshape + permute-to-dim-0 path.
+    // bf16 along W: scans the tiles in place, without permuting W to dim 0.
     constexpr int h = 32, w = 64;
     const auto input = ttnn::ones(ttnn::Shape{1, 1, h, w}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     const auto output = ttnn::cumsum(input, -1);

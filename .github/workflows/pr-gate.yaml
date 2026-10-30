@@ -180,7 +180,9 @@ jobs:
       llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
+      llk-hardware-free-changed: ${{ steps.find-changes.outputs.llk-hardware-free-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -189,6 +191,84 @@ jobs:
           sparse-checkout: .github
       - id: find-changes
         uses: ./.github/actions/find-changed-files
+
+  # The ONE place team time budgets are enforced. It has to see every tests yaml
+  # at once: several yamls charge the same (team, budget_type, sku) budget, so the
+  # allowance is the sum across all of them. The per-pipeline checks this replaced
+  # each saw a single yaml, which let every yaml claim the full budget on its own.
+  verify-time-budgets:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      # A cmd block that records a failed test command and runs the next one starts that
+      # command on devices nothing has reset (#57706). Runs from this job's own checkout.
+      - name: Lint pipeline cmd blocks
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git show FETCH_HEAD:.github/pipeline_cmd_lint_baseline.yaml > "${RUNNER_TEMP}/base_baseline.yaml" 2>/dev/null || : > "${RUNNER_TEMP}/base_baseline.yaml"
+          python3 .github/scripts/utils/lint_pipeline_cmds.py --base-baseline "${RUNNER_TEMP}/base_baseline.yaml"
+      - name: Verify test timeouts against team time budgets
+        uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
+        with:
+          # The action is pinned to @main so the check logic is always current, but that
+          # means GITHUB_ACTION_PATH resolves inside a separate main-pinned checkout, not
+          # this job's own checkout above. Point it explicitly at $GITHUB_WORKSPACE so it
+          # verifies this branch's test yamls and budget file, not main's.
+          args: >-
+            --tests-dir "$GITHUB_WORKSPACE/tests/pipeline_reorg"
+            --budget-file "$GITHUB_WORKSPACE/.github/time_budget.yaml"
+            --comment-file "${{ runner.temp }}/budget-report.md"
+      # Every failure kind gets explained on the PR, not just an over-budget bucket:
+      # a missing budget_type or an undeclared bucket is just as opaque to the author.
+      # One comment is kept up to date across pushes rather than stacking per run, and
+      # a run that passes edits an existing comment to say so instead of leaving a
+      # stale failure behind. A pass with no prior comment posts nothing.
+      - name: Explain a time budget failure on the PR
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          REPO: ${{ github.repository }}
+          BODY_FILE: ${{ runner.temp }}/budget-report.md
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$BODY_FILE" ]; then
+            echo "No report was written (the check did not get far enough); nothing to post."
+            exit 0
+          fi
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            PR_NUMBER=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+              --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "No open PR for '$BRANCH'; nothing to post."
+            exit 0
+          fi
+
+          existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+              --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- time-budget-check"))) | .id] | first // empty')
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
+              -F "body=@$BODY_FILE" >/dev/null
+            echo "Updated time-budget comment $existing on PR #$PR_NUMBER."
+          elif grep -q "status=fail" "$BODY_FILE"; then
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
+            echo "Posted a new time-budget comment on PR #$PR_NUMBER."
+          else
+            echo "Check passed and no existing comment to clear; nothing to post."
+          fi
 
   build-runtime-smoke-image:
     needs: [asan-build, build-docker-images, find-changed-files]
@@ -236,7 +316,6 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
   # A second image because the tag reflects build-args, and smoke installs a
@@ -286,7 +365,6 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn
       test-category: pr_gate
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
 
@@ -343,7 +421,6 @@ jobs:
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
-      per-test-timeout: 15
     secrets: inherit
 
   build-ttnn-examples-image:
@@ -387,7 +464,6 @@ jobs:
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
-      per-test-timeout: 15
     secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
@@ -446,6 +522,7 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
          needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true')
@@ -463,6 +540,7 @@ jobs:
             if ("${{ needs.find-changed-files.outputs.llk-common-changed }}" === "true") expectedLabels.add("llk:common");
             if ("${{ needs.find-changed-files.outputs.llk-sfpi-changed }}" === "true") expectedLabels.add("sfpi");
             if ("${{ needs.find-changed-files.outputs.llk-tests-changed }}" === "true") expectedLabels.add("llk:test-infra");
+            if ("${{ needs.find-changed-files.outputs.llk-hardware-free-changed }}" === "true") expectedLabels.add("llk:test-infra");
             if ("${{ needs.find-changed-files.outputs.llk-ci-changed }}" === "true") expectedLabels.add("llk:ci");
             if ("${{ needs.find-changed-files.outputs.llk-perf-changed }}" === "true") expectedLabels.add("llk:performance");
             if ("${{ needs.find-changed-files.outputs.llk-quasar-changed }}" === "true") expectedLabels.add("llk:quasar");
@@ -528,13 +606,13 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-ci-changed == 'true')
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true')
       }}
     uses: ./.github/workflows/llk-smoke-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      per-test-timeout: 15
       enabled-skus: ALL_SKUS_IN_TESTS
       # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
       sku-allowlist: ${{
@@ -548,31 +626,60 @@ jobs:
           && '*'
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
           || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
+          || (needs.find-changed-files.outputs.llk-perf-changed == 'true' && 'wh_n150_civ2')
           || '' }}
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
-  # LLK Quasar Build Check (compile-only, no hardware needed)
-  llk-build-quasar:
+  # Quasar LLK tests on ttsim, two shards (llk_pr_gate_tests.yaml, sim_quasar_xl).
+  # Sanity runs the same shards. The skip list is the script default.
+  # Disabled on merge_group: it was holding up the merge queue for too long.
+  # Still runs on PR gate and push-to-main.
+  llk-quasar-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-ci-changed == 'true')
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.ttsim-ci-changed == 'true')
       }}
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    timeout-minutes: 20
-    container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-      - uses: ./.github/actions/llk-compile-quasar
-        with:
-          pytest-markers: "quasar"
+    uses: ./.github/workflows/llk-ttsim-pr-gate-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+
+  # Host-only LLK tests (tests/pipeline_reorg/llk_hardware_free_tests.yaml, cpu_xlarge).
+  # Same change set as llk-smoke-tests, plus a hardware-free-only change and a
+  # Quasar change: the stall-wrapper probe used to run inside the Quasar compile
+  # job because it lived under python_tests/quasar.
+  # Disabled on merge_group: cpu_xlarge (tt-ubuntu-2204-xlarge-stable) has no
+  # merge-queue prio pool, same contended-runner issue as llk-quasar-tests. Still
+  # runs on PR gate and push-to-main.
+  llk-hardware-free-tests:
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-hardware-free-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -597,7 +704,9 @@ jobs:
       - model-charts-sync
       - build-docs
       - llk-smoke-tests
-      - llk-build-quasar
+      - llk-quasar-tests
+      - llk-hardware-free-tests
+      - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -607,11 +716,13 @@ jobs:
       - name: Check if all jobs passed
         uses: ./.github/actions/workflow-status
         with:
-          required-jobs: ""
+          # verify-time-budgets is required, not optional: it has no build dependency
+          # and never skips, so a skip would mean it silently stopped gating.
+          required-jobs: "verify-time-budgets"
           optional-jobs: >-
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-build-quasar
+            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

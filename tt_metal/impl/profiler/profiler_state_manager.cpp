@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <thread>
 #include <vector>
 #include "profiler_state_manager.hpp"
@@ -12,6 +13,9 @@
 #include "hostdev/profiler_common.h"
 #include "context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "profiler_state.hpp"
+#include <tt_stl/indestructible.hpp>
+#include "context/metal_env_accessor.hpp"
 #include "math.hpp"
 #include "tt_cluster.hpp"
 #include <tt-metalium/device.hpp>
@@ -24,11 +28,11 @@ constexpr static uint32_t DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT 
 namespace {
 
 // Convert a wall-time margin into device ticks for the NOC-debug watermark.
-uint64_t noc_debug_margin_to_ticks(const std::vector<IDevice*>& devices, std::chrono::milliseconds margin) {
+uint64_t noc_debug_margin_to_ticks(
+    const Cluster& cluster, const std::vector<IDevice*>& devices, std::chrono::milliseconds margin) {
     uint32_t aiclk_mhz = 0;
     for (auto* device : devices) {
-        aiclk_mhz = std::max(
-            aiclk_mhz, static_cast<uint32_t>(MetalContext::instance().get_cluster().get_device_aiclk(device->id())));
+        aiclk_mhz = std::max(aiclk_mhz, static_cast<uint32_t>(cluster.get_device_aiclk(device->id())));
     }
     if (aiclk_mhz == 0) {
         aiclk_mhz = 1000;  // conservative nominal clock if the frequency is unavailable
@@ -76,18 +80,18 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
             profiler_program_support_count.value());
     }
 
-    const uint32_t dram_bank_size_per_risc_bytes =
-        dram_bank_size_per_risc_bytes_single_program * profiler_program_support_count.value();
+    const uint64_t dram_bank_size_per_risc_bytes =
+        static_cast<uint64_t>(dram_bank_size_per_risc_bytes_single_program) * profiler_program_support_count.value();
+    TT_FATAL(
+        dram_bank_size_per_risc_bytes <= std::numeric_limits<uint32_t>::max(),
+        "Profiler program support count {} needs {} B of DRAM per RISC, which does not fit in 32 bits",
+        profiler_program_support_count.value(),
+        dram_bank_size_per_risc_bytes);
 
     rtoptions.set_profiler_program_support_count(profiler_program_support_count.value());
 
     TT_ASSERT(dram_bank_size_per_risc_bytes > kernel_profiler::PROFILER_L1_BUFFER_SIZE);
-    return dram_bank_size_per_risc_bytes;
-}
-
-uint32_t get_profiler_dram_bank_size_per_risc_bytes() {
-    llrt::RunTimeOptions& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    return get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
+    return static_cast<uint32_t>(dram_bank_size_per_risc_bytes);
 }
 
 uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions) {
@@ -97,13 +101,55 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     // There are 2 DRAM buffers per risc when debug dump is enabled.
     // The size of each buffer returned by get_profiler_dram_bank_size_per_risc_bytes is half to maintain the same
     // total profiler size.
-    if (debug_dump_enabled) {
-        return per_buffer_size * 2;
+    const uint32_t device_profiler_bytes = debug_dump_enabled ? per_buffer_size * 2 : per_buffer_size;
+    if (!rtoptions.get_streaming_profiler_enabled()) {
+        return device_profiler_bytes;
     }
-    return per_buffer_size;
+    // The streaming profiler's GDDR spool takes over the device profiler's DRAM slot (the two are mutually
+    // exclusive). The Blackhole HAL sizes that slot as this per-RISC value x 5 RISCs x 20 cores per DRAM channel,
+    // so it is handed the spool's per-RISC share; reserve_spool() checks the resulting slot at boot.
+    constexpr uint32_t kBlackholeRiscsPerDramChannel = 5 * 20;
+    return div_up(rtoptions.get_streaming_profiler_spool_mb() << 20, kBlackholeRiscsPerDramChannel);
 }
 
-ProfilerStateManager::ProfilerStateManager(MetalEnvImpl& env) : env_(env), do_sync_on_close(true) {}
+ProfilerStateManager::ProfilerStateManager(MetalContext& ctx) :
+    ctx_(ctx), env_(MetalEnvAccessor(ctx.get_env()).impl()), do_sync_on_close(true) {
+    if (getDeviceProfilerState(env_)) {
+        ProfilerRegistry::instance().attach(*this);
+        attached_to_registry = true;
+    }
+}
+
+ProfilerStateManager::~ProfilerStateManager() {
+    if (attached_to_registry) {
+        ProfilerRegistry::instance().detach(*this);
+    }
+}
+
+ProfilerRegistry& ProfilerRegistry::instance() {
+    // Indestructible is only needed while MetalContext lifetime is in transition. Once every context is owned by a
+    // MetalEnv and destroyed with it, a plain function-local static is enough (unless a MetalEnv itself has static
+    // storage duration, since it would then be destroyed after this object).
+    // Until then, a ProfilerStateManager can be torn down from MetalContext's atexit handler (destroy_all_instances).
+    // That handler is registered before this object is first constructed, so it runs after a plain static would have
+    // been destroyed, and the detach would touch a destroyed registry.
+    static ttsl::Indestructible<ProfilerRegistry> registry;
+    return registry.get();
+}
+
+void ProfilerRegistry::attach(ProfilerStateManager& profiler_state_manager) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(
+        attached_.empty(),
+        "The device profiler supports only one profiled MetalContext per process; another context is already "
+        "attached");
+    attached_.push_back(&profiler_state_manager);
+}
+
+void ProfilerRegistry::detach(ProfilerStateManager& profiler_state_manager) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::erase(attached_, &profiler_state_manager);
+}
 
 void ProfilerStateManager::cleanup_device_profilers() {
     // This thread only exists when debug dump is enabled
@@ -203,7 +249,7 @@ void ProfilerStateManager::start_debug_dump_thread(
 
     constexpr uint64_t max_margin_ticks = uint64_t(1) << (kernel_profiler::PROFILER_MARKER_TS_BITS - 1);
     TT_FATAL(
-        noc_debug_margin_to_ticks(active_devices, watermark_margin) < max_margin_ticks,
+        noc_debug_margin_to_ticks(env_.get_cluster(), active_devices, watermark_margin) < max_margin_ticks,
         "TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS ({}) is too large: it exceeds half the {}-bit device timestamp wrap "
         "window, which would silently disable the mid-run watermark.",
         watermark_margin.count(),
@@ -244,35 +290,23 @@ void ProfilerStateManager::start_debug_dump_thread(
 
                 idle_cycles = 0;
                 for (auto* device : active_devices) {
-                    {
-                        auto profiler_it = this->device_profiler_map.find(device->id());
-                        TT_ASSERT(profiler_it != this->device_profiler_map.end());
-                        DeviceProfiler& profiler = profiler_it->second;
-                        profiler.pollDebugDumpResults(
-                            device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
-                    }
-                    constexpr auto state = ProfilerReadState::LAST_FD_READ;
-                    detail::ReadDeviceProfilerResultsInternal(
-                        device->get_mesh_device().get(),
-                        device,
-                        virtual_cores_map.at(device->id()),
-                        state,
-                        {},
-                        was_force_read);
-
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    if (this->env_.get_rtoptions().get_profiler_trace_only() || was_force_read) {
-                        profiler.processResults(
-                            device,
-                            virtual_cores_map.at(device->id()),
-                            state,
-                            ProfilerDataBufferSource::DRAM_AND_L1,
-                            {});
-                    } else {
-                        profiler.processResults(
-                            device, virtual_cores_map.at(device->id()), state, ProfilerDataBufferSource::DRAM, {});
+                    // The kernels are done, but BRISC publishes a core's last chunks in finish_profiler only after it
+                    // has reported completion to dispatch, and stalls there if a buffer is full, so chunks can still
+                    // land while this read runs. Poll again until a poll finds nothing new. Only BRISC and NCRISC
+                    // record NOC events, finish_profiler pushes them first, and each stalls at most once, so 4 polls
+                    // cover the worst case: one before BRISC publishes, BRISC's handover, BRISC's chunk with
+                    // NCRISC's handover, and NCRISC's chunk. Later chunks stay behind the read cursors for the next
+                    // poll.
+                    constexpr uint32_t max_drain_polls = 4;
+                    for (uint32_t poll = 0; poll < max_drain_polls; ++poll) {
+                        const bool found_new_data = profiler.pollDebugDumpResults(
+                            device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
+                        if (!found_new_data && poll > 0) {
+                            break;
+                        }
                     }
                     if (was_force_read && !profiler.device_markers_per_core_risc_map.empty()) {
                         profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
@@ -295,33 +329,22 @@ void ProfilerStateManager::start_debug_dump_thread(
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
+                    // Kernels may be running, so this must not reset the device's profiler indices: it only parses
+                    // what the riscs have published since the last poll.
                     profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
-                    detail::ReadDeviceProfilerResultsInternal(
-                        device->get_mesh_device().get(),
-                        device,
-                        virtual_cores_map.at(device->id()),
-                        ProfilerReadState::LAST_FD_READ,
-                        {},
-                        /*include_l1=*/true);
-                    profiler.processResults(
-                        device,
-                        virtual_cores_map.at(device->id()),
-                        ProfilerReadState::LAST_FD_READ,
-                        ProfilerDataBufferSource::DRAM_AND_L1,
-                        {});
                 }
-                if (auto& noc_debug_state = MetalContext::instance().noc_debug_state();
-                    noc_debug_state && !active_devices.empty()) {
+                if (auto& noc_debug_state = ctx_.noc_debug_state(); noc_debug_state && !active_devices.empty()) {
                     // Recomputed each pass rather than hoisted, because the aiclk can change at runtime (DVFS).
-                    const uint64_t margin_ticks = noc_debug_margin_to_ticks(active_devices, watermark_margin);
+                    const uint64_t margin_ticks =
+                        noc_debug_margin_to_ticks(env_.get_cluster(), active_devices, watermark_margin);
                     noc_debug_state->process_accumulated_events_up_to(margin_ticks);
                     noc_debug_state->report_new_issues();
                 }
                 // Discharge the marker set. This is what keeps host memory bounded on a long run: dumpDeviceResults
                 // consumes the markers and its last statement clears device_markers_per_core_risc_map, which
                 // otherwise grows for the whole run (it is only cleared at device close). Safe to clear here because
-                // the set's other job -- deduplicating the repeated parses of one undrained buffer, which is what
-                // gates pushing NOC-debug events.
+                // the set only deduplicates parses within one pass (it gates pushing NOC-debug events), and the read
+                // cursors keep a later pass from parsing the same data again.
                 for (auto* device : active_devices) {
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());

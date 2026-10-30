@@ -17,6 +17,7 @@ on:
           - Qwen/Qwen3-32B
           - Qwen/Qwen3.6-27B
           - Qwen/Qwen2.5-VL-72B-Instruct
+          - Qwen/Qwen2.5-VL-7B-Instruct
           - Qwen/Qwen3-VL-32B-Instruct
           - google/gemma-3-27b-it
           - google/gemma-4
@@ -234,7 +235,8 @@ jobs:
       - name: 🧪 Run host-only plugin tests
         run: |
           pushd "$PLUGIN_DIR"
-          pytest tests --ignore=tests/tt -v
+          # Root pytest at the plugin so `tests` resolves to the plugin package, not tt-metal's tests/.
+          PYTHONPATH="$PLUGIN_DIR:$PYTHONPATH" pytest --rootdir="$PLUGIN_DIR" --confcutdir="$PLUGIN_DIR" tests --ignore=tests/tt -v
           popd
   vllm-tests:
     needs: [check-harbor, build-artifact, resolve-skus]

@@ -421,18 +421,19 @@ jobs:
     # builds for the same commit + config simultaneously, queue them so the second run
     # gets a fully warm ccache instead of both racing with cold caches.
     # Keyed purely on SHA + compile inputs — no branch/PR special-casing.
-    concurrency:
-      group: >-
-        cmake-build-
-        ${{ github.sha }}-
-        ${{ inputs.platform }}-
-        ${{ inputs.build-type }}-
-        ${{ inputs.toolchain }}-
-        ${{ inputs.architecture }}-
-        tracy:${{ inputs.tracy }}-
-        dist:${{ inputs.distributed }}-
-        lto:${{ inputs.enable-lto }}
-      queue: max
+    # Disabled: this mutex serializes cross-workflow ASan builds and forces the losing job to re-queue for an already-scarce runner pool, turning normal waits into multi-hour merge-queue stalls.
+    # concurrency:
+    #   group: >-
+    #     cmake-build-
+    #     ${{ github.sha }}-
+    #     ${{ inputs.platform }}-
+    #     ${{ inputs.build-type }}-
+    #     ${{ inputs.toolchain }}-
+    #     ${{ inputs.architecture }}-
+    #     tracy:${{ inputs.tracy }}-
+    #     dist:${{ inputs.distributed }}-
+    #     lto:${{ inputs.enable-lto }}
+    #   queue: max
     timeout-minutes: 100
     runs-on: ${{ inputs['runs-on'] }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
@@ -467,7 +468,7 @@ jobs:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         CCACHE_COMPRESS: "true"
-        CCACHE_COMPRESSLEVEL: "3"
+        CCACHE_COMPRESSLEVEL: "9"
         # Log ccache operations to a file so remote storage errors are visible in CI.
         # Errors (storage helper failures, S3 timeouts) would otherwise be silent.
         CCACHE_LOGFILE: /tmp/ccache.log
@@ -847,6 +848,15 @@ jobs:
           PYTHON_VERSION_NODOT=$(echo "${{ needs.parse-platform.outputs.python-version }}" | tr -d '.')
           ARTIFACT_NAME="ttnn-dist-inplace-cp${PYTHON_VERSION_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: 🔍 Import the wheel in a clean venv
+        if: ${{ inputs.build-inplace-wheel && github.event_name == 'merge_group' }}
+        timeout-minutes: 10
+        run: |
+          # ttnn must import on its declared dependencies alone.
+          python3 -m venv "$RUNNER_TEMP/wheel-smoke"  # not /tmp: noexec in this image
+          "$RUNNER_TEMP/wheel-smoke/bin/pip" install --quiet /work/wheelhouse/*.whl
+          cd / && "$RUNNER_TEMP/wheel-smoke/bin/python" -c "import ttnn"
 
       - name: ☁️ Upload wheel package
         if: ${{ inputs.build-inplace-wheel }}

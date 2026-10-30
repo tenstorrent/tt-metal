@@ -51,13 +51,13 @@ between the token-major and expert-major layouts.
 
 ## Regenerating
 
-**Prerequisite:** the capture step needs the `enable_torch_tracer` split from
-`martemov/llama-graph-tracing-bbradel-fork`, which is not on main yet. Without it,
-`enable_logging` + `enable_graph_report` turns on the legacy python torch tracer
-(`ttnn/ttnn/decorators.py:997-999`), which wraps every incoming `torch.Tensor` in a
-`TracedTorchTensor` that nanobind cannot dtype-convert — `ttnn.from_torch` aborts before the model
-is built. The committed cases came from a capture taken with that branch merged locally; nothing
-in this directory depends on it, only the act of re-capturing does.
+The capture step runs on main. `enable_logging` + `enable_graph_report` used to switch on the
+legacy python torch tracer in `ttnn/ttnn/decorators.py`, which wrapped every incoming
+`torch.Tensor` in a `TracedTorchTensor` that nanobind cannot dtype-convert, so `ttnn.from_torch`
+aborted before the model was built; tt-metal#54956 removed that auto-enable. The committed cases
+came from a capture taken before that fix, with the `enable_torch_tracer` split from
+`martemov/llama-graph-tracing-bbradel-fork` merged locally as a workaround; nothing in this
+directory depends on it.
 
 ```bash
 # 1. capture a run. The demo turns device trace off and caps generated tokens by itself when

@@ -58,6 +58,17 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
     const std::uint32_t ct_dim = 1) {
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operandA,
+        "unpack_AB_sub_bcast_col_custom operandA DFB differs from the one llk_unpack_AB_sub_bcast_col_init_custom "
+        "programmed");
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp1,
+        operandB,
+        "unpack_AB_sub_bcast_col_custom operandB DFB differs from the one llk_unpack_AB_sub_bcast_col_init_custom "
+        "programmed");
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
@@ -65,9 +76,9 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
     const std::uint32_t l1_tile_idx_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a;
     const std::uint32_t l1_tile_idx_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
 
     _llk_unpack_AB_sub_bcast_col_custom_(
         ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),

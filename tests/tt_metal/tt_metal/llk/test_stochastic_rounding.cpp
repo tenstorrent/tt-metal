@@ -20,7 +20,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 
@@ -75,7 +75,7 @@ StochasticRoundingResult run_stochastic_rounding(
     const size_t output_byte_size = num_tiles * tile_byte_size_output;
     const size_t num_elements = num_tiles * tt::constants::TILE_HW;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*cq.device());
     auto mesh_workload = distributed::MeshWorkload();
 
     auto input_dram_buffer = distributed::MeshBuffer::create(

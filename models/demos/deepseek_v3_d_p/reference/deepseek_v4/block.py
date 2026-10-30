@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""One DeepSeek-V4 decoder block on CPU, composed from the reference modules, plus the same weights in
+the layout TtV4Block wants.
+
+Composed rather than driven through DeepseekV4DecoderLayer because both callers need the pieces
+separately: the device takes each one's weights on its own, and ``v4_block_forward`` interleaves the
+two hyper-connections by hand.
+"""
+
+from __future__ import annotations
+
+import torch
+
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import (
+    DeepseekV4Attention,
+    DeepseekV4HyperConnection,
+    DeepseekV4RMSNorm,
+    DeepseekV4RotaryEmbedding,
+    DeepseekV4SparseMoeBlock,
+)
+
+
+def v4_block_modules(config, layer_idx: int) -> dict:
+    """The six modules a V4 block is made of, freshly initialised.
+
+    Both callers fill them in afterwards -- ``build_v4_block_reference`` randomises them,
+    ``tt/v4/weights.py`` copies checkpoint weights over them -- so the dict's shape is settled
+    here rather than in each of them.
+    """
+    attn = DeepseekV4Attention(config, layer_idx=layer_idx).eval()
+    if attn.compressor is None:
+        # A sliding-only layer has no compressor and so no rope of its own; the config determines it.
+        attn.rotary_emb = DeepseekV4RotaryEmbedding(config)
+    hidden = config.hidden_size
+    return {
+        "attn": attn,
+        "mlp": DeepseekV4SparseMoeBlock(config, layer_idx=layer_idx).eval(),
+        "attn_norm": DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval(),
+        "ffn_norm": DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval(),
+        "attn_hc": DeepseekV4HyperConnection(config).eval(),
+        "ffn_hc": DeepseekV4HyperConnection(config).eval(),
+    }
+
+
+def _normal_per_expert(param: torch.Tensor, std: float) -> None:
+    """``param.normal_(0, std)``, drawn one expert at a time in fp32 when ``param`` is not fp32: torch's
+    bf16 ``normal_`` is ~4x slower, and a whole fp32 draw would cost the memory a bf16 MoE saves."""
+    if param.dtype == torch.float32:
+        param.normal_(0.0, std)
+        return
+    for expert in param:
+        expert.copy_(torch.empty(expert.shape).normal_(0.0, std))
+
+
+def build_v4_block_reference(config, layer_idx: int, seed: int = 0, moe_dtype: torch.dtype = torch.float32):
+    """A randomised V4 decoder block: the two norms, the layer's attention, and its MoE.
+
+    Random, and deliberately not near-identity: the norm gains are drawn away from 1.0 and the sinks
+    from N(0,1), so a PCC pass cannot come from weights that make the block an identity map.
+
+    ``moe_dtype`` is the MoE's parameter dtype; everything else stays fp32. The MoE is nearly all of a
+    layer's host memory, and the device is handed bf16 copies of its weights either way.
+    """
+    torch.manual_seed(seed)
+    ref = v4_block_modules(config, layer_idx)
+    attn, mlp = ref["attn"], ref["mlp"]
+    # Cast before the draws, so the fp32 allocation is never touched.
+    mlp.to(moe_dtype)
+    hidden, inter, n_exp = config.hidden_size, config.intermediate_size, config.num_local_experts
+    hs, ds = hidden**-0.5, inter**-0.5
+    with torch.no_grad():
+        attn.q_a_norm.weight.uniform_(0.5, 1.5)
+        attn.kv_norm.weight.uniform_(0.5, 1.5)
+        attn.sinks.normal_(0.0, 1.0)
+        if attn.compressor is not None:
+            attn.compressor.position_bias.normal_(0.0, 0.02)
+            attn.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+            indexer = getattr(attn.compressor, "indexer", None)
+            if indexer is not None:
+                indexer.position_bias.normal_(0.0, 0.02)
+                indexer.kv_norm.weight.uniform_(0.5, 1.5)
+
+        mlp.gate.weight.normal_(0.0, hs)
+        _normal_per_expert(mlp.experts.gate_up_proj, hs)
+        _normal_per_expert(mlp.experts.down_proj, ds)
+        for p in (mlp.shared_experts.gate_proj, mlp.shared_experts.up_proj):
+            p.weight.normal_(0.0, hs)
+        mlp.shared_experts.down_proj.weight.normal_(0.0, ds)
+        if mlp.is_hash:
+            # A frozen token-id -> expert-id table. Random ids, so routing is not a function of
+            # anything the device could recompute from the hidden state.
+            mlp.gate.tid2eid.copy_(torch.randint(0, n_exp, mlp.gate.tid2eid.shape))
+        else:
+            mlp.gate.e_score_correction_bias.normal_(0.0, 0.01)
+
+        # The hyper-connections get what the model prescribes (DeepseekV4PreTrainedModel.
+        # _init_weights): fn ~ N(0, initializer_range), base zero, scale one. A non-zero base with a
+        # small scale -- which tt/mhc's own op test uses deliberately, to cover the bias add -- would
+        # make the projection ~1% of each sigmoid's argument and the rest bias, leaving this test
+        # blind to whether the projection is computed correctly at all.
+        for site in ("attn", "ffn"):
+            hc = ref[f"{site}_hc"]
+            hc.fn.normal_(0.0, config.initializer_range)
+            hc.base.zero_()
+            hc.scale.fill_(1.0)
+
+        ref["attn_norm"].weight.uniform_(0.5, 1.5)
+        ref["ffn_norm"].weight.uniform_(0.5, 1.5)
+    return ref
+
+
+def v4_mhc_weights(ref):
+    """``ref`` -> the ``(fn, base, scale)`` triples TtV4Block's mhc_weights wants, per site."""
+    return {
+        site: (
+            ref[f"{site}_hc"].fn.detach(),
+            ref[f"{site}_hc"].base.detach(),
+            ref[f"{site}_hc"].scale.detach(),
+        )
+        for site in ("attn", "ffn")
+    }
+
+
+def v4_block_state_dict(ref, config):
+    """``ref`` -> the state-dict keys TtV4Block reads.
+
+    The experts are stored packed: ``gate_up_proj`` is ``[experts, 2*inter, hidden]`` whose first
+    ``inter`` rows are the gate half (``_apply_gate`` chunks the [T, 2*inter] product, so the split is
+    by output row), and ``down_proj`` is ``[experts, hidden, inter]`` -- already the per-expert layout.
+    """
+    mlp, inter = ref["mlp"], config.intermediate_size
+    gate_up, down = mlp.experts.gate_up_proj.detach(), mlp.experts.down_proj.detach()
+    experts = [
+        {
+            "gate_proj": gate_up[e, :inter].to(torch.bfloat16),
+            "up_proj": gate_up[e, inter:].to(torch.bfloat16),
+            "down_proj": down[e].to(torch.bfloat16),
+        }
+        for e in range(config.num_local_experts)
+    ]
+    shared = {
+        "gate_proj": mlp.shared_experts.gate_proj.weight.detach().to(torch.bfloat16),
+        "up_proj": mlp.shared_experts.up_proj.weight.detach().to(torch.bfloat16),
+        "down_proj": mlp.shared_experts.down_proj.weight.detach().to(torch.bfloat16),
+    }
+    # e_score_correction_bias biases selection only, and hash routing does not select; the device gate
+    # still wants the tensor, so a hash layer hands it zeros.
+    bias = getattr(mlp.gate, "e_score_correction_bias", None)
+    state = {
+        "attn_norm_weight": ref["attn_norm"].weight.detach(),
+        "ffn_norm_weight": ref["ffn_norm"].weight.detach(),
+        "gate_weights": {
+            "weight": mlp.gate.weight.detach().to(torch.bfloat16),
+            "e_score_correction_bias": (
+                bias.detach().to(torch.float32)
+                if bias is not None
+                else torch.zeros(config.num_local_experts, dtype=torch.float32)
+            ),
+        },
+        "routed_expert_weights": experts,
+        "shared_expert_weights": shared,
+    }
+    if mlp.is_hash:
+        state["hash_table"] = mlp.gate.tid2eid.detach()
+    return state
+
+
+def v4_block_forward(ref, config, hidden_states, input_ids):
+    """One unchunked pass, which the device's chunked path has to reproduce.
+
+    ``hidden_states`` is [1, seq, hc_mult, hidden] in and out: V4's residual is hc_mult parallel
+    streams mixed by two hyper-connections, not a sum. ``input_ids`` drives hash routing and a top-k
+    layer ignores it.
+    """
+    attn, mlp = ref["attn"], ref["mlp"]
+    seq = hidden_states.shape[1]
+    position_ids = torch.arange(seq).unsqueeze(0).expand(1, -1)
+    sw = config.sliding_window
+
+    i = torch.arange(seq).view(seq, 1)
+    j = torch.arange(seq).view(1, seq)
+    mask = torch.zeros(seq, seq).masked_fill(~((j <= i) & (i - j < sw)), float("-inf")).view(1, 1, seq, seq)
+    rope_src = attn.compressor.rotary_emb if attn.compressor is not None else attn.rotary_emb
+
+    def _attend(collapsed):
+        cos, sin = rope_src(collapsed, position_ids=position_ids, layer_type=attn.rope_layer_type)
+        out, _ = attn(
+            ref["attn_norm"](collapsed), {attn.rope_layer_type: (cos, sin)}, position_ids, mask, past_key_values=None
+        )
+        return out
+
+    with torch.no_grad():
+        # comb is consumed transposed: sum_j comb[j, k] * residual[j, d]. Sinkhorn yields a
+        # doubly-stochastic but non-symmetric matrix, so the direction matters.
+        h, dtype = hidden_states, hidden_states.dtype
+        post, comb, collapsed = ref["attn_hc"](h)
+        h = post.to(dtype).unsqueeze(-1) * _attend(collapsed).unsqueeze(-2) + torch.matmul(
+            comb.to(dtype).transpose(-1, -2), h
+        )
+        post, comb, collapsed = ref["ffn_hc"](h)
+        moe_dtype = mlp.experts.gate_up_proj.dtype
+        mlp_out = mlp(ref["ffn_norm"](collapsed).to(moe_dtype), input_ids=input_ids).to(dtype)
+        return post.to(dtype).unsqueeze(-1) * mlp_out.unsqueeze(-2) + torch.matmul(comb.to(dtype).transpose(-1, -2), h)

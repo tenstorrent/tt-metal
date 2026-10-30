@@ -4,17 +4,25 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <set>
+#include <string>
+#include <array>
 #include <unordered_set>
 
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
-#include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/link_health.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt_stl/span.hpp>
 
 #include <map>
 #include <memory>
@@ -29,8 +37,7 @@ class Cluster;
 struct EthCoord;
 
 namespace umd {
-    class Cluster;
-    class ClusterDescriptor;
+class ClusterDescriptor;
 }
 
 namespace llrt {
@@ -201,6 +208,58 @@ public:
     std::optional<RoutingDirection> get_forwarding_direction(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
 
+    // Canonical logical route between two chips of one mesh, reconstructed by following the next-hop
+    // relation. Not a substitute for get_fabric_route(), which is conditioned on a source channel.
+    std::vector<FabricNodeId> get_canonical_intramesh_route(
+        FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
+
+    // Whether the mesh has a validated express-ring topology. Mesh-scoped; per-line link liveness is
+    // not represented.
+    bool express_routing_enabled(MeshId mesh_id) const;
+
+    // Whether a protected ring family covers this node along the given dimension. Ring state is only
+    // derived for meshes with express links, so check express_routing_enabled before relying on this.
+    // Per-node by design: answers false for a leaf. Never wire this into
+    // need_deadlock_avoidance_support -- that flag also gates first-level ACK and the credit path, so
+    // a per-node answer would elide the guard on leaf chips. The per-mesh axis query below is the one
+    // that feeds it.
+    bool has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const;
+
+    // Whether the edge leaving `local` in `egress` belongs to a protected ring.
+    bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
+
+    // The ring a direction rides: the express decomposition for a hop on the express axis (including Z),
+    // the ordinary orthogonal ring otherwise. Null when the mesh has no such ring. Public because the multicast reverse
+    // trees are built from it off the control plane -- a host that must open one connection per canonical root output
+    // has to run the same encoder the worker runs, and that needs this topology.
+    const AxisRouteTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
+
+    // The topology governing `axis` (0 = Y, 1 = X) of this mesh: express chords where declared for
+    // that axis, the ordinary ring where the axis closes, else the plain line. Never null for a 2D
+    // mesh with a non-degenerate axis.
+    //
+    // Prefer this over ring_for_direction() for anything that needs a per-axis tree. The latter is
+    // null on a non-express mesh (Y) or a non-closing dimension (X), and a null topology silently
+    // yields an empty multicast map rather than an error.
+    const AxisRouteTopology* axis_topology(MeshId mesh_id, int axis) const;
+
+    // For traffic arriving at `local` from its `ingress` neighbor and leaving toward its `egress` one,
+    // whether both hops ride one oriented view of the same ring, i.e. it stays on the ring it is on.
+    bool are_same_directed_ring_edges(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // For that same turn, whether a non-transit ring acquisition is permitted. A crossing into the
+    // family that may continue is terminal and returns false.
+    bool continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // Does the axis that `axis_direction` belongs to (N/S/Z select Y, E/W select X) carry any
+    // protected ring anywhere in this mesh?
+    //
+    // Used to decide whether a router compiles in protected flow control at all, which is a property
+    // of the axis rather than of one chip. Asking the per-node question instead would disable the
+    // guard on leaf chips, and that flag also gates first-level ACK and the credit path, so the
+    // effect would reach beyond flow control.
+    bool mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const;
+
     // Return eth channels that can forward the data from src to dest.
     // This will be a subset of the active routers in a given direction since some channels could be
     // reserved along the way for tunneling etc.
@@ -209,7 +268,7 @@ public:
     std::vector<chan_id_t> get_forwarding_eth_chans_to_chip(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, RoutingDirection forwarding_direction) const;
 
-    stl::Span<const ChipId> get_intra_chip_neighbors(
+    ttsl::Span<const ChipId> get_intra_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
     std::unordered_map<MeshId, std::vector<ChipId>> get_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
@@ -265,9 +324,6 @@ public:
 
     void clear_fabric_context();
 
-    // Initialize fabric tensix config (call after routing tables are configured)
-    void initialize_fabric_tensix_datamover_config();
-
     // Check if the provided chip and channel is a cross-host eth link
     bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;
 
@@ -276,7 +332,8 @@ public:
     // intended for users to grab available eth cores for testing
     // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<tt::tt_metal::CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<tt::tt_metal::CoreCoord> get_active_ethernet_cores(
+        ChipId chip_id, bool skip_reserved_cores = false) const;
     std::unordered_set<tt::tt_metal::CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
 
     // Collect router port directions map from all hosts via MPI and merge into local map
@@ -305,6 +362,41 @@ public:
 
     /// Topology mapper for fabric node ↔ physical ASIC / host bindings (used by routing and pipeline layout).
     const TopologyMapper& get_topology_mapper() const;
+
+    // Factory system descriptor / link health.
+    //
+    // Everything here answers as if the system were healthy when no factory descriptor is configured,
+    // which is the state every caller is in today: there is nothing that says what *should* be cabled, so
+    // there is nothing a missing cable can be missing from. Flags are false, collections empty, and
+    // is_link_healthy is true.
+
+    // Whether a factory system descriptor was configured and ingested. When false, nothing below reports
+    // anything.
+    //
+    // Also the switch that closes STRICT's abort paths: with a factory descriptor, a missing or short
+    // connection is recorded rather than fatal, because recording it is the entire point. Without one,
+    // STRICT is unchanged.
+    bool has_factory_descriptor() const;
+
+    // Non-null only when a factory descriptor was ingested. Prefer the forwarders below for the common
+    // queries; this is for callers that need the full query surface.
+    const experimental::LinkHealth* get_link_health() const;
+
+    // Whether fabric routed around a factory-expected cable that is not there. Distinct from
+    // has_factory_descriptor(): a descriptor whose cables are all present does not reroute.
+    bool fsd_rerouting_active() const;
+
+    bool is_link_healthy(FabricNodeId fabric_node_id, chan_id_t chan) const;
+    const std::vector<experimental::LinkInfo>& get_downed_links() const;
+    const std::vector<experimental::LinkInfo>& get_unused_downed_links() const;
+
+    // The downed links on this host that the cluster also reports ethernet-down for. A record here is one
+    // this rank confirmed with the hardware rather than only inferred from the descriptors.
+    const std::vector<experimental::LinkInfo>& get_locally_unhealthy_links() const;
+
+    // Recompute the comparison against the current live descriptor. No-op without a factory descriptor.
+    // Invalidates every reference handed out by the accessors above.
+    void refresh_connectivity_diff();
 
     // Exit fabric nodes on `src_mesh_id` with inter-mesh connectivity to `dst_mesh_id` (as assigned during intermesh
     // setup). Inter-mesh connectivity is merged across hosts during setup, so multi-host runs can query any mesh pair
@@ -336,6 +428,11 @@ private:
 
     void init_control_plane_auto_discovery();
 
+    // Gathers the FabricConfig of every rank and enforces one consistent FabricConfig per logical mesh
+    // and across all meshes connected by the mesh graph descriptor. Must run after the local mesh
+    // binding and distributed contexts are known, and before routing tables or FabricContext are built.
+    void validate_fabric_config_across_ranks();
+
     // Initialize fabric context if fabric is enabled
     void initialize_fabric_context();
 
@@ -347,6 +444,10 @@ private:
 
     // Fabric Settings
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+
+    // FabricConfig that was agreed on by all ranks in validate_fabric_config_across_ranks(). Fabric
+    // initialization is only allowed to proceed with this value.
+    std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being
@@ -360,11 +461,27 @@ private:
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 
+    // Coordinate along that ring's axis of the neighbor reached by `direction`.
+    std::optional<int> ring_coord_of_neighbor(
+        const AxisRouteTopology& rings, FabricNodeId local, RoutingDirection direction) const;
+
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
+    // The factory descriptor, filtered to this job's hosts. Null when none is configured. Declared before
+    // the mapper because the mapper solves on it and so must not outlive it.
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> fsd_physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::unique_ptr<MeshGraph> mesh_graph_;
+    // The live view re-discovered by refresh_connectivity_diff(). Held as a member because
+    // link_health_ keeps a pointer to it between refreshes; physical_system_descriptor_ cannot be
+    // replaced instead, since the topology mapper still references it.
+    std::unique_ptr<tt_metal::PhysicalSystemDescriptor> refreshed_live_descriptor_;
+
+    // Declared after everything it points into -- both descriptors and the mapper -- so it is destroyed
+    // first. Null when no factory descriptor is configured.
+    std::unique_ptr<experimental::LinkHealth> link_health_;
+    std::vector<experimental::LinkInfo> locally_unhealthy_;
 
     std::map<FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
 
@@ -425,6 +542,43 @@ private:
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    // Load the configured factory system descriptor, restricted to this job's hosts, and fill
+    // fsd_physical_system_descriptor_. No-op when none is configured.
+    //
+    // Every failure mode here is collective: the ranks agree on the host filter before any of them
+    // ingests, so either all of them continue or all of them throw. A rank that gave up and mapped on live
+    // instead would disagree with its peers about which cables exist, and any collective gated on that
+    // deadlocks.
+    void ingest_factory_system_descriptor();
+
+    // A STRICT mesh graph may run with relaxed system health. A RELAXED mesh graph may not run with
+    // STRICT system health.
+    void validate_system_health_against_mesh_graph_policy() const;
+
+    // The descriptor the mapper solves on: the factory one when there is one, else the live one. Solving
+    // on the factory descriptor is the point of the feature -- it keeps a downed cable from changing where
+    // the mesh lands.
+    const tt::tt_metal::PhysicalSystemDescriptor& descriptor_to_map_on() const;
+
+    // Build link_health_. Runs after intermesh connectivity, so intra-mesh directions and the mesh graph
+    // are settled and every record can be given its logical view.
+    void construct_link_health_after_intermesh();
+
+    // Extras in live are fine -- the factory descriptor is golden about what must exist, not what may.
+    // Too many missing cables is not: past a threshold the descriptor does not describe this machine.
+    void check_fsd_compatibility_and_downed_fraction();
+
+    // Cross-check the local half of the downed set against the cluster's own ethernet status. Never fatal
+    // when a factory descriptor is set: the record is the result, not a reason to abort.
+    void confirm_local_downed_links();
+
+    // Move holes that sit on routing planes fabric already gave up on out of the active set. Must run
+    // after the plane trim and the cross-host merge, so every rank classifies identically.
+    void classify_unused_downed_after_plane_trim();
+
+    // A used downed link fails when that mesh's intra policy is STRICT, or when intermesh is STRICT.
+    void reject_used_downed_links_under_strict_policy();
     // Live routing planes in a given direction: the post-health-check active plane count.
     // Note: this includes reserved planes as well, as opposed to get_num_usable_routing_planes.
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
@@ -440,12 +594,28 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
+    using Routing2DActionVectors = std::array<std::uint8_t, Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES>;
+
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
-    void write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id) const;
+    void write_routing_info_to_devices(
+        MeshId mesh_id,
+        ChipId chip_id,
+        const MeshShape& mesh_shape,
+        const RoutingTable& intra_mesh_routing_table,
+        const RoutingTable& inter_mesh_routing_table,
+        const Routing2DActionVectors* action_vectors_2d) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
     // Helper functions to compute and embed routing path tables
     void compute_and_embed_1d_routing_path_table(MeshId mesh_id, routing_l1_info_t& routing_info) const;
-    void compute_and_embed_2d_routing_path_table(MeshId mesh_id, ChipId chip_id, routing_l1_info_t& routing_info) const;
+    Routing2DActionVectors compute_2d_routing_action_vectors(
+        MeshId mesh_id, const MeshShape& mesh_shape, const RoutingTable& intra_mesh_routing_table) const;
+    void compute_and_embed_2d_routing_path_table(
+        MeshId mesh_id,
+        ChipId chip_id,
+        const MeshShape& mesh_shape,
+        const Routing2DActionVectors& action_vectors,
+        const RoutingTable& inter_mesh_routing_table,
+        routing_l1_info_t& routing_info) const;
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
@@ -471,9 +641,6 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
-    template <uint8_t dim, bool compressed>
-    void write_all_to_all_routing_fields(MeshId mesh_id) const;
-
     // Top level function responsible for generating intermesh connectivity
     // based on the MGD and Physical State of the system.
     // This function will annotate physical connections between physical meshes (exit nodes)
@@ -495,7 +662,8 @@ private:
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,
-        const std::unordered_set<FabricNodeId>& requested_exit_nodes);
+        const std::unordered_set<FabricNodeId>& requested_exit_nodes,
+        uint32_t neighbor_mpi_rank);
 
     // Multi-Host Intermesh Connectivity Helper Function:
     // Build this mesh's PortDescriptorTable by gathering cables toward every requested neighbor mesh.

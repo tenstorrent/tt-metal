@@ -37,13 +37,14 @@ from helpers.test_variant_parameters import (
     SDPA_EXP_SCALE,
     SDPA_OP,
     SDPA_SOFTPLUS_PARAMS,
+    fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_DIMENSIONS = [TILE_DIM, TILE_DIM]
 
-RECIP_OPS = (SdpaOp.RecipLegacy, SdpaOp.RecipIter)
+RECIP_OPS = (SdpaOp.RecipIter,)
 EXP_OPS = (SdpaOp.ExpAccurate, SdpaOp.ExpPoly)
 
 # The exp bodies take their scale as a uint16_t bf16 pattern, so only bf16-exact values
@@ -93,13 +94,8 @@ class Precision(Enum):
         return self.label
 
 
-CORRECTION_NUM_TILES = 5
 CORRECTION_TILE_NAMES = ("prev_max", "worker_max", "cur_max", "prev_sum", "worker_sum")
 CORRECTION_SCALE_BF16_VALUES = (0x3F80, 0x3E80)  # (1.0, 0.25)
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _bf16_to_float(pattern: int) -> float:
@@ -118,8 +114,7 @@ def _ramp(lo: float, hi: float) -> torch.Tensor:
 # produces, so the floor doesn't decide a comparison.
 
 # Most paths that pack into bf16 share one pair because packer rounding is the main source of error.
-# The exceptions are the two paths that are not limited by the rounding precision: correction
-# accumulates across five tiles, and RecipLegacy under APPROX is a 7-bit arecip with no Newton step.
+# Correction is not limited by rounding precision because it accumulates across five tiles.
 _TOLERANCES = {
     # op, approx (None where the body ignores it): bf16-packed, fp32 end-to-end
     (SdpaOp.Correction, None): ((1.5e-4, 2.5e-2), (1.0e-6, 2.5e-7)),
@@ -128,8 +123,6 @@ _TOLERANCES = {
     (SdpaOp.Softplus, None): ((1.0e-4, 1.0e-2), (1.0e-4, 4.0e-3)),
     (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
-    (SdpaOp.RecipLegacy, False): ((2.5e-3, 1.2e-2), (1.5e-3, 3.0e-3)),
-    (SdpaOp.RecipLegacy, True): ((2.5e-3, 1.0e-1), (2.5e-3, 8.0e-2)),
 }
 
 
@@ -180,8 +173,8 @@ def _stimulus(variant: Variant) -> torch.Tensor:
         # keeps any element from being its own reciprocal, which would be written yet compare
         # equal to the input and read as a footprint gap.
 
-        # Both bodies return 1/x, so the sign has to survive the kernel; RecipLegacy used to
-        # return |1/x| and no longer does. Sign alternates by row, not by flat index, because
+        # The reciprocal returns 1/x, so the sign has to survive the kernel. Sign alternates
+        # by row, not by flat index, because
         # the kernel writes every other row.
         magnitudes = _ramp(1.25, 5.0)
         rows = torch.arange(ELEMENTS_PER_TILE) // TILE_DIM
@@ -214,9 +207,9 @@ def _templates(variant: Variant):
         DEST_SYNC(variant.dest_sync),
         SDPA_EXP_SCALE(scale_bf16=variant.exp_scale_bf16),
         SDPA_SOFTPLUS_PARAMS(
-            softplus_beta_bits=_f32_bits(variant.softplus.beta),
-            softplus_beta_reciprocal_bits=_f32_bits(1.0 / variant.softplus.beta),
-            softplus_threshold_bits=_f32_bits(variant.softplus.threshold),
+            softplus_beta_bits=fp32_bits(variant.softplus.beta),
+            softplus_beta_reciprocal_bits=fp32_bits(1.0 / variant.softplus.beta),
+            softplus_threshold_bits=fp32_bits(variant.softplus.threshold),
         ),
     ]
 
@@ -292,7 +285,7 @@ def test_sfpu_sdpa(variant, precision):
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, TILE_DIMENSIONS)
 
     unexpected = _footprint_violations(src_A.view(TILE_DIM, TILE_DIM), res_tensor)
@@ -340,11 +333,13 @@ def _correction_stimulus_tiles(torch_format):
 
 
 def _dest_configurations():
-    """Dest configurations that can hold five tiles."""
+    """Cover both the four-tile FP32 half-sync layout and the five-tile layout."""
     return [
         (Precision.Bf16Dest, DestSync.Half),
         (Precision.Bf16Dest, DestSync.Full),
+        (Precision.Fp32Dest, DestSync.Half),
         (Precision.Fp32Dest, DestSync.Full),
+        (Precision.Fp32E2E, DestSync.Half),
         (Precision.Fp32E2E, DestSync.Full),
     ]
 
@@ -361,11 +356,16 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
     torch_format = format_dict[formats.input_format]
 
     src_tiles = _correction_stimulus_tiles(torch_format)
+    reuse_cur_max_tile = precision != Precision.Bf16Dest and dest_sync == DestSync.Half
+    if reuse_cur_max_tile:
+        src_tiles = [src_tiles[0], src_tiles[1], src_tiles[4], src_tiles[3]]
+    num_tiles = len(src_tiles)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
     golden_tiles = get_golden_generator(SdpaCorrectionGolden)(
         [t.view(TILE_DIM, TILE_DIM) for t in src_tiles],
         scale=_bf16_to_float(scale_bf16),
+        reuse_cur_max_tile=reuse_cur_max_tile,
     )
 
     src_A_tilized = torch.cat(
@@ -389,9 +389,9 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
             src_B,
             formats.input_format,
             formats.output_format,
-            tile_count_A=CORRECTION_NUM_TILES,
+            tile_count_A=num_tiles,
             tile_count_B=1,
-            tile_count_res=CORRECTION_NUM_TILES,
+            tile_count_res=num_tiles,
         ),
         dest_acc=precision.dest_acc,
         unpack_to_dest=precision.unpack_to_dest,
@@ -400,20 +400,20 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
     )
     res_from_L1 = configuration.run().result
 
-    res_flat = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_flat = result_tensor(res_from_L1, formats.output_format)
     res_tiles = [
         untilize_block(
             res_flat[i * ELEMENTS_PER_TILE : (i + 1) * ELEMENTS_PER_TILE],
             formats.output_format,
             TILE_DIMENSIONS,
         )
-        for i in range(CORRECTION_NUM_TILES)
+        for i in range(num_tiles)
     ]
 
     for name, src, res, golden in zip(
         CORRECTION_TILE_NAMES, src_tiles, res_tiles, golden_tiles
     ):
-        # All five regions are addressed by the same strided walk, so a write outside the
+        # All regions are addressed by the same strided walk, so a write outside the
         # footprint in any one of them is a stride bug.
         unexpected = _footprint_violations(src.view(TILE_DIM, TILE_DIM), res)
         assert not unexpected, (

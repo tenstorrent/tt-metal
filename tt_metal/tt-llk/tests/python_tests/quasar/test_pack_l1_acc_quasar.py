@@ -4,7 +4,8 @@
 from typing import List
 
 import pytest
-import torch
+from helpers.constraints import is_valid_quasar_dest_mode_conversion
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     PackGolden,
@@ -13,17 +14,17 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     ReluConfig,
-    format_dict,
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
+    quasar_mx_smoke,
+    runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -31,7 +32,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -42,7 +42,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 TILE_DIMENSIONS = [32, 32]
@@ -52,16 +52,12 @@ TILE_DIMENSIONS = [32, 32]
 PACK_L1_ACC_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ]
-)
+) + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
 
 
 def generate_qsr_pack_l1_acc_combinations(
@@ -95,24 +91,6 @@ def generate_qsr_pack_l1_acc_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
-            out_fmt.is_32_bit()
-            and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
-            dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
-        ):
-            return False
-        return True
-
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -121,23 +99,10 @@ def generate_qsr_pack_l1_acc_combinations(
             continue
 
         for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+            if is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
                 combinations.append((fmt, dest_acc))
 
     return combinations
-
-
-def pack_l1_acc_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
-
-
-def pack_l1_acc_implied_math_formats(formats_dest_acc, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    formats = formats_dest_acc[0]
-    if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
 ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
@@ -148,17 +113,13 @@ ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
-    implied_math_format=lambda formats_dest_acc: pack_l1_acc_implied_math_formats(
-        formats_dest_acc
-    ),
-    dest_sync_mode=lambda: pack_l1_acc_dest_sync_modes(is_perf=False),
-    input_dimensions=INPUT_DIMENSIONS,
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_l1_acc_quasar(
     formats_dest_acc,
-    implied_math_format,
     dest_sync_mode,
     input_dimensions,
     run_types,
@@ -168,7 +129,7 @@ def test_pack_l1_acc_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc) = formats_dest_acc
+    formats, dest_acc = formats_dest_acc
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -227,9 +188,7 @@ def test_pack_l1_acc_quasar(
             partials, data_format=formats.output_format
         )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -238,7 +197,6 @@ def test_pack_l1_acc_quasar(
         "test_name": "sources/quasar/pack_l1_acc_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -275,7 +233,6 @@ def test_pack_l1_acc_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(
@@ -290,12 +247,7 @@ def test_pack_l1_acc_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     test_passed = passed_test(
         golden_tensor,

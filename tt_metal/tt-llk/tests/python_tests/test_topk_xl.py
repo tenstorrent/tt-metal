@@ -225,8 +225,10 @@ def _variant(
     sort_mode=TopKXLSortMode.Dispatch,
     lsb_row_major=False,
     reinit_after_copy=False,
+    blaze_compat=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
+    extra_templates=(),
 ):
     """
     Build the stimulus and the TestConfig for one variant. Returns (config, rows).
@@ -237,10 +239,13 @@ def _variant(
     """
     tail_elements = K if tail_elements is None else tail_elements
     tiles_per_seq = _tiles_per_sequence(K)
-    result_tiles = (1 if index_op == TopKXLIndexOp.RemoveMsb else 2) * tiles_per_seq
+    fused_region_only = (
+        index_op == TopKXLIndexOp.RemoveMsb or sort_mode == TopKXLSortMode.Columns
+    )
+    result_tiles = (1 if fused_region_only else 2) * tiles_per_seq
     # 32-bit input does unpack_to_dest (is_32bit_input), while bf16 goes
     # through SrcA then the MATH A2D datacopy.
-    is_32bit = formats.input_format in (DataFormat.Float32, DataFormat.Int32)
+    is_32bit = formats.input_format.is_32_bit()
     # Unused dummy tile, but it is declared with the input format, so its dtype has
     # to follow it or the stimuli packer is handed a mislabeled tensor.
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[formats.input_format])
@@ -270,7 +275,9 @@ def _variant(
                 sort_mode=sort_mode,
                 lsb_row_major=lsb_row_major,
                 reinit_after_copy=reinit_after_copy,
+                blaze_compat=blaze_compat,
             ),
+            *extra_templates,
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -930,11 +937,57 @@ def test_topk_xl_local_sort_early_exit(K, sort_direction):
         )
 
 
+# The topk_large_indices column body (k <= 64): each column keeps the top 64 of its members over all chunks.
+@parametrize(num_chunks=[2, 4], sort_direction=list(TopKSortDirection))
+def test_topk_xl_rebuild_columns(num_chunks, sort_direction):
+    K = 1024
+    result, rows = _run(
+        K,
+        num_chunks=num_chunks,
+        sort_mode=TopKXLSortMode.Columns,
+        sort_direction=sort_direction,
+    )
+    words = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+    assert (
+        words.numel() == ELEMENTS_PER_TILE
+    ), f"expected one fused tile, got {words.numel()} words"
+    row = rows[0]
+    hi16 = lambda w: (int(w) >> 16) & 0xFFFF
+    row_hi16 = [(int(v) >> 16) & 0xFFFF for v in row.view(torch.int32).tolist()]
+
+    columns = {}
+    for offset in range(K):
+        position = _sort_position(offset, K)
+        columns.setdefault(position // 64, []).append((position, offset))
+
+    ascending = sort_direction == TopKSortDirection.Ascending
+    for column, members in sorted(columns.items()):
+        sequence = [int(words[offset]) for _, offset in sorted(members)]
+        values = [hi16(w) for w in sequence]
+        assert values == sorted(
+            values, reverse=not ascending
+        ), f"column {column} is not sorted {'ascending' if ascending else 'descending'}"
+        candidates = [
+            row_hi16[c * K + offset] for _, offset in members for c in range(num_chunks)
+        ]
+        assert (
+            sorted(values, reverse=True) == sorted(candidates, reverse=True)[:64]
+        ), f"column {column} does not hold the top 64 of its members"
+        for w in sequence:
+            offset = _index_to_chunk_offset(w & 0xFFFF, K)
+            assert (
+                _sort_position(offset, K) // 64 == column
+            ), f"column {column} holds offset {offset} from another column"
+            assert hi16(w) in {
+                row_hi16[c * K + offset] for c in range(num_chunks)
+            }, f"column {column}: index of offset {offset} is not paired with its value"
+
+
 # row_major=true stamps each element's chunk offset instead of the tile coordinate the
 # default numbering needs decoding from. The offset fits in bits [10:0] for every K, so
 # core_id keeps bits [15:11] either way.
-@parametrize(K=[512, 1024, 2048], core_id=[0, 31])
-def test_topk_xl_add_lsb_indices_row_major(K, core_id):
+@parametrize(K=[512, 1024, 2048], core_id=[0, 31], blaze_compat=[False, True])
+def test_topk_xl_add_lsb_indices_row_major(K, core_id, blaze_compat):
     result, rows = _run(
         K,
         index_op=TopKXLIndexOp.Separate,
@@ -942,6 +995,7 @@ def test_topk_xl_add_lsb_indices_row_major(K, core_id):
         group_shift=GROUP_SHIFT,
         core_id=core_id,
         lsb_row_major=True,
+        blaze_compat=blaze_compat,
     )
     _check_coordinates(
         result,
@@ -982,3 +1036,35 @@ def test_topk_xl_reinit_after_copy(K, num_chunks, fused):
     _check_coordinates(
         result, K, rows, num_chunks=num_chunks, group_id=GROUP_ID, core_id=None
     )
+
+
+@parametrize(K=[512, 1024, 2048], fused_e2e=[False, True], input_fp32=[False, True])
+def test_topk_xl_blaze_compat(K, fused_e2e, input_fp32):
+    """Chained merges, copy reinit, and a partial/empty tail on two independent rows."""
+    _run_test_topk(
+        K,
+        num_chunks=4,
+        tail_elements=K // 2,
+        num_rows=2,
+        mode="signed",
+        reinit_after_copy=True,
+        fused_e2e=fused_e2e,
+        blaze_compat=True,
+        formats=InputOutputFormat(
+            DataFormat.Float32 if input_fp32 else DataFormat.Float16_b,
+            DataFormat.UInt32,
+        ),
+    )
+
+
+@parametrize(K=[512, 1024, 2048], core_id=[0, 31])
+def test_topk_xl_blaze_compat_pack_remove_msb(K, core_id):
+    """PACK owns replay only after MATH has handed over the full DEST section."""
+    result, rows = _run(
+        K,
+        num_rows=2,
+        index_op=TopKXLIndexOp.RemoveMsb,
+        core_id=core_id,
+        blaze_compat=True,
+    )
+    _check_remove_msb(result, K, rows, core_id=core_id)

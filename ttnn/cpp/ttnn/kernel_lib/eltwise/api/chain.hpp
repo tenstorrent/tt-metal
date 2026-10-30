@@ -25,7 +25,7 @@
  * --------------------
  * The chain never issues engine-wide ("BIG") init. The caller owns `compute_kernel_hw_startup`
  * (plus `compute_kernel_hw_startup` / `mm_init` / `reduce_init` when the kernel mixes those
- * primitives). The chain owns only per-element init — `*_tile_init`, `init_bcast`, `copy_init`,
+ * primitives). The chain owns only per-element init — `*_tile_init`, `bcast_init`, `copy_init`,
  * and the `reconfig_data_format_*` fold and dst-sync lifecycle.
  * Do not add a `*_with_init` wrapper that folds `compute_kernel_hw_startup`
  * into the chain: it is only correct for single-stage kernels and breaks multi-stage / mid-loop
@@ -45,18 +45,40 @@
  * already halves the usable slot count when it is on. There is no per-element opt-in and no
  * mid-kernel `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` toggle.
  *
+ * Binding DataflowBuffers
+ * -----------------------
+ * Each `input(...)` / `output(...)` spec names a buffer by its compile-time id (what the reconfig
+ * fold and the compile-time checks reason about). The element that carries the spec also takes that
+ * buffer's `DataflowBuffer` by reference as a leading constructor argument — one per spec, in the
+ * order the specs appear in its template arguments — and the chain issues every wait/pop/reserve/push
+ * through it. The chain never constructs a DataflowBuffer itself; construct each one once in the
+ * kernel and pass the same object to every chain that uses it:
+ *
+ *   CopyTile<input(dfb::in)>{in}                                  // 1 spec  -> 1 buffer
+ *   DestReuseBinary<BinaryFpuOp::Mul, input(dfb::s), ...>{s}      // 1 spec  -> 1 buffer
+ *   BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b}   // 2 specs -> 2 buffers (A, B)
+ *   PackTile<output(dfb::out)>{out}                               // 1 spec  -> 1 buffer
+ *   Exp<>{}                                                       // DEST-only: no buffer
+ *
+ * Runtime tile bases (`TileAddressing::Offset` / `Strided`) follow the buffers:
+ * `CopyTile<input(dfb::in, ..., TileAddressing::Offset)>{in, base}`,
+ * `BinaryFpu<...>{a, b, base_a, base_b}`. A buffer whose id differs from its spec's id trips a watcher
+ * assert; without the watcher it is not diagnosed, so keep the buffers in spec order.
+ *
  * Examples
  * --------
- *   // Streaming unary — Exp(x) -> out (dfb_* are dataflow-buffer ids, i.e. buffer indices)
+ *   DataflowBuffer in(dfb::in), a(dfb::a), b(dfb::b), out(dfb::out);   // once, at the top of the kernel
+ *
+ *   // Streaming unary — Exp(x) -> out
  *   eltwise_chain(IterationShape::tiles(num_tiles),
- *       CopyTile<input(dfb_in)>{},
+ *       CopyTile<input(dfb::in)>{in},
  *       Exp<>{},
- *       PackTile<output(dfb_out)>{});
+ *       PackTile<output(dfb::out)>{out});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
  *   eltwise_chain(IterationShape::tiles(num_tiles),
- *       BinaryFpu<BinaryFpuOp::Add, input(dfb_a), input(dfb_b)>{},
- *       PackTile<output(dfb_out)>{});
+ *       BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b},
+ *       PackTile<output(dfb::out)>{out});
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
@@ -67,7 +89,8 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "api/compute/common_globals.h"  // ALWI (used by the public eltwise_chain() declaration)
+#include "api/compute/common_globals.h"    // ALWI (used by the public eltwise_chain() declaration)
+#include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer — elements bind the caller's buffers by reference
 // The heavier LLK / compute-API includes are impl-only and live in chain.inl.
 
 namespace compute_kernel_lib {
@@ -77,6 +100,8 @@ namespace compute_kernel_lib {
 // NO_PREV_DFB sentinels) are dataflow-buffer ids: today an integer `tt::CBIndex` value.
 // The public element aliases accept complete input(...) / output(...) specs and forward each
 // id as a separate implementation NTTP so it does not consume packed configuration bits.
+// The matching runtime `DataflowBuffer` objects are bound by reference at element construction
+// (see "Binding DataflowBuffers" above).
 
 // (The marker-tag hierarchy — CbReaderTag/CbWriterTag/DestOnlyTag + the per-element
 //  leaf tags — and the is_*_op_v classification predicates are internal pipeline
@@ -198,7 +223,9 @@ enum class InitReconfigOwner {
 /// `PerTile + Col` denotes a streamed column: the chain waits for one tile at each grid-row boundary,
 /// reuses the current front tile across that row, then pops it. `Upfront + Col` instead stages an
 /// Ht-tile window and indexes it by row. Output `PerTile` remains literal: one output tile is reserved
-/// and pushed per grid cell. `PerOuter` exists only for output DEST-row accumulation.
+/// and pushed per grid cell. `PerOuter` opens one output window per grid row: direct pack reserves
+/// and pushes Wt tiles, while PerRow DEST accumulation publishes its single reduced tile. WholeShape
+/// DEST accumulation instead uses the one-tile `OneUpfront` / `OneAtEnd` lifecycle.
 /// On a partial final block, `BlockTailSync` selects whether synchronization covers the valid
 /// remainder or the full `block_size`.
 
@@ -320,6 +347,8 @@ struct InputSpec {
     InputTileMapping mapping;
     DataFormatReconfig reconfig;
     TileAddressing addressing;
+    dfb::AccessPattern producer_access_pattern = dfb::AccessPattern::UNKNOWN;
+    dfb::AccessPattern consumer_access_pattern = dfb::AccessPattern::UNKNOWN;
 };
 
 /// The second (srcB) input of a `BinaryFpu`. srcB is the only operand the FPU broadcast path
@@ -345,6 +374,8 @@ struct OutputSpec {
     DestAccumulation dest_accumulation;
     L1Accumulation l1_accumulation;
     PackRelu relu;
+    dfb::AccessPattern producer_access_pattern = dfb::AccessPattern::UNKNOWN;
+    dfb::AccessPattern consumer_access_pattern = dfb::AccessPattern::UNKNOWN;
 };
 
 /// Bind one input buffer id to its configuration.
@@ -359,6 +390,20 @@ constexpr InputSpec input(
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
+constexpr InputSpec input(
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
+    WaitPolicy wait = WaitPolicy::PerTile,
+    PopPolicy pop = PopPolicy::PerTile,
+    InputTileMapping mapping = InputTileMapping::Scalar,
+    DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    TileAddressing addressing = TileAddressing::Direct) noexcept;
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
+constexpr InputSpec input(
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
+    WaitPolicy wait,
+    PopPolicy pop,
+    DataFormatReconfig reconfig) noexcept;
 
 /// Bind srcB of a BinaryFpu and optionally select its intra-tile broadcast. The overload taking
 /// an existing InputSpec makes compile-time helper-produced input configurations composable.
@@ -373,6 +418,22 @@ constexpr BroadcastInputSpec input(
     TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr BroadcastInputSpec input(
     uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
+constexpr BroadcastInputSpec input(
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
+    BroadcastDim broadcast,
+    WaitPolicy wait = WaitPolicy::PerTile,
+    PopPolicy pop = PopPolicy::PerTile,
+    InputTileMapping mapping = InputTileMapping::Scalar,
+    DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    TileAddressing addressing = TileAddressing::Direct) noexcept;
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
+constexpr BroadcastInputSpec input(
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
+    BroadcastDim broadcast,
+    WaitPolicy wait,
+    PopPolicy pop,
+    DataFormatReconfig reconfig) noexcept;
 
 /// Bind one output buffer id to its configuration.
 /// Defaults: reserve/push per tile, reconfig enabled, Direct addressing, no accumulation,
@@ -380,6 +441,16 @@ constexpr BroadcastInputSpec input(
 /// knobs pay the trailing-default spelling cost instead of the common ones.
 constexpr OutputSpec output(
     uint32_t cb_id,
+    ReservePolicy reserve = ReservePolicy::PerTile,
+    PushPolicy push = PushPolicy::PerTile,
+    DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    TileAddressing addressing = TileAddressing::Direct,
+    DestAccumulation dest_accumulation = DestAccumulation::Disabled,
+    L1Accumulation l1_accumulation = L1Accumulation::Disabled,
+    PackRelu relu = PackRelu::Disabled) noexcept;
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
+constexpr OutputSpec output(
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
     ReservePolicy reserve = ReservePolicy::PerTile,
     PushPolicy push = PushPolicy::PerTile,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
@@ -420,7 +491,7 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 // 3. Block size — `IterationShape::block_size` semantics
 // =============================================================================
 //
-// Op-struct template-param enums (Approx / Legacy) live in op_params.hpp — they
+// Op-struct template-param enums (Approx) live in op_params.hpp — they
 // are an op-helper concern, not part of the chain mechanics, so they are not defined here.
 
 /// Block size. Configured with `IterationShape::tiles(n).block_size(blk)` or
@@ -434,8 +505,8 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 /// `block_size * chain_lane_width` always fits DEST (`DEST_AUTO_LIMIT`): an oversized value can't
 /// overflow DEST, it only costs extra outer iterations. Streaming CB-reader chains consume one
 /// tile per iter, so block_size is clamped to 1 for them. A shape using `FullBlock` mode instead
-/// describes a physical CB contract and must already fit; the chain
-/// asserts rather than changing it.
+/// describes a physical CB contract and callers must supply a block size that fits DEST.
+/// FullBlock with Upfront reserve and PerBlockSize push is unsupported (debug assertion).
 
 // =============================================================================
 // 4. Operation selectors
@@ -466,20 +537,28 @@ constexpr uint32_t binary_fpu_config_bits(
 constexpr uint32_t dest_reuse_binary_config_bits(
     BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst) noexcept;
 
-template <uint32_t Cb, uint32_t ConfigBits>
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct CopyTileImpl;
-template <uint32_t Cb, uint32_t ConfigBits>
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct PackTileImpl;
-template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits>
+template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits, class DataflowBufferA, class DataflowBufferB>
 struct BinaryFpuImpl;
-template <uint32_t Cb, uint32_t ConfigBits>
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct DestReuseBinaryImpl;
 
 }  // namespace detail
 
+/// Load one input tile into `DstSlot`. Constructor: `{in}`, `{in, base}` (Offset) or `{in, range}` (Strided),
+/// where `in` is the DataflowBuffer named by `Input`.
 template <InputSpec Input, Dst DstSlot = Dst::D0>
-using CopyTile = detail::CopyTileImpl<Input.cb_id, detail::copy_tile_config_bits(DstSlot, Input)>;
+using CopyTile = detail::CopyTileImpl<
+    Input.cb_id,
+    detail::copy_tile_config_bits(DstSlot, Input),
+    DataflowBufferFor<Input.producer_access_pattern, Input.consumer_access_pattern>>;
 
+/// FPU binary of two input tiles into `DstSlot`. Constructor: `{a, b}` — the DataflowBuffers named by
+/// `AInput` and `BInput`, in that order (the same object twice when both name one buffer) — optionally
+/// followed by per-side tile bases: `{a, b, base_a}`, `{a, b, base_a, base_b}`, or StridedTileRange forms.
 template <
     BinaryFpuOp Op,
     InputSpec AInput,
@@ -489,17 +568,27 @@ template <
 using BinaryFpu = detail::BinaryFpuImpl<
     AInput.cb_id,
     BInput.input_spec.cb_id,
-    detail::binary_fpu_config_bits(Op, AInput, BInput, DstSlot, Accumulation)>;
+    detail::binary_fpu_config_bits(Op, AInput, BInput, DstSlot, Accumulation),
+    DataflowBufferFor<AInput.producer_access_pattern, AInput.consumer_access_pattern>,
+    DataflowBufferFor<BInput.input_spec.producer_access_pattern, BInput.input_spec.consumer_access_pattern>>;
 
 /// Apply an FPU binary operation between one CB input and `DstSlot`.
 /// The LLK operation is in-place in DEST: it reads and overwrites the same slot.
 /// `Op` is the first template argument, matching `BinaryFpu`.
+/// Constructor: `{in}`, `{in, base}` or `{in, range}`, where `in` is the DataflowBuffer named by `Input`.
 template <BinaryFpuOp Op, InputSpec Input, DestReuseType ReuseType, Dst DstSlot = Dst::D0>
-using DestReuseBinary =
-    detail::DestReuseBinaryImpl<Input.cb_id, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot)>;
+using DestReuseBinary = detail::DestReuseBinaryImpl<
+    Input.cb_id,
+    detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot),
+    DataflowBufferFor<Input.producer_access_pattern, Input.consumer_access_pattern>>;
 
+/// Pack `DstSlot` to an output tile. Constructor: `{out}`, `{out, base}` or `{out, range}`, where `out` is the
+/// DataflowBuffer named by `Output`.
 template <OutputSpec Output, Dst DstSlot = Dst::D0>
-using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bits(Output, DstSlot)>;
+using PackTile = detail::PackTileImpl<
+    Output.cb_id,
+    detail::pack_tile_config_bits(Output, DstSlot),
+    DataflowBufferFor<Output.producer_access_pattern, Output.consumer_access_pattern>>;
 
 // (Chain-shape trait predicates, the EltwiseChain type-list wrapper, and the INVALID_DFB sentinel
 //  are implementation detail — declared in chain.inl, not on this public surface.)

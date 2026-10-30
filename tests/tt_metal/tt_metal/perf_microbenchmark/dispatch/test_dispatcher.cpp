@@ -13,7 +13,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/context_types.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -21,6 +21,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
+#include "distributed/mesh_device_impl.hpp"
 
 /*
  * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)
@@ -1070,8 +1071,8 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
-        this->device_ = this->mesh_device_->get_devices()[0];
-        if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
+        this->device_ = this->mesh_device_->impl().get_devices()[0];
+        if (detail::sd_cq_kernel_tests_should_skip(*this->mesh_device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
         Common::DispatchPayloadGenerator::Config pgcfg;
@@ -1143,7 +1144,7 @@ public:
         }
 
         const auto& memmap = Common::sd_dispatch_mem_map();
-        const tt::CoreType cq_core_type = Common::sd_cq_kernel_core_type(this->device_);
+        const tt::CoreType cq_core_type = detail::resolve_sd_cq_kernel_core_type(*this->mesh_device_);
         // CQ0: this is a slow-dispatch (SD) test with no real command queue.
         const uint32_t l1_buf_base = memmap.dispatch_buffer_base(/*cq_id=*/0);
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
@@ -1159,10 +1160,10 @@ public:
 
         const uint32_t cmd_cb_bytes = cmd_cb_pages * page_size;
 
-        const CoreCoord spoof_logical = Common::sd_spoof_prefetch_core(this->device_);
-        const CoreCoord disp_logical = Common::dispatch_core(this->device_);
-        const CoreCoord phys_spoof = Common::sd_virtual_core(this->device_, spoof_logical);
-        const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, disp_logical);
+        const CoreCoord spoof_logical = detail::sd_cq_prefetch_core(*this->mesh_device_);
+        const CoreCoord disp_logical = detail::sd_cq_dispatch_core(*this->mesh_device_);
+        const CoreCoord phys_spoof = detail::sd_cq_virtual_core(*this->mesh_device_, spoof_logical);
+        const CoreCoord phys_disp = detail::sd_cq_virtual_core(*this->mesh_device_, disp_logical);
         const bool fd_kernels_on_same_core = (phys_spoof == phys_disp);
 
         // When both FD kernels share a core, each kernel writes into its own L1 region, so the dispatcher
@@ -1187,7 +1188,7 @@ public:
         tt_metal::MetalContext::instance().get_cluster().write_core(
             raw.data(), raw.size(), tt_cxy_pair(this->device_->id(), phys_spoof), l1_buf_base);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*this->mesh_device_);
 
         const uint32_t spoof_prefetch_sem_id =
             tt_metal::CreateSemaphore(program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);
@@ -1211,10 +1212,10 @@ public:
 
         const tt_metal::KernelHandle sp = Common::create_sd_cq_kernel(
             program,
-            this->device_,
+            *this->mesh_device_,
             "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
             spoof_logical,
-            Common::prefetch_dm(),
+            detail::prefetch_dm_processor(),
             prefetch_defines,
             spoof_args);
         tt_metal::SetRuntimeArgs(program, sp, spoof_logical, {1u});
@@ -1232,10 +1233,10 @@ public:
 
         const tt_metal::KernelHandle dispatch_kernel = Common::create_sd_cq_kernel(
             program,
-            this->device_,
+            *this->mesh_device_,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             disp_logical,
-            Common::dispatch_dm(),
+            detail::dispatch_dm_processor(),
             dispatch_defines);
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, disp_logical, {0u, 0u, 0u});
 

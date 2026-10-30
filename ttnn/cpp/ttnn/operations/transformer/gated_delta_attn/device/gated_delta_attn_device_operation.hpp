@@ -8,7 +8,8 @@
 #include <vector>
 
 #include "ttnn/operations/transformer/gated_delta_attn/device/gated_delta_attn_device_operation_types.hpp"
-#include "ttnn/operations/transformer/gated_delta_attn/device/gated_delta_attn_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -22,6 +23,15 @@ struct GatedDeltaAttnSeqDeviceOperation {
     // Return two Tensors: output [BH, num_chunks, C, Dv] and final_state [BH, Dk, Dv].
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
+
+    struct GatedDeltaAttnSeqProgramFactory {
+        // The head→core mapping and every non-address runtime arg (head index, num_chunks) derive from
+        // the attributes and tensor specs, all covered by the default program hash (which also keys on
+        // initial_state presence and every tensor's layout baked into the tensor bindings). The eleven
+        // tensor bindings are therefore the whole cache-hit refresh.
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs);
+    };
     using program_factory_t = std::variant<GatedDeltaAttnSeqProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -29,8 +39,6 @@ struct GatedDeltaAttnSeqDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 // Low-level dispatch function (used by public API).

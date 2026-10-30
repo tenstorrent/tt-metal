@@ -118,6 +118,7 @@ jobs:
       has-t3-e2e: ${{ steps.check.outputs.has-t3-e2e }}
       has-vllm-tests: ${{ steps.check.outputs.has-vllm-tests }}
       has-any-tests: ${{ steps.check.outputs.has-any-tests }}
+      has-image-consumer: ${{ steps.check.outputs.has-image-consumer }}
     steps:
       - name: Checkout test definitions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -249,6 +250,9 @@ jobs:
           github_output = os.environ.get("GITHUB_OUTPUT", "")
           results = {}
           any_tests = False
+          # Test types whose legs consume bake-env-dev-full.outputs.image.
+          IMAGE_CONSUMER_TYPES = ("unit", "e2e")
+          has_image_consumer = False
 
           for test_type, path in test_files.items():
               if not os.path.exists(path):
@@ -279,6 +283,14 @@ jobs:
                   # Only count toward any_tests if the user actually selected this tier and test type
                   if found and tier in enabled_tiers and test_type in enabled_test_types:
                       any_tests = True
+                  # ...and toward has-image-consumer only for the test types wired to
+                  # the prebuilt env image. any_tests is too weak a gate for the bake:
+                  # it also counts sweep and vLLM, which stay on the artifact path, so a
+                  # sweep-only dispatch would build and push an image nothing pulls.
+                  # Add a type here when its legs start taking prebuilt-image.
+                  if (found and tier in enabled_tiers and test_type in enabled_test_types
+                          and test_type in IMAGE_CONSUMER_TYPES):
+                      has_image_consumer = True
 
           # vLLM Model Tests: single pipeline. Not tier-gated on scheduled/standalone
           # runs, but all-model-tests forwards a single selected tier to the vLLM impl
@@ -309,6 +321,7 @@ jobs:
               any_tests = True
 
           results["has-any-tests"] = "true" if any_tests else "false"
+          results["has-image-consumer"] = "true" if has_image_consumer else "false"
 
           if github_output:
               with open(github_output, "a") as f:
@@ -357,14 +370,53 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
+  # Bakes the source tree and this run's build output into one image the unit and
+  # e2e legs run in, so they need no artifact download and no recursive checkout.
+  # One bake serves all six of those jobs, since they share the one build-artifact
+  # above. PROFILE=full because the legs read /work/build, and /work/runtime for
+  # e2e; the dev base is the same image docker-image resolves to, so the image path
+  # and the fallback path agree.
+  #
+  # has-image-consumer, not has-any-tests: the latter also counts the sweep and vLLM
+  # legs, which stay on the artifact path, so a sweep-only dispatch would otherwise
+  # checkout, build and push an image nothing pulls. preflight computes it from the
+  # same tier and test-type selection the six consumers gate on, so the two cannot
+  # disagree; see IMAGE_CONSUMER_TYPES there when wiring a new consumer.
+  bake-env-dev-full:
+    needs: [build-artifact, preflight]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
+     needs.preflight.outputs.has-image-consumer == 'true' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      # No source-ref: this caller takes no ref, so the producer's default (its own
+      # commit) is already the commit build-artifact built.
+
   # ── Tier 1 ────────────────────────────────────────────────────────
   t1-unit-tests:
-    needs: [build-artifact, preflight]
-    if: ${{ inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
+    needs: [build-artifact, preflight, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above,
+    # which now states the build-artifact dependency the bare needs list used to
+    # imply. A failed bake leaves the ref empty and the legs fall back to the
+    # artifact path; gating on the bake would skip the suite instead.
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -373,12 +425,17 @@ jobs:
       tier: "1"
 
   t1-e2e-tests:
-    needs: [build-artifact, preflight]
-    if: ${{ inputs.tier-1 && inputs.run-e2e-tests && needs.preflight.outputs.has-t1-e2e == 'true' }}
+    needs: [build-artifact, preflight, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && inputs.tier-1 && inputs.run-e2e-tests && needs.preflight.outputs.has-t1-e2e == 'true' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above,
+    # which now states the build-artifact dependency the bare needs list used to
+    # imply. A failed bake leaves the ref empty and the legs fall back to the
+    # artifact path; gating on the bake would skip the suite instead.
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -402,12 +459,17 @@ jobs:
 
   # ── Tier 2 ────────────────────────────────────────────────────────
   t2-unit-tests:
-    needs: [build-artifact, preflight]
-    if: ${{ inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
+    needs: [build-artifact, preflight, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above,
+    # which now states the build-artifact dependency the bare needs list used to
+    # imply. A failed bake leaves the ref empty and the legs fall back to the
+    # artifact path; gating on the bake would skip the suite instead.
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -416,12 +478,17 @@ jobs:
       tier: "2"
 
   t2-e2e-tests:
-    needs: [build-artifact, preflight]
-    if: ${{ inputs.tier-2 && inputs.run-e2e-tests && needs.preflight.outputs.has-t2-e2e == 'true' }}
+    needs: [build-artifact, preflight, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && inputs.tier-2 && inputs.run-e2e-tests && needs.preflight.outputs.has-t2-e2e == 'true' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above,
+    # which now states the build-artifact dependency the bare needs list used to
+    # imply. A failed bake leaves the ref empty and the legs fall back to the
+    # artifact path; gating on the bake would skip the suite instead.
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -445,12 +512,17 @@ jobs:
 
   # ── Tier 3 ────────────────────────────────────────────────────────
   t3-unit-tests:
-    needs: [build-artifact, preflight]
-    if: ${{ inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
+    needs: [build-artifact, preflight, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above,
+    # which now states the build-artifact dependency the bare needs list used to
+    # imply. A failed bake leaves the ref empty and the legs fall back to the
+    # artifact path; gating on the bake would skip the suite instead.
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -459,12 +531,17 @@ jobs:
       tier: "3"
 
   t3-e2e-tests:
-    needs: [build-artifact, preflight]
-    if: ${{ inputs.tier-3 && inputs.run-e2e-tests && needs.preflight.outputs.has-t3-e2e == 'true' }}
+    needs: [build-artifact, preflight, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && inputs.tier-3 && inputs.run-e2e-tests && needs.preflight.outputs.has-t3-e2e == 'true' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above,
+    # which now states the build-artifact dependency the bare needs list used to
+    # imply. A failed bake leaves the ref empty and the legs fall back to the
+    # artifact path; gating on the bake would skip the suite instead.
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}

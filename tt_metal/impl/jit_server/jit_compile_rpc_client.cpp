@@ -60,6 +60,7 @@ void fill_target_recipe(rpc::TargetRecipe::Builder& builder, const TargetRecipe&
         defines.set(i, target.defines[i]);
     }
     builder.setIncludes(target.includes);
+    builder.setPchUmbrella(target.pch_umbrella);
     builder.setCompilerOptLevel(target.compiler_opt_level);
     auto srcs = builder.initSrcs(target.srcs.size());
     for (std::size_t i = 0; i < target.srcs.size(); ++i) {

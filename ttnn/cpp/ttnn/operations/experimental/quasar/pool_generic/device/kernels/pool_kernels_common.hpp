@@ -41,8 +41,9 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unco
     return true;
 }
 
-template <uint32_t cb_id, uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles(Noc noc, DataflowBuffer cb, DataflowBuffer clear_cb) {
+template <uint32_t cb_id, uint32_t clear_value_cb_id, typename DFB, typename ClearDFB>
+ALWI void clear_out_tiles(Noc noc, DFB& cb, ClearDFB& clear_cb) {
+    ASSERT(cb.get_id() == cb_id);
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
     // QSR: get_local_cb_interface(cb_id).fifo_page_size is stale for Metal-2.0 DFBs; read the entry
@@ -58,12 +59,14 @@ ALWI void clear_out_tiles(Noc noc, DataflowBuffer cb, DataflowBuffer clear_cb) {
     noc.async_read_barrier();
 }
 
-template <uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles(Noc noc, DataflowBuffer dst_cb, DataflowBuffer clear_value_cb, uint32_t num_tiles) {
+template <uint32_t clear_value_cb_id, typename DstDFB, typename ClearDFB>
+ALWI void clear_out_tiles(Noc noc, DstDFB& dst_cb, ClearDFB& clear_value_cb, uint32_t num_tiles) {
+    ASSERT(clear_value_cb.get_id() == clear_value_cb_id);
     constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
 
     UnicastEndpoint self_ep;
-    const auto src = experimental::local_addr(clear_value_cb.get_read_ptr(), noc.get_noc_id());
+    // Producer face: the pool reader fills its lane's clear copy at its write cursor (no push).
+    const auto src = experimental::local_addr(clear_value_cb.get_write_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         noc.async_read(self_ep, dst_cb, tile_size, src, {.offset_bytes = i * tile_size});
@@ -72,16 +75,22 @@ ALWI void clear_out_tiles(Noc noc, DataflowBuffer dst_cb, DataflowBuffer clear_v
 }
 
 // Zero out all tiles for a given circular buffer.
-template <uint32_t cb_id>
-ALWI void zero_out_tiles(Noc noc, DataflowBuffer cb) {
+template <uint32_t cb_id, typename DFB>
+ALWI void zero_out_tiles(Noc noc, DFB& cb) {
+    ASSERT(cb.get_id() == cb_id);
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
     noc.async_write_zeros(cb, tile_size * num_tiles);
     noc.write_zeros_l1_barrier();
 }
 
-template <uint32_t config_dram_addr, uint32_t config_page_size, uint32_t tensor_args_index, uint32_t cb_reader_index>
-ALWI void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_cb, uint32_t core_index) {
+template <
+    uint32_t config_dram_addr,
+    uint32_t config_page_size,
+    uint32_t tensor_args_index,
+    uint32_t cb_reader_index,
+    typename DFB>
+ALWI void load_config_tensor_if_in_dram(Noc noc, DFB& reader_cb, uint32_t core_index) {
     constexpr auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
     const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
 
@@ -90,44 +99,44 @@ ALWI void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_cb, uint3
     reader_cb.push_back(1);
 }
 
-template <
-    bool one_scalar_per_core,
-    uint32_t in_scalar_cb_id,
-    uint32_t reader_nindices,
-    bool split_reader,
-    uint32_t multi_buffering_factor>
+template <bool one_scalar_per_core, uint32_t in_scalar_cb_id, uint32_t reader_nindices, typename DFB>
 ALWI void fill_scalar(
-    DataflowBuffer scalar_cb,
+    DFB& scalar_cb,
     uint32_t& scalar_start,
     uint32_t& scalar_end,
     uint32_t& scalar_value,
     uint32_t& scalar_index,
-    uint32_t& counter,
+    uint32_t stick_index,
     volatile uint16_t* config_ptr) {
-    constexpr uint32_t num_readers = split_reader ? 2 : 1;
+    // Per-stick scalar (avg pool). stick_index is the GLOBAL output-stick index on this core: the
+    // config table is segmented by global stick, and each lane only visits every T-th stick.
     scalar_cb.reserve_back(1);
 
-    while (counter >= scalar_end && scalar_end < reader_nindices) {
+    while (stick_index >= scalar_end && scalar_end < reader_nindices) {
         scalar_index++;
         scalar_start = scalar_end;
         scalar_value = config_ptr[3 * scalar_index + 1];
         scalar_end = config_ptr[3 * scalar_index + 2];
     }
 
-    // We want to fill the scalar CB the fewest times possible, this will be min(scalar_end - scalar_start, num_readers
-    // * multi_buffering_factor)
-    if (counter < scalar_start + num_readers * multi_buffering_factor) {
-        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
-        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
-        // between the first and second face.
-        fill_with_val(scalar_cb.get_write_ptr(), FACE_WIDTH, scalar_value, false);
+    // Refill this lane's ring entry only if it does not already hold the value (the entry content
+    // persists across ring wraps, so a segment costs one fill per ring entry). Fill only the first
+    // FACE_WIDTH: reload_srcB = true in unpack_tilizeA_B_block reuses face 0 for the remaining faces.
+    volatile tt_l1_ptr uint32_t* entry = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scalar_cb.get_write_ptr());
+    if (entry[0] != (scalar_value | (scalar_value << 16))) {
+        fill_with_val(scalar_cb.get_write_ptr(), FACE_WIDTH, scalar_value);
+#ifdef ARCH_QUASAR
+        // CPU-store fill goes through the DM L1/L2 cache; compute reads TL1 directly -- write it back
+        // (same as the one-scalar init in the reader).
+        flush_l2_cache_range(static_cast<uintptr_t>(scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
+#endif
     }
-    counter += num_readers;
 
     scalar_cb.push_back(1);
 }
 
-ALWI void zero_out_page(Noc noc, DataflowBuffer cb) {
+template <typename DFB>
+ALWI void zero_out_page(Noc noc, DFB& cb) {
     // QSR: read the DFB entry size from the object, not the stale legacy CB interface (LLK guidance).
     const uint32_t page_size = cb.get_entry_size();
     noc.async_write_zeros(cb, page_size);

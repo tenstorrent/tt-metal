@@ -7,7 +7,7 @@
 
 #include "tt_align.hpp"
 #include "hostdev/dev_msgs.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::active_eth;
 
@@ -21,7 +21,7 @@ using namespace tt::tt_metal::blackhole::active_eth;
 #include "hal_types.hpp"
 #include "tensix.h"
 #include "llrt/hal.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "noc/noc_parameters.h"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_AERISC_MAILBOX_BASE)->x))
@@ -131,6 +131,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_AERISC_FABRIC_ROUTER_STATE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = MEM_AERISC_FABRIC_ROUTER_COMMAND_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_PTP_TRACE)] = MEM_AERISC_PTP_TRACE_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
                                                                          offsetof(boot_results_t, eth_live_status) +
                                                                          offsetof(eth_live_status_t, rx_link_up);
@@ -148,7 +149,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_ERISC_KERNEL_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
         MEM_ERISC_MAX_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t) * go_message_num_entries;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_ring_t) * go_message_num_entries;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_AERISC_BANK_TO_NOC_SIZE;

@@ -91,6 +91,15 @@ def get_git_home_dir_str():
     result = run_process_and_get_result("git rev-parse --show-toplevel")
     git_home_dir_str = result.stdout.decode("utf-8").replace("\n", "")
 
+    # A source tree without .git (a prebuilt test image, an export) leaves git with
+    # no answer; TT_METAL_HOME is the repo root by contract and is what this feeds.
+    if not git_home_dir_str:
+        git_home_dir_str = os.environ.get("TT_METAL_HOME", "")
+
+    # Without this, an empty string becomes Path("") == Path("."), which passes both
+    # checks below and silently yields paths like /build/test/... at the filesystem root.
+    assert git_home_dir_str, "Could not find the repo root: git rev-parse failed and TT_METAL_HOME is not set"
+
     git_home_dir = pathlib.Path(git_home_dir_str)
 
     assert git_home_dir.exists(), f"{git_home_dir} doesn't exist"

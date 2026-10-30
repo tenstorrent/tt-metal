@@ -14,18 +14,18 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 # Use common functions from demo_common.py
 # load_and_cache_context and load_inputs are now imported from demo_common
@@ -35,7 +35,7 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        reference_data_file = os.path.join("models/ttt_compat/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file), f"Reference data file {reference_data_file} does not exist"
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
@@ -768,8 +768,9 @@ def test_qwen_demo_text(
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-        if batch_idx != 0:
+        # Clear repeated-request KV state, warming the reset program before the
+        # first trace so later resets cannot allocate behind a live trace.
+        if repeat_batches > 1:
             model.switch_mode("prefill")
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
@@ -924,6 +925,7 @@ def test_qwen_demo_text(
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
                 decode_async_read = not token_accuracy
+                reload_decode_inputs = iteration == 0 or not is_enable_trace or device_sampling_params is None
                 decode_output = generator.decode_forward(
                     out_tok,
                     current_pos,
@@ -933,10 +935,13 @@ def test_qwen_demo_text(
                     read_from_device=True,
                     async_read=decode_async_read,
                     sampling_params=device_sampling_params,
-                    reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
+                    reload_inputs=reload_decode_inputs,
+                    reload_page_table=False,
+                    reload_sampling_params=(device_sampling_params is not None and reload_decode_inputs),
+                    reset_sampling_state=(device_sampling_params is not None and iteration == 0),
                 )
                 if decode_async_read:
                     tt_out_tok, read_event = decode_output
@@ -948,7 +953,7 @@ def test_qwen_demo_text(
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
-                break
+                raise
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)

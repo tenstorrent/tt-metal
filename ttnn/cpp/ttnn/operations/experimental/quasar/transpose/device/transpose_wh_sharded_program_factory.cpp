@@ -37,7 +37,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
@@ -122,8 +122,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_IN0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = ttnn::create_reader_datamovement_config(
-            input_tensor.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer_spec{
@@ -134,16 +133,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_OUT0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::CONSUMER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = ttnn::create_writer_datamovement_config(
-            input_tensor.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     ttnn::ComputeKernelConfig compute_cfg{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input_tensor.device()->arch(), compute_cfg);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
-        std::visit(
-            [&](auto& c) { c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+        compute_hw.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
     }
 
     KernelSpec compute_spec{

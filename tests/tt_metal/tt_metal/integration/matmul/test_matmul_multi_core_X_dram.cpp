@@ -44,7 +44,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -60,7 +61,7 @@ struct MatmulConfig {
 };
 
 std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -73,7 +74,7 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -240,7 +241,6 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             out_subblock_h,
             out_subblock_w);
 
-    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program_ = workload.get_programs().at(device_range);
@@ -292,15 +292,15 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
                 convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
             auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             auto activations_tile_transposed = tt_metal::transpose_tiles(activations, per_core_M, K, in0_block_w);
-            pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
-                device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
+            pass &= slow_dispatch::WriteToDRAMChannel(
+                *mesh_device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
             auto identity_tilized = tilize_swizzled(weights_slice, K * 32, per_core_N * 32);
             auto weights_tile_layout =
                 convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
             auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-            pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
-                device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
+            pass &=
+                slow_dispatch::WriteToDRAMChannel(*mesh_device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
             const std::array mm_reader_args = {
                 (std::uint32_t)dram_buffer_src0_addr,
@@ -349,8 +349,8 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             uint32_t dram_buffer_dst_addr =
                 (core_index * per_core_M * per_core_N * single_tile_size) + dram_unreserved_base;
             int dram_dst_channel_id = 2;
-            tt_metal::detail::ReadFromDeviceDRAMChannel(
-                device,
+            slow_dispatch::ReadFromDRAMChannel(
+                *mesh_device,
                 dram_dst_channel_id,
                 dram_buffer_dst_addr,
                 per_core_M * per_core_N * single_tile_size,

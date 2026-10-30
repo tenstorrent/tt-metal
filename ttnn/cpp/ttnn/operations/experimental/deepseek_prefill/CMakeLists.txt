@@ -4,11 +4,16 @@ add_subdirectory(attn_res_gather_softmax)
 add_subdirectory(attn_res_weighted_reduce_nc)
 add_subdirectory(combine)
 add_subdirectory(combine_fabric2d)
+add_subdirectory(compressor_state_exchange)
+add_subdirectory(csa_compressor)
 add_subdirectory(dispatch)
+add_subdirectory(dispatch_fabric2d)
 add_subdirectory(extract)
+add_subdirectory(hybrid_routed_expert_ffn)
 add_subdirectory(inbound_socket_service_sync)
 add_subdirectory(insert)
 add_subdirectory(masked_bincount)
+add_subdirectory(mhc_split_sinkhorn)
 add_subdirectory(moe_fused_swiglu)
 add_subdirectory(moe_grouped_topk)
 add_subdirectory(moe_hash_gate)
@@ -36,11 +41,16 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d
+        TTNN::Ops::Experimental::DeepSeekPrefill::CompressorStateExchange
+        TTNN::Ops::Experimental::DeepSeekPrefill::CsaCompressor
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
+        TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
+        TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
+        TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
@@ -75,11 +85,16 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CompressorStateExchange>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CsaCompressor>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>

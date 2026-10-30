@@ -227,6 +227,9 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
     runs_on lookup. Timeout and other per-SKU fields still come from the logical key
     in the tests YAML.
 
+    Assumes one test per name: a yaml reusing a (name, gtest_shard_index) pair is
+    rejected, since anything selecting a test by name could not tell the two apart.
+
     Args:
         tests: List of test dictionaries (with 'skus' dict)
         enabled_skus: List of enabled logical SKU strings
@@ -248,10 +251,19 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             print(f"::error::SKU '{sku}' not found in SKU configuration. Available SKUs: {list(sku_config.keys())}")
             sys.exit(1)
 
-    filtered_tests = []
+    filtered_tests = {}
 
     for test in tests:
         test_name = test.get("name", "Unnamed Test")
+        name_key = (test_name, str(test.get("gtest_shard_index", "")))
+        if name_key in filtered_tests:
+            print(
+                f"::error::Test '{test_name}' is defined more than once. Names must be unique "
+                "within one tests yaml; gtest_shard_index counts as part of the name."
+            )
+            sys.exit(1)
+        filtered_tests[name_key] = []
+
         test_skus = test.get("skus")
 
         # Skip tests without skus
@@ -307,15 +319,17 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
                 isinstance(label, str) and "exabox-multihost" in label for label in runs_on
             )
             substitute_cmd_placeholders(entry, allow_missing_cmd=allow_missing_cmd)
-            filtered_tests.append(entry)
+            filtered_tests[name_key].append(entry)
+
+    selected = [entry for entries in filtered_tests.values() for entry in entries]
 
     if not tests:
         return []
-    elif not filtered_tests:
+    elif not selected:
         print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'.")
         sys.exit(1)
 
-    return filtered_tests
+    return selected
 
 
 def write_matrix_output(filtered_matrix):

@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/device/pow_int_device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -19,6 +20,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
@@ -117,22 +119,8 @@ Tensor restore_scalar_output_layout(
 
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = tt::tt_metal::hal::get_eps();
-    Tensor result(input_a);
-    {
-        Tensor eps_gt(input_a);
-        {
-            eps_gt = ttnn::where(
-                ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
-                ttnn::add(input_a, eps, std::nullopt, output_mem_config),
-                input_a);
-        }
-        result = ttnn::where(
-            ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
-            ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
-            eps_gt);
-    }
-    return result;
+    return ttnn::detail::invoke_binary_ng(
+        input_a, input_b, binary::BinaryOpType::NEXTAFTER, std::nullopt, output_mem_config, std::nullopt, {}, {}, {});
 }
 
 Tensor minimum(
@@ -249,7 +237,12 @@ Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<M
         std::nullopt);
 }
 
-Tensor div(
+namespace {
+
+// Shared by both scalar orderings; scalar_is_lhs selects which operand the compute kernel
+// reads as the left-hand side. Kept out of the public signature because bind_div pins it
+// via nb::overload_cast.
+Tensor div_scalar_impl(
     const Tensor& input,
     unary::ScalarVariant value,
     bool fast_and_approximate_mode,
@@ -261,7 +254,8 @@ Tensor div(
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool scalar_is_lhs) {
     const bool is_int32 = input.dtype() == DataType::INT32;
 
     if (is_int32 && std::holds_alternative<float>(value)) {
@@ -286,7 +280,10 @@ Tensor div(
                 operation_sub_core_grids,
                 "Division output typecast");
         }
-        const auto result = ttnn::div(
+        // Recurse through the impl, not the public ttnn::div: the tensor-first overload hard-codes
+        // scalar_is_lhs to false, so a scalar numerator would be lost here and the promoted operands
+        // divided the wrong way round.
+        const auto result = div_scalar_impl(
             operation_input,
             value,
             fast_and_approximate_mode,
@@ -298,7 +295,8 @@ Tensor div(
             lhs_activations,
             rhs_activations,
             operation_sub_core_grids,
-            std::nullopt);
+            std::nullopt,
+            scalar_is_lhs);
         return restore_scalar_output_layout(
             input, operation_input.layout(), result, output_mem_config, operation_sub_core_grids);
     }
@@ -323,7 +321,8 @@ Tensor div(
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
                 sub_core_grids,
-                sub_device_id);
+                sub_device_id,
+                scalar_is_lhs);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -338,7 +337,8 @@ Tensor div(
                 rhs_activations,
                 /*fast_and_approximate_mode=*/std::nullopt,
                 sub_core_grids,
-                sub_device_id);
+                sub_device_id,
+                scalar_is_lhs);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -357,7 +357,8 @@ Tensor div(
             rhs_activations,
             std::nullopt,  // fast_and_approximate_mode
             sub_core_grids,
-            sub_device_id);
+            sub_device_id,
+            scalar_is_lhs);
     }
 
     // Non-int32 inputs: with rounding_mode=None, use DIV directly; with "trunc"/"floor",
@@ -375,7 +376,8 @@ Tensor div(
             rhs_activations,
             fast_and_approximate_mode,
             sub_core_grids,
-            sub_device_id);
+            sub_device_id,
+            scalar_is_lhs);
     }
 
     TT_FATAL(
@@ -408,9 +410,12 @@ Tensor div(
         cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
 
-    std::optional<Tensor> divided = ttnn::divide(
+    // ttnn::divide's tensor-scalar overload takes no scalar_is_lhs, so go straight to the
+    // primitive here to forward it.
+    std::optional<Tensor> divided = ttnn::detail::invoke_binary_ng(
         input,
         value,
+        binary::BinaryOpType::DIV,
         quotient_dtype,
         output_mem_config,
         quotient_output,
@@ -419,7 +424,8 @@ Tensor div(
         rhs_activations,
         effective_fap,
         sub_core_grids,
-        sub_device_id);
+        sub_device_id,
+        scalar_is_lhs);
 
     Tensor rounded = (rounding_mode == "trunc")
                          ? ttnn::trunc(divided.value(), output_mem_config, quotient_output, sub_core_grids)
@@ -428,6 +434,66 @@ Tensor div(
         return rounded;
     }
     return ttnn::typecast(rounded, *requested_dtype, output_mem_config, output_tensor, sub_core_grids);
+}
+
+}  // namespace
+
+Tensor div(
+    const Tensor& input,
+    unary::ScalarVariant value,
+    bool fast_and_approximate_mode,
+    const std::optional<std::string>& rounding_mode,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return div_scalar_impl(
+        input,
+        value,
+        fast_and_approximate_mode,
+        rounding_mode,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        sub_device_id,
+        /*scalar_is_lhs=*/false);
+}
+
+Tensor div(
+    unary::ScalarVariant value,
+    const Tensor& input,
+    bool fast_and_approximate_mode,
+    const std::optional<std::string>& rounding_mode,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return div_scalar_impl(
+        input,
+        value,
+        fast_and_approximate_mode,
+        rounding_mode,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        sub_device_id,
+        /*scalar_is_lhs=*/true);
 }
 
 Tensor div(
@@ -583,25 +649,19 @@ Tensor div_no_nan(
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    if (input_a.dtype() == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
-        // Not using SFPU div op here since inf/nan handling is not required
-        Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
-        return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
-    }
     Tensor div_result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor prelu(
-    const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor prelu(const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& output_mem_config) {
     float weight_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, weight);
-    return ttnn::prelu_sfpu(input, weight_f);
+    return ttnn::prelu_sfpu(input, weight_f, output_mem_config);
 }
 
 Tensor prelu(
-    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& output_mem_config) {
     float scalar_weight = weight[0];
-    return ttnn::prelu_sfpu(input, scalar_weight);
+    return ttnn::prelu_sfpu(input, scalar_weight, output_mem_config);
 }
 
 Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -930,12 +990,12 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
 Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
+    TT_FATAL(!coeffs.empty(), "polyval requires at least one coefficient");
     if (coeffs.size() == 1) {
         return ttnn::full_like(input_a, coeffs[0], std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     Tensor result = ttnn::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
-    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+    for (size_t idx = 1; idx < coeffs.size() - 1; idx++) {
         result = ttnn::add(result, coeffs[idx], std::nullopt, output_mem_config);
         result = ttnn::multiply(input_a, result, std::nullopt, output_mem_config);
     }
@@ -985,6 +1045,12 @@ Tensor lcm(
         rhs_activations);
 }
 
+namespace {
+bool is_integer_pow_base(DataType dtype) {
+    return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16;
+}
+}  // namespace
+
 // power - floating point exponent
 Tensor pow(
     const Tensor& input_a,
@@ -996,6 +1062,11 @@ Tensor pow(
         std::int32_t exp = exponent;
         return pow(input_a, exp, output_mem_config, output_tensor);
     }
+    TT_FATAL(
+        !is_integer_pow_base(input_a.dtype()),
+        "pow: {} input requires an integral exponent, got {}",
+        input_a.dtype(),
+        exponent);
     return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
 }
 
@@ -1005,6 +1076,20 @@ Tensor pow(
     std::int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    if (exponent == 0 || exponent == 1) {
+        const MemoryConfig memory_config = output_mem_config.value_or(
+            output_tensor.has_value() ? output_tensor->memory_config() : input.memory_config());
+        if (exponent == 0) {
+            return ttnn::full_like(input, 1, input.dtype(), input.layout(), std::nullopt, memory_config, output_tensor);
+        }
+        return ttnn::assign(input, memory_config, input.dtype(), output_tensor);
+    }
+    if (is_integer_pow_base(input.dtype())) {
+        TT_FATAL(exponent >= 0, "pow: integers to negative integer powers are not allowed, got {}", exponent);
+        const MemoryConfig memory_config = output_mem_config.value_or(
+            output_tensor.has_value() ? output_tensor->memory_config() : input.memory_config());
+        return ttnn::prim::pow_int(input, static_cast<std::uint32_t>(exponent), memory_config, output_tensor);
+    }
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         std::uint32_t exp = exponent;
@@ -1023,6 +1108,13 @@ Tensor pow(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    // The binary POWER kernel computes in floating point, so it is not an exact integer power.
+    // Keep the shared "not supported for binary operation" wording that dtype validation uses.
+    TT_FATAL(
+        !is_integer_pow_base(input.dtype()),
+        "Input tensor A dtype {} is not supported for binary operation POWER: tensor exponents are not supported for "
+        "integer inputs, use a scalar integer exponent",
+        input.dtype());
     return ttnn::detail::invoke_binary_ng(
         input,
         exponent,
@@ -1116,7 +1208,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -1127,7 +1220,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        /*fast_and_approximate_mode=*/std::nullopt,
+        fast_and_approximate_mode.value_or(false),
         sub_core_grids,
         sub_device_id);
 }
@@ -1142,7 +1235,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -1174,7 +1268,7 @@ Tensor bias_gelu(
             {},
             /*fast_and_approximate_mode*/ std::nullopt,
             resolved_sub_core_grids),
-        true,
+        fast_and_approximate_mode.value_or(false),
         memory_config,
         gelu_output,
         resolved_sub_core_grids);
@@ -1194,6 +1288,10 @@ constexpr uint64_t SITU_GLU_L1_PEAK_INTERMEDIATES = 3;
 // Fraction of total L1 the intermediates may claim, leaving room for the ops' CBs.
 constexpr uint64_t SITU_GLU_L1_BUDGET_NUM = 3;
 constexpr uint64_t SITU_GLU_L1_BUDGET_DEN = 4;
+
+// The betas ckernel::sfpu::SituGluConfigKimi compiles into situ_glu_tile.
+constexpr float SITU_GLU_NATIVE_BETA_GATE = 4.0f;
+constexpr float SITU_GLU_NATIVE_BETA_UP = 25.0f;
 
 static bool situ_glu_intermediates_fit_l1(const Tensor& gate) {
     const auto& allocator = gate.device()->allocator();
@@ -1252,6 +1350,63 @@ Tensor situ_glu(
         "situ_glu: a core restriction cannot be combined with an interleaved-L1 output, which would "
         "take L1 on the cores restricted away. Use DRAM or a sharded L1 memory config.");
 
+    // Native path: one binary_ng SFPU launch (situ_glu_tile), reading gate and up once and writing the
+    // result once, with no intermediates. The LLK compiles Kimi K3's betas in, so any other betas --
+    // and the architectures without the LLK -- keep the composite below and its numerics. It goes
+    // through the same entry point as the public binary ops, so layout normalization, output
+    // placement and dtype handling are theirs rather than a second copy here.
+    const auto arch = gate.device()->arch();
+    if ((arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) && beta1 == SITU_GLU_NATIVE_BETA_GATE &&
+        beta2 == SITU_GLU_NATIVE_BETA_UP && gate.dtype() == up.dtype()) {
+        const bool gate_rm = gate.layout() == Layout::ROW_MAJOR;
+        const bool up_rm = up.layout() == Layout::ROW_MAJOR;
+        // The shared entry point tilizes (and re-untilizes) a pair it cannot run row-major, but on the
+        // full grid: it does not carry a core restriction into those conversions. Under a restriction,
+        // do them here on the restricted cores so the shared path finds nothing left to convert. Same
+        // rule as the shared path: both row-major and interleaved runs row-major, anything else tiles.
+        const bool convert_here =
+            cores.has_value() && (gate_rm || up_rm) && !(gate_rm && up_rm && !gate.is_sharded() && !up.is_sharded());
+        if (!convert_here) {
+            return ttnn::detail::invoke_binary_ng(
+                gate,
+                up,
+                binary::BinaryOpType::SITU_GLU,
+                std::nullopt,
+                output_mem_config,
+                std::nullopt,
+                {},
+                {},
+                {},
+                std::nullopt,
+                cores);
+        }
+        // A tilized copy is a new buffer: keep it off interleaved L1, which would take L1 on the cores
+        // restricted away (see the output check above).
+        const auto tilize = [&](const Tensor& t) {
+            if (t.layout() == Layout::TILE) {
+                return t;
+            }
+            const auto& mc = t.memory_config();
+            const std::optional<MemoryConfig> tile_mc =
+                mc.is_l1() && !mc.is_sharded() ? std::optional<MemoryConfig>(ttnn::DRAM_MEMORY_CONFIG) : std::nullopt;
+            return ttnn::to_layout(t, Layout::TILE, std::nullopt, tile_mc, cores);
+        };
+        Tensor result = ttnn::detail::invoke_binary_ng(
+            tilize(gate),
+            tilize(up),
+            binary::BinaryOpType::SITU_GLU,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            cores);
+        return gate_rm && up_rm ? ttnn::to_layout(result, Layout::ROW_MAJOR, std::nullopt, std::nullopt, cores)
+                                : result;
+    }
+
     // Sharded inputs keep the ops' own placement: interleaved-L1 intermediates against a sharded
     // input would add an unshard/reshard round-trip, which is the opposite of the point here.
     const bool use_l1 = !gate.is_sharded() && !cores.has_value() &&
@@ -1277,6 +1432,52 @@ Tensor situ_glu(
     // Pin the output placement, or multiply would inherit situ_a's L1 config and make placement
     // depend on the hidden dim.
     return ttnn::multiply(situ_a, up_half, std::nullopt, effective_out);
+}
+
+Tensor clamped_silu_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float limit,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    using namespace operations::unary;
+
+    // At limit == 0 the up half clamps to zero; at limit < 0 the clamp bounds invert.
+    TT_FATAL(limit > 0.0f, "clamped_silu_glu: limit must be positive, got {}", limit);
+
+    auto cores = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        cores = gate.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+    if (!cores.has_value()) {
+        // Unrestricted, multiply falls back to get_sub_device_ids().front(), which is the whole grid
+        // only while the device is unpartitioned. Once a custom manager is loaded that is sub-device
+        // 0, an arbitrary strip, and landing there silently is never what a caller means.
+        const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
+        TT_FATAL(
+            loaded_sub_devices.size() == 1,
+            "clamped_silu_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on "
+            "sub-device 0 rather than the full grid. Pass sub_core_grids or sub_device_id.",
+            loaded_sub_devices.size());
+    }
+
+    // Spans apply in list order: the gate's clamp precedes its SILU.
+    const EltwiseUnaryWithParam gate_acts[] = {{UnaryOpType::MINIMUM, limit}, {UnaryOpType::SILU}};
+    const EltwiseUnaryWithParam up_acts[] = {{UnaryOpType::CLAMP_TSS, -limit, limit}};
+    return ttnn::multiply(
+        gate,
+        up,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        /*post_activations=*/{},
+        gate_acts,
+        up_acts,
+        /*fast_and_approximate_mode=*/std::nullopt,
+        cores,
+        std::nullopt);
 }
 
 }  // namespace ttnn

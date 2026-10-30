@@ -27,15 +27,17 @@ if _WORLD_SIZE != 2:
 
 _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 
-# Fabric pinned FABRIC_2D by conftest's autouse fixture (both ranks must match).
 import torch  # noqa: E402
 import ttnn  # noqa: E402
 
-from utils.weight_bridge import (  # noqa: E402
+from grpo_remote_rollout.utils.weight_bridge import (  # noqa: E402
     SENDER_RANK,
     RECEIVER_RANK,
     HostWeightBridge,
 )
+
+# Pin fabric FABRIC_2D before either rank opens a device (both ranks must match).
+pytestmark = pytest.mark.usefixtures("_set_fabric_2d")
 
 # 4->4: 4 sender chips -> 4 receiver submeshes.
 SENDER_SHAPE = (1, 4)

@@ -4,13 +4,13 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -18,7 +18,6 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
@@ -30,16 +29,14 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 // UMD: re-exports tt::ARCH (used in MeshDevice::arch return type).
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 // UMD: re-exports CoreType (used in MeshDevice::virtual_core_from_logical_core parameter).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Allocator;
-class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -54,6 +51,7 @@ class FabricNodeId;
 }
 namespace tt::tt_metal {
 
+class MetalEnv;
 class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
@@ -66,21 +64,26 @@ struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDeviceImpl;
 
-namespace multihost {
-class DistributedContext;
-}
-
 using DeviceIds = std::vector<int>;
+
+// Options for creating a MeshDevice from a MetalEnv.
+//
+// num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
+// from it is open, other open_* calls must pass the same values.
+struct OpenMeshDeviceOptions {
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
+    uint8_t num_command_queues = 1;
+    DispatchCoreConfig dispatch_core_config;
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
+};
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
-    friend class tt::tt_metal::MetalEnv;
 
 private:
-    MeshDevice() = default;
-    // [[Experimental]] Creates a MeshDevice that uses the given MetalEnv instance.
-    // This is used by MetalEnv::create_mesh_device and MetalEnv::create_unit_mesh_device.
-    explicit MeshDevice(MetalEnv& metal_env);
+    // Adopts a fully-constructed impl, so pimpl_ is never null.
+    explicit MeshDevice(std::unique_ptr<MeshDeviceImpl> impl);
 
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
@@ -123,7 +126,7 @@ public:
     [[deprecated(
         "Returns only the reference device's assignment, which is incorrect on heterogeneously-harvested "
         "meshes. Use get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) instead.")]]
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
 
     // Returns the optimal DRAM-bank-to-logical-worker assignment for the device at `coord` as a map from
     // DRAM bank id to the logical worker core that should service it. The assignment is a device-local
@@ -132,10 +135,11 @@ public:
     // arbitrary local device's assignment (best-effort, exact only on homogeneous meshes); it throws only
     // when the mesh has no local device to fall back to.
     std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
-        NOC noc, const MeshCoordinate& coord);
+        NOC noc, const MeshCoordinate& coord) const;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
@@ -158,7 +162,6 @@ public:
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
-    const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
@@ -231,15 +234,10 @@ public:
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
     // Returns the devices in the mesh in row-major order.
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates or use "
+        "get_device_ids instead. This will be removed after 2026-11-19.")]]
     std::vector<IDevice*> get_devices() const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
-    IDevice* get_device(ChipId physical_device_id) const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
-    IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
@@ -250,6 +248,7 @@ public:
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     size_t num_rows() const;
     size_t num_cols() const;
+    [[deprecated("Deprecated, use get_device(const MeshCoordinate&) instead. This will be removed after 2026-11-19.")]]
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
     // Returns true if the coordinate is local to this mesh device.
@@ -341,6 +340,18 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Open a MeshDevice which will use the given MetalEnv.
+    static std::shared_ptr<MeshDevice> open_mesh_device(
+        MetalEnv& env, const MeshDeviceConfig& config, const OpenMeshDeviceOptions& options = {});
+
+    // Open a unit mesh for the physical device ID which will use the given MetalEnv.
+    static std::shared_ptr<MeshDevice> open_unit_mesh(
+        MetalEnv& env, ChipId device_id, const OpenMeshDeviceOptions& options = {});
+
+    // Open a unit mesh for each physical device ID in the list which will use the given MetalEnv.
+    static std::map<ChipId, std::shared_ptr<MeshDevice>> open_unit_meshes(
+        MetalEnv& env, ttsl::Span<const ChipId> device_ids, const OpenMeshDeviceOptions& options = {});
 
     // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }

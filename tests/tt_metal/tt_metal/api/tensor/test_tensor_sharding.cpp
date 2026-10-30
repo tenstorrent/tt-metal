@@ -120,10 +120,97 @@ INSTANTIATE_TEST_SUITE_P(
                         }
                 },
             .expected_err_msg = "Shard height 16 must match physical height 32 for width sharded"
+        },
+        // HEIGHT sharded: Zero shard height
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {0, 64},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
+        },
+        // WIDTH sharded: Zero shard width
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::WIDTH_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {64, 0},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
+        },
+        // BLOCK sharded: Zero shard height
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {0, 64},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
+        },
+        // BLOCK sharded: Zero shard width
+        IllegalShardSpecParams{
+            .shape = Shape{64, 64},
+            .page_config = PageConfig(Layout::TILE),
+            .memory_config =
+                MemoryConfig{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
+                            num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true),
+                            {64, 0},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard shape must be greater than 0 in each sharded dim"
         }
     )  // Values
     // clang-format on
 );
+
+// A row-major tensor takes its width alignment from the shard width, so a zero width is rejected while the
+// TensorLayout is built, ahead of the TensorSpec check.
+class ZeroRowMajorShardWidthTests : public ::testing::TestWithParam<TensorMemoryLayout> {};
+
+TEST_P(ZeroRowMajorShardWidthTests, ExpectFailAndCheckErrMsg) {
+    const auto memory_config = MemoryConfig{
+        GetParam(),
+        BufferType::L1,
+        ShardSpec{num_cores_to_corerangeset(1, grid_size, /*row_wise=*/true), {64, 0}, ShardOrientation::ROW_MAJOR},
+    };
+    EXPECT_THAT(
+        std::function<void()>([&memory_config]() {
+            auto tensor_spec = TensorSpec(
+                Shape{64, 64}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config));
+        }),
+        ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Row Major width alignment must be greater than 0")));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    ZeroRowMajorShardWidthTests,
+    ::testing::Values(TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::BLOCK_SHARDED));
 
 class MemoryConfigEqualityTest : public ::testing::Test {
 protected:
@@ -186,12 +273,15 @@ TEST_F(MemoryConfigEqualityTest, NdShardCreatedIgnoresLegacyField) {
     // Two configs both created with nd_shard_spec should compare equal on nd_shard_spec alone,
     // even if one has a legacy shard_spec prepopulated and the other does not.
     MemoryConfig user_config(BufferType::L1, nd_shard_spec_a_);
-    MemoryConfig tensor_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::ND_SHARDED,
-        BufferType::L1,
-        shard_spec_a_,
-        nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
+    MemoryConfig tensor_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::ND_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_a_,
+        .nd_shard_spec = nd_shard_spec_a_,
+        .created_with_nd_shard_spec = true,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
     EXPECT_EQ(user_config, tensor_config);
 }
 
@@ -199,64 +289,85 @@ TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
     // Two configs both created with legacy shard_spec should compare equal on shard_spec alone,
     // even if one has an nd_shard_spec prepopulated and the other does not.
     MemoryConfig user_config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
-    MemoryConfig tensor_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        BufferType::L1,
-        shard_spec_a_,
-        nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/false);
+    MemoryConfig tensor_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_a_,
+        .nd_shard_spec = nd_shard_spec_a_,
+        .created_with_nd_shard_spec = false,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
     EXPECT_EQ(user_config, tensor_config);
 }
 
 TEST_F(MemoryConfigEqualityTest, MixedCreationPath_BothFieldsMatch) {
     // One created with nd_shard_spec, the other with legacy shard_spec.
     // Equality falls through to comparing both fields.
-    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::ND_SHARDED,
-        BufferType::L1,
-        shard_spec_a_,
-        nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
-    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::ND_SHARDED,
-        BufferType::L1,
-        shard_spec_a_,
-        nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/false);
+    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::ND_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_a_,
+        .nd_shard_spec = nd_shard_spec_a_,
+        .created_with_nd_shard_spec = true,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
+    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::ND_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_a_,
+        .nd_shard_spec = nd_shard_spec_a_,
+        .created_with_nd_shard_spec = false,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
     EXPECT_EQ(nd_config, legacy_config);
 }
 
 TEST_F(MemoryConfigEqualityTest, MixedCreationPath_NdFieldDiffers) {
-    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::ND_SHARDED,
-        BufferType::L1,
-        shard_spec_a_,
-        nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
-    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::ND_SHARDED,
-        BufferType::L1,
-        shard_spec_a_,
-        nd_shard_spec_b_,
-        /*created_with_nd_shard_spec=*/false);  // This is not a realistic scenario, but it's here to test the equality
-                                                // operator.
+    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::ND_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_a_,
+        .nd_shard_spec = nd_shard_spec_a_,
+        .created_with_nd_shard_spec = true,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
+    // This is not a realistic scenario, but it's here to test the equality operator.
+    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::ND_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_a_,
+        .nd_shard_spec = nd_shard_spec_b_,
+        .created_with_nd_shard_spec = false,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
     EXPECT_NE(nd_config, legacy_config);
 }
 
 TEST_F(MemoryConfigEqualityTest, MixedCreationPath_LegacyFieldDiffers) {
-    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::ND_SHARDED,
-        BufferType::L1,
-        shard_spec_a_,
-        nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/true);
-    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::ND_SHARDED,
-        BufferType::L1,
-        shard_spec_b_,
-        nd_shard_spec_a_,
-        /*created_with_nd_shard_spec=*/false);  // This is not a realistic scenario, but it's here to test the equality
-                                                // operator.
+    MemoryConfig nd_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::ND_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_a_,
+        .nd_shard_spec = nd_shard_spec_a_,
+        .created_with_nd_shard_spec = true,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
+    // This is not a realistic scenario, but it's here to test the equality operator.
+    MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::ND_SHARDED,
+        .buffer_type = BufferType::L1,
+        .shard_spec = shard_spec_b_,
+        .nd_shard_spec = nd_shard_spec_a_,
+        .created_with_nd_shard_spec = false,
+        .per_core_allocation = false,
+        .range_lockstep_allocation = false,
+    });
     EXPECT_NE(nd_config, legacy_config);
 }
 

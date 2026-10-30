@@ -17,7 +17,7 @@ single chunk profiles both classes; the report separates them by the layer tag.
 
 What you get per zone: summed DEVICE KERNEL DURATION [ns] per device (with the across-device skew),
 op count, bytes moved (from the CSV's input/output shapes + dtypes) and the implied GB/s. Parse with
-    python3 models/demos/minimax_m3/tests/perf/parse_zone_perf.py <ops_perf_results_*.csv> --html report.html
+    python3 models/demos/minimax_m3/tests/perf/visualize_zones.py <ops_perf_results_*.csv>
 
 Zone list — dense layer: input_norm, attn/{qkv_proj,split_heads,qk_norm,rope,kv_write,
 ring_joint_sdpa,concat_heads,o_proj,ccl_out_allreduce}, post_attn_norm, mlp/{gate_up_proj,swiglu,
@@ -63,7 +63,7 @@ way run_prefill_perf.sh does:
 
 Manual equivalent:
   cd $TT_METAL_HOME && source python_env/bin/activate && export PYTHONPATH=$TT_METAL_HOME
-  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
+  export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   PROFILE_CACHE=25600 PREFILL_TRACE_DIR=<golden> \
     python3 -m tracy -v -r -p models/demos/minimax_m3/tests/perf/profile_prefill.py
@@ -93,13 +93,15 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE  # noqa: E402
+from models.demos.minimax_m3.tt.moe import shared_overlap  # noqa: E402
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env  # noqa: E402
 
 
 def _raise_nproc_limit():
-    """tt-metal JIT-compiles device kernels in parallel and each `g++ -flto=auto` fans out to
-    `make -j<nproc>`; a low RLIMIT_NPROC makes clone3 fail mid-build ("posix_spawn: Operation not
-    permitted"). Raise the soft limit to the hard limit. Copied from galaxy_prefill_kv_pcc.py."""
+    """tt-metal JIT-compiles device kernels in parallel and each target spawns its own chain of
+    short-lived processes (g++, cc1plus/lto1, as, ld); a low RLIMIT_NPROC makes clone3 fail
+    mid-build ("posix_spawn: Operation not permitted"). Raise the soft limit to the hard limit.
+    Copied from galaxy_prefill_kv_pcc.py."""
     soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
     if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
         try:
@@ -108,10 +110,6 @@ def _raise_nproc_limit():
         except (ValueError, OSError) as e:
             print(f"[zone-prof] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
 
-
-# MSA layers pick the top-16 of 128-token blocks; topk_large_indices aborts with fewer than 16 blocks,
-# so a chunk must cover at least this many tokens. Keep in sync with tt/attention/msa.py.
-MSA_MIN_TOKENS = 16 * 128  # 2048
 
 # sparse_attention_freq marks layers 0-2 dense and 3-59 sparse (tt/layer.py).
 FIRST_SPARSE_LAYER = 3
@@ -144,8 +142,9 @@ def plan(chunk: int, cache: int):
     chunks (the runtime fills the cache one chunk at a time, so a partial prefix is not reachable),
     and `total` is the cache capacity the KV cache must be allocated for.
     """
-    assert chunk % 1024 == 0, f"chunk ({chunk}) must be a multiple of 1024 (MSA needs S%1024==0)"
-    assert chunk >= MSA_MIN_TOKENS, f"chunk ({chunk}) below the MSA floor {MSA_MIN_TOKENS}"
+    # Whole 128-token MSA blocks per SP rank (SP <= 8). A cold chunk below the 2048-token top-k window reads
+    # the KV cache, so there is no 2048 floor.
+    assert chunk > 0 and chunk % 1024 == 0, f"chunk ({chunk}) must be a positive multiple of 1024"
     n_prefix = cache // chunk
     cache_aligned = n_prefix * chunk
     n_chunks = n_prefix + 1
@@ -403,14 +402,15 @@ def main():
             f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"
             f"  device-kernel time per zone: parse the ops CSV with\n"
-            f"    python3 models/demos/minimax_m3/tests/perf/parse_zone_perf.py "
-            f"<generated/profiler/reports/*/ops_perf_results_*.csv> --html zones.html",
+            f"    python3 models/demos/minimax_m3/tests/perf/visualize_zones.py "
+            f"<generated/profiler/reports/*/ops_perf_results_*.csv>",
             flush=True,
         )
         print("[zone-prof] DONE", flush=True)
     finally:
         # Sub-mesh first: closing the parent runs a final profiler read on the parent's command queue,
         # and MeshDevice::close then refuses to close a mesh whose child still holds an in-use queue.
+        shared_overlap.release_all()
         for sub in galaxy.get_submeshes():
             ttnn.close_mesh_device(sub)
         ttnn.close_mesh_device(galaxy)

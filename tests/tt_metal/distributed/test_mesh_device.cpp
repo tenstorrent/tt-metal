@@ -41,8 +41,10 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
+using ::testing::ThrowsMessage;
 
 // Builds the expected bank id -> worker core map from a per-bank list (indexed by DRAM bank id).
 std::unordered_map<uint32_t, CoreCoord> to_bank_map(const std::vector<CoreCoord>& per_bank) {
@@ -63,6 +65,29 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     });
 }
 
+// A 2x2 shape over one device makes MeshDeviceView throw; that must surface as an exception rather
+// than a segfault in ~MeshDevice, and must leave the devices reusable. Issue #51236.
+TEST(MeshDeviceInitTest, CreateWithMismatchedShapeThrowsWithoutCrashing) {
+    MeshDeviceConfig mismatched_config(MeshShape(2, 2), /*offset=*/std::nullopt, /*physical_device_ids=*/{0});
+
+    EXPECT_THAT(
+        [&] {
+            MeshDevice::create(
+                mismatched_config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Shape and values size mismatch")));
+
+    EXPECT_NO_THROW({
+        auto mesh = MeshDevice::create(
+            MeshDeviceConfig(MeshShape(1, 1)),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1,
+            DispatchCoreType::WORKER);
+        mesh->close();
+    });
+}
+
 std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
     return MeshDevice::create(
         MeshDeviceConfig(MeshShape(1, 1)),
@@ -78,7 +103,7 @@ std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
 void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
     mesh.enable_program_cache();
 
-    Program program;
+    Program program = CreateProgram(mesh);
     const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
     CreateKernel(
         program,
@@ -147,27 +172,27 @@ TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
 
 TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
     auto stats = mesh_device_->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
         EXPECT_EQ(stats.total_allocatable_size_bytes, device_stats.total_allocatable_size_bytes);
     }
 }
 
 TEST_F(MeshDevice2x4Test, ViewIs2D) {
-    std::vector<IDevice*> devices;
+    std::vector<Device*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().impl().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 
-    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
+    MeshDeviceView view_1d(std::make_unique<MeshDeviceViewImpl>(MeshShape(8), devices, fabric_node_ids));
     EXPECT_FALSE(view_1d.is_mesh_2d());
 
-    MeshDeviceView view_2d(MeshShape(2, 4), devices, fabric_node_ids);
+    MeshDeviceView view_2d(std::make_unique<MeshDeviceViewImpl>(MeshShape(2, 4), devices, fabric_node_ids));
     EXPECT_TRUE(view_2d.is_mesh_2d());
 
-    MeshDeviceView view_3d(MeshShape(2, 2, 2), devices, fabric_node_ids);
+    MeshDeviceView view_3d(std::make_unique<MeshDeviceViewImpl>(MeshShape(2, 2, 2), devices, fabric_node_ids));
     EXPECT_FALSE(view_3d.is_mesh_2d());
 }
 
@@ -182,14 +207,14 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshInvalidConfig) {
 
 TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
-    EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
+    EXPECT_THAT(mesh_device_->impl().get_devices(), SizeIs(8));
     EXPECT_TRUE(mesh_device_->is_parent_mesh());
     EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
 
     auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
     EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
     EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-    EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+    EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
     EXPECT_FALSE(submesh->is_parent_mesh());
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
@@ -215,7 +240,7 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshes) {
     EXPECT_THAT(submeshes, SizeIs(4));
     for (const auto& submesh : submeshes) {
         EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-        EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+        EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
     }
 
     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
@@ -250,6 +275,27 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
             EXPECT_EQ(per_device, to_bank_map(device->get_optimal_dram_bank_to_logical_worker_assignment(noc)));
         }
     }
+}
+
+TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
+    const CoreCoord logical_core{0, 0};
+    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
+    const auto& control_plane = metal_context.get_control_plane();
+
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        // Derive the expected coordinate from the chip's SoC descriptor rather than from the device
+        // object the implementation itself uses, so the two cannot agree by construction.
+        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
+            mesh_device_->impl().get_fabric_node_id(mesh_coordinate));
+        EXPECT_EQ(
+            tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                *mesh_device_, mesh_coordinate, logical_core),
+            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                physical_chip_id, logical_core, CoreType::WORKER));
+    }
+
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+        *mesh_device_, MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
 }
 
 TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {

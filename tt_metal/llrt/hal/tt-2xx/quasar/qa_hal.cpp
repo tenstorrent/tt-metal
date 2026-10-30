@@ -2,12 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
+#include <optional>
 #include <string>
+#include <string_view>
 
+#include "quasar/qa_att_windows.hpp"
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
@@ -18,7 +23,6 @@
 #include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg_defines_core.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -293,10 +297,21 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(13);
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        // A Quasar IP variant's LLK headers go first so they shadow the base ones under tt_llk_quasar.
+        auto variant = hal_.quasar_arch_variant_;
+        const std::string lower_variant = [&]() {
+            std::string result = std::string(enchantum::to_string(variant));
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return result;
+        }();
+        const std::string variant_llk_dir = "tt_metal/tt-llk/tt_llk_quasar/arch/" + lower_variant;
+        if (std::filesystem::is_directory(params.rtoptions.get_root_dir() + variant_llk_dir)) {
+            includes.push_back(variant_llk_dir);
+        }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
@@ -304,6 +319,13 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+        if (variant == IpVariant::GRENDEL) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+        } else if (variant == IpVariant::HORIZON) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else if (variant == IpVariant::TRINITY) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
+        }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -340,7 +362,39 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
-        defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
+        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
+        // emulation by the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
+        // The map comes from RunTimeOptions (TT_METAL_NOC_ATT, or the qsr.s1 default MetalEnvImpl
+        // installs) and is fixed for the process, so the firmware and kernel builds see the same map.
+        if (const std::optional<std::string_view> att_map = params.rtoptions.get_noc_att_map();
+            att_map.has_value()) {
+            // ATT enabled => the ATT backend and the V3 API everywhere, one map
+            // per build. The defines reach the JIT build key through the
+            // define hash, so toggling can never reuse stale binaries.
+            const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
+            if (map_info == nullptr) {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected {})", *att_map, quasar_att::KNOWN_MAP_NAMES);
+            }
+            defines.push_back(std::string(map_info->config_define));
+            // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
+            // reject non-DRAM-backed CQs at compile time). The watcher, including its
+            // NoC sanitizer, runs under ATT: the sanitizer classifies operands through
+            // the map (debug/sanitize.h) instead of decoding XY fields.
+            defines.push_back("NOC_ATT_ENABLED");
+            defines.push_back("NOC_API_V3");
+            static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
+            if (params.is_fw && att_program_for_test) {
+                // Firmware-only bring-up hook: replay the generated ATT image
+                // during noc_init on targets whose boot leaves the tables
+                // unprogrammed (the emulator).
+                defines.push_back("ATT_PROGRAM_FOR_TEST");
+            }
+        } else {
+            defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
+        }
         return defines;
     }
 
@@ -369,6 +423,25 @@ public:
         return cflags;
     }
 
+    std::string rvv_compile_flags(const Params& params) const override {
+        if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
+            return {};
+        }
+        // -march: the tt-qsr32-tensix base ISA plus zve32f and zvl128b (VLEN >= 128).
+        //   Appended after common_flags' -mcpu, so it overrides the arch while keeping the
+        //   tt-qsr32-tensix tuning.
+        // -fno-lto: with -flto the RVV builtins are re-expanded by the link-stage LTRANS units,
+        //   which do not carry the vector -march, breaking codegen at link time (observed on
+        //   Blackhole with sfpi 7.70.0). Compile-only: the link stays stock, this object just
+        //   opts out of LTO.
+        // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers tripped
+        //   -Warray-bounds false positives at -O3 under -Werror (also observed on Blackhole).
+        // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reached through
+        //   explicit intrinsics; keep the auto-vectorizers off scalar kernel/LLK code.
+        return "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb -fno-lto "
+               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
+    }
+
     bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
@@ -376,8 +449,7 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -401,11 +473,9 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
-                    case HalProcessorClassType::COMPUTE:
-                        TT_THROW("DISPATCH cores do not have compute processors");
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
             default:
                 TT_THROW(
@@ -430,7 +500,8 @@ public:
     }
 };
 
-void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
+void Hal::initialize_qa(
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -440,11 +511,20 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     static_assert(
         static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
+    this->quasar_arch_variant_ = quasar_arch_variant;
     this->core_info_.push_back(quasar::create_tensix_mem_map());
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::TENSIX)].num_physical_riscs_ =
+        static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::ACTIVE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)].num_physical_riscs_ =
+        static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -556,7 +636,13 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
+    this->noc_stream_remote_dest_words_free_width_ = 0;                      // TODO: add correct value
+    this->noc_stream_remote_src_reg_index_ = 0;                              // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->risc_soft_reset_addr_ = 0;                                         // TODO: add correct value
+    this->wall_clock_low_addr_ = 0;                                          // TODO: add correct value
+    this->wall_clock_high_addr_ = 0;                                         // TODO: add correct value
+    this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;

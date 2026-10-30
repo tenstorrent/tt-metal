@@ -29,6 +29,7 @@
       timeout: 15
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: health
   arch: wormhole_b0
 
 - name: Galaxy Blackhole health
@@ -40,4 +41,5 @@
       timeout: 10
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: health
   arch: blackhole

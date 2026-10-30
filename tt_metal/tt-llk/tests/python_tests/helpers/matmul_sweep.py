@@ -15,7 +15,7 @@ from helpers.llk_params import (
     StochasticRounding,
     Transpose,
 )
-from helpers.param_config import get_max_dst_index
+from helpers.param_config import get_max_dst_index, max_dest_tiles
 
 
 # =========================
@@ -69,6 +69,58 @@ class MatmulConfig:
     dst_index: int
     dest_sync: DestSync
     dest_acc: DestAccumulation
+
+
+# Keep in sync with tests/helpers/include/perf.h (PERF_ADDRESS wrap).
+PERF_RING_TILES = 16
+
+# Dest occupancy (rt, ct) through dest Half 16-bit (8 tiles): 1×N, 2×N, 4×1 / 4×2.
+# Filtered by dest capacity. Dest-fill vectors/square and mid-fill stay separate.
+DEST_RT_CT_BLOCKS = (
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (4, 1),
+    (4, 2),
+)
+
+# Odd t_dim (rt, ct >= 3 with min(rt, ct) odd): 16-tile dest blocks the sweeps above never reach.
+ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
+ODD_REUSE_KT_DIMS = (1, 2)
+
+
+def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
+    """Half-dest occupancy: 2×2, 1×(cap/2), (cap/2)×1 when they fit."""
+    half = max_tiles // 2
+    pairs = ((2, 2), (1, half), (half, 1))
+    return [
+        (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
+    ]
+
+
+def unpack_matmul_fits_perf_ring(
+    rt_dim: int, ct_dim: int, kt_dim: int, ring_tiles: int = PERF_RING_TILES
+) -> bool:
+    """True when one `_llk_unpack_AB_matmul_` from index 0 stays in the perf ring.
+
+    PERF_ADDRESS only wraps the caller-programmed base. The unpack MOP then
+    strides THCON: A by `kt_dim` for each extra output row, B by 1 for each
+    extra output column. Last A index is `(rt-1)*kt`; last B index is `ct-1`.
+    1×N keeps long-K (A does not stride); N×1 drops K that would walk A off
+    the ring (and through PERF_INPUT_B / past L1).
+    """
+    last_a = (rt_dim - 1) * kt_dim
+    last_b = ct_dim - 1
+    return last_a < ring_tiles and last_b < ring_tiles
 
 
 # ======================================================================
@@ -391,7 +443,6 @@ def sweep_matmul(
     fpu_stochastic_modes = {StochasticRounding.Fpu, StochasticRounding.All}
 
     for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
         is_fpu_bfloat16 = (
             fmt.input_format in bfloat16_formats
             and fmt.output_format in bfloat16_formats
@@ -401,7 +452,9 @@ def sweep_matmul(
             if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
                 continue
 
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+            max_tiles = max_dest_tiles(
+                dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
+            )
 
             # Use cached or newly generated dimensions
             dimensions_list = dimensions_cache.setdefault(

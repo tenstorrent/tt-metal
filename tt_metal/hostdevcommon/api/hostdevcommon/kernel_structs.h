@@ -7,8 +7,8 @@
 
 namespace tt {
 
-// Note: Max CB count is architecture-dependent.
-// Use hal.get_arch_num_circular_buffers() for runtime validation.
+// Note: Max DataflowBuffer count is architecture-dependent.
+// Use hal.get_num_dataflow_buffers() for runtime validation.
 enum CBIndex : std::uint8_t {
     c_0 = 0,
     c_1 = 1,

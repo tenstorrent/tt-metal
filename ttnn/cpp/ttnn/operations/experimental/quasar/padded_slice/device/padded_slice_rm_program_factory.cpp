@@ -91,6 +91,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
+    const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
+
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
@@ -148,7 +150,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
 
         int this_input_row_size_bytes =
-            std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
+            std::max(std::min<int>(output_row_size_bytes, slice_row_size_bytes - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
         // [#48552] Clamp to the real output sticks so the reader doesn't over-read past the source on the
         // tile-rounded padded shard tail (see total_output_sticks note above).
@@ -184,6 +186,7 @@ const TensorParamName PS_SRC{"padded_slice_src"};
 const TensorParamName PS_OUT{"padded_slice_out"};
 const DFBSpecName PS_OUT_DFB{"padded_slice_out_dfb"};
 const ScratchpadSpecName PS_SCRATCH{"padded_slice_scratch"};
+const ScratchpadSpecName PS_ZERO{"padded_slice_zero"};
 const KernelSpecName PS_READER{"padded_slice_reader"};
 const KernelSpecName PS_WRITER{"padded_slice_writer"};
 constexpr uint32_t kNumTrids = 2;
@@ -213,7 +216,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
 
     uint32_t num_cores_channels =
         ttnn::operations::experimental::quasar::detail::get_num_cores_channels_from_sharded_tensor(output);
-    uint32_t input_row_size_bytes = (a.logical_shape()[-1] * a.element_size()) / num_cores_channels;
+    uint32_t slice_row_size_bytes = (actual_output_shape[-1] * a.element_size()) / num_cores_channels;
 
     TT_FATAL(
         output.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
@@ -233,11 +236,10 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     const bool is_non_aligned = (output_row_size_bytes % alignment) != 0;
 
-    // pad_output_row: output row wider than the input row -> the padding writer. Not yet ported to Quasar
-    // (the resnet stem is non-pad: sliced C == input C). The pad path can be added later mirroring the
-    // shared writer_unary_sharded_padded_rm kernel.
-    const bool pad_output_row = output_row_size_bytes > input_row_size_bytes;
-    TT_FATAL(!pad_output_row, "Quasar padded_slice: pad-row path (output_row > input_row) not yet ported.");
+    // The shard row is wider than the slice row (channels padded to the shard alignment): the reader
+    // zero-fills each row's tail from a zeroed scratchpad, which the shared factory's pad-row writer did.
+    const bool pad_output_row = output_row_size_bytes > slice_row_size_bytes;
+    const uint32_t l1_alignment = ::hal::get_l1_alignment();
 
     const uint32_t output_cb_page_size =
         is_non_aligned ? tt::round_up(output_row_size_bytes, dst_buffer_alignment) : output_row_size_bytes;
@@ -271,6 +273,15 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
         spec.scratchpads.push_back(ScratchpadSpec{.unique_id = PS_SCRATCH, .size_per_node = scratch_page * kNumTrids});
     }
+    // Zero source for the pad-row tails: one row of zeros plus room to match the destination's L1
+    // misalignment. The kernel reads [unpadded % l1_alignment, + stick_size_offset - unpadded), which ends at or
+    // before stick_size_offset == output_row_size_bytes (the sharded-L1 row is l1-aligned, asserted above), so
+    // this size leaves at least l1_alignment to spare. Declared unconditionally for the same name-check reason
+    // as above; tiny when unused.
+    spec.scratchpads.push_back(ScratchpadSpec{
+        .unique_id = PS_ZERO,
+        .size_per_node =
+            pad_output_row ? tt::align(output_row_size_bytes + l1_alignment, l1_alignment) : l1_alignment});
 
     // Reader: interleaved src -> OUTPUT DFB.
     KernelSpec reader{
@@ -282,11 +293,15 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     reader.dfb_bindings = {ProducerOf(PS_OUT_DFB, "in0")};
     // Always bound (see the ScratchpadSpec note above): the kernel's `scratch::pad` reference must resolve
     // even when is_non_aligned is false (non-template if-constexpr still name-checks the discarded branch).
-    reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = PS_SCRATCH, .accessor_name = "pad"}};
+    reader.scratchpad_bindings = {
+        ScratchpadBinding{.scratchpad_spec_name = PS_SCRATCH, .accessor_name = "pad"},
+        ScratchpadBinding{.scratchpad_spec_name = PS_ZERO, .accessor_name = "zero"}};
     reader.compile_time_args = {
         {"is_non_aligned", is_non_aligned ? 1u : 0u},
         {"src_buffer_alignment", static_cast<uint32_t>(src_buffer_alignment)},
-        {"num_trids", kNumTrids}};
+        {"num_trids", kNumTrids},
+        {"pad_output_row", pad_output_row ? 1u : 0u},
+        {"l1_alignment", l1_alignment}};
     reader.runtime_arg_schema = {
         .runtime_arg_names = {
             "src_byte_offset",
@@ -300,8 +315,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "num_read_per_barrier"}};
     // Per-dim geometry tail (num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim).
     reader.advanced_options.num_runtime_varargs = 3 * num_dims;
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     // Writer: drain/commit the OUTPUT DFB (non-pad). Reuses the ported i2s sharded writer.
     KernelSpec writer{
@@ -311,8 +325,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "writer_unary_sharded.cpp"};
     writer.dfb_bindings = {ConsumerOf(PS_OUT_DFB, "out")};
     writer.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     spec.kernels = {reader, writer};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {PS_READER, PS_WRITER}, .target_nodes = total_cores}};

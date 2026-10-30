@@ -74,6 +74,7 @@ def close_device(device: "ttnn.device.Device"):
 
 
 synchronize_device = ttnn._ttnn.device.synchronize_device
+is_trace_capture_active = ttnn._ttnn.device.is_trace_capture_active
 SetRootDir = ttnn._ttnn.device.SetRootDir
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
@@ -143,6 +144,8 @@ def ReadDeviceProfiler(device):
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
 ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
+GetOperationTimeoutSeconds = ttnn._ttnn.device.GetOperationTimeoutSeconds
+SetOperationTimeoutSeconds = ttnn._ttnn.device.SetOperationTimeoutSeconds
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
@@ -173,19 +176,37 @@ def manage_device(device_id: int) -> "ttnn.device.Device":
         close_device(device)
 
 
+get_dispatch_core_axis = ttnn._ttnn.device.get_dispatch_core_axis
 initialize_fast_dispatch = ttnn._ttnn.device.initialize_fast_dispatch
 terminate_fast_dispatch = ttnn._ttnn.device.terminate_fast_dispatch
 
 
 @contextlib.contextmanager
-def setup_fast_dispatch(device):
+def setup_fast_dispatch(device, *, allow_destructive=False):
     """
     Context manager that enables Fast Dispatch for the duration of the block.
     The device must have been opened in Slow Dispatch mode (e.g. TT_METAL_SLOW_DISPATCH_MODE=1).
     On exit, Fast Dispatch is terminated and the device returns to Slow Dispatch.
 
+    Entering refuses, before any firmware is written, if an L1 or L1_SMALL
+    allocation is resident on a core that Fast Dispatch will claim: dispatch
+    cores may not hold L1 allocations while Fast Dispatch is active.
+
+    Limitations:
+        - Any interleaved L1 buffer resident when the session opens is refused,
+          whatever its size: its pages are spread over every L1 bank.
+        - A non-default sub-device manager still loaded on any view over an
+          active chip is refused, even with allow_destructive: the check sees
+          only the default manager's allocations. Sub-device managers aren't
+          supported with manual Fast Dispatch; loading one inside the block
+          raises.
+        - Every active device must be MMIO-attached; otherwise entering raises
+          before Fast Dispatch is enabled.
+
     Args:
         device: The device to enable Fast Dispatch on.
+        allow_destructive: If True, proceed with a warning instead of refusing.
+            The resident L1 may be corrupted.
 
     Yields:
         None: Use the device inside the block; it is in Fast Dispatch mode.
@@ -197,7 +218,7 @@ def setup_fast_dispatch(device):
         ...     pass
         >>> # FD terminated; device is back in Slow Dispatch
     """
-    initialize_fast_dispatch(device)
+    initialize_fast_dispatch(device, allow_destructive=allow_destructive)
     try:
         yield
     finally:
@@ -220,6 +241,16 @@ def get_allocator_base_address(device, buffer_type):
     the absolute L1 top address used by the device-side allocator.
     """
     return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
+
+
+def experimental_get_l1_occupied_ranges(mesh_device, device_coord, core=None):
+    """Occupied L1 ``(start, end)`` ranges on ``core`` of one mesh device, or a dict over every L1-bank core.
+
+    Covers lockstep, per-core and persistent L1; requires the HYBRID allocator.
+    """
+    if core is None:
+        return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord)
+    return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord, core)
 
 
 SubDevice = ttnn._ttnn.device.SubDevice

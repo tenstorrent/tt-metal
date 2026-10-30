@@ -55,20 +55,27 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "weekly"
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: ./ci-main/.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
 
   fetch-ttsim:
     needs: load-test-matrix
@@ -156,8 +163,7 @@ jobs:
 
       # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
       # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
-      # download, so the simulator comes from tt_metal/ttsim-version like every other sim
-      # pipeline rather than from tt_metal/tt-llk/tests/ttsim-version.
+      # download; both read the same tt_metal/ttsim-version pin.
       - name: ⬇️  Setup TTSim
         uses: ./.github/actions/setup-ttsim
         timeout-minutes: 5
@@ -173,10 +179,14 @@ jobs:
         continue-on-error: true
         # CHIP_ARCH has no script flag: helpers/chip_architecture.py reads it from the
         # environment at import so the suite does not probe for real silicon.
+        # --no-ignore: this report counts every collected test. Known ttsim gaps
+        # stay in tests/pipeline_reorg/ttsim-skip-list.yaml for the quasar PR gate.
         env:
           CHIP_ARCH: ${{ steps.arch.outputs.name }}
+          ARCH: ${{ steps.arch.outputs.name }}
         run: |
-          ${{ matrix.test-group.cmd }} --architecture ${{ steps.arch.outputs.name }}
+          set -euo pipefail
+          ${{ matrix.test-group.cmd }} --architecture "$ARCH" --no-ignore
 
       # Rename the timestamped outputs to stable per-arch names so the artifact has predictable
       # filenames (the script writes ttsim_<timestamp>.{xml,html} plus latest.* symlinks, which
@@ -308,6 +318,7 @@ jobs:
             echo "| ❌ Failed | ${failed} |"
             echo "| ⏩ Skipped | ${skipped} |"
             echo "| 💥 Crashed | ${crashed_disp} |"
+            echo "| 🚫 Skip list | disabled |"
             echo "| 📈 Pass rate | ${pass_pct}% |"
             echo ""
             echo "HTML report: available in the \`ttsim-report-${ARCH}\` artifact of this run."

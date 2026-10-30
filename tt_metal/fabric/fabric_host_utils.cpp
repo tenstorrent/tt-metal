@@ -10,52 +10,39 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include "erisc_datamover_builder.hpp"
-#include <set>
 #include <vector>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <stdexcept>
-#include "fabric_context.hpp"
-#include <queue>
 #include <unordered_map>
-#include <unordered_set>
+#include <set>
 #include <filesystem>
 #include <fstream>
 #include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include "impl/context/metal_context.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 
 namespace tt::tt_fabric {
 
 namespace {
 
-// Mock cluster mapping export uses cluster descriptor filenames (basename). Strip MPI-rank uniquifier
-// suffix appended during PSD discovery when multiple ranks share the same descriptor basename.
-HostName hostname_for_mapping_export(const HostName& hostname) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
-        return hostname;
+// The export key is the machine name. Ranks that share a machine already share it; the MPI rank on
+// each chip is what separates them.
+HostName hostname_for_mapping_export(const HostName& hostname, bool /*mock_enabled*/) { return hostname; }
+
+// yaml-cpp does not terminate a document. Files copied into the repo as goldens are rejected by
+// pre-commit's end-of-file-fixer without a trailing newline.
+void write_yaml_document(std::ostream& out, const YAML::Emitter& emitter) {
+    const char* text = emitter.c_str();
+    out << text;
+    if (emitter.size() == 0 || text[emitter.size() - 1] != '\n') {
+        out << '\n';
     }
-    constexpr std::string_view cluster_desc_suffix = ".yaml";
-    const auto pos = hostname.rfind(cluster_desc_suffix);
-    if (pos == std::string::npos || pos + cluster_desc_suffix.size() >= hostname.size()) {
-        return hostname;
-    }
-    const std::string tail = hostname.substr(pos + cluster_desc_suffix.size());
-    if (tail.size() <= 1 || tail.front() != '_') {
-        return hostname;
-    }
-    for (char c : tail.substr(1)) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) {
-            return hostname;
-        }
-    }
-    return hostname.substr(0, pos + cluster_desc_suffix.size());
 }
 
 }  // namespace
@@ -154,6 +141,76 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     return link_indices;
 }
 
+std::vector<uint32_t> get_forwarding_link_indices(
+    const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    // find the forwarding direction b/w src and dest chip
+    const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!forwarding_direction.has_value()) {
+        return {};
+    }
+
+    return get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
+std::map<ChipId, std::set<chan_id_t>> get_remote_transfer_dispatch_channels(
+    const ControlPlane& control_plane, const tt::Cluster& cluster) {
+    std::map<ChipId, std::set<chan_id_t>> dispatch_chans_per_mmio_chip;
+    if (cluster.arch() != tt::ARCH::WORMHOLE_B0 || cluster.is_galaxy_cluster()) {
+        return dispatch_chans_per_mmio_chip;
+    }
+    // Only chips this host's fabric mesh uses. The mesh can be smaller than the physical cluster, and looking up a chip
+    // outside it is fatal on silicon.
+    std::unordered_map<ChipId, FabricNodeId> local_fabric_nodes;
+    for (const auto& [fabric_node, physical_chip] :
+         control_plane.get_topology_mapper().get_local_logical_mesh_chip_id_to_physical_chip_id_mapping()) {
+        local_fabric_nodes.emplace(physical_chip, fabric_node);
+    }
+    for (const auto mmio_chip : cluster.mmio_chip_ids()) {
+        const auto mmio_node_it = local_fabric_nodes.find(mmio_chip);
+        if (mmio_node_it == local_fabric_nodes.end()) {
+            continue;
+        }
+        const auto mmio_node = mmio_node_it->second;
+        std::set<chan_id_t> dispatch_chans;
+        for (const auto remote_chip : cluster.get_devices_controlled_by_mmio_device(mmio_chip)) {
+            const auto remote_node_it = local_fabric_nodes.find(remote_chip);
+            if (remote_chip == mmio_chip || remote_node_it == local_fabric_nodes.end()) {
+                continue;
+            }
+            const auto remote_node = remote_node_it->second;
+            const auto direction = control_plane.get_forwarding_direction(mmio_node, remote_node);
+            if (!direction.has_value()) {
+                continue;
+            }
+            const auto neighbors = control_plane.get_chip_neighbors(mmio_node, *direction);
+            const auto same_mesh = neighbors.find(remote_node.mesh_id);
+            if (same_mesh == neighbors.end() ||
+                std::find(same_mesh->second.begin(), same_mesh->second.end(), remote_node.chip_id) ==
+                    same_mesh->second.end()) {
+                continue;  // only remote chips one hop away
+            }
+            if (get_forwarding_link_indices(control_plane, mmio_node, remote_node).empty()) {
+                continue;
+            }
+            // The link FabricBuilder::discover_channels configures for dispatch. Galaxy is excluded above, and the
+            // device argument is only read on Galaxy.
+            const auto dispatch_link_idx = tt::tt_metal::RelayMux::get_dispatch_link_index(
+                control_plane, /*is_galaxy_cluster=*/false, mmio_node, remote_node, /*device=*/nullptr);
+            for (const auto eth_chan :
+                 control_plane.get_active_fabric_eth_routing_planes_in_direction(mmio_node, *direction)) {
+                if (control_plane.get_routing_plane_id(mmio_node, eth_chan) == dispatch_link_idx) {
+                    dispatch_chans.insert(eth_chan);
+                }
+            }
+        }
+        if (!dispatch_chans.empty()) {
+            dispatch_chans_per_mmio_chip.emplace(mmio_chip, std::move(dispatch_chans));
+        }
+    }
+    return dispatch_chans_per_mmio_chip;
+}
+
 void serialize_mesh_coordinates_to_file(
     const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
     // Ensure output directory exists
@@ -195,12 +252,11 @@ void serialize_mesh_coordinates_to_file(
 }
 
 void serialize_asic_to_fabric_node_mapping_to_file(
-    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path, bool mock_enabled) {
     // Ensure output directory exists
     std::filesystem::create_directories(output_file_path.parent_path());
 
     const auto& mesh_graph = topology_mapper.get_mesh_graph();
-    const auto& physical_system_descriptor = topology_mapper.get_physical_system_descriptor();
 
     // Structure: hostname -> mesh_id -> umd_chip_id -> {asic_position, fabric_node_id, asic_id}
     struct AsicMapping {
@@ -224,13 +280,17 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 // Get physical chip ID (UMD chip ID) for this fabric node
                 ChipId umd_chip_id = topology_mapper.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
 
-                // Get ASIC position (tray_id and asic_location) from physical system descriptor
-                tt::tt_metal::TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
-                tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
+                // ASIC position straight from the mapper's address for this node. Asking the descriptor
+                // by asic_id instead would work only when the descriptor being solved on is also the one
+                // that labelled the chip -- on the factory path asic_id is a UMD id the descriptor has
+                // never heard of, and the catch below would silently drop every chip from the export.
+                const auto address = topology_mapper.get_physical_node_id_from_fabric_node_id(fabric_node_id);
+                tt::tt_metal::TrayID tray_id = address.tray;
+                tt::tt_metal::ASICLocation asic_location = address.loc;
 
                 // Get hostname for this fabric node (mock: cluster descriptor filename)
-                HostName hostname =
-                    hostname_for_mapping_export(topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id));
+                HostName hostname = hostname_for_mapping_export(
+                    topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id), mock_enabled);
 
                 // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
                 AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
@@ -325,116 +385,10 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     emitter << YAML::EndSeq;
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
-    out_file << emitter.c_str();
+    write_yaml_document(out_file, emitter);
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
-}
-
-namespace {
-
-std::optional<PhysicalGroupingDescriptor> load_pgd_if_regular_file(const std::filesystem::path& path) {
-    if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
-        log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
-        return PhysicalGroupingDescriptor(path);
-    }
-    return std::nullopt;
-}
-
-std::vector<std::filesystem::path> build_physical_grouping_descriptor_search_paths(
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
-    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
-    const std::string cluster_name = cluster_name_env != nullptr ? cluster_name_env : "";
-    const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
-    const std::string tt_metal_home = tt_metal_home_env != nullptr ? tt_metal_home_env : ".";
-
-    std::vector<std::filesystem::path> search_paths;
-    search_paths.reserve(3);
-    if (!cluster_name.empty()) {
-        search_paths.push_back(
-            std::filesystem::path("/data/scaleout_configs") / cluster_name /
-            (cluster_name + "_physical_grouping_descriptor.textproto"));
-        search_paths.push_back(
-            std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" / "physical_groupings" /
-            (cluster_name + "_physical_grouping_descriptor.textproto"));
-    }
-
-    std::string arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = context.get_cluster();
-    const tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
-    const tt::ARCH arch = cluster.arch();
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
-        arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
-    } else if (
-        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
-        arch == tt::ARCH::BLACKHOLE) {
-        if (physical_system_descriptor != nullptr && physical_system_descriptor->is_bh_galaxy_rev_c()) {
-            arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
-        } else {
-            arch_cluster_filename = "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
-        }
-    } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
-        arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
-    }
-
-    search_paths.push_back(
-        std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" / "physical_groupings" /
-        arch_cluster_filename);
-    return search_paths;
-}
-
-}  // namespace
-
-PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
-    const std::optional<std::filesystem::path>& pgd_path,
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
-    if (pgd_path.has_value() && !pgd_path->empty()) {
-        if (auto loaded = load_pgd_if_regular_file(*pgd_path)) {
-            return *loaded;
-        }
-        TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", pgd_path->string());
-    }
-
-    const char* pgd_path_env = std::getenv("TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH");
-    if (pgd_path_env != nullptr && std::strlen(pgd_path_env) > 0) {
-        const std::filesystem::path explicit_path(pgd_path_env);
-        if (auto loaded = load_pgd_if_regular_file(explicit_path)) {
-            return *loaded;
-        }
-        TT_THROW(
-            "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
-    }
-
-    const auto search_paths = build_physical_grouping_descriptor_search_paths(physical_system_descriptor);
-    for (const auto& path : search_paths) {
-        if (auto loaded = load_pgd_if_regular_file(path)) {
-            return *loaded;
-        }
-    }
-
-    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
-    std::string error_msg = "Could not find Physical Grouping Descriptor file. Searched:\n";
-    for (const auto& path : search_paths) {
-        error_msg += "  - " + path.string() + "\n";
-    }
-    if (cluster_name_env != nullptr && cluster_name_env[0] != '\0') {
-        error_msg += std::string("Cluster name from TT_CLUSTER_NAME: ") + cluster_name_env + "\n";
-    } else {
-        error_msg += "TT_CLUSTER_NAME not set\n";
-    }
-    throw std::runtime_error(error_msg);
-}
-
-std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
-    const std::optional<std::filesystem::path>& pgd_path,
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
-    try {
-        return find_and_load_physical_grouping_descriptor(pgd_path, physical_system_descriptor);
-    } catch (const std::exception& e) {
-        log_debug(tt::LogFabric, "Physical Grouping Descriptor not loaded (soft-skip): {}", e.what());
-        return std::nullopt;
-    }
 }
 
 void serialize_intermesh_port_assignment_to_file(
@@ -502,7 +456,7 @@ void serialize_intermesh_port_assignment_to_file(
     }
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
-    out_file << emitter.c_str();
+    write_yaml_document(out_file, emitter);
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());

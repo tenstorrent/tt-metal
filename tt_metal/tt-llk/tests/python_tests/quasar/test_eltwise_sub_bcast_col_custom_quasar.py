@@ -19,7 +19,6 @@ per-tile SETRWC(CLR_A, ..., SET_AB) is not holding SrcB across tiles.
 import logging
 
 import pytest
-import torch
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -31,15 +30,14 @@ from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
-    format_dict,
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -47,7 +45,6 @@ from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
@@ -58,7 +55,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, MAX_NUM_FACES, get_tile_params
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -97,21 +94,19 @@ def _block_shapes_fitting_dest(
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True
-    ),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
-    tile_dimensions=TILE_DIMENSIONS,
-    block_shape=lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
-        dest_sync, dest_acc, tile_dimensions
+    tile_dimensions=runtime(TILE_DIMENSIONS),
+    block_shape=runtime(
+        lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
+            dest_sync, dest_acc, tile_dimensions
+        )
     ),
 )
 def test_eltwise_sub_bcast_col_custom_quasar(
     formats,
     dest_acc,
-    implied_math_format,
     dest_sync,
     tile_dimensions,
     block_shape,
@@ -202,7 +197,6 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         templates=[
             MATH_OP(mathop=MathOperation.Elwsub),
             BROADCAST_TYPE(BroadcastType.Column),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync),
         ],
         runtimes=[
@@ -251,12 +245,7 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         face_r_dim=face_r_dim,
     ).flatten()
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

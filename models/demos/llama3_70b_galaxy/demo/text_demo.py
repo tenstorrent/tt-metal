@@ -23,7 +23,7 @@ from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -65,7 +65,7 @@ def load_inputs(user_input, len_per_batch, instruct):
     user_input = user_input * batch
     in_prompt = []
     all_prompts = []
-    cache_dir = Path("models/tt_transformers/demo/context_cache")
+    cache_dir = Path("models/ttt_compat/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
@@ -100,7 +100,7 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        reference_data_file = os.path.join("models/ttt_compat/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file), f"Reference data file {reference_data_file} does not exist"
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
@@ -136,7 +136,7 @@ class TokenAccuracy:
 
 def get_accuracy_thresholds(model_args):
     """Parse token accuracy thresholds from the common PERF.md Performance table."""
-    perf_file = "models/tt_transformers/PERF.md"
+    perf_file = "models/ttt_compat/PERF.md"
     with open(perf_file, "r") as f:
         content = f.read()
 
@@ -256,16 +256,19 @@ def create_tt_model(
             max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
 
-    model = TtTransformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        paged_attention_config=paged_attention_config,
-        mode="prefill",
-        enable_prefetcher_performance_mode=True,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(state_dict, "is_placeholder", False)):
+        model = TtTransformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            mode="prefill",
+            enable_prefetcher_performance_mode=True,
+        )
 
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
@@ -1197,13 +1200,15 @@ def test_demo_text(
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-        if batch_idx != 0:
-            model.switch_mode("prefill")
-            for layer in model.layers:
-                k_cache, v_cache = layer.attention.layer_past
-                k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+        # when doing repeating batches, set kv-caches to zero, to avoid context leaking.
+        # Also run it on the first batch, where it is a no-op on freshly allocated caches: it
+        # compiles the multiply here, before any trace is captured, instead of on batch 1 when
+        # the prefill traces are already live.
+        model.switch_mode("prefill")
+        for layer in model.layers:
+            k_cache, v_cache = layer.attention.layer_past
+            k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+            v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
         temperature = sampling_params["temperature"]
@@ -1403,6 +1408,7 @@ def test_demo_text(
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
                 decode_async_read = not token_accuracy
+                reload_decode_inputs = iteration == 0 or not is_enable_trace or device_sampling_params is None
                 decode_output = generator.decode_forward(
                     out_tok,
                     current_pos,
@@ -1412,12 +1418,15 @@ def test_demo_text(
                     read_from_device=True,
                     async_read=decode_async_read,
                     sampling_params=device_sampling_params,
-                    reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
                     prompt_tokens=input_tokens_prefill_pt,
                     output_tokens=prefilled_token,
+                    reload_inputs=reload_decode_inputs,
+                    reload_page_table=False,
+                    reload_sampling_params=(device_sampling_params is not None and reload_decode_inputs),
+                    reset_sampling_state=(device_sampling_params is not None and iteration == 0),
                 )
                 if decode_async_read:
                     tt_out_tok, read_event = decode_output

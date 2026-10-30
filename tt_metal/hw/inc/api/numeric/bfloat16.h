@@ -9,10 +9,13 @@
 
 #include "internal/risc_attribs.h"
 
-inline constexpr uint16_t NEG_INF_BFLOAT16 = 0xFF80;    // Representation of negative infinity in bfloat16
-inline constexpr uint16_t POS_INF_BFLOAT16 = 0x7F80;    // Representation of positive infinity in bfloat16
-inline constexpr uint16_t NAN_BFLOAT16 = 0x7FFF;        // Representation of NaN in bfloat16
-inline constexpr uint16_t BFLOAT16_SIGN_MASK = 0x8000;  // Sign bit mask for bfloat16
+inline constexpr uint16_t NEG_INF_BFLOAT16 = 0xFF80;         // Representation of negative infinity in bfloat16
+inline constexpr uint16_t POS_INF_BFLOAT16 = 0x7F80;         // Representation of positive infinity in bfloat16
+inline constexpr uint16_t NAN_BFLOAT16 = 0x7FFF;             // Representation of NaN in bfloat16
+inline constexpr uint16_t BFLOAT16_SIGN_MASK = 0x8000;       // Sign bit mask for bfloat16
+inline constexpr uint16_t BFLOAT16_EXPONENT_MASK = 0x7F80;   // Exponent mask for bfloat16
+inline constexpr uint16_t BFLOAT16_MANTISSA_MASK = 0x007F;   // Mantissa mask for bfloat16
+inline constexpr uint16_t BFLOAT16_MAGNITUDE_MASK = 0x7FFF;  // Magnitude mask (all bits except sign)
 
 // Convert bfloat16 (stored as uint16_t) to float.
 // Bfloat16 occupies the high 16 bits of a float's bit representation; this

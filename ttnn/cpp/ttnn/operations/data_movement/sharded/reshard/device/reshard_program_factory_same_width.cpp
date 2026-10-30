@@ -234,12 +234,12 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     spec.kernels = {
         make_worker(
             kSWReaderKernel,
-            ttnn::create_reader_datamovement_config(device->arch()),
+            ttnn::create_reader_datamovement_config(),
             DFBEndpointType::PRODUCER,
             /*is_reader=*/1),
         make_worker(
             kSWWriterKernel,
-            ttnn::create_writer_datamovement_config(device->arch()),
+            ttnn::create_writer_datamovement_config(),
             DFBEndpointType::CONSUMER,
             /*is_reader=*/0),
     };

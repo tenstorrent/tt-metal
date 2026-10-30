@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <stdexcept>
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
@@ -27,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <filesystem>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -59,7 +61,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -68,7 +70,7 @@ protected:
         // and a hung core will fail that check. Tensix/DRAM cores don't need this.
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (auto& [device_id, device] : id_to_device_) {
-            for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+            for (const auto& logical_core : device->impl().get_devices()[0]->get_inactive_ethernet_cores()) {
                 CoreCoord virtual_core =
                     cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
                 cluster.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
@@ -112,6 +114,19 @@ public:
         if (wait_for_dump) {
             int curr_count = MetalContext::instance().watcher_server()->dump_count();
             while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {;}
+        }
+    }
+
+    // For a program that deliberately trips the watcher. The host's wait for the program aborts once the watcher
+    // trips, but the program may complete first, so the throw is tolerated rather than required. Callers verify
+    // the watcher error itself.
+    void RunProgramExpectingWatcherError(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+        try {
+            RunProgram(mesh_device, workload);
+        } catch (const std::runtime_error& e) {
+            log_info(tt::LogTest, "Caught exception (one is expected in this test)");
+            EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
         }
     }
 
@@ -404,7 +419,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     static void ReleaseSharedDevices() {
@@ -431,13 +446,19 @@ public:
     // Hardware config for a single-threaded data-movement kernel, portable across generations.
     static experimental::DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
         if (arch == tt::ARCH::QUASAR) {
-            return experimental::DataMovementGen2Config{};
+            return experimental::DataMovementHardwareConfig{};
         }
-        return experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        return experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::NOC_0,
+                },
+        };
     }
 
     // Compiles the kernel and returns the path to its ELF, so the caller can inspect the binary.
-    std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
+    std::string CompileKernel(const std::string& kernel_path, ttsl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
@@ -447,7 +468,6 @@ public:
         Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
-        auto* device = mesh_device->get_devices()[0];
         program.impl().compile(mesh_device.get());
 
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -458,8 +478,8 @@ public:
         const int riscv_id = static_cast<int>(kernel->get_kernel_processor_type(0));
 
         const auto& build_state =
-            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            tt::tt_metal::BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
+                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         return build_state.get_target_out_path(kernel->get_full_kernel_name());
     }
@@ -468,7 +488,7 @@ public:
     void RunProgram(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::string& kernel_path,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
         Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
@@ -523,7 +543,7 @@ private:
 
     // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
     // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
-    static void SetSingleDmPrintArgs(Program& program, stl::Span<const uint32_t> runtime_args) {
+    static void SetSingleDmPrintArgs(Program& program, ttsl::Span<const uint32_t> runtime_args) {
         if (runtime_args.empty()) {
             return;
         }

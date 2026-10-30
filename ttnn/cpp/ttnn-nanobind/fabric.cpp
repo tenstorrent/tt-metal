@@ -13,6 +13,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
@@ -300,24 +301,39 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "fabric_connection_rt_args_size",
+        &tt::tt_metal::internal::fabric_connection_rt_args_size,
+        nb::arg("num_connections"),
+        R"(
+            Return the number of runtime-argument words required for a fabric connection
+            block in the currently opened fabric context.
+        )");
+
+    mod.def(
         "compute_fabric_connection_rt_args",
         &tt::tt_metal::internal::compute_fabric_connection_rt_args,
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
-        nb::arg("teardown_sem_ids"),
-        nb::arg("buffer_index_sem_ids"),
+        nb::arg("teardown_sem_args"),
+        nb::arg("buffer_index_sem_args"),
+        nb::arg("sem_args_are_l1_addresses") = false,
         R"(
             Compute fabric connection RT args without any PD mutation.
-            Pure computation — resolves routing and assembles the flat RT args vector
-            using caller-provided semaphore IDs. No PD needed.
+            Pure computation — resolves routing and assembles the flat RT args vector from
+            the caller's semaphore values. No PD needed.
+
+            The two semaphore values are copied through verbatim; sem_args_are_l1_addresses
+            says they are raw L1 addresses rather than program semaphore IDs, and must then
+            be 16 B aligned.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips
                 connection_link_indices: List of link indices (empty for auto-select)
-                teardown_sem_ids: Pre-allocated semaphore IDs (one per connection)
-                buffer_index_sem_ids: Pre-allocated semaphore IDs (one per connection)
+                teardown_sem_args: One per connection — IDs, or addresses when the flag is set
+                buffer_index_sem_args: One per connection — same interpretation
+                sem_args_are_l1_addresses: False (IDs, default) or True (L1 addresses)
 
             Returns:
                 List of runtime args for RoutingPlaneConnectionManager::build_from_args().
@@ -380,12 +396,14 @@ void bind_fabric_api(nb::module_& mod) {
     mod.def(
         "get_forwarding_link_indices",
         &tt::tt_fabric::get_forwarding_link_indices,
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         R"(
             Return the fabric link indices that can forward packets from src to dst.
 
-            The returned indices are valid inputs to setup_routing_plane_connection.
+            ``mesh_device`` selects the context the fabric is resolved in; src and dst do not have to
+            belong to it. The returned indices are valid inputs to setup_routing_plane_connection.
         )");
 
     mod.def(

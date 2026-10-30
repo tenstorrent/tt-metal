@@ -141,7 +141,13 @@ void bind_slice_descriptor(nb::module_& mod) {
         .def_rw("slice_end", &ttnn::prim::SliceParams::slice_end)
         .def_rw("step", &ttnn::prim::SliceParams::step)
         .def_rw("output_mem_config", &ttnn::prim::SliceParams::output_mem_config)
-        .def_rw("sub_core_grids", &ttnn::prim::SliceParams::sub_core_grids);
+        .def_rw("sub_core_grids", &ttnn::prim::SliceParams::sub_core_grids)
+        .def_rw(
+            "output_mem_config_inherited",
+            &ttnn::prim::SliceParams::output_mem_config_inherited,
+            "True if output_mem_config was implicitly inherited from the input tensor (no memory_config or "
+            "output_tensor given by the caller) rather than explicitly requested. When set, the device operation "
+            "may adjust an inherited sharded spec to fit the sliced output shape.");
 
     nb::class_<ttnn::prim::SliceInputs>(mod, "SliceInputs")
         .def(
@@ -165,18 +171,10 @@ void bind_slice_descriptor(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
-    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::SliceParams& operation_attributes,
-               const ttnn::prim::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+    // Bound without create_descriptor: the Metal 2.0 factory produces a ProgramSpec, and the
+    // fusion branches that used to drive create_descriptor consume a ProgramDescriptor. The class
+    // stays exposed so those call sites resolve and report the missing method themselves.
+    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

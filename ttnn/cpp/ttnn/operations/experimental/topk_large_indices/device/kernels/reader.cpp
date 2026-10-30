@@ -10,13 +10,18 @@
 // Shared metadata read invalidates the reused L1 address before loading the next value.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "topk_large_indices_metadata.hpp"
+#include "topk_large_indices_runtime_args.hpp"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_row = get_arg_val<uint32_t>(1);
-    const uint32_t num_rows = get_arg_val<uint32_t>(2);
-    uint32_t search_len = get_arg_val<uint32_t>(3);
-    const uint32_t input_page_bytes = get_arg_val<uint32_t>(4);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
+    const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::reader_start_row);
+    const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::reader_num_rows);
+    constexpr bool row_split = get_named_compile_time_arg_val("row_split") != 0;
+    const uint32_t split_row = row_split ? get_arg_val<uint32_t>(topk_core_args::reader_split_row) : 0;
+    const bool has_split = row_split && get_arg_val<uint32_t>(topk_core_args::reader_has_split) != 0;
+    const bool second_half = row_split && get_arg_val<uint32_t>(topk_core_args::reader_second_half) != 0;
+    uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::search_length);
+    const uint32_t input_page_bytes = get_common_arg_val<uint32_t>(topk_common_args::input_row_bytes);
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
@@ -26,10 +31,16 @@ void kernel_main() {
     constexpr uint32_t llk_k = chunk_bytes / element_bytes;
     constexpr auto input_args = TensorAccessorArgs<4>();
     constexpr uint32_t metadata_args_base = input_args.next_compile_time_args_offset();
-    constexpr bool valid_length_from_metadata = get_compile_time_arg_val(metadata_args_base) != 0;
+    // THE metadata-mode selector for this kernel. One flag, not one per metadata argument: the host
+    // validates the metadata tensors as a group, so inside this mode every metadata read is legal.
+    constexpr bool metadata_mode = get_compile_time_arg_val(metadata_args_base) != 0;
     constexpr uint32_t meta_cb = get_compile_time_arg_val(metadata_args_base + 1);
     constexpr uint32_t meta_offset = get_compile_time_arg_val(metadata_args_base + 2);
     constexpr auto meta_args = TensorAccessorArgs<metadata_args_base + 3>();
+    // Real-token-end block, appended after the accessor above so those offsets are untouched.
+    constexpr uint32_t vend_args_base = meta_args.next_compile_time_args_offset();
+    constexpr auto vend_args = TensorAccessorArgs<vend_args_base>();
+    constexpr uint32_t neginf_bf16_pair = 0xFF80FF80u;
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     const uint32_t input_width = input_page_bytes / element_bytes;
@@ -37,12 +48,14 @@ void kernel_main() {
     Noc noc;
 
     TopkMetadataBounds bounds;
-    if constexpr (valid_length_from_metadata) {
+    TopkSegmentBounds whole;
+    TopkSegmentBounds split;
+    if constexpr (metadata_mode) {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.reserve_back(1);
         const uint32_t scratch = meta_cb_obj.get_write_ptr();
-        const uint32_t metadata_length =
-            trace_metadata::read_metadata_scalar_u32(noc, meta_args, get_arg_val<uint32_t>(5), scratch);
+        const uint32_t metadata_length = trace_metadata::read_metadata_scalar_u32(
+            noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
         // Validate before addition so the offset cannot wrap and no malformed metadata can produce a NoC read
         // outside the input row. ASSERT is watcher-gated, so it compiles to nothing in a normal build; pair it
         // with a clamp, as bounded_kv_actual_isl / bounded_cache_batch_idx do, or the bound would hold only
@@ -52,21 +65,63 @@ void kernel_main() {
                                     (metadata_length != 0 || meta_offset != 0);
         ASSERT(metadata_valid);
         search_len = metadata_valid ? metadata_length + meta_offset : input_width;
+        // 0 = no bound supplied (full chunk): the host zeroes the slot rather than compiling a second
+        // variant, so presence costs a compare here instead of a program hash split.
+        const uint32_t valid_end_addr = get_common_arg_val<uint32_t>(topk_common_args::valid_end_address);
+        if (valid_end_addr != 0) {
+            // Same scratch page as the read above: the helper invalidates the L1 line before loading, which
+            // is exactly what it documents for a reused address.
+            const uint32_t valid_end =
+                trace_metadata::read_metadata_scalar_u32(noc, vend_args, valid_end_addr, scratch);
+            const uint32_t capped = ((valid_end + 31) / 32) * 32;
+            if (capped < search_len) {
+                search_len = capped;
+            }
+        }
         bounds = calculate_topk_bounds(search_len, llk_k);
+        whole = whole_row_bounds(bounds);
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
-        mailbox->num_chunks = bounds.num_chunks;
-        mailbox->tail_elements = bounds.tail_elements;
+        mailbox->num_chunks = whole.num_chunks;
+        mailbox->tail_elements = whole.tail_elements;
+        if constexpr (row_split) {
+            // The compute also needs this core's half of the split row.
+            split = half_bounds(bounds, llk_k, second_half);
+            CoreLocalMem<TopkMetadataBounds> split_mailbox(scratch + sizeof(TopkMetadataBounds));
+            split_mailbox->num_chunks = split.num_chunks;
+            split_mailbox->tail_elements = split.tail_elements;
+        }
         clobber_all_memory();
         meta_cb_obj.push_back(1);
     } else {
         bounds = calculate_topk_bounds(search_len, llk_k);
+        whole = whole_row_bounds(bounds);
+        if constexpr (row_split) {
+            split = half_bounds(bounds, llk_k, second_half);
+        }
     }
-    const uint32_t tail_chunk_bytes = bounds.tail_elements * element_bytes;
 
+    // One loop for both: without a split row, has_split is false and every row takes the whole-row bounds.
+    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-        const uint32_t row = start_row + local_row;
-        for (uint32_t chunk = 0; chunk < bounds.num_chunks; ++chunk) {
-            const uint32_t active_chunk_bytes = (chunk + 1 == bounds.num_chunks) ? tail_chunk_bytes : chunk_bytes;
+        const bool is_split = has_split && local_row == num_whole_rows;
+        const uint32_t row = is_split ? split_row : start_row + local_row;
+        const TopkSegmentBounds& segment = is_split ? split : whole;
+        const uint32_t tail_chunk_bytes = segment.tail_elements * element_bytes;
+        if (segment.empty) {
+            // Nothing valid in this half: hand the compute one chunk of -inf so its survivors lose the merge.
+            input_cb.reserve_back(tiles_per_chunk);
+            auto* chunk_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_cb.get_write_ptr());
+            for (uint32_t word = 0; word < tiles_per_chunk * tile_bytes / sizeof(uint32_t); ++word) {
+                chunk_words[word] = neginf_bf16_pair;
+            }
+            // Order the fill ahead of the push, as the metadata mailbox above does.
+            clobber_all_memory();
+            input_cb.push_back(tiles_per_chunk);
+            continue;
+        }
+        for (uint32_t chunk = 0; chunk < segment.num_chunks; ++chunk) {
+            const uint32_t row_chunk = segment.first_chunk + chunk;
+            const uint32_t active_chunk_bytes = (chunk + 1 == segment.num_chunks) ? tail_chunk_bytes : chunk_bytes;
             input_cb.reserve_back(tiles_per_chunk);
             for (uint32_t tile = 0; tile < tiles_per_chunk; ++tile) {
                 const uint32_t tile_offset = tile * tile_bytes;
@@ -80,7 +135,7 @@ void kernel_main() {
                         input,
                         input_cb,
                         read_bytes,
-                        {.page_id = row, .offset_bytes = chunk * chunk_bytes + tile_offset},
+                        {.page_id = row, .offset_bytes = row_chunk * chunk_bytes + tile_offset},
                         {.offset_bytes = tile_offset});
                 }
             }

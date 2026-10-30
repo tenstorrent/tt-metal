@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 using fds_capture::kTokenChecked;
@@ -18,7 +19,7 @@ constexpr uint32_t kTimeoutRecapture = 0x5A5A0012;
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
     constexpr uint32_t group_id = get_named_compile_time_arg_val("group_id");
-    constexpr uint32_t dispatch_mask = get_named_compile_time_arg_val("dispatch_mask");
+    constexpr uint32_t dispatch_mask = overlay::fds_signalling::dispatch_lane_mask;
     constexpr uint32_t silence_iterations = get_named_compile_time_arg_val("silence_iterations");
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
     static_assert(group_id < kTokenCleared, "the payload group must not collide with the step tokens");
@@ -43,7 +44,7 @@ void kernel_main() {
     if (result == kComplete) {
         // The engine rewrites the identical value early in this window; with no change on the
         // wire, nothing may be captured.
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenCleared);
+        overlay::FdsNeo::fds_done(kTokenCleared);
         observed = fds_kernel::lane_nonzero(go_inst, silence_iterations);
         if (observed != 0) {
             result = kRecapturedWithoutChange;
@@ -61,7 +62,7 @@ void kernel_main() {
 
     if (result == kComplete) {
         // The engine now sends the value through zero: a real change, which must be captured.
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenChecked);
+        overlay::FdsNeo::fds_done(kTokenChecked);
         if (!fds_kernel::wait_de_status(go_inst, group_id, poll_iterations)) {
             result = kTimeoutRecapture;
         }

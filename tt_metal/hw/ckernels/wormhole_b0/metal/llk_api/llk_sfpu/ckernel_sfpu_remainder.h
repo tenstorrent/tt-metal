@@ -27,6 +27,8 @@ inline void init_remainder(const uint value, const uint recip) {
 // chunk b0 are precomputed by the caller. Abs(a) is reloaded after q*b to reduce SFPU register pressure.
 sfpi_inline sfpi::vInt compute_unsigned_remainder_small_b(
     const sfpi::vInt& a_unsigned, const sfpi::vInt& b_unsigned, const sfpi::vFloat& inv_b_f, const sfpi::vFloat& b0) {
+    sfpi::lreg_pressure _;
+
     sfpi::vMag a = sfpi::abs(a_unsigned);
     sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
 

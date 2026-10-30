@@ -3,17 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // DEVICE_PRINT tests for DRAM programmable cores (DRISC, Blackhole only).
@@ -27,11 +32,11 @@ public:
     void RunDramProgram(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::string& kernel_path,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -41,14 +46,23 @@ public:
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
 
-        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        if (this->IsSlowDispatch()) {
+            DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        } else {
+            // Fast dispatch cannot launch DRAM-core kernels, so launch it the way resident DRAM-core kernels are. Its
+            // prints still go through the dispatch_s aggregator.
+            IDevice* device = mesh_device->impl().get_devices()[0];
+            program_.impl().compile(device, /*force_slow_dispatch=*/true);
+            slow_dispatch::LaunchProgramAsync(*device, program_, /*force_slow_dispatch=*/true);
+            slow_dispatch::WaitProgramDone(*device, program_);
+        }
         MetalContext::instance().dprint_server()->await();
     }
 
     void TestDramOutput(
         const std::string& kernel_path,
         const std::vector<std::string>& expected_messages,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         for (auto& mesh_device : this->devices_) {
             RunDramProgram(mesh_device, kernel_path, runtime_args);
             EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));
@@ -58,10 +72,6 @@ public:
 
 #define DRAM_SKIP_GUARDS()                                                                                  \
     do {                                                                                                    \
-        if (!this->IsSlowDispatch()) {                                                                      \
-            log_info(tt::LogTest, "DRAM cores only support Slow Dispatch (Fast Dispatch not yet supported).");  \
-            GTEST_SKIP();                                                                                   \
-        }                                                                                                   \
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();                                     \
         if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {                               \
             log_info(tt::LogTest, "Skipping: DRAM programmable cores not available on this architecture."); \
@@ -119,6 +129,37 @@ TEST_F(DevicePrintDramFixture, DramPrintFactorial) {
         "factorial(5) = 120",
     };
     TestDramOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_factorial.cpp", messages, runtime_args);
+}
+
+// Each DRAM view's NOC0 worker endpoint runs the syseng firmware, which sits where a DPRINT buffer would go, so the
+// print server must neither poll it nor write its magic there.
+TEST_F(DevicePrintDramFixture, DramPrintSkipsSysengEndpoints) {
+    DRAM_SKIP_GUARDS();
+    for (auto& mesh_device : this->devices_) {
+        auto& context = MetalContext::instance(mesh_device->impl().get_context_id());
+        const auto& cluster = context.get_cluster();
+        for (IDevice* device : mesh_device->get_devices()) {
+            const auto& soc_desc = cluster.get_soc_desc(device->id());
+            std::unordered_set<CoreCoord> noc0_endpoints;
+            for (int dram_view = 0; dram_view < static_cast<int>(soc_desc.get_num_dram_views()); dram_view++) {
+                noc0_endpoints.insert(soc_desc.get_preferred_worker_core_for_dram_view(dram_view, /*noc=*/0));
+            }
+
+            size_t num_dram_print_cores = 0;
+            for (const auto& print_core : context.dprint_server()->get_print_cores(device->id())) {
+                if (print_core.type != CoreType::DRAM) {
+                    continue;
+                }
+                num_dram_print_cores++;
+                const CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    device->id(), print_core.coord, CoreType::DRAM);
+                EXPECT_FALSE(noc0_endpoints.contains(virtual_core))
+                    << "Device " << device->id() << " DRAM print core " << print_core.coord.str() << " (virtual "
+                    << virtual_core.str() << ") is a syseng-owned NOC0 endpoint";
+            }
+            EXPECT_GT(num_dram_print_cores, 0u);
+        }
+    }
 }
 
 #undef DRAM_SKIP_GUARDS

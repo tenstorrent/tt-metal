@@ -3,15 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 
 import ttnn
 
-from models.common.utility_functions import tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, check_with_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
@@ -209,3 +211,117 @@ def test_distributed_layernorm_with_program_cache_4chip(
         iterations=iterations,
         has_weights=has_weights,
     )
+
+
+# Regression for #54697: the pre-all-gather x^2 buffer is sized per row, so a wide row with
+# fp32 dest accumulation is what pushes the program past L1. The parametrizations above cannot
+# catch it -- they shard 8192 across 4-8 devices, leaving only 1024 per chip. This runs the
+# widest per-chip row the models actually use (Llama-3.3-70B on a 2-device mesh: 8192/2) on a
+# SINGLE device, with fp32_dest_acc_en on, so it fails at allocation time if the buffer sizing
+# regresses again.
+@pytest.mark.parametrize("width", [4096], ids=["w4096"])
+@pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+def test_pre_all_gather_wide_row_fp32_dest_acc_fits_l1(device, width, is_rmsnorm):
+    torch.manual_seed(1234)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    inp = torch.randn((1, 1, 32, width), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if is_rmsnorm:
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            tt_inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+        )
+    else:
+        tt_stats = ttnn.layer_norm_pre_all_gather(
+            tt_inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+        )
+
+    # Column 0 of the stats tile is sum(x^2) for both variants.
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    passing, pcc = check_with_pcc(expected, got, 0.99)
+    assert passing, f"sum(x^2) mismatch at width {width}: {pcc}"
+
+
+# The interleaved pre-all-gather path used to drop memory_config, so an L1 request came back in DRAM.
+@pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+def test_pre_all_gather_interleaved_honors_memory_config(device, is_rmsnorm):
+    torch.manual_seed(0)
+    inp = torch.randn((1, 1, 32, 1024), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    op = ttnn.rms_norm_pre_all_gather if is_rmsnorm else ttnn.layer_norm_pre_all_gather
+    tt_stats = op(tt_inp, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert tt_stats.memory_config() == ttnn.L1_MEMORY_CONFIG
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    torch.testing.assert_close(got, expected, rtol=5e-2, atol=0)
+
+
+# The 2D pre-all-gather grid used to bound its X extent by grid.y. Column dispatch makes the grid taller
+# than wide, so num_tile_rows == grid.y used to place cores past the last column.
+@pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="The 2D pre-all-gather merge uses multicast semaphore atomics, which the simulator does not implement",
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_rms_norm_pre_all_gather_2d_grid_taller_than_wide(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.y <= grid.x:
+        pytest.skip(f"needs a compute grid taller than wide, got {grid.x}x{grid.y}")
+    torch.manual_seed(0)
+    inp = torch.randn((1, 1, grid.y * 32, 2048), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, dtype=ttnn.bfloat16, use_2d_core_grid=True)
+
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    torch.testing.assert_close(got, expected, rtol=5e-2, atol=0)
+
+
+def _run_rms_norm_post_all_gather_2d(device, num_tile_rows):
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    width = 2048
+    inp = torch.randn((1, 1, num_tile_rows * 32, width), dtype=torch.bfloat16)
+    gamma = torch.randn((width,), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_gamma = ttnn.from_torch(
+        gamma.reshape(1, 1, -1, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, dtype=ttnn.bfloat16)
+    tt_out = ttnn.rms_norm_post_all_gather(tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, use_2d_core_grid=True)
+
+    expected = reference_layernorm(inp.to(torch.float32), gamma.to(torch.float32), None, epsilon, is_rmsnorm=True)
+    passing, pcc = check_with_pcc(expected, ttnn.to_torch(tt_out).to(torch.float32), 0.999)
+    assert passing, pcc
+
+
+# The 2D post-all-gather layout offset each core by one tile row per grid column and wrote its rows as one
+# contiguous run, so any core holding more than one tile row read and wrote the wrong tiles.
+def test_rms_norm_post_all_gather_2d_grid_multiple_rows_per_core(device):
+    _run_rms_norm_post_all_gather_2d(device, 2 * device.compute_with_storage_grid_size().x)
+
+
+# Only RMSNorm exposes use_2d_core_grid. With a grid taller than wide, num_tile_rows == grid.y used to place
+# cores past the last column.
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_rms_norm_post_all_gather_2d_grid_taller_than_wide(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.y <= grid.x:
+        pytest.skip(f"needs a compute grid taller than wide, got {grid.x}x{grid.y}")
+    _run_rms_norm_post_all_gather_2d(device, grid.y)

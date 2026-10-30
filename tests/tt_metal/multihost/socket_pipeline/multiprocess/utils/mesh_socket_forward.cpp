@@ -13,11 +13,13 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace tt::tt_metal {
 
@@ -35,7 +37,7 @@ tt::tt_metal::Program create_socket_forward_program(
         tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
         "Socket forward only supports BLACKHOLE_GALAXY cluster");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     const auto& send_socket_conn = send_socket.get_config().socket_connection_config[0];
     const auto& recv_socket_conn = recv_socket.get_config().socket_connection_config[0];
@@ -66,8 +68,10 @@ tt::tt_metal::Program create_socket_forward_program(
 
     auto socket_aligned_page_size = tt::align(num_bytes, max_alignment);
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
-    auto fwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, downstream_fabric_node_id);
+    auto bwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, upstream_fabric_node_id);
+    auto fwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, downstream_fabric_node_id);
     TT_FATAL(
         fwd_link_indices.size() > 1, "Single core multi link version of SocketForward only supports multiple links.");
     TT_FATAL(!bwd_link_indices.empty(), "No link indices found from downstream to upstream core in SocketForward.");
@@ -161,7 +165,7 @@ void socket_forward(
     const auto& device_coord = send_socket_connections[0].sender_core.device_coord;
 
     // Check if this device coordinate is local to this mesh device
-    auto* target_device = mesh_device->get_device(device_coord);
+    auto* target_device = internal::get_device(*mesh_device, device_coord);
     TT_FATAL(target_device != nullptr, "SocketForward device coordinate not found in mesh device");
 
     distributed::MeshWorkload workload;

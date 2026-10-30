@@ -110,6 +110,36 @@ typedef union
     dest_rd_ctrl_t f;
 } dest_rd_ctrl_u;
 
+// RMW mask over every non-reserved field of dest_rd_ctrl_t. A packer data-format reconfig writes the
+// whole field set with it, as the full configure does with a word write.
+constexpr std::uint32_t PCK_DEST_RD_CTRL_FIELDS_MASK =
+    PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK;
+// dest_rd_ctrl_t is four 1-bit fields at consecutive bit positions followed by the reserved bits; the
+// mask must be exactly that run of bits. (Checked arithmetically: clang cannot constant-evaluate a
+// bit cast of a bit-field struct.)
+static_assert(
+    PCK_DEST_RD_CTRL_Read_32b_data_MASK == (1u << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT) &&
+        PCK_DEST_RD_CTRL_Read_unsigned_MASK == (1u << PCK_DEST_RD_CTRL_Read_unsigned_SHAMT) &&
+        PCK_DEST_RD_CTRL_Read_int8_MASK == (1u << PCK_DEST_RD_CTRL_Read_int8_SHAMT) &&
+        PCK_DEST_RD_CTRL_Round_10b_mant_MASK == (1u << PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT),
+    "PCK_DEST_RD_CTRL fields must be single bits");
+static_assert(
+    PCK_DEST_RD_CTRL_Read_unsigned_SHAMT == PCK_DEST_RD_CTRL_Read_32b_data_SHAMT + 1 &&
+        PCK_DEST_RD_CTRL_Read_int8_SHAMT == PCK_DEST_RD_CTRL_Read_unsigned_SHAMT + 1 &&
+        PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT == PCK_DEST_RD_CTRL_Read_int8_SHAMT + 1,
+    "PCK_DEST_RD_CTRL fields must be consecutive bits, as laid out in dest_rd_ctrl_t");
+// The constant stays on the right-hand side: the cross-thread config checker (infra/check_cross_thread_cfg.py)
+// reads `<name>_MASK =` as a definition and would resolve the mask to this assert instead.
+static_assert(
+    (((1u << (PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT - PCK_DEST_RD_CTRL_Read_32b_data_SHAMT + 1)) - 1) << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT) ==
+        PCK_DEST_RD_CTRL_FIELDS_MASK,
+    "PCK_DEST_RD_CTRL_FIELDS_MASK must cover every non-reserved field of dest_rd_ctrl_t");
+static_assert(
+    PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32 &&
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32 &&
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
+    "PCK_DEST_RD_CTRL fields must share one ADDR32 for a combined RMW");
+
 // PACK_EDGE_OFFSET_SEC[0:3] register structure
 //
 // Lower 16b represent a mask that is applied on a single row of one face on the packer output
@@ -315,19 +345,13 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    // Channel-1 (L1 output) strides are zero for every pack mode: output placement comes from
+    // L1_Dest_addr and the packer's write pointer. Only the fast-untilize strided pack sets a
+    // channel-1 (Y) stride, in its own init.
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
-
-    if constexpr (pack_mode == PackMode::Tilize)
-    {
-        const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
-        TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
-        TT_SETDMAREG(0, UPPER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP1));
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-        TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
-        TTI_NOP;
-        TTI_NOP;
-    }
 }
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
@@ -534,16 +558,10 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Read_unsigned must share ADDR32 for combined RMW");
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Round_10b_mant must share ADDR32 for combined RMW");
-    cfg_reg_rmw_tensix<
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
-        PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
-        PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(dest_rd_ctrl.val);
+    // Read_int8 is what makes an Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a
+    // reconfig onto or away from Int8/UInt8 must write it like the full configure does: the RMW
+    // covers every dest_rd_ctrl field.
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(dest_rd_ctrl.val);
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
@@ -589,6 +607,14 @@ inline void configure_pack(
         "Unsupported packer to L1 conversion.");
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
+
+    // Drain the packer before any of the configuration below is rewritten, whatever the formats. The raw
+    // cfg[] stores in this function and in set_packer_config are RISC MMIO, which no STALLWAIT can hold
+    // back: the STALLWAIT only keeps new packer instructions out, and tensix_sync() blocks this RISC until
+    // the packer has gone idle, which is what orders those stores behind a pack still in flight. Without
+    // it the pack samples the new format/width mid-tile.
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+    tensix_sync();
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
@@ -647,6 +673,7 @@ inline void configure_pack(
 
     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
+    cfg[PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32]     = 0x0;
 
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;

@@ -1,27 +1,31 @@
-# Matrix multiply with HiFi2 fidelity.
+# Matrix multiply with LoFi fidelity.
 
 # quasar_use_dvalid: true
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "input_B"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "matmul_out"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
 
 operations:
   - math:
       - type: "Fpu"
+        block_tiles: [2, 4]
         in0: "input_A"
         in1: "input_B"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
-    block_size: [64, 128]
+        math_fidelity: "LoFi"
     pack:
       - output: "matmul_out"
+        block_tiles: [2, 4]
         packer: "Packer"

@@ -8,6 +8,7 @@
 #include <set>
 #include <vector>
 
+#include <tt_stl/overloaded.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/distributed/types.hpp>
 #include "tt-metalium/mesh_coord.hpp"
@@ -110,16 +111,20 @@ DeviceStorage::DeviceStorage() : mesh_tensor_holder_(std::make_shared<MeshTensor
 DeviceStorage::DeviceStorage(DeviceStorage&& other) noexcept :
     mesh_tensor_holder_(std::move(other.mesh_tensor_holder_)),
     coords_(std::move(other.coords_)),
+    tensor_topology_(std::move(other.tensor_topology_)),
     root_mesh_tensor_holder_(std::move(other.root_mesh_tensor_holder_)) {
     other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+    other.tensor_topology_.reset();
 }
 
 DeviceStorage& DeviceStorage::operator=(DeviceStorage&& other) noexcept {
     if (this != &other) {
         mesh_tensor_holder_ = std::move(other.mesh_tensor_holder_);
         coords_ = std::move(other.coords_);
+        tensor_topology_ = std::move(other.tensor_topology_);
         root_mesh_tensor_holder_ = std::move(other.root_mesh_tensor_holder_);
         other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
+        other.tensor_topology_.reset();
     }
     return *this;
 }
@@ -134,6 +139,16 @@ DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<tt::tt_metal::
 DeviceStorage::DeviceStorage(
     const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
     DeviceStorage(other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {}
+
+DeviceStorage DeviceStorage::single_shard(
+    const DeviceStorage& other, const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    DeviceStorage shard(other, std::vector<tt::tt_metal::distributed::MeshCoordinate>{coord});
+    shard.tensor_topology_ = TensorTopology(
+        tt::tt_metal::distributed::MeshShape(1),
+        {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
+        std::vector<tt::tt_metal::distributed::MeshCoordinate>{coord});
+    return shard;
+}
 
 DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) :
     DeviceStorage(
@@ -223,6 +238,8 @@ void DeviceStorage::deallocate() {
 
 bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
 
+bool DeviceStorage::is_root_allocated() const { return get_root_mesh_tensor()->is_allocated(); }
+
 bool DeviceStorage::is_uniform_storage() const { return coords_.size() == get_mesh_tensor().device().num_devices(); }
 
 std::span<const tt::tt_metal::distributed::MeshCoordinate> DeviceStorage::get_coords() const {
@@ -270,7 +287,7 @@ DeviceStorage DeviceStorage::combine_device_storages(
         tt::tt_metal::distributed::MeshShape(vec_coords.size()), shard_dim);
 
     DeviceStorage res(model_storage, std::move(vec_coords));
-    update_tensor_topology(res.get_mesh_tensor(), topology);
+    tt::tt_metal::update_tensor_topology(res.get_mesh_tensor(), topology);
     return res;
 }
 
@@ -288,6 +305,9 @@ const TensorSpec& DeviceStorage::get_tensor_spec() const {
 }
 
 const TensorTopology& DeviceStorage::get_tensor_topology() const {
+    if (tensor_topology_.has_value()) {
+        return *tensor_topology_;
+    }
     return std::visit(
         ttsl::overloaded{
             [](const MeshTensorHolder::Allocated& allocated) -> const TensorTopology& {
@@ -298,6 +318,14 @@ const TensorTopology& DeviceStorage::get_tensor_topology() const {
             },
             [](const auto&) -> const TensorTopology& { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
+}
+
+void DeviceStorage::update_tensor_topology(TensorTopology tensor_topology) {
+    if (tensor_topology_.has_value()) {
+        tensor_topology_ = std::move(tensor_topology);
+        return;
+    }
+    tt::tt_metal::update_tensor_topology(get_mesh_tensor(), std::move(tensor_topology));
 }
 
 }  // namespace ttnn

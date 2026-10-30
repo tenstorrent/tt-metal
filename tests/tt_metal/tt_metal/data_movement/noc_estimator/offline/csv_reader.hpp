@@ -8,6 +8,7 @@
 #include <vector>
 #include <map>
 #include <tt-metalium/experimental/noc_estimator/types.hpp>
+#include <cstdint>
 
 namespace tt::tt_metal::experimental::noc_estimator::offline {
 
@@ -17,13 +18,13 @@ struct DataPoint {
     NocPattern pattern = NocPattern::ONE_TO_ONE;
     MemoryType memory = MemoryType::L1;
     Architecture arch = Architecture::WORMHOLE_B0;
-    uint32_t num_transactions = 0;
-    uint32_t transaction_size_bytes = 0;
-    uint32_t num_subordinates = 1;
+    std::uint32_t num_transactions = 0;
+    std::uint32_t transaction_size_bytes = 0;
+    std::uint32_t num_subordinates = 1;
     bool same_axis = false;
     bool stateful = false;
     bool loopback = false;
-    uint32_t noc_index = 0;
+    std::uint32_t noc_index = 0;
     double latency_cycles = 0.0;
 };
 
@@ -51,7 +52,7 @@ private:
     static constexpr const char* COL_SAME_AXIS = "Same axis";
     static constexpr const char* COL_STATEFUL = "Stateful";
     static constexpr const char* COL_LOOPBACK = "Loopback";
-    static constexpr const char* COL_NOC_INDEX = "NOC index";
+    static constexpr const char* COL_NOC_INDEX = "NoC Index";
     static constexpr const char* COL_LATENCY = "Latency (cycles)";
 
     bool parse_header(const std::string& line);

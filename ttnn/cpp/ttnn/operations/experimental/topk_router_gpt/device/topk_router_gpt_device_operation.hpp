@@ -8,8 +8,9 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "topk_router_gpt_device_operation_types.hpp"
-#include "topk_router_gpt_program_factory.hpp"
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
@@ -19,7 +20,18 @@ struct TopkRouterGptDeviceOperation {
     using tensor_return_value_t = topk_router_gpt::tensor_return_value_t;
     using spec_return_value_t = topk_router_gpt::spec_return_value_t;
 
-    using program_factory_t = std::variant<program::TopkRouterGptProgramFactory>;
+    // The five tensors are the only per-dispatch state; they are declared as tensor bindings in
+    // create_program_artifacts, so the framework patches them on a cache hit. The rest of the
+    // per-core block (roles, k-tile split, ring ordering, vchannels) derives from the tensor specs
+    // and the device's DRAM bank assignment, all covered by the program hash — hence no override.
+    struct TopkRouterGptProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<TopkRouterGptProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 

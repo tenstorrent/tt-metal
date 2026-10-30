@@ -2,15 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import math
 import os
 import pathlib
+import uuid
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
 from loguru import logger
 
 import ttnn
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 
 def _validate_file_extension(file_name: pathlib.Path):
@@ -230,15 +233,29 @@ Example::
 """
 ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 
+
+def _golden_function_unsqueeze_to_4d(input_tensor):
+    # Match Shape.to_rank(4): left-pad the logical shape with 1s up to rank 4.
+    shape = list(input_tensor.shape)
+    while len(shape) < 4:
+        shape.insert(0, 1)
+    return input_tensor.reshape(shape)
+
+
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
+ttnn.attach_golden_function(ttnn.unsqueeze_to_4D, golden_function=_golden_function_unsqueeze_to_4d)
 
 
-def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, **_):
+def _golden_function_from_torch(input_tensor, dtype=None, *, spec=None, layout=None, col_tilize=False, **_):
     if input_tensor is None:
         return None
 
     import torch
+
+    if col_tilize:
+        # Column tilization stores the transposed matrix, so the result has its last two dimensions swapped.
+        input_tensor = input_tensor.transpose(-2, -1).contiguous()
 
     target_dtype = spec.dtype if spec is not None else dtype
     if target_dtype is None:
@@ -252,8 +269,8 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, **_):
         # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
 
-    if target_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-        # Round-trip block floats through host packing so the golden includes BFP quantization.
+    if target_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) or ttnn.is_mx_dtype(target_dtype):
+        # Round-trip block floats and MX through host packing so the golden includes their quantization.
         target_layout = spec.layout if spec is not None else layout
         target_layout = target_layout or ttnn.TILE_LAYOUT
         return ttnn.Tensor(tensor=input_tensor, data_type=target_dtype, layout=target_layout).to_torch()
@@ -262,7 +279,7 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, **_):
     return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))
 
 
-@ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)
+@ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function_from_torch)
 def from_torch(
     tensor: Optional["torch.Tensor"],
     dtype: Optional[ttnn.DataType] = None,
@@ -361,6 +378,11 @@ def from_torch(
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
+    if isinstance(tensor, torch.Tensor) and type(tensor) is not torch.Tensor:
+        # nanobind picks its torch importer by type(tensor).__module__ starting with "torch", so a subclass defined
+        # elsewhere (ttnn.torch_tracer.TracedTorchTensor, model-side wrappers) is not converted and fails to import.
+        tensor = tensor.as_subclass(torch.Tensor)
+
     # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
     # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
     # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
@@ -389,15 +411,13 @@ def from_torch(
     )
 
 
-def _golden_function(tensor, *, torch_rank=None, **kwargs):
-    if torch_rank is None:
-        return tensor
-
-    while len(tensor.shape) > torch_rank:
-        if tensor.shape[0] != 1:
-            raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-        tensor = tensor.squeeze(0)
-    return tensor
+def _golden_function(tensor, dtype=None, *, torch_rank=None, **kwargs):
+    if torch_rank is not None:
+        while len(tensor.shape) > torch_rank:
+            if tensor.shape[0] != 1:
+                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+            tensor = tensor.squeeze(0)
+    return tensor.to(dtype) if dtype is not None else tensor
 
 
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
@@ -479,16 +499,63 @@ ttnn.register_python_operation(
     golden_function=_golden_function,
 )(ttnn._ttnn.operations.core.from_device)
 
+
+def _golden_function_allocate_tensor(*args, **kwargs):
+    import torch
+
+    # Support both the (tensor_spec, mesh_device) and (shape, dtype, layout, mesh_device, memory_config) overloads.
+    first_argument = args[0] if args else kwargs.get("tensor_spec", kwargs.get("shape"))
+    if isinstance(first_argument, ttnn.TensorSpec):
+        shape, dtype = first_argument.shape, first_argument.dtype
+    else:
+        shape = first_argument
+        dtype = args[1] if len(args) > 1 else kwargs.get("dtype")
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
+    output = torch.empty(tuple(shape), dtype=torch_dtype)
+    # Allocation leaves storage uninitialized, so only shape and dtype are meaningful downstream.
+    ttnn.decorators.set_golden_comparison_config(output, method="skip", scope="all")
+    return output
+
+
 ttnn.register_python_operation(
     name="ttnn.allocate_tensor_on_device",
 )(ttnn._ttnn.operations.core.allocate_tensor_on_device)
 ttnn.register_python_operation(
     name="ttnn.allocate_tensor_on_host",
 )(ttnn._ttnn.operations.core.allocate_tensor_on_host)
+ttnn.attach_golden_function(ttnn.allocate_tensor_on_device, golden_function=_golden_function_allocate_tensor)
+ttnn.attach_golden_function(ttnn.allocate_tensor_on_host, golden_function=_golden_function_allocate_tensor)
+
+
+def _make_copy_transfer_golden_function(source_name, destination_name):
+    """Build a golden for a void host<->device copy that keeps the destination's stored golden in sync.
+
+    Args are resolved by nanobind kwarg name first, falling back to the idiomatic positional order
+    (source, destination); both bindings declare source as arg 0 and destination as arg 1.
+    """
+
+    def golden_function(*args, _ttnn_global_golden=False, **kwargs):
+        # The op returns None, so the golden must also return None to preserve the output contract.
+        # Only the global golden path passes tensors that alias the stored golden graph; mutate there.
+        if _ttnn_global_golden:
+            source = kwargs.get(source_name, args[0] if len(args) > 0 else None)
+            destination = kwargs.get(destination_name, args[1] if len(args) > 1 else None)
+            if source is None or destination is None:
+                raise ValueError(f"copy transfer golden requires {source_name} and {destination_name}")
+            destination.copy_(source)
+        return None
+
+    golden_function._ttnn_mutates_global_inputs = True
+    return golden_function
+
 
 ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
+ttnn.attach_golden_function(
+    ttnn.copy_host_to_device_tensor,
+    golden_function=_make_copy_transfer_golden_function("host_tensor", "device_tensor"),
+)
 doc = """
 Copies host tensor data into a pre-allocated device tensor, writing only the shards mapped to cores in :attr:`logical_core_filter`.
 
@@ -514,9 +581,14 @@ ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor_partial",
     doc=doc,
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor_partial)
+# Per-core partial writes have no safe dense-tensor golden without the device shard mapping.
 ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",
 )(ttnn._ttnn.operations.core.copy_device_to_host_tensor)
+ttnn.attach_golden_function(
+    ttnn.copy_device_to_host_tensor,
+    golden_function=_make_copy_transfer_golden_function("device_tensor", "host_tensor"),
+)
 
 doc = """
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
@@ -527,6 +599,8 @@ Args:
 """
 
 ttnn.register_python_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
+# deallocate returns None and only releases storage; there is no output value to compare.
+ttnn.attach_golden_function(ttnn.deallocate, golden_function=None)
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -543,8 +617,8 @@ def _golden_function(tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.to_layout, golden_function=_golden_function)
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+def _golden_function(tensor, dtype, *args, **kwargs):
+    return golden_to_output_dtype(tensor, dtype)
 
 
 ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
@@ -611,7 +685,9 @@ def _typecast_golden_function(
             return torch.clamp(input_tensor.to(torch.int64), min=0, max=255).to(torch.uint8)
         if "quasar" in arch_name and input_tensor.is_floating_point():
             return torch.round(torch.clamp(input_tensor.float(), min=0)).to(torch.uint8)
-        return input_tensor.to(torch.uint8)
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        # Same wrap as the int8 branch below
+        return (converted.to(torch.int64) % 256).to(torch.uint8)
 
     if output_dtype == ttnn.uint16:
         if input_tensor.is_floating_point():
@@ -625,14 +701,23 @@ def _typecast_golden_function(
             converted = input_tensor
         return torch.clamp(converted.to(torch.int64), min=0, max=65535).to(torch.uint16)
 
+    if output_dtype == ttnn.int8:
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        # Narrowing to int8 wraps modulo 256 rather than saturating
+        return ((converted.to(torch.int64) + 128) % 256 - 128).to(torch.int8)
+
     if output_dtype == ttnn.uint32:
         converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        if input_dtype == ttnn.int8:
+            # int8 widens to uint32 by sign-extending and reinterpreting so negatives wrap to the
+            # top of the range instead of clamping to 0.
+            return (converted.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
         return torch.clamp(converted.to(torch.int64), min=0, max=2**32 - 1).to(torch.uint32)
 
     if output_dtype == ttnn.fp8_e4m3:
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
 
-    if output_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+    if output_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) or ttnn.is_mx_dtype(output_dtype):
         return ttnn.Tensor(tensor=input_tensor, data_type=output_dtype, layout=ttnn.TILE_LAYOUT).to_torch()
 
     return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(output_dtype))
@@ -645,8 +730,8 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+def _golden_function(tensor, *args, dtype=None, **kwargs):
+    return golden_to_output_dtype(tensor, dtype)
 
 
 ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
@@ -663,7 +748,13 @@ ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_f
 ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
 
 
-@ttnn.register_python_operation(name="ttnn.load_tensor")
+def _golden_function_load_tensor(file_name, *, device=None, **_):
+    # Load on host and convert to torch so device-vs-host load consistency is still value-compared.
+    host_tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), None)
+    return host_tensor.to_torch()
+
+
+@ttnn.register_python_operation(name="ttnn.load_tensor", golden_function=_golden_function_load_tensor)
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None) -> ttnn.Tensor:
     """
     Load tensor from a file.
@@ -687,7 +778,8 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
     return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), device)
 
 
-@ttnn.register_python_operation(name="ttnn.dump_tensor")
+# dump_tensor writes to disk and returns None; there is no output value to compare.
+@ttnn.register_python_operation(name="ttnn.dump_tensor", golden_function=None)
 def dump_tensor(
     file_name: Union[str, pathlib.Path],
     tensor: ttnn.Tensor,
@@ -718,7 +810,60 @@ def dump_tensor(
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
-@ttnn.register_python_operation(name="ttnn.as_tensor")
+# The check writes nothing and returns None; there is no output value to compare.
+@ttnn.register_python_operation(name="ttnn.verify_shards_match_topology", golden_function=None)
+def verify_shards_match_topology(tensor: ttnn.Tensor, *, compare_replica_contents: bool = True) -> None:
+    """
+    Check that a host tensor's topology label describes its shards.
+
+    Every populated shard must sit at a coordinate the label lists and every labelled coordinate must hold a shard
+    (or be remote to this host); shards the label calls replicas of each other (mesh coordinates that differ only
+    along ``Replicate`` axes) must have the same size and, unless ``compare_replica_contents`` is ``False``, the same
+    values (tile padding is not compared). ``dump_tensor`` runs this check before it writes one copy per replica group; it is exposed so that any
+    other caller that keeps one copy per group, such as a checkpoint gather that composes a tensor by its label, can
+    run it for the same reason.
+
+    Args:
+        tensor (ttnn.Tensor): a host tensor (``tensor.cpu()``).
+
+    Keyword Args:
+        compare_replica_contents (bool, optional): byte-compare replicas, not only their sizes. Defaults to ``True``.
+
+    Raises:
+        RuntimeError: naming the mesh coordinates and the label when the label does not describe the shards.
+    """
+    ttnn._ttnn.tensor.verify_shards_match_topology(tensor, compare_replica_contents)
+
+
+_as_tensor_cache_repair = True
+
+
+@contextlib.contextmanager
+def as_tensor_cache_repair(enabled: bool):
+    """Scopes whether ``ttnn.as_tensor`` regenerates a cache file that exists but fails to load.
+
+    On by default: the file is rewritten from the tensor passed to ``as_tensor``. Wrap a warm-cache
+    build, whose tensors are dataless placeholders, in ``with ttnn.as_tensor_cache_repair(False):``
+    so a failed load raises instead of overwriting a good cache file with the placeholder's
+    contents. The previous setting is restored on exit.
+    """
+    global _as_tensor_cache_repair
+    previous = _as_tensor_cache_repair
+    _as_tensor_cache_repair = enabled
+    try:
+        yield
+    finally:
+        _as_tensor_cache_repair = previous
+
+
+def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):
+    # as_tensor applies the caller's preprocess callback to the Torch input before conversion.
+    if preprocess is not None:
+        tensor = preprocess(tensor)
+    return _golden_function_from_torch(tensor, dtype, **kwargs)
+
+
+@ttnn.register_python_operation(name="ttnn.as_tensor", golden_function=_golden_function_as_tensor)
 def as_tensor(
     tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types
     dtype: Optional[ttnn.DataType] = None,
@@ -729,6 +874,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+    cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -747,6 +893,11 @@ def as_tensor(
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
+        cache_dump_mode (ttnn.DumpTensorMode, optional): How a cache miss writes ``cache_file_name``. Defaults to
+            ``ttnn.DumpTensorMode.DISTRIBUTED_GATHER``, a collective that every rank must reach with the same tensor.
+            Use ``ttnn.DumpTensorMode.LOCAL`` when ranks own different tensors (e.g. one pipeline stage per rank):
+            with ``DISTRIBUTED_GATHER`` their cache misses never pair up and a cold fill deadlocks. ``LOCAL`` writes
+            each rank's host-local tensor, so cache files must not be shared between ranks.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -802,7 +953,18 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        if cache_dump_mode == ttnn.DumpTensorMode.LOCAL:
+            # Every rank writes its own file here. Publish it with a rename from a temp file unique to this fill, so a
+            # concurrent reader or filler never sees a partial file, and a failed dump leaves nothing behind.
+            tmp_file_name = f"{cache_file_name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+            try:
+                ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, cache_dump_mode)
+                os.replace(tmp_file_name, cache_file_name)
+            except BaseException:
+                pathlib.Path(tmp_file_name).unlink(missing_ok=True)
+                raise
+        else:
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor, cache_dump_mode)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor
@@ -817,6 +979,8 @@ def as_tensor(
         tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
         logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
     except RuntimeError as e:
+        if not _as_tensor_cache_repair:
+            raise RuntimeError(f"Failed to load cache file {cache_file_name}: {e}. Delete it to regenerate.") from e
         logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
         tensor = from_torch_and_dump(torch_tensor, dtype, layout, cache_file_name, mesh_mapper)
 

@@ -15,7 +15,7 @@ git submodule update --init --recursive
 source python_env/bin/activate
 ```
 Prereqs on every host: same clone path + commit, a populated tilized weight cache, and the golden trace
-(the adapter defaults to `/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240`;
+(the adapter defaults to `/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240`;
 `PREFILL_TRACE_DIR` overrides).
 
 ## Allocate the galaxies (slurm)
@@ -28,29 +28,27 @@ Run the commands below from inside the allocation.
 ## Accuracy — KV PCC
 
 Same two processes as the perf run below (runner under `tt-run`, producer on rank 0's host); the producer
-reads the KV back and PCCs it against the golden trace. Single-rank, `PREFILL_MOCK_MIGRATION=1` makes the
-runner publish its KV chunk table for the read-back gate (without it the producer has nothing to PCC).
-Multi-rank, bare `PREFILL_MOCK_MIGRATION=1` is rejected (each rank would publish a table covering only its
-own layer slice); set `PREFILL_ENABLE_MIGRATION: "1"` ALONGSIDE it in the binding's `global_env` to select
-the merged mock — every rank joins the stage-layout all-gather, rank 0 publishes ONE table spanning all
-layers, and each rank writes a rank-scoped device map (`<stem>_r<rank>.json`; the producer merges the
-local ones). The table path must then be on shared storage (`PREFILL_MIGRATION_TABLE_PATH`, not `/tmp`).
+reads the KV back and PCCs it against the golden trace. The runner always publishes a KV chunk table, at
+any rank count and with no flag: every rank joins the stage-layout all-gather, rank 0 writes ONE table
+spanning all layers, and each rank writes a rank-scoped device map (`<stem>_r<rank>.json`; the producer
+merges the local ones). Leave `PREFILL_ENABLE_MIGRATION` at `0` (mock migration) so the table stays on
+disk for the read-back instead of going to a migration worker. Multi-rank, point
+`PREFILL_MIGRATION_TABLE_PATH` at shared storage — rank 0 writes it and every other host's producer reads
+it, so `/tmp` cannot work.
 On the producer (Process 2) add `PREFILL_PRODUCER_CHECK_PCC=1` and set `PREFILL_PRODUCER_MAX_REQUESTS=1`
 so every slot's KV is still resident when it is read back. PASS = `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, default `0.93`).
 
-Both `PREFILL_MANIFEST` and `PREFILL_MOCK_MIGRATION` are shell-forwarded with `mpirun -x`, which lands on
-the launch-host rank only — fine at 1 galaxy (one rank), but at 2+ galaxies the remote ranks never see
-them and silently run the default model without publishing their table. For multi-host, put both in the
-request binding's `global_env` (the same `_minimax.yaml` copy made under Process 1, plus
-`PREFILL_MOCK_MIGRATION: "1"` and `PREFILL_ENABLE_MIGRATION: "1"` — see above) and drop them from the
-shell. A ready-made 2-rank example (intragalaxy) is
+`PREFILL_MANIFEST` is shell-forwarded with `mpirun -x`, which lands on the launch-host rank only — fine at
+1 galaxy (one rank), but at 2+ galaxies the remote ranks never see it and silently run the default model.
+For multi-host, put it in the request binding's `global_env` (the same `_minimax.yaml` copy made under
+Process 1, plus the shared `PREFILL_MIGRATION_TABLE_PATH` — see above) and drop it from the shell. A
+ready-made 2-rank example (intragalaxy) is
 `models/demos/minimax_m3/tt/runners/manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml`.
 
 ### 1 galaxy
 ```bash
 PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
-PREFILL_MOCK_MIGRATION=1 \
   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
   bh-glx-b08u02:1
@@ -58,7 +56,7 @@ PREFILL_MOCK_MIGRATION=1 \
 
 ### 2 galaxies
 ```bash
-# binding copy carries PREFILL_MANIFEST (absolute) + PREFILL_MOCK_MIGRATION: "1" in global_env
+# binding copy carries PREFILL_MANIFEST (absolute) + a shared PREFILL_MIGRATION_TABLE_PATH in global_env
 ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
   models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank_minimax.yaml \
   bh-glx-b08u02:1,bh-glx-b08u08:1
@@ -129,10 +127,10 @@ Then, on that node:
 cd $TT_METAL_HOME && source python_env/bin/activate
 LOGURU_LEVEL=INFO \
 PREFILL_MODEL=minimax_m3 \
-PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320 \
+PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_56320 \
 PREFILL_H2D_SERVICE_ID=ds_prefill \
 PREFILL_SP=8 PREFILL_TP=4 PREFILL_NUM_LAYERS=60 \
-PREFILL_CHUNK_SIZE=5120 PREFILL_MAX_SEQ_LEN=56320 \
+PREFILL_CHUNK_SIZE=5120 PREFILL_MAX_SEQ_LEN=61440 \
 PREFILL_NUM_USERS=2 \
 PREFILL_PRODUCER_CHUNKS=11 \
 PREFILL_PRODUCER_MAX_REQUESTS=10 \
@@ -176,7 +174,7 @@ Three prerequisites specific to this mode:
   `tensor_cache_bfp8_MeshShape([4, 4])` / `([2, 4])`, which the default checkpoint dir does not carry
   (populating takes ~1 h per shape, once; the ranks populate their own slices in parallel). Point
   `TT_CACHE_PATH` at a root that has them — both shapes are currently populated at
-  `/data/zbaczewski/m3_pp_cache` (its `[8, 4]` dir is empty, so do NOT use it for whole-galaxy runs).
+  `/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill` (its `[8, 4]` dir is empty, so do NOT use it for whole-galaxy runs).
 - **PRTE slot fix.** Multi-rank on one host under a Slurm allocation fails with "All nodes which are
   allocated for this job are already filled" (the galaxy advertises `CPUTot=1`). Before launching:
   ```bash

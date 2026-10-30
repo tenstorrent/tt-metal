@@ -34,7 +34,6 @@ SFPU call ahead of one to hold that. Their MOVB2D also has to keep datums with a
 which is what carries a small expert id through copy4rows intact.
 """
 
-import struct
 
 import pytest
 import torch
@@ -64,6 +63,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_FACES,
     TILE_COUNT,
+    fp32_bits,
 )
 
 # There is no Quasar implementation of this op, so the includes the kernel needs do not exist there.
@@ -80,11 +80,6 @@ SCORES, IDS, KEYS, INTERMEDIATE = 0, 1, 2, 3
 
 EPS = 0.5
 SCALE = 2.5
-
-
-def _bits(value):
-    """The fp32 bit pattern Converter::as_float expects."""
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _one(argument):
@@ -395,8 +390,8 @@ def test_generalized_moe_gate(topk, softmax, approx):
                 mode=MODE_GATE,
                 topk=topk,
                 softmax=softmax,
-                eps=_bits(EPS),
-                scale=_bits(SCALE),
+                eps=fp32_bits(EPS),
+                scale=fp32_bits(SCALE),
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
@@ -448,7 +443,7 @@ def _sigmoid_stimuli(seed, grouped):
     return payload.to(torch.bfloat16), bias.to(torch.bfloat16)
 
 
-# The op's enable_sigmoid front-end, which nothing else reaches: transpose_wh_tile, then sigmoid_tile,
+# The op's enable_sigmoid front-end, which nothing else reaches: transpose_tile, then sigmoid_tile,
 # then a RELOAD binary that takes SrcA back out of DEST through MOVD2A while the unpacker feeds only
 # SrcB under DEST_TO_SRCA reuse. The plain path never instantiates that unpack configuration, so this
 # is also the only cover of RELOAD as production actually drives it.
@@ -471,10 +466,10 @@ def test_generalized_moe_gate_sigmoid(grouped, topk):
                 sigmoid=True,
                 grouped=grouped,
                 topk=topk,
-                eps=_bits(EPS),
-                scale=_bits(SCALE),
+                eps=fp32_bits(EPS),
+                scale=fp32_bits(SCALE),
             ),
-            # Not _payload_tile: the sigmoid front-end does its transpose in transpose_wh_tile on
+            # Not _payload_tile: the sigmoid front-end does its transpose in transpose_tile on
             # the raw L1 tile, so this path uploads the payload as-is and the golden transposes.
             [payload, _id_tile(ids), _zeros(), _zeros()],
             src_b=bias,
@@ -509,7 +504,7 @@ def test_generalized_moe_gate_grouped(seed, approx):
     faces = _run(
         _config(
             GENERALIZED_MOE_GATE(
-                mode=MODE_GATE, grouped=True, eps=_bits(EPS), scale=_bits(SCALE)
+                mode=MODE_GATE, grouped=True, eps=fp32_bits(EPS), scale=fp32_bits(SCALE)
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
@@ -523,6 +518,58 @@ def test_generalized_moe_gate_grouped(seed, approx):
     _assert_gate_output(faces, golden, 8, ordered=False, **_weight_tolerance(approx))
 
 
+# The fused grouped caller consumes only scores/indices and can fold a deferred scale into
+# normalization. Check ids as well as weights: scaling must not change winner selection.
+@parametrize(
+    sigmoid=[False, True],
+    scaling=[(False, 0.0), (True, 0.0), (True, 0.5), (True, 1.0), (True, 1.75)],
+    approx=[ApproximationMode.No, ApproximationMode.Yes],
+    dest_sync=[DestSync.Half, DestSync.Full],
+)
+def test_generalized_moe_gate_grouped_single_face(sigmoid, scaling, approx, dest_sync):
+    do_extra_scale, extra_scale = scaling
+    ids = _ids_face()
+    if sigmoid:
+        payload, bias = _sigmoid_stimuli(seed=77, grouped=True)
+        tiles = [payload, _id_tile(ids), _zeros(), _zeros()]
+        payload = torch.sigmoid(payload.to(torch.float32).t()).to(torch.bfloat16)
+        keys = payload.to(torch.float32) + bias.to(torch.float32)
+    else:
+        payload, bias, keys = _gate_stimuli(seed=128)
+        tiles = _gate_tiles(payload, ids)
+
+    faces = _run(
+        _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE,
+                grouped=True,
+                sigmoid=sigmoid,
+                transpose_of_faces=False,
+                do_extra_scale=do_extra_scale,
+                extra_scale=fp32_bits(extra_scale),
+                output_tiles=2,
+                eps=fp32_bits(EPS),
+                scale=fp32_bits(SCALE),
+            ),
+            tiles,
+            src_b=bias,
+            approx=approx,
+            dest_sync=dest_sync,
+            num_faces=1,
+        )
+    )
+    golden = get_golden_generator(GeneralizedMoeGateGolden)(
+        keys,
+        payload,
+        ids,
+        eps=EPS,
+        scale=SCALE * extra_scale if do_extra_scale else SCALE,
+        grouped=True,
+    )
+    tolerance = dict(rtol=5e-2, atol=1e-2) if sigmoid else _weight_tolerance(approx)
+    _assert_gate_output(faces, golden, 8, ordered=False, **tolerance)
+
+
 # The op ships at DstSync::SyncFull over a single face; every test here otherwise runs SyncHalf over
 # four. Neither reaches the gate's arithmetic, so the answer has to be the one the golden already
 # pins. The SyncHalf and four-face corners are controls: they keep a failure attributable to the
@@ -534,7 +581,9 @@ def test_generalized_moe_gate_shipping_config(dest_sync, num_faces):
 
     faces = _run(
         _config(
-            GENERALIZED_MOE_GATE(mode=MODE_GATE, eps=_bits(EPS), scale=_bits(SCALE)),
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE, eps=fp32_bits(EPS), scale=fp32_bits(SCALE)
+            ),
             _gate_tiles(payload, ids),
             src_b=bias,
             dest_sync=dest_sync,
@@ -563,8 +612,8 @@ def test_generalized_moe_gate_normalization(norm, softmax):
             GENERALIZED_MOE_GATE(
                 mode=MODE_GATE,
                 softmax=softmax,
-                eps=_bits(eps),
-                scale=_bits(scale),
+                eps=fp32_bits(eps),
+                scale=fp32_bits(scale),
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
@@ -609,7 +658,7 @@ def test_generalized_moe_gate_softmax_logits():
         _config(
             # eps 0 and scale 1, so the answer is a plain softmax over the selected logits.
             GENERALIZED_MOE_GATE(
-                mode=MODE_GATE, softmax=True, eps=_bits(0.0), scale=_bits(1.0)
+                mode=MODE_GATE, softmax=True, eps=fp32_bits(0.0), scale=fp32_bits(1.0)
             ),
             # src_b defaults to zero: with no bias the sort key is the logit itself.
             _gate_tiles(payload, ids),
@@ -641,7 +690,9 @@ def test_generalized_moe_gate_ties():
 
     faces = _run(
         _config(
-            GENERALIZED_MOE_GATE(mode=MODE_GATE, eps=_bits(EPS), scale=_bits(SCALE)),
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE, eps=fp32_bits(EPS), scale=fp32_bits(SCALE)
+            ),
             _gate_tiles(payload.reshape(16, 16).to(torch.bfloat16), ids),
             src_b=(key - payload).reshape(16, 16).to(torch.bfloat16),
         )
@@ -686,8 +737,8 @@ def test_generalized_moe_gate_produce_run(store, idx_offset):
                 to_lo=store_lo,
                 to_hi=store_hi,
                 idx_offset=idx_offset,
-                eps=_bits(EPS),
-                scale=_bits(SCALE),
+                eps=fp32_bits(EPS),
+                scale=fp32_bits(SCALE),
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
@@ -931,8 +982,8 @@ def test_generalized_moe_gate_dest_sections(what):
                 row_src=0,
                 row_dst=4,
                 sections=2,
-                eps=_bits(EPS),
-                scale=_bits(SCALE),
+                eps=fp32_bits(EPS),
+                scale=fp32_bits(SCALE),
             ),
             (_gate_tiles(payload, ids) if gate else tiles),
             src_b=bias if gate else None,
@@ -1124,30 +1175,38 @@ def test_generalized_moe_gate_step0():
         ), f"region {region} rows 8-15 were written"
 
 
-def test_generalized_moe_gate_step2():
+@parametrize(output_tiles=[2, 3])
+def test_generalized_moe_gate_step2(output_tiles):
     """step2 turns the merged run into the output layout: rank r moves to row 0, column r.
 
     The run arrives down column 0 of rows 0-7, so this is the same window transpose read back one
     row instead of eight -- out[0][j] = in[j][0]. Columns 8-15 of that row are SrcB residue.
-    num_tiles=3, so the scratch region is untouched; the gate needs the bias transposed too, which
-    is what makes it 3 rather than 2.
+    Three tiles include bias for multi-block combine; two preserve it for grouped output.
+    Both configurations must leave scratch untouched.
     """
+    output_tiles = _one(output_tiles)
     tags, tiles = _tag_tiles()
 
     faces = _run(
-        _config(GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP2), tiles)
+        _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_MOVE, sub_op=MOVE_STEP2, output_tiles=output_tiles
+            ),
+            tiles,
+        )
     )
 
-    for region in (SCORES, IDS, KEYS):
+    for region in range(output_tiles):
         assert torch.equal(
             faces[region][0, 0:8], tags[region][0:8, 0]
         ), f"region {region} did not land the run on row 0"
         assert torch.equal(
             faces[region][1:16], tags[region][1:16]
         ), f"region {region} was written below row 0"
-    assert torch.equal(
-        faces[INTERMEDIATE], tags[INTERMEDIATE]
-    ), "step2 touched the scratch region"
+    for region in range(output_tiles, 4):
+        assert torch.equal(
+            faces[region], tags[region]
+        ), f"step2 touched preserved region {region}"
 
 
 def _offset_block(offset):
@@ -1510,8 +1569,8 @@ def test_generalized_moe_gate_combine_finalize(topk, softmax):
                 sub_op=RUN_COMBINE_FINALIZE,
                 topk=topk,
                 softmax=softmax,
-                eps=_bits(EPS),
-                scale=_bits(SCALE),
+                eps=fp32_bits(EPS),
+                scale=fp32_bits(SCALE),
             ),
             _combine_tiles(keys, ids, scores),
         )

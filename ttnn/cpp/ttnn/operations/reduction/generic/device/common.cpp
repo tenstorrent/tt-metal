@@ -13,10 +13,18 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/layout/page_config.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn::prim {
+namespace {
+// tt::datum_size throws for block-float rather than returning a size. Bfp8_b is the only
+// block-float format the op admits, so it is the only one that reaches here.
+bool block_float_format(tt::DataFormat df) { return df == tt::DataFormat::Bfp8_b; }
+}  // namespace
+
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,
@@ -49,10 +57,10 @@ RmPlan make_rm_plan(
         plan.ht_tiles_per_chunk = std::clamp(plan.Ht_rm, 1u, k_rm_max_tiles_per_chunk);
     }
 
-    // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;
-    // so the unpacked-format byte sizes are always well-defined here.
-    plan.src_datum_size = tt::datum_size(src_cb_data_format);
-    plan.dst_datum_size = tt::datum_size(dst_cb_data_format);
+    // Block-float has no per-datum size. RM staging and the writer stride never see it here:
+    // RM input is BF16/FP32, and block-float output is TILE-only.
+    plan.src_datum_size = block_float_format(src_cb_data_format) ? 0 : tt::datum_size(src_cb_data_format);
+    plan.dst_datum_size = block_float_format(dst_cb_data_format) ? 0 : tt::datum_size(dst_cb_data_format);
     plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
     // One CB page = one logical RM row (chunk-wide). The compute kernel uses
     // compute_kernel_lib::tilize, whose asymmetric mode requires one input page per row so each
@@ -83,21 +91,21 @@ void validate_rm_preconditions(
         static_cast<int>(input.memory_config().memory_layout()),
         static_cast<int>(output.memory_config().memory_layout()));
     TT_FATAL(
-        math_op == tt::tt_metal::ReduceOpMath::SUM,
-        "{} RM path only supports SUM (mean lowered from AVG), got {}",
+        math_op == tt::tt_metal::ReduceOpMath::SUM || math_op == tt::tt_metal::ReduceOpMath::MAX ||
+            math_op == tt::tt_metal::ReduceOpMath::MIN,
+        "{} RM path only supports SUM (mean lowered from AVG), and MAX/MIN as the TILE H-split's stage 2, got {}",
         dim_label,
         math_op);
     TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);
 }
 
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, uint32_t num_h_slices, uint32_t slice_Ht) {
+    const RmPlan& plan, uint32_t num_h_slices, uint32_t slice_Ht) {
     // Both reduce dims get the same set. Only the reader's REDUCE_COL (H) branch reads H_logical and
     // the H-axis-split geometry (num_h_slices / slice_Ht), but a compile-time arg is free on the
     // path that ignores it, and the name has to exist in every build of the source: name lookup in
     // the discarded `if constexpr` branch happens regardless of the condition.
     return {
-        {"scaler_bits", scaler_bits},
         {"W_logical", plan.W_logical},
         {"elem_bytes", plan.src_datum_size},
         {"padding_identity_bits", plan.padding_identity_bits},
@@ -128,13 +136,12 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
 }
 
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
-    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
+    const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce) {
     return {
         {"Ht", Ht_arg},
         {"Wt", plan.Wt},
         // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
         {"NC", 1u},
-        {"post_mul_scaler_bits", post_mul_scaler_bits},
         {"wt_tiles_per_chunk", plan.wt_tiles_per_chunk},
         {"ht_tiles_per_chunk", plan.ht_tiles_per_chunk},
         // enable_fp32_sfpu: route Float32 through the SFPU (full fp32) instead of the FPU (tf32)
@@ -312,10 +319,19 @@ bool h_reduce_negate_fits_in_l1(
     const uint32_t Ht = H / tile_height;
 
     auto* device = input_tensor.device();
-    // Mirror the H factory: shard-based CB sizing is only valid on the width-sharded L1 path.
-    const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-                                    output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-                                    input_tensor.memory_config().is_l1() && output_mem_config.is_l1();
+    // Shard-based CB sizing is only valid on the H factory's width-sharded fast path.
+    const auto& input_mem_config = input_tensor.memory_config();
+    MemoryConfig resolved_output_mem_config = output_mem_config;
+    if (input_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && input_mem_config.is_l1() &&
+        output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && output_mem_config.is_l1()) {
+        auto output_shape = input_tensor.logical_shape();
+        output_shape[2] = 1;
+        resolved_output_mem_config =
+            build_reduce_output_tensor_spec(
+                output_shape, input_tensor.dtype(), output_mem_config, input_mem_config, ReduceOpDim::H)
+                .memory_config();
+    }
+    const bool use_width_sharding = reduce_h_uses_width_sharded_fast_path(input_mem_config, resolved_output_mem_config);
 
     uint32_t num_cols_per_core_group_1 = 0;
     uint32_t num_cols_per_core_group_2 = 0;

@@ -360,6 +360,41 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_INT32  = 40,
     REMAINDER_UINT32 = 41,
     FMOD_INT32       = 42,
+    // nextafter steps the bit pattern, so the step is one ULP of the destination format rather
+    // than a fixed epsilon. bfloat16 carries its mantissa in the top 16 bits of the fp32 dest
+    // register, so it needs its own variant.
+    NEXTAFTER      = 43,
+    NEXTAFTER_BF16 = 44,
+    // LOGADDEXP, LOGADDEXP2, and COPY_DEST have no SfpuType counterpart, so their
+    // inits pass a placeholder (`add1` in the test helpers, `unused` in Compute API).
+    LOGADDEXP  = 45,
+    LOGADDEXP2 = 46,
+    // Quant family and Dest-to-Dest copy. Appended so the values above stay put.
+    // The kernels are calculate_quant_int32 / requant / dequant and copy_dest_value.
+    QUANT     = 47,
+    REQUANT   = 48,
+    DEQUANT   = 49,
+    COPY_DEST = 50,
+    // calculate_mask_posinf (mask_posinf_tile) and the equal_nan=True instantiation of
+    // calculate_sfpu_isclose, which the MASK / ISCLOSE entries above do not reach. Not named
+    // ISCLOSE_EQUAL_NAN: that is the binary_ng compute-kernel define (0/1, the
+    // isclose_binary_tile template argument), and an enumerator of the same name would be
+    // macro-expanded wherever both are visible.
+    MASK_POSINF   = 51,
+    ISCLOSE_EQNAN = 52,
+    // The remaining quantization.h entry points: uint8 / int8 output (quant_init / requant_init
+    // OUTPUT_FORMAT) and int8 input (requant_init / dequant_init INT8_INPUT). QUANT / REQUANT /
+    // DEQUANT above are the default instantiations (OUTPUT_FORMAT = Int32, INT8_INPUT = false).
+    QUANT_UINT8               = 53,
+    QUANT_INT8                = 54,
+    REQUANT_UINT8             = 55,
+    REQUANT_INT8              = 56,
+    REQUANT_INT8_IN           = 57,
+    REQUANT_INT8_IN_UINT8_OUT = 58,
+    REQUANT_INT8_IN_INT8_OUT  = 59,
+    DEQUANT_INT8              = 60,
+    // _float_to_int32_positive_ on raw fp32 words (in0 -> out), the conversion inside the pow kernels.
+    FLOAT_TO_INT32_POSITIVE = 61,
 };
 
 enum class PackMode : std::uint8_t

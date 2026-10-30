@@ -80,18 +80,17 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
                 ? tt::tt_metal::split_work_to_cores(*args.sub_core_grid, work_units)
                 : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
-    const auto fp32_temp_dtype = DataType::FLOAT32;
     const auto farthest_x_y =
         args.sub_core_grid.has_value() ? args.sub_core_grid->bounding_box().end_coord : compute_with_storage_grid_size;
     const uint32_t all_cores_in_bounding_box = (farthest_x_y.x + 1) * (farthest_x_y.y + 1);
 
     // Metal 2.0 resource names. Declared local (not at namespace scope) so the sibling factory in
     // the same unity-build translation unit can reuse the same identifiers without collision.
-    const DFBSpecName INPUT_DFB{"input"};
-    const DFBSpecName INDEX_DFB{"index"};
-    const DFBSpecName SRC_DFB{"source"};
+    const ScratchpadSpecName INPUT_SCRATCH{"input"};
+    const ScratchpadSpecName INDEX_SCRATCH{"index"};
+    const ScratchpadSpecName SRC_SCRATCH{"source"};
     const DFBSpecName DST_DFB{"output"};
-    const DFBSpecName FP32_TEMP_DFB{"fp32_temp"};
+    const ScratchpadSpecName FP32_TEMP_SCRATCH{"fp32_temp"};
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName INDEX_TENSOR{"index"};
     const TensorParamName SRC_TENSOR{"source"};
@@ -99,55 +98,35 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
 
-    // Each scatter DFB holds exactly one chunk page (num_entries = 1; entry_size is the 32-aligned
-    // chunk byte size). The data format is set even though these are data-movement-only DFBs,
-    // because the kernels select their C++ element type at compile time via get_dataformat(dfb::name).
-    auto make_dfb = [](const DFBSpecName& name, DataType dtype, uint32_t page_size_bytes) {
-        return DataflowBufferSpec{
-            .unique_id = name,
-            .entry_size = page_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = datatype_to_dataformat_converter(dtype),
-        };
-    };
-
+    // The output DFB holds exactly one chunk page (num_entries = 1; entry_size is the 32-aligned
+    // chunk byte size). It carries no data format: both kernels are data movement, and the writer gets
+    // the output element size as a compile-time arg.
     Group<DataflowBufferSpec> dataflow_buffers{
-        make_dfb(INPUT_DFB, input_tensor.dtype(), input_page_size_bytes),
-        make_dfb(INDEX_DFB, index_tensor.dtype(), index_page_size_bytes),
-        make_dfb(SRC_DFB, src_tensor.dtype(), source_page_size_bytes),
-        make_dfb(DST_DFB, output_tensor.dtype(), output_page_size_bytes),
-        make_dfb(FP32_TEMP_DFB, fp32_temp_dtype, fp32_temp_page_size_bytes),
+        DataflowBufferSpec{
+            .unique_id = DST_DFB,
+            .entry_size = output_page_size_bytes,
+            .num_entries = 1,
+        },
     };
 
-    // The reader alone fills and drains INPUT/INDEX/SRC and the FP32_TEMP scratch (self-loop: bound
-    // PRODUCER + CONSUMER); it produces DST, which the writer consumes.
+    // The reader alone fills and reads INPUT/INDEX/SRC, each one 32-aligned chunk page, and the
+    // FP32_TEMP accumulator, all as private scratchpads; it produces DST, which the writer consumes. A
+    // scratchpad carries no data format, so the reader gets its index element size as a compile-time
+    // arg instead (input is always bfloat16 in this factory).
     KernelSpec reader{
         .unique_id = READER,
         .source = reader_kernel_path,
         .dfb_bindings =
             {
                 DFBBinding{
-                    .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = INDEX_DFB, .accessor_name = "index", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = INDEX_DFB, .accessor_name = "index", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = SRC_DFB, .accessor_name = "source", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = SRC_DFB, .accessor_name = "source", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = FP32_TEMP_DFB,
-                    .accessor_name = "fp32_temp",
-                    .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = FP32_TEMP_DFB,
-                    .accessor_name = "fp32_temp",
-                    .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
                     .dfb_spec_name = DST_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = INPUT_SCRATCH, .accessor_name = "input"},
+                ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH, .accessor_name = "index"},
+                ScratchpadBinding{.scratchpad_spec_name = SRC_SCRATCH, .accessor_name = "source"},
+                ScratchpadBinding{.scratchpad_spec_name = FP32_TEMP_SCRATCH, .accessor_name = "fp32_temp"},
             },
         .tensor_bindings =
             {
@@ -161,6 +140,7 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
                 {"index_stick_size", index_stick_size},
                 {"source_stick_size", source_stick_size},
                 {"input_rank", static_cast<uint32_t>(input_shape.rank())},
+                {"index_element_size", index_datum_size},
             },
         .runtime_arg_schema =
             {
@@ -172,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
                      "source_chunk_size",
                      "scatter_reduction_type"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         // Per-dimension shape extents (input dims then index dims). N = rank-1 per tensor; the
         // count varies with rank across instantiations, so these are delivered as runtime varargs.
         .advanced_options =
@@ -194,12 +174,13 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
         .compile_time_args =
             {
                 {"output_stick_size_bytes", output_stick_size_bytes},
+                {"output_element_size", output_datum_size},
             },
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"start_stick_id", "sticks_for_core", "input_and_output_chunk_size"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Per-dimension shape extents are the same on every node; build once and bind per node.
@@ -253,6 +234,12 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     spec.name = "scatter_reduce_bfloat16";
     spec.kernels = {reader, writer};
     spec.dataflow_buffers = std::move(dataflow_buffers);
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = INPUT_SCRATCH, .size_per_node = input_page_size_bytes},
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH, .size_per_node = index_page_size_bytes},
+        ScratchpadSpec{.unique_id = SRC_SCRATCH, .size_per_node = source_page_size_bytes},
+        ScratchpadSpec{.unique_id = FP32_TEMP_SCRATCH, .size_per_node = fp32_temp_page_size_bytes},
+    };
     spec.tensor_parameters = {
         TensorParameter{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()},
         TensorParameter{.unique_id = INDEX_TENSOR, .spec = index_tensor.tensor_spec()},

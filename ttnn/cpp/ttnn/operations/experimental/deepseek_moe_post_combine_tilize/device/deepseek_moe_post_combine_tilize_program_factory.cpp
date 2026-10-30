@@ -9,35 +9,44 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
-#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/deepseek_moe_post_combine_tilize_program_factory.hpp"
-
-#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/deepseek_moe_post_combine_tilize_device_operation.hpp"
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::experimental::prim {
 
-DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostCombineTilizeProgramFactory::create(
-    const DeepseekMoEPostCombineTilizeParams&,
-    const DeepseekMoEPostCombineTilizeInputs& tensor_args,
-    ttnn::Tensor& tensor_return_value) {
-    auto program = Program();
+ttnn::device_operation::ProgramArtifacts
+DeepseekMoEPostCombineTilizeDeviceOperation::DeepseekMoEPostCombineTilizeProgramFactory::create_program_artifacts(
+    const operation_attributes_t&, const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE{"compute"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName TILIZE_INPUT{"tilize_input"};
+    const DFBSpecName TILIZE_OUTPUT{"tilize_output"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
 
     /*
      * Tensors
      */
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    uint32_t input_row_page_size = input_tensor.buffer()->page_size();
+    uint32_t input_row_page_size = static_cast<uint32_t>(input_tensor.buffer()->page_size());
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_rank = input_shape.rank();
 
     const ttnn::Tensor& output_tensor = tensor_return_value;
-    const uint32_t output_tile_page_size = output_tensor.buffer()->page_size();
+    const uint32_t output_tile_page_size = static_cast<uint32_t>(output_tensor.buffer()->page_size());
     const auto& output_shape = output_tensor.padded_shape();
+
+    const auto& input = input_tensor.mesh_tensor();
+    const auto& output = output_tensor.mesh_tensor();
 
     /*
      * Shard spec
@@ -57,88 +66,114 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
     const uint32_t output_num_shards_wide = output_shape[-1] / output_shard_width;
     const uint32_t output_num_shards_high = upper_dims / output_nd_shard_spec.shard_shape[-2];
 
-    /*
-     * CBs
-     */
-    uint32_t tilize_input_cb_id = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(
-        tilize_input_cb_id,
-        program,
-        op_cores,
-        output_shard_width_bytes,
-        tt::constants::TILE_HEIGHT,
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
+    const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t tilize_output_cb_id = tt::CBIndex::c_1;
-    auto output_cb = tt::tt_metal::create_cb(
-        tilize_output_cb_id,
-        program,
-        op_cores,
-        output_tile_page_size,
-        output_shard_width_tiles,
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()),
-        output_tensor.buffer());
-    tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);
+    /*
+     * Tensor parameters
+     */
+    const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};
+    // The output is reached only as the backing memory of the tilize output DFB (borrowed_from below).
+    const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
+
+    /*
+     * DFBs
+     */
+    const DataflowBufferSpec tilize_input_dfb{
+        .unique_id = TILIZE_INPUT,
+        .entry_size = output_shard_width_bytes,
+        .num_entries = tt::constants::TILE_HEIGHT,
+        .data_format_metadata = data_format,
+    };
+
+    // The output DFB is backed by the sharded output tensor. Borrowing it from the output
+    // TensorParameter (never an address) is what lets the framework re-peg it on a cache hit.
+    const DataflowBufferSpec tilize_output_dfb{
+        .unique_id = TILIZE_OUTPUT,
+        .entry_size = output_tile_page_size,
+        .num_entries = output_shard_width_tiles,
+        .data_format_metadata = data_format,
+        .borrowed_from = OUTPUT,
+    };
 
     /*
      * Kernels
      */
 
     // reader
-    std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
-        {"tilize_input_cb_id", tilize_input_cb_id},
-        {"input_row_page_size", input_row_page_size},
-        {"bytes_to_read_per_row", output_shard_width_bytes},
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
+            "deepseek_moe_post_combine_tilize_reader.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O2},
+        .dfb_bindings = {{
+            .dfb_spec_name = TILIZE_INPUT,
+            .accessor_name = "tilize_input",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {{
+            .tensor_parameter_name = INPUT,
+            .accessor_name = "input",
+        }},
+        .compile_time_args =
+            {
+                {"input_row_page_size", input_row_page_size},
+                {"bytes_to_read_per_row", output_shard_width_bytes},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"intra_row_byte_offset", "row_page_offset"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
-
-    std::vector<uint32_t> reader_ct_args = {};
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
-
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
-        "deepseek_moe_post_combine_tilize_reader.cpp",
-        op_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = reader_ct_args,
-            .defines = {},
-            .named_compile_args = reader_named_ct_args,
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
     // compute
-    std::unordered_map<std::string, uint32_t> compute_named_ct_args = {
-        {"tilize_input_cb_id", tilize_input_cb_id},
-        {"tilize_output_cb_id", tilize_output_cb_id},
-        {"num_tiles", output_shard_width_tiles},
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
+            "deepseek_moe_post_combine_tilize_compute.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                {
+                    .dfb_spec_name = TILIZE_INPUT,
+                    .accessor_name = "tilize_input",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                {
+                    .dfb_spec_name = TILIZE_OUTPUT,
+                    .accessor_name = "tilize_output",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .compile_time_args =
+            {
+                {"num_tiles", output_shard_width_tiles},
+            },
+        .hw_config = ComputeHardwareConfig{},
     };
-    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
-        "deepseek_moe_post_combine_tilize_compute.cpp",
-        op_cores,
-        tt::tt_metal::ComputeConfig{.named_compile_args = compute_named_ct_args});
 
     // writer
-    std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
-        {"tilize_output_cb_id", tilize_output_cb_id},
-        {"num_tiles", output_shard_width_tiles},
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
+            "deepseek_moe_post_combine_tilize_writer.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O2},
+        .dfb_bindings = {{
+            .dfb_spec_name = TILIZE_OUTPUT,
+            .accessor_name = "tilize_output",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .compile_time_args =
+            {
+                {"num_tiles", output_shard_width_tiles},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
-        "deepseek_moe_post_combine_tilize_writer.cpp",
-        op_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = {},
-            .defines = {},
-            .named_compile_args = writer_named_ct_args,
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
+
+    KernelRunArgs reader_run_args{.kernel = READER};
 
     bool is_row_major_shard_orientation = output_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     std::vector<tt::tt_metal::CoreCoord> cores =
@@ -156,39 +191,32 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
             intra_row_byte_offset = (i / output_num_shards_high) * output_shard_width_bytes;
             row_page_offset = (i % output_num_shards_high) * tt::constants::TILE_HEIGHT;
         }
-        std::vector<uint32_t> reader_rt_args = {
-            intra_row_byte_offset, row_page_offset, input_tensor.buffer()->address()};
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"intra_row_byte_offset", intra_row_byte_offset}, {"row_page_offset", row_page_offset}});
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .compute_kernel_id = compute_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .sharded_output_cb_handle = sharded_output_cb_handle,
-         .cores = cores}};
-}
+    ProgramSpec spec{
+        .name = "deepseek_moe_post_combine_tilize",
+        .kernels = {std::move(reader), std::move(compute), std::move(writer)},
+        .dataflow_buffers = {tilize_input_dfb, tilize_output_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {WorkUnitSpec{
+            .name = "deepseek_moe_post_combine_tilize",
+            .kernels = {READER, COMPUTE, WRITER},
+            .target_nodes = op_cores,
+        }},
+    };
 
-void DeepseekMoEPostCombineTilizeProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const DeepseekMoEPostCombineTilizeParams&,
-    const DeepseekMoEPostCombineTilizeInputs& tensor_args,
-    ttnn::Tensor& tensor_return_value) {
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const ttnn::Tensor& output_tensor = tensor_return_value;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args)};
+    run_args.tensor_args = {{INPUT, input}, {OUTPUT, output}};
 
-    auto& program = cached_program.program;
-    const tt::tt_metal::KernelHandle& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const std::vector<tt::tt_metal::CoreCoord>& cores = cached_program.shared_variables.cores;
-
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, cached_program.shared_variables.sharded_output_cb_handle, *output_tensor.buffer());
-
-    for (auto core : cores) {
-        auto& reader_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_args[2] = input_tensor.buffer()->address();
-    }
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::experimental::prim

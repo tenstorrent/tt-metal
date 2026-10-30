@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlapEntry, ov
 from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 
 OverlappedTensor = ttnn.OverlappedTensor
+NUM_DEVICES_4x2 = 4 * 2
 
 
 def _core_range_set_eq(a: ttnn.CoreRangeSet, b: ttnn.CoreRangeSet) -> bool:
@@ -219,6 +220,9 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device, dtype):
     indirect=True,
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device, dtype):
     """Roundtrip serialization with TP on a 4x2 mesh.
 
@@ -230,8 +234,8 @@ def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device, dtype):
     that after dump+load, each device gets back its original data.
     """
     mesh = bh_2d_mesh_device
-    if mesh.shape[0] * mesh.shape[1] < 8:
-        pytest.skip("Test requires 4x2 mesh (8 devices)")
+    if mesh.shape[0] * mesh.shape[1] < NUM_DEVICES_4x2:
+        pytest.skip(f"Test requires 4x2 mesh ({NUM_DEVICES_4x2} devices)")
 
     submesh = mesh.create_submesh(ttnn.MeshShape((4, 2)))
     mesh_rows, mesh_cols = 4, 2

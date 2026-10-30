@@ -1,0 +1,48 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# THREE 4x32 BigMeshes, carved into sixteen 4x2 pipeline stages each.
+#
+#   3 BigMeshes x 16 stages/BigMesh = 48 stages
+#   4 hosts/BigMesh x 3 BigMeshes   = 12 mapped BigMesh hosts
+#
+# CPU-constrained-runner sibling of subtorus_sc24_4x32_6bigmesh_ring: half the
+# BigMeshes so the MASTER placement solve stays small enough to finish inside
+# the CI budget on shared cpu_medium runners. Placed onto an existing SC16
+# revC subtorus (Aisle D) mock cluster. Both axes RING and the test requests
+# FABRIC_2D_TORUS_XY. A three-BigMesh ring (0-1-2-0) is the complete graph on
+# three nodes, so no extra inter-mesh chords are needed.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 32 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 16 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graph: three-BigMesh ring (3 pairs) -----------------------------------
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+# --- Instantiation ---------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

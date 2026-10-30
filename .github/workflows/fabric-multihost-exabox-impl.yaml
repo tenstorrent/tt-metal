@@ -17,6 +17,11 @@ on:
         type: string
         default: "sc4"
         description: "Supercluster configuration (sc4)"
+      release-ready-only:
+        required: false
+        type: boolean
+        default: false
+        description: "Run only tests marked release_ready"
 
 permissions:
   id-token: write
@@ -46,32 +51,45 @@ jobs:
           fi
           echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
 
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "e2e"
+
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
 
       - name: Build test matrix
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "bh_${{ inputs.sp-config }}" \
-            ./.github/sku_config.yaml
+        uses: ./ci-main/.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "bh_${{ inputs.sp-config }}"
+          sku-config: ./.github/sku_config.yaml
 
       - name: Filter tests by sp_config
         id: filter-tests
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          RELEASE_READY_ONLY: ${{ inputs.release-ready-only }}
         run: |
           FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config }}" '[.[] | select(.sp_config == $sp)]')
           if [ "$FILTERED" = "[]" ]; then
             echo "::error::No tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
             exit 1
+          fi
+          if [ "$RELEASE_READY_ONLY" = "true" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c '[.[] | select(.release_ready == true)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::warning::No release_ready tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}. Skipping."
+            fi
           fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$FILTERED" >> $GITHUB_OUTPUT
@@ -82,6 +100,7 @@ jobs:
   multihost-tests:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     env:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
@@ -98,6 +117,9 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # SC4 container initialization provisions remote worker pods and counts against
+    # the job timeout. Two days; other supercluster configs keep the six-hour default.
+    timeout-minutes: ${{ inputs.sp-config == 'sc4' && 2880 || 360 }}
     # Consumed by the multihost runner container hook to provision remote worker pods.
     # Job steps still run on the CPU/control runner; the hook handles worker image setup.
     container:

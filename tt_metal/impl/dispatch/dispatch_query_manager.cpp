@@ -17,8 +17,9 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include "llrt/hal.hpp"
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace {
@@ -119,12 +120,16 @@ bool DispatchQueryManager::distributed_dispatcher() const { return distributed_d
 
 NOC DispatchQueryManager::go_signal_noc() const { return go_signal_noc_; }
 
+bool DispatchQueryManager::fds_signalling_enabled() const { return fds_signalling_enabled_; }
+
 void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     num_hw_cqs_ = num_hw_cqs;
     dispatch_core_config_ = dispatch_core_config;
 
     auto& env_impl = MetalEnvAccessor(env_).impl();
     const auto& cluster = env_impl.get_cluster();
+    const auto& hal = env_impl.get_hal();
+    const auto& rtoptions = env_impl.get_rtoptions();
     const tt::ARCH arch = cluster.arch();
 
     if (arch == tt::ARCH::QUASAR) {
@@ -150,8 +155,13 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     logical_dispatch_cores_on_user_chips_ =
         populate_all_logical_dispatch_cores(env_, num_hw_cqs_, dispatch_core_config_);
     cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, num_hw_cqs, logical_dispatch_cores_on_user_chips_);
+    // FDS go/completion is a Quasar DE path. The go wire is per dispatch engine, so FDS needs one CQ per dispatch
+    // engine.
+    fds_signalling_enabled_ = resolved_dispatch_core_type_ == CoreType::DISPATCH && hal.supports_fds() &&
+                              rtoptions.get_fast_dispatch() && cq_dispatch_layout_.num_cqs_per_core == 1;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
+    dispatch_cores_ready_.store(false, std::memory_order_release);
 }
 
 const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
@@ -163,6 +173,9 @@ const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_di
 }
 
 tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
+    if (dispatch_cores_ready_.load(std::memory_order_acquire)) {
+        return dispatch_cores_[cq_id];
+    }
     std::scoped_lock<std::mutex> lock(modifier_mutex);
     if (dispatch_cores_.empty()) {
         for (auto cq = 0; cq < num_hw_cqs_; cq++) {
@@ -189,6 +202,7 @@ tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
                     dispatch_cores_[cq].y);
             }
         }
+        dispatch_cores_ready_.store(true, std::memory_order_release);
     }
     return dispatch_cores_[cq_id];
 }

@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     STEADY_STATE_LTX_PROMPT,
@@ -27,10 +28,10 @@ from models.tt_dit.utils.ltx import (
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
+    traced_default,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
-from models.tt_dit.utils.vbench import assert_vbench_quality
 
 from .ltx_mesh_params import (
     LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
@@ -61,6 +62,19 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
     return False
 
 
+FAST_T2V_TIMING_LIMITS = {
+    ((4, 8), 1088, 1920, 153): {
+        "Encoder": (0.23, 0.94),
+        "Stage 1 denoise": (1.46, 2.76),
+        "Latent upsample": (0.05, 0.22),
+        "Stage 2 denoise": (1.81, 3.39),
+        "VAE decode": (0.62, 1.22),
+        "Audio decode": (0.25, 0.47),
+        "Total": (4.54, 8.57),
+    },
+}
+
+
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
 @pytest.mark.skipif(
     not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
@@ -77,6 +91,7 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
 )
 def test_pipeline_distilled(
     mesh_device,
+    device_params,
     sp_axis,
     tp_axis,
     num_links,
@@ -105,9 +120,15 @@ def test_pipeline_distilled(
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     height = int(os.environ.get("HEIGHT", "1088"))
     width = int(os.environ.get("WIDTH", "1920"))
+    # FPS conditions the model (audio latent length + A/V cross-PE temporal scaling), so it is
+    # fixed at create_pipeline. 6s lands on 145f@24 (6.04s) or 153f@25 (6.12s) -- (n-1)%8 == 0
+    # forbids the exact 144/150.
+    fps = float(os.environ.get("FPS", "24"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
-    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    # Traced by default wherever the mesh param reserves a trace region; LTX_TRACED=0/1 overrides
+    # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
+    traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
 
     # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
     # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
@@ -135,6 +156,7 @@ def test_pipeline_distilled(
         num_frames=num_frames,
         height=height,
         width=width,
+        fps=fps,
         image_conditioning=bool(image_path),
     )
 
@@ -146,10 +168,10 @@ def test_pipeline_distilled(
     steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
     replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
 
-    def run(*, prompt, number, seed):
-        output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+    def run(*, prompt, number, seed, output_path=None):
+        output_filename = output_path or os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
-        logger.info(f"Config: {height}x{width}, {num_frames} frames")
+        logger.info(f"Config: {height}x{width}, {num_frames} frames @ {fps}fps ({num_frames / fps:.4f}s)")
         if images:
             logger.info(f"I2V: conditioning image {images[0][0]} (strength={images[0][2]})")
 
@@ -165,6 +187,7 @@ def test_pipeline_distilled(
             height=height,
             width=width,
             seed=seed,
+            fps=fps,
         )
         logger.info(f"Saved video to: {output_filename}")
         print_ltx_timing_table(
@@ -179,6 +202,7 @@ def test_pipeline_distilled(
             topology=topology,
             output_path=output_filename,
             prompt=prompt,
+            report_model="ltx-2.3-fast-i2v" if image_path else "ltx-2.3-fast-t2v",
         )
 
     vbench_thresholds_by_height = {
@@ -189,7 +213,9 @@ def test_pipeline_distilled(
             # Averaged over VBENCH_SEEDS clips: dynamic_degree is near-binary per clip and this content
             # sits at ~0.8-1.0, so the floor requires ~4/5 seeds dynamic (1.0 would demand every seed).
             "dynamic_degree": 0.8,
-            "imaging_quality": 0.645,
+            # The quality threshold below is meant to only capture major failures/regressions of the model,
+            # not gate against small numeric drifts.
+            "imaging_quality": 0.5,
         },
     }
 
@@ -198,15 +224,16 @@ def test_pipeline_distilled(
     # RUN_CLIP=0 skips the CLIP prompt-alignment gate; defaults on (mirrors the wan2.2 test).
     run_clip = os.environ.get("RUN_CLIP", "1") in ("1", "true", "True")
 
-    # An enabled quality gate whose deps are absent must report SKIPPED (visible), never a silent
-    # green pass. Unguarded by rank on purpose: dep availability is per-process (same venv on every
-    # rank), and a rank-divergent skip would hang the collective generate().
-    if run_vbench:
-        pytest.importorskip("vbench", reason="RUN_VBENCH=1 but vbench not installed (set RUN_VBENCH=0)")
+    export_dir = os.environ.get("VBENCH_EXPORT_DIR")
+    if export_dir and not run_vbench:
+        raise ValueError("VBENCH_EXPORT_DIR requires RUN_VBENCH=1")
+    # Missing dependencies must fail an enabled gate, including in CI.
+    if run_vbench and not export_dir:
+        __import__("vbench")
     if run_clip:
-        pytest.importorskip("decord", reason="RUN_CLIP=1 but decord not installed (set RUN_CLIP=0)")
+        __import__("decord")
 
-    def check_output_with_vbench(prompt, number, seed=None):
+    def check_output_with_vbench(prompt, number, seed, num_seeds=1):
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
@@ -216,36 +243,40 @@ def test_pipeline_distilled(
         if thresholds is None:
             pytest.skip(f"no VBench thresholds calibrated for height {height}")
 
-        # Gate on the average of VBENCH_SEEDS traced replays (default 5): a single clip's VBench score
-        # is too noisy to gate on — dynamic_degree is near-binary per clip — so score the set together
-        # (VBench averages over a directory). The primary clip (`number`, `seed`) is already rendered;
-        # the rest are cheap warm replays. A single-clip caller (no seed) or OUTPUT_PATH (one pinned
-        # filename) keeps the one-clip path.
-        num_seeds = int(os.environ.get("VBENCH_SEEDS", "5"))
-        if seed is None or num_seeds <= 1 or os.environ.get("OUTPUT_PATH"):
-            output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
-            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
-            return
+        # VBENCH_TEMPORAL_WIDTH > 0 records vbench_cpu.score_clip_ci as the bundle's scorer: motion_smoothness
+        # and dynamic_degree are scored on a copy downscaled to that width so the full-size clips score within
+        # the leg's time; 0 or unset scores everything at full resolution.
+        temporal_width = int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0"))
+        scorer = (
+            {
+                "scorer": "models.tt_dit.utils.vbench_cpu:score_clip_ci",
+                "scorer_kwargs": {"temporal_width": temporal_width},
+            }
+            if temporal_width
+            else {}
+        )
+        seeds = [seed + k for k in range(num_seeds)]
 
-        cwd = os.path.abspath(os.getcwd())
-
-        with tempfile.TemporaryDirectory() as vbench_dir:
-
-            def _link(idx: int, mp4_number: int) -> None:
-                # The render always lands directly in CWD; resolve the path and confirm it stays there so
-                # the number threaded into the filename can't escape it, and give the link a plain integer
-                # name so nothing dynamic reaches the destination path either.
-                src = os.path.abspath(os.path.join(cwd, f"ltx_av_fast_{width}x{height}_{mp4_number}.mp4"))
-                if os.path.dirname(src) != cwd:
-                    raise ValueError(f"render path escaped the working dir: {src!r}")
-                os.symlink(src, os.path.join(vbench_dir, f"seed_{idx}.mp4"))
-
-            _link(0, number)
-            for k in range(1, num_seeds):
-                run(prompt=prompt, number=1000 + k, seed=seed + k)
-                _link(k, 1000 + k)
-            logger.info(f"VBench gate averaged over {num_seeds} seeds (base seed {seed})")
-            assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
+        with tempfile.TemporaryDirectory() as scratch:
+            bundle = vbench_bundle.create_bundle(export_dir or os.path.join(scratch, "vbench"))
+            # The clip at `seed` is copied from where it was rendered (OUTPUT_PATH if pinned, which then
+            # keeps the requested seed's video); the replays render straight into the bundle.
+            rendered = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+            shutil.copyfile(rendered, vbench_bundle.clip_path(bundle, 0, seeds[0]))
+            for k, clip_seed in enumerate(seeds[1:], start=1):
+                run(
+                    prompt=prompt,
+                    number=1000 + k,
+                    seed=clip_seed,
+                    output_path=str(vbench_bundle.clip_path(bundle, 0, clip_seed)),
+                )
+            vbench_bundle.write_manifest(
+                bundle, prompts=[vbench_bundle.GatePrompt(prompt, thresholds)], seeds=seeds, **scorer
+            )
+            if export_dir:
+                logger.info(f"VBench bundle written to {export_dir}; scored after pytest")
+            else:
+                vbench_bundle.evaluate(bundle)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
         # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each
@@ -292,6 +323,21 @@ def test_pipeline_distilled(
             f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
         )
 
+    def check_steady_state_timing(timings):
+        # Rank 0 generates, so only it has timings; I2V and uncalibrated configs are not gated.
+        limits = None if image_path else FAST_T2V_TIMING_LIMITS.get((mesh_shape, height, width, num_frames))
+        if not timings or limits is None:
+            logger.info("No steady-state timing limits for this config; skipping the timing check")
+            return
+        measured = dict(timings)
+        measured["Total"] = sum(measured.values())
+        failures = [
+            f"{stage} = {measured.get(stage, float('nan')):.2f}s outside [{lower}, {upper}]s"
+            for stage, (lower, upper) in limits.items()
+            if not lower <= measured.get(stage, float("nan")) <= upper
+        ]
+        assert not failures, "Steady-state timing out of range:\n" + "\n".join(failures)
+
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))
         run(prompt=prompt, number=0, seed=seed)
@@ -304,13 +350,16 @@ def test_pipeline_distilled(
             run(prompt=steady_state_prompt, number=1, seed=seed)
             logger.info("=== traced steady-state pass (gen #2, pure replay) ===")
             run(prompt=replay_prompt, number=2, seed=seed)
+            # The VBench seed replays overwrite last_timings, so keep gen #2's now.
+            steady_state_timings = list(getattr(pipeline, "last_timings", None) or [])
             # Gate gen #2: a corrupted full-replay pass is the failure this structure exists to
             # catch, and gen #1 still has a capture in it.
             check_output_with_clip(replay_prompt, 2)
-            check_output_with_vbench(replay_prompt, 2, seed=seed)
+            check_output_with_vbench(replay_prompt, 2, seed, num_seeds=int(os.environ.get("VBENCH_SEEDS", "5")))
+            check_steady_state_timing(steady_state_timings)
         else:
             check_output_with_clip(prompt, 0)
-            check_output_with_vbench(prompt, 0)
+            check_output_with_vbench(prompt, 0, seed)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -320,7 +369,7 @@ def test_pipeline_distilled(
                 break
             run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, i)
-            check_output_with_vbench(prompt, i)
+            check_output_with_vbench(prompt, i, i)
 
     if traced:
         pipeline.release_traces()
@@ -502,6 +551,14 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
     # i2v conditioned on that frame
     i2v = tmp_path / "i2v.mp4"
     _gen(i2v, [(str(cond), 0, strength)])
+    # Publish the Fast I2V generation rate for the dashboard (#58596). This test generates through
+    # _gen and never calls print_ltx_timing_table, so report directly from the i2v run's timings.
+    # No-op outside CI (report_generation_rate -> report_vision_fps guards on IS_CI_ENV).
+    i2v_timings = getattr(pipeline, "last_timings", None)
+    if i2v_timings:
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate("ltx-2.3-fast-i2v", sum(secs for _, secs in i2v_timings), num_frames, batch_size=1)
     if os.environ.get("LTX_I2V_OUT"):
         shutil.copy(str(i2v), os.environ["LTX_I2V_OUT"])
 

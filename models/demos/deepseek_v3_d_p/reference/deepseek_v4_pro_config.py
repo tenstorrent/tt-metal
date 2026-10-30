@@ -17,20 +17,30 @@ class DeepSeekV4ProConfig:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
-    # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
-    # token count on the 7168x3072 routed-expert shape (1.24-3.14x across 0-5120 tokens),
-    # so there is no crossover to place a threshold at. A bound this far above any
-    # per-expert region leaves the composite an empty band, which TtRoutedExpert reads as
-    # 'fused owns the layer' and drops the composite dispatch entirely.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. On the 7168x3072 routed-expert
+    # shape the composite already wins from 256 and gives the band back only at 576, where its
+    # tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over that
+    # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
+    # Not enabled: only Kimi K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 2**31 - 1
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
     HEAD_DIM = 512
 
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 6
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 5.9% on hot_expert traffic and
+    # nothing on balanced, for 35 -> 17 MB a chip.
+    COMBINE_FWD_REDUCTION = 16
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at +1.8% balanced and +4.9% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1
     # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.
     NUM_EXPERT_GROUPS = 1
@@ -45,7 +55,11 @@ class DeepSeekV4ProConfig:
 
     # Model architecture
     NUM_LAYERS = 61
+    NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
+    # Per-layer attention kind as config.json's compress_ratios encodes it: 0 sliding, 4 CSA, 128 HCA.
+    # Two bootstrap layers, then CSA / HCA alternating from layer 2.
+    COMPRESS_RATIOS = (128, 128) + tuple(4 if i % 2 == 0 else 128 for i in range(NUM_LAYERS - 2))
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
 
@@ -64,6 +78,12 @@ class DeepSeekV4ProConfig:
     # Compressed attention config
     COMPRESS_RATES = {"compressed_sparse_attention": 4, "heavily_compressed_attention": 128}
     COMPRESS_ROPE_THETA = 160000.0
+    # YaRN scaling, as stated in config.json rope_scaling. It reaches the compressed branches only:
+    # DeepseekV4Config folds these into rope_parameters["compress"] and leaves the sliding rope plain.
+    ROPE_SCALING_FACTOR = 16
+    ROPE_SCALING_ORIGINAL_MAX_POSITION_EMBEDDINGS = 65536
+    ROPE_SCALING_BETA_FAST = 32
+    ROPE_SCALING_BETA_SLOW = 1
     HC_MULT = 4
     HC_SINKHORN_ITERS = 20
     HC_EPS = 1.0e-6
@@ -71,5 +91,9 @@ class DeepSeekV4ProConfig:
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
     ROPE_THETA = 10000
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    # Read at runtime by the shared expert only; the routed kernel bakes the same value at compile
+    # time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     SWIGLU_LIMIT = 10.0
     MAX_POSITION_EMBEDDINGS = 1048576

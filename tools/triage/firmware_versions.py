@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
-from triage_hw_utils import read_tag
+from triage_hw_utils import read_tag, device_has_firmware
 
 from run_checks import run as get_run_checks
 
@@ -36,7 +36,9 @@ class FirmwareVersionsRow:
     cm_fw: str = triage_field("CM FW")
 
 
-def get_firmware_versions(device: Device) -> FirmwareVersionsRow:
+def get_firmware_versions(device: Device) -> FirmwareVersionsRow | None:
+    if not device_has_firmware(device):
+        return None
     device_id = device.id
     return FirmwareVersionsRow(
         eth_fw=read_tag(device_id, "ETH_FW_VERSION"),

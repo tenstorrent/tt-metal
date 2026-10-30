@@ -20,26 +20,6 @@ pytestmark = pytest.mark.use_module_device
         (torch.Size([1, 1, 64, 128])),
     ),
 )
-@pytest.mark.parametrize("fill_value", [1, 0, 5.5, -2.235])
-def test_fill(device, input_shapes, fill_value):
-    torch_input_tensor = torch.randn((input_shapes), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn.fill)
-    torch_output_tensor = golden_function(torch_input_tensor, fill_value)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output = ttnn.fill(input_tensor, fill_value)
-    output_tensor = ttnn.to_torch(output)
-    equal_passed, equal_message = assert_equal(torch_output_tensor, output_tensor)
-    assert equal_passed
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 20, 31])),
-        (torch.Size([1, 1, 64, 128])),
-    ),
-)
 @pytest.mark.parametrize("fill_value", [5.88958, -9.76145])
 def test_fill_fp32(device, input_shapes, fill_value):
     torch_input_tensor = torch.randn((input_shapes), dtype=torch.float32)

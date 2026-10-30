@@ -7,6 +7,7 @@
 #include <optional>
 
 #include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -30,7 +31,9 @@ Tensor high_bw_all_gather(
     // Trace-safe active extent: 1-element uint32 tensor holding this chunk's start position in the
     // gathered dim; the reader derives the extent from it. Mutually exclusive with gathered_dim_size.
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
-    uint32_t gathered_slab_global = 0);
+    uint32_t gathered_slab_global = 0,
+    const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

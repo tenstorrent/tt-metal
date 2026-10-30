@@ -47,14 +47,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
         "untilize_variable_num_blocks_metal2.cpp";
 
-    auto* device = a.device();
-
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t output_tensor_width = output.padded_shape()[-1];
@@ -122,7 +120,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     uint32_t output_element_size = output.element_size();
@@ -164,17 +162,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
              {"output_tensor_width", output_tensor_width},
              {"output_tensor_height", output_tensor_height}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{COMPUTE_SRC},

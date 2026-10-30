@@ -16,7 +16,7 @@ void kernel_main() {
     int32_t sin_angle = static_cast<int32_t>(get_arg_val<uint32_t>(4));
     int32_t center_x = static_cast<int32_t>(get_arg_val<uint32_t>(5));
     int32_t center_y = static_cast<int32_t>(get_arg_val<uint32_t>(6));
-    uint32_t fill_value_bf16 = get_arg_val<uint32_t>(7);
+    uint32_t fill_value_bits = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(1);
@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t input_stick_nbytes_unaligned = get_compile_time_arg_val(8);
     constexpr bool fill_is_zero = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t burst_size = get_compile_time_arg_val(10);
+    constexpr uint32_t element_size = input_stick_nbytes_unaligned / input_channels;
 
     constexpr auto src_args = TensorAccessorArgs<11>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
@@ -43,14 +44,21 @@ void kernel_main() {
         zero_out_page(noc, fill_dfb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
-        const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
-        const uint32_t num_pairs = input_channels / 2;
-        for (uint32_t c = 0; c < num_pairs; c++) {
-            fill_ptr32[c] = fill_value_packed;
-        }
-        if (input_channels & 1) {
-            volatile tt_l1_ptr uint16_t* fill_ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
-            fill_ptr16[input_channels - 1] = static_cast<uint16_t>(fill_value_bf16);
+        if constexpr (element_size == 2) {
+            const uint32_t fill_value_packed = (fill_value_bits << 16) | fill_value_bits;
+            const uint32_t num_pairs = input_channels / 2;
+            for (uint32_t c = 0; c < num_pairs; c++) {
+                fill_ptr32[c] = fill_value_packed;
+            }
+            if (input_channels & 1) {
+                volatile tt_l1_ptr uint16_t* fill_ptr16 =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
+                fill_ptr16[input_channels - 1] = static_cast<uint16_t>(fill_value_bits);
+            }
+        } else {
+            for (uint32_t c = 0; c < input_channels; c++) {
+                fill_ptr32[c] = fill_value_bits;
+            }
         }
     }
 

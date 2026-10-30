@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax)
 
 set_target_properties(
@@ -18,7 +18,12 @@ set_target_properties(
 
 # Headers too: the dataflow kernels include the shared statistics layout, and JIT
 # compiles from this installed file set rather than from a source checkout.
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.h
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax

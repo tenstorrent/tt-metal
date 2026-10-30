@@ -553,6 +553,7 @@ void bind_unary_operation_with_int_parameter(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -662,6 +663,7 @@ void bind_softplus(nb::module_& mod) {
             threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -712,6 +714,7 @@ void bind_xielu(nb::module_& mod) {
             alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -764,6 +767,7 @@ void bind_unary_rdiv(
             {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -822,6 +826,7 @@ void bind_tanh_like(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             fast_and_approximate_mode (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -872,6 +877,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1056,6 +1062,7 @@ void bind_sigmoid(nb::module_& mod) {
             mode (ttnn.SigmoidMode, optional): Select sigmoid mode to use. Defaults to `SigmoidMode.Accurate`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1156,6 +1163,7 @@ void bind_identity(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1699,8 +1707,8 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         R"doc(The last dimension of the input tensor must be even.)doc");
     bind_unary_operation_subcoregrids<"deg2rad">(
         mod,
@@ -1949,10 +1957,10 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite_2param<"var_hw", &ttnn::var_hw>(
         mod,
-        R"doc(Computes the variance across the height (H) and width (W) dimensions for each batch and channel. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population variance over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W. Both means divide by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"std_hw", &ttnn::std_hw>(
         mod,
-        R"doc(Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population standard deviation over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W, dividing by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"normalize_hw", &ttnn::normalize_hw>(
         mod,
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",

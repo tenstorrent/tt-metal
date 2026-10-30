@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <algorithm>
+#include <utility>
 #include <cstdint>
 #include <vector>
 
@@ -14,7 +14,6 @@
 namespace ttnn::operations::experimental::indexer_score::program::ring_schedule {
 
 using ArrivalWaves = std::vector<std::vector<uint32_t>>;
-using WorkList = std::vector<std::vector<std::vector<uint32_t>>>;
 
 struct RingWrites {
     uint32_t forward_writes_expected;
@@ -50,49 +49,6 @@ inline ArrivalWaves arrival_waves(uint32_t ring_size, uint32_t ring_index, RingW
 // Linear and Ring-2 do not have paired bidirectional arrival waves; retain their existing lane assignment.
 inline bool rotation_enabled(ttnn::ccl::Topology topology, uint32_t ring_size) {
     return topology == ttnn::ccl::Topology::Ring && ring_size > 2;
-}
-
-inline uint32_t wave_column_shift(uint32_t wave, uint32_t wave_count, uint32_t column_count) {
-    // Stagger consecutive remote waves by alternating one- and two-column steps. This distributes partial
-    // KC-unit tails more broadly than a unit stride while keeping neighboring waves close on the physical grid.
-    const uint32_t column_stride = std::max(1u, column_count / (wave_count + 1));
-    return ((wave + wave / 2) * column_stride) % column_count;
-}
-
-// Build each (row-block, column) lane's shard-major list of physical K-tile starts. Rotation changes only which
-// column residue a lane owns in paired arrival waves. It is a cyclic column permutation within each row block, so
-// every KC unit remains in exactly one lane, adjacent row blocks retain their paired DRAM access pattern, and
-// paired shards retain matching, monotonically increasing offsets.
-inline WorkList make_work_list(
-    const ArrivalWaves& waves,
-    uint32_t units_per_shard,
-    uint32_t tiles_per_shard,
-    uint32_t k_tiles_per_unit,
-    uint32_t num_blocks,
-    uint32_t cols_used,
-    bool rotate_waves) {
-    WorkList work_list(num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
-    const uint32_t lane_count = num_blocks * cols_used;
-    const uint32_t wave_count = static_cast<uint32_t>(waves.size());
-
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        for (uint32_t wave = 0; wave < wave_count; ++wave) {
-            // Only paired forward/backward arrivals need rotation. The local shard and an even Ring's final
-            // opposite shard are singleton waves and retain the natural mapping.
-            const uint32_t column_shift =
-                rotate_waves && waves[wave].size() > 1 ? wave_column_shift(wave, wave_count, cols_used) : 0;
-            for (uint32_t col = 0; col < cols_used; ++col) {
-                const uint32_t source_col = (col + cols_used - column_shift) % cols_used;
-                const uint32_t source_lane = block + source_col * num_blocks;
-                for (uint32_t unit = source_lane; unit < units_per_shard; unit += lane_count) {
-                    for (uint32_t shard : waves[wave]) {
-                        work_list[block][col].push_back(shard * tiles_per_shard + unit * k_tiles_per_unit);
-                    }
-                }
-            }
-        }
-    }
-    return work_list;
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::program::ring_schedule

@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
-from models.common.utility_functions import is_blackhole, run_for_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, run_for_blackhole, skip_for_blackhole
 
 import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
 
@@ -76,17 +76,19 @@ GROUP_NORM_ROW_MAJOR_SHAPES = [
         (1, 512 // 4, 512, 512, 32 // 4, 8, 8, 8),
         (1, 256 // 4, 512, 512, 32 // 4, 4, 8, 8),
         (1, 256 // 4, 1024, 1024, 32 // 4, 16, 8, 8),
-        # for test below, PCC drops to 0.9565977077851433 of welford_normal and welford_reciprocal
+        # For the test below, PCC drops to 0.9565977077851433 for both statistics modes.
         (1, 128 // 4, 1024, 1024, 32 // 4, 8, 8, 8),
         # mochi
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
 @pytest.mark.parametrize("specify_grid", [True, False])
-def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid):
+def test_group_norm_DRAM(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
+):
     base.test_group_norm_DRAM(
-        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
     )
 
 
@@ -172,13 +174,13 @@ def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device, expect_error):
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
 @pytest.mark.parametrize("specify_grid", [True, False])
 def test_group_norm_no_input_mask_DRAM(
-    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
 ):
     base.test_group_norm_no_input_mask_DRAM(
-        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
     )
 
 
@@ -192,13 +194,28 @@ def test_group_norm_no_input_mask_DRAM(
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_DRAM_SHAPES)
-@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_DRAM_unit_shapes(
-    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
 ):
     base.test_group_norm_DRAM(
-        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
+    )
+
+
+_GROUP_NORM_DRAM_NIGHTLY_ONLY = [s for s in base.GROUP_NORM_DRAM_SHAPES if s not in base.GROUP_NORM_DRAM_SANITY_SHAPES]
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", _GROUP_NORM_DRAM_NIGHTLY_ONLY)
+@pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_group_norm_DRAM_model_shapes(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
+):
+    base.test_group_norm_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
     )
 
 
@@ -206,13 +223,13 @@ def test_group_norm_DRAM_unit_shapes(
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES
 )
-@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_no_input_mask_DRAM_unit_shapes(
-    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
 ):
     base.test_group_norm_no_input_mask_DRAM(
-        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
     )
 
 
@@ -251,7 +268,7 @@ def test_group_norm_DRAM_oft_unit_shapes(
 @skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_ROW_MAJOR_SHAPES)
-@pytest.mark.parametrize("welford_mode", ["legacy"])
+@pytest.mark.parametrize("statistics_mode", ["tile_reduction"])
 @pytest.mark.parametrize(
     "input_layout, output_layout",
     [
@@ -271,7 +288,7 @@ def test_group_norm_DRAM_row_major(
     num_out_blocks,
     cores_y,
     cores_x,
-    welford_mode,
+    statistics_mode,
     input_layout,
     output_layout,
 ):
@@ -285,14 +302,14 @@ def test_group_norm_DRAM_row_major(
         num_out_blocks,
         cores_y,
         cores_x,
-        welford_mode,
+        statistics_mode,
         use_input_mask=True,
         input_layout=input_layout,
         output_layout=output_layout,
     )
 
 
-# Welford + interleaved ROW_MAJOR must fail (legacy-only feature).
+# Two-pass statistics with interleaved ROW_MAJOR must fail; this layout is tile-reduction only.
 @skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
 @pytest.mark.parametrize(
@@ -304,7 +321,7 @@ def test_group_norm_DRAM_row_major(
     ],
     ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
 )
-def test_group_norm_DRAM_row_major_rejects_welford(device, input_layout, output_layout, expect_error):
+def test_group_norm_DRAM_row_major_rejects_two_pass(device, input_layout, output_layout, expect_error):
     N, C, H, W = 1, 480, 1, 64
     num_groups = 8
     grid_size = ttnn.CoreGrid(y=1, x=1)
@@ -319,7 +336,7 @@ def test_group_norm_DRAM_row_major_rejects_welford(device, input_layout, output_
     if input_layout == ttnn.TILE_LAYOUT:
         tt_input = ttnn.tilize_with_zero_padding(tt_input, use_multicore=True)
 
-    with expect_error(RuntimeError, "not supported on the Welford path"):
+    with expect_error(RuntimeError, "not supported on the SFPU two-pass path"):
         ttnn.group_norm(
             tt_input,
             num_groups=num_groups,
@@ -444,7 +461,7 @@ def test_group_norm_DRAM_row_major_no_mcast_large_block_ht(device):
         16,
         8,
         8,
-        "legacy",
+        "tile_reduction",
         use_input_mask=True,
         input_layout=ttnn.TILE_LAYOUT,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,

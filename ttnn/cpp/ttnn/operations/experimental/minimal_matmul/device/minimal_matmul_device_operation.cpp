@@ -29,13 +29,13 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         "minimal_matmul operands must be on device");
     TT_FATAL(act_tensor.device() == weight_tensor.device(), "minimal_matmul inputs must reside on the same device");
     TT_FATAL(
-        act_tensor.buffer() != nullptr && weight_tensor.buffer() != nullptr,
+        act_tensor.is_allocated() && weight_tensor.is_allocated(),
         "minimal_matmul inputs must be allocated in device buffers");
     if (has_bias) {
         const auto& bias_tensor = *bias_ptr;
         TT_FATAL(bias_tensor.storage_type() == StorageType::DEVICE, "minimal_matmul bias must be on device");
         TT_FATAL(bias_tensor.device() == act_tensor.device(), "minimal_matmul bias must be on the same device");
-        TT_FATAL(bias_tensor.buffer() != nullptr, "minimal_matmul bias must be allocated in a device buffer");
+        TT_FATAL(bias_tensor.is_allocated(), "minimal_matmul bias must be allocated in a device buffer");
     }
 
     // Layout requirements: all inputs must be TILE layout
@@ -218,8 +218,8 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
         TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
         TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
-        TT_FATAL(ternary_a.buffer() != nullptr, "fused_ternary_input_a must be allocated");
-        TT_FATAL(ternary_b.buffer() != nullptr, "fused_ternary_input_b must be allocated");
+        TT_FATAL(ternary_a.is_allocated(), "fused_ternary_input_a must be allocated");
+        TT_FATAL(ternary_b.is_allocated(), "fused_ternary_input_b must be allocated");
 
         TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
         TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");
@@ -265,10 +265,16 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             cfg.N_block_size,
             cfg.subblock_w);
 
-        // Grid must be at least 1x1
+        // Grid must be at least 2x2 on WH/BH (the sender/receiver split assumes both axes span more
+        // than one core). Quasar: the factory declares only the regions/kernels that exist on the grid,
+        // so a 1xN / Nx1 / 1x1 grid (the single-core Quasar emulator) is accepted there.
+        const uint32_t min_grid_dim = act_tensor.device()->arch() == tt::ARCH::QUASAR ? 1 : 2;
         TT_FATAL(
-            cfg.compute_with_storage_grid_size.x >= 2 && cfg.compute_with_storage_grid_size.y >= 2,
-            "compute_with_storage_grid_size must be >= 2x2");
+            cfg.compute_with_storage_grid_size.x >= min_grid_dim &&
+                cfg.compute_with_storage_grid_size.y >= min_grid_dim,
+            "compute_with_storage_grid_size must be >= {}x{}",
+            min_grid_dim,
+            min_grid_dim);
 
         // Additional grid checks are performed when creating the program
         auto device_grid = act_tensor.device()->compute_with_storage_grid_size();

@@ -10,6 +10,7 @@
 namespace ttml::optimizers {
 
 NoOp::NoOp(ttml::serialization::NamedParameters parameters) : OptimizerBase(std::move(parameters)) {
+    init_param_groups({{"lr", 0.0F}}, {});
 }
 
 void NoOp::zero_grad() {
@@ -27,10 +28,12 @@ void NoOp::step() {
 serialization::StateDict NoOp::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
+    save_param_groups(dict);
     return dict;
 }
 
 void NoOp::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
 }
 
@@ -41,12 +44,4 @@ size_t NoOp::get_steps() const {
 void NoOp::set_steps(size_t steps) {
     this->m_steps = steps;
 }
-
-float NoOp::get_lr() const {
-    return 0.0f;
-}
-
-void NoOp::set_lr(float lr) {
-}
-
 }  // namespace ttml::optimizers

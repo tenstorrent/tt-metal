@@ -9,6 +9,7 @@
 - name: llk_e2e_wormhole group 1/2
   split_group: 1
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
@@ -22,10 +23,14 @@
     wh_n150_civ2:
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    PYTEST_MARKERS: "not perf and not quasar and not accuracy"
 
 - name: llk_e2e_wormhole group 2/2
   split_group: 2
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
@@ -39,10 +44,14 @@
     wh_n150_civ2:
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    PYTEST_MARKERS: "not perf and not quasar and not accuracy"
 
 - name: llk_e2e_blackhole group 1/2
   split_group: 1
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
@@ -56,10 +65,14 @@
     bh_p150b_civ2:
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    PYTEST_MARKERS: "not perf and not quasar and not accuracy"
 
 - name: llk_e2e_blackhole group 2/2
   split_group: 2
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
@@ -73,3 +86,6 @@
     bh_p150b_civ2:
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    PYTEST_MARKERS: "not perf and not quasar and not accuracy"

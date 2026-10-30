@@ -104,7 +104,7 @@ const char* StatusName(uint32_t status) {
 
 // Flat 1D UINT32 page layout: one DRAM page per logical row, page_size_bytes each.
 // num_pages rows, page_size_bytes / 4 words per row.
-TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, uint32_t num_pages) {
+TensorSpec make_zero_memory_dram_tensor_spec(uint32_t page_size_bytes, uint32_t num_pages) {
     const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
     auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -114,11 +114,20 @@ TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, uint32_t num_pag
 
 experimental::DataMovementHardwareConfig make_dm_config(tt::ARCH arch, DataMovementProcessor processor, NOC noc) {
     if (arch == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{
-            .disable_dfb_implicit_sync_for_all = true,
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
         };
     }
-    return experimental::DataMovementGen1Config{.processor = processor, .noc = noc};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx =
+            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = processor,
+                .noc = noc,
+            },
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +313,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
 
     // DRAM tensor: 0xFF everywhere, so a no-op kernel can't pass the post-zero check.
     auto tensor =
-        MeshTensor::allocate_on_device(this->device(), make_flat_dram_tensor_spec(page_size_bytes, num_pages));
+        MeshTensor::allocate_on_device(this->device(), make_zero_memory_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), stamped);
 
@@ -421,7 +430,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
     slow_dispatch::WriteToL1(this->device(), node, flag_addr, flag_init);
 
     auto tensor =
-        MeshTensor::allocate_on_device(this->device(), make_flat_dram_tensor_spec(page_size_bytes, num_pages));
+        MeshTensor::allocate_on_device(this->device(), make_zero_memory_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), stamped);
 
@@ -574,7 +583,8 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     // No host-side seeding needed: the kernel stamps the scratch non-zero and verifies the stamp
     // before zeroing it, so the all-zero check proves overload (1) ran for every target type.
 
-    auto tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages));
+    auto tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_zero_memory_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), stamped);
 

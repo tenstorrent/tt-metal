@@ -132,6 +132,18 @@
 #include "api/compute/eltwise_unary/dropout.h"
 #endif
 
+#ifdef SFPU_OP_RAND_INCLUDE
+#include "api/compute/eltwise_unary/rand.h"
+#endif
+
+#ifdef SFPU_OP_EMA_INCLUDE
+#include "api/compute/ema.h"
+#endif
+
+#ifdef SFPU_OP_RESHUFFLE_INCLUDE
+#include "api/compute/reshuffle.h"
+#endif
+
 #ifdef SFPU_OP_FILL_INCLUDE
 #include "api/compute/eltwise_unary/fill.h"
 #endif
@@ -200,6 +212,38 @@
 #include "api/compute/eltwise_unary/mish.h"
 #endif
 
+#ifdef SFPU_OP_RDIV_INCLUDE
+#include "api/compute/eltwise_unary/rdiv.h"
+#endif
+
+#ifdef SFPU_OP_TANH_DERIVATIVE_INCLUDE
+#include "api/compute/eltwise_unary/tanh_derivative.h"
+#endif
+
+#ifdef SFPU_OP_INT_SUM_INCLUDE
+#include "api/compute/eltwise_unary/sfpu_int_sum.h"
+#endif
+
+#ifdef SFPU_OP_LERP_INCLUDE
+#include "api/compute/eltwise_unary/lerp.h"
+#endif
+
+#ifdef SFPU_OP_ADDCDIV_INCLUDE
+#include "api/compute/eltwise_unary/addcdiv.h"
+#endif
+
+#ifdef SFPU_OP_ADDCMUL_INCLUDE
+#include "api/compute/eltwise_unary/addcmul.h"
+#endif
+
+#ifdef SFPU_OP_SNAKE_BETA_INCLUDE
+#include "api/compute/eltwise_unary/snake_beta.h"
+#endif
+
+#ifdef SFPU_OP_MASK_INCLUDE
+#include "api/compute/mask.h"
+#endif
+
 #ifdef SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "api/compute/compute_kernel_api.h"
 #endif
@@ -226,4 +270,65 @@
 
 #ifdef SFPU_OP_BINARY_MAX_MIN_INCLUDE
 #include "api/compute/binary_max_min.h"
+#endif
+
+#ifdef SFPU_OP_COPY_DEST_INCLUDE
+#include "api/compute/copy_dest_values.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_ISCLOSE_INCLUDE
+#include "api/compute/isclose.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_FMOD_INCLUDE
+#include "api/compute/binary_fmod.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_REMAINDER_INCLUDE
+#include "api/compute/binary_remainder.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_DIV_INT32_INCLUDE
+#include "api/compute/div_int32_sfpu.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_DIV_INT32_FLOOR_INCLUDE
+#include "api/compute/div_int32_floor.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_BITWISE_INCLUDE
+#include "api/compute/binary_bitwise_sfpu.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_GCD_INCLUDE
+#include "api/compute/gcd.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_LCM_INCLUDE
+#include "api/compute/lcm.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_BCAST_INCLUDE
+#include "api/compute/sfpu_binary_bcast.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_SHIFT_INCLUDE
+#include "api/compute/binary_shift.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_LOGADDEXP_INCLUDE
+#include "api/compute/logaddexp.h"
+#include "api/compute/logaddexp2.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_SUB_INT_INCLUDE
+#include "api/compute/sub_int_sfpu.h"
+#endif
+
+#ifdef SFPU_OP_SITU_GLU_INCLUDE
+#include "api/compute/situ_glu.h"
+#endif
+
+#ifdef SFPU_OP_CLAMPED_SILU_GLU_INCLUDE
+#include "api/compute/clamped_silu_glu.h"
 #endif

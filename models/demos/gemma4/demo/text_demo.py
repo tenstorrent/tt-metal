@@ -60,17 +60,17 @@ from models.demos.gemma4.tt.generator_trace import (
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     PagedAttentionConfig,
     get_padded_prefill_len,
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
+from models.ttt_compat.tt.model_config import determine_device_name
 
-_TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
-_CONTEXT_CACHE_DIR = "models/tt_transformers/demo/context_cache"
+_TT_TRANSFORMERS_PROMPTS_DIR = "models/ttt_compat/demo/sample_prompts"
+_CONTEXT_CACHE_DIR = "models/ttt_compat/demo/context_cache"
 
 _MESH_DEVICE_SHAPES = {
     # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
@@ -526,7 +526,10 @@ def run_batch_generation(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 enable_trace=enable_decode_trace,
-                reset_batch=(iteration == 0),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             if isinstance(decode_out, tuple):
                 logits = decode_out[0]
@@ -571,7 +574,7 @@ def run_batch_generation(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
-            ml_model_name="gemma4",
+            ml_model_name=os.environ.get("HF_MODEL", "gemma4"),
             ml_model_type="llm",
             device_name=determine_device_name(mesh_device),
             num_layers=model_args.num_hidden_layers,
@@ -722,6 +725,10 @@ def _run_generation_via_generator(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=device_sampling_params,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         if device_sampling_params is not None:
             out_tok = decode_out.long().view(batch_size, 1)
@@ -981,6 +988,8 @@ def run_generation(
             tb.print_exc()
             raise
         warmup_logits.deallocate(True)
+        # Finish queued warmup work before starting the measured TTFT window.
+        ttnn.synchronize_device(mesh_device)
         profiler.end(f"compile_prefill", iteration=prompt_idx)
         logger.info(f"Prefill warmup done in {profiler.get_duration('compile_prefill', iteration=prompt_idx):.2f}s")
 
@@ -1341,7 +1350,7 @@ def run_generation(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo_perf",
-            ml_model_name="gemma4",
+            ml_model_name=os.environ.get("HF_MODEL", "gemma4"),
             ml_model_type="llm",
             device_name=determine_device_name(mesh_device),
             num_layers=num_layers or model_args.num_hidden_layers,

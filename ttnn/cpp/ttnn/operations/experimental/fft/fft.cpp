@@ -15,7 +15,7 @@
 #include "device/rebank_rm_device_operation.hpp"
 #include "device/rebank_rm_merge_device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/types.hpp"  // ttnn::Shape, ttnn::SmallVector
+#include "ttnn/types.hpp"  // ttnn::Shape, ttsl::SmallVector
 
 // Bluestein: included after fft.hpp to avoid circular dependency
 #include "ttnn/operations/experimental/fft/bluestein.hpp"
@@ -89,7 +89,7 @@ std::pair<uint32_t, uint32_t> pick_factorization(uint32_t N) {
 }
 
 ttnn::Shape make_shape(std::initializer_list<uint32_t> dims) {
-    ttnn::SmallVector<uint32_t> v;
+    ttsl::SmallVector<uint32_t> v;
     v.reserve(dims.size());
     for (auto d : dims) {
         v.push_back(d);
@@ -626,7 +626,7 @@ static std::tuple<ttnn::Tensor, ttnn::Tensor> fft_three_pass_auto(
     // Restore the caller's original rank: 2-D (B, N) inputs stay 2-D; multi-dim
     // inputs (e.g. (b0, b1, N)) are reshaped back so we don't silently flatten
     // the leading dims (matches bluestein_dispatch's restore behaviour).
-    ttnn::SmallVector<uint32_t> out_dims;
+    ttsl::SmallVector<uint32_t> out_dims;
     for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
         out_dims.push_back(static_cast<uint32_t>(shape[d]));
     }
@@ -671,7 +671,7 @@ static std::tuple<ttnn::Tensor, ttnn::Tensor> bluestein_dispatch(
 
     // Restore original leading dims if they were multi-dim
     if (shape.size() != 2u) {
-        ttnn::SmallVector<uint32_t> orig_dims;
+        ttsl::SmallVector<uint32_t> orig_dims;
         for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
             orig_dims.push_back(static_cast<uint32_t>(shape[d]));
         }
@@ -959,12 +959,12 @@ static void preflight_fft_input(
 
     auto* dev = real.device();
     TT_FATAL(dev != nullptr, "{}: input tensor must reside on a device.", op_name);
+    const auto arch = dev->arch();
     TT_FATAL(
-        dev->arch() == tt::ARCH::WORMHOLE_B0,
-        "{}: only Wormhole B0 is supported (got arch={}). "
-        "Blackhole/Grayskull paths are not validated; use ttnn.experimental.fft only on WH.",
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+        "{}: only Wormhole B0 and Blackhole are supported (got arch={}).",
         op_name,
-        static_cast<int>(dev->arch()));
+        static_cast<int>(arch));
 
     if (imag.has_value()) {
         const auto& im = *imag;

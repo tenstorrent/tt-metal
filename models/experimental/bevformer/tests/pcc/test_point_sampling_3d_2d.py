@@ -16,8 +16,8 @@ from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import (
     point_sampling_3d_to_2d_ttnn,
 )
 
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
+from models.experimental.bevformer.tests.common import (
+    PRESETS,
     img_metas_for_dataset,
     lidar2img_for_dataset,
 )
@@ -36,6 +36,9 @@ ENABLE_LOGGING = True
 # Default Test Configuration                                                  #
 PRINT_DETAILED_COMPARISON_FLAG = False
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
+
 
 # Test functions
 @pytest.mark.parametrize(
@@ -47,7 +50,6 @@ PRINT_DETAILED_COMPARISON_FLAG = False
         ("carla_base", 200, 200, 1, 1.0, 0.0, 0, 0.0),  # CARLA base model
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [42])
 def test_generate_reference_points(
     device,
@@ -65,12 +67,9 @@ def test_generate_reference_points(
     torch.manual_seed(seed)
 
     # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
+    config = PRESETS[config_name]
 
-    dataset_config = preset_config.dataset_config
-    z_cfg = dataset_config.z_cfg
+    z_cfg = config.z_cfg
 
     # --------------------------------------------------------------------------- #
     # Function Execution                                                          #
@@ -138,7 +137,6 @@ def test_generate_reference_points(
         ("carla_base", 200, 200, 1, 0.999, 5.21, 0.02, 0.5),  # CARLA base model
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [42])
 def test_point_sampling_3d_to_2d(
     device,
@@ -156,16 +154,12 @@ def test_point_sampling_3d_to_2d(
     torch.manual_seed(seed)
 
     # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = preset_config.dataset_config
+    config = PRESETS[config_name]
 
     # Extract parameters from configs
-    pc_range = dataset_config.pc_range
-    z_cfg = dataset_config.z_cfg
-    num_cams = dataset_config.num_cams
+    pc_range = config.pc_range
+    z_cfg = config.z_cfg
+    num_cams = config.num_cams
     eps = 1e-5
 
     # --------------------------------------------------------------------------- #
@@ -174,8 +168,8 @@ def test_point_sampling_3d_to_2d(
 
     # The deterministic rig keeps bev_mask a property of the geometry rather than
     # of an RNG draw, so this test's projections match the encoder's.
-    lidar2img = lidar2img_for_dataset(dataset_config).unsqueeze(0).repeat(batch_size, 1, 1, 1)
-    img_metas = img_metas_for_dataset(dataset_config, batch_size)
+    lidar2img = lidar2img_for_dataset(config).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+    img_metas = img_metas_for_dataset(config, batch_size)
 
     # Generate reference points with batch dimension
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))

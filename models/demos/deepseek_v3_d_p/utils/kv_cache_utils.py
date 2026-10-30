@@ -5,6 +5,7 @@
 Utilities for KVPE cache initialization and management.
 """
 
+import math
 import socket
 from dataclasses import dataclass
 from enum import Enum
@@ -13,13 +14,15 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.kv_bank_alignment import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    check_kv_bank_aligned,
+)
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
-# This is a predefined constant for the number of contiguous tokens in a DRAM bank
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # Nominal DRAM bank count for a full (unharvested) Blackhole part. Prefer get_num_dram_banks(device)
 # at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
@@ -181,16 +184,20 @@ class MlaKvCache:
             intermediates["tt_kvpe"] = ttnn.clone(packed)
         return packed
 
+    def prepare_scaled_fp8_inputs(
+        self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, keep_rope_tiled: bool = False
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Quantize latent directly and expose cache fields, optionally retaining tiled RoPE."""
+        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            latent, round_scale_to_power_of_two=True
+        )
+        rope_rm = rope if keep_rope_tiled else ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        return latent_fp8, scales, rope_rm
+
     def _pack_scaled_fp8(
         self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, intermediates: dict[str, ttnn.Tensor] | None
     ) -> ttnn.Tensor:
-        latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
-        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-            latent_rm, round_scale_to_power_of_two=True
-        )
-        if latent_rm is not latent:
-            ttnn.deallocate(latent_rm)
-        rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        latent_fp8, scales, rope_rm = self.prepare_scaled_fp8_inputs(latent, rope)
         packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope_rm)
         if intermediates is not None:
             reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
@@ -266,6 +273,27 @@ def merged_num_layers(stage_layout):
     return total
 
 
+def declared_seq_shard_factor(t) -> int:
+    """Product of mesh extents over the axes whose placement shards tensor dim 2 (mirrors the op's
+    tensor_dim_shard_factor). 0 when the topology does not describe the tensor's mesh."""
+    topology = t.tensor_topology()
+    dist_dims = tuple(topology.distribution_shape())
+    placements = topology.placements()
+    if len(placements) != len(dist_dims):
+        return 0
+    factor = 1
+    for axis, placement in enumerate(placements):
+        if isinstance(placement, ttnn.PlacementShard) and placement.dim == 2:
+            factor *= dist_dims[axis]
+    return factor
+
+
+def is_tp_deduped_kv_cache(t, mesh_shape) -> bool:
+    """True when dim 2 is declared sharded over all sp*tp chips; read from the cache so readers match its allocation."""
+    sp, tp = mesh_shape
+    return tp > 1 and declared_seq_shard_factor(t) == sp * tp
+
+
 def create_kv_chunk_address_table_block_cyclic(
     config,
     mesh_device,
@@ -278,9 +306,11 @@ def create_kv_chunk_address_table_block_cyclic(
     first_layer_idx=0,
     num_my_layers=None,
     stage_layout=None,
+    layer_rows=None,
+    tp_axis=None,
 ):
     """
-    Create and populate a KV chunk address table for disaggregation (Kimi K2.6 model - non-balanced).
+    Create and populate a KV chunk address table for disaggregation (Kimi K2.7 model - non-balanced).
 
     Builds ONE table spanning every pipeline stage's layers, following tt-blaze's layer->mesh merge:
     each rank owns a contiguous LAYER range on its full mesh, and the table places each global layer's
@@ -299,6 +329,13 @@ def create_kv_chunk_address_table_block_cyclic(
         stage_layout: optional pre-gathered per-rank stage layout from allgather_kv_stage_layout().
             Pass it when the COLLECTIVE all-gather has already run on all ranks (so only rank 0 builds);
             leave None to run the all-gather inline (single-rank / tests).
+        layer_rows: table row to publish each dense cache layer at, for a model whose attention is
+            HYBRID and whose cache therefore holds fewer layers than its stage spans. Kimi-K3 writes a
+            KV slab on 24 of 93 layers, so its stages are numbered in compacted MLA-slot space and this
+            maps slot -> model layer, keeping published rows on the model's layer axis so a consumer
+            indexing by layer needs no change. None (every layer owns a slab) means row == layer, which
+            is what DeepSeek / Kimi-K2 / GLM want.
+        tp_axis: None for a TP-replicated cache, the TP axis for a deduped one (see is_tp_deduped_kv_cache).
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
@@ -322,6 +359,15 @@ def create_kv_chunk_address_table_block_cyclic(
 
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
     config.num_layers = merged_num_layers(stage_layout)
+    if layer_rows is not None:
+        # Compacted stages count SLABS, not rows, so their sum is not the published extent. Widen
+        # before construction, where extents are fixed. Same widening the merged builder applies to
+        # the index config.
+        assert len(layer_rows) == config.num_layers, (
+            f"layer_rows has {len(layer_rows)} entries but the gathered stages span "
+            f"{config.num_layers} dense cache layers; every slab needs exactly one published row"
+        )
+        config.num_layers = max(layer_rows) + 1
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
     return populate_kv_chunk_address_table_block_cyclic(
         lookup_table=lookup_table,
@@ -335,6 +381,8 @@ def create_kv_chunk_address_table_block_cyclic(
         num_users=num_users,
         config_id=0,
         stage_layout=stage_layout,
+        layer_rows=layer_rows,
+        tp_axis=tp_axis,
     )
 
 
@@ -352,6 +400,7 @@ def populate_kv_chunk_address_table_block_cyclic(
     stage_layout=None,
     layer_rows=None,
     tp_axis=None,
+    alias_rows=None,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -372,6 +421,8 @@ def populate_kv_chunk_address_table_block_cyclic(
         tp_axis: None (default) = TP-REPLICATED, one device group per row. When set (KV dedup), each
             (row, col) device holds a distinct sub-slice, so the table uses per-device singleton groups:
             linear chip row*tp + col owns tokens [seq_chunk*5120 + row*640 + col*(640/tp), +640/tp).
+        alias_rows: {alias table row: source table row}; each alias gets every location its source does.
+            Decode MTP levels that share one KV cache read level 1's rows this way. None = no aliases.
         (remaining args as in create_kv_chunk_address_table_block_cyclic)
 
     Returns:
@@ -387,6 +438,10 @@ def populate_kv_chunk_address_table_block_cyclic(
             f"the map must cover every layer the cache physically stores"
         )
         return layer_rows[dense_layer]
+
+    aliases_of = {}
+    for alias, source in (alias_rows or {}).items():
+        aliases_of.setdefault(source, []).append(alias)
 
     if stage_layout is not None:
         # ---- stage_layout-driven path (PP-capable, #48826). ----
@@ -441,6 +496,8 @@ def populate_kv_chunk_address_table_block_cyclic(
                     for slot in range(num_users):
                         for local_layer in range(count):
                             global_layer = first + local_layer
+                            table_row = _table_row(global_layer)
+                            aliases = aliases_of.get(table_row, ())
                             for seq_chunk in range(num_chunks_per_seq_len):
                                 chunk_token_start = (
                                     seq_chunk * PREFILL_CHUNK_TOKENS
@@ -455,7 +512,9 @@ def populate_kv_chunk_address_table_block_cyclic(
                                     location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                                     location.size_bytes = chunk_size_bytes
                                     location.device_group_index = group_idx
-                                    lookup_table.set(_table_row(global_layer), position, slot, location, config_id)
+                                    lookup_table.set(table_row, position, slot, location, config_id)
+                                    for alias in aliases:
+                                        lookup_table.set(alias, position, slot, location, config_id)
 
                                     curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                                     if curr_bank_id == 0:
@@ -464,7 +523,7 @@ def populate_kv_chunk_address_table_block_cyclic(
 
     # ---- Legacy single-stage path (direct call, stage_layout is None). ----
     # The pre-#48826 behavior, still exercised by direct callers that don't build a stage_layout
-    # (e.g. test_glm52_kv_cache_table and the kv_chunk_table runner): base addr / bank count derived
+    # (e.g. test_glm53_kv_cache_table and the kv_chunk_table runner): base addr / bank count derived
     # from the cache itself. tp_axis=None (TP-replicated) is tp_factor == 1 below, so both layouts run
     # the same loop: one device group per row, spanning the whole row's slice.
     host_name = socket.gethostname()
@@ -478,9 +537,10 @@ def populate_kv_chunk_address_table_block_cyclic(
     # DENSE rows the cache physically holds. With layer_rows the caller has WIDENED the published layer
     # axis to the global count (config.num_layers) while the cache still holds only its compacted rows,
     # so both the loop bound and the batch check below must use the dense count -- otherwise a compacted
-    # cache is rejected for not having num_users * global_layers slots. The stage_layout branch above is
-    # immune because it loops over each stage's own `count`.
-    num_layers = len(layer_rows) if layer_rows is not None else config.num_layers
+    # cache is rejected for not having num_users * global_layers slots. Alias rows widen it the same way
+    # with no cache rows behind them. The stage_layout branch above is immune because it loops over each
+    # stage's own `count`.
+    num_layers = len(layer_rows) if layer_rows is not None else config.num_layers - len(alias_rows or ())
 
     assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
     num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS
@@ -542,6 +602,8 @@ def populate_kv_chunk_address_table_block_cyclic(
             curr_bank_offset = 0
             for slot in range(num_users):
                 for layer in range(num_layers):
+                    table_row = _table_row(layer)
+                    aliases = aliases_of.get(table_row, ())
                     for seq_chunk in range(num_chunks_per_seq_len):
                         chunk_token_start = (
                             seq_chunk * PREFILL_CHUNK_TOKENS
@@ -554,7 +616,9 @@ def populate_kv_chunk_address_table_block_cyclic(
                             location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                             location.size_bytes = chunk_size_bytes
                             location.device_group_index = group_idx
-                            lookup_table.set(_table_row(layer), position, slot, location, config_id)
+                            lookup_table.set(table_row, position, slot, location, config_id)
+                            for alias in aliases:
+                                lookup_table.set(alias, position, slot, location, config_id)
 
                             curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                             if curr_bank_id == 0:
@@ -578,6 +642,8 @@ def populate_kv_chunk_address_table_dflash(
     num_users=1,
     config_id=0,
     chunk_size_global=PREFILL_CHUNK_TOKENS,
+    stage_layout=None,
+    first_layer=0,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from ONE HEAD of the DFlash
@@ -617,9 +683,15 @@ def populate_kv_chunk_address_table_dflash(
     per-head write/readback settles it, and getting it backwards swaps head and layer strides rather
     than failing loudly.
 
-    Single-stage only (no ``stage_layout``): the drafter is written on the last pipeline rank alone
-    (``tt_prefill_runtime`` guards the write with ``is_last_rank``), so there is no cross-stage layer
-    range to merge and the base address comes from this rank's own tensor instead of an all-gather.
+    Stages. The drafter is written on the last pipeline rank alone (``tt_prefill_runtime`` guards the
+    write with ``is_last_rank``), so unlike the block-cyclic caches it is never layer-partitioned: there
+    is no cross-stage layer range to merge. What pipeline parallelism DOES change is *who describes it* --
+    rank 0 builds and serializes the table but owns no drafter tensor. So pass ``stage_layout`` (the
+    all-gathered layout for this cache, from ``allgather_kv_stage_layout``) and the base address, bank
+    count, fabric nodes and host name come from the owning rank's gathered entry instead of local
+    handles; ranks that own no drafter cache contribute ``count == 0`` and are skipped. Omit it
+    (single-rank) and those four facts are read from ``kv_cache`` as before. ``kv_cache`` may be None
+    exactly when ``stage_layout`` is given.
 
     Args:
         lookup_table: an existing KvChunkAddressTable (single- or multi-config).
@@ -640,7 +712,14 @@ def populate_kv_chunk_address_table_dflash(
     assert sp_axis != tp_axis, f"sp_axis and tp_axis must differ; both are {sp_axis}"
     sp = mesh_shape[sp_axis]
     tp = mesh_shape[tp_axis]
-    num_layers = config.num_layers
+    # Two layer counts, and mixing them addresses the wrong DRAM: the config spans the merged table's whole
+    # layer axis (the verifier's layers, then the draft ones at first_layer), while the cache this walk
+    # describes holds only the drafter's own depth.
+    num_layers = config.num_layers - first_layer
+    assert num_layers > 0, (
+        f"drafter config spans {config.num_layers} layers with first_layer={first_layer}, leaving no draft "
+        f"layers; first_layer is the verifier's layer count, not this cache's"
+    )
 
     assert (
         num_kv_heads % tp == 0
@@ -651,14 +730,17 @@ def populate_kv_chunk_address_table_dflash(
     # allocate_dflash_kv_cache builds this tensor from its PER-DEVICE shape (allocate_tensor_on_device
     # over local_shape, then update_tensor_topology), so both dims below are local: dim 0 is the
     # unsharded user-major (slot, layer) fold and dim 1 is this chip's slice of the kv-heads.
-    assert kv_cache.shape[0] == num_users * num_layers, (
-        f"drafter cache batch dim {kv_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers}); "
-        f"the walk below assumes the user-major slot*num_layers+layer fold"
-    )
-    assert kv_cache.shape[1] == heads_per_chip, (
-        f"drafter cache head dim {kv_cache.shape[1]} != num_kv_heads({num_kv_heads}) / tp({tp}) = "
-        f"{heads_per_chip}; the per-head shard stride below would land on the wrong head"
-    )
+    # Only checkable on the rank that OWNS the cache; the stage_layout path describes a remote rank's
+    # allocation from gathered metadata and has no tensor to interrogate (see the stage note below).
+    if kv_cache is not None:
+        assert kv_cache.shape[0] == num_users * num_layers, (
+            f"drafter cache batch dim {kv_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers}); "
+            f"the walk below assumes the user-major slot*num_layers+layer fold"
+        )
+        assert kv_cache.shape[1] == heads_per_chip, (
+            f"drafter cache head dim {kv_cache.shape[1]} != num_kv_heads({num_kv_heads}) / tp({tp}) = "
+            f"{heads_per_chip}; the per-head shard stride below would land on the wrong head"
+        )
 
     assert (
         seq_len % chunk_size_global == 0
@@ -679,48 +761,267 @@ def populate_kv_chunk_address_table_dflash(
     blocks_per_chunk_local = tokens_per_chunk_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     num_chunks_per_seq_len = seq_len // chunk_size_global
 
-    host_name = socket.gethostname()
-    dram_bank_base_addr = int(kv_cache.buffer_address())
-    # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
-    num_dram_banks = get_num_dram_banks(mesh_device)
-
     col = head_idx // heads_per_chip  # the TP column that owns this head
     h_local = head_idx % heads_per_chip  # its index within that chip's head slice
 
-    for row in range(sp):
-        # One device, not one row: this head lives on exactly (row, col), and the worker would read a
-        # multi-member group as replicas. Written axis-generically so sp_axis/tp_axis can swap.
-        coord = [0, 0]
-        coord[sp_axis] = row
-        coord[tp_axis] = col
-        fabric_node_id = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
-        group_idx = lookup_table.add_device_group([fabric_node_id])
-        lookup_table.set_fabric_node_host(fabric_node_id, host_name=host_name)
+    # One walk, two sources. Single-stage (the drafter is written on THIS rank) reads the address, bank
+    # count, fabric nodes and host from local handles. Under pipeline parallelism the drafter lives on the
+    # last rank alone while rank 0 builds the table, so those four facts arrive instead through the
+    # all-gathered stage layout -- exactly as the block-cyclic builder does since #48826. Geometry
+    # (heads, head_dim, layers) needs no gather: every rank loads the same DFlashDrafterConfig.
+    if stage_layout is None:
+        assert kv_cache is not None, "single-stage dflash populate needs the local cache tensor"
+        stages = [
+            {
+                "base_addr": int(kv_cache.buffer_address()),
+                # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
+                "num_banks": get_num_dram_banks(mesh_device),
+                "fnids": [
+                    [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for c in range(mesh_shape[1])]
+                    for r in range(mesh_shape[0])
+                ],
+                "host_name": socket.gethostname(),
+                "count": num_layers,
+            }
+        ]
+    else:
+        # count == 0 is a rank that owns no drafter cache. The all-gather is collective so every rank
+        # contributes an entry; only the KV-tail rank's is real, and the others are skipped here.
+        stages = [
+            {
+                "base_addr": s["base_addr"],
+                "num_banks": s["num_banks"],
+                "fnids": s["fnids"],
+                "host_name": f"host-{s['host_tag']:08x}",  # crc32 tag rebuilt to a string (int-only allgather)
+                "count": s["count"],
+            }
+            for s in stage_layout
+            if s["count"] > 0
+        ]
+        assert len(stages) == 1, (
+            f"the drafter is built on exactly one rank (the KV tail), so exactly one gathered stage may "
+            f"carry it; got {len(stages)} with count>0"
+        )
+        assert stages[0]["count"] == num_layers, (
+            f"gathered drafter stage spans {stages[0]['count']} layers but the table config declares "
+            f"{num_layers}; the drafter is not layer-partitioned across ranks"
+        )
+        gathered_first = next(s["first_layer"] for s in stage_layout if s["count"] > 0)
+        assert gathered_first == first_layer, (
+            f"gathered drafter stage starts at layer {gathered_first} but this config was sized for "
+            f"{first_layer}; the owning rank and the table builder disagree on where the draft layers begin"
+        )
 
-        for slot in range(num_users):
-            for layer in range(num_layers):
-                # DRAM shard index of the FIRST block of this (slot, layer, local head) plane. A plane's
-                # seq blocks are contiguous in the shard grid, so the per-position term below is an add.
-                head_base_dram_shard = ((slot * num_layers + layer) * heads_per_chip + h_local) * blocks_local
-                for seq_chunk in range(num_chunks_per_seq_len):
-                    chunk_token_start = seq_chunk * chunk_size_global + row * tokens_per_chunk_local
-                    chunk_token_end = chunk_token_start + tokens_per_chunk_local
-                    # Same loop shape as populate_kv_chunk_address_table_block_cyclic — position IS the table key
-                    # rather than a value derived after the fact. enumerate recovers the block index the
-                    # shard walk needs; the tokens_per_chunk_local assert above makes block_in_chunk
-                    # exactly 0..blocks_per_chunk_local-1.
-                    for block_in_chunk, position in enumerate(
-                        range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
-                    ):
-                        dram_shard_idx = head_base_dram_shard + seq_chunk * blocks_per_chunk_local + block_in_chunk
-                        # No curr_ prefix on purpose: derived per entry, not a carried cursor as in kimi/M3.
-                        bank_id = dram_shard_idx % num_dram_banks
-                        bank_offset = (dram_shard_idx // num_dram_banks) * chunk_size_bytes
+    for stage in stages:
+        dram_bank_base_addr = stage["base_addr"]
+        num_dram_banks = stage["num_banks"]
+        host_name = stage["host_name"]
+        stage_fnids = stage["fnids"]
+
+        for row in range(sp):
+            # One device, not one row: this head lives on exactly (row, col), and the worker would read a
+            # multi-member group as replicas. Written axis-generically so sp_axis/tp_axis can swap.
+            coord = [0, 0]
+            coord[sp_axis] = row
+            coord[tp_axis] = col
+            # fnids are indexed by raw mesh coordinate, so reuse the coord built above rather than
+            # assuming sp_axis == 0.
+            fabric_node_id = stage_fnids[coord[0]][coord[1]]
+            group_idx = lookup_table.add_device_group([fabric_node_id])
+            lookup_table.set_fabric_node_host(fabric_node_id, host_name=host_name)
+
+            for slot in range(num_users):
+                for layer in range(num_layers):
+                    # DRAM shard index of the FIRST block of this (slot, layer, local head) plane. A plane's
+                    # seq blocks are contiguous in the shard grid, so the per-position term below is an add.
+                    head_base_dram_shard = ((slot * num_layers + layer) * heads_per_chip + h_local) * blocks_local
+                    for seq_chunk in range(num_chunks_per_seq_len):
+                        chunk_token_start = seq_chunk * chunk_size_global + row * tokens_per_chunk_local
+                        chunk_token_end = chunk_token_start + tokens_per_chunk_local
+                        # Same loop shape as populate_kv_chunk_address_table_block_cyclic — position IS the table key
+                        # rather than a value derived after the fact. enumerate recovers the block index the
+                        # shard walk needs; the tokens_per_chunk_local assert above makes block_in_chunk
+                        # exactly 0..blocks_per_chunk_local-1.
+                        for block_in_chunk, position in enumerate(
+                            range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+                        ):
+                            dram_shard_idx = head_base_dram_shard + seq_chunk * blocks_per_chunk_local + block_in_chunk
+                            # No curr_ prefix on purpose: derived per entry, not a carried cursor as in kimi/M3.
+                            bank_id = dram_shard_idx % num_dram_banks
+                            bank_offset = (dram_shard_idx // num_dram_banks) * chunk_size_bytes
+                            location = ttnn.experimental.disaggregation.KvCacheLocation()
+                            location.noc_addr = (bank_id << 32) | (dram_bank_base_addr + bank_offset)
+                            location.size_bytes = chunk_size_bytes
+                            location.device_group_index = group_idx
+                            # `layer` indexes the drafter's own cache; the table key continues the
+                            # verifier's layer axis, so the draft layers land at first_layer onwards.
+                            lookup_table.set(first_layer + layer, position, slot, location, config_id)
+    return lookup_table
+
+
+def _kda_local_segments(geometry, kind: str, tp_col: int):
+    """One device's segments of one layer: ``(global segment, shard index within the layer's batch)``."""
+    if kind == "kda_recurrent":
+        return [
+            (geometry.recurrent_segment(tp_col, head, band), geometry.recurrent_local_shard(0, head, band))
+            for head in range(geometry.local_heads)
+            for band in range(geometry.bands)
+        ]
+    if kind == "kda_convolution":
+        return [
+            (
+                geometry.convolution_segment(branch, tp_col, head, half),
+                geometry.convolution_local_column(branch, head, half),
+            )
+            for branch in range(3)
+            for head in range(geometry.local_heads)
+            for half in range(geometry.halves)
+        ]
+    raise ValueError(f"unknown KDA state kind {kind!r} (expected 'kda_recurrent' or 'kda_convolution')")
+
+
+def kda_segment_bytes(geometry, kind: str) -> int:
+    if kind == "kda_recurrent":
+        return geometry.recurrent_segment_bytes
+    if kind == "kda_convolution":
+        return geometry.convolution_segment_bytes
+    raise ValueError(f"unknown KDA state kind {kind!r}")
+
+
+def kda_segments_per_layer(geometry, kind: str) -> int:
+    if kind == "kda_recurrent":
+        return geometry.recurrent_segments_per_layer
+    if kind == "kda_convolution":
+        return geometry.convolution_segments_per_layer
+    raise ValueError(f"unknown KDA state kind {kind!r}")
+
+
+# The contract's KDA position axis (k3_disagg_contract.md, tt-blaze #3634). A KDA config has no token
+# axis, so its positions are synthetic: one version of BOTH states spans a window of kda_window()
+# positions, recurrent segment i sits at i * 96 and convolution segment i at i * 64 inside it (at 96
+# heads), and each of the decode side's KDA_VERSIONS windows aliases the one prefill state. Segment
+# indices would not pair: the KV Manager requires equal chunk_n_tokens on both sides, and one
+# /migrate position range serves every config of a layer, so both states must fill the same window.
+KDA_POSITION_QUANTUM = 32  # decode's minimum position stride (one tile edge)
+KDA_VERSIONS = 8  # decode's per-user state ring (speculative-decode versions)
+
+
+def kda_window(geometry) -> int:
+    """Positions per version: the least window both states fill evenly at a stride of whole tiles."""
+    return (
+        math.lcm(geometry.recurrent_segments_per_layer, geometry.convolution_segments_per_layer) * KDA_POSITION_QUANTUM
+    )
+
+
+def kda_chunk_n_tokens(geometry, kind: str) -> int:
+    return kda_window(geometry) // kda_segments_per_layer(geometry, kind)
+
+
+def kda_max_sequence_length(geometry) -> int:
+    return KDA_VERSIONS * kda_window(geometry)
+
+
+def kda_position(geometry, kind: str, segment: int, version: int = 0) -> int:
+    """Table position of global segment ``segment`` in window ``version``."""
+    return version * kda_window(geometry) + segment * kda_chunk_n_tokens(geometry, kind)
+
+
+def populate_kv_chunk_address_table_kda(
+    lookup_table,
+    config,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    geometry,
+    kind,
+    num_users=1,
+    config_id=0,
+    stage_layout=None,
+    layer_rows=None,
+):
+    """
+    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a Kimi-K3 KDA state slab
+    (see ``tt/kda/state_adapter.py`` for the slabs and the segment numbering being described).
+
+    The KDA analogue of the block-cyclic and dflash walks, differing in three ways:
+
+      * **No token axis.** A KDA layer's state is a fixed set of segments, each set at
+        ``kda_position(geometry, kind, i, v)`` for every version window ``v`` (see the constants above).
+      * **TP shards heads, SP replicates.** Column ``g // H_local`` is the only column holding global
+        head ``g``, and every SP row of that column holds the same bytes, so a device group is one TP
+        column spanning all SP rows -- the worker reads any member as a replica. (The MLA cache is the
+        transpose: SP-sharded, TP-replicated, one group per row.)
+      * **Batch-major shards.** Both slabs fold ``(slot, layer)`` into their leading dim, so a layer's
+        segments are one contiguous shard run ``[batch * shards_per_layer, +shards_per_layer)`` with
+        ``batch = slot * count + local_layer``; shard ``s`` lives in bank ``s % num_banks`` at
+        ``base + (s // num_banks) * segment_bytes``. The recurrent slab is ND-sharded with one
+        ``[128, 32]`` band per shard (four 4 KiB tile pages); the convolution slab is interleaved
+        row-major with one 384-byte page per segment, which is the same address function.
+
+    ``stage_layout`` (required) is the all-gathered layout of this slab's ``KvCacheStage`` -- numbered
+    in compacted KDA-slot space -- and ``layer_rows`` maps that space back to model layers, exactly as
+    the kvpe stage does. Ranks whose stage has ``count == 0`` (no KDA layer) are skipped.
+
+    Returns:
+        lookup_table: the same table, with config_id populated.
+    """
+    if stage_layout is None:
+        raise ValueError("populate_kv_chunk_address_table_kda needs the gathered stage layout of the slab")
+    segment_bytes = kda_segment_bytes(geometry, kind)
+    shards_per_layer = (
+        geometry.recurrent_shards_per_layer if kind == "kda_recurrent" else geometry.convolution_shards_per_layer
+    )
+    stride = kda_chunk_n_tokens(geometry, kind)
+    window = kda_window(geometry)
+    assert (
+        config.chunk_n_tokens == stride
+    ), f"KDA {kind} config has chunk_n_tokens {config.chunk_n_tokens}; the contract stride is {stride}"
+    assert config.max_sequence_length == kda_max_sequence_length(geometry), (
+        f"KDA {kind} config spans {config.max_sequence_length} positions, not "
+        f"{KDA_VERSIONS} windows of {kda_window(geometry)}"
+    )
+    assert (
+        config.chunk_size_bytes == segment_bytes
+    ), f"KDA {kind} config chunk is {config.chunk_size_bytes} bytes but a segment is {segment_bytes}"
+    assert sp_axis != tp_axis, f"sp_axis and tp_axis must differ; both are {sp_axis}"
+    sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
+    assert (sp, tp) == (
+        geometry.sequence_parallel_size,
+        geometry.tensor_parallel_size,
+    ), f"mesh SP{sp}xTP{tp} != contract geometry SP{geometry.sequence_parallel_size}xTP{geometry.tensor_parallel_size}"
+
+    for stage in stage_layout:
+        count = int(stage["count"])
+        if count == 0:
+            continue
+        base = int(stage["base_addr"])
+        num_banks = int(stage["num_banks"])
+        host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
+        first = int(stage["first_layer"])
+        fnids = stage["fnids"]
+        for tp_col in range(tp):
+            members = []
+            for sp_row in range(sp):
+                coord = [0, 0]
+                coord[sp_axis] = sp_row
+                coord[tp_axis] = tp_col
+                members.append(fnids[coord[0]][coord[1]])
+            group_idx = lookup_table.add_device_group(members)
+            for fid in members:
+                lookup_table.set_fabric_node_host(fid, host_name=host_name)
+            local_segments = _kda_local_segments(geometry, kind, tp_col)
+            for slot in range(num_users):
+                for local_layer in range(count):
+                    batch = slot * count + local_layer
+                    row = layer_rows[first + local_layer] if layer_rows is not None else first + local_layer
+                    for segment, shard_in_layer in local_segments:
+                        shard = batch * shards_per_layer + shard_in_layer
                         location = ttnn.experimental.disaggregation.KvCacheLocation()
-                        location.noc_addr = (bank_id << 32) | (dram_bank_base_addr + bank_offset)
-                        location.size_bytes = chunk_size_bytes
+                        location.noc_addr = ((shard % num_banks) << 32) | (base + (shard // num_banks) * segment_bytes)
+                        location.size_bytes = segment_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location, config_id)
+                        for version in range(KDA_VERSIONS):  # kda_position(), inlined: 17M calls at 32 users
+                            lookup_table.set(row, version * window + segment * stride, slot, location, config_id)
     return lookup_table
 
 
@@ -736,6 +1037,7 @@ def init_kvpe_cache(
     layout=ttnn.TILE_LAYOUT,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -781,6 +1083,8 @@ def init_kvpe_cache(
     seq_len_local = seq_len // stripes
 
     num_dram_banks = get_num_dram_banks(mesh_device)
+    if bank_aligned:
+        check_kv_bank_aligned(seq_len, seq_len_local, num_dram_banks)
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
@@ -870,6 +1174,7 @@ def init_mla_kv_cache(
     num_users=1,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -895,12 +1200,23 @@ def init_mla_kv_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
+        bank_aligned=bank_aligned,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 
 
 def allocate_mla_kvpe_cache(
-    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False
+    *,
+    mesh_device,
+    hf_config,
+    max_seq_len,
+    mesh_shape,
+    sp_axis,
+    num_layers,
+    num_users,
+    full_mesh=False,
+    tp_axis=None,
+    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate the MLA KVPE cache for one runtime from the HF config.
 
@@ -908,6 +1224,8 @@ def allocate_mla_kvpe_cache(
     shared cache holds ``num_users * num_layers`` user-major slots of
     ``max_seq_len`` each. Shared by ``TtPrefillRuntime`` (its default allocator)
     and the MLA model adapter, so the MLA KV layout has one definition.
+
+    tp_axis: KV dedup, forwarded to init_kvpe_cache; must match the reader's tp_shard_kv.
     """
     return init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BFP8_TILE,
@@ -919,6 +1237,8 @@ def allocate_mla_kvpe_cache(
         num_kvpe_cache_layers=num_layers,
         num_users=num_users,
         full_mesh=full_mesh,
+        tp_axis=tp_axis,
+        bank_aligned=bank_aligned,
     )
 
 

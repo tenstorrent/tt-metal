@@ -25,11 +25,15 @@ struct AffineExclusiveScanOperation {
 };
 
 Tensor affine_exclusive_scan(
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
+    const Tensor& summaries,
+    const Tensor& initial_state,
     uint32_t,
+    const std::optional<Tensor>& tail_entry_states,
     const tt::tt_metal::MemoryConfig&,
-    const DeviceComputeKernelConfig&);
+    const DeviceComputeKernelConfig&,
+    const Tensor&,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows,
+    const std::optional<Tensor>& actual_end);
 
 }  // namespace ttnn::experimental::prim

@@ -7,10 +7,11 @@
  */
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -44,13 +45,19 @@ void async_read_row_to_tile(
     } else if constexpr (t == 1) {  // ROW MAJOR LAYOUT
         noc.async_read_barrier();
         // L1→L1 copy: move the second half of the row (datums 16..31) into the second face
-        UnicastEndpoint self;
+#ifdef ARCH_QUASAR
+        // Quasar: a same-core NoC loopback read spins/drops on the emulator; the row above is already
+        // barriered, so relocate the bytes with a scalar copy instead (see local_l1_copy).
+        local_l1_copy(L1_dst_addr + face_bytes, L1_dst_addr + half_row_bytes, row_bytes);
+#else
+        const UnicastEndpoint self;
         noc.async_read(
             self,
             CoreLocalMem<uint32_t>(L1_dst_addr + face_bytes),
             row_bytes,
             {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = L1_dst_addr + half_row_bytes},
             {});
+#endif
     } else {
         static_assert(t == 0 || t == 1, "Layout must be ROW_MAJOR(t == 1) or TILE_LAYOUT(t == 0)");
     }
@@ -70,12 +77,14 @@ void kernel_main() {
     constexpr auto beta_is_row_major = get_arg(args::beta_is_row_major);
     constexpr auto dfb_length = get_arg(args::dfb_length);
     constexpr auto Wt = get_arg(args::Wt);  // Width in tiles
+    // Tiles between the starts of consecutive input rows; exceeds Wt when a core owns only a slice of each row.
+    constexpr auto row_stride = get_arg(args::row_stride);
     constexpr auto reduce_factor = get_arg(args::reduce_factor);
 
     const auto src_a = TensorAccessor(tensor::src);
     const auto src_stats = TensorAccessor(tensor::stats_src);
 
-    Noc noc;
+    const Noc noc;
     // Input tiles and the per-device statistics, both consumed by the compute kernel.
     DataflowBuffer dfb_inp_buf(dfb::inp);
     DataflowBuffer dfb_stats_buf(dfb::stats);
@@ -146,7 +155,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
                 for (uint32_t j = 0; j < dfb_length; j++) {
                     dfb_gamma_buf.reserve_back(1);
-                    uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
+                    const uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
                     async_read_row_to_tile<gamma_is_row_major>(
                         noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
                     gamma_tile_count++;
@@ -180,7 +189,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
             for (uint32_t i = 0; i < dfb_leftovers; i++) {
                 dfb_gamma_buf.reserve_back(1);
-                uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
+                const uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
                 async_read_row_to_tile<gamma_is_row_major>(
                     noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
                 gamma_tile_count++;
@@ -200,5 +209,6 @@ void kernel_main() {
 #endif
 #endif
         }
+        inp_tile_idx += row_stride - Wt;
     }  // ncht loop
 }

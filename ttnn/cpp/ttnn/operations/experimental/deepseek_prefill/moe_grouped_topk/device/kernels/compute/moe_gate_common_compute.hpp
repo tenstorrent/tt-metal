@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -29,35 +30,132 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/compute/moe_gate_sqrt_softplus.h"
+
+// Gate-only fused sqrt(softplus(x)) + bias SFPU pass (fp32-accurate softplus). Only Blackhole ships it;
+// elsewhere activate_add_bias_tile keeps the stock softplus / sqrt / add sequence. Gated on the arch, as
+// the Compute API header is, so a missing header breaks the Blackhole build instead of silently falling
+// back to the stock bf16 softplus.
+#if defined(ARCH_BLACKHOLE)
+#define MOE_GATE_FUSED_SQRT_SOFTPLUS 1
+#endif
 
 namespace blocks {
 // Router affinity activations applied to the raw gate logits.
 constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
 constexpr uint32_t SCORE_FUNC_SQRTSOFTPLUS = 1;  // DeepSeek-V4: sqrt(softplus(x))
 
-// Widen width_tiles input tiles from their (possibly bf16) source format into an fp32 output CB.
-// The whole gate pipeline computes in fp32, and the downstream two-operand ops (e.g. add_bias) need
-// every operand in a single format, so the bf16 gate logits/bias are upcast here (lossless) instead
-// of by a separate host-side ttnn.typecast op. When the input is already fp32 this is an identity copy.
-void upcast_tiles(uint32_t cb_in_id, uint32_t cb_out_fp32_id, uint32_t width_tiles) {
-    CircularBuffer cb_in(cb_in_id);
-    CircularBuffer cb_out(cb_out_fp32_id);
-    reconfig_data_format_srca(cb_in_id);
-    copy_init(cb_in_id);
-    pack_reconfig_data_format(cb_out_fp32_id);
-    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_in.wait_front(1);
-        tile_regs_acquire();
-        copy_tile(cb_in_id, 0, 0);
-        tile_regs_commit();
-        cb_in.pop_front(1);
+// The gate always sorts largest-first on fp32 keys and never uses fused (bf16 + u16) keys. Both stable
+// engines take their tie polarity from this one direction.
+constexpr bool GATE_TOPK_DESCENDING = true;
+constexpr bool GATE_TOPK_FUSED = false;
+constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER =
+    ckernel::topk_tie_order_from_global_direction(GATE_TOPK_DESCENDING);
 
-        cb_out.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, cb_out_fp32_id);
-        tile_regs_release();
-        cb_out.push_back(1);
+// Stable engines: the comparator (STABLE_SORT) works on any key. The rank-tag engine (RANK_STAMPED)
+// stamps a GATE_TAG_BITS-wide chain-position tag into the low mantissa bits of each fp32 key and lets
+// the plain network order ties. The keys are full fp32, so the stamp clears the tag field first and
+// they compare at 23 - GATE_TAG_BITS = 17 mantissa bits.
+// It sorts stable-by-index only where candidates arrive in index order: the
+// single-group expert top-k and the group-score sort (column == group id), not the grouped path's
+// final top-k, whose winning-group tiles arrive in group-sum order. Everything else keeps the comparator.
+constexpr uint32_t GATE_TAG_BITS = 6;
+static_assert((1u << GATE_TAG_BITS) >= 64, "a two-tile chain (ranks 0..63) must fit the tag field");
+
+// The gate's TopK primitives in one place: stable_sort selects stable mode, rank_tag its engine
+// (rank tags, else the comparator). Every call site below goes through these.
+template <bool stable_sort, bool rank_tag>
+constexpr bool gate_comparator_stable() {
+    static_assert(!rank_tag || stable_sort, "rank_tag is a stable-mode engine choice");
+    return stable_sort && !rank_tag;
+}
+
+// tag_bits is a rank-stamped-only parameter; the other engines take the default.
+template <bool rank_tag>
+constexpr uint32_t gate_tag_bits() {
+    return rank_tag ? GATE_TAG_BITS : 16;
+}
+
+template <bool rank_tag>
+ALWI void gate_topk_init() {
+    ckernel::topk_tile_init<GATE_TOPK_FUSED, rank_tag, gate_tag_bits<rank_tag>()>();
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_local_sort(uint32_t idst, bool ascending, int end_phase) {
+    ckernel::topk_local_sort<
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER>(idst, (int)ascending, end_phase);
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_merge(uint32_t idst, int m_iter, int k) {
+    ckernel::topk_merge<
+        /*idir=*/false,
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER,
+        gate_tag_bits<rank_tag>()>(idst, m_iter, k);
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_rebuild(uint32_t idst, bool ascending, int m_iter, int k, int logk, int skip_second) {
+    ckernel::topk_rebuild<
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER>(idst, ascending, m_iter, k, logk, skip_second);
+}
+
+// The selected router affinity activation, in place over DEST tile idst, with the stock SFPU ops.
+template <uint32_t score_func>
+ALWI void activate_tile(uint32_t idst) {
+    if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+        // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
+        constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
+        constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
+        softplus_tile_init();
+        softplus_tile(idst, const_1_fp32, const_1_fp32, const_20_fp32);
+        sqrt_tile_init();
+        sqrt_tile(idst);
+    } else {
+        sigmoid_tile_init();
+        sigmoid_tile(idst);
     }
+}
+
+// Init for activate_add_bias_tile, once per pass rather than per tile. Only the fused SFPU routine has
+// one: copy_init / copy_tile program ADDR_MOD_0/2/3 and leave its ADDR_MOD_7, SFPU config and sqrt
+// constants alone. The stock sequence re-inits every op per tile (softplus and sqrt share registers).
+template <uint32_t score_func>
+ALWI void activate_add_bias_init() {
+#ifdef MOE_GATE_FUSED_SQRT_SOFTPLUS
+    if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+        moe_gate_sqrt_softplus_add_bias_tile_init();
+    }
+#endif
+}
+
+// Activation over DEST tile idst_score and score + bias over idst_key (which holds the bias). The bias
+// add runs on the SFPU in full fp32. sqrt(softplus) on Blackhole: one fused pass with an fp32-accurate
+// softplus (see the LLK header).
+template <uint32_t score_func>
+ALWI void activate_add_bias_tile(uint32_t idst_score, uint32_t idst_key) {
+#ifdef MOE_GATE_FUSED_SQRT_SOFTPLUS
+    if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+        moe_gate_sqrt_softplus_add_bias_tile(idst_score, idst_key);
+        return;
+    }
+#endif
+    activate_tile<score_func>(idst_score);
+    add_binary_tile_init();
+    add_binary_tile(idst_score, idst_key, idst_key);
 }
 
 // Applies the selected router affinity activation to each logits tile. The output CB (historically
@@ -74,18 +172,7 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         // copy tile from scores cb to destination register 0
         copy_init(cb_in_scores_id);
         copy_tile(cb_in_scores_id, 0, 0);
-        if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
-            // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
-            constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
-            constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
-            softplus_tile_init();
-            softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
-            sqrt_tile_init();
-            sqrt_tile(0);
-        } else {
-            sigmoid_tile_init();
-            sigmoid_tile(0);
-        }
+        activate_tile<score_func>(0);
         tile_regs_commit();
         cb_in_scores.pop_front(1);
 
@@ -98,38 +185,58 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
     }
 }
 
-template <bool dump_biased = false>
-void add_bias(
-    uint32_t cb_sigmoid_scores_id,
+// Activation and bias add in one pass, read straight from the raw (bf16 or fp32) input CBs: bf16 is
+// exact through SrcA and fp32 inputs are UnpackToDestFp32, so DEST holds the exact logits and bias, and
+// no fp32 upcast pass is needed. The bias add runs on the SFPU in full fp32 (the FPU add would read the
+// activation through SrcA as TF32 first). Packs the unbiased activated scores (gathered later for the
+// weights) and the biased sort keys.
+template <uint32_t score_func, bool dump_biased = false>
+void apply_score_func_add_bias(
+    uint32_t cb_in_scores_id,
     uint32_t cb_in_bias_id,
+    uint32_t cb_activated_scores_id,
     uint32_t cb_biased_scores_id,
     uint32_t width_tiles,
     uint32_t cb_biased_dump_id = 0) {
-    CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
+    CircularBuffer cb_in_scores(cb_in_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
+    CircularBuffer cb_activated_scores(cb_activated_scores_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
     CircularBuffer cb_biased_dump(cb_biased_dump_id);
-    // Perform add bias on sigmoid scores
-    add_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
-    cb_sigmoid_scores.wait_front(width_tiles);
+    // DEST tiles: the logits, overwritten by the activated score, and the bias, overwritten by the key.
+    constexpr uint32_t dst_score = 0;
+    constexpr uint32_t dst_key = 1;
+    activate_add_bias_init<score_func>();
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+        cb_in_scores.wait_front(1);
         cb_in_bias.wait_front(1);
         tile_regs_acquire();
-        add_tiles(cb_sigmoid_scores_id, cb_in_bias_id, width_tile, 0, 0);
+        // Reconfigure the unpacker for the input (a prior top-k iteration may have left it on UInt16).
+        reconfig_data_format_srca(cb_in_scores_id);
+        copy_init(cb_in_scores_id);
+        copy_tile(cb_in_scores_id, 0, dst_score);
+        reconfig_data_format_srca(cb_in_scores_id, cb_in_bias_id);
+        copy_init(cb_in_bias_id);
+        copy_tile(cb_in_bias_id, 0, dst_key);
+        activate_add_bias_tile<score_func>(dst_score, dst_key);
         tile_regs_commit();
+        cb_in_scores.pop_front(1);
         cb_in_bias.pop_front(1);
 
+        cb_activated_scores.reserve_back(1);
         cb_biased_scores.reserve_back(1);
         if constexpr (dump_biased) {
             cb_biased_dump.reserve_back(1);
         }
         tile_regs_wait();
-        pack_reconfig_data_format(cb_biased_scores_id);
-        pack_tile(0, cb_biased_scores_id);
+        pack_reconfig_data_format(cb_activated_scores_id);
+        pack_tile(dst_score, cb_activated_scores_id);
+        pack_tile(dst_key, cb_biased_scores_id);
         if constexpr (dump_biased) {
-            pack_tile(0, cb_biased_dump_id);
+            pack_tile(dst_key, cb_biased_dump_id);
         }
         tile_regs_release();
+        cb_activated_scores.push_back(1);
         cb_biased_scores.push_back(1);
         if constexpr (dump_biased) {
             cb_biased_dump.push_back(1);
@@ -170,7 +277,10 @@ void process_and_sort_tiles(
         transpose_tile(cb_expert_index_template_id, wt + 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, end_phase);
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
+        gate_topk_local_sort<stable_sort, /*rank_tag=*/false>(0 /*idst*/, ascending, end_phase);
 
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores_id);
@@ -202,33 +312,42 @@ void process_and_sort_tiles(
     }
 }
 
+// Sums the top summed_experts_per_group rows of each group in full fp32: the top tiles are unpacked
+// straight to DEST (cb_top_experts_per_group is UnpackToDestFp32) and summed on the SFPU in index order,
+// not with an FPU add, whose SrcA/SrcB loads would truncate each summand to TF32.
 void sum_top_experts_per_group(
     const uint32_t cb_top_experts_per_group_id,
     const uint32_t cb_group_summed_scores_id,
     uint32_t summed_experts_per_group) {
     CircularBuffer cb_top_experts_per_group(cb_top_experts_per_group_id);
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
-    // sum the top experts_per_group rows for each group
-    compute_kernel_hw_startup(cb_top_experts_per_group_id, cb_top_experts_per_group_id, cb_group_summed_scores_id);
-    add_init(cb_top_experts_per_group_id, cb_top_experts_per_group_id, true);
+    // DEST tiles: the running sum and the next summand.
+    constexpr uint32_t dst_sum = 0;
+    constexpr uint32_t dst_summand = 1;
     cb_top_experts_per_group.wait_front(summed_experts_per_group);
 
     cb_group_summed_scores.reserve_back(1);
     tile_regs_acquire();
-    for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        add_tiles(cb_top_experts_per_group_id, cb_top_experts_per_group_id, i, i + 1, 0);
+    reconfig_data_format_srca(cb_top_experts_per_group_id);
+    copy_init(cb_top_experts_per_group_id);
+    copy_tile(cb_top_experts_per_group_id, 0, dst_sum);
+    for (uint32_t i = 1; i < summed_experts_per_group; i++) {
+        copy_tile(cb_top_experts_per_group_id, i, dst_summand);
+        add_binary_tile_init();
+        add_binary_tile(dst_sum, dst_summand, dst_sum);
     }
     tile_regs_commit();
     tile_regs_wait();
     pack_reconfig_data_format(cb_group_summed_scores_id);
-    pack_tile(0, cb_group_summed_scores_id);
+    pack_tile(dst_sum, cb_group_summed_scores_id);
     tile_regs_release();
 
     cb_group_summed_scores.push_back(1);
     cb_top_experts_per_group.pop_front(summed_experts_per_group);
 }
 
-template <bool stable_sort = false>
+// rank_tag: the rank-tag stable engine is valid here because column j of the summed-scores tile is group j.
+template <bool stable_sort = false, bool rank_tag = false>
 void topk_group_scores(
     const uint32_t cb_group_summed_scores_id,
     const uint32_t cb_group_index_template_id,
@@ -239,7 +358,7 @@ void topk_group_scores(
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
     CircularBuffer cb_group_index_template(cb_group_index_template_id);
     CircularBuffer cb_sorted_group_order(cb_sorted_group_order_id);
-    topk_tile_init();
+    gate_topk_init<rank_tag>();
     cb_sorted_group_order.reserve_back(1);
 
     // Sort single input and index tile that have already ben transposed.
@@ -256,7 +375,15 @@ void topk_group_scores(
     copy_tile(cb_group_index_template_id, 0, 2);
 
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, log_topk_groups);
+    if constexpr (rank_tag) {
+        // Only tile 0 holds data. The stamp also folds -0.0 into +0.0.
+        ckernel::topk_stamp_tile_rank_range<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(
+            0 /*idst*/, 0 /*dst_tile_index*/, 0 /*rank_base*/);
+    } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
+        ckernel::topk_canonicalize_negzero_values(0);
+    }
+    gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, log_topk_groups);
+    ckernel::topk_finalize_uint16_indices(2);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -292,7 +419,9 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
-template <bool stable_sort = false>
+// rank_tag: the rank-tag stable engine is valid only when tile j holds indices above every index in
+// tiles 0..j-1 (single-group expert top-k: yes; the sum-ordered winning groups of the grouped path: no).
+template <bool stable_sort = false, bool indices_pretransposed = false, bool rank_tag = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,
     const uint32_t cb_winning_group_indices_id,
@@ -308,7 +437,7 @@ void topk(
     bool ascending = false;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
-    topk_tile_init();
+    gate_topk_init<rank_tag>();
     tile_regs_acquire();
     cb_winning_group_scores.wait_front(tiles);
     cb_winning_group_indices.wait_front(tiles);
@@ -322,12 +451,24 @@ void topk(
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_indices_id);
-    transpose_init(cb_winning_group_indices_id);
-    transpose_tile(cb_winning_group_indices_id, 0, 2);
-    transpose_tile(cb_winning_group_indices_id, 1, 3);
+    if constexpr (indices_pretransposed) {
+        copy_init(cb_winning_group_indices_id);
+        copy_tile(cb_winning_group_indices_id, 0, 2);
+        copy_tile(cb_winning_group_indices_id, 1, 3);
+    } else {
+        transpose_init(cb_winning_group_indices_id);
+        transpose_tile(cb_winning_group_indices_id, 0, 2);
+        transpose_tile(cb_winning_group_indices_id, 1, 3);
+    }
     // llk_topk_sort -> inplace
-    ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
-    ckernel::topk_merge<false, stable_sort>(0, 0, 32);
+    if constexpr (rank_tag) {
+        // Both tiles are fresh: positions 0..63. The stamp also folds -0.0 into +0.0.
+        ckernel::topk_stamp_local_positions<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(0 /*idst*/);
+    } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
+        ckernel::topk_canonicalize_negzero_values(0);
+    }
+    gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
+    gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -337,13 +478,27 @@ void topk(
         transpose_tile(cb_winning_group_scores_id, j, 1);
 
         reconfig_data_format_srca(cb_winning_group_indices_id);
-        transpose_init(cb_winning_group_indices_id);
-        transpose_tile(cb_winning_group_indices_id, j, 3);
+        if constexpr (indices_pretransposed) {
+            copy_init(cb_winning_group_indices_id);
+            copy_tile(cb_winning_group_indices_id, j, 3);
+        } else {
+            transpose_init(cb_winning_group_indices_id);
+            transpose_tile(cb_winning_group_indices_id, j, 3);
+        }
 
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending, 4);
-        ckernel::topk_merge<false, stable_sort>(0, 0, 32);
+        if constexpr (rank_tag) {
+            // The kept tile 0 was re-tagged by the previous merge; only the fresh tile 1 needs stamping.
+            ckernel::topk_stamp_tile_rank_range<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(
+                0 /*idst*/, 1 /*dst_tile_index*/, 32 /*rank_base*/);
+        } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
+        gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
+        gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
     }
-    ckernel::topk_rebuild<stable_sort>(0, (int)ascending, 0, 32, 5, true);
+    gate_topk_rebuild<stable_sort, rank_tag>(
+        0 /*idst*/, ascending, 0 /*m_iter*/, 32 /*k*/, 5 /*logk*/, true /*skip_second*/);
+    ckernel::topk_finalize_uint16_indices(2);
     tile_regs_commit();
     tile_regs_wait();
     cb_final_indices_transposed.reserve_back(1);

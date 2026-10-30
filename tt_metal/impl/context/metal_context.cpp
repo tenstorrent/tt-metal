@@ -4,14 +4,11 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <filesystem>
 #include <algorithm>
 #include <memory>
 #include <mutex>
-#include <future>
 #include <set>
 #include <vector>
-#include <unordered_set>
 
 #include <tracy/Tracy.hpp>
 
@@ -31,12 +28,13 @@
 #include "jit_build/build_env_manager.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
+#include "llrt/core_descriptor.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
-#include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
 #include "dispatch/topology.hpp"
@@ -50,8 +48,8 @@
 #include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>
@@ -106,32 +104,12 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
 }  // namespace
 
 ContextId extract_context_id(const IDevice* device) {
-    // get_mesh_device is not const
-    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
-        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
-        return mesh_device->impl().get_context_id();
+    if (const auto* device_concrete = dynamic_cast<const Device*>(device)) {
+        return device_concrete->get_context_id();  // Its mesh's, without locking the mesh.
     }
-    // Must be a Device if not MeshDevice
-    const auto* device_concrete = dynamic_cast<const Device*>(device);
-    TT_ASSERT(device_concrete != nullptr, "Device is not a Device");
-    return device_concrete->get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
+    const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();  // get_mesh_device is not const
+    TT_ASSERT(mesh_device != nullptr, "Device is neither a Device nor part of a MeshDevice");
     return mesh_device->impl().get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device) {
-    ContextId context_id = DEFAULT_CONTEXT_ID;
-    if (mesh_device != nullptr) {
-        context_id = extract_context_id(mesh_device);
-    } else if (device != nullptr) {
-        context_id = extract_context_id(device);
-    } else {
-        TT_FATAL(false, "Both MeshDevice and Device are nullptr");
-    }
-    return context_id;
 }
 
 void MetalContext::initialize_device_manager(
@@ -173,14 +151,25 @@ void MetalContext::initialize(
     // DispatchCoreConfig{}, and comparing that against the already-resolved stored config would read as a
     // parameter change and tear down a context that in fact matches. Resolving first also leaves the stored
     // snapshot complete, which get_dispatch_core_axis() now requires.
-    DispatchCoreConfig resolved_config = dispatch_core_config;
-    resolved_config.set_dispatch_core_axis(
+    DispatchCoreConfig resolved_config(
+        dispatch_core_config.get_dispatch_core_type(),
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
     if (initialized_) {
         if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
+            // The legacy implicit context keeps tearing down underneath open devices; an explicit MetalEnv refuses.
+            const bool devices_open = device_manager_ && device_manager_->is_initialized() &&
+                                      !device_manager_->get_all_active_devices().empty();
+            TT_FATAL(
+                env_owned_ || !devices_open,
+                "Cannot change num_command_queues ({} -> {}), dispatch_core_config or worker_l1_size ({} -> {}) of a "
+                "MetalEnv while MeshDevices created from it are open. Close them first.",
+                num_hw_cqs_,
+                num_hw_cqs,
+                worker_l1_size_,
+                worker_l1_size);
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else {
@@ -251,7 +240,6 @@ void MetalContext::initialize(
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
-        rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
     // Emulated devices have no firmware for the watcher to poll; skip it. A null
@@ -270,7 +258,7 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(MetalEnvAccessor(*this->env_).impl());
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(*this);
     }
 
     data_collector_ = std::make_unique<DataCollector>(MetalEnvAccessor(*this->env_).impl());
@@ -293,6 +281,19 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         !get_cluster().is_mock_or_emulated()) {
+        // Only Wormhole non-Galaxy clusters reach remote chips through UMD ethernet gateways.
+        if (tt_fabric::is_tt_fabric_config(get_fabric_config()) && get_cluster().arch() == tt::ARCH::WORMHOLE_B0 &&
+            !get_cluster().is_galaxy_cluster()) {
+            // The channel lookup reads the fabric routing tables. A control plane rebuilt after SetFabricConfig (e.g.
+            // by initialize_control_plane()) has none until DeviceManager configures fabric, so configure it here.
+            this->initialize_fabric_config();
+            // Pin UMD's remote-transfer cores here, before the watcher attaches and firmware launches: UMD does not
+            // lock its core list against concurrent remote transfers.
+            for (const auto& [mmio_chip, eth_chans] :
+                 tt_fabric::get_remote_transfer_dispatch_channels(this->get_control_plane(), get_cluster())) {
+                get_cluster().configure_ethernet_cores_for_remote_transfers(mmio_chip, eth_chans);
+            }
+        }
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
@@ -347,7 +348,6 @@ void MetalContext::teardown() {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
-        rtoptions().set_disable_dma_ops(false);
     }
 
     if (!get_cluster().is_mock_or_emulated()) {
@@ -431,7 +431,7 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     MetalEnvDescriptor desc{};
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        desc = MetalEnvDescriptor(*mock_cluster_desc);
+        desc.mock_cluster_desc_path = std::move(*mock_cluster_desc);
     }
     g_default_env = new MetalEnv(std::move(desc));
     MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, *g_default_env);
@@ -662,7 +662,25 @@ void MetalContext::initialize_fabric_config() {
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().initialize_fabric_tensix_datamover_config();
+    auto& env_impl = MetalEnvAccessor(*env_).impl();
+    if (!tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config()) ||
+        env_impl.get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+        return;
+    }
+
+    tt_fabric::FabricTensixSessionInputs inputs{.active_devices = device_manager_->get_all_active_devices()};
+    if (!inputs.active_devices.empty()) {
+        // Mux core placement is the same on every device, so take it from the first one.
+        const auto device_id = inputs.active_devices.front()->id();
+        auto& dispatch_core_manager = get_dispatch_core_manager();
+        const auto num_hw_cqs = dispatch_core_manager.get_num_hw_cqs();
+        const auto dispatch_core_config = dispatch_core_manager.get_dispatch_core_config();
+        inputs.logical_fabric_mux_cores =
+            tt::get_logical_fabric_mux_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+        inputs.logical_dispatch_mux_cores =
+            tt::get_logical_dispatch_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+    }
+    env_impl.initialize_fabric_tensix_datamover_config(inputs);
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
@@ -678,11 +696,6 @@ tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() con
 const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
     return MetalEnvAccessor(*env_).impl().get_fabric_router_config();
-}
-
-void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().set_fabric_tensix_config(fabric_tensix_config);
 }
 
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const {

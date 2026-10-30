@@ -36,10 +36,10 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config = std::nullopt,
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 void close_device(MeshDevice& device);
-void enable_program_cache(IDevice& device);
-void disable_and_clear_program_cache(IDevice& device);
+void enable_program_cache(MeshDevice& device);
+void disable_and_clear_program_cache(MeshDevice& device);
 bool is_wormhole_or_blackhole(tt::ARCH arch);
-void deallocate_buffers(IDevice* device);
+void deallocate_buffers(MeshDevice* device);
 
 /**
  * Sets the default device to be used for auto-formatting operations

@@ -8,7 +8,7 @@ import torch.optim as optim
 
 import ttnn
 import pytest
-from models.common.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -26,6 +26,34 @@ fp32_dest_acc_en_ids = ["fp32_dest_acc_en=False"]
 if is_wormhole_b0():
     fp32_dest_acc_en.append(True)
     fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
+
+
+def test_moreh_sgd_golden_honors_positional_hyperparameters():
+    param = torch.tensor([1.0, -2.0])
+    grad = torch.tensor([0.25, -0.5])
+    momentum_buffer = torch.tensor([0.1, 0.2])
+    lr, momentum, dampening, weight_decay = 0.2, 0.9, 0.0, 0.1
+    golden_function = ttnn.get_golden_function(ttnn.moreh_sgd)
+
+    actual_param, actual_buffer = golden_function(
+        param,
+        grad,
+        momentum_buffer,
+        torch.empty_like(param),
+        torch.empty_like(momentum_buffer),
+        lr,
+        momentum,
+        dampening,
+        weight_decay,
+        True,
+        momentum_initialized=True,
+    )
+
+    weighted_grad = grad + weight_decay * param
+    expected_buffer = momentum * momentum_buffer + weighted_grad
+    expected_param = param - lr * (weighted_grad + momentum * expected_buffer)
+    torch.testing.assert_close(actual_buffer, expected_buffer)
+    torch.testing.assert_close(actual_param, expected_param)
 
 
 @pytest.mark.parametrize(
@@ -184,6 +212,41 @@ def test_moreh_sgd(
 
 @pytest.mark.parametrize(
     "shape",
+    [
+        [1, 1, 30, 32],  # H — non-multiple of 32
+        [1, 1, 32, 40],  # W — non-multiple of 32
+    ],
+)
+def test_moreh_sgd_partial_tile(shape, device):
+    # ones - lr*ones with lr=1 → 0 on written tiles; a skipped tile stays 1.
+    cpu_param = torch.ones(shape, dtype=torch.bfloat16)
+    cpu_grad = torch.ones(shape, dtype=torch.bfloat16)
+    dev_param = ttnn.from_torch(cpu_param, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_grad = ttnn.from_torch(cpu_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_param_out = ttnn.from_torch(cpu_param, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    dev_param_out, _ = ttnn.operations.moreh.sgd(
+        dev_param,
+        dev_grad,
+        None,
+        dev_param_out,
+        None,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        False,
+        momentum_initialized=False,
+        compute_kernel_config=get_compute_kernel_options(False),
+    )
+
+    result = ttnn.to_torch(dev_param_out).to(torch.bfloat16)
+    expected = torch.zeros(shape, dtype=torch.bfloat16)
+    assert torch.equal(result, expected), result
+
+
+@pytest.mark.parametrize(
+    "shape",
     [[32, 32]],  # single
 )
 @pytest.mark.parametrize("lr", [3.0])
@@ -328,3 +391,37 @@ def test_moreh_sgd_callback(
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+def test_moreh_sgd_lr_schedule_reuses_program(device):
+    """lr is not part of the program-cache key, and every cache hit still uses the current lr (#58406 item 4)."""
+    shape = [1, 1, 32, 32]
+    # ones - lr * ones = 1 - lr, which is exact in bfloat16 for these lr values.
+    lrs = [0.5, 0.25, 0.125]
+    dev_param = ttnn.from_torch(torch.ones(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    dev_grad = ttnn.from_torch(torch.ones(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    device.clear_program_cache()
+    num_program_cache_entries_list = []
+    for lr in lrs:
+        dev_param_out, _ = ttnn.operations.moreh.sgd(
+            dev_param,
+            dev_grad,
+            None,
+            None,
+            None,
+            lr,
+            0.0,
+            0.0,
+            0.0,
+            False,
+            momentum_initialized=False,
+            compute_kernel_config=get_compute_kernel_options(False),
+        )
+        result = ttnn.to_torch(dev_param_out).to(torch.bfloat16)
+        expected = torch.full(shape, 1.0 - lr, dtype=torch.bfloat16)
+        assert torch.equal(result, expected), f"lr={lr}: {result}"
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list == [num_program_cache_entries_list[0]] * len(lrs)

@@ -17,20 +17,22 @@ regular-tilize state; `_llk_unpack_tilize_uninit_` then restores the baseline (g
 Because the tiny-matmul run re-runs `_llk_unpack_hw_configure_` for its operands, this
 primarily validates that the regular-tilize -> uninit -> tiny-matmul SEQUENCE produces a
 correct result; `do_restore=False` is the negative control.
+
+The Blackhole mixed-width (input and output format differ) `dest_acc=Yes` cases are the
+silicon reproducer for the packer drain in `configure_pack`: run 1 calls
+`_llk_pack_hw_configure_` straight after run 0's pack, and without the drain they hang the
+Tensix. Keep them in the sweep.
 """
 
 from dataclasses import dataclass
 
-import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
-    MathFidelity,
     StochasticRounding,
     Transpose,
-    format_dict,
 )
 from helpers.matmul_sweep import (
     FaceLayoutConfig,
@@ -56,7 +58,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
 )
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Tiny in0 (SrcB) is 2 horizontal faces; in1 (SrcA) is a regular 4-face 32x32 tile.
 TINY_NUM_FACES_IN0 = 2
@@ -99,23 +101,16 @@ def _tiny_matmul_layout(in0_tile_r_dim: int):
     return tile_dims, face
 
 
-@skip_for_blackhole
 @parametrize(
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
         ],
         same=False,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     in0_tile_r_dim=[8, 4, 2, 1],
     do_restore=[True, False],
 )
@@ -226,12 +221,7 @@ def test_tilize_polluter_tiny_matmul(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # num_faces < 4: compare only the active faces of each output tile.
     num_elements_per_tile = tile_dims.in0_tile_r_dim * tile_dims.in1_tile_c_dim

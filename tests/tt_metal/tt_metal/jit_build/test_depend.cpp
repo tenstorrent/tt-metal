@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 #include <unistd.h>
@@ -13,6 +14,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "jit_build/depend.hpp"
+#include "jit_build/pch.hpp"
 
 TEST(JitBuildTests, ParseDependencyFile) {
     constexpr auto dep_file_content = R"(
@@ -108,6 +110,49 @@ TEST_F(JitBuildDependencyTests, OutOfDateAfterDeletion) {
 
     // Verify that dependencies are not up to date
     EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
+}
+
+TEST_F(JitBuildDependencyTests, MissingPchUmbrellaFailsBuild) {
+    const auto umbrella = out_dir_ / "missing_pch.h";
+    EXPECT_THROW(tt::jit_build::ensure_pch("", "Os", "", umbrella, out_dir_ / "pch"), std::runtime_error);
+    EXPECT_FALSE(std::filesystem::exists(out_dir_ / "pch"));
+}
+
+TEST_F(JitBuildDependencyTests, UnreadablePchUmbrellaFailsBuild) {
+    if (::geteuid() == 0) {
+        GTEST_SKIP() << "Root can read files regardless of permission bits";
+    }
+    const auto umbrella = out_dir_ / "pch.h";
+    std::ofstream{umbrella} << "#include <array>\n";
+    std::filesystem::permissions(umbrella, std::filesystem::perms::none);
+    EXPECT_THROW(tt::jit_build::ensure_pch("", "Os", "", umbrella, out_dir_ / "pch"), std::runtime_error);
+    EXPECT_FALSE(std::filesystem::exists(out_dir_ / "pch"));
+}
+
+TEST_F(JitBuildDependencyTests, ExplicitPchDependency) {
+    const std::string obj = "test.o";
+    const std::string hash_path = (out_dir_ / (obj + ".dephash")).string();
+    const std::string umbrella = (out_dir_ / "pch.h").string();
+    std::ofstream{out_dir_ / "test.cpp"} << "int value;\n";
+    std::ofstream{umbrella} << "#include <array>\n";
+    // GCC can omit the umbrella from the consuming object's dependency file.
+    std::ofstream{out_dir_ / "test.d"} << "test.o: test.cpp\n";
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path);
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+    // Existing records without the umbrella remain reusable when it changes.
+    std::ofstream{umbrella} << "#include <array>\n#include <tuple>\n";
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+    std::ofstream{umbrella} << "#include <array>\n#include <tuple>\n#include <utility>\n";
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+    std::filesystem::remove(umbrella);
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
 }
 
 TEST_F(JitBuildDependencyTests, DependencyHashesNotFound) {

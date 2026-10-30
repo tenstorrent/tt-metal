@@ -39,7 +39,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
@@ -169,21 +169,17 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         // work around, and CB_IN is a real reader->compute handshake (reserve_back/push_back vs the
         // compute's wait_front/pop_front) that needs the credits. (The earlier disable_implicit_sync_for
         // was a workaround for the self/loopback NOC-read auto-post bug, removed with that read.)
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     ttnn::ComputeKernelConfig compute_cfg{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input_tensor.device()->arch(), compute_cfg);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         // Keep both the tilize input (cb_in) and its output (cb_tilize, which feeds the transpose)
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
-        std::visit(
-            [&](auto& c) {
-                c.unpack_modes.emplace(CB_IN, tt::tt_metal::UnpackMode::UnpackToDest);
-                c.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
-            },
-            compute_hw);
+        compute_hw.unpack_modes.emplace(CB_IN, tt::tt_metal::UnpackMode::UnpackToDest);
+        compute_hw.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
     }
 
     // Output binding: ht<=8 -> compute self-loops the borrowed output shard directly; ht>8 -> compute
@@ -217,7 +213,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"num_hw_blocks_per_core", num_hw_blocks_per_core},
              {"last_output_row_num_datums", last_output_row_num_datums},
              {"pack_num_pages_last_col", pack_num_pages_last_col},
-             {"pack_num_pages_last_row_col", pack_num_pages_last_row_col}},
+             {"pack_num_pages_last_row_col", pack_num_pages_last_row_col},
+             // ht<=8: compute holds both ends of the output shard DFB and must pop what it pushes.
+             {"out_is_self_loop", static_cast<uint32_t>(!ht_gt_8)}},
         .hw_config = compute_hw,
     };
 
@@ -249,7 +247,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
                  {"W_per_tile_last", W_per_tile_last},
                  {"H_size_bytes", H * output_tensor.element_size()},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
-            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
         kernels.push_back(std::move(writer_spec));
         wu_kernels.push_back(WRITER_KERNEL);

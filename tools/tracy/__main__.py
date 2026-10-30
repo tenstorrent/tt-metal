@@ -47,6 +47,15 @@ def main():
         help="HTTP port for the Tracy WASM web UI after capture (default: 8080, or TRACY_WASM_HTTP_PORT if set). WebSocket uses this port + 1.",
     )
     parser.add_option(
+        "--no-web-server",
+        dest="web_server",
+        action="store_false",
+        default=None,
+        help="Do not start the Tracy WASM web UI after capture. The server is a daemon and outlives the run that "
+        "started it, so headless CI and measurement loops that only want the numbers should turn it off. "
+        "Same effect as setting TRACY_NO_WEB_SERVER=1.",
+    )
+    parser.add_option(
         "--no-op-info-cache",
         dest="opInfoCache",
         action="store_false",
@@ -172,7 +181,8 @@ def main():
     parser.add_option(
         "--profiler-capture-perf-counters",
         type="string",
-        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, all",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, "
+        "all; on Quasar also l1_client=<subport*8 + event> for the l1_client event counter",
         action="callback",
         callback=split_comma_list,
         dest="perf_counter_groups",
@@ -275,6 +285,13 @@ def main():
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = str(
             generate_logs_folder(os.path.abspath(outputFolder))
         )
+
+    # Only --profiler-capture-perf-counters sets the mask, since it also selects the post-processor that reports it.
+    if not options.perf_counter_groups and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ:
+        logger.warning(
+            "Ignoring TT_METAL_PROFILE_PERF_COUNTERS from the environment; pass --profiler-capture-perf-counters to capture counters."
+        )
+        del os.environ["TT_METAL_PROFILE_PERF_COUNTERS"]
 
     # Schedule and validate once, in the outer capture process; the inner --no-capture-tool run
     # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.
@@ -397,7 +414,17 @@ def main():
                 proc = subprocess.Popen([testCommand], shell=True, env=env, preexec_fn=os.setsid)
                 proc_holder["p"] = proc
                 logger.info("Test process started")
-                proc.communicate()
+                try:
+                    proc.communicate()
+                except BaseException:
+                    # The SIGINT/SIGTERM handler above cannot run when an exception propagates
+                    # through this wait; kill the workload's process group so nothing outlives the
+                    # wrapper.
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    raise
                 if options.check_exit_code and proc.returncode != 0:
                     logger.error(f"{testCommand} exited with a non-zero return code")
                     sys.exit(4)
@@ -412,6 +439,33 @@ def main():
             capture_timeout = 120
             try:
                 captureProcess.communicate(timeout=capture_timeout)
+                # A crashed capture tool returns from communicate() normally with a nonzero returncode
+                # rather than raising TimeoutExpired; without this check the copy below only warns that
+                # the .tracy it never wrote is missing.
+                capRc = captureProcess.returncode
+                if capRc != 0:
+                    # A signal death shows up as a negative returncode for a direct child, or as
+                    # 128+signo when launched via a shell.
+                    sigNo = None
+                    if capRc is not None and capRc < 0:
+                        sigNo = -capRc
+                    elif capRc is not None and capRc > 128:
+                        sigNo = capRc - 128
+                    if sigNo is not None:
+                        try:
+                            sigName = signal.Signals(sigNo).name
+                        except ValueError:
+                            sigName = f"signal {sigNo}"
+                        detail = f"was killed by {sigName} (signal {sigNo}, exit code {capRc})"
+                    else:
+                        detail = f"exited with code {capRc}"
+                    logger.error(
+                        f"Tracy capture tool (tracy-capture) {detail} before writing a trace. "
+                        f"The profiling stream crashed the capture tool, so NO .tracy was produced. "
+                        f"This is a capture-side failure -- the test itself may have passed. "
+                        f"Re-run under a debugger/ASan build of tracy-capture to root-cause."
+                    )
+                    sys.exit(70)  # EX_SOFTWARE: internal capture-tool failure
                 # Copy the generated .tracy file to the server's traces folder with a unique name
                 import datetime
 
@@ -448,8 +502,10 @@ def main():
                     logger.info(f"embed.tracy -> traces/{tracy_dst.name}")
                 except Exception as e:
                     logger.warning(f"Could not update embed.tracy: {e}")
-                launch_server_subprocess(port=options.web_app_port)
-                # Start the WASM server as a daemon with defaults
+                # Start the WASM server as a daemon with defaults, unless it was switched off
+                # (--no-web-server / TRACY_NO_WEB_SERVER=1) -- it outlives this process, so a
+                # headless run must be able to avoid leaving one listening.
+                launch_server_subprocess(port=options.web_app_port, enabled=options.web_server)
                 if options.report:
                     generate_report(
                         outputFolder,

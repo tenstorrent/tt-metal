@@ -42,10 +42,11 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -123,7 +124,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     std::vector<CoreCoord> all_l1_writer_cores_ordered,
     uint32_t bank_start_id,
     const uint32_t& input_buffer_addr) {
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t start_tile_id = 0;
     uint32_t kt = k / 32;
@@ -295,8 +296,7 @@ bool validation(
             last_block_offset + tile_stride_over_dram_banks + receiver_core_pair_offset;
 
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], core, cb_addr, num_tiles_cb / 2 * single_tile_size, result_vec);
+        slow_dispatch::ReadFromL1(*device, core, cb_addr, num_tiles_cb / 2 * single_tile_size, result_vec);
 
         if (df == 0) {  // BFP4
             auto result_bfp4 = unpack_bfp4_tiles_into_float_vec(result_vec, true, true);

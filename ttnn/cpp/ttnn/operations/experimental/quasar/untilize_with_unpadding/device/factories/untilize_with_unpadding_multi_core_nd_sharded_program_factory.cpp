@@ -48,7 +48,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = input.padded_shape()[-1];
     uint32_t output_tensor_width = output.padded_shape()[-1];
@@ -127,8 +127,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -189,8 +188,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"output_tensor_height", output_tensor_height},
              {"tensor_rank", static_cast<uint32_t>(input.padded_shape().rank())}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         .advanced_options =
             KernelAdvancedOptions{
                 .num_common_runtime_varargs = static_cast<uint32_t>(writer_common_runtime_args.size())},
@@ -200,16 +198,12 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     // Compute: untilize with a per-core variable block count (idle cores get 0 blocks).
     // ------------------------------------------------------------------------
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::FLOAT32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input.device()->arch(), compute_config);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);
     if (fp32_dest_acc_en) {
-        std::visit(
-            [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+        compute_hw.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
     }
 
     KernelSpec compute{

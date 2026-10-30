@@ -8,9 +8,8 @@ Kimi K2.7-Code Model Configuration (text tower only).
 Single source of truth for model dimension constants.
 Values from HuggingFace config.json for Kimi-K2.7-Code (``text_config``).
 
-Deliberately standalone rather than subclassing ``KimiK26Config``. The two generations agree on every
-dimension today, so inheritance would have been shorter -- but it would also mean an edit made for
-K2.6 silently moved K2.7, and it would hide which values K2.7 actually asserts.
+Deliberately standalone: every dimension is asserted here rather than inherited from another
+generation's config, so an edit made for a sibling model cannot silently move K2.7.
 """
 
 
@@ -19,19 +18,39 @@ class KimiK27Config:
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
+    # Callers can override this default with use_fused_rmsnorm at model initialization.
+    USE_FUSED_PREFILL_RMSNORM = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
-    # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
-    # token count on the 7168x2048 routed-expert shape (1.02-1.81x across 0-5120 tokens),
-    # so there is no crossover to place a threshold at. A bound this far above any
-    # per-expert region leaves the composite an empty band, which TtRoutedExpert reads as
-    # 'fused owns the layer' and drops the composite dispatch entirely.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 2**31 - 1
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
+    # 7168x2048 routed-expert shape, between 320 and 384: the composite's cost is flat inside an M
+    # chunk while the fused op's rises with the count. 320 is a 2.9% tie, 384 goes to the composite
+    # by 8.0%, and the composite holds the band outright from there -- 11% at 640, 22% at 768.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
+    # config that does not name it runs the routed expert then combine as separate ops.
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
+    # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
+    # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
+    # Off while the GLM 5.3 SC4 prefill regression is bisected: it runs dispatch and combine again. Set True to
+    # re-enable.
+    MOE_FABRIC2D_TRANSPORT = False
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 8
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 2.0% on hot_expert traffic and
+    # nothing on balanced, the flattest of the eight, for 47 -> 23 MB a chip.
+    COMBINE_FWD_REDUCTION = 16
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at +1.3% balanced and +3.5% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1

@@ -8,12 +8,32 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 
 namespace ttnn::operations::complex_unary {
 
-Tensor _real(const ComplexTensor& input, const MemoryConfig& /*output_mem_config*/) { return input[0]; }
+namespace {
 
-Tensor _imag(const ComplexTensor& input, const MemoryConfig& /*output_mem_config*/) { return input[1]; }
+// real and imag hand back a component of the input instead of computing a tensor, so the result is a
+// view of it. to_memory_config returns the component untouched when it already satisfies the request,
+// which keeps the default path and matching requests zero-copy. A host component has no config to
+// satisfy and cannot be relocated by a device op, so it is handed back as it is today.
+Tensor place_component(const Tensor& component, const MemoryConfig& output_mem_config) {
+    if (!ttnn::get_memory_config(component).has_value()) {
+        return component;
+    }
+    return ttnn::to_memory_config(component, output_mem_config);
+}
+
+}  // namespace
+
+Tensor _real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return place_component(input[0], output_mem_config);
+}
+
+Tensor _imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return place_component(input[1], output_mem_config);
+}
 
 Tensor _angle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     return atan2(input[1], input[0], output_mem_config);

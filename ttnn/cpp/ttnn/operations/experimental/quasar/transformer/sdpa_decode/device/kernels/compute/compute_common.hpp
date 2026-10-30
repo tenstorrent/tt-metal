@@ -29,32 +29,88 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#if defined(TRISC_MATH) || defined(TRISC_PACK)
+// ckernel_sfpu_sdpa.h has no Quasar implementation (raw WH/BH SFPI microcode for the fused
+// first-column softmax primitives). On Quasar, every helper below that used a fused primitive
+// is routed to generic SFPU tile ops instead (see the ARCH_QUASAR branches throughout this file).
+#if (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
+
+#ifdef ARCH_QUASAR
+// Tracks the packer's currently-selected output operand (the DFB whose descriptor/ring the packer HW is
+// pointed at). Reset once at compute-main entry via sdpa_pack_operand_tracker_reset().
+inline uint32_t g_last_pack_operand = 0xFFFFFFFFu;
+#endif
+
+// Switch the packer output operand to `out_dfb`.
+//
+// Quasar packer quirk: pack_reconfig_data_format(new) only updates the pack DATA FORMAT, not the output
+// ring/descriptor, when the pack output OPERAND changes (api/compute/reconfig_data_format.h NOTE
+// ARCH_QUASAR: "call pack_init(new_cb_id) before pack_tile when switching pack output operand"). Without a
+// pack_init the packer keeps writing to the previously-selected operand's ring -> the intended DFB is
+// never written (all-zero / silently-wrong output, no assert).
+//
+// But pack_init is a FULL packer re-init (state_configure<PACK> + llk_pack_init) that resets the packer's
+// per-tile dest write pointer / L1-accumulate section. Firing it at a SAME-operand / format-only reconfig
+// (e.g. an in-place accumulate that keeps packing the operand already selected) clobbers the in-progress
+// accumulation -> silently-wrong output. So pack_init must fire ONLY on a genuine operand CHANGE vs the
+// last ACTUAL pack. That is tracked at runtime here (not by per-site static classification) so runtime /
+// if constexpr branches and cross-helper operand carries are all handled: every operand switch routes
+// through this wrapper, so g_last_pack_operand is always the true last-packed operand. WH/BH need neither
+// (pack_reconfig alone re-targets there), so the gate is ARCH_QUASAR-only and the validated WH path is
+// byte-identical.
+ALWI void pack_reconfig_out(uint32_t out_dfb) {
+    pack_reconfig_data_format(out_dfb);
+#ifdef ARCH_QUASAR
+    if (out_dfb != g_last_pack_operand) {
+        pack_init(out_dfb);
+        g_last_pack_operand = out_dfb;
+    }
+#endif
+}
+
+// Reset the packer-operand tracker so the first pack of a fresh kernel launch always re-inits the packer
+// descriptor (a stale value carried across launches must never suppress that first pack_init).
+ALWI void sdpa_pack_operand_tracker_reset() {
+#ifdef ARCH_QUASAR
+    g_last_pack_operand = 0xFFFFFFFFu;
+#endif
+}
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
 
+#ifdef ARCH_QUASAR
+    // Quasar's llk_math_eltwise_unary_datacopy_init takes no PackMode param; its trailing template
+    // args are bools (unpack_to_dest, is_int_fpu_en, tilize).
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*unpack_to_dest*/,
+          false /*is_int_fpu_en*/>(cbid)));
+#else
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
           PackMode::Default>(cbid)));
+#endif
 }
 
 /**
  * in0_dfb = max(in0_dfb, in1_dfb)
  */
-template <uint32_t num_tiles>
-void max_block_inplace(uint32_t in0, uint32_t in1) {
-    DataflowBuffer dfb_in0(in0);
-    DataflowBuffer dfb_in1(in1);
+template <uint32_t num_tiles, typename In0DFB, typename In1DFB>
+void max_block_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1) {
+    const uint32_t in0 = dfb_in0.get_id();
+    const uint32_t in1 = dfb_in1.get_id();
     // inputs come in full, outputs go out full
     copy_init(in0);
     copy_init(in1);
@@ -84,13 +140,12 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 /**
  * out_dfb = eltwise_max(in0, in1)
  */
-template <VectorMode vector_mode = VectorMode::RC>
-void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0);
-    DataflowBuffer dfb_in1(in1);
-    DataflowBuffer dfb_out(out_dfb);
+template <VectorMode vector_mode = VectorMode::RC, typename In0DFB, typename In1DFB, typename OutDFB>
+void max_block(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0 = dfb_in0.get_id();
+    const uint32_t in1 = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // inputs come in full, outputs go out full
-    copy_init(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
@@ -100,7 +155,13 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles)
     dfb_out.reserve_back(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
+        // copy_init programs the unpacker for one DFB; Quasar asserts if copy_tile then reads another
+        // (LLK reinit guard), so re-init per operand.
+        reconfig_data_format_srca(in0);
+        copy_init(in0);
         copy_tile(in0, i, dst_reg_0);
+        reconfig_data_format_srca(in1);
+        copy_init(in1);
         copy_tile(in1, i, dst_reg_1);
         binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, vector_mode);
         tile_regs_commit();
@@ -121,12 +182,16 @@ template <
     uint32_t scale_dfb,
     uint32_t rows,
     uint32_t cols,
-    VectorMode vector_mode = VectorMode::C>
-void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, bool do_eltwise_max = false) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_scale(scale_dfb);
-    DataflowBuffer dfb_out(out_dfb);
-    DataflowBuffer dfb_prev(prev_dfb);
+    VectorMode vector_mode = VectorMode::C,
+    typename In0DFB,
+    typename ScaleDFB,
+    typename OutDFB,
+    typename PrevDFB>
+void reduce_c(In0DFB& dfb_in0, ScaleDFB& dfb_scale, OutDFB& dfb_out, PrevDFB& dfb_prev, bool do_eltwise_max = false) {
+    ASSERT(dfb_in0.get_id() == in0_dfb);
+    ASSERT(dfb_scale.get_id() == scale_dfb);
+    const uint32_t out_dfb = dfb_out.get_id();
+    const uint32_t prev_dfb = dfb_prev.get_id();
     // Precondition: in0_dfb has rows*cols produced. in0_dfb has tiles in row-major order
     // Precondition: scale_dfb has 1 produced
     // Precondition: out_dfb has rows free
@@ -184,7 +249,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, bool do_eltwise_max = false) 
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(out_dfb);
+        pack_reconfig_out(out_dfb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
             pack_tile<true>(cur_max_dst_idx, out_dfb, (row_start_idx + i));
@@ -209,11 +274,22 @@ template <
     uint32_t in0_dfb,
     uint32_t scale_dfb,
     uint32_t rows,
-    VectorMode vector_mode = VectorMode::C>
-void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwise_max = false) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_scale(scale_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+    VectorMode vector_mode = VectorMode::C,
+    typename In0DFB,
+    typename ScaleDFB,
+    typename OutDFB,
+    typename PrevDFB>
+void reduce_c(
+    In0DFB& dfb_in0,
+    ScaleDFB& dfb_scale,
+    OutDFB& dfb_out,
+    PrevDFB& dfb_prev,
+    uint32_t cols,
+    bool do_eltwise_max = false) {
+    ASSERT(dfb_in0.get_id() == in0_dfb);
+    ASSERT(dfb_scale.get_id() == scale_dfb);
+    const uint32_t out_dfb = dfb_out.get_id();
+    const uint32_t prev_dfb = dfb_prev.get_id();
     // Precondition: in0_dfb has rows*cols produced. in0_dfb has tiles in row-major order
     // Precondition: scale_dfb has 1 produced
     // Precondition: out_dfb has rows free
@@ -226,7 +302,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
     dfb_in0.wait_front(num_tiles);
     dfb_out.reserve_back(rows);
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
 
     binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
@@ -256,36 +332,41 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
     dfb_out.push_back(rows);
 }
 
-#ifdef TRISC_MATH
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_recip_first_column,
-        (legacy_compat, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::C);
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
 }
 #endif
 
 /**
  * in_dfb = 1 / in_dfb
  */
-void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in(in_dfb);
+template <typename InDFB>
+void recip_block_inplace(InDFB& dfb_in, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
     // Precondition: in_dfb has num_tiles produced
     // Postcondition: in_dfb has num_tiles produced
     reconfig_data_format_srca(in_dfb);
     copy_init(in_dfb);
+#ifdef ARCH_QUASAR
     recip_tile_init();
-    pack_reconfig_data_format(in_dfb);
+#else
+    // The first-column helper uses SFPI, not full-tile LOADMACRO/replay state.
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::sfpu_reciprocal_init, (APPROX)));
+#endif
+    pack_reconfig_out(in_dfb);
 
     dfb_in.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0);
-        MATH((recip_tile_first_column(0)));
+#ifdef ARCH_QUASAR
+        recip_tile(0);  // full-tile 1/x; only col 0 is consumed downstream
+#else
+        MATH((recip_tile_first_column(0)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, in_dfb);
@@ -307,11 +388,16 @@ template <
     uint32_t scale_fp32,
     bool write_result_inplace = true,
     bool do_reduce = true,
-    VectorMode vector_mode = VectorMode::RC>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uint32_t cols) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_reduce(reduce_dfb);
+    VectorMode vector_mode = VectorMode::RC,
+    typename In0DFB,
+    typename In1DFB,
+    typename ReduceDFB>
+void sub_exp_block_bcast_cols_inplace(
+    In0DFB& dfb_in0, In1DFB& dfb_in1, ReduceDFB& dfb_reduce, uint32_t cols, uint32_t in1_offset = 0) {
+    ASSERT(dfb_in0.get_id() == in0_dfb);
+    // in1_offset: ring-front offset of the in1 (max) block. 0 unless in1 is the "cur" half of the
+    // merged max DFB, in which case it is statistics_tiles so the reads skip the "prev" block.
+    const uint32_t in1_dfb = dfb_in1.get_id();
     // Precondition: in0_dfb has rows*cols produced
     // Precondition: in1_dfb has rows produced
     // Postcondition: in0_dfb has rows*cols produced
@@ -322,14 +408,20 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     reconfig_data_format(in0_dfb, in1_dfb);
     sub_bcast_cols_init(in0_dfb, in1_dfb);
 
+#ifndef ARCH_QUASAR
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
     exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+#endif
+    // Quasar's exp only supports the default scale (1.0) and CLAMP_NEGATIVE=true (see the
+    // ARCH_QUASAR branch below, which applies scale_fp32 via a separate multiply before an
+    // unscaled exp). CLAMP_NEGATIVE matches the WH packer-ReLU-zeroes-negatives intent, so the
+    // ReLU config below stays shared for both archs (it's a no-op once inputs are already clamped).
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     dfb_in0.wait_front(rows * cols);
-    dfb_in1.wait_front(rows);
+    dfb_in1.wait_front(rows + in1_offset);
     if constexpr (do_reduce) {
         dfb_reduce.reserve_back(rows);
     }
@@ -345,12 +437,31 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+#ifdef ARCH_QUASAR
+            // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32 is
+            // applied via a separate multiply pass across all tiles in this dst block, then an
+            // unscaled exp pass. sub_tiles_bcast_cols is an FPU op (separate pipeline, no state to
+            // reissue); mul and exp are both SFPU op families, so each family's _init is issued once,
+            // immediately before its own loop over j, rather than interleaved per-tile.
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, in1_offset + i, j);
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                mul_unary_tile(j, scale_fp32);
+            }
+            exp_tile_init<true /* approx */>();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                exp_tile<true /* approx */, false /* scale_en */>(j);
+            }
+#else
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, in1_offset + i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
+#endif
             tile_regs_commit();
 
             if constexpr (write_result_inplace) {
@@ -361,7 +472,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
-                pack_reconfig_data_format(in0_dfb);
+                pack_reconfig_out(in0_dfb);
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_dfb);
                 }
@@ -370,7 +481,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             }
 
             if constexpr (do_reduce) {
-                pack_reconfig_data_format(reduce_dfb);
+                pack_reconfig_out(dfb_reduce.get_id());
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
                 if (u > 0) {
@@ -378,7 +489,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
-                    pack_tile<true>(j, reduce_dfb, i);
+                    pack_tile<true>(j, dfb_reduce.get_id(), i);
                     if (u == 0 && j == 0) {
                         // If this was the first tile of a row, start accumulating
                         PACK((llk_pack_reconfig_l1_acc(1)));
@@ -408,11 +519,18 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
  * @tparam pack_accumulate - If true, enables L1 accumulation to accumulate results onto existing tiles
  *                           in out_dfb. Only supported when immediate_pop=false.
  */
-template <uint32_t rows, uint32_t cols, bool immediate_pop, bool pack_accumulate>
-void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <
+    uint32_t rows,
+    uint32_t cols,
+    bool immediate_pop,
+    bool pack_accumulate,
+    typename In0DFB,
+    typename In1DFB,
+    typename OutDFB>
+void mul_block_bcast_cols(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in0_dfb has rows*cols produced
     // Precondition: in1_dfb has rows produced
     // Precondition: out_dfb has rows*cols produced
@@ -423,7 +541,7 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
     constexpr uint32_t num_tiles = rows * cols;
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
@@ -490,10 +608,10 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
 /**
  * in0_dfb *= in1_dfb
  */
-template <uint32_t rows, uint32_t cols>
-void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+template <uint32_t rows, uint32_t cols, typename In0DFB, typename In1DFB>
+void mul_block_bcast_cols_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     // Precondition: in0_dfb has rows*cols produced
     // Precondition: in1_dfb has rows produced
     // Postcondition: in0_dfb has rows*cols produced
@@ -511,7 +629,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -535,10 +653,10 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
     reconfig_data_format_srcb(in0_dfb);
 }
 
-template <uint32_t in1_scalar_dfb, uint32_t num_tiles>
-void mul_block_bcast_scalar_inplace(uint32_t in0_dfb) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1_scalar(in1_scalar_dfb);
+template <uint32_t in1_scalar_dfb, uint32_t num_tiles, typename In0DFB, typename In1ScalarDFB>
+void mul_block_bcast_scalar_inplace(In0DFB& dfb_in0, In1ScalarDFB& dfb_in1_scalar) {
+    ASSERT(dfb_in1_scalar.get_id() == in1_scalar_dfb);
+    const uint32_t in0_dfb = dfb_in0.get_id();
     // Precondition: in0_dfb has num_tiles produced
     // Precondition: in1_scalar_dfb has 1 produced
     // Postcondition: in0_dfb has num_tiles produced
@@ -580,16 +698,16 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_dfb) {
 /**
  * in0_dfb += in1_dfb
  */
-template <bool pop_in1 = true>
-void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+template <bool pop_in1 = true, typename In0DFB, typename In1DFB>
+void add_block_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     // Precondition: in0_dfb and in1_dfb have num_tiles produced
     // Postcondition: in0_dfb has num_tiles produced
     // Postcondition: in1_dfb has num_tiles consumed
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     add_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
@@ -612,9 +730,62 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     dfb_in0.push_back(num_tiles);
 }
 
-void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+/**
+ * Merged online-softmax running-sum update, fused: sum = cur + prev * exp_max_diff, in place on the
+ * single merged sum DFB that holds both the prev block (ring front [0, num_tiles)) and the cur block
+ * (behind it at [cur_offset, cur_offset + num_tiles)), plus a separate exp_max_diff (emd) DFB.
+ *
+ * Why fused (not mul_block_inplace(prev) followed by add_block_inplace(cur, prev)): the two sum blocks
+ * sit contiguously in the ring exactly as reduce_c produced them (prev at the front, cur reserve_back'd
+ * right behind it). WH tile addressing is fifo_rd_ptr + page_size*tile_index with NO ring wrap, so an
+ * offset read (cur at cur_offset) is only valid while prev and cur are physically contiguous. An in-place
+ * mul_block_inplace on the front (prev) block pop_front/reserve_back/push_back-rotates the full
+ * 2*num_tiles-deep ring, which wraps the layout and makes the subsequent cur offset read fetch a wrong L1
+ * address (PCC ~0.70 on WH batch32). This fused pass reads both blocks straight from the contiguous
+ * reduce_c layout — mirroring the merged max path, whose sub_exp_block also reads prev@front + cur@offset
+ * contiguously and never rotates the merged buffer.
+ *
+ * emd is read (num_tiles at the front) but NOT popped — the out-accumulator scaling that follows pops it.
+ * num_tiles is statistics_tiles (== Sq_chunk_t); num_tiles + 1 must fit DST (one scratch reg for cur).
+ *
+ * Postcondition: `dfb_sum` holds num_tiles produced (the running sum) at the front; prev+cur consumed.
+ */
+template <typename DSumDFB, typename DEmdDFB>
+void fma_block_merged_sum(DSumDFB& d_sum, DEmdDFB& d_emd, uint32_t cur_offset, uint32_t num_tiles) {
+    const uint32_t dfb_sum = d_sum.get_id();
+    const uint32_t dfb_emd = d_emd.get_id();
+    d_sum.wait_front(cur_offset + num_tiles);  // prev@front [0,num_tiles) + cur@[cur_offset,+num_tiles)
+    d_emd.wait_front(num_tiles);
+    reconfig_data_format(dfb_sum, dfb_emd);
+    pack_reconfig_out(dfb_sum);
+    const uint32_t cur_scratch = num_tiles;  // one scratch DST reg above the num_tiles result regs
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        // dst[i] = prev[i] * emd[i]   (prev at front idx i, emd at front idx i)
+        mul_init(dfb_sum, dfb_emd);
+        mul_tiles(dfb_sum, dfb_emd, i, i, i);
+        // dst[cur_scratch] = cur[i]   (cur at ring offset cur_offset + i)
+        copy_init(dfb_sum);
+        copy_tile(dfb_sum, cur_offset + i, cur_scratch);
+        // dst[i] = prev[i]*emd[i] + cur[i]
+        add_binary_tile_init();
+        add_binary_tile(i, cur_scratch, i);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    d_sum.pop_front(cur_offset + num_tiles);  // drop the consumed prev AND cur blocks
+    d_sum.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        pack_tile(i, dfb_sum, i);
+    }
+    tile_regs_release();
+    d_sum.push_back(num_tiles);  // running sum is now the single contiguous front block
+}
+
+template <typename In0DFB, typename In1DFB>
+void mul_tiles_bcast_cols_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     /**
      * Given in0_dfb and in1_dfb, multiply each tile of in0_dfb by the corresponding tile of in1_dfb
      * and bcast cols of in1_dfb.
@@ -625,7 +796,7 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t n
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -644,9 +815,10 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t n
 /**
  * in0_dfb *= in1_dfb
  */
-void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
+template <typename In0DFB, typename In1DFB>
+void mul_block_inplace(In0DFB& dfb_in0, In1DFB& dfb_in1, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
     // Precondition: in0_dfb and in1_dfb have num_tiles produced
     // Postcondition: in0_dfb has num_tiles produced
     // Postcondition: in1_dfb has num_tiles produced
@@ -668,7 +840,7 @@ void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     }
 }
 
-#if defined(TRISC_MATH) || defined(TRISC_PACK)
+#if (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void exp_tile_first_column(uint32_t idst) {
@@ -680,34 +852,51 @@ void exp_tile_first_column(uint32_t idst) {
         idst,
         VectorMode::C);
 }
-#endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
+#endif  // (defined(TRISC_MATH) || defined(TRISC_PACK)) && !defined(ARCH_QUASAR)
 
 /**
  * out_dfb = exp((in0_dfb - in1_dfb) * scale_fp32)
  */
-template <uint32_t scale_fp32>
-void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <uint32_t scale_fp32, typename In0DFB, typename In1DFB, typename OutDFB>
+void sub_exp_block(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles, uint32_t in1_offset = 0) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in0_dfb and in1_dfb have num_tiles produced
     // Postcondition: out_dfb has num_tiles produced
     // Postcondition: in0_dfb and in1_dfb has num_tiles produced
+    // in1_offset: ring-front offset of the in1 block. 0 unless in1 is the "cur" half of the merged
+    // max DFB, in which case it is statistics_tiles so the reads skip the "prev" block at the front.
 
     sub_init(in0_dfb, in1_dfb);
+#ifndef ARCH_QUASAR
     exp_tile_init<EXP_APPROX_MODE>();
+#endif
     dfb_in0.wait_front(num_tiles);
-    dfb_in1.wait_front(num_tiles);
+    dfb_in1.wait_front(num_tiles + in1_offset);
     dfb_out.reserve_back(num_tiles);
 
+#ifndef ARCH_QUASAR
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         tile_regs_acquire();
-        sub_tiles(in0_dfb, in1_dfb, i, i, 0);
-        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+        sub_tiles(in0_dfb, in1_dfb, i, in1_offset + i, 0);
+#ifdef ARCH_QUASAR
+        // No fused exp_tile_first_column on Quasar, and Quasar's exp only supports scale=1.0 (see
+        // exp_init's static_assert), so scale_fp32 (already fp32-encoded) is applied via a separate
+        // multiply before an unscaled exp. Full-tile exp is numerically safe; only column 0 is
+        // consumed downstream.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, scale_fp32);
+        exp_tile_init<EXP_APPROX_MODE>();
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(0);
+#else
+        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -716,39 +905,50 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
     }
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
+    constexpr bool reuse_cur_max_tile = is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf;
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_fused_max_sub_exp_add_tile,
-        (is_fp32_dest_acc_en),
+        (is_fp32_dest_acc_en, reuse_cur_max_tile),
         idst,
         vector_mode,
         scale_bf16);
 }
 #endif
 
-template <uint32_t scale_fp32, VectorMode vector_mode = VectorMode::C>
+template <
+    uint32_t scale_fp32,
+    VectorMode vector_mode = VectorMode::C,
+    typename WorkerMaxDFB,
+    typename WorkerSumDFB,
+    typename CurMaxDFB,
+    typename PrevMaxDFB,
+    typename CurSumDFB,
+    typename PrevSumDFB,
+    typename ExpMaxDiffDFB,
+    typename ExpMaxDiff2DFB>
 void correction_block(
-    uint32_t dfb_worker_max,
-    uint32_t dfb_worker_sum,
-    uint32_t dfb_cur_max,
-    uint32_t dfb_prev_max,
-    uint32_t dfb_cur_sum,
-    uint32_t dfb_prev_sum,
-    uint32_t dfb_exp_max_diff,
-    uint32_t dfb_exp_max_diff_2,
+    WorkerMaxDFB& dfb_worker_max_obj,
+    WorkerSumDFB& dfb_worker_sum_obj,
+    CurMaxDFB& dfb_cur_max_obj,
+    PrevMaxDFB& dfb_prev_max_obj,
+    CurSumDFB& dfb_cur_sum_obj,
+    PrevSumDFB& dfb_prev_sum_obj,
+    ExpMaxDiffDFB& dfb_exp_max_diff_obj,
+    ExpMaxDiff2DFB& dfb_exp_max_diff_2_obj,
     uint32_t num_head_tiles) {
-    DataflowBuffer dfb_worker_max_obj(dfb_worker_max);
-    DataflowBuffer dfb_worker_sum_obj(dfb_worker_sum);
-    DataflowBuffer dfb_cur_max_obj(dfb_cur_max);
-    DataflowBuffer dfb_prev_max_obj(dfb_prev_max);
-    DataflowBuffer dfb_cur_sum_obj(dfb_cur_sum);
-    DataflowBuffer dfb_prev_sum_obj(dfb_prev_sum);
-    DataflowBuffer dfb_exp_max_diff_obj(dfb_exp_max_diff);
-    DataflowBuffer dfb_exp_max_diff_2_obj(dfb_exp_max_diff_2);
+    const uint32_t dfb_worker_max = dfb_worker_max_obj.get_id();
+    const uint32_t dfb_worker_sum = dfb_worker_sum_obj.get_id();
+    const uint32_t dfb_cur_max = dfb_cur_max_obj.get_id();
+    const uint32_t dfb_prev_max = dfb_prev_max_obj.get_id();
+    const uint32_t dfb_cur_sum = dfb_cur_sum_obj.get_id();
+    const uint32_t dfb_prev_sum = dfb_prev_sum_obj.get_id();
+    const uint32_t dfb_exp_max_diff = dfb_exp_max_diff_obj.get_id();
+    const uint32_t dfb_exp_max_diff_2 = dfb_exp_max_diff_2_obj.get_id();
     dfb_worker_max_obj.wait_front(num_head_tiles);
     dfb_worker_sum_obj.wait_front(num_head_tiles);
     dfb_prev_max_obj.wait_front(num_head_tiles);
@@ -761,27 +961,90 @@ void correction_block(
 
     constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
     constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
-    constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max
+    constexpr uint32_t dst_reg_2 = 2;  // cur_max output; also worker_sum input in FP32 half-sync
     constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum, returns cur_sum
-    constexpr uint32_t dst_reg_4 = 4;  // dst_reg_4 is used for worker_sum
+    constexpr uint32_t dst_reg_4 = 4;  // worker_sum in the five-tile layout
+    // #56171: FP32 half-sync only has slots 0..3. Reuse the cur_max output
+    // slot for worker_sum, which the SFPU loads before writing cur_max.
+    constexpr uint32_t worker_sum_dst = (DST_ACCUM_MODE && DST_SYNC_MODE == DstSync::SyncHalf) ? dst_reg_2 : dst_reg_4;
+    static_assert(
+        worker_sum_dst < compute_kernel_lib::DEST_AUTO_LIMIT,
+        "correction_block DST layout exceeds DEST capacity for this sync/accum mode");
 
+#ifndef ARCH_QUASAR
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         tile_regs_acquire();
+#ifndef ARCH_QUASAR
         copy_init(dfb_worker_max);
         exp_tile_init<EXP_APPROX_MODE>();
+#endif
+        // Each input switch must bind its own Quasar unpack buffer descriptor.
+#ifdef ARCH_QUASAR
+        copy_init(dfb_prev_max);
+#endif
         copy_tile(dfb_prev_max, i, dst_reg_0);
+#ifdef ARCH_QUASAR
+        copy_init(dfb_worker_max);
+#endif
         copy_tile(dfb_worker_max, i, dst_reg_1);
+#ifdef ARCH_QUASAR
+        copy_init(dfb_prev_sum);
+#endif
         copy_tile(dfb_prev_sum, i, dst_reg_3);
-        copy_tile(dfb_worker_sum, i, dst_reg_4);
-        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
+#ifdef ARCH_QUASAR
+        copy_init(dfb_worker_sum);
+#endif
+        copy_tile(dfb_worker_sum, i, worker_sum_dst);
+#ifdef ARCH_QUASAR
+        // No fused max/sub/exp/add primitive on Quasar. Decompose into generic dst-to-dst SFPU
+        // ops: cur_max = max(prev_max, worker_max); exp_prev/exp_worker = exp((prev/worker_max -
+        // cur_max) * scale); cur_sum = exp_prev*prev_sum + exp_worker*worker_sum. Full-tile ops
+        // are numerically safe here; only column 0 is consumed downstream. Each op family's _init
+        // reprograms shared SFPU state (e.g. LREG polynomial constants), so it must be re-issued
+        // immediately before that family's calculate call, not hoisted above the other families.
+        binary_max_tile_init();
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_2);  // cur_max = max(prev_max, worker_max)
+        sub_binary_tile_init();
+        sub_binary_tile(dst_reg_0, dst_reg_2, dst_reg_0);  // dst_reg_0 = prev_max - cur_max
+        sub_binary_tile(dst_reg_1, dst_reg_2, dst_reg_1);  // dst_reg_1 = worker_max - cur_max
+        // Quasar's exp only supports scale=1.0 (see exp_init's static_assert), so scale_fp32
+        // (already fp32-encoded) is applied via a separate multiply before an unscaled exp.
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_reg_0, scale_fp32);  // dst_reg_0 = (prev_max - cur_max) * scale
+        mul_unary_tile(dst_reg_1, scale_fp32);  // dst_reg_1 = (worker_max - cur_max) * scale
+        exp_tile_init<EXP_APPROX_MODE>();
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_0);  // dst_reg_0 = exp_prev
+        exp_tile<EXP_APPROX_MODE, false /*scale_en*/>(dst_reg_1);  // dst_reg_1 = exp_worker
+        mul_binary_tile_init();
+        mul_binary_tile(dst_reg_1, worker_sum_dst, worker_sum_dst);  // exp_worker * worker_sum
+        mul_binary_tile(dst_reg_0, dst_reg_3, dst_reg_3);            // exp_prev * prev_sum
+        add_binary_tile_init();
+        add_binary_tile(dst_reg_3, worker_sum_dst, dst_reg_3);  // cur_sum
+#else
+        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
+        // pack_tile selects the tile index; pack_reconfig_out selects the output buffer.
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_exp_max_diff);
+#endif
         pack_tile(dst_reg_0, dfb_exp_max_diff);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_exp_max_diff_2);
+#endif
         pack_tile(dst_reg_1, dfb_exp_max_diff_2);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_cur_max);
+#endif
         pack_tile(dst_reg_2, dfb_cur_max);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_cur_sum);
+#endif
         pack_tile(dst_reg_3, dfb_cur_sum);
         tile_regs_release();
         dfb_cur_max_obj.push_back(1);
@@ -796,16 +1059,19 @@ void correction_block(
 /**
  * in_dfb -> out_dfb
  */
-template <bool pop_in_dfb>
-void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in(in_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <bool pop_in_dfb, typename InDFB, typename OutDFB>
+void move_block(InDFB& dfb_in, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in_dfb has num_tiles produced
     // Precondition: out_dfb has num_tiles free
     // Postcondition: in_dfb has num_tiles consumed
     // Postcondition: out_dfb has num_tiles produced
 
     copy_init(in_dfb);
+#ifdef ARCH_QUASAR
+    pack_reconfig_out(out_dfb);
+#endif
 
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
@@ -825,9 +1091,10 @@ void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     }
 }
 
-void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in(in_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename InDFB, typename OutDFB>
+void copy_block(InDFB& dfb_in, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // Precondition: in_dfb has num_tiles produced
     // Precondition: out_dfb has num_tiles free
     // Postcondition: in_dfb has num_tiles consumed
@@ -848,20 +1115,28 @@ void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     dfb_in.pop_front(num_tiles);
 }
 
-void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
+template <typename InDFB, typename OutDFB>
+void log_block(InDFB& dfb_in, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in_dfb = dfb_in.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     reconfig_data_format_srca(in_dfb);
-    pack_reconfig_data_format(out_dfb);
-    DataflowBuffer dfb_in(in_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(in_dfb);
-    log_tile_init();
+    // log_tile SFPU is not wired up on Quasar; log_block is only used on the (untested) attention-sink
+    // path, so guard the log ops out there. On Quasar this degrades log_block to a plain copy — revisit
+    // when attention-sink is brought up on Quasar.
+#ifndef ARCH_QUASAR
+    MATH((log_tile_init()));
+#endif
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         copy_tile(in_dfb, i, 0 /*dst*/);
-        log_tile(0);
+#ifndef ARCH_QUASAR
+        MATH((log_tile(0)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -870,10 +1145,11 @@ void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     }
 }
 
-void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename In0DFB, typename In1DFB, typename OutDFB>
+void sigmoid_sub(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // out_dfb = sigmoid(in0_dfb - in1_dfb)
     /**
      * sigmoid(x) is accurately implemented as 1 / (1 + exp(-x))
@@ -885,8 +1161,13 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     dfb_in1.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
     sub_init(in0_dfb, in1_dfb);
+#ifdef ARCH_QUASAR
+    // Quasar ships a generic accurate sigmoid SFPU op, so there's no need for the manual
+    // exp(-x)/add-1/reciprocal decomposition the WH/BH fused fast path uses below.
+    sigmoid_tile_init();
+#else
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
+    // recip_tile_first_column() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
@@ -894,11 +1175,22 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_dfb, in1_dfb, i, i, 0);
+#ifdef ARCH_QUASAR
+        sigmoid_tile(0);  // full-tile accurate sigmoid(in0-in1); only col 0 is consumed downstream
+#else
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -910,8 +1202,8 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
-        // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
+        MATH((recip_tile_first_column(0 /*dst_index*/)));  // WH/BH fused fast path
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_dfb);
@@ -920,7 +1212,7 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     dfb_out.push_back(num_tiles);
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
     SFPU_UNARY_CALL(
@@ -936,10 +1228,11 @@ void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, 
 }
 #endif
 
-void logsigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename In0DFB, typename In1DFB, typename OutDFB>
+void logsigmoid_sub(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // out_dfb = logsigmoid(in0_dfb - in1_dfb)
     // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
     dfb_in0.wait_front(num_tiles);
@@ -961,8 +1254,12 @@ void logsigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32
         //     const_1_fp32 /*beta_reciprocal*/,
         //     const_20_fp32 /*threshold*/,
         //     (int)VectorMode::C)));
-
-        MATH((softplus_tile_first_column(0, const_1_fp32, const_1_fp32, const_20_fp32)));
+#ifdef ARCH_QUASAR
+        // Generic full-tile softplus; only col 0 is consumed downstream.
+        softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
+#else
+        MATH((softplus_tile_first_column(0, const_1_fp32, const_1_fp32, const_20_fp32)));  // WH/BH fused fast path
+#endif
         // Negate the output of softplus
         negative_tile(0);
         tile_regs_commit();
@@ -977,11 +1274,11 @@ void logsigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32
  * out_dfb = in0_dfb - in1_dfb
  * Compile with size optimization to prevent binary size exceeding the limit.
  */
-__attribute__((optimize("Os"))) void sub_block(
-    uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <typename In0DFB, typename In1DFB, typename OutDFB>
+__attribute__((optimize("Os"))) void sub_block(In0DFB& dfb_in0, In1DFB& dfb_in1, OutDFB& dfb_out, uint32_t num_tiles) {
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
@@ -1001,10 +1298,16 @@ __attribute__((optimize("Os"))) void sub_block(
 /**
  * out_dfb = in0_dfb @ in1_dfb
  */
+template <
+    typename In0DFB,
+    typename In1DFB,
+    typename OutDFB,
+    typename MaskDFB = DataflowBufferAnyPattern,
+    typename ZeroDFB = DataflowBufferAnyPattern>
 ALWI void matmul_blocks(
-    const uint32_t& in0_dfb,
-    const uint32_t& in1_dfb,
-    const uint32_t& out_dfb,
+    In0DFB& dfb_in0,
+    In1DFB& dfb_in1,
+    OutDFB& dfb_out,
     const uint32_t& M,
     const uint32_t& N,
     const uint32_t& K,
@@ -1016,18 +1319,16 @@ ALWI void matmul_blocks(
     const uint32_t& subblock_w,
     const bool& transpose,
     const bool& add_mask = false,
-    const uint32_t& mask_dfb = 0,
-    const uint32_t& zero_dfb = 0) {
+    MaskDFB* dfb_mask = nullptr,
+    ZeroDFB* dfb_zero = nullptr) {
     // precondition: in0_dfb has M*K produced
     // precondition: in1_dfb has K*N produced
     // postcondition: in0_dfb is full, in1_dfb is empty
     // postcondition: out_dfb has M*N produced
 
-    DataflowBuffer dfb_in0(in0_dfb);
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
-    DataflowBuffer dfb_mask(mask_dfb);
-    DataflowBuffer dfb_zero(zero_dfb);
+    const uint32_t in0_dfb = dfb_in0.get_id();
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
 
     matmul_block_init(
         in0_dfb,
@@ -1067,12 +1368,16 @@ ALWI void matmul_blocks(
                 in1_index += N;
             }
             if (add_mask) {
-                dfb_mask.wait_front(out_subblock_num_tiles);
-                dfb_zero.wait_front(1);
+                const uint32_t mask_dfb = dfb_mask->get_id();
+                const uint32_t zero_dfb = dfb_zero->get_id();
+                dfb_mask->wait_front(out_subblock_num_tiles);
+                // zero_dfb is identity_scale_in: the zero tile sits behind the reduce scaler (entry 1).
+                constexpr uint32_t zero_tile_idx = 1;
+                dfb_zero->wait_front(zero_tile_idx + 1);
                 reconfig_data_format(zero_dfb, mask_dfb);
                 add_init(zero_dfb, mask_dfb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(zero_dfb, mask_dfb, 0, i, i);
+                    add_tiles(zero_dfb, mask_dfb, zero_tile_idx, i, i);
                 }
                 reconfig_data_format(in1_dfb, in0_dfb);
                 matmul_block_init(in0_dfb, in1_dfb, transpose, subblock_w, subblock_h, in0_block_w);
@@ -1099,10 +1404,10 @@ ALWI void matmul_blocks(
     dfb_in1.pop_front(K * N);
 }
 
-template <uint32_t M>
-void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
-    DataflowBuffer dfb_in1(in1_dfb);
-    DataflowBuffer dfb_out(out_dfb);
+template <uint32_t M, typename In1DFB, typename OutDFB>
+void matmul_reduce(In1DFB& dfb_in1, OutDFB& dfb_out) {
+    const uint32_t in1_dfb = dfb_in1.get_id();
+    const uint32_t out_dfb = dfb_out.get_id();
     // precondition: in0_dfb has M*K produced
     // precondition: in1_dfb has K*N produced
     // postcondition: in0_dfb is full, in1_dfb is empty
@@ -1133,7 +1438,7 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     dfb_in1.wait_front(N);
     dfb_out.wait_front(M);
 
@@ -1148,6 +1453,10 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
 
         tile_regs_commit();
         dfb_out.pop_front(subblock_h);
+        // In-place: reserve before packing. On Quasar the POP (unpack thread) and PUSH (pack thread)
+        // land on the tile counter asynchronously; without this WAIT_FREE the PUSH can beat the POP
+        // and overflow a DFB sized to exactly subblock_h.
+        dfb_out.reserve_back(subblock_h);
 
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_h; i++) {
@@ -1194,7 +1503,7 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t start = num_cols - num_padded;
 
     reconfig_data_format_srca(neginf_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(neginf_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1226,7 +1535,7 @@ void apply_partial_mask_lightweight(
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_dfb tile-row of this query band; nonzero when heads span >1 DEST band
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1264,7 +1573,7 @@ void apply_causal_mask_lightweight(
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1563,7 +1872,28 @@ template <
     uint32_t chunked_q_local_padded_Nt = 0,
     uint32_t chunked_chunk_size_t = 0,
     bool use_windowed_narrowing = false,
-    uint32_t dfb_windowed_k_range = 0>
+    uint32_t dfb_windowed_k_range = 0,
+    typename QkImDFB,
+    typename IdentityScaleInDFB,
+    typename AttentionSinkDFB,
+    typename ScaleInDFB,
+    typename WindowedKRangeDFB,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename LseInDFB,
+    typename LseOutDFB,
+    typename PrevOutDFB,
+    typename OutDFB>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1603,38 +1933,40 @@ void sdpa_inner_loop(
     const uint32_t global_n_mask_chunk_id,
     const uint32_t local_n_mask_chunk_id,
     const uint32_t joint_n_mask_chunk_id,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_lse_in,
-    const uint32_t dfb_lse_out,
-    const uint32_t dfb_prev_out,
-    const uint32_t dfb_out,
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj,
+    AttentionSinkDFB& dfb_attention_sink_obj,
+    ScaleInDFB& dfb_scale_in_obj,
+    WindowedKRangeDFB& dfb_windowed_k_range_obj,
+    QInDFB& dfb_q_in_obj,
+    KInDFB& dfb_k_in_obj,
+    VInDFB& dfb_v_in_obj,
+    MaskInDFB& dfb_mask_in_obj,
+    ColIdentityDFB& dfb_col_identity_obj,
+    OutImADFB& dfb_out_im_A_obj,
+    OutImBDFB& dfb_out_im_B_obj,
+    MaxADFB& dfb_max_A_obj,
+    MaxBDFB& dfb_max_B_obj,
+    SumADFB& dfb_sum_A_obj,
+    SumBDFB& dfb_sum_B_obj,
+    ExpMaxDiffDFB& dfb_exp_max_diff_obj,
+    LseInDFB& dfb_lse_in_obj,
+    LseOutDFB& dfb_lse_out_obj,
+    PrevOutDFB& dfb_prev_out_obj,
+    OutDFB& dfb_out_obj,
     const LightweightMaskContext& lw_mask = {},
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true,
     const ChunkedContext& chunked = {}) {
-    // Parameter-stable DFB locals. Aliases (dfb_sum_A/B, dfb_max_A/B, dfb_out_im_A/B) are
-    // std::swap-mutated below, so they use inline DataflowBuffer(alias).method() at the call
-    // sites instead. dfb_out is constructed conditionally near its consumer (cur.out target).
-    DataflowBuffer dfb_q_in_obj(dfb_q_in);
-    DataflowBuffer dfb_k_in_obj(dfb_k_in);
-    DataflowBuffer dfb_v_in_obj(dfb_v_in);
-    DataflowBuffer dfb_qk_im_obj(dfb_qk_im);
-    DataflowBuffer dfb_attention_sink_obj(dfb_attention_sink);
-    DataflowBuffer dfb_lse_in_obj(dfb_lse_in);
-    DataflowBuffer dfb_prev_out_obj(dfb_prev_out);
+    // The ping-pong aliases (sum_A/B, max_A/B, out_im_A/B) are std::swap-mutated pointers to the
+    // caller's buffers.
+    const uint32_t dfb_q_in = dfb_q_in_obj.get_id();
+    const uint32_t dfb_k_in = dfb_k_in_obj.get_id();
+    const uint32_t dfb_v_in = dfb_v_in_obj.get_id();
+    const uint32_t dfb_mask_in = dfb_mask_in_obj.get_id();
+    const uint32_t dfb_out = dfb_out_obj.get_id();
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1679,12 +2011,12 @@ void sdpa_inner_loop(
         }  // If ring attention
 
         // Set up ping pong buffers
-        uint32_t alias_prev_sum = dfb_sum_A;
-        uint32_t alias_cur_sum = dfb_sum_B;
-        uint32_t alias_prev_max = dfb_max_A;
-        uint32_t alias_cur_max = dfb_max_B;
-        uint32_t alias_mm2_prev_out = dfb_out_im_A;
-        uint32_t alias_mm2_cur_out = dfb_out_im_B;
+        auto* alias_prev_sum = &dfb_sum_A_obj;
+        auto* alias_cur_sum = &dfb_sum_B_obj;
+        auto* alias_prev_max = &dfb_max_A_obj;
+        auto* alias_cur_max = &dfb_max_B_obj;
+        auto* alias_mm2_prev_out = &dfb_out_im_A_obj;
+        auto* alias_mm2_cur_out = &dfb_out_im_B_obj;
 
         uint32_t k_chunk_end;
         if constexpr (sdpa_type == STANDARD) {
@@ -1700,14 +2032,13 @@ void sdpa_inner_loop(
         // chunks; any disagreement deadlocks the CBs.
         uint32_t k_chunk_start = iter_k_chunk_start;
         if constexpr (use_windowed_narrowing) {
-            DataflowBuffer dfb_k_range_obj(dfb_windowed_k_range);
-            dfb_k_range_obj.wait_front(1);
+            dfb_windowed_k_range_obj.wait_front(1);
             k_chunk_start = ckernel::read_tile_value(dfb_windowed_k_range, 0, 0);
             k_chunk_end = ckernel::read_tile_value(dfb_windowed_k_range, 0, 1);
             // read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
             // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
             dummy_unpack(dfb_windowed_k_range);
-            dfb_k_range_obj.pop_front(1);
+            dfb_windowed_k_range_obj.pop_front(1);
         }
 
         uint32_t processed_k_chunks = 0;
@@ -1754,11 +2085,11 @@ void sdpa_inner_loop(
              * matmul_blocks internally waits on both inputs
              */
             reconfig_data_format(dfb_k_in, dfb_q_in);
-            pack_reconfig_data_format(dfb_qk_im);
+            pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
-                dfb_q_in,
-                dfb_k_in,
-                dfb_qk_im,
+                dfb_q_in_obj,
+                dfb_k_in_obj,
+                dfb_qk_im_obj,
                 Sq_chunk_t,
                 Sk_chunk_t,
                 DHt,
@@ -1887,7 +2218,7 @@ void sdpa_inner_loop(
                     dummy_pack(dfb_qk_im);
                     dfb_qk_im_obj.push_back(Sk_chunk_t * Sq_chunk_t);
                 } else {
-                    add_block_inplace(dfb_qk_im, dfb_mask_in, qk_chunk_tiles);
+                    add_block_inplace(dfb_qk_im_obj, dfb_mask_in_obj, qk_chunk_tiles);
                 }
             }
 
@@ -1904,7 +2235,12 @@ void sdpa_inner_loop(
              */
             reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_qk_im, dfb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+                dfb_qk_im_obj,
+                dfb_identity_scale_in_obj,
+                *alias_cur_max,
+                *alias_prev_max,
+                Sk_chunk_t,
+                processed_k_chunks > 0);
 
             /**
              * sub_exp fuses a few operations.
@@ -1917,18 +2253,18 @@ void sdpa_inner_loop(
              * outside of the loop over K chunks.
              */
             sub_exp_block_bcast_cols_inplace<dfb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+                dfb_qk_im_obj, *alias_cur_max, *alias_cur_sum, Sk_chunk_t);
 
             // Reconfigure unpackers: srcA (context 0) = dfb_v_in, srcB (context 1) = dfb_qk_im (operands are swapped in
             // matmul)
             reconfig_data_format(dfb_v_in, dfb_qk_im);
-            pack_reconfig_data_format(alias_mm2_cur_out);
+            pack_reconfig_out(alias_mm2_cur_out->get_id());
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
-                dfb_qk_im,
-                dfb_v_in,
-                alias_mm2_cur_out,
+                dfb_qk_im_obj,
+                dfb_v_in_obj,
+                *alias_mm2_cur_out,
                 Sq_chunk_t,
                 vDHt,
                 Sk_chunk_t,
@@ -1941,7 +2277,7 @@ void sdpa_inner_loop(
                 false /*transpose*/);
 
             dfb_qk_im_obj.pop_front(qk_chunk_tiles);
-            reconfig_data_format(alias_prev_max, alias_cur_max);
+            reconfig_data_format(alias_prev_max->get_id(), alias_cur_max->get_id());
 
             /* OUT_ACC += OUT_IM */
             if (processed_k_chunks > 0) {
@@ -1949,25 +2285,25 @@ void sdpa_inner_loop(
                  * dfb_exp_max_diff = torch.exp((dfb_prev_max - dfb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
-                sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
-                DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+                sub_exp_block<scale_fp32>(*alias_prev_max, *alias_cur_max, dfb_exp_max_diff_obj, Sq_chunk_t);
+                alias_prev_max->pop_front(Sq_chunk_t);
 
                 /**
                  * dfb_prev_sum *= dfb_exp_max_diff
                  * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                  * reduction, containing the sum of tiles in dim=-1 of QK.
                  */
-                mul_tiles_bcast_cols_inplace(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+                mul_tiles_bcast_cols_inplace(*alias_prev_sum, dfb_exp_max_diff_obj, Sq_chunk_t);
 
                 /* dfb_cur_sum += dfb_prev_sum */
-                add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                add_block_inplace(*alias_cur_sum, *alias_prev_sum, Sq_chunk_t);
 
                 /**
                  * alias_mm2_cur_out += alias_mm2_prev_out * dfb_exp_max_diff
                  * This uses L1 accumulation to accumulate onto mm2_cur_out.
                  */
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                    alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_cur_out);
+                    *alias_mm2_prev_out, dfb_exp_max_diff_obj, *alias_mm2_cur_out);
             }
 
             // Swap DFB handles to prepare for next iteration
@@ -1981,7 +2317,7 @@ void sdpa_inner_loop(
         /**
          * Performs final row-reduction on the partial sum.
          */
-        matmul_reduce<Sq_chunk_t>(dfb_col_identity, alias_prev_sum);
+        matmul_reduce<Sq_chunk_t>(dfb_col_identity_obj, *alias_prev_sum);
 
         /**
          * Process attention sink as a virtual K chunk.
@@ -2002,22 +2338,27 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(dfb_attention_sink, dfb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t, 1>(
-                alias_cur_max, alias_prev_max, true);
+            // Runtime-cols reduce_c (as in the flash loop above): the compile-time-cols overload copies
+            // prev_max with a within-face-only transpose, which Quasar's unpack-A init rejects.
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t>(
+                dfb_attention_sink_obj, dfb_identity_scale_in_obj, *alias_cur_max, *alias_prev_max, 1, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
-            sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
-            DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+            //    sub_exp_block packs via a bare pack_tile; on Quasar the packer is still latched to
+            //    alias_cur_max from the reduce above, so point it at dfb_exp_max_diff first.
+            pack_reconfig_out(dfb_exp_max_diff_obj.get_id());
+            sub_exp_block<scale_fp32>(*alias_prev_max, *alias_cur_max, dfb_exp_max_diff_obj, Sq_chunk_t);
+            alias_prev_max->pop_front(Sq_chunk_t);
 
             // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
-            mul_tiles_bcast_cols_inplace(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+            mul_tiles_bcast_cols_inplace(*alias_prev_sum, dfb_exp_max_diff_obj, Sq_chunk_t);
             // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
             //    This adds the attention sink's contribution to the softmax denominator
             sub_exp_block_bcast_cols_inplace<dfb_attention_sink, Sq_chunk_t, scale_fp32, false>(
-                alias_cur_max, alias_cur_sum, 1);
+                dfb_attention_sink_obj, *alias_cur_max, *alias_cur_sum, 1);
 
             // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
-            add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+            add_block_inplace(*alias_cur_sum, *alias_prev_sum, Sq_chunk_t);
 
             // 6. Update running statistics for final normalization
             std::swap(alias_prev_sum, alias_cur_sum);
@@ -2027,21 +2368,21 @@ void sdpa_inner_loop(
             //    Note: We do NOT compute attention_sink @ V, so output only has real token contributions
             //    But we need to rescale it due to the updated max
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(
-                alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_cur_out);
+                *alias_mm2_prev_out, dfb_exp_max_diff_obj, *alias_mm2_cur_out);
             std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
         }
 
         if constexpr (sdpa_type == RING) {
-            log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
+            log_block(*alias_prev_sum, *alias_cur_max, Sq_chunk_t);
 
             // Scale prev_max by scale_fp32
-            mul_block_bcast_scalar_inplace<dfb_scale_in, Sq_chunk_t>(alias_prev_max);
-            add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
+            mul_block_bcast_scalar_inplace<dfb_scale_in, Sq_chunk_t>(*alias_prev_max, dfb_scale_in_obj);
+            add_block_inplace(*alias_prev_max, *alias_cur_max, Sq_chunk_t);
 
             /* dfb_cur_sum = 1.0 / dfb_cur_sum */
-            recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+            recip_block_inplace(*alias_prev_sum, Sq_chunk_t);
             /* dfb_out_accumulate_im *= dfb_cur_sum */
-            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum);
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(*alias_mm2_prev_out, *alias_prev_sum);
 
             if (ring_iter > 0) {
                 // Update output according to previous and current LSE
@@ -2053,55 +2394,55 @@ void sdpa_inner_loop(
                 dfb_lse_in_obj.wait_front(Sq_chunk_t);
                 dfb_prev_out_obj.wait_front(out_chunk_tiles);
 
-                uint32_t alias_cur_lse = alias_prev_max;      // full
-                uint32_t alias_sig = alias_cur_max;           // empty
-                uint32_t alias_cur_out = alias_mm2_prev_out;  // full
-                uint32_t alias_sub = alias_mm2_cur_out;       // empty
+                auto* alias_cur_lse = alias_prev_max;      // full
+                auto* alias_sig = alias_cur_max;           // empty
+                auto* alias_cur_out = alias_mm2_prev_out;  // full
+                auto* alias_sub = alias_mm2_cur_out;       // empty
 
                 // alias_sig = sigmoid(alias_cur_lse - dfb_lse_in)
-                sigmoid_sub(alias_cur_lse, dfb_lse_in, alias_sig, Sq_chunk_t);
+                sigmoid_sub(*alias_cur_lse, dfb_lse_in_obj, *alias_sig, Sq_chunk_t);
 
                 // alias_sub = dfb_prev_out - alias_cur_out
-                reconfig_data_format(dfb_prev_out, alias_cur_out);
-                sub_block(dfb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
+                reconfig_data_format(dfb_prev_out_obj.get_id(), alias_cur_out->get_id());
+                sub_block(dfb_prev_out_obj, *alias_cur_out, *alias_sub, out_chunk_tiles);
                 // alias_sub *= alias_sig
-                reconfig_data_format(alias_sub, alias_sig);
-                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
+                reconfig_data_format(alias_sub->get_id(), alias_sig->get_id());
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(*alias_sub, *alias_sig);
                 // dfb_out = dfb_prev_out - alias_sub
-                reconfig_data_format(dfb_prev_out, alias_sub);
-                pack_reconfig_data_format(dfb_out);
-                sub_block(dfb_prev_out, alias_sub, dfb_out, out_chunk_tiles);
+                reconfig_data_format(dfb_prev_out_obj.get_id(), alias_sub->get_id());
+                pack_reconfig_out(dfb_out);
+                sub_block(dfb_prev_out_obj, *alias_sub, dfb_out_obj, out_chunk_tiles);
                 dfb_prev_out_obj.pop_front(out_chunk_tiles);
-                DataflowBuffer(alias_cur_out).pop_front(out_chunk_tiles);
-                DataflowBuffer(alias_sub).pop_front(out_chunk_tiles);
+                alias_cur_out->pop_front(out_chunk_tiles);
+                alias_sub->pop_front(out_chunk_tiles);
 
                 // alias_sig = sigmoid(dfb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // dfb_lse_out = dfb_lse_in - alias_cur_lse
-                pack_reconfig_data_format(alias_sig);
-                reconfig_data_format(dfb_lse_in, alias_cur_lse);
-                logsigmoid_sub(dfb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
-                sub_block(dfb_lse_in, alias_sig, dfb_lse_out, Sq_chunk_t);
-                DataflowBuffer(alias_sig).pop_front(Sq_chunk_t);
-                DataflowBuffer(alias_cur_lse).pop_front(Sq_chunk_t);
+                pack_reconfig_out(alias_sig->get_id());
+                reconfig_data_format(dfb_lse_in_obj.get_id(), alias_cur_lse->get_id());
+                logsigmoid_sub(dfb_lse_in_obj, *alias_cur_lse, *alias_sig, Sq_chunk_t);
+                sub_block(dfb_lse_in_obj, *alias_sig, dfb_lse_out_obj, Sq_chunk_t);
+                alias_sig->pop_front(Sq_chunk_t);
+                alias_cur_lse->pop_front(Sq_chunk_t);
                 dfb_lse_in_obj.pop_front(Sq_chunk_t);
             } else {
-                pack_reconfig_data_format(dfb_out);
-                copy_block(alias_mm2_prev_out, dfb_out, out_chunk_tiles);
+                pack_reconfig_out(dfb_out);
+                copy_block(*alias_mm2_prev_out, dfb_out_obj, out_chunk_tiles);
 
-                pack_reconfig_data_format(dfb_lse_out);
-                copy_block(alias_prev_max, dfb_lse_out, Sq_chunk_t);
+                pack_reconfig_out(dfb_lse_out_obj.get_id());
+                copy_block(*alias_prev_max, dfb_lse_out_obj, Sq_chunk_t);
             }
         } else {
             /* dfb_cur_sum = 1.0 / dfb_cur_sum */
-            recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+            recip_block_inplace(*alias_prev_sum, Sq_chunk_t);
 
             /* dfb_out_accumulate_im *= dfb_cur_sum */
-            pack_reconfig_data_format(dfb_out);
-            mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, dfb_out);
+            pack_reconfig_out(dfb_out);
+            mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(*alias_mm2_prev_out, *alias_prev_sum, dfb_out_obj);
 
             // free up dfb_prev_max after K chunks
-            DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+            alias_prev_max->pop_front(Sq_chunk_t);
         }
 
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
@@ -2156,7 +2497,24 @@ template <
     uint32_t sliding_window_size,
     bool lightweight_mask_enabled = false,
     bool use_windowed_narrowing = false,
-    uint32_t dfb_windowed_k_range = 0>
+    uint32_t dfb_windowed_k_range = 0,
+    typename QkImDFB,
+    typename IdentityScaleInDFB,
+    typename AttentionSinkDFB,
+    typename WindowedKRangeDFB,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename OutDFB>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2182,19 +2540,23 @@ void sdpa_standard(
     const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_out,
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj,
+    AttentionSinkDFB& dfb_attention_sink_obj,
+    WindowedKRangeDFB& dfb_windowed_k_range_obj,
+    QInDFB& dfb_q_in_obj,
+    KInDFB& dfb_k_in_obj,
+    VInDFB& dfb_v_in_obj,
+    MaskInDFB& dfb_mask_in_obj,
+    ColIdentityDFB& dfb_col_identity_obj,
+    OutImADFB& dfb_out_im_A_obj,
+    OutImBDFB& dfb_out_im_B_obj,
+    MaxADFB& dfb_max_A_obj,
+    MaxBDFB& dfb_max_B_obj,
+    SumADFB& dfb_sum_A_obj,
+    SumBDFB& dfb_sum_B_obj,
+    ExpMaxDiffDFB& dfb_exp_max_diff_obj,
+    OutDFB& dfb_out_obj,
     const LightweightMaskContext& lw_mask = {},
     const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
@@ -2259,22 +2621,27 @@ void sdpa_standard(
         0,      // global_n_mask_chunk_id (not used)
         0,      // local_n_mask_chunk_id (not used)
         0,      // joint_n_mask_chunk_id (not used)
-        dfb_q_in,
-        dfb_k_in,
-        dfb_v_in,
-        dfb_mask_in,
-        dfb_col_identity,
-        dfb_out_im_A,
-        dfb_out_im_B,
-        dfb_max_A,
-        dfb_max_B,
-        dfb_sum_A,
-        dfb_sum_B,
-        dfb_exp_max_diff,
-        0,  // dfb_lse_in (not used)
-        0,  // dfb_lse_out (not used)
-        0,  // dfb_prev_out (not used)
-        dfb_out,
+        dfb_qk_im_obj,
+        dfb_identity_scale_in_obj,
+        dfb_attention_sink_obj,
+        dfb_q_in_obj,  // dfb_scale_in (not used)
+        dfb_windowed_k_range_obj,
+        dfb_q_in_obj,
+        dfb_k_in_obj,
+        dfb_v_in_obj,
+        dfb_mask_in_obj,
+        dfb_col_identity_obj,
+        dfb_out_im_A_obj,
+        dfb_out_im_B_obj,
+        dfb_max_A_obj,
+        dfb_max_B_obj,
+        dfb_sum_A_obj,
+        dfb_sum_B_obj,
+        dfb_exp_max_diff_obj,
+        dfb_q_in_obj,  // dfb_lse_in (not used)
+        dfb_q_in_obj,  // dfb_lse_out (not used)
+        dfb_q_in_obj,  // dfb_prev_out (not used)
+        dfb_out_obj,
         lw_mask,
         is_causal,
         false,  // is_balanced (not used)
@@ -2291,7 +2658,22 @@ template <
     uint32_t Sk_chunk_t,
     uint32_t DHt,
     bool use_joint_mask,
-    uint32_t scale_fp32>
+    uint32_t scale_fp32,
+    typename QkImDFB,
+    typename IdentityScaleInDFB,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename OutDFB>
 void sdpa_joint(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2315,19 +2697,23 @@ void sdpa_joint(
     const uint32_t out_chunk_tiles,
     const uint32_t mask_chunk_0,
     const uint32_t mask_chunk_1,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_out) {
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj,
+    QInDFB& dfb_q_in_obj,
+    KInDFB& dfb_k_in_obj,
+    VInDFB& dfb_v_in_obj,
+    MaskInDFB& dfb_mask_in_obj,
+    ColIdentityDFB& dfb_col_identity_obj,
+    OutImADFB& dfb_out_im_A_obj,
+    OutImBDFB& dfb_out_im_B_obj,
+    MaxADFB& dfb_max_A_obj,
+    MaxBDFB& dfb_max_B_obj,
+    SumADFB& dfb_sum_A_obj,
+    SumBDFB& dfb_sum_B_obj,
+    ExpMaxDiffDFB& dfb_exp_max_diff_obj,
+    OutDFB& dfb_out_obj) {
+    ASSERT(dfb_qk_im_obj.get_id() == dfb_qk_im);
+    ASSERT(dfb_identity_scale_in_obj.get_id() == dfb_identity_scale_in);
     sdpa_inner_loop<
         JOINT,
         dfb_qk_im,
@@ -2384,22 +2770,27 @@ void sdpa_joint(
         0,      // global_n_mask_chunk_id (not used)
         0,      // local_n_mask_chunk_id (not used)
         0,      // joint_n_mask_chunk_id (not used)
-        dfb_q_in,
-        dfb_k_in,
-        dfb_v_in,
-        dfb_mask_in,
-        dfb_col_identity,
-        dfb_out_im_A,
-        dfb_out_im_B,
-        dfb_max_A,
-        dfb_max_B,
-        dfb_sum_A,
-        dfb_sum_B,
-        dfb_exp_max_diff,
-        0,  // dfb_lse_in (not used)
-        0,  // dfb_lse_out (not used)
-        0,  // dfb_prev_out (not used)
-        dfb_out);
+        dfb_qk_im_obj,
+        dfb_identity_scale_in_obj,
+        dfb_q_in_obj,  // dfb_attention_sink (not used)
+        dfb_q_in_obj,  // dfb_scale_in (not used)
+        dfb_q_in_obj,  // dfb_windowed_k_range (not used)
+        dfb_q_in_obj,
+        dfb_k_in_obj,
+        dfb_v_in_obj,
+        dfb_mask_in_obj,
+        dfb_col_identity_obj,
+        dfb_out_im_A_obj,
+        dfb_out_im_B_obj,
+        dfb_max_A_obj,
+        dfb_max_B_obj,
+        dfb_sum_A_obj,
+        dfb_sum_B_obj,
+        dfb_exp_max_diff_obj,
+        dfb_q_in_obj,  // dfb_lse_in (not used)
+        dfb_q_in_obj,  // dfb_lse_out (not used)
+        dfb_q_in_obj,  // dfb_prev_out (not used)
+        dfb_out_obj);
 }
 
 /**
@@ -2418,7 +2809,26 @@ template <
     bool lightweight_mask_enabled = false,
     bool chunked_enabled = false,
     uint32_t chunked_q_local_padded_Nt = 0,
-    uint32_t chunked_chunk_size_t = 0>
+    uint32_t chunked_chunk_size_t = 0,
+    typename QkImDFB,
+    typename IdentityScaleInDFB,
+    typename ScaleInDFB,
+    typename QInDFB,
+    typename KInDFB,
+    typename VInDFB,
+    typename MaskInDFB,
+    typename ColIdentityDFB,
+    typename OutImADFB,
+    typename OutImBDFB,
+    typename MaxADFB,
+    typename MaxBDFB,
+    typename SumADFB,
+    typename SumBDFB,
+    typename ExpMaxDiffDFB,
+    typename LseInDFB,
+    typename LseOutDFB,
+    typename PrevOutDFB,
+    typename OutDFB>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2453,22 +2863,25 @@ void sdpa_ring(
     const uint32_t global_n_mask_chunk_id,
     const uint32_t local_n_mask_chunk_id,
     const uint32_t joint_n_mask_chunk_id,
-    const uint32_t dfb_q_in,
-    const uint32_t dfb_k_in,
-    const uint32_t dfb_v_in,
-    const uint32_t dfb_mask_in,
-    const uint32_t dfb_col_identity,
-    const uint32_t dfb_out_im_A,
-    const uint32_t dfb_out_im_B,
-    const uint32_t dfb_max_A,
-    const uint32_t dfb_max_B,
-    const uint32_t dfb_sum_A,
-    const uint32_t dfb_sum_B,
-    const uint32_t dfb_exp_max_diff,
-    const uint32_t dfb_lse_in,
-    const uint32_t dfb_lse_out,
-    const uint32_t dfb_prev_out,
-    const uint32_t dfb_out,
+    QkImDFB& dfb_qk_im_obj,
+    IdentityScaleInDFB& dfb_identity_scale_in_obj,
+    ScaleInDFB& dfb_scale_in_obj,
+    QInDFB& dfb_q_in_obj,
+    KInDFB& dfb_k_in_obj,
+    VInDFB& dfb_v_in_obj,
+    MaskInDFB& dfb_mask_in_obj,
+    ColIdentityDFB& dfb_col_identity_obj,
+    OutImADFB& dfb_out_im_A_obj,
+    OutImBDFB& dfb_out_im_B_obj,
+    MaxADFB& dfb_max_A_obj,
+    MaxBDFB& dfb_max_B_obj,
+    SumADFB& dfb_sum_A_obj,
+    SumBDFB& dfb_sum_B_obj,
+    ExpMaxDiffDFB& dfb_exp_max_diff_obj,
+    LseInDFB& dfb_lse_in_obj,
+    LseOutDFB& dfb_lse_out_obj,
+    PrevOutDFB& dfb_prev_out_obj,
+    OutDFB& dfb_out_obj,
     const LightweightMaskContext& lw_mask,
     const bool is_causal_ring_iter,
     const bool skip_first_half_q,
@@ -2535,22 +2948,27 @@ void sdpa_ring(
         global_n_mask_chunk_id,
         local_n_mask_chunk_id,
         joint_n_mask_chunk_id,
-        dfb_q_in,
-        dfb_k_in,
-        dfb_v_in,
-        dfb_mask_in,
-        dfb_col_identity,
-        dfb_out_im_A,
-        dfb_out_im_B,
-        dfb_max_A,
-        dfb_max_B,
-        dfb_sum_A,
-        dfb_sum_B,
-        dfb_exp_max_diff,
-        dfb_lse_in,
-        dfb_lse_out,
-        dfb_prev_out,
-        dfb_out,
+        dfb_qk_im_obj,
+        dfb_identity_scale_in_obj,
+        dfb_q_in_obj,  // dfb_attention_sink (not used)
+        dfb_scale_in_obj,
+        dfb_q_in_obj,  // dfb_windowed_k_range (not used)
+        dfb_q_in_obj,
+        dfb_k_in_obj,
+        dfb_v_in_obj,
+        dfb_mask_in_obj,
+        dfb_col_identity_obj,
+        dfb_out_im_A_obj,
+        dfb_out_im_B_obj,
+        dfb_max_A_obj,
+        dfb_max_B_obj,
+        dfb_sum_A_obj,
+        dfb_sum_B_obj,
+        dfb_exp_max_diff_obj,
+        dfb_lse_in_obj,
+        dfb_lse_out_obj,
+        dfb_prev_out_obj,
+        dfb_out_obj,
         lw_mask,
         is_causal_ring_iter,
         skip_first_half_q,

@@ -4,6 +4,7 @@
 
 #include "unary_composite_op.hpp"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <variant>
@@ -26,6 +27,11 @@
 #include <tt-metalium/hal.hpp>
 #include <cstdint>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 namespace ttnn::detail {
 
 // Function variance of whole tensor.
@@ -41,28 +47,79 @@ Tensor _variance_impl(
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
-Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
-    return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
+
+// ttnn::var and ttnn::std over H and W run as one program, but give each (N, C) plane to a single core. The
+// composite below spreads a plane over the grid in five programs (nine when H or W is not a multiple of 32, since
+// each ttnn::mean then also copies the input and fills its tile padding), but it reads the input twice and writes
+// and reads an input-sized intermediate. The one program is faster for planes of at most 64 tiles, and for larger
+// planes from about 10 planes up, on both an 8x8 Wormhole and a 120-core Blackhole: the crossover does not move with
+// the grid size. Below that the composite is faster, 3.2x for a single 1024x1024 plane on Wormhole.
+bool _hw_statistic_fits_one_program(const Tensor& y) {
+    const auto& shape = y.logical_shape();
+    // Host tensors and ranks below 2 take the composite, whose first op reports them. Quasar has no two-pass
+    // Std/Var kernel.
+    if (!ttnn::is_device_tensor(y) || shape.rank() < 2 || y.device()->arch() == tt::ARCH::QUASAR) {
+        return false;
+    }
+    const uint64_t plane_area = static_cast<uint64_t>(shape[-2]) * shape[-1];
+    const uint64_t planes = plane_area == 0 ? 0 : shape.volume() / plane_area;
+    const uint64_t tiles_per_plane = static_cast<uint64_t>(tt::div_up(shape[-2], tt::constants::TILE_HEIGHT)) *
+                                     tt::div_up(shape[-1], tt::constants::TILE_WIDTH);
+    constexpr uint64_t max_tiles_per_plane = 64;
+    constexpr uint64_t min_planes = 10;
+    return tiles_per_plane <= max_tiles_per_plane || planes >= min_planes;
 }
 
-Tensor _std(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, output_mem_config));
+// mean(y) over H and W, packed as FP32 whatever y's dtype. A bfloat16 mean is off by up to half a bfloat16 ULP, and
+// subtracting it adds that error squared to every squared deviation: 4% of the variance for a mean of 100.3 and a
+// std of 1. These are ttnn::mean's steps for the last two dimensions, which has no output dtype, with an FP32 output.
+Tensor _mean_hw_fp32(const Tensor& y) {
+    const auto& shape = y.logical_shape();
+    const auto rank = shape.rank();
+    Tensor input = y;
+    if (y.layout() == Layout::TILE &&
+        (shape[-2] % tt::constants::TILE_HEIGHT != 0 || shape[-1] % tt::constants::TILE_WIDTH != 0)) {
+        // fill_pad writes in place, so it fills a copy.
+        input = ttnn::fill_implicit_tile_padding(ttnn::clone(input, std::nullopt, std::nullopt, std::nullopt), 0.0f);
+    }
+    input = rank > 4   ? operations::data_movement::squeeze_from_ND_to_4D(input)
+            : rank < 4 ? operations::core::unsqueeze_to_4D(input)
+                       : input;
+    Tensor mean = operations::reduction::generic::detail::reduce(
+        input,
+        tt::tt_metal::ReduceOpMath::AVG,
+        tt::tt_metal::ReduceOpDim::HW,
+        1.0f / (static_cast<float>(shape[-2]) * static_cast<float>(shape[-1])),
+        input.memory_config(),
+        DataType::FLOAT32);
+    ttsl::SmallVector<uint32_t> mean_shape(shape.cbegin(), shape.cend());
+    mean_shape[rank - 2] = 1;
+    mean_shape[rank - 1] = 1;
+    return ttnn::reshape(mean, ttnn::Shape(mean_shape));
 }
 
-Tensor _std(
-    const Tensor& y,
-    const Tensor& mean_y,
-    Tensor& y_minus_mean_y,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
+// mean((y - mean(y))^2) over H and W. Both means divide by the logical H * W and leave out the tile padding.
+// ttnn::bcast would round FP32 deviations to bfloat16 precision; ttnn::subtract keeps them. FP32 inputs subtract on
+// the SFPU anyway; for bfloat16 the SFPU is requested, because the FPU would truncate the FP32 mean to TF32. The
+// input-sized squared deviation stays where y is; only the result goes to output_mem_config.
+Tensor _mean_squared_deviation_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+    ttsl::SmallVector<int> dims = {-2, -1};
+    Tensor mean_y = y.dtype() == DataType::FLOAT32 ? ttnn::mean(y, dims, true) : _mean_hw_fp32(y);
+    const std::array square = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SQUARE}};
+    const std::optional<bool> fast_and_approximate_mode =
+        y.dtype() == DataType::BFLOAT16 ? std::optional<bool>(false) : std::nullopt;
+    Tensor squared_deviation =
+        ttnn::subtract(y, mean_y, std::nullopt, std::nullopt, std::nullopt, square, {}, {}, fast_and_approximate_mode);
+    return ttnn::mean(squared_deviation, dims, true, output_mem_config);
 }
 
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
+    // The slices below always split dim 3; callers have already mapped -1 to 3.
+    TT_FATAL(dim == 3, "glu-family ops only support the last dimension, got dim={}", dim);
     ttnn::Shape inshape(input_a.padded_shape());
-    TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
+    TT_FATAL(((inshape[3] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     ttsl::SmallVector<std::uint32_t> s_a = {0, 0, 0, 0};
     ttsl::SmallVector<std::uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
@@ -131,17 +188,20 @@ Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_m
 }
 
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    ttsl::SmallVector<int> dims = {2, 3};
-    Tensor mean_y = ttnn::mean(y, dims, true);
-    return detail::_variance_impl(y, mean_y, output_memory_config);
+    if (detail::_hw_statistic_fits_one_program(y)) {
+        return ttnn::var(y, ttsl::SmallVector<int>{-2, -1}, true, output_mem_config, std::nullopt, 1.0f, false);
+    }
+    return detail::_mean_squared_deviation_hw(y, output_mem_config);
 }
 
 // Function std
-// compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
+// compute standard deviation of tensor y over H and W = sqrt(mean((y - mean(y))^2)), dividing by the logical H * W
 //  Ref: torch.std
 Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(var_hw(y, output_mem_config));
+    if (detail::_hw_statistic_fits_one_program(y)) {
+        return ttnn::std(y, ttsl::SmallVector<int>{-2, -1}, true, output_mem_config, std::nullopt, 1.0f, false);
+    }
+    return ttnn::sqrt(detail::_mean_squared_deviation_hw(y, output_mem_config), false, output_mem_config);
 }
 
 // Function normalize
@@ -150,10 +210,12 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
     ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
-    Tensor std_y = detail::_std(y, mean_y, y_minus_mean_y, output_mem_config);
-    Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
-    Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, output_mem_config);
-    return z;
+    // The divisor was built as reciprocal(sqrt(variance)), two dispatches for
+    // what rsqrt is, and multiply applies a unary chain to its operands anyway,
+    // so the rsqrt rides on the multiply that was going to read it.
+    Tensor var_y = detail::_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
+    const std::array rsqrt_of_var = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSQRT}};
+    return ttnn::multiply(y_minus_mean_y, var_y, std::nullopt, output_mem_config, std::nullopt, {}, {}, rsqrt_of_var);
 }
 
 // Function Clip
@@ -250,7 +312,6 @@ Tensor clamp(
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
 Tensor glu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -263,7 +324,6 @@ Tensor glu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryCo
 
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
 Tensor reglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -279,7 +339,6 @@ Tensor geglu(
     std::int32_t dim,
     const std::optional<MemoryConfig>& output_mem_config,
     operations::unary::GeluVariant variant) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -297,7 +356,6 @@ Tensor geglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memory
 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
 Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -309,29 +367,52 @@ Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memor
     return swiglu_result;
 }
 
+// The 0/1 mask has to be built in the input's own dtype. A bfloat16 mask against an
+// integer input promotes the multiply to bfloat16, and the result comes back rounded
+// to 8 mantissa bits -- tril(int32 around 2^30) was off by up to 1023.
+static Tensor trilu_mask(
+    const Tensor& input_a, std::int32_t diag, bool upper, const std::optional<MemoryConfig>& output_mem_config) {
+    const auto mem = output_mem_config.value_or(input_a.memory_config());
+    const DataType dt = input_a.dtype();
+    if (dt == DataType::INT32) {
+        return upper ? ttnn::index_triu<std::int32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
+                     : ttnn::index_tril<std::int32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
+    }
+    if (dt == DataType::UINT32) {
+        return upper ? ttnn::index_triu<std::uint32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
+                     : ttnn::index_tril<std::uint32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
+    }
+    return upper ? ttnn::index_triu<::bfloat16>(
+                       input_a.logical_shape(),
+                       input_a.padded_shape(),
+                       diag,
+                       DataType::BFLOAT16,
+                       Layout::TILE,
+                       input_a.device(),
+                       mem)
+                 : ttnn::index_tril<::bfloat16>(
+                       input_a.logical_shape(),
+                       input_a.padded_shape(),
+                       diag,
+                       DataType::BFLOAT16,
+                       Layout::TILE,
+                       input_a.device(),
+                       mem);
+}
+
 // tril : select lower triangular region of input matrix
 Tensor tril(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_l = ttnn::index_tril<::bfloat16>(
-        input_a.logical_shape(),
-        input_a.padded_shape(),
-        diag,
-        DataType::BFLOAT16,
-        Layout::TILE,
-        input_a.device(),
-        output_mem_config.value_or(input_a.memory_config()));
+    Tensor index_l = trilu_mask(input_a, diag, /*upper=*/false, output_mem_config);
     return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
 }
 
 // triu : select upper triangular region of input matrix
 Tensor triu(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_u = ttnn::index_triu<::bfloat16>(
-        input_a.logical_shape(),
-        input_a.padded_shape(),
-        diag,
-        DataType::BFLOAT16,
-        Layout::TILE,
-        input_a.device(),
-        output_mem_config.value_or(input_a.memory_config()));
+    Tensor index_u = trilu_mask(input_a, diag, /*upper=*/true, output_mem_config);
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
 
@@ -356,20 +437,6 @@ Tensor polygamma(const Tensor& input_a, std::int32_t k, const std::optional<Memo
 Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_not(x, output_mem_config, x);
 }
-
-}  // namespace ttnn
-
-namespace ttnn::operations::unary {
-
-Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(input, (1.0f / 2.0f), std::nullopt, output_mem_config);
-    Tensor floor_res = ttnn::floor(result, output_mem_config);
-    return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
-}
-
-}  // namespace ttnn::operations::unary
-
-namespace ttnn {
 
 // Global Norm
 Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {

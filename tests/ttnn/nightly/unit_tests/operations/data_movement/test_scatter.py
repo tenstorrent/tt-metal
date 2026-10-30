@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from tt_py_test_utils_common.utility_functions import is_quasar
 from tests.ttnn.utils_for_testing import assert_allclose
 
 
@@ -26,9 +27,59 @@ def select_torch_dtype(ttnn_dtype):
         )  # !!! there is a strict requirement for the index tensor in Torch to be int64, and there is no int64 in ttnn
 
 
-def rand_permutations(shape, dim, dtype):
-    r = torch.rand(*shape)
-    return torch.argsort(r, dim=dim).to(dtype)
+def rand_scatter_index(index_shape, dim, input_dim_size, dtype):
+    """Indices unique along `dim`, drawn from the whole `[0, input_dim_size)` range.
+
+    Uniqueness matters for any test that compares values: when two entries of the same index row
+    point at the same output element, torch leaves the winning source element unspecified, so the
+    comparison is only asserting that ttnn and torch happen to walk the row in the same order.
+    Neither promises that.
+
+    Permuting `index_shape[dim]` is not enough by itself. Where the index is shorter than the input
+    along `dim` that only ever reaches the input's first `index_shape[dim]` positions, leaving the
+    rest of the scatter axis untouched by the test. Permute the *input* extent instead and keep the
+    first `index_shape[dim]` entries, which is unique and spans the full range.
+
+    When `index_shape[dim] > input_dim_size` uniqueness is impossible by pigeonhole and the values
+    wrap; callers detect that with `scatter_duplicates_unavoidable` and make the winner moot.
+    """
+    permuted_shape = list(index_shape)
+    permuted_shape[dim] = max(input_dim_size, index_shape[dim])
+    permuted = torch.argsort(torch.rand(*permuted_shape), dim=dim) % input_dim_size
+    return permuted.narrow(dim, 0, index_shape[dim]).to(dtype).contiguous()
+
+
+def scatter_duplicates_unavoidable(index_shape, dim, input_dim_size):
+    """True when the index is longer than the input along `dim`, so no index can be unique there."""
+    return index_shape[dim] > input_dim_size
+
+
+def rand_scatter_source(source_shape, index_shape, dim, input_dim_size, dtype, index):
+    """Random source values, or index-derived ones where duplicate indices cannot be avoided.
+
+    With duplicates forced, several source elements compete for one output slot and torch leaves
+    the winner unspecified. Deriving the value from the index makes every competitor for a slot
+    carry the same value, so any winner gives the same answer - and unlike a single fill value it
+    keeps distinct slots apart *within one lane along `dim`*, so a value landing in the wrong slot
+    of its own lane is still caught.
+
+    It does not tell one lane from another: the value depends on the index, not on where the index
+    sits. The widest case here is the extreme of that - test_scatter_forge's [1, 1, 320, 320]
+    against index [1, 1, 320, 384] gives every lane an index covering the whole 320-wide axis, so
+    all 320 output rows come out identical (verified) and a lane-to-lane mapping error would be
+    invisible. A positional term would not buy much, because bfloat16 already cannot keep 320
+    values apart (289 distinct). Lane mapping is what the rank 5/6/8 fold tests cover: duplicates
+    cannot occur there, so those keep a fully random source and every lane differs.
+
+    Only the index-shaped prefix is overwritten, because that is all either side reads: ttnn slices
+    the source down to the index's shape and torch indexes it at the index's coordinates.
+
+    None of the above affects the agreement property, which holds for any mapping of index to value.
+    """
+    source = torch.randn(source_shape, dtype=dtype)
+    if scatter_duplicates_unavoidable(index_shape, dim, input_dim_size):
+        source[tuple(slice(0, extent) for extent in index_shape)] = index.to(dtype) * 0.5
+    return source
 
 
 @pytest.mark.parametrize(
@@ -72,7 +123,9 @@ def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, ind
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
 
-    torch_index = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch_index_dtype)
+    # Unique indices spanning the input's full extent along dim: this matrix is value-checked
+    # below, and a repeated index leaves the winning source element unspecified in torch.
+    torch_index = rand_scatter_index(index_and_source_shape, dim, input_shape[dim], torch_index_dtype)
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
 
     torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
@@ -84,6 +137,88 @@ def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, ind
     torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
     assert torch_result_from_ttnn.shape == torch_result.shape
     assert torch_result_from_ttnn.dtype == torch_result.dtype
+    # Values too, not just the spec: the rank-5/6/8 shapes above are the ones a fold-style
+    # regression would hit, and asserting only shape/dtype is what let #56876 through.
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+
+
+# Any zero extent used to reach the program factories, which size their work split as
+# logical_volume() / input_shape[-1] and divide 0 by 0 - a SIGFPE that killed the host process
+# rather than an error the caller could catch. The scatter axis is transposed last before that
+# division, so a zero interior dim reaches it too whenever dim points elsewhere. An empty index
+# against a non-empty input failed differently, on dfb.entry_size > 0. torch returns the input
+# unchanged for all of these. See issue #56881.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape",
+    [
+        ([2, 3, 0], -1, [2, 3, 0]),  # zero last dim - SIGFPE
+        ([0], -1, [0]),  # rank-1 empty - SIGFPE
+        ([0], 0, [0]),  # same, positive dim
+        ([2, 0, 3], -1, [2, 0, 3]),  # zero interior, dim elsewhere - threw from the program builder
+        ([2, 0, 4], 1, [2, 0, 4]),  # zero interior transposed onto the scatter axis - SIGFPE
+        ([0, 3, 4], 0, [0, 3, 4]),  # zero leading dim - SIGFPE
+        ([2, 3, 4], -1, [2, 3, 0]),  # empty index, non-empty input - dfb.entry_size > 0
+        ([2, 3, 4], -1, [2, 0, 4]),  # empty index on an interior dim
+        ([2, 3, 4], 1, [2, 0, 4]),  # same, transposed
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE])
+def test_scatter_zero_volume(input_shape, dim, index_shape, layout, device):
+    # The op bails out early only for an empty input or an empty scatter axis. An index that is
+    # empty on some *other* axis is left to the device op on purpose - it returns a correct,
+    # freshly allocated result there. That route converts layout on the way in, which used to fail
+    # on a zero-volume tensor; #58900 fixed it, so TILE is covered here too.
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    # randint needs a non-empty range even when it produces no elements
+    torch_index = torch.randint(0, max(input_shape[dim], 1), index_shape, dtype=torch.int64)
+    torch_src = torch.randn(index_shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=layout, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    result = ttnn.to_torch(ttnn_result)
+    assert result.shape == torch_result.shape, f"shape {result.shape} != expected {torch_result.shape}"
+    assert result.dtype == torch_result.dtype, f"dtype {result.dtype} != expected {torch_result.dtype}"
+    if result.numel():
+        assert_allclose(result, torch_result)
+
+
+# The reduction path reaches the same division through its own program factory.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape",
+    [
+        ([2, 3, 0], -1, [2, 3, 0]),
+        ([2, 0, 4], 1, [2, 0, 4]),
+        ([2, 3, 4], -1, [2, 3, 0]),
+    ],
+)
+def test_scatter_add_zero_volume(input_shape, dim, index_shape, device):
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_index = torch.randint(0, max(input_shape[dim], 1), index_shape, dtype=torch.int64)
+    torch_src = torch.randn(index_shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_result = torch.scatter_add(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter_add(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    result = ttnn.to_torch(ttnn_result)
+    assert result.shape == torch_result.shape, f"scatter_add shape {result.shape} != expected {torch_result.shape}"
+    if result.numel():
+        assert_allclose(result, torch_result)
 
 
 @pytest.mark.parametrize(
@@ -121,7 +256,79 @@ def test_scatter_partial(
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
 
-    torch_index = torch.randint(0, input_shape[dim], index_shape)
+    torch_index = rand_scatter_index(index_shape, dim, input_shape[dim], torch.int64)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    # [10, 10, 10] / dim=1 / index [2, 30, 10] asks for 30 unique indices along an axis of 10.
+    torch_src = rand_scatter_source(source_shape, index_shape, dim, input_shape[dim], torch_dtype, torch_index)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+    assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+# A rank > 4 input used to be collapsed to 4D by merging its leading (rank - 3) dims, and the index
+# tensor was collapsed the same way but with its own extents. The reader maps an input stick
+# coordinate straight onto the index tensor's axes, so once the leading dims were fused into one
+# linear id the two no longer referred to the same element whenever any interior leading dim
+# differed between input and index - scatter then wrote the wrong source row and skipped a valid one,
+# silently. Legal input: scatter only requires index_shape[d] <= input_shape[d] for d != dim.
+# See issue #56876.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape, source_shape",
+    [
+        # dim == -1, so no transpose: the leading dims reach the kernel exactly as given.
+        ([2, 3, 4, 5, 6], -1, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),  # one interior leading dim differs
+        ([2, 3, 4, 5, 6], -1, [2, 2, 3, 5, 6], [2, 2, 3, 5, 6]),  # two interior leading dims differ
+        ([4, 5, 6, 7, 8], -1, [3, 2, 3, 7, 8], [3, 2, 3, 7, 8]),  # every leading dim differs
+        ([2, 3, 4, 5, 6], -1, [2, 2, 4, 5, 6], [3, 4, 5, 6, 7]),  # source larger than index
+        ([2, 3, 4, 5, 6, 7], -1, [2, 3, 2, 5, 6, 7], [2, 3, 2, 5, 6, 7]),  # rank 6
+        ([2, 3, 2, 3, 2, 3, 2, 3], -1, [2, 2, 2, 2, 2, 2, 2, 3], [2, 2, 2, 2, 2, 2, 2, 3]),  # rank 8
+        # dim != -1, so the op transposes dim to the last axis first - the mismatched leading dim
+        # ends up in a different position than it started in. Covered above rank 5 too, since the
+        # transpose interacts with how many leading axes there are to walk.
+        ([2, 3, 4, 5, 6], 2, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6], 0, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6], -2, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),
+        # The mismatched dim has to sit somewhere other than the axis `dim` names: dim=2 against an
+        # index that differs at axis 2 transposes the mismatch into the scatter axis, which is
+        # excluded from the leading-dim comparison, so the fold lines up again and the case proves
+        # nothing (verified - it passes unfixed). Mismatch at axis 1 for dim=2.
+        ([2, 3, 4, 5, 6, 7], 2, [2, 2, 4, 5, 6, 7], [2, 2, 4, 5, 6, 7]),  # rank 6, transposed
+        ([2, 3, 4, 5, 6, 7], 0, [2, 3, 2, 5, 6, 7], [2, 3, 2, 5, 6, 7]),  # rank 6, transposed
+        ([2, 3, 2, 3, 2, 3, 2, 3], 3, [2, 2, 2, 2, 2, 2, 2, 3], [2, 2, 2, 2, 2, 2, 2, 3]),  # rank 8, transposed
+        # Interior leading dim of 1 on the index side: broadcast-looking but not broadcast.
+        ([2, 3, 4, 5, 6], -1, [2, 1, 4, 5, 6], [2, 1, 4, 5, 6]),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype, index_dtype, layout",
+    [
+        (ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        (ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        (ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+    ],
+)
+def test_scatter_high_rank_unequal_leading_dims(
+    input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout, device
+):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_index_dtype = select_torch_dtype(index_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = rand_scatter_index(index_shape, dim, input_shape[dim], torch_index_dtype)
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
 
     torch_src = torch.randn(source_shape, dtype=torch_dtype)
@@ -137,7 +344,93 @@ def test_scatter_partial(
         assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
     else:
         assert_allclose(torch_result_from_ttnn, torch_result)
-    assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+# pre_scatter_transform_tensor runs once per operand, so a Shape{1} operand used to return early
+# and reach the device op at rank 1 while its siblings were padded to rank 4. The reader sizes its
+# shape-vararg reads from the input rank alone, so it then read index_dims past the end of the block
+# the factory wrote, in_bounds() failed against the stale values and the scatter was skipped for
+# every stick - the op returned the input unchanged. Legal input: with dim == 0 on a rank-1 tensor
+# there is no d != dim, so a size-1 index against a size-100 input passes every check.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape, source_shape",
+    [
+        ([100], 0, [1], [1]),  # index and source are Shape{1}, input is not
+        ([100], -1, [1], [1]),  # same, negative dim
+        ([100], 0, [1], [5]),  # only index is Shape{1}
+        ([1], 0, [5], [5]),  # only input is Shape{1}
+        ([1], 0, [1], [1]),  # every operand is Shape{1}
+        ([1], -1, [1], [1]),  # same, negative dim
+    ],
+)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_scatter_singleton_operand(input_shape, dim, index_shape, source_shape, input_dtype, device):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_index = rand_scatter_index(index_shape, dim, input_shape[dim], torch.int64)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    # [1] / index [5] asks for 5 unique indices along an axis of 1: every source element targets
+    # output element 0, so the winner has to stop mattering. With a single slot the index-derived
+    # values collapse to one value on their own.
+    torch_src = rand_scatter_source(source_shape, index_shape, dim, input_shape[dim], torch_dtype, torch_index)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+
+
+# Same defect, exercised through the separate bfloat16 reduction program factory / reader kernel,
+# which carries its own copy of the coordinate walk. See issue #56876.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape",
+    [
+        ([2, 3, 4, 5, 6], -1, [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6], 2, [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6, 7], -1, [2, 3, 2, 5, 6, 7]),
+        # mismatch at axis 1, not axis 2 - see the note in the non-reduction test above
+        ([2, 3, 4, 5, 6, 7], 2, [2, 2, 4, 5, 6, 7]),
+    ],
+)
+@pytest.mark.parametrize("reduction", ["add", "multiply"])
+def test_scatter_reduction_high_rank_unequal_leading_dims(input_shape, dim, index_and_source_shape, reduction, device):
+    # Deliberately randint rather than rand_scatter_index, unlike every non-reduction test in this
+    # file. Duplicate indices are the whole point here: they are what makes the reduce path combine
+    # anything at all. Unique indices write each output slot exactly once, which turns add and
+    # multiply into plain assignment - measured over these four cases, randint reduces 125, 128,
+    # 678 and 883 slots respectively while unique indices reduce zero. Duplicates are safe to keep
+    # because add and multiply are order-independent, so there is no unspecified winner to depend
+    # on the way a plain scatter would have.
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch.int64)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch.bfloat16)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src, reduce=reduction)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src, reduce=reduction)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    assert_allclose(torch_result_from_ttnn, torch_result)
 
 
 @pytest.mark.parametrize(
@@ -181,7 +474,7 @@ def test_scatter_normal_with_callback(
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
 
-    torch_index = rand_permutations(index_and_source_shape, dim, torch_index_dtype)
+    torch_index = rand_scatter_index(index_and_source_shape, dim, input_shape[dim], torch_index_dtype)
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
 
     torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
@@ -300,6 +593,8 @@ def test_scatter_reduction_row_major_int32_with_callback_and_sub_cores(
 ):
     torch.manual_seed(0)
 
+    # randint, not rand_scatter_index: scatter_add needs duplicate indices to exercise the
+    # accumulate path - see test_scatter_reduction_high_rank_unequal_leading_dims.
     torch_dtype = torch.float32
 
     torch_input = torch.randint(0, input_shape[dim], input_shape, dtype=torch_dtype)
@@ -367,6 +662,8 @@ def test_scatter_reduction(
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
 
+    # randint, not rand_scatter_index: reduce=add/multiply needs duplicates to combine anything -
+    # see test_scatter_reduction_high_rank_unequal_leading_dims.
     torch_index = torch.randint(0, input_shape[dim], index_and_source_shape)
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
 
@@ -384,6 +681,87 @@ def test_scatter_reduction(
     else:
         assert_allclose(torch_result_from_ttnn, torch_result)
     assert device.num_program_cache_entries() == expected_num_cache_entries
+
+
+def test_scatter_program_cache_dtype_variants(device):
+    # The reader kernels take their input and index element types as compile-time args, so two calls
+    # that differ only in dtype must never share a cached program: a hit compiled for another dtype
+    # would read the wrong element width and scatter garbage. Same shapes throughout, so dtype (and
+    # reduction) is the only thing that can tell the cache entries apart. ROW_MAJOR keeps scatter the
+    # only program in the cache.
+    input_shape, dim, index_and_source_shape = [8, 300], -1, [8, 200]
+    layout = ttnn.Layout.ROW_MAJOR
+    configs = [
+        (ttnn.bfloat16, ttnn.uint16, None),
+        (ttnn.bfloat16, ttnn.int32, None),
+        (ttnn.bfloat16, ttnn.uint32, None),
+        (ttnn.float32, ttnn.uint16, None),
+        (ttnn.float32, ttnn.int32, None),
+        # bfloat16 with a reduction takes the separate bf16 reduction program factory
+        (ttnn.bfloat16, ttnn.uint16, "add"),
+        (ttnn.bfloat16, ttnn.int32, "add"),
+        (ttnn.float32, ttnn.int32, "add"),
+    ]
+
+    def run_and_check(input_dtype, index_dtype, reduction, seed):
+        torch.manual_seed(seed)
+        torch_dtype = select_torch_dtype(input_dtype)
+        torch_input = torch.randn(input_shape, dtype=torch_dtype)
+        torch_index = rand_scatter_index(index_and_source_shape, dim, input_shape[dim], torch.int64)
+        torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+
+        ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+        ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+        ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+        if reduction is None:
+            torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+            ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+        else:
+            torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src, reduce=reduction)
+            ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src, reduce=reduction)
+
+        torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+        assert torch_result_from_ttnn.shape == torch_result.shape
+        assert torch_result_from_ttnn.dtype == torch_result.dtype
+        if torch_dtype is torch.float32:
+            assert_allclose(torch_result_from_ttnn, torch_result, atol=0.1, rtol=1e-2)
+        else:
+            assert_allclose(torch_result_from_ttnn, torch_result)
+
+    # first pass: every configuration is a distinct program
+    for i, (input_dtype, index_dtype, reduction) in enumerate(configs):
+        entries_before = device.num_program_cache_entries()
+        run_and_check(input_dtype, index_dtype, reduction, seed=i)
+        assert device.num_program_cache_entries() == entries_before + 1, (input_dtype, index_dtype, reduction)
+
+    # second pass, in reverse so no hit follows its own miss: all hits, fresh data, still correct
+    num_entries = device.num_program_cache_entries()
+    for i, (input_dtype, index_dtype, reduction) in reversed(list(enumerate(configs))):
+        run_and_check(input_dtype, index_dtype, reduction, seed=100 + i)
+        assert device.num_program_cache_entries() == num_entries, (input_dtype, index_dtype, reduction)
+
+
+@pytest.mark.parametrize("index_dtype, max_index", [(ttnn.uint16, 2**16), (ttnn.uint8, 2**8)])
+def test_scatter_reduction_bf16_narrow_index_multi_chunk(index_dtype, max_index, device):
+    # Regression: a narrow index dtype wrapped the chunk offset, reducing indices twice.
+    # Chunks are at most L1/16 elements (~98k), so 400k always spans several.
+    torch.manual_seed(0)
+    input_shape, index_shape = [1, 400000], [1, 50000]
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    # Cover every index value, including those the wrapped offset lands on.
+    torch_index = torch.arange(index_shape[-1]).reshape(index_shape) % max_index
+    torch_src = torch.randn(index_shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_result = torch.scatter(torch_input, -1, index=torch_index, src=torch_src, reduce="add")
+    ttnn_result = ttnn.scatter(ttnn_input, -1, ttnn_index, ttnn_src, reduce="add")
+
+    assert_allclose(ttnn.to_torch(ttnn_result), torch_result)
 
 
 @pytest.mark.parametrize(
@@ -491,10 +869,14 @@ def test_scatter_forge(input_shape, index_and_source_shape, input_dtype, device)
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    torch_index = torch.randint(0, input_shape[-1], index_and_source_shape, dtype=torch_index_dtype)
+    torch_index = rand_scatter_index(index_and_source_shape, -1, input_shape[-1], torch_index_dtype)
     ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    # [1, 1, 320, 320] against index [1, 1, 320, 384] asks for 384 unique indices along an axis
+    # of 320, so the source must not depend on which duplicate wins.
+    torch_src = rand_scatter_source(
+        index_and_source_shape, index_and_source_shape, -1, input_shape[-1], torch_dtype, torch_index
+    )
     ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     torch_result = torch.scatter(torch_input, -1, index=torch_index, src=torch_src)
@@ -527,7 +909,7 @@ def test_scatter_negative_dim(device, shape, dim, dtype):
     # Create index and source tensors for scattering
     index_shape = list(shape)
     index_shape[dim] = min(index_shape[dim], 2)  # Scatter subset
-    torch_index = torch.randint(0, shape[dim], index_shape, dtype=torch.int32)
+    torch_index = rand_scatter_index(index_shape, dim, shape[dim], torch.int32)
     torch_source = torch.rand(index_shape, dtype=dtype)
 
     # PyTorch reference with negative dim
@@ -578,7 +960,7 @@ def test_scatter_negative_dim_equals_positive(device, shape, dim):
     torch_input = torch.rand(shape, dtype=torch.bfloat16)
     index_shape = list(shape)
     index_shape[dim] = min(index_shape[dim], 2)
-    torch_index = torch.randint(0, shape[dim], index_shape, dtype=torch.int32)
+    torch_index = rand_scatter_index(index_shape, dim, shape[dim], torch.int32)
     torch_source = torch.rand(index_shape, dtype=torch.bfloat16)
 
     # Get results for both negative and positive dims
@@ -626,7 +1008,7 @@ def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
     torch_dtype = torch.bfloat16
 
     torch_input = torch.randn(shape, dtype=torch_dtype)
-    torch_index = torch.randint(0, shape[0], index_shape, dtype=torch.int64)
+    torch_index = rand_scatter_index(index_shape, -1, shape[0], torch.int64)
     torch_src = torch.randn(index_shape, dtype=torch_dtype)
 
     # PyTorch reference with dim=-1 (should be equivalent to dim=0 for 1D)
@@ -643,3 +1025,61 @@ def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
 
     assert result.shape == torch_result.shape
     assert_allclose(result, torch_result)
+
+
+# The empty path returns before the device operation runs, so it relies on ttnn::scatter calling that
+# operation's validation up front. Without these, a refactor could drop the call and nothing would
+# notice: invalid operands would be accepted whenever a shape happened to contain a zero.
+@pytest.mark.parametrize(
+    "input_dtype, index_dtype, source_dtype, expected_message",
+    [
+        (ttnn.bfloat16, ttnn.int32, ttnn.float32, "input_dtype differs from src_dtype"),
+        (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "index_dtype"),
+    ],
+)
+def test_scatter_zero_volume_rejects_invalid_operands(
+    input_dtype, index_dtype, source_dtype, expected_message, device, expect_error
+):
+    def make(dtype):
+        torch_dtype = select_torch_dtype(dtype)
+        return ttnn.from_torch(
+            torch.zeros([2, 0, 4], dtype=torch_dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+
+    with expect_error(RuntimeError, expected_message):
+        ttnn.scatter(make(input_dtype), -1, make(index_dtype), make(source_dtype))
+
+
+# ttnn::scatter untilizes TILE operands before scattering, which turns BFLOAT8_B into BFLOAT16. So a
+# BFLOAT8_B operand works with a BFLOAT16 one (models such as GPT-OSS's top-k router and BGE-M3 rely on
+# this), as does BFLOAT8_B on both sides. The output is BFLOAT16 in every case.
+@pytest.mark.parametrize(
+    "input_dtype, source_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+    ],
+)
+def test_scatter_block_float_operands(input_dtype, source_dtype, device):
+    torch.manual_seed(0)
+    shape, dim = [32, 64], -1
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_index = rand_scatter_index(shape, dim, shape[dim], torch.int64)
+    torch_src = torch.randn(shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # Row-major index: only the block-float operands need TILE, and untilizing an INT32 index would
+    # test untilize rather than scatter.
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=source_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if is_quasar():
+        pytest.skip("untilize of a BFLOAT8_B tensor is not supported on Quasar (Bfp8_b DFB format)")
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+    assert ttnn_result.dtype == ttnn.bfloat16
+    # Compare against torch on the block-float-rounded operands, the values the device actually scattered.
+    torch_result = torch.scatter(
+        ttnn.to_torch(ttnn_input).to(torch.bfloat16), dim, torch_index, ttnn.to_torch(ttnn_src).to(torch.bfloat16)
+    )
+    assert_allclose(ttnn.to_torch(ttnn_result).to(torch.bfloat16), torch_result)

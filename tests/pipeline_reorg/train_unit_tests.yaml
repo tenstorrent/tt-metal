@@ -23,6 +23,7 @@
       timeout: 40
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: unit
 
 # Non-nightly unit tests
 - name: tt-train cpp non-nightly unit tests
@@ -37,13 +38,58 @@
     # bh_p150b_civ2 is used for merge gate test
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: unit
 
-- name: tt-train python unit tests
-  cmd: python -m pytest tt-train/tests/python
+- name: tt-train cpp distributed unit tests
+  # NIGHTLY tests already run in the nightly legs on bh_p100 and bh_p150b_civ2, so this leg skips them.
+  # Multi-device tests must therefore not be named NIGHTLY, or they run nowhere.
+  cmd: |
+    mkdir -p generated/test_reports
+    export TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_1_2_line_line.textproto
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
-    bh_p100:
-      timeout: 20
-    bh_p150b_civ2:
-      timeout: 20
+    bh_quietbox_2:
+      timeout: 25
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: unit
+
+- name: tt-train cpp watcher unit tests
+  # Tests of kernels whose bugs only the watcher reports, such as gumbel_sample's NOC write past its staging CB and
+  # its missing atomic barrier (#62090). This job doesn't pass enable-watcher, so the cmd sets the same four
+  # variables enable-watcher would; without them the watcher's device-side checks are compiled out.
+  cmd: |
+    mkdir -p generated/test_reports
+    export TT_METAL_WATCHER=2 TT_METAL_WATCHER_APPEND=1
+    export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="GumbelSample*"
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: unit
+
+- name: tt-train python unit tests
+  cmd: |
+    python -m pytest tt-train/tests/python
+  skus:
+    bh_p100:
+      timeout: 35
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: unit
+
+- name: tt-train python distributed unit tests
+  cmd: |
+    # Workaround for hang in QB2 https://github.com/tenstorrent/tt-metal/issues/55957
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    python -m pytest tt-train/tests/python
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: unit

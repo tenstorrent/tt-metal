@@ -9,11 +9,13 @@
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include "impl/buffers/semaphore.hpp"
+#include "impl/experimental/blaze/named_kernel_args_impl.hpp"
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <bitset>
 
 namespace tt::tt_metal {
 
@@ -121,6 +123,9 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
         for (const auto& cb : other.cbs) {
             result.cbs.push_back(cb);
         }
+
+        // One launch message per merged program, so one reload table; two different ones is an error.
+        result.reload_table = internal::merge_reload_tables(result.reload_table, other.reload_table);
     }
 
     // Custom program hash is invalidated after merge
@@ -182,6 +187,11 @@ static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescri
 }
 
 void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& desc) {
+    // Compare every merged count, including empty and omitted cores, before writing any arg.
+    for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
+        experimental::blaze::validate_cached_runtime_arg_counts(program, desc.kernels[k], k);
+    }
+
     for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
         const auto& kernel = desc.kernels[k];
         for (const auto& [core, args] : kernel.runtime_args) {

@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt;
@@ -130,11 +131,11 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     }
 
     // Reader kernel (sharded input handed over through the borrowed input DFB). This binds the shared
-    // Metal 2.0 reader fork that already lives in typecast's tree, so its accessor and argument names
-    // are that kernel's interface, not this op's choice.
+    // eltwise/unary Metal 2.0 reader fork, so its accessor and argument names are that kernel's
+    // interface, not this op's choice.
     const KernelSpec reader{
         .unique_id = READER,
-        .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
+        .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
         .dfb_bindings =
             {DFBBinding{
                 .dfb_spec_name = IN_DFB,
@@ -142,7 +143,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::PRODUCER,
             }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer kernel (writes interleaved output to DRAM). Both layout variants present the same binding
@@ -159,7 +160,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::CONSUMER,
             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (is_tile) {
         writer.source =
@@ -179,7 +180,8 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "writer_unary_stick_layout_sharded_blocks_interleaved_start_id_metal2.cpp";
         writer.runtime_arg_schema.runtime_arg_names = {
-            "block_height", "block_width_bytes", "padded_block_width_bytes", "input_width_offset_bytes", "start_id"};
+            "block_height", "block_num_units", "block_width_bytes", "padded_block_width_bytes",
+            "input_width_offset_bytes", "start_id"};
     }
 
     Group<KernelSpec> kernels;
@@ -190,6 +192,17 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
 
     // Optional compute kernel for data-format conversion.
     if (convert_df) {
+        // Every field of the legacy ComputeConfigDescriptor{} was left at its default, and the
+        // Metal 2.0 ComputeHardwareConfig defaults match those field for field (HiFi4; math_approx_mode
+        // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
+        // false; dst_full_sync_en false = double_buffer_dest true), so an all-default config
+        // reproduces the legacy settings exactly.
+        ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};
+        if (input.device()->arch() == tt::ARCH::QUASAR) {
+            // The WH/BH config sets no fields, so the Quasar config copies none.
+            // TODO(#52269): Quasar unpack_modes are copied from WH/BH and not yet optimized for Quasar.
+            compute_hw = ComputeHardwareConfig{};
+        }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
             .source = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy_metal2.cpp",
@@ -208,12 +221,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                      .endpoint_type = DFBEndpointType::PRODUCER,
                  }},
             .compile_time_args = {{"per_core_tile_cnt", num_units_per_shard}},
-            // Every field of the legacy ComputeConfigDescriptor{} was left at its default, and the
-            // Metal 2.0 Gen1 compute defaults match those field for field (HiFi4; math_approx_mode
-            // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
-            // false; dst_full_sync_en false = double_buffer_dest true), so an all-default Gen1 config
-            // reproduces the legacy settings exactly.
-            .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+            .hw_config = std::move(compute_hw),
         });
         work_unit_kernels.push_back(COMPUTE);
     }
@@ -273,6 +281,8 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                     writer_run_args.runtime_arg_values,
                     core,
                     {{"block_height", shard_height},
+                     // The reader pushes the whole shard; the last height shard may write fewer rows.
+                     {"block_num_units", num_units_per_shard},
                      {"block_width_bytes", shard_width},
                      {"padded_block_width_bytes", padded_shard_width},
                      {"input_width_offset_bytes", w0},

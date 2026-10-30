@@ -52,15 +52,8 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "bit_exact"
-      - name: Build test matrix
-        id: build-matrix
+      - name: Resolve enabled SKUs
+        id: resolve-skus
         env:
           ARCHITECTURE: ${{ inputs.architecture }}
         run: |
@@ -79,11 +72,29 @@ jobs:
               exit 1
               ;;
           esac
+          echo "enabled-skus=$ENABLED_SKUS" >> "$GITHUB_OUTPUT"
 
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "$ENABLED_SKUS" \
-            ./.github/sku_config.yaml
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
+      - name: Build test matrix
+        id: build-matrix
+        uses: ./ci-main/.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
+          sku-config: ./.github/sku_config.yaml
 
   llk-bit-exact-exec:
     needs: [load-test-matrix, build-images]

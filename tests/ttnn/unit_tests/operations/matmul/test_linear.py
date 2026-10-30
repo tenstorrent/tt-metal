@@ -90,6 +90,7 @@ def test_linear(
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [384])
 @pytest.mark.parametrize("k_size", [1024])
@@ -410,6 +411,7 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     )
 
 
+@pytest.mark.merge_gate
 def test_bloom_ff2_linear(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
@@ -512,6 +514,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
+@pytest.mark.merge_gate
 def test_linear_with_fp32_dest_acc_and_bias(device):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])
@@ -648,7 +651,7 @@ def test_resnet50_linear(device):
         ((32, 2, 32), (32, 32), (1, 32)),  # 4D tensors with no bias
     ],
 )
-def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
+def test_vector_linear(device, shape_a, shape_b, shape_bias) -> None:
     """
     Test the compatibility of the torch and ttnn linear for the given operation and different
     tensor shapes.
@@ -659,28 +662,29 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     torch_a = torch.randn(*shape_a, dtype=torch.bfloat16)
     torch_b = torch.randn(*shape_b, dtype=torch.bfloat16)
 
-    # For torch.linear, weight matrix is expected to be (out_features, in_features)
-    # but internally it's transposed during the operation
-    torch_weight = torch_b
-    if len(shape_b) >= 2:
-        torch_weight = torch.transpose(torch_weight, -1, -2)
-
     # Create bias tensor if shape_bias is not empty
     torch_bias = None
     ttnn_bias = None
     if shape_bias is not None:
-        torch_bias = torch.randn(*shape_bias, dtype=torch.bfloat16) if shape_bias != tuple() else torch.randn(())
+        torch_bias = (
+            torch.randn(*shape_bias, dtype=torch.bfloat16)
+            if shape_bias != tuple()
+            else torch.randn((), dtype=torch.bfloat16)
+        )
         ttnn_bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Create ttnn tensors
     ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Handle exceptions in torch
+    # ttnn.linear takes b as (in_features, out_features), so the reference is matmul + bias.
+    # torch.nn.functional.linear is not used because it rejects a 2D input with a 1D weight and a bias.
     torch_errored = False
     torch_error_msg = ""
     try:
-        torch_result = torch.nn.functional.linear(torch_a, torch_weight, torch_bias)
+        torch_result = torch.matmul(torch_a, torch_b)
+        if torch_bias is not None:
+            torch_result = torch_result + torch_bias
     except Exception as e:
         torch_errored = True
         torch_error_msg = str(e)
@@ -701,16 +705,14 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         logger.info('[EXPECTED_ERROR END] RuntimeError message="Unsupported bias shape"')
 
     # Compare error behavior
-    if torch_errored != ttnn_errored:
-        return (
-            False,
-            f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
-        )
+    assert (
+        torch_errored == ttnn_errored
+    ), f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})"
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
-        return (True, "")
+        return
 
     # Convert ttnn result to torch for comparison
     ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
@@ -733,9 +735,9 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
 
-    assert torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True), (
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}",
-    )
+    assert torch.allclose(
+        torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True
+    ), f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}"
 
 
 @pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8])
@@ -816,16 +818,12 @@ def test_linear_yolov7(
         mcast_in0=False,
     )
 
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 7),
-            ),
-        }
-    )
+    # Shard the factory's actual work-core set (div_up(M, per_core_M)); any larger grid silently drops tail-core data.
+    m_tiles = (nhw + 31) // 32
+    work_cores = (m_tiles + per_core_M - 1) // per_core_M
+    shard_grid = ttnn.num_cores_to_corerangeset(work_cores, ttnn.CoreCoord(8, 8), row_wise=True)
 
-    shard_height = (nhw + num_cores * 32 - 1) // (num_cores * 32) * 32
+    shard_height = (nhw + work_cores * 32 - 1) // (work_cores * 32) * 32
     x = tt_input_tensor
     in0_shard_shape = [shard_height, input_channels]
     in0_shard_spec = ttnn.ShardSpec(shard_grid, in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -1187,6 +1185,34 @@ def test_linear_bias_wrong_height_rejected_on_multicore_reuse_program_config(dev
 
     with expect_error(RuntimeError, r"padded second last dimension of bias, 32, not equal to expected bias height, 64"):
         ttnn.linear(in0, in1, bias=bias, program_config=program_config)
+
+
+def test_linear_narrow_bias_core_grid_activation(device):
+    """With core_grid, activation would normally be fused into the matmul kernel. A narrow bias is applied
+    via add(), so activation must run afterward to produce act(a @ b + bias)."""
+    torch.manual_seed(0)
+    a = torch.randn(32, 64, dtype=torch.bfloat16)
+    b = torch.randn(64, 64, dtype=torch.bfloat16)
+    # A large constant bias: PCC alone cannot catch the bug, since act(a @ b) + bias is mostly a shift.
+    bias = torch.tensor([4.0], dtype=torch.bfloat16)
+    expected = torch.relu(a @ b + bias)
+
+    result = ttnn.linear(
+        ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device),
+        bias=ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, device=device),
+        activation="relu",
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+    )
+    assert_numeric_metrics(
+        expected,
+        ttnn.to_torch(result),
+        atol=1.0,
+        rtol=0.05,
+        frobenius_threshold=0.05,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("bias_rank", [0, 1, 2, 3, 4])
@@ -1633,3 +1659,113 @@ def test_linear_batched_reuse_fused_bias_program_cache(device):
     )
     assert_with_pcc(torch.matmul(torch_a, torch_b) + torch_biases[0], ttnn.to_torch(out0), 0.9997)
     assert_with_pcc(torch.matmul(torch_a, torch_b) + torch_biases[1], ttnn.to_torch(out1), 0.9997)
+
+
+def _in0_column_window_config(
+    per_core_M, per_core_N, in0_block_w, activation=None, *, fuse_batch=True, transpose_mcast=False
+):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=transpose_mcast,
+        fused_activation=activation,
+        fuse_batch=fuse_batch,
+    )
+
+
+@pytest.mark.parametrize("in0_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("offset", [0, 96, 352, 384], ids=["offset0", "offset96", "offset352", "window-at-end"])
+def test_linear_in0_column_offset(device, offset, in0_memory_config):
+    """A column window of a wider activation must match the linear of the sliced window, bit for bit."""
+    M, K, N, width = 256, 128, 512, 512
+    torch.manual_seed(0)
+    wide = torch.randn(1, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    bias = torch.randn(1, N).bfloat16()
+    to_device = lambda t, memory_config=ttnn.DRAM_MEMORY_CONFIG: ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_wide = to_device(wide, in0_memory_config)
+    tt_window = to_device(wide[..., offset : offset + K].contiguous())
+    tt_weight, tt_bias = to_device(weight), to_device(bias)
+    # Two K blocks, so the window also exercises the reader's step to the next block of a wide row.
+    config = _in0_column_window_config(2, 4, 2, ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID))
+    expected = ttnn.linear(tt_window, tt_weight, bias=tt_bias, program_config=config)
+    actual = ttnn.linear(tt_wide, tt_weight, bias=tt_bias, program_config=config, in0_column_offset=offset)
+    assert tuple(actual.shape) == (1, M, N)
+    assert torch.equal(ttnn.to_torch(expected), ttnn.to_torch(actual))
+
+
+@pytest.mark.parametrize(
+    "shape,width,offset,fuse_batch,transpose_mcast",
+    [
+        ((2, 1, 128), 384, 128, False, False),
+        ((2, 1, 128), 384, 256, True, False),
+        ((1, 1, 256), 500, 352, True, False),
+        ((1, 1, 256), 512, 96, True, True),
+    ],
+    ids=["batched", "batched-fused", "unaligned-a-width", "transpose-mcast"],
+)
+def test_linear_in0_column_offset_layouts(device, shape, width, offset, fuse_batch, transpose_mcast):
+    """Batched A (the in0 batch stride), A with a non-tile-aligned width, and a transposed multicast grid."""
+    K, N = 128, 256
+    batch, channels, M = shape
+    torch.manual_seed(0)
+    wide = torch.randn(batch, channels, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_wide, tt_window, tt_weight = (
+        to_device(wide),
+        to_device(wide[..., offset : offset + K].contiguous()),
+        to_device(weight),
+    )
+    # The 4x4 grid splits A's row tiles (per batch unless fused) and B's column tiles four ways.
+    row_tiles = (batch * channels * M if fuse_batch else M) // 32
+    config = _in0_column_window_config(
+        row_tiles // 4, N // 32 // 4, 2, fuse_batch=fuse_batch, transpose_mcast=transpose_mcast
+    )
+    expected = ttnn.linear(tt_window, tt_weight, program_config=config)
+    actual = ttnn.linear(tt_wide, tt_weight, program_config=config, in0_column_offset=offset)
+    assert tuple(actual.shape) == (batch, channels, M, N)
+    assert torch.equal(ttnn.to_torch(expected), ttnn.to_torch(actual))
+
+
+def test_linear_in0_column_offset_program_cache(device):
+    """The offset is part of the program: a second offset must not reuse the first offset's program."""
+    M, K, N, width = 128, 64, 256, 256
+    torch.manual_seed(0)
+    wide = torch.randn(1, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_wide, tt_weight = to_device(wide), to_device(weight)
+    config = _in0_column_window_config(1, 2, 2)
+    for offset in (0, 128, 0):
+        actual = ttnn.linear(tt_wide, tt_weight, program_config=config, in0_column_offset=offset)
+        expected = wide[..., offset : offset + K].float() @ weight.float()
+        assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
+
+
+@pytest.mark.parametrize(
+    "offset,program_config,transpose_a,message",
+    [
+        (48, "mcast2d", False, "tile-aligned window"),
+        (416, "mcast2d", False, "tile-aligned window"),
+        (0, "none", False, "requires a MatmulMultiCoreReuseMultiCastProgramConfig"),
+        (0, "mcast2d", True, "does not support transpose_a"),
+    ],
+    ids=["unaligned", "window-past-end", "no-program-config", "transpose-a"],
+)
+def test_linear_in0_column_offset_rejects_invalid_window(
+    device, expect_error, offset, program_config, transpose_a, message
+):
+    M, K, N, width = 64, 128, 64, 512
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    wide = to_device(torch.randn(1, M, width).bfloat16())
+    weight = to_device((torch.randn(K, N) * 0.1).bfloat16())
+    config = _in0_column_window_config(1, 1, 4) if program_config == "mcast2d" else None
+    with expect_error(RuntimeError, message):
+        ttnn.linear(wide, weight, program_config=config, transpose_a=transpose_a, in0_column_offset=offset)

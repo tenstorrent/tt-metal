@@ -48,6 +48,7 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal::distributed::test {
@@ -117,7 +118,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
         for (int i = 0; i < num_workloads_per_trace * num_traces; i++) {
             auto workload = std::make_shared<MeshWorkload>();
             auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-                1, mesh_device_->compute_with_storage_grid_size(), seed);
+                *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), seed);
             workload->add_program(all_devices, std::move(*programs[0]));
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
             mesh_workloads.push_back(workload);
@@ -365,13 +366,13 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     auto output_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
     // Query coords for syncer, datacopy and addition workloads
-    auto syncer_coord = sub_device_1.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto syncer_coord = sub_device_1.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto syncer_core_phys = mesh_device_->worker_core_from_logical_core(syncer_coord);
-    auto datacopy_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto datacopy_coord = sub_device_2.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto datacopy_core = CoreRangeSet(CoreRange(datacopy_coord, datacopy_coord));
     auto datacopy_core_phys = mesh_device_->worker_core_from_logical_core(datacopy_coord);
-    auto add_coord = sub_device_4.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto add_coord = sub_device_4.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto add_core = CoreRangeSet(CoreRange(add_coord, add_coord));
     auto add_core_phys = mesh_device_->worker_core_from_logical_core(add_coord);
 
@@ -380,7 +381,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
     // Program syncs with host and notifies downstream datacopy or addition program
-    Program sync_and_incr_program = CreateProgram();
+    Program sync_and_incr_program = CreateProgram(*this->mesh_device_);
     auto sync_kernel = CreateKernel(
         sync_and_incr_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_increment.cpp",
@@ -389,7 +390,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     std::array<uint32_t, 3> sync_rt_args = {global_sem.address(), datacopy_core_phys.x, datacopy_core_phys.y};
     SetRuntimeArgs(sync_and_incr_program, sync_kernel, syncer_core, sync_rt_args);
     // Program copies data from dram once notified
-    Program datacopy_program = CreateProgram();
+    Program datacopy_program = CreateProgram(*this->mesh_device_);
     auto datacopy_kernel = CreateKernel(
         datacopy_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_datacopy.cpp",
@@ -404,7 +405,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
             .set_page_size(src0_cb_index, single_tile_size);
     CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
     // Program copies data from DRAM, does addition in RISC once notified
-    Program add_program = CreateProgram();
+    Program add_program = CreateProgram(*this->mesh_device_);
     auto add_kernel = CreateKernel(
         add_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_add.cpp",
@@ -424,7 +425,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     CreateCircularBuffer(add_program, datacopy_core, cb_src0_config);
     // Same program as above, but runs on different SubDevice. Reads from DRAM, once
     // notified by previous program
-    Program add_program_2 = CreateProgram();
+    Program add_program_2 = CreateProgram(*this->mesh_device_);
     auto add_kernel_2 = CreateKernel(
         add_program_2,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_add.cpp",
@@ -460,9 +461,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
 
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto device_id : mesh_device_->get_device_ids()) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+            device_id, syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
     }
 
     // Capture Trace
@@ -483,9 +484,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
-        for (auto* device : mesh_device_->get_devices()) {
+        for (auto device_id : mesh_device_->get_device_ids()) {
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+                device_id, syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
         for (const auto& device_coord : left_col) {
@@ -513,7 +514,7 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     MeshCoordinateRange all_devices(mesh_device_->shape());
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), seed);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), seed);
     workload->add_program(all_devices, std::move(*programs[0]));
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
     try {
@@ -534,7 +535,7 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
     MeshCoordinateRange bottom_right_corner({1, 2}, {1, 3});  // Devices (1,2) to (1,3)
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        2, mesh_device_->compute_with_storage_grid_size(), 0);
+        *this->mesh_device_, 2, mesh_device_->compute_with_storage_grid_size(), 0);
 
     auto mesh_workload = std::make_shared<MeshWorkload>();
     mesh_workload->add_program(top_left_corner, std::move(*programs[0]));
@@ -559,6 +560,30 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
     mesh_device_->release_mesh_trace(trace_id);
 }
 
+TEST_F(MeshTraceTest2x4, SingleDeviceTraceReplay) {
+    // Leaves out all other devices, including remote chips (#60338)
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 0);
+
+    auto mesh_workload = std::make_shared<MeshWorkload>();
+    mesh_workload->add_program(MeshCoordinateRange({0, 0}, {0, 0}), std::move(*programs[0]));
+
+    // Compile workload first
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+
+    auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
+
+    for (int i = 0; i < 100; i++) {
+        mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
 // Sweep Tests on T3K and TG
 void run_heterogenous_trace_sweep(
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -577,7 +602,7 @@ void run_heterogenous_trace_sweep(
             auto workload = std::make_shared<MeshWorkload>();
             for (const auto& program_grid : workload_grid) {
                 auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-                    1, mesh_device->compute_with_storage_grid_size(), seed);
+                    *mesh_device, 1, mesh_device->compute_with_storage_grid_size(), seed);
                 workload->add_program(program_grid, std::move(*programs[0]));
             }
             EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
@@ -786,7 +811,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
     for (uint32_t i = 0; i < num_workloads; i++) {
         auto workload = std::make_shared<MeshWorkload>();
         auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-            1, mesh_device_->compute_with_storage_grid_size(), 42);
+            *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 42);
         workload->add_program(all_devices, std::move(*programs[0]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         mesh_workloads.push_back(workload);
@@ -815,7 +840,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCaptu
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 123);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 123);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 
@@ -851,7 +876,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMax
 
     MeshWorkload workload;
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 321);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 321);
     workload.add_program(all_devices, std::move(*programs[0]));
 
     const auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
@@ -921,7 +946,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 456);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 456);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 
@@ -1001,7 +1026,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 789);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 789);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 
@@ -1064,7 +1089,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), 999);
+        *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 999);
     workload->add_program(all_devices, std::move(*programs[0]));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
 

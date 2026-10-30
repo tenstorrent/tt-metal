@@ -227,7 +227,7 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
              m2::TensorBinding{.tensor_parameter_name = T_OUTPUT_GRAD, .accessor_name = "output_grad"}},
         .compile_time_args = {{"input_grad_rank", static_cast<uint32_t>(input_grad_rank)}},
         .runtime_arg_schema = {.runtime_arg_names = {"decimal", "num_output_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // The three per-dimension blocks (output_grad_dim, input_grad_dim, need_bcast_dim) are read as
     // runtime varargs (count = input_grad_rank each).
@@ -240,7 +240,7 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
             .dfb_spec_name = DX, .accessor_name = "input_grad", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = T_INPUT_GRAD, .accessor_name = "input_grad"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_input_tiles_per_core", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -250,18 +250,27 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
     if (fp32_dest_acc_en) {
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
+    // p = ±inf: the power-ladder gradient formula degenerates (floor(inf) overflows the
+    // uint32 exponent path in the kernel). Switch the compute kernel to the exact sub-gradient
+    // dx = sign(x) * dy * eq(|x|, y), mirroring the forward op's IS_ZERO / MINUS_INF special-casing
+    // (see moreh_norm_program_factory_{nc,h,w}_other.cpp). One define covers both signs: y equals
+    // max|x| for p=+inf and min|x| for p=-inf, so the mask eq(|x| - y, 0) selects the argmax(|x|)
+    // set for +inf and the argmin(|x|) set for -inf without a separate branch.
+    if (std::isinf(p)) {
+        compute_defines.emplace("NORM_INF", "1");
+    }
 
     // Style B: the legacy factory builds a Metal ComputeConfigDescriptor directly, setting only
     // math_fidelity / fp32_dest_acc_en / math_approx_mode; dst_full_sync_en is left at the Metal
-    // default (false), so double_buffer_dest stays at its matching Gen1 default (true). We build a
-    // ComputeGen1Config directly to preserve that (resolved dst_full_sync_en / packer_l1_acc are
+    // default (false), so double_buffer_dest stays at its matching default (true). We build a
+    // ComputeHardwareConfig directly to preserve that (resolved dst_full_sync_en / packer_l1_acc are
     // unused, matching legacy).
     // Plain copies (structured-binding names captured by value to keep the lambda portable).
     const MathFidelity cfg_math_fidelity = math_fidelity;
     const bool cfg_math_approx_mode = math_approx_mode;
     const bool cfg_fp32_dest_acc_en = fp32_dest_acc_en;
     auto make_compute_hw = [&]() {
-        m2::ComputeGen1Config cfg{
+        m2::ComputeHardwareConfig cfg{
             .fpu_math_fidelity = cfg_math_fidelity,
             .sfpu_precision_mode = cfg_math_approx_mode ? Precision::Approximate : Precision::Precise,
             .enable_32_bit_dest = cfg_fp32_dest_acc_en,
@@ -322,7 +331,11 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
             .compile_time_args =
                 {{"num_output_tiles", num_cols_per_core_group},
                  {"wt_need_bcast", need_bcast_dim[0]},
-                 {"ht_need_bcast", need_bcast_dim[1]}},
+                 // need_bcast_dim is sized from input_grad's LOGICAL rank (line ~109 above), so a
+                 // rank-1 input_grad (a supported case, e.g. dim=0 norm_backward on a 1-D tensor)
+                 // makes it a 1-element vector; there is no height dimension to broadcast in that
+                 // case, so treat it as "no broadcast needed" rather than reading out of bounds.
+                 {"ht_need_bcast", need_bcast_dim.size() > 1 ? need_bcast_dim[1] : 0}},
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"num_input_tiles_per_core", "p", "p_is_negative", "p_minus_one", "p_minus_one_is_negative"}},

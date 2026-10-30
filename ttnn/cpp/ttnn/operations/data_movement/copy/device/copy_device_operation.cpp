@@ -53,7 +53,7 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
         total_cb_size += num_output_units * aligned_output_unit_size;
     }
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     const uint32_t max_l1_size =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
@@ -99,7 +99,7 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
         "ttnn.copy only supports float, bfloat, fp8_e4m3, int32, uint32, uint16 and uint8 output tensors but got {}",
         operation_attributes.output_dtype);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to copy need to be allocated in buffers on device!");
 
     // Determine the actual output dtype based on preallocated output if present
     DataType output_dtype = operation_attributes.output_dtype;
@@ -122,7 +122,7 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
             "spec than the one specified in the passed-in memory config.");
         TT_FATAL(out_tensor.dtype() == operation_attributes.output_dtype, "Mismatched output dtype");
         TT_FATAL(out_tensor.storage_type() == StorageType::DEVICE, "Output tensor needs to be on device!");
-        TT_FATAL(out_tensor.buffer() != nullptr, "Output tensor needs to be allocated in buffers on device!");
+        TT_FATAL(out_tensor.is_allocated(), "Output tensor needs to be allocated in buffers on device!");
         TT_FATAL(
             out_tensor.device() == input_tensor_a.device(),
             "Output tensor needs to be on the same device as the input tensor!");

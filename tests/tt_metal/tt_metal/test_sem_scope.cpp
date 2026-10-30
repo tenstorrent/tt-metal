@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <vector>
 #include <map>
 #include <memory>
@@ -24,10 +25,11 @@
 #include "common/mesh_dispatch_fixture.hpp"
 #include "jit_build/jit_build_settings.hpp"  // ::SemScope, host mirror of the device enum
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
-// Exercises the device Semaphore class end-to-end across all three mechanisms. The
+// Exercises the device Semaphore class end-to-end across all four mechanisms. The
 // host resolves each semaphore's mechanism from a binder-topology census,
 // with nothing configurable on the SemaphoreSpec, so every test builds the shape
 // that makes the census pick the mechanism under test.
@@ -42,20 +44,19 @@ protected:
     const std::string kernel_path_census = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_census_probe.cpp";
     const std::string kernel_path_remote = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_remote.cpp";
     const std::string kernel_path_slot_probe = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_slot_probe.cpp";
+    const std::string kernel_path_compute = "tests/tt_metal/tt_metal/test_kernels/compute/test_compute_semaphore.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    IDevice* device_{nullptr};
     std::vector<uint32_t> result;
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
         if (arch_ != tt::ARCH::QUASAR) {
-            GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementGen2Config";
+            GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its DM specs set no config_1xx";
         }
         mesh_device_ = devices_[0];
-        device_ = mesh_device_->get_devices()[0];
-        report_addr = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+        report_addr = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         num_dms_ = std::min(num_dms_, 6u);  // Metal 2.0 reserves DM0/DM1
     }
@@ -73,10 +74,10 @@ protected:
         // Prefill with a sentinel, not 0: the with_down tests expect 0, so a zero prefill would
         // pass even if the kernel never reported.
         std::vector<uint32_t> sentinel(1, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -105,7 +106,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         });
         std::vector<experimental::WorkUnitSpec> work_units{experimental::WorkUnitSpec{
             .name = "main",
@@ -122,9 +123,8 @@ protected:
                     {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
                       .accessor_name = "counter"}},
                 .runtime_arg_schema =
-                    {.runtime_arg_names =
-                         {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                    {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             work_units.push_back(experimental::WorkUnitSpec{
                 .name = "observer",
@@ -157,7 +157,6 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", 0u},
                      {"is_reporter", 0u},
-                     {"barrier_idx", 0u},
                      {"wait_min_total", 0u}}),
             });
         }
@@ -166,7 +165,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 1u);
         EXPECT_NE(result.empty() ? kNoReport : result[0], kNoReport) << "kernel never reported";
         return result.empty() ? 0u : result[0];
@@ -181,14 +180,14 @@ protected:
         const bool has_watchdog = mode_define == "MODE_MULTI_CONSUMER";
         // Sentinel prefill
         std::vector<uint32_t> sentinel(3, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
         if (has_watchdog) {
             std::vector<uint32_t> wd_sentinel(1, kNoReport);
-            tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr + 64u, wd_sentinel);
+            slow_dispatch::WriteToL1(*mesh_device_, core, report_addr + 64u, wd_sentinel);
         }
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -215,7 +214,7 @@ protected:
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"report_addr", "increment_times", "num_threads", "self_noc_x", "self_noc_y"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
@@ -246,7 +245,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 3 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 3u);
         if (result.size() < 3) {
             return 0u;
@@ -256,7 +255,7 @@ protected:
         EXPECT_EQ(result[2], static_cast<uint32_t>(want)) << "done_sem baked scope != shape intent";
         if (has_watchdog) {
             std::vector<uint32_t> wd;
-            tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr + 64u, sizeof(uint32_t), wd);
+            slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr + 64u, sizeof(uint32_t), wd);
             EXPECT_EQ(wd.size(), 1u);
             if (!wd.empty()) {
                 const uint32_t total_credits = (num_dms_ - 2) * concurrent_iterations;
@@ -275,10 +274,10 @@ protected:
     // The baked scopes are asserted.
     std::pair<uint32_t, uint32_t> run_coexist() {
         std::vector<uint32_t> zero(4, 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, zero);
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device_);
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
@@ -300,7 +299,7 @@ protected:
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"external_sem"}, .accessor_name = "external"},
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "num_threads"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
@@ -327,7 +326,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 4 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 4 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 4u);
         if (result.size() < 4) {
             return {0u, 0u};
@@ -344,7 +343,7 @@ protected:
         const uint32_t expected = sender_threads * iters;
         // Sentinel prefill: see run_scope.
         std::vector<uint32_t> sentinel(2, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
         // The sender addresses the semaphore's node by its virtual NoC coords.
         const CoreCoord core_virtual = mesh_device_->worker_core_from_logical_core(core);
@@ -366,7 +365,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"increment_times", "remote_noc_x", "remote_noc_y"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
         experimental::KernelSpec receiver_spec{
             .unique_id = RECEIVER,
@@ -375,7 +374,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "expected"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec wu_recv{.name = "wu_recv", .kernels = {RECEIVER}, .target_nodes = core};
@@ -408,7 +407,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 2 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 2u);
         if (result.size() < 2) {
             return {kNoReport, 0u};
@@ -440,7 +439,7 @@ protected:
             }
         }
         std::vector<uint32_t> sentinel(3, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, reporter_node, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, reporter_node, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord{0, 0};
@@ -451,10 +450,6 @@ protected:
 
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
-        EXPECT_LE(kernels.size(), 2u) << "run_census supports at most 2 kernels (barrier slots)";
-        if (kernels.size() > 2u) {
-            return {kNoReport, 0u};
-        }
         std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
         for (size_t i = 0; i < kernels.size(); i++) {
             const auto& k = kernels[i];
@@ -467,9 +462,8 @@ protected:
                     {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
                       .accessor_name = "counter"}},
                 .runtime_arg_schema =
-                    {.runtime_arg_names =
-                         {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                    {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             bool placed = false;
             for (auto& [node, names] : by_node) {
@@ -489,8 +483,6 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", k.increments},
                      {"is_reporter", k.reporter ? 1u : 0u},
-                     // Distinct barrier slot per kernel (see the cap's safety note above).
-                     {"barrier_idx", static_cast<uint32_t>(i)},
                      {"wait_min_total", k.wait_min_total}}),
             });
         }
@@ -508,7 +500,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, reporter_node, report_addr, 3 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, reporter_node, report_addr, 3 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 3u);
         if (result.size() < 3) {
             return {kNoReport, 0u};
@@ -516,6 +508,160 @@ protected:
         census_ring_word_ = result[2];
         EXPECT_NE(result[0], kNoReport) << "census probe never reported: the reporter kernel/thread did not run";
         return {result[0], result[1]};
+    }
+
+    // TODO @RT: port over to the Metal 2.0 tests (metal2_host_api/integration_tests) after Quasar has been ported.
+    // https://github.com/tenstorrent/tt-metal/issues/60164
+    // Pattern D (`in` non-empty) also adds a DM reader and writer, moves the input tiles through DRAM and dataflow
+    // buffers, and returns the output tiles in `out`.
+    static constexpr uint32_t kComputeDepth = 4;  // kernel kDepth, passed as the semaphore's max_value
+    static constexpr uint32_t kComputeMaxTiles = 8;
+    static constexpr uint32_t kTileWords = 32 * 32 * 2 / 4;
+
+    struct ComputeRun {
+        uint32_t pattern = 0;
+        uint32_t thread_sel = 0;
+        uint32_t num_iters = 0;
+        uint32_t nosync = 0;
+        uint32_t batch = 1;
+        uint32_t max_value = 0;
+    };
+
+    std::vector<uint32_t> run_compute(
+        const ComputeRun& run,
+        uint32_t n_report,
+        const std::vector<uint32_t>& in = {},
+        std::vector<uint32_t>* out = nullptr) {
+        const bool dfb_datacopy = !in.empty();
+        std::vector<uint32_t> zero_report(8, 0u);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, zero_report);
+
+        experimental::SemaphoreSpec sem{.unique_id = experimental::SemaphoreSpecName{"sem"}, .target_nodes = core};
+        sem.advanced_options.max_value = run.max_value;
+        const experimental::KernelSpecName COMPUTE{"compute"};
+        experimental::KernelSpec ks{
+            .unique_id = COMPUTE,
+            .source = kernel_path_compute,
+            .num_threads = 1,
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
+            .compile_time_args =
+                {{"pattern", run.pattern},
+                 {"thread_sel", run.thread_sel},
+                 {"nosync", run.nosync},
+                 {"batch", run.batch}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_iters", "report_addr"}},
+            .hw_config = experimental::ComputeHardwareConfig{},  // double-buffered DST (pattern D: SyncHalf)
+        };
+        experimental::ProgramSpec spec{
+            .name = "sem_compute_atomic",
+            .kernels = {ks},
+            .semaphores = {sem},
+            .work_units = {{.name = "main", .kernels = {COMPUTE}, .target_nodes = core}},
+        };
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = COMPUTE,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                core, {{"num_iters", run.num_iters}, {"report_addr", report_addr}}),
+        }};
+
+        std::shared_ptr<distributed::MeshBuffer> in_buffer;
+        std::shared_ptr<distributed::MeshBuffer> out_buffer;
+        if (dfb_datacopy) {
+            const uint32_t tile_bytes = kTileWords * 4;
+            const uint32_t bytes = run.num_iters * tile_bytes;
+            const distributed::ReplicatedBufferConfig dram_size{.size = bytes};
+            const distributed::DeviceLocalBufferConfig dram{.page_size = bytes, .buffer_type = BufferType::DRAM};
+            in_buffer = distributed::MeshBuffer::create(dram_size, dram, mesh_device_.get());
+            out_buffer = distributed::MeshBuffer::create(dram_size, dram, mesh_device_.get());
+            slow_dispatch::WriteToBuffer(*in_buffer, in);
+
+            const experimental::KernelSpecName READER{"reader"};
+            const experimental::KernelSpecName WRITER{"writer"};
+            const experimental::DataMovementHardwareConfig dm_hw_config{
+                .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true}};
+            auto& compute = spec.kernels[0];
+            compute.compiler_options.defines = {{"PATTERN_D_DFB", "1"}};
+            // Self-loop bindings need distinct accessor names; the kernel uses dfb::mid for both sides.
+            compute.dfb_bindings = {
+                experimental::ConsumerOf(experimental::DFBSpecName{"in"}, "in"),
+                experimental::ProducerOf(experimental::DFBSpecName{"mid"}, "mid"),
+                experimental::ConsumerOf(experimental::DFBSpecName{"mid"}, "mid_in"),
+                experimental::ProducerOf(experimental::DFBSpecName{"out"}, "out"),
+            };
+            spec.kernels.push_back(experimental::KernelSpec{
+                .unique_id = READER,
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
+                .num_threads = 1,
+                .dfb_bindings = {experimental::ProducerOf(experimental::DFBSpecName{"in"}, "out")},
+                .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"}},
+                .hw_config = dm_hw_config,
+            });
+            spec.kernels.push_back(experimental::KernelSpec{
+                .unique_id = WRITER,
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+                .num_threads = 1,
+                .dfb_bindings = {experimental::ConsumerOf(experimental::DFBSpecName{"out"}, "in")},
+                .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+                .hw_config = dm_hw_config,
+            });
+            for (auto [name, entries] : {std::pair{"in", 2u}, std::pair{"mid", kComputeDepth}, std::pair{"out", 2u}}) {
+                spec.dataflow_buffers.push_back(experimental::DataflowBufferSpec{
+                    .unique_id = experimental::DFBSpecName{name},
+                    .entry_size = tile_bytes,
+                    .num_entries = entries,
+                    .data_format_metadata = tt::DataFormat::Float16_b,
+                });
+            }
+            spec.work_units[0].kernels = {COMPUTE, READER, WRITER};
+            params.kernel_run_args.push_back(
+                {.kernel = READER,
+                 .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                     core, {{"src_addr", in_buffer->address()}, {"bank_id", 0u}, {"num_tiles", run.num_iters}})});
+            params.kernel_run_args.push_back(
+                {.kernel = WRITER,
+                 .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                     core, {{"dst_addr", out_buffer->address()}, {"bank_id", 0u}, {"num_tiles", run.num_iters}})});
+        }
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::SetProgramRunArgs(program, params);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, n_report * sizeof(uint32_t), result);
+        if (dfb_datacopy) {
+            slow_dispatch::ReadFromBuffer(*out_buffer, *out);
+        }
+        return result;
+    }
+
+    // Pattern D: num_tiles distinct Float16_b tiles through the ring. Returns the report; `mismatched` is the
+    // number of output tiles that differ from the input.
+    std::vector<uint32_t> run_compute_datacopy(uint32_t num_tiles, uint32_t nosync, uint32_t& mismatched) {
+        // Tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F): exact through a datacopy, distinct per tile.
+        std::vector<uint32_t> in(num_tiles * kTileWords);
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            for (uint32_t w = 0; w < kTileWords; ++w) {
+                const uint32_t lo = 0x4000u + (t << 7) + ((2 * w) & 0x7Fu);
+                const uint32_t hi = 0x4000u + (t << 7) + ((2 * w + 1) & 0x7Fu);
+                in[t * kTileWords + w] = (hi << 16) | lo;
+            }
+        }
+        std::vector<uint32_t> out;
+        auto report = run_compute(
+            {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kComputeDepth}, 4, in, &out);
+        mismatched = 0;
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            const auto first = t * kTileWords;
+            if (!std::equal(out.begin() + first, out.begin() + first + kTileWords, in.begin() + first)) {
+                ++mismatched;
+            }
+        }
+        return report;
     }
 
     bool has_second_node() const {
@@ -540,8 +686,7 @@ TEST_F(SemScopeFixture, TestExternalScopeIncrement) {
     }
     const uint32_t observed = run_scope(SemScope::EXTERNAL);
     log_info(LogTest, "EXTERNAL scope value(): {} (expected {})", observed, iterations);
-    EXPECT_EQ(observed, iterations)
-        << "Semaphore<EXTERNAL>::up()/value() did not produce the expected single-writer count.";
+    EXPECT_EQ(observed, iterations) << "EXTERNAL up()/value() did not produce the expected single-writer count.";
 }
 
 // The smallest cached shape: one 2-thread on-node binder kernel (a single instance would
@@ -555,7 +700,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedScopeIncrement) {
     log_info(LogTest, "DM_LOCAL_CACHED scope={} count={} (expected {})", scope, count, 2 * iterations);
     EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED))
         << "the smallest cached-geometry shape must resolve DM_LOCAL_CACHED";
-    EXPECT_EQ(count, 2 * iterations) << "Semaphore<DM_LOCAL_CACHED>::up()/value() did not produce the expected count.";
+    EXPECT_EQ(count, 2 * iterations) << "DM_LOCAL_CACHED up()/value() did not produce the expected count.";
 }
 
 // A single-writer single-node shape is the census's cheap pick. value() must equal iterations.
@@ -563,7 +708,7 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
     const uint32_t observed = run_scope(SemScope::LOCAL_NONATOMIC);
     log_info(LogTest, "LOCAL_NONATOMIC scope value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations)
-        << "Semaphore<LOCAL_NONATOMIC>::up()/value() (legacy default) did not produce the expected count.";
+        << "LOCAL_NONATOMIC up()/value() (legacy default) did not produce the expected count.";
 }
 
 // up(N) then down(N) must leave the semaphore at 0, per scope. DM_LOCAL_CACHED has no
@@ -575,13 +720,13 @@ TEST_F(SemScopeFixture, TestExternalScopeUpDown) {
     }
     const uint32_t observed = run_scope(SemScope::EXTERNAL, /*with_down=*/true);
     log_info(LogTest, "EXTERNAL up/down value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() (atomic NoC decrement) did not return to 0.";
+    EXPECT_EQ(observed, 0u) << "EXTERNAL down() (atomic NoC decrement) did not return to 0.";
 }
 
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
     const uint32_t observed = run_scope(SemScope::LOCAL_NONATOMIC, /*with_down=*/true);
     log_info(LogTest, "LOCAL_NONATOMIC up/down value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
+    EXPECT_EQ(observed, 0u) << "LOCAL_NONATOMIC down() (legacy) did not return to 0.";
 }
 
 TEST_F(SemScopeFixture, TestExternalDownFromAllOnes) {
@@ -602,7 +747,7 @@ TEST_F(SemScopeFixture, TestExternalConcurrentUp) {
     const uint32_t observed = run_concurrent(SemScope::EXTERNAL, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "EXTERNAL concurrent up value(): {} (expected {})", observed, expected);
-    EXPECT_EQ(observed, expected) << "Semaphore<EXTERNAL>::up() lost updates under concurrency (non-atomic route?).";
+    EXPECT_EQ(observed, expected) << "EXTERNAL up() lost updates under concurrency (non-atomic route?).";
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
@@ -612,7 +757,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
     const uint32_t observed = run_concurrent(SemScope::DM_LOCAL_CACHED, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "DM_LOCAL_CACHED concurrent up value(): {} (expected {})", observed, expected);
-    EXPECT_EQ(observed, expected) << "Semaphore<DM_LOCAL_CACHED>::up() lost updates under concurrency.";
+    EXPECT_EQ(observed, expected) << "DM_LOCAL_CACHED up() lost updates under concurrency.";
 }
 
 // The current WH/BH pattern, up(noc, my_x, my_y, 1) on a semaphore the census resolves to
@@ -651,7 +796,7 @@ TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
     }
     const uint32_t observed = run_concurrent(SemScope::EXTERNAL, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "EXTERNAL producer/consumer value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() lost a concurrent producer increment (non-atomic?).";
+    EXPECT_EQ(observed, 0u) << "EXTERNAL down() lost a concurrent producer increment (non-atomic?).";
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
@@ -660,7 +805,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     }
     const uint32_t observed = run_concurrent(SemScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
+    EXPECT_EQ(observed, 0u) << "DM_LOCAL_CACHED down() lost a concurrent producer increment.";
 }
 
 // One producer feeds single credits while (num_dms-2) consumers concurrently down() them
@@ -672,9 +817,8 @@ TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
     }
     const uint32_t observed = run_concurrent(SemScope::DM_LOCAL_CACHED, "MODE_MULTI_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED multi-consumer down value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u)
-        << "Semaphore<DM_LOCAL_CACHED>::down() double-spent a credit under multi-consumer contention "
-           "(the LR/SC CAS retry loop is broken, two consumers passed the >= check on one credit).";
+    EXPECT_EQ(observed, 0u) << "DM_LOCAL_CACHED down() double-spent a credit under multi-consumer contention "
+                               "(the LR/SC CAS retry loop is broken, two consumers passed the >= check on one credit).";
 }
 
 // The same multi-consumer shape on EXTERNAL. Exact 0 means no credit was double-spent or lost.
@@ -795,7 +939,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                         "with different thread counts";
     }
     std::vector<uint32_t> sentinel(3, kNoReport);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+    slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
     const experimental::SemaphoreSpecName SEM_A{"sem_a"};
     const experimental::SemaphoreSpecName SEM_B{"sem_b"};
@@ -815,9 +959,8 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
-                {.runtime_arg_names =
-                     {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
@@ -837,7 +980,6 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
-                 {"barrier_idx", 0u},
                  {"wait_min_total", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -847,7 +989,6 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 0u},
-                 {"barrier_idx", 1u},
                  {"wait_min_total", 0u}}),
         },
     };
@@ -857,7 +998,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 3 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 3u);
     ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "two cached sems on one node: scope={} count={}", result[0], result[1]);
@@ -905,13 +1046,15 @@ TEST_F(SemScopeFixture, TestCachedSelfRestoresAcrossLaunches) {
         EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED)) << "run " << run << " did not resolve cached";
         EXPECT_EQ(count, expected)
             << (run == 0 ? "first launch miscounted"
-                         : "a later launch started from a stale pool row, the exit-stub "
+                         : "a later launch started from a stale pool row, the pool exit "
                            "self-restore did not fully reset the protocol words");
     }
 }
 
-// Making sure cached seeding needs no barrier at all by having a user kernel
-// pick a barrier slot that the cached seeder never rendezvoused with.
+// Making sure cached seeding needs no barrier at all by running a user kernel that
+// rendezvouses on its own barrier, which the cached seeder never took part in.
+// Firmware hands the two kernels separate slots, so the user barrier cannot touch
+// whatever the seeder relies on.
 TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     if (num_dms_ < 5) {
         GTEST_SKIP() << "needs >= 5 user DMs for two multi-threaded kernels with different thread counts";
@@ -920,14 +1063,14 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
         GTEST_SKIP() << "needs >= 2 worker nodes: KB's semaphore spans two nodes to resolve EXTERNAL";
     }
     std::vector<uint32_t> sentinel(3, kNoReport);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+    slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
     const experimental::SemaphoreSpecName SEM_A{"sem_cached"};
     const experimental::SemaphoreSpecName SEM_B{"sem_external"};
     experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
     experimental::SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = experimental::NodeRange{core, second_node()}};
     const experimental::KernelSpecName KA{"cached_binder"};
-    const experimental::KernelSpecName KB{"slot1_user"};
+    const experimental::KernelSpecName KB{"barrier_user"};
     const uint32_t threads_a = 2;
     const uint32_t threads_b = num_dms_ - threads_a;
 
@@ -940,9 +1083,8 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
-                {.runtime_arg_names =
-                     {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
@@ -962,7 +1104,6 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
-                 {"barrier_idx", 0u},
                  {"wait_min_total", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -972,7 +1113,6 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 0u},
-                 {"barrier_idx", 1u},  // a user array slot with no seeder rendezvous to collide with
                  {"wait_min_total", 0u}}),
         },
     };
@@ -982,7 +1122,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 3 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 3u);
     ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "cached seeding vs user barrier slot: scope={} count={}", result[0], result[1]);
@@ -1077,7 +1217,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
         GTEST_SKIP() << "needs a second node for the disjoint-node id collision";
     }
     std::vector<uint32_t> sentinel(2, kNoReport);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+    slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
     experimental::SemaphoreSpec sem_near{
         .unique_id = experimental::SemaphoreSpecName{"sem_near"}, .target_nodes = core};
@@ -1093,7 +1233,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
             {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_near"}, .accessor_name = "near_sem"},
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_far"}, .accessor_name = "far_sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {K}, .target_nodes = core};
     experimental::ProgramSpec spec{
@@ -1113,7 +1253,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 2 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 2u);
     ASSERT_NE(result[0], kNoReport) << "slot probe never reported";
     log_info(LogTest, "same-id scopes: near={} far={}", result[0], result[1]);
@@ -1134,8 +1274,8 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
             {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+            {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
     experimental::ProgramSpec spec{.name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
@@ -1145,4 +1285,131 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
     }) << "binding the same semaphore twice in one kernel must be rejected (it double-counts the census)";
 }
 
+// ---- COMPUTE_ATOMIC: the Tensix hardware semaphore, UNPACK <-> PACK ----
+// Index PACK_UNPACK on Quasar. One kernel (test_compute_semaphore.cpp), patterns A, D, E selected by the
+// `pattern` compile-time arg. The Blackhole tests are in metal2_host_api/integration_tests/compute_semaphore.cpp.
+
+// Pattern E iterations: the emulator's slow consumer keeps this short (64 = 16 ring capacities).
+static constexpr uint32_t kBoundedProducerIters = 64;
+
+// Pattern A: one thread drives set/up/down/wait/wait_min/value through a known value sequence. Run
+// once on UNPACK and once on PACK -- the same primitive must work from either thread.
+TEST_F(SemScopeFixture, TestComputeAtomicSelfCheckUnpack) {
+    const auto r = run_compute({.pattern = 0, .thread_sel = 0}, 6);
+    log_info(
+        LogTest,
+        "UNPACK self-check: pass={} v(after up5)={} v(after down3)={} v(after up1)={} fail_step={}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4]);
+    EXPECT_EQ(r[1], 5u);
+    EXPECT_EQ(r[2], 2u);
+    EXPECT_EQ(r[3], 3u);
+    EXPECT_EQ(r[0], 1u) << "UNPACK primitive self-check failed at step " << r[4];
+}
+
+TEST_F(SemScopeFixture, TestComputeAtomicSelfCheckPack) {
+    const auto r = run_compute({.pattern = 0, .thread_sel = 2}, 6);
+    log_info(
+        LogTest,
+        "PACK self-check: pass={} v(after up5)={} v(after down3)={} v(after up1)={} fail_step={}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4]);
+    EXPECT_EQ(r[1], 5u);
+    EXPECT_EQ(r[2], 2u);
+    EXPECT_EQ(r[3], 3u);
+    EXPECT_EQ(r[0], 1u) << "PACK primitive self-check failed at step " << r[4];
+}
+
+// Pattern D: two-hop datacopy through a 4-slot ring (a compute self-loop DFB). A DM reader and writer move
+// distinct 32x32 Float16_b tiles in and out through DRAM, and the host checks out == in bit for bit. The
+// semaphore is the only thing ordering PACK's write of each slot before UNPACK's read of it.
+TEST_F(SemScopeFixture, TestComputeAtomicDatacopy) {
+    uint32_t mismatched = 0;
+    const auto r = run_compute_datacopy(kComputeMaxTiles, /*nosync=*/0, mismatched);
+    log_info(LogTest, "datacopy: packed={} final_sem={} mismatched_tiles={}", r[0], r[2], mismatched);
+    EXPECT_EQ(r[0], kComputeMaxTiles) << "PACK did not finish every tile";
+    EXPECT_EQ(r[2], 0u) << "semaphore did not settle to 0 -- up/down unbalanced";
+    EXPECT_EQ(mismatched, 0u) << "output != input: UNPACK read the ring before PACK's writes landed";
+}
+
+// Negative control: without semaphore operations, UNPACK reads each slot before PACK writes it, so the
+// output must NOT equal the input. If this passes the positive test above is not a detector.
+TEST_F(SemScopeFixture, TestComputeAtomicDatacopyNoSyncControl) {
+    uint32_t mismatched = 0;
+    const auto r = run_compute_datacopy(kComputeMaxTiles, /*nosync=*/1, mismatched);
+    log_info(
+        LogTest, "datacopy no-sync control: packed={} mismatched_tiles={} / {}", r[0], mismatched, kComputeMaxTiles);
+    EXPECT_EQ(r[0], kComputeMaxTiles);
+    EXPECT_GT(mismatched, 0u) << "unsynchronized datacopy came out correct -- the positive test is not a detector";
+}
+
+// Pattern E: PACK gates each up() with wait_not_full() against a capacity of kComputeDepth; the slow UNPACK
+// consumer's high-water mark must stay at the capacity and nothing may be lost. Report: produced, consumed,
+// high-water mark, final value, UNPACK timeout.
+TEST_F(SemScopeFixture, TestComputeAtomicBoundedProducer) {
+    const uint32_t num_iters = kBoundedProducerIters;
+    const auto r = run_compute({.pattern = 4, .num_iters = num_iters, .max_value = kComputeDepth}, 6);
+    log_info(
+        LogTest,
+        "bounded producer: produced={} consumed={} high_water={} final={}{}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4] ? " [UNPACK TIMEOUT]" : "");
+    EXPECT_EQ(r[4], 0u) << "UNPACK timed out -- a post was lost";
+    EXPECT_EQ(r[1], num_iters) << "UNPACK did not consume every credit";
+    EXPECT_LE(r[2], kComputeDepth) << "producer ran past the capacity -- wait_not_full() did not hold it";
+    EXPECT_GE(r[2], 2u) << "consumer was never behind -- the test did not exercise back-pressure";
+    EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
+}
+
+// Batched: wait_not_full(2); up(2) against the same capacity. Takes the RISC-poll form of wait_not_full
+// (no SEMWAIT condition for "room for n"; on Quasar it settles on the CSR Sync busy bit); the high-water
+// mark must still stay at the capacity. A wait that only reserved one slot would let up(2) reach
+// kComputeDepth + 1.
+TEST_F(SemScopeFixture, TestComputeAtomicBoundedProducerBatched) {
+    const uint32_t num_iters = kBoundedProducerIters;
+    const auto r = run_compute({.pattern = 4, .num_iters = num_iters, .batch = 2, .max_value = kComputeDepth}, 6);
+    log_info(
+        LogTest,
+        "bounded producer, batch 2: produced={} consumed={} high_water={} final={}{}",
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4] ? " [UNPACK TIMEOUT]" : "");
+    EXPECT_EQ(r[4], 0u) << "UNPACK timed out -- a post was lost";
+    EXPECT_EQ(r[1], num_iters) << "UNPACK did not consume every credit";
+    EXPECT_LE(r[2], kComputeDepth) << "batched producer ran past the capacity -- wait_not_full(2) reserved too little";
+    EXPECT_GE(r[2], 2u) << "consumer was never behind -- the test did not exercise back-pressure";
+    EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
+}
+
+// Same run without wait_not_full().
+// Quasar SEMPOST back-pressure: even without wait_not_full(), all credits survive
+// and the value stays at the programmed maximum. Unlike Blackhole, this is not a negative control
+// for wait_not_full(); it checks the hardware behavior on which completion of this run depends.
+TEST_F(SemScopeFixture, TestComputeAtomicBoundedProducerNoWaitControl) {
+    const uint32_t num_iters = kBoundedProducerIters;
+    const auto r = run_compute({.pattern = 4, .num_iters = num_iters, .nosync = 1, .max_value = kComputeDepth}, 6);
+    log_info(
+        LogTest,
+        "bounded producer no-wait control: produced={} consumed={} high_water={}{}",
+        r[0],
+        r[1],
+        r[2],
+        r[4] ? " [UNPACK TIMEOUT]" : "");
+    EXPECT_EQ(r[0], num_iters) << "PACK did not finish every post";
+    EXPECT_EQ(r[4], 0u) << "UNPACK timed out waiting for a credit";
+    EXPECT_EQ(r[1], num_iters) << "Quasar lost a post at capacity";
+    EXPECT_EQ(r[2], kComputeDepth) << "expected hardware back-pressure at the programmed maximum";
+    EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
+}
 }  // namespace tt::tt_metal

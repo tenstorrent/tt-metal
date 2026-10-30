@@ -77,6 +77,14 @@ constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DispatchEngineProcess
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
+// Go messages per sub-device: one per launch message slot on Tensix, which fast dispatch targets. Other cores are only
+// slow-dispatched and keep one.
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DRISC) || \
+    defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t GO_RING_DEPTH = 1;
+#else
+constexpr uint32_t GO_RING_DEPTH = 8;
+#endif
 #else
 #error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
 #endif
@@ -119,8 +127,7 @@ constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
 // Packing of RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr (part of the
 // host<->device remote-CB config contract): L1 addresses fit in 24 bits (< 2 MB) and
 // num_receivers fits in 8 bits, so the two share a single 32-bit slot. The device pack/unpack
-// helpers live in circular_buffer_interface.h; host code packs the same field in
-// global_circular_buffer.cpp.
+// helpers live in circular_buffer_interface.h.
 constexpr static std::uint32_t REMOTE_CB_PACKED_ADDR_MASK = 0x00FFFFFFu;
 constexpr static std::uint32_t REMOTE_CB_PACKED_COUNT_SHIFT = 24;
 
@@ -173,7 +180,7 @@ struct kernel_config_msg_t {
     volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
-    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
+    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 4];  // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -184,6 +191,9 @@ struct kernel_config_msg_t {
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
+    // Runtime binary reload: L1 address of this program's stage table, 0 if the program does not
+    // reload. Written by the host with the rest of the launch message.
+    volatile uint32_t reload_table_addr;
     volatile uint16_t watcher_kernel_ids[MaxProcessorsPerCoreType];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
@@ -191,11 +201,9 @@ struct kernel_config_msg_t {
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     // Byte offset of PrefetcherPipe kernel-config region from kernel_config_base.
     // REMOTE_DFB_OFFSET_NONE (0xFF) means no PrefetcherPipes on this launch.
-    // Placed here (after the 2-byte origin pair) so the field is uint16-aligned without
-    // growing mailboxes_t: pad3 is 2 B smaller than the prior 1+X+4 layout.
+    // Placed after the 2-byte origin pair so the field is uint16-aligned.
     volatile uint16_t prefetcher_pipe_offset;
-    volatile uint8_t pad3[((1 - MaxProcessorsPerCoreType % 2) * 10) + 3];  // CODEGEN:skip — was 1+X+4; −2 B for
-                                                                           // prefetcher_pipe_offset
+    volatile uint8_t pad3[9 - (MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -216,6 +224,7 @@ static_assert(offsetof(kernel_config_msg_t, prefetcher_pipe_offset) % sizeof(uin
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, reload_table_addr) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
@@ -230,6 +239,11 @@ struct go_msg_t {
         };
     };
 } __attribute__((packed));
+
+// One sub-device's go messages, indexed by launch message slot.
+struct go_ring_t {
+    struct go_msg_t slot[GO_RING_DEPTH];
+};
 
 struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
@@ -286,6 +300,8 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeEthDestL1AddrOverflow = 16,
     DebugSanitizeCBOutOfBounds = 17,
     DebugSanitizeNocInvalidTxnId = 18,
+    DebugSanitizeNocSharedCmdBuf = 19,
+    DebugSanitizeNocReadToRegAddr = 20,
 };
 
 struct debug_assert_msg_t {
@@ -307,6 +323,7 @@ enum debug_assert_type_t {
     DebugAssertCrtaOutOfBounds = 9,
     DebugAssertHwFault = 10,
     DebugAssertNCriscNOCPacketTagClearedTripped = 11,
+    DebugAssertNocMidNotClearedTripped = 12,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
@@ -337,6 +354,14 @@ struct debug_eth_link_t {
     volatile uint8_t link_down;
 };
 
+// The NoC command buffers each data movement RISC has programmed on one NOC since the current launch began,
+// a bit per command buffer. Kept by kernels built with DEDICATED_NOC_SHARED, the two dedicated-NOC kernels of
+// a core that share one NOC (DataMovement1XXConfig::dedicated_noc_sharing), which must keep to disjoint
+// command buffers; the NoC sanitizer flags one that both have used. BRISC firmware zeroes it per launch.
+struct debug_noc_cmd_buf_usage_msg_t {
+    volatile uint8_t by_risc[2];  // index 0: BRISC (DM0), 1: NCRISC (DM1)
+};
+
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
@@ -352,6 +377,7 @@ struct watcher_msg_t {
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
     uint8_t pad0;  // CODEGEN:skip
+    struct debug_noc_cmd_buf_usage_msg_t noc_cmd_buf_usage[MAX_NUM_NOCS_PER_CORE];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;
@@ -418,13 +444,17 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
     volatile CoreMagicNumber core_magic_number;
-    uint8_t pad;  // CODEGEN:skip
+    // DRAM cores only (0 elsewhere). Bit N is set when this core is a DRAM view's preferred
+    // endpoint on NOC N, i.e. that NIU forwards DRAM accesses over AXI and must stay in NOC2AXI
+    // mode. DRISC firmware puts every other NIU in stream mode. See experimental/drisc_mode.h.
+    volatile uint8_t noc2axi_niu_mask;
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
+static_assert(GO_RING_DEPTH == 1 || GO_RING_DEPTH == launch_msg_buffer_num_entries);
 
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
@@ -432,9 +462,10 @@ struct mailboxes_t {
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_messages[go_message_num_entries];
+    volatile struct go_ring_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
-    volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
+    // Index into go_messages to use. Always 0 on unicast cores.
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) volatile uint32_t go_message_index;
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
                                                            // the 4 TRISCs per engine.
     volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
@@ -461,6 +492,9 @@ static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 // debug_ring_buf is a byte array reinterpreted as 4-byte fields, and on Blackhole its head is the
 // target of an atomic, which traps if misaligned.
 static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
+// BRISC firmware clears the command buffer usage record with one word store per launch.
+static_assert(offsetof(watcher_msg_t, noc_cmd_buf_usage) % sizeof(uint32_t) == 0);
+static_assert(sizeof(watcher_msg_t::noc_cmd_buf_usage) == sizeof(uint32_t));
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 

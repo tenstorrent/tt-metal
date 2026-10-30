@@ -11,6 +11,7 @@
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -24,11 +25,12 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Device;
 class IDevice;
+class LaunchMessageRingBufferState;
 class MetalContext;
 class Program;
 class Semaphore;
@@ -105,10 +107,12 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size);
 
-// On WH/BH, DFBs are initialised via setup_local_cb_read_write_interfaces and require
-// local_cb_mask to be a proper slot bitmask (one bit per DFB id).  Call this after
-// finalize_dfbs so the mask is set correctly for every kernel group.
+// Write each kernel group's DFBs into its launch message's local_cb_mask. On WH/BH, DFBs are initialised via
+// setup_local_cb_read_write_interfaces and need a slot bitmask (one bit per DFB device slot); on Quasar the firmware
+// reads the DFB count. Call this after finalize_cbs and finalize_dfbs: finalize_cbs sizes the CB config region from
+// local_cb_mask, which must not count DFBs.
 void finalize_dfb_masks(
+    const MetalContext& metal_ctx,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
 
@@ -153,11 +157,15 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
 
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
+// pipe's active credit lane count, resolved from the program's attachment at build time so a
+// relay / Attach that armed lanes after this core's participant record was added is picked up.
+std::vector<uint32_t> build_prefetcher_pipe_config_payload(
+    const detail::ProgramImpl& program,
+    const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);
+
 std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
-    const CoreRangeSet& kernel_group_cores,
-    const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>>&
-        per_core_prefetcher_pipes,
-    uint8_t num_program_slots);
+    const detail::ProgramImpl& program, const CoreRangeSet& kernel_group_cores);
 
 uint32_t finalize_kernel_bins(
     IDevice* device,
@@ -186,36 +194,45 @@ void reserve_space_in_kernel_config_buffer(
     uint32_t program_ordering_sync_count,
     ProgramDispatchMetadata& dispatch_md);
 
+// Refresh cached CB payloads without reserving or submitting queue commands.
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence);
+
 void update_program_dispatch_commands(
     detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
-    ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 TraceNode create_trace_node(
     detail::ProgramImpl& program,
     distributed::MeshDevice* mesh_device,
     uint32_t num_workers,
     bool use_prefetcher_cache);
+
+// Serialize the same command fragments as write_program_command_sequence for reuse across devices.
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed);
+
+// Visits the command chunks in their canonical device-execution order.
+void for_each_program_command_sequence_chunk(
+    const ProgramCommandSequence& sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    const std::function<void(const void*, uint32_t)>& process_chunk);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
@@ -238,18 +255,16 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    bool reset_launch_msg_state);
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
 void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     uint32_t num_worker_sems,
     ttsl::Span<const uint32_t> workers_per_sub_device);
-
-void set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
@@ -262,11 +277,12 @@ void reset_expected_num_workers_completed_on_device(
 ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
     uint32_t num_workers, uint32_t num_additional_workers);
 
-void set_core_go_message_mapping_on_device(
+// Immutable setup batches, each bounded by the device's maximum fetch size.
+std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
+    ttsl::Span<const uint32_t> workers_per_sub_device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
+    bool reset_launch_msg_state);
 
 // ProgramImpl version - does not support CQs
 uint32_t program_base_addr_on_core(detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);

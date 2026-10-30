@@ -5,6 +5,7 @@
 import inspect
 import sys
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -16,10 +17,11 @@ from models.common.sampling._utils import (
     topk_would_route_to_large_indices,
     upper_power_of_2,
 )
-from models.common.sampling.tt_log_probs import LogProbsCalculator
+from models.common.sampling.tt_log_probs import LogProbsCalculator, LogProbsResult
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
     build_tail_invalid_vocab_mask,
+    get_vocab_num_shards,
     get_vocab_shard_dims,
 )
 
@@ -42,6 +44,70 @@ TIEBREAK_INDEX_SENTINEL = 2**24
 
 # Widest input ttnn.topk accepts in one call; vocabs beyond it must be cut into chunks.
 TOPK_MAX_WIDTH = 64 * 1024
+
+
+def format_grammar_bitmask(
+    grammar_bitmask: torch.Tensor,
+    *,
+    vocab_size: int,
+    padded_vocab_size: int,
+    max_batch_size: int,
+) -> torch.Tensor:
+    """Validate and pad a packed vLLM grammar mask for the device sampler.
+
+    Examples:
+        >>> v, p, m = 10, 64, 3
+        >>> # 521 == (1 << 0) | (1 << 3) | (1 << 9)
+        >>> g = torch.tensor([[521]], dtype=torch.int32)
+        >>> format_grammar_bitmask(g, vocab_size=v, padded_vocab_size=p, max_batch_size=m)
+        tensor([[521,   0],
+                [ -1,  -1],
+                [ -1,  -1]], dtype=torch.int32)
+    """
+    # region Input validation
+    if not isinstance(grammar_bitmask, torch.Tensor):
+        raise TypeError(f"`grammar_bitmask` must be a torch.Tensor, got {type(grammar_bitmask).__name__}")
+
+    if grammar_bitmask.dtype != torch.int32:
+        raise TypeError(f"`grammar_bitmask` must have dtype torch.int32, got {grammar_bitmask.dtype}")
+
+    if grammar_bitmask.ndim != 2:
+        raise ValueError(
+            "`grammar_bitmask` must have shape [batch, ceil(vocab_size / 32)], " f"got {tuple(grammar_bitmask.shape)}"
+        )
+
+    if padded_vocab_size < vocab_size or padded_vocab_size % 32 != 0:
+        raise ValueError(
+            "`padded_vocab_size` must be a multiple of 32 and at least `vocab_size`, "
+            f"got `vocab_size={vocab_size}`, `padded_vocab_size={padded_vocab_size}`"
+        )
+
+    packed_vocab_size = (vocab_size + 31) // 32
+    if grammar_bitmask.shape[1] != packed_vocab_size:
+        raise ValueError(
+            "`grammar_bitmask` packed width does not match `vocab_size`: "
+            f"got {grammar_bitmask.shape[1]}, expected {packed_vocab_size} for `vocab_size={vocab_size}`"
+        )
+
+    if grammar_bitmask.shape[0] > max_batch_size:
+        raise ValueError(f"`grammar_bitmask` batch {grammar_bitmask.shape[0]} exceeds sampler batch {max_batch_size}")
+    # endregion
+
+    # numpy stays single-threaded here; torch's intra-op pool contends with ttnn's host threads.
+    batch_size = grammar_bitmask.shape[0]
+    formatted = np.full((max_batch_size, padded_vocab_size // 32), -1, dtype=np.int32)
+    formatted[:batch_size] = 0
+    active = formatted[:batch_size, :packed_vocab_size]
+    active[:] = grammar_bitmask.numpy()
+    valid_tail_bits = vocab_size % 32
+    if valid_tail_bits:
+        active[:, -1] &= np.int32((1 << valid_tail_bits) - 1)
+
+    empty_rows = np.flatnonzero(~active.any(axis=1))
+    if empty_rows.size:
+        raise ValueError(f"`grammar_bitmask` contains rows with no allowed token: " f"`rows={empty_rows.tolist()!r}`")
+
+    return torch.from_numpy(formatted)
 
 
 class TTSampling(LightweightModule):
@@ -94,27 +160,32 @@ class TTSampling(LightweightModule):
 
     @staticmethod
     def _untilize_chunk_count(width):
-        """Fewest tile-aligned even chunks of at most TOPK_MAX_WIDTH each, or 1
-        when the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row
-        known to untilize in one program).
+        """Fewest tile-aligned chunks of at most TOPK_MAX_WIDTH each, or 1 when
+        the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row known
+        to untilize in one program).
 
-        Raise rather than fall back: a wide row that cannot be cut would either
-        recreate the full-row circular-buffer/L1 compile clash (silent return 1)
-        or explode into thousands of tiny chunks (unbounded search), and both
-        are better caught at the source. The search is bounded so chunks stay at
-        least half of TOPK_MAX_WIDTH wide.
+        Prefer an even cut so every chunk is at least half of TOPK_MAX_WIDTH
+        wide (the search is bounded to twice the minimum count).
         """
+
         if width <= 2 * TOPK_MAX_WIDTH:
             return 1
-        num_chunks = -(-width // TOPK_MAX_WIDTH)
+        min_chunks = (width + TOPK_MAX_WIDTH - 1) // TOPK_MAX_WIDTH  # ceil(width / TOPK_MAX_WIDTH)
+        num_chunks = min_chunks
         max_chunks = 2 * num_chunks
         while num_chunks <= max_chunks:
             if width % num_chunks == 0 and (width // num_chunks) % ttnn.TILE_SIZE == 0:
                 return num_chunks
             num_chunks += 1
-        raise ValueError(
-            f"cannot cut an untilize row of width {width} into tile-aligned chunks of at most {TOPK_MAX_WIDTH}"
-        )
+        # INFO: split accepts an uneven trailing chunk.
+        return min_chunks
+
+    @staticmethod
+    def _untilize_chunk_width(width, num_chunks):
+        """Tile-aligned ttnn.split size that cuts `width` into `num_chunks` pieces
+        (the last one shorter when the row does not divide evenly)."""
+        per_chunk = (width + num_chunks - 1) // num_chunks  # ceil(width / num_chunks)
+        return (per_chunk + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE  # round up to a tile
 
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
@@ -133,8 +204,11 @@ class TTSampling(LightweightModule):
         Changing this state between decode steps invalidates captured traces, so
         SamplingGenerator maintains separate trace slots keyed by force_argmax.
         """
+        calculator = getattr(self, "log_probs_calculator", None)
+        needs_topk_logprobs = calculator is not None and calculator.enable_log_probs and calculator._use_topk_logprobs
         return (
             self._allow_force_argmax_sampling
+            and not needs_topk_logprobs
             and is_default_value(k, 1)
             and (is_default_value(p, 1.0) or is_default_value(p, 0.0))
             and is_default_value(temp, 1.0)
@@ -182,12 +256,12 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
-        # ttnn.topk rejects stable=True outright on any architecture whose LLK lacks the stable bitonic
-        # network -- only Wormhole B0 and Blackhole implement it -- so ask for it just where it exists
-        # instead of taking a TT_FATAL everywhere else. Requesting it is best effort regardless
-        # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what guarantees the greedy pick,
-        # so falling back to the default network costs correctness nothing.
-        self._topk_stable = ttnn.device.is_wormhole_b0(mesh_device) or ttnn.device.is_blackhole(mesh_device)
+        # Use the fast unstable top-k; _adjust_values_for_tiebreak guarantees the correctness
+        # host-side. stable=True (lowest-index tie-break) is only cheap where the
+        # multi-core factory can pack [bf16 value | u16 index] fused keys: otherwise a multi-step
+        # path costs ~2.5-3x more, and additionally the BH topk_large_indices route currently
+        # has no stable mode at all.
+        self._topk_stable = False
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
@@ -248,6 +322,8 @@ class TTSampling(LightweightModule):
         # the worker sub-core grids so they stay inside the worker sub-device. Left None elsewhere so no
         # other arch's behaviour changes.
         self._force_argmax_sub_core_grids = self.sub_core_grids if getattr(args, "use_unfused_ccl", False) else None
+        # Decode rows past the real batch are padding; force-argmax only needs the live ones.
+        self._decode_live_rows = raw_batch if raw_batch < self.max_batch_size else None
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -387,6 +463,157 @@ class TTSampling(LightweightModule):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # Stores changing packed grammar bits.
+        self.grammar_bitmask_tensor = None
+        # Constant [0...31] shift vector used to unpack every int32 word in parallel.
+        self.grammar_bitmask_arange = None
+
+    def enable_device_grammar(self) -> None:
+        """Allocate persistent packed-mask inputs before any trace is captured."""
+        if self._sampling_dp != 1:
+            raise ValueError(
+                f"device grammar sampling does not support row-sharded sampling: " f"`sampling_dp={self._sampling_dp}`"
+            )
+
+        num_vocab_shards = get_vocab_num_shards(self.cluster_shape, self.sampling_all_gather_axis)
+        if self.padded_vocab_size % (32 * num_vocab_shards) != 0:
+            raise ValueError(
+                "device grammar sampling requires every vocab shard to hold whole 32-token mask words: "
+                f"`padded_vocab_size={self.padded_vocab_size}`, `num_vocab_shards={num_vocab_shards}`"
+            )
+
+        if self.grammar_bitmask_tensor is not None:
+            return
+
+        initial_mask = self.validate_grammar_bitmask(
+            torch.full(
+                (self.max_batch_size, (self.vocab_size + 31) // 32),
+                -1,
+                dtype=torch.int32,
+            ),
+        )
+        vocab_shard_dims = self._grammar_bitmask_shard_dims()
+        mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            dims=vocab_shard_dims,
+            mesh_shape=self.cluster_shape,
+        )
+        self.grammar_bitmask_tensor = ttnn.from_torch(
+            initial_mask,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.grammar_bitmask_arange = ttnn.from_torch(
+            torch.arange(32, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def update_grammar_bitmask(self, grammar_bitmask: torch.Tensor) -> None:
+        """Replace the full persistent mask; inactive rows become all-allowed."""
+        if self.grammar_bitmask_tensor is None:
+            raise RuntimeError("device grammar buffers were not enabled before trace capture")
+
+        formatted = self.validate_grammar_bitmask(grammar_bitmask)
+        vocab_shard_dims = self._grammar_bitmask_shard_dims()
+        host_tensor = ttnn.from_torch(
+            formatted,
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=vocab_shard_dims,
+                mesh_shape=self.cluster_shape,
+            ),
+        )
+        ttnn.copy_host_to_device_tensor(host_tensor, self.grammar_bitmask_tensor)
+
+    def validate_grammar_bitmask(self, grammar_bitmask: torch.Tensor) -> torch.Tensor:
+        """Return the fixed-shape mask or raise before sampler state changes."""
+        return format_grammar_bitmask(
+            grammar_bitmask,
+            vocab_size=self.vocab_size,
+            padded_vocab_size=self.padded_vocab_size,
+            max_batch_size=self.max_batch_size,
+        )
+
+    def _grammar_bitmask_shard_dims(self):
+        """Map the logits' 4D vocab axis onto a 2D packed-mask tensor."""
+        return tuple(
+            1 if dim == 3 else dim
+            for dim in get_vocab_shard_dims(
+                self.cluster_shape,
+                self.sampling_all_gather_axis,
+            )
+        )
+
+    def _apply_grammar_bitmask(self, logits):
+        if self.grammar_bitmask_tensor is None or self.grammar_bitmask_arange is None:
+            raise RuntimeError("device grammar buffers were not enabled before sampling")
+
+        # Mesh tensor shapes are per device, i.e., local to this vocab shard.
+        local_packed_width = self.grammar_bitmask_tensor.shape[-1]
+        local_vocab_width = local_packed_width * 32
+
+        packed = ttnn.reshape(
+            self.grammar_bitmask_tensor,
+            (self.max_batch_size, local_packed_width, 1),
+            sub_core_grids=self.sub_core_grids,
+        )
+        shifted = ttnn.bitwise_right_shift(
+            packed,
+            self.grammar_bitmask_arange,
+            sub_core_grids=self.sub_core_grids,
+        )
+        allowed_bits = ttnn.bitwise_and(
+            shifted,
+            1,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(shifted)
+
+        unpacked = ttnn.reshape(
+            allowed_bits,
+            (1, 1, self.max_batch_size, local_vocab_width),
+            sub_core_grids=self.sub_core_grids,
+        )
+        allowed_tiled = ttnn.to_layout(
+            unpacked,
+            ttnn.TILE_LAYOUT,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(allowed_bits)
+
+        allowed = ttnn.typecast(
+            allowed_tiled,
+            ttnn.bfloat16,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(allowed_tiled)
+
+        additive_mask = ttnn.where(
+            allowed,
+            0.0,
+            float("-inf"),
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.add_(
+            logits,
+            additive_mask,
+            sub_core_grids=self.sub_core_grids,
+        )
+        ttnn.deallocate(additive_mask)
+        ttnn.deallocate(allowed)
+
+        return logits
 
     def _get_num_sampling_shards(self):
         if self.multi_step_reduction:
@@ -629,6 +856,11 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
+        # Top-k reporting needs the candidate pipeline, even for greedy tokens.
+        # Resolve reporting before choosing the path so its parameters update too.
+        self.log_probs_calculator.set_log_probs_mode(
+            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+        )
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
@@ -680,10 +912,6 @@ class TTSampling(LightweightModule):
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
 
-        self.log_probs_calculator.set_log_probs_mode(
-            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
-        )
-
     def _greedy_col_dims(self):
         """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
         mask's dims (batch on dim2), so self._greedy_col is distributed exactly like self.k_tensor."""
@@ -699,24 +927,19 @@ class TTSampling(LightweightModule):
         sub-device. Random users (k>1) get boost==0 => their values are bit-identical => their
         sampling is byte-for-byte unchanged. All ops honor self.sub_core_grids.
 
-        WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k is unreliable). Remove this method,
-        `_greedy_col` and `_greedy_col_dims` once that issue is fixed and validated on device.
-
-        With a working stable top-k this pass is redundant, because candidate position and global
-        token id are ordered the same way BY CONSTRUCTION: the gathered buffer is laid out as one
-        contiguous block per device, and `_create_indices_tensors` derives each global id as
-        `local_topk_index + device_id * padded_per_device` from that same layout. Across blocks the
-        two orders therefore agree unconditionally. WITHIN a block they agree only if the per-device
-        top-k emitted its tied maxima in ascending local-index order -- i.e. only if `stable=True`
-        actually works. It currently may not (#33492: `ttnn.sort` rejects `stable=True` outright, the
-        LLK top-k test skips every stable case, and this tree still carries the double-SFPSWAP
-        scheme rather than the index-aware comparator from tt-llk#1340), which is why this exists.
+        Stable top-k (`stable=True`) on EVERY local top-k call would make this pass redundant, but
+        stable is not uniformly cheap: multicore-eligible bf16 calls take the fused-key engine
+        (packed [bf16 value | u16 index] words on the plain unstable network, where otherwise costs
+        ~2.5-3x on the SFPU sort stage and the BH topk_large_indices route has no stable mode at
+        all. Sampling keeps the host-side pass as the stable-sort guarantee instead. Removing this
+        method, `_greedy_col` and `_greedy_col_dims` in favour of `stable=True` becomes a pure win
+        once the remaining routes implement a performant stable mode.
 
         KNOWN LIMITATION: this picks the lowest global id among the GATHERED candidates. If a single
-        device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k drops
-        all but 32 of them by the same unreliable network, so the true lowest-id token may never
-        reach the gathered set and this pass cannot recover it. Fixing #33492 is the real fix; this
-        only narrows the window.
+        device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k
+        breaks the tie by array position and drops all but 32 of them, so the true lowest-id token
+        may never reach the gathered set and this pass cannot recover it. Enabling `stable=True`
+        on every route (at the costs above) would close that window.
 
         is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
             lowest_index_among_maxima = min(global_index + not_max * SENTINEL)          # == idx at maxima, huge else
@@ -786,11 +1009,59 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(boost)
         return adjusted
 
+    def _argmax_live_rows(self, x_untilized, tt_out_tok):
+        """Argmax the live decode rows only and write them into ``tt_out_tok``; padded slots get token 0."""
+        live_rows = self._decode_live_rows
+        live = ttnn.slice(x_untilized, [0, 0, 0, 0], [1, 1, live_rows, x_untilized.shape[-1]])
+        tokens = ttnn.argmax(live, dim=-1, keepdim=False)
+        ttnn.deallocate(live)
+        tokens = ttnn.reshape(tokens, [1, 1, 1, live_rows])
+        padded = ttnn.pad(tokens, [(0, 0), (0, 0), (0, 0), (0, tt_out_tok.shape[-1] - live_rows)], 0)
+        ttnn.deallocate(tokens)
+        ttnn.copy(padded, tt_out_tok)
+        ttnn.deallocate(padded)
+        return tt_out_tok
+
+    def _untilize_for_argmax(self, x):
+        """Untilize a vocabulary row in bounded chunks while preserving its exact width."""
+        num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
+        # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
+        # senders-column spill as the vocab-trim slice above).
+        if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
+            # Untilizing the full row in one program needs a static circular-buffer
+            # region proportional to the row width with past  around 150K elements it clashes
+            # with the model's resident L1 buffers at compile.
+            x_chunks = ttnn.split(x, self._untilize_chunk_width(x.shape[-1], num_untilize_chunks), dim=3)
+            untilized_chunks = []
+            for chunk in x_chunks:
+                # Free each tiled chunk as soon as its row-major copy exists,
+                # so peak memory holds around 1 full-vocab buffer less than freeing
+                # after the loop.
+                untilized_chunks.append(
+                    ttnn.untilize(
+                        chunk,
+                        use_multicore=True,
+                        sub_core_grids=self._force_argmax_sub_core_grids,
+                    )
+                )
+                chunk.deallocate()
+            x_untilized = ttnn.concat(
+                untilized_chunks,
+                dim=3,
+                sub_core_grids=self._force_argmax_sub_core_grids,
+            )
+            for chunk in untilized_chunks:
+                ttnn.deallocate(chunk)
+        else:
+            x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
+        return x_untilized
+
     def forward(
         self,
         x: ttnn.Tensor,
         tt_out_tok: ttnn.Tensor = None,
-    ):
+        apply_grammar: bool = False,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
         """
         Perform on-device sampling on logits tensor.
         The logits are sharded over the devices in the cluster.
@@ -801,12 +1072,29 @@ class TTSampling(LightweightModule):
         Args:
             x: Input logits tensor
             tt_out_tok: Optional output tensor to write results to
+            apply_grammar: Apply the packed mask previously staged with
+                ``update_grammar_bitmask`` before token selection.
 
         Returns:
-            Sampled token indices tensor
+            Sampled token indices and optional logprob output.
         """
+        if apply_grammar:
+            x = (
+                x
+                if x.dtype == ttnn.bfloat16
+                else ttnn.typecast(
+                    x,
+                    dtype=ttnn.bfloat16,
+                    sub_core_grids=self.sub_core_grids,
+                )
+            )
+            x = self._apply_grammar_bitmask(x)
+
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
+            # Logprobs consume the vocabulary shards before argmax's gather/slice,
+            # masked below. Keep token selection identical when reporting toggles.
+            logits_for_log_probs = x
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
             # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
             # (0,0) on the DRAM-interleaved path (it does not honor sub_core_grids there) and spills
@@ -819,6 +1107,12 @@ class TTSampling(LightweightModule):
             slice_valid_vocab = self._can_slice_valid_vocab_for_argmax() and not force_argmax_skip_vocab_trim
             if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
+                logits_for_log_probs = x
+            elif self.log_probs_calculator.enable_log_probs:
+                # The valid-vocab slice only trims the gathered tensor; the shards the
+                # calculator normalizes over would otherwise keep the padded tail in sum(exp).
+                logits_for_log_probs = self._mask_invalid_vocab_logits(x)
+            owns_log_prob_logits = logits_for_log_probs is not x
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
@@ -870,57 +1164,36 @@ class TTSampling(LightweightModule):
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
-            num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
-            # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
-            # senders-column spill as the vocab-trim slice above). Qwen3-32B Galaxy
-            # pads to 155648, which _untilize_chunk_count cuts into 4 chunks, so the
-            # post-main-rebase chunked path hits that fatal on the BH prefetcher
-            # worker sub-device. A single untilize of that width compiles there
-            # (Gemma-2's 256000-wide clash is the reason the chunked path exists;
-            # it stays for unpinned Wormhole grids).
-            if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
-                # Untilizing the full row in one program needs a static circular-buffer
-                # region proportional to the row width; past ~150K elements it clashes
-                # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
-                # logits throw "circular buffers ... clash with L1 buffers"). The gate
-                # is width-based, not mesh-based: multi-device force-argmax gathers the
-                # full padded vocab onto every device and hits the same wall. Untilize
-                # in tile-aligned chunks and concat row-major instead.
-                x_chunks = ttnn.split(x, x.shape[-1] // num_untilize_chunks, dim=3)
-                untilized_chunks = []
-                for chunk in x_chunks:
-                    # Free each tiled chunk as soon as its row-major copy exists,
-                    # so peak memory holds ~1 full-vocab buffer less than freeing
-                    # after the loop (this runs inside the captured decode trace,
-                    # so the peak is baked into the trace region size).
-                    untilized_chunks.append(
-                        ttnn.untilize(
-                            chunk,
-                            use_multicore=True,
-                            sub_core_grids=self._force_argmax_sub_core_grids,
-                        )
-                    )
-                    chunk.deallocate()
-                x_untilized = ttnn.concat(
-                    untilized_chunks,
-                    dim=3,
+            x_untilized = self._untilize_for_argmax(x)
+            if (
+                tt_out_tok is not None
+                and self._decode_live_rows is not None
+                and num_devices == 1
+                and self._sampling_dp == 1
+                and self._force_argmax_sub_core_grids is None
+            ):
+                tt_out_tok = self._argmax_live_rows(x_untilized, tt_out_tok)
+            else:
+                tt_out_tok = ttnn.argmax(
+                    x_untilized,
+                    dim=-1,
+                    output_tensor=tt_out_tok,
+                    keepdim=False,
                     sub_core_grids=self._force_argmax_sub_core_grids,
                 )
-                for chunk in untilized_chunks:
-                    ttnn.deallocate(chunk)
+            if self.log_probs_calculator.enable_log_probs:
+                # argmax drops the final axis; the calculator takes the ordinary
+                # sampler's [1,1,1,B] ROW_MAJOR index layout.
+                logprob_indices = (
+                    ttnn.reshape(tt_out_tok, (1, 1, 1, tt_out_tok.shape[-1]))
+                    if len(tt_out_tok.shape) == 3
+                    else tt_out_tok
+                )
+                self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, logprob_indices)
             else:
-                x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
-            tt_out_tok = ttnn.argmax(
-                x_untilized,
-                dim=-1,
-                output_tensor=tt_out_tok,
-                keepdim=False,
-                sub_core_grids=self._force_argmax_sub_core_grids,
-            )
-            # Argmax fast-path does not compute logprobs (it never runs a softmax over
-            # the vocab). On single-chip, on-device logprobs are unsupported anyway
-            # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
-            self.tt_log_probs = None
+                self.tt_log_probs = None
+            if owns_log_prob_logits:
+                ttnn.deallocate(logits_for_log_probs)
             return tt_out_tok, self.tt_log_probs
 
         # Decode logits normally arrive in bfloat16 already; a bf16->bf16 ttnn.typecast is
@@ -929,6 +1202,10 @@ class TTSampling(LightweightModule):
             x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
         )
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
+        # The calculator derives per-shard width from its logits, which must match the
+        # padded_vocab_size // num_shards offsets in tt_indices_device_offsets, so keep the
+        # masked logits from before any power-of-2 pad below.
+        logits_for_log_probs = x_bf16
 
         # The single-device split below exists only because the stock top-k factories cap
         # out near 64K columns. When ttnn.topk would take the Blackhole topk_large_indices
@@ -965,8 +1242,10 @@ class TTSampling(LightweightModule):
             # Drop stable=True ONLY when the authoritative C++ route query says
             # ttnn.topk will take the Blackhole topk_large_indices composite for
             # these halves once the custom arguments are absent.
-            # stable is best-effort/broken anyway (tenstorrent/tt-metal#33492);
-            # _adjust_values_for_tiebreak is what actually guarantees the greedy
+            # Sampling opts out of stable topk for decode perf (_topk_stable is
+            # False): these chunks route to the single-core factory,
+            # where stable pays ~2-3x on the SFPU sort stage.
+            # _adjust_values_for_tiebreak is what guarantees the greedy
             # pick after the gather, regardless of per-device tie order. Calls
             # that would not route keep today's arguments bit-for-bit, and a
             # call the model constrained to a sub-grid is never relaxed.
@@ -983,12 +1262,10 @@ class TTSampling(LightweightModule):
                     k=self.max_top_k,
                     dim=-1,
                     sub_core_grids=self.sub_core_grid_topk,
-                    # Break exact-value ties by lowest index instead of array position, so which
-                    # of a set of tied candidates enters the top-k does not depend on placement.
-                    # Best effort only, and only where the LLK has the network at all (see
-                    # self._topk_stable) -- the stable bitonic network is an open LLK issue
-                    # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
-                    # guarantees the greedy pick.
+                    # _topk_stable is False: the fast unstable network is used and
+                    # _adjust_values_for_tiebreak guarantees the greedy pick. The routed-topk
+                    # relax (unstable where the call would take the BH topk_large_indices
+                    # composite) is kept so re-enabling stable stays a one-line change.
                     stable=False if use_routed_topk else self._topk_stable,
                 )
                 topk_values_list.append(topk_values)
@@ -1017,9 +1294,12 @@ class TTSampling(LightweightModule):
                 )
             # Perform local top-k on each device. Drop stable=True ONLY when the
             # authoritative C++ route query says the relaxed call will take the
-            # Blackhole topk_large_indices composite -- stable is
-            # best-effort/broken anyway (#33492) and _adjust_values_for_tiebreak
-            # guarantees the greedy pick. Sub-grid-constrained calls never relax.
+            # Blackhole topk_large_indices composite -- sampling keeps every call
+            # unstable (_topk_stable is False): this multicore-eligible call would
+            # usually get the ~free fused-key stable engine, but the greedy
+            # guarantee must hold on ALL routes (see _topk_stable), and
+            # _adjust_values_for_tiebreak already provides it host-side.
+            # Sub-grid-constrained calls never relax.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
                 x_bf16, self.max_top_k
             )
@@ -1028,12 +1308,10 @@ class TTSampling(LightweightModule):
                 k=self.max_top_k,
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
-                # Break exact-value ties by lowest index instead of array position, so which
-                # of a set of tied candidates enters the top-k does not depend on placement.
-                # Best effort only, and only where the LLK has the network at all (see
-                # self._topk_stable) -- the stable bitonic network is an open LLK issue
-                # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
-                # guarantees the greedy pick.
+                # _topk_stable is False: the fast unstable network is used and
+                # _adjust_values_for_tiebreak guarantees the greedy pick. The routed-topk
+                # relax (unstable where the call would take the BH topk_large_indices
+                # composite) is kept so re-enabling stable stays a one-line change.
                 stable=False if use_routed_topk else self._topk_stable,
             )
 
@@ -1120,7 +1398,7 @@ class TTSampling(LightweightModule):
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
         # Perform the actual sampling with top-k, top-p, and temperature.
-        # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
+        # Host-side tie-break (in lieu of stable=True on every top-k route; see _topk_stable):
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
         # sampling INPUT so ttnn.sampling's argmax picks it regardless of how the top-k network
         # ordered the tied candidates. Random users are byte-for-byte unchanged. Correcting the INPUT
@@ -1154,14 +1432,14 @@ class TTSampling(LightweightModule):
         if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator._use_topk_logprobs:
             # New path: top-K logprobs for gpt-oss-120b
             self.tt_log_probs = self.log_probs_calculator.calculate_topk_log_probs(
-                logits_tensor=x,
+                logits_tensor=logits_for_log_probs,
                 topk_values=topk_values_gathered_bf16_interleaved,
                 topk_global_indices=topk_global_indices_interleaved,
                 sub_core_grid_topk=self.sub_core_grid_topk,
             )
         elif self.log_probs_calculator.enable_log_probs:
             # Old path: single sampled-token logprob
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, tt_out_tok)
         else:
             self.tt_log_probs = None
 

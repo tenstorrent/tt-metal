@@ -6,8 +6,8 @@
 //
 // Copy of eltwise_binary_row_bcast_dfb.cpp (the FPU ROW kernel) with the binary-op section swapped to the
 // SFPU path -- the SAME delta eltwise_binary_sfpu_no_bcast_dfb.cpp applies vs eltwise_binary_no_bcast_dfb.cpp
-// (unary_op_init_common + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with the
-// ARCH_QUASAR copy_tile_to_dst_init_short handling). The broadcast pass (unary_bcast<ROW> through the
+// (compute_kernel_hw_startup + copy_init + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with
+// reconfig_data_format_srca + copy_init before each operand copy). The broadcast pass (unary_bcast<ROW> through the
 // intermediate llk_post DFB) and its two pack_reconfig_data_format / pack_init (ARCH_QUASAR gasket) calls are
 // IDENTICAL to the FPU kernel -- unary_bcast is FPU-side regardless of the binary op that consumes its output.
 //
@@ -99,6 +99,13 @@ void kernel_main() {
     DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    // An activation chain reads its operand from the pre ring. Each object drains once, at kernel exit.
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#endif
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
     copy_init(dfb_post_lhs_id);
@@ -144,10 +151,10 @@ void kernel_main() {
 #endif
 
         // --- Binary op (SFPU path; mirrors eltwise_binary_sfpu_no_bcast_dfb.cpp's body, single tile). ---
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_rhs.wait_front(num_tiles_per_cycle);
 
         dfb_out.reserve_back(num_tiles_per_cycle);
@@ -157,25 +164,13 @@ void kernel_main() {
 #endif
 
         tile_regs_acquire();
-#ifdef ARCH_QUASAR
-        // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-        // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
-        // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
-        // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
+        // Startup and preprocessing preserve the physical-LHS SrcA format.
         copy_init(dfb_post_lhs_id);
-#else
-        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
-        copy_init(dfb_post_lhs_id);
-#endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
         }
-#ifdef ARCH_QUASAR
-        copy_init(dfb_post_rhs_id);
-#else
         reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
         copy_init(dfb_post_rhs_id);
-#endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -188,6 +183,7 @@ void kernel_main() {
 #endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
         tile_regs_commit();
 
         tile_regs_wait();

@@ -3,11 +3,29 @@
 
 
 import os
+import resource
 from pathlib import Path
 
 from loguru import logger
 
 import ttnn
+
+
+def raise_nproc_limit(tag: str = "prefill") -> None:
+    """Raise RLIMIT_NPROC's soft limit to the hard limit for this process and its children.
+
+    tt-metal JIT-compiles device kernels in parallel and each target spawns its own chain of short-lived
+    processes (g++, cc1plus/lto1, as, ld); at the per-user default on the galaxy hosts (counted across
+    every process the user owns) clone3 fails mid-build with "posix_spawn: Operation not permitted" /
+    "Resource temporarily unavailable". Call it first thing in any harness that builds a model.
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
+        try:
+            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+            logger.info(f"[{tag}] raised RLIMIT_NPROC soft {soft} -> {hard}")
+        except (ValueError, OSError) as e:
+            logger.warning(f"[{tag}] could not raise RLIMIT_NPROC (soft={soft}): {e}")
 
 
 def _create_fabric_router_config(max_payload_size):
@@ -17,7 +35,7 @@ def _create_fabric_router_config(max_payload_size):
 
 
 def open_mesh_device(
-    mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0, trace_region_size: int = 0
+    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0
 ) -> ttnn.MeshDevice:
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
@@ -34,11 +52,12 @@ def open_mesh_device(
     elif fabric_mode:
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
-        fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+        # The torus modes need a descriptor declaring RING on both axes; a LINE one hangs at bring-up.
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
     fabric_router_config = _create_fabric_router_config(
-        max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
+        max_payload_size=max_payload_size,
     )
 
     ttnn.set_fabric_config(
@@ -55,32 +74,68 @@ def open_mesh_device(
     )
 
 
-def make_global_spec(mesh_shape: tuple, chunk_size: int) -> ttnn.TensorSpec:
-    sp_factor = mesh_shape[0]
-    isl_per_chip = chunk_size // sp_factor
+H2D_PAGE_ALIGNMENT_BYTES = 64
+
+_H2D_ID_BYTES = 4
+
+
+def h2d_row_len(chunk_size: int, sp_factor: int) -> int:
+    assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
+    return chunk_size // sp_factor
+
+
+TILE_HEIGHT = 32
+
+MTP_PAD_TOKEN_ID = 0xFFFFFFFF
+
+MTP_TOKEN_ALIGN = TILE_HEIGHT
+
+
+def num_mtp_tokens(mtp_levels: int) -> int:
+    assert mtp_levels >= 0, f"mtp_levels must be non-negative, got {mtp_levels}"
+    if not mtp_levels:
+        return 0
+    return -(-mtp_levels // MTP_TOKEN_ALIGN) * MTP_TOKEN_ALIGN
+
+
+def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
+    rows = h2d_row_len(chunk_size, sp_factor) + num_mtp_tokens(mtp_levels)
+    assert rows % TILE_HEIGHT == 0, (
+        f"union embedding is {rows} rows, not a whole number of {TILE_HEIGHT}-row tiles; "
+        f"chunk_size/sp_factor = {chunk_size // sp_factor} must itself be tile-aligned"
+    )
+    return rows
+
+
+def make_token_spec(mesh_shape: tuple, row_len: int) -> ttnn.TensorSpec:
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
+        shape=ttnn.Shape([mesh_shape[0], 1, row_len]),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
     )
 
 
+def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0) -> ttnn.TensorSpec:
+    if mtp_levels:
+        return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, mesh_shape[0], mtp_levels))
+    return make_token_spec(mesh_shape, h2d_row_len(chunk_size, mesh_shape[0]))
+
+
 def build_h2d_service(
     mesh_device: ttnn.MeshDevice,
     *,
-    mesh_shape: tuple,
-    chunk_size: int,
+    global_spec: ttnn.TensorSpec,
     mapper_config: ttnn.MeshMapperConfig,
     worker_cores: ttnn.CoreRange,
     metadata_size_bytes: int,
 ) -> ttnn.H2DStreamService:
-    sp_factor, tp_factor = mesh_shape
-    assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
-    isl_per_chip = chunk_size // sp_factor
-    per_chip_bytes = isl_per_chip * 4
-
-    global_spec = make_global_spec(mesh_shape, chunk_size)
+    row_len = int(global_spec.shape[-1])
+    per_chip_bytes = row_len * _H2D_ID_BYTES
+    assert per_chip_bytes % H2D_PAGE_ALIGNMENT_BYTES == 0, (
+        f"per-chip page is {per_chip_bytes}B for a {row_len}-id row, not a multiple of "
+        f"{H2D_PAGE_ALIGNMENT_BYTES}B; the socket rejects a non-PCIe-aligned page size outright"
+    )
     mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
     service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
@@ -92,17 +147,42 @@ def build_h2d_service(
         metadata_size_bytes=metadata_size_bytes,
     )
     logger.info(
-        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
+        f"[h2d] H2DStreamService built: global_shape=({mesh_device.shape[0]},1,{row_len}) "
         f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
     )
     return service
 
 
-def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn.TensorSpec:
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        shape=ttnn.Shape([1, planes, rows, hidden_size]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+
+
+# Rows per chip of the MTP id block below the hidden on the D2D activation (see mtp_prefill/id_transport.py).
+MTP_ID_ROWS = TILE_HEIGHT
+
+
+def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0) -> int:
+    if not mtp_levels:
+        return chunk_size
+    return chunk_size + sp_factor * MTP_ID_ROWS
+
+
+def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
+    return hidden_size * (2 if dflash else 1)
+
+
+def indexer_indices_global_spec(per_chip_shape, mesh_shape) -> ttnn.TensorSpec:
+    _, _, rows, k = per_chip_shape
+    sp, tp = mesh_shape
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, sp * rows, tp * k]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
     )
 
@@ -115,6 +195,17 @@ def resolve_trace_dir(path) -> Path:
     if len(subs) != 1:
         raise FileNotFoundError(f"no metadata.json in {path} or a unique subdir (found {len(subs)} candidates)")
     return subs[0]
+
+
+def load_trace_golden_span(trace_dir) -> tuple:
+    import json
+
+    with open(Path(trace_dir) / "metadata.json") as f:
+        md = json.load(f)
+    rows = md.get("capture_rows")
+    if rows is not None:
+        return int(rows[0]), int(rows[1])
+    return 0, int(md.get("n_prompt_tokens") or len(md["token_ids"]))
 
 
 def load_trace_token_ids(trace_dir, total_len=None) -> list:
@@ -150,7 +241,9 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
     return out
 
 
-def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> list[tuple[int, int]]:
+def compute_layer_split(
+    num_layers: int, num_ranks: int, valid_starts=None, tail_levels: int = 0
+) -> list[tuple[int, int]]:
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
         counts = [int(x) for x in override.split(",")]
@@ -160,8 +253,16 @@ def compute_layer_split(num_layers: int, num_ranks: int, valid_starts=None) -> l
                 f"{num_layers} (got {len(counts)} counts summing to {sum(counts)})"
             )
     else:
-        base, rem = divmod(num_layers, num_ranks)
-        counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
+        base, rem = divmod(num_layers + tail_levels, num_ranks)
+        counts = [base + (1 if r >= num_ranks - rem else 0) for r in range(num_ranks)]
+        counts[-1] -= tail_levels
+        if counts[-1] < 1:
+            raise ValueError(
+                f"{tail_levels} tail levels (MTP heads or the DFlash drafter) leave the last of {num_ranks} "
+                f"ranks {counts[-1]} trunk layers out of {num_layers}: the tail would hold no trunk stage. "
+                f"Use fewer ranks, or set "
+                f"PREFILL_PP_LAYER_COUNTS (TRUNK counts, summing to {num_layers})."
+            )
         if valid_starts is not None:
             counts = _snap_counts_to_starts(counts, valid_starts, num_layers)
 

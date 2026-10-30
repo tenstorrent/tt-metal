@@ -9,12 +9,16 @@
 #include <cstdint>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <tuple>
 
+#include <fmt/base.h>
 #include <fmt/core.h>
+#include <fmt/format.h>
 
 #include <tt-metalium/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

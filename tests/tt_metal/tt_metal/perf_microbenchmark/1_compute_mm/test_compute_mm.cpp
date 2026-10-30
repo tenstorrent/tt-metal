@@ -15,6 +15,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "common/work_split_internal.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -55,7 +56,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
 using namespace tt;
@@ -123,7 +125,7 @@ uint32_t get_in0_block_w(
 CoreCoord get_core_range(
     uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols);
 
-std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch);
+std::tuple<tt::tt_metal::MathFidelity, bool> get_compute_params(tt::ARCH arch);
 
 std::tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice);
 
@@ -162,7 +164,7 @@ void prepare_inputs(
 tt_metal::Program create_program_single_core(
     tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
@@ -182,7 +184,7 @@ tt_metal::Program create_program_single_core(
 tt_metal::Program create_program(
     tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
@@ -482,7 +484,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
         if (single_core) {
-            math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
+            math_fidelity = fidel == 0 ? tt::tt_metal::MathFidelity::LoFi : tt::tt_metal::MathFidelity::HiFi2;
             fp32_dest_acc_en = fp32 != 0;
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
@@ -509,7 +511,7 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "out_subblock_h {}", out_subblock_h);
         log_debug(LogTest, "out_subblock_w {}", out_subblock_w);
 
-        tt::tt_metal::Program program;
+        tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
         if (single_core) {
             program = create_program_single_core(
                 device.get(),
@@ -587,7 +589,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         constexpr int giga_byte = 1000000;
         constexpr long long tera_byte = 1000000000000LL;
-        int tt_npu_clock = get_tt_npu_clock(device->get_devices()[0]);
+        int tt_npu_clock = device->get_clock_rate_mhz();
         double rpeak_tflops = get_tt_npu_rpeak_tflops(arch, grid_size, tt_npu_clock);
         std::vector<double> rmax_tflops;
         uint64_t num_of_matmul_ops =
@@ -605,8 +607,8 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, true);
                 log_debug(LogTest, "EnqueueMeshWorkload done");
 
-                uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(
-                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+                uint64_t t0_to_any_riscfw_end =
+                    get_t0_to_any_riscfw_end_cycle(*device, mesh_workload.get_programs().begin()->second);
                 double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                 auto execution_time = t0_to_any_riscfw_end * cycle_time;
                 rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -631,7 +633,7 @@ int main(int argc, char** argv) {
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end =
-                        get_t0_to_any_riscfw_end_cycle(device.get(), mesh_workload.get_programs().begin()->second);
+                        get_t0_to_any_riscfw_end_cycle(*device, mesh_workload.get_programs().begin()->second);
                     double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                     auto execution_time = t0_to_any_riscfw_end * cycle_time;
                     rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -831,11 +833,11 @@ CoreCoord get_core_range(
     return core_range;
 }
 
-std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+std::tuple<tt::tt_metal::MathFidelity, bool> get_compute_params(tt::ARCH arch) {
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     if (arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE) {
-        math_fidelity = MathFidelity::HiFi2;
+        math_fidelity = tt::tt_metal::MathFidelity::HiFi2;
         // TODO: apply packer_l1_acc
         // TODO: need to consider whether to set these variablias as arguments
         fp32_dest_acc_en = false;
@@ -891,9 +893,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
 }
 
 tt_metal::Program create_program_single_core(
-    tt_metal::distributed::MeshDevice* /*device*/,
+    tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
@@ -909,7 +911,7 @@ tt_metal::Program create_program_single_core(
     bool packer_l1,
     uint32_t num_blocks,
     uint32_t interm_cb_dtype) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     log_debug(tt::LogTest, "cb_data_format: {} ", cb_data_format);
     log_debug(tt::LogTest, "math_fidelity: {} ", math_fidelity);
@@ -1100,7 +1102,7 @@ tt_metal::Program create_program_single_core(
 tt_metal::Program create_program(
     tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
@@ -1121,7 +1123,7 @@ tt_metal::Program create_program(
     uint32_t out_addr,
     bool matmul_block,
     bool packer_l1) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t num_buffer = 2;  // double buffer
     uint32_t in0_block_tiles = per_core_Mt * in0_block_w;
@@ -1461,12 +1463,11 @@ void prepare_inputs(
 
             // copy in0, in1, in2 to L1
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
-            auto* target_device = device->get_devices()[0];
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
+            pass &= slow_dispatch::WriteToL1(*device, core, in0_addr, in0);
             TT_FATAL(pass, "Failed to write in0 to device L1");
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
+            pass &= slow_dispatch::WriteToL1(*device, core, in1_addr, in1);
             TT_FATAL(pass, "Failed to write in1 to device L1");
-            pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in2_cb_addr, in2);
+            pass &= slow_dispatch::WriteToL1(*device, core, in2_cb_addr, in2);
             TT_FATAL(pass, "Failed to write in2 to device L1");
         }
     }
@@ -1598,9 +1599,7 @@ bool validation(
             std::vector<uint32_t> result_vec;
             uint32_t num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
             uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
-            auto* target_device = device->get_devices()[0];
-            tt_metal::detail::ReadFromDeviceL1(
-                target_device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
+            slow_dispatch::ReadFromL1(*device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);
             auto result_untilized = untilize_swizzled(result_flat_layout, num_r * 32, num_c * 32);
 
