@@ -191,7 +191,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     const auto& output_tensor_start = operation_attributes.slice_start;
     const auto& stride = operation_attributes.step;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*input.device());
     tt::tt_metal::distributed::MeshDevice* device = input.device();
     const auto& input_padded_shape = input.padded_shape();
 

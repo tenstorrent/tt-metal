@@ -162,7 +162,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     ////////////////////////////////////////////////////////////////////////////
     //                            Core Assignment
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
     const auto grid = mesh_device->compute_with_storage_grid_size();
 
     // Two splits, because the two passes carry different amounts of parallelism. A

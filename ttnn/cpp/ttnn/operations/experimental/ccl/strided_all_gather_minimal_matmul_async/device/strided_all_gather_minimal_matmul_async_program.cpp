@@ -106,7 +106,7 @@ strided_all_gather_minimal_matmul_async_program(
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
     bool fuse_swiglu) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*input_tensor.device());
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     uint32_t TILE_WIDTH = 32;

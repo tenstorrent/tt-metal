@@ -382,13 +382,13 @@ bool RunPipelinedWorkersTest(
 
     const auto cb_index = tt::CB::c_in0;
 
-    Program program = tt::tt_metal::CreateProgram();
-
     MeshFabric1DFixture test_fixture;
     auto full_mesh_device = test_fixture.mesh_device_;
 
     std::shared_ptr<distributed::MeshDevice> mesh_device =
         full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+
+    Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it

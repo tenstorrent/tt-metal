@@ -206,7 +206,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     uint32_t packet_size_bytes = input_num_tiles * input_page_size_bytes;
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     // sdpa compute values
     const auto tile_width = input_tensor_l.tensor_spec().tile().get_width();

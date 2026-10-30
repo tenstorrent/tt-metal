@@ -82,8 +82,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const tt::tt_metal::GlobalSemaphore& data_valid_sem,
     uint32_t num_available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
-    tt::tt_metal::Program program{};
     auto* mesh_device = input_tensor.device();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     ////////////////////////////////////////////////////////////////
     // Fabric setup

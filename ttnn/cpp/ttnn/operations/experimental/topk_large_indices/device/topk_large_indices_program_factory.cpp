@@ -265,7 +265,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram(*tensor_args.input_tensor.device());
 
     const auto& input = tensor_args.input_tensor;
     auto& indices = tensor_return_value;

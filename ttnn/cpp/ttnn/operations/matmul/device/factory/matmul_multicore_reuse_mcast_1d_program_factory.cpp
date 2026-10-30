@@ -6826,7 +6826,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             }
             auto mesh_grid = pc.allowed_worker_cores.value().bounding_box().grid_size();
             DeviceComputeKernelConfig ckc = attributes.compute_kernel_config.value();
-            tt_metal::Program program{};
+            tt_metal::Program program = tt_metal::CreateProgram(*tensor_args.input_tensors.at(0).device());
             std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_signaler = std::nullopt;
             auto b_tensors =
                 std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};

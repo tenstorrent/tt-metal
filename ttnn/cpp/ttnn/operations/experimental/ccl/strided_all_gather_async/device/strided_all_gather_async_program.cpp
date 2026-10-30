@@ -220,7 +220,7 @@ StridedAllGatherAsyncProgramFactory::create_at(
         tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*tensor_args.input_tensor.device());
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> empty_fused_op_signaler;
     return {
         std::move(program),

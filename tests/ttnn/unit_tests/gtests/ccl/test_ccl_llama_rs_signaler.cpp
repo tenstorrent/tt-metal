@@ -147,7 +147,7 @@ protected:
 }  // namespace
 
 TEST_F(LlamaRsSignalerTest, SemaphoresStayOnOwnedCores) {
-    Program program = tt::tt_metal::CreateProgram();
+    Program program = tt::tt_metal::CreateProgram(*device_);
     const MatmulFusedOpSignaler signaler = make_signaler(program);
     const CoreRangeSet owned = rs_cores().merge(matmul_cores());
 
@@ -171,7 +171,7 @@ TEST_F(LlamaRsSignalerTest, SemaphoresStayOnOwnedCores) {
 }
 
 TEST_F(LlamaRsSignalerTest, SignalReachesEachRsCoreOnceAndNothingElse) {
-    Program program = tt::tt_metal::CreateProgram();
+    Program program = tt::tt_metal::CreateProgram(*device_);
     const MatmulFusedOpSignaler signaler = make_signaler(program);
     std::vector<uint32_t> rs_args;
     signaler.push_llama_rs_rt_args_for_rs(rs_args);
