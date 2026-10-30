@@ -69,7 +69,6 @@ inline constexpr std::chrono::seconds kHostDeadline{300};
 inline constexpr uint64_t kGddrTargetOffset = 0x100000;
 // Observer handshake lines, in the hart's data area after its source block.
 inline constexpr uint64_t kPeerFlagOffsetFromData = 0x8000;
-inline constexpr uint32_t kLeadingGuardTag = 0x900;
 
 // Probe-gated values, set from the probes' results on mimir_2x_package (2026-10-22, every CCE).
 // MimirCacheProbe.EightHartLaunch: true once all 8 harts of one CCE posted their status (2x, every CCE, 2026-10-22).
@@ -163,23 +162,6 @@ std::string cce_skip_reason(uint32_t cce_index) {
     return "";
 }
 
-// A batch from the hart's own TL1 to the CCE's local GDDR view: command i reads the whole source block (source stride
-// 0) and writes destination + i * len_bytes.
-struct GddrBatch {
-    uint32_t cce_index = 0;
-    uint32_t hart = 0;
-    uint32_t mode = abi::kModeTridBatch;
-    uint32_t num_commands = 1;
-    uint32_t len_bytes = 0;
-    uint32_t first_trid = 0;
-    uint32_t trid_stride = 0;
-    uint64_t peer_flag_offset = 0;
-};
-
-uint32_t gddr_view_of(const metal_SocDescriptor& soc, uint32_t cce_index) {
-    return local_dram_view_for_cce(soc, cce_index);
-}
-
 uint64_t gddr_view_offset() {
     return MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED) + kGddrTargetOffset;
 }
@@ -188,35 +170,6 @@ uint64_t gddr_view_offset() {
 uint32_t gddr_backend_for(const metal_SocDescriptor& soc, uint32_t view, uint64_t view_offset) {
     return mimir_channel_location(chiplet_offset_of(soc, view, view_offset)).tile == 0 ? abi::kBackendGddr0
                                                                                        : abi::kBackendGddr1;
-}
-
-std::vector<uint32_t> batch_args(const metal_SocDescriptor& soc, const GddrBatch& batch) {
-    const uint32_t view = gddr_view_of(soc, batch.cce_index);
-    const uint64_t view_offset = gddr_view_offset();
-    const uint64_t chiplet_offset = chiplet_offset_of(soc, view, view_offset);
-    const uint64_t source_offset = tl1_data(batch.hart);
-    std::vector<uint32_t> args(abi::kNumArgs, 0);
-    args[abi::kArgMode] = batch.mode;
-    args[abi::kArgBackendVc] = gddr_backend_for(soc, view, view_offset);
-    args[abi::kArgStatusOffset] = static_cast<uint32_t>(tl1_done_block(batch.hart));
-    args[abi::kArgLenBytes] = batch.len_bytes;
-    args[abi::kArgPollBudgetLo] = static_cast<uint32_t>(kPollBudgetCycles);
-    args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kPollBudgetCycles >> 32);
-    args[abi::kArgSrcKind] = abi::kKindOwnTl1;
-    args[abi::kArgSrcSelector] = batch.cce_index;
-    args[abi::kArgSrcOffsetLo] = static_cast<uint32_t>(source_offset);
-    args[abi::kArgSrcOffsetHi] = static_cast<uint32_t>(source_offset >> 32);
-    args[abi::kArgDstKind] = abi::kKindGddr;
-    args[abi::kArgDstSelector] = mimir_of_view(soc, view);
-    args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(chiplet_offset);
-    args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(chiplet_offset >> 32);
-    args[abi::kArgNumElements] = batch.num_commands;
-    args[abi::kArgSourceStrideBytes] = 0;
-    args[abi::kArgTrid] = batch.first_trid;
-    args[abi::kArgDestinationStrideBytes] = batch.len_bytes;
-    args[abi::kArgTridStride] = batch.trid_stride;
-    args[abi::kArgPeerFlagOffset] = static_cast<uint32_t>(batch.peer_flag_offset);
-    return args;
 }
 
 std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid, uint64_t peer_flag_offset) {
@@ -228,73 +181,6 @@ std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid, uint64_t peer_
     args[abi::kArgTrid] = trid;
     args[abi::kArgPeerFlagOffset] = static_cast<uint32_t>(peer_flag_offset);
     return args;
-}
-
-// Seeds the source block, poisons the first line of every command's destination and writes a guard before and after
-// the destination region. Returns the source words.
-std::vector<uint32_t> prepare_batch(
-    distributed::MeshDevice& unit_mesh,
-    IDevice* device,
-    const metal_SocDescriptor& soc,
-    const GddrBatch& batch,
-    uint32_t tag) {
-    const uint32_t view = gddr_view_of(soc, batch.cce_index);
-    const uint64_t view_offset = gddr_view_offset();
-    const uint32_t seed = mimir_test_seed() ^ (tag * 0x9E3779B9u);
-    const std::vector<uint32_t> source =
-        make_pattern(MimirPattern::Prng, batch.len_bytes / sizeof(uint32_t), tl1_data(batch.hart), seed);
-    write_cce_tl1(device, batch.cce_index, tl1_data(batch.hart), source);
-    for (uint32_t command = 0; command < batch.num_commands; ++command) {
-        mimir_contract::write_gddr_view(
-            unit_mesh,
-            view,
-            view_offset + static_cast<uint64_t>(command) * batch.len_bytes,
-            make_seed_pattern(tag, kGuardWords));
-    }
-    mimir_contract::write_gddr_view(unit_mesh, view, view_offset - kGuardBytes, make_guard(kLeadingGuardTag + tag));
-    mimir_contract::write_gddr_view(
-        unit_mesh, view, view_offset + static_cast<uint64_t>(batch.num_commands) * batch.len_bytes, make_guard(tag));
-    record_leg(
-        "batch",
-        "config",
-        fmt::format(
-            "CCE{} hart {} mode {}, {} x {} B own TL1 0x{:x} -> GDDR view {} +0x{:x}, trid {} stride {}, seed 0x{:08x}",
-            batch.cce_index,
-            batch.hart,
-            batch.mode,
-            batch.num_commands,
-            batch.len_bytes,
-            tl1_data(batch.hart),
-            view,
-            view_offset,
-            batch.first_trid,
-            batch.trid_stride,
-            seed));
-    return source;
-}
-
-// Guards intact, and the first line of the first command and the last line of the last command hold the source.
-void expect_batch_sample(
-    distributed::MeshDevice& unit_mesh,
-    const metal_SocDescriptor& soc,
-    const GddrBatch& batch,
-    const std::vector<uint32_t>& source,
-    uint32_t tag,
-    const std::string& label) {
-    const uint32_t view = gddr_view_of(soc, batch.cce_index);
-    const uint64_t view_offset = gddr_view_offset();
-    const uint64_t region_bytes = static_cast<uint64_t>(batch.num_commands) * batch.len_bytes;
-    std::vector<uint32_t> words;
-    mimir_contract::read_gddr_view(unit_mesh, view, view_offset - kGuardBytes, kGuardBytes, words);
-    EXPECT_EQ(words, make_guard(kLeadingGuardTag + tag)) << label << ": guard before the destination overwritten";
-    mimir_contract::read_gddr_view(unit_mesh, view, view_offset + region_bytes, kGuardBytes, words);
-    EXPECT_EQ(words, make_guard(tag)) << label << ": guard after the destination overwritten";
-    mimir_contract::read_gddr_view(unit_mesh, view, view_offset, kGuardBytes, words);
-    EXPECT_EQ(words, std::vector<uint32_t>(source.begin(), source.begin() + kGuardWords))
-        << label << ": first line of command 0";
-    mimir_contract::read_gddr_view(unit_mesh, view, view_offset + region_bytes - kGuardBytes, kGuardBytes, words);
-    EXPECT_EQ(words, std::vector<uint32_t>(source.end() - kGuardWords, source.end()))
-        << label << ": last line of the last command";
 }
 
 // Poisons every launch's status line, runs them all in one Program and returns their status lines in launch order;

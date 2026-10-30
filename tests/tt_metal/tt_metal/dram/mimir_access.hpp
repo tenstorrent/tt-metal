@@ -108,25 +108,7 @@ struct MimirCceL1AddressInfo {
     uint64_t tl1_offset = 0;
     uint64_t cluster_address = 0;
     uint64_t host_axi_address = 0;
-    uint64_t mla_address = 0;
     uint32_t size = 0;
-
-    std::string to_string() const {
-        return fmt::format(
-            "CCE{} (M{} location {}, chip {}) TL1 0x{:x} +{} B: translated core ({}, {}), cluster 0x{:x}, "
-            "host AXI 0x{:x}, MLA 0x{:x}",
-            cce_index,
-            mimir_index,
-            location,
-            chip,
-            tl1_offset,
-            size,
-            translated_core.x,
-            translated_core.y,
-            cluster_address,
-            host_axi_address,
-            mla_address);
-    }
 
     std::string host_string() const {
         return fmt::format(
@@ -196,7 +178,6 @@ inline MimirCceL1AddressInfo mimir_cce_l1_address(
         info.host_axi_address,
         cce_index,
         cce_window_address);
-    info.mla_address = host_cce_sram_mla_address(windows, info.location, tl1_offset);
     info.size = size;
     return info;
 }
@@ -611,22 +592,6 @@ struct MimirDramAddressInfo {
     uint64_t flat_address = 0;
     MimirChannelLocation first_channel;
     uint32_t size = 0;
-
-    std::string to_string() const {
-        return fmt::format(
-            "view {} (M{}, chip {}) view_offset 0x{:x} +{} B: chiplet offset 0x{:x}, flat 0x{:x}, "
-            "first channel {} (tile {} slice {})",
-            view,
-            mimir_index,
-            chip,
-            view_offset,
-            size,
-            chiplet_offset,
-            flat_address,
-            first_channel.instance,
-            first_channel.tile,
-            first_channel.slice);
-    }
 
     std::string host_string() const {
         return fmt::format(

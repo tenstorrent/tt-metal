@@ -1979,8 +1979,6 @@ TEST_P(MimirAtomicIdmaAccum, SingleHart) {
     expect_accumulate_destination(device, batch, expected, 1, label);
 }
 
-uint32_t accumulate_hart_count() { return kEightHartLaunchPassed ? abi::kMaxParticipants : 2; }
-
 // Every hart accumulates four 256 B blocks onto one shared destination. Each hart's data poll waits for the sum of
 // every hart's contribution, so no hart stores its status while another's accumulate may be in flight (MIM-560).
 TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
@@ -1989,7 +1987,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
-    const uint32_t harts = accumulate_hart_count();
+    const uint32_t harts = multi_hart_count();
     const uint32_t seed = leg_seed(1);
     std::vector<IdmaBatch> batches;
     std::vector<uint32_t> initial;
@@ -2036,7 +2034,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsDisjoint) {
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
-    const uint32_t harts = accumulate_hart_count();
+    const uint32_t harts = multi_hart_count();
     const uint32_t seed = leg_seed(1);
     const uint64_t region_offset = tl1_data(0) + kAccumulateDestinationFromData;
     const uint32_t block_words = kBlockBytes / sizeof(uint32_t);
