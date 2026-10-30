@@ -727,6 +727,18 @@ TABLE = {
         "and kv_actual_global 0 every chip reads row 0, so the programs are identical). Same kernels, same values. "
         "off = the stock ttnn.experimental.deepseek_prefill.rotary_embedding_indexed (32 programs a call on 8x4)",
     ),
+    "PREPARED_ALL": Setting(
+        "on",
+        ("on", "off"),
+        "P.14 (galaxy 8x4, owner 2026-10-29 / OV-23: no Python-built op stays non-prepared). Census (warm chunks, 8x4): "
+        "every Python-built program the model dispatches a chunk already goes through ttnn.bringup.run_prepared (fused "
+        "head, fused tail, sparse_all_gather_2d, ckv_bfp4, bfp_round; no ttnn.generic_op call), the rest are C++ device "
+        "ops (TTNN's program cache). on = the block MoE's fused tail (TailA2A, 40 calls a chunk) keyed on the tensors' "
+        "shapes and memory configs, the y / se / out addresses patched per call (tt/prepared_tail.py "
+        "ShapeKeyedTailA2A): one prepared program for all 40 layers whatever the allocator does (DS41-146: its "
+        "address-keyed 16-entry cache rebuilt programs when a buffer moved, 22 -> 188 ms a chunk). off = TailA2A's "
+        "address-keyed cache (the path before P.14). Same program, same runtime arguments, same bytes",
+    ),
     "CKV_PACK_BEFORE_GATHER": Setting(
         "on",
         ("on", "off"),
