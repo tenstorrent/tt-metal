@@ -41,11 +41,9 @@ class KimiK27Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 8
-    # Pages per combine_fabric2d forwarding channel, trading DRAM against throughput:
-    # +6% on hot_expert at ring8 / 5k against 67 pages, for 6.6 MB a chip.
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
     COMBINE_FWD_VC_PAGES = 48
-    # Pages per dispatch_fabric2d forwarding channel. Shallowest depth inside 5% at
-    # ring8 / 5k: +1.3% balanced, +3.5% hot_expert.
     DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1

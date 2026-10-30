@@ -22,12 +22,9 @@ class MiniMaxM27Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Pages per combine_fabric2d forwarding channel, trading DRAM against throughput. Swept at ring8 / 5k:
-    # hot_expert reads 1145, 1052, 958, 913, 909, 909, 911 us over 32, 48, 64, 80, 96, 112, 134 pages, flat
-    # from 80 up, and 64 already costs 5%. Balanced never fills a channel, so only hot_expert constrains it.
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
     COMBINE_FWD_VC_PAGES = 80
-    # Pages per dispatch_fabric2d forwarding channel. Shallowest depth inside 5% at
-    # ring8 / 5k: -1.3% balanced, +0.2% hot_expert.
     DISPATCH_FWD_VC_PAGES = 32
     NUM_SHARED_EXPERTS = 0  # shared_intermediate_size = 0
     # MiniMax routes with a single expert group -> gate collapses to plain top-k.
