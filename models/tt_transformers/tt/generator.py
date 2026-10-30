@@ -253,6 +253,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.trace_input_prefill_sampling = defaultdict(lambda: None)
         self.trace_output_prefill_sampling = defaultdict(lambda: None)
         self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
+        # {device_sampling_bool: program cache entries per model at the trace's first replay}; opt-in models only
+        self._decode_trace_cache_entries = {}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
@@ -2628,6 +2630,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ``reload_page_table`` refreshes only the page table while preserving
         device-produced token and position state.
         """
+        # A decode trace captured before programs that were compiled since (e.g. the first prefill of a new length)
+        # is re-captured when the host inputs are authoritative again (the start of a request): those programs'
+        # long-lived device resources (global semaphores a cached op created, ...) may have been allocated inside
+        # this trace's scratch region, which every replay overwrites. Opt-in per model.
+        if (
+            reload_inputs
+            and self.trace_ids_decode[on_device_sampling]
+            and self._decode_trace_is_stale(on_device_sampling)
+        ):
+            logger.info("Program cache grew since the decode trace was captured: re-capturing the decode trace")
+            self._release_decode_trace(on_device_sampling)
+            skip_precompile = True  # the decode programs are compiled; capturing does not execute them
+
         # The trace is different depending on whether we are doing device sampling or not
         if not self.trace_ids_decode[on_device_sampling]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
@@ -2666,9 +2681,39 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if host_page_table is not None:
                     ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
 
+        if self._recaptures_stale_decode_traces():
+            entries = self.__dict__.setdefault("_decode_trace_cache_entries", {})
+            if on_device_sampling not in entries:
+                entries[on_device_sampling] = self._program_cache_entries()
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         return self.trace_output_decode[on_device_sampling]
+
+    def _program_cache_entries(self):
+        return [self.model_args[i].mesh_device.num_program_cache_entries() for i in range(self.data_parallel)]
+
+    def _recaptures_stale_decode_traces(self):
+        return all(getattr(m, "_tt_recapture_decode_trace_on_new_programs", False) for m in self.model)
+
+    def _decode_trace_is_stale(self, key):
+        """True when a model that opts in (``_tt_recapture_decode_trace_on_new_programs``) compiled programs since
+        the decode trace ``key`` was captured (program cache entries recorded at its first replay)."""
+        if not self._recaptures_stale_decode_traces():
+            return False
+        recorded = self.__dict__.get("_decode_trace_cache_entries", {}).get(key)
+        return recorded is not None and recorded != self._program_cache_entries()
+
+    def _release_decode_trace(self, key):
+        """Release decode trace ``key`` and the sampling traces captured with it (both are re-captured lazily)."""
+        for i, trace_id in self.trace_ids_decode[key].items():
+            ttnn.release_trace(self.model_args[i].mesh_device, trace_id)
+            sampling_module = getattr(self.model[i], "sampling", None)
+            if sampling_module is not None and hasattr(sampling_module, "reset_trace"):
+                sampling_module.reset_trace()
+        self.trace_ids_decode[key] = None
+        self.trace_inputs_decode[key] = None
+        self.trace_output_decode[key] = None
+        self.__dict__.get("_decode_trace_cache_entries", {}).pop(key, None)
 
     def _apply_sampling_slot_remap(self, slot_remap) -> None:
         if slot_remap is None:
