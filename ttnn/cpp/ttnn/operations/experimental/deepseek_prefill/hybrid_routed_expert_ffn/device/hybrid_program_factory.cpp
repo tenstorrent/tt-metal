@@ -493,8 +493,12 @@ void append_to_descriptor(
         blocking.l1_budget,
         blocking.describe());
 
+    // With NEED_START the counts scratch holds two pages: counts, then `start` (the reader's
+    // COUNTS_BCAST fills both once per dispatch, so start no longer reuses the counts page).
+    const bool need_start = direct_write || operation_arguments.read_x_at_offset;
+    const uint32_t counts_scratch_bytes = need_start ? 2 * counts_page : counts_page;
     for (const auto& allocation : blocking.cb_allocations(
-             activations_are_row_major, output_tile, idx_page, counts_page, /*aliases_enabled=*/true)) {
+             activations_are_row_major, output_tile, idx_page, counts_scratch_bytes, /*aliases_enabled=*/true)) {
         CBDescriptor cb_descriptor{
             .total_size = allocation.total_size,
             .core_ranges = all_cores,
@@ -676,6 +680,22 @@ void append_to_descriptor(
         compute_descriptor.defines.emplace_back("SWIGLU_OAI", "1");
     }
 
+    // The reader rebuilds any grid core's coordinates from its own row's and column's lists, which
+    // holds only while virtual x depends on the column alone and virtual y on the row alone.
+    for (uint32_t y = 0; y < kgroups; ++y) {
+        for (uint32_t x = 0; x < hgroups; ++x) {
+            const auto v = virtual_core(device, x, OY + y);
+            TT_FATAL(
+                v.first == virtual_core(device, x, OY).first && v.second == virtual_core(device, 0, OY + y).second,
+                "moe_fused_swiglu: virtual coordinates of the {}x{} grid are not separable at ({}, {})",
+                hgroups,
+                kgroups,
+                x,
+                y);
+        }
+    }
+    const auto h_mcast_rect = mcast_rect_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
+
     for (uint32_t y = 0; y < kgroups; ++y) {
         for (uint32_t x = 0; x < hgroups; ++x) {
             const CoreCoord core{x, OY + y};
@@ -683,9 +703,8 @@ void append_to_descriptor(
             const uint32_t group_index = (y % blocking.mgroup_rows) * hgroups + x;
             KernelDescriptor::RTArgList reader_args;
             const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY + y, hgroups - 1, OY + y);
-            const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
             reader_args.reserve(
-                17 + 2 * kgroups + x_mcast_args.size() + h_mcast_args.size() +
+                17 + 2 * kgroups + x_mcast_args.size() + h_mcast_rect.size() +
                 h_group_rect_args[y / blocking.mgroup_rows].size() + 2u * experts_per_chip);
             reader_args.push_back(0u);  // reserved runtime slot
             reader_args.push_back(tensor_arguments.activations.buffer());
@@ -710,18 +729,22 @@ void append_to_descriptor(
                 reader_args.push_back(vy);
             }
             reader_args.append(x_mcast_args);
-            reader_args.append(h_mcast_args);
+            for (const uint32_t arg : h_mcast_rect) {
+                reader_args.push_back(arg);
+            }
             for (const uint32_t arg : h_group_rect_args[y / blocking.mgroup_rows]) {
                 reader_args.push_back(arg);
             }
             // Per-expert weight bases, role-major, at the END of the list: every earlier offset the
             // kernels derive from HGROUPS/KGROUPS stays where it was, so only one new constexpr
             // offset per kernel tracks this table.
-            for (const auto& w_gate : tensor_arguments.w_gates) {
-                reader_args.push_back(w_gate.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                reader_args.push_back(w_down.buffer());
+            if (!operation_arguments.weights_from_table) {
+                for (const auto& w_gate : tensor_arguments.w_gates) {
+                    reader_args.push_back(w_gate.buffer());
+                }
+                for (const auto& w_down : tensor_arguments.w_downs) {
+                    reader_args.push_back(w_down.buffer());
+                }
             }
             // Per-expert bias bases, role-major, after the weight table for the same reason it sits
             // last: one new constexpr offset in the reader and nothing above it moves.
@@ -763,11 +786,13 @@ void append_to_descriptor(
             for (uint32_t arg = 0; arg < 4; ++arg) {
                 writer_args.push_back(h_mcast_noc1_args[arg]);
             }
-            for (const auto& w_up : tensor_arguments.w_ups) {
-                writer_args.push_back(w_up.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                writer_args.push_back(w_down.buffer());
+            if (!operation_arguments.weights_from_table) {
+                for (const auto& w_up : tensor_arguments.w_ups) {
+                    writer_args.push_back(w_up.buffer());
+                }
+                for (const auto& w_down : tensor_arguments.w_downs) {
+                    writer_args.push_back(w_down.buffer());
+                }
             }
             writer_descriptor.emplace_runtime_args(core, writer_args);
 
@@ -997,13 +1022,31 @@ void validate(const OperationArguments& operation_arguments, const TensorArgumen
             "moe_fused_swiglu: expert biases require RoutedExpertActivation::SituGlu or "
             "RoutedExpertActivation::SwiGluOai; the SiLU path has no bias branch");
         // The CB layout reuses the bf16 tile for all three bias CBs rather than threading a bias
-        // format through it, so the tensors have to actually be bf16.
-        for (const auto& bias : {std::cref(gate_biases), std::cref(up_biases), std::cref(down_biases)}) {
-            for (const auto& tensor : bias.get()) {
+        // format through it, so the tensors have to actually be bf16. The reader fetches bias tile
+        // `col` of tile-row 0 by page id, so each bias must also be one TILE row of exactly its
+        // projection's N in DRAM; any other layout or shape reads the wrong pages silently.
+        for (const auto& [list_name, list, expected_n] :
+             std::initializer_list<std::tuple<const char*, const std::vector<Tensor>&, uint32_t>>{
+                 {"gate_bias", gate_biases, static_cast<uint32_t>(gate_shape[-1])},
+                 {"up_bias", up_biases, static_cast<uint32_t>(up_shape[-1])},
+                 {"down_bias", down_biases, static_cast<uint32_t>(down_shape[-1])}}) {
+            for (uint32_t e = 0; e < list.size(); ++e) {
+                const Tensor& bias = list[e];
+                const std::string name = fmt::format("{}[{}]", list_name, e);
+                validate_device_tensor(bias, name.c_str());
                 TT_FATAL(
-                    tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
+                    bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
                     "moe_fused_swiglu: expert biases must be BFLOAT16, got {}",
-                    tensor.dtype());
+                    bias.dtype());
+                TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "moe_fused_swiglu: {} must be TILE layout", name);
+                TT_FATAL(is_dram_interleaved(bias), "moe_fused_swiglu: {} must be DRAM interleaved", name);
+                const auto& shape = bias.logical_shape();
+                TT_FATAL(
+                    static_cast<uint32_t>(shape[-1]) == expected_n && shape.volume() == expected_n,
+                    "moe_fused_swiglu: {} logical shape {} must be a single row of its projection N ({})",
+                    name,
+                    shape,
+                    expected_n);
             }
         }
     }
@@ -1172,7 +1215,10 @@ constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
 // a property of the UNION, not of that op -- it must track upstream's highest index.
 constexpr uint32_t CB_BASE =
     ::ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry::CB_DOWN_BIAS + 1;
-constexpr uint32_t CB_IN0_X = CB_BASE + 0;
+// Tilize-once output: the helper asserts its CB index is below 32 (see CB_X_RM), so it takes
+// the base slot. CB_IN0_X is no longer a tilize operand and moves above the 25..31 block.
+constexpr uint32_t CB_X_TILIZED = CB_BASE + 0;
+constexpr uint32_t CB_IN0_X = CB_BASE + 20;
 constexpr uint32_t CB_IN1_GATE = CB_BASE + 16;
 constexpr uint32_t CB_IN1_UP = CB_BASE + 2;
 constexpr uint32_t CB_IN1_DOWN = CB_BASE + 3;
@@ -1190,12 +1236,12 @@ constexpr uint32_t CB_IN0_DOWN_FULL = CB_BASE + 12;
 // partials_up (up matmul) using the SAME shared x K-block — one x read
 // per K-block feeds both matmuls instead of two.
 constexpr uint32_t CB_PARTIALS_UP = CB_BASE + 13;
-// Writer-only scratch for the device-side `start` (expert_region_offsets)
-// page: the writer adds start[global_id]/TILE tile-rows to every output row.
-constexpr uint32_t CB_START_SCRATCH = CB_BASE + 14;
-// Reader's own `start` scratch (x is the shared dispatched buffer, so the
-// reader offsets its x reads by start[global_id] too). Separate from the
-// writer's so the two RISCs don't share one L1 page.
+// CB_BASE + 14 is unused: the writer once had its own `start` scratch there.
+// The `start` (expert_region_offsets) scratch, shared by reader and writer: the
+// reader offsets its x reads by start[global_id] and the writer adds
+// start[global_id]/TILE tile-rows to every output row. The reader's counts
+// broadcast fills it once on every core, before the counts push the writer
+// waits on; neither RISC writes it afterwards.
 constexpr uint32_t CB_START_SCRATCH_READER = CB_BASE + 15;
 // Row-major bf16 staging for x when x_is_row_major: the reader fills it with
 // row-major sticks and the compute kernel tilizes it to bf8_b into CB_IN0_X.
@@ -1204,10 +1250,8 @@ constexpr uint32_t CB_START_SCRATCH_READER = CB_BASE + 15;
 // bf8_b path's L1). The CT-arg index is passed either way; the CB just isn't
 // created (and never touched by the kernels) when x is already TILE.
 // Swapped down out of the +16 slot it would otherwise take: tilize_helpers.inl asserts both
-// the tilize input (this) and its output (CB_IN0_X) are below CB index 32, which is stricter
+// the tilize input (this) and its output (CB_X_TILIZED) are below CB index 32, which is stricter
 // than the 64 slots the hardware has, and the fused block already occupies 0..24.
-// Swapped down out of the +16 slot: tilize_helpers.inl asserts the tilize input (this) and
-// its output (CB_IN0_X) are both below CB index 32, and the fused block occupies 0..24.
 constexpr uint32_t CB_X_RM = CB_BASE + 1;
 // Optional per-expert projection biases (gpt-oss, FUSE_BIAS). Each holds this
 // core's N-column slice of the (1, N) bias, read once by the reader and added
@@ -1239,7 +1283,8 @@ void append_to_descriptor(
     uint32_t& next_semaphore_id,
     const UnifiedRoutedExpertFfnParams& op,
     const UnifiedRoutedExpertFfnInputs& t,
-    Tensor& tensor_return_value) {
+    Tensor& tensor_return_value,
+    bool weights_from_table) {
     // All local experts share one shape/dtype (validated), so the program is
     // built once against expert 0's weights; the kernels loop over experts and
     // vary only the per-expert base address.
@@ -1480,10 +1525,10 @@ void append_to_descriptor(
     // section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
-                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
+        total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tilized (bf8_b)
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
@@ -1772,23 +1817,23 @@ void append_to_descriptor(
     // while compute consumes K-block N. PM FPU util = 0 today says we're
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
-    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
-    // both on the compute threads sharing DST -> serial), so a second slot buys no
-    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
-    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
-    // overlap).
-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
-    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
-    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
-    // while N's posted mcast still drains — single-buffering reuses the slot
-    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
-    // unchanged.
+    // Row-major x is tilized once per M-row and multicast as bf8_b, so the reader fills
+    // cb_in0_x in both layouts and both double-buffer it: block kb+1 lands while kb's
+    // matmul runs.
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * 2u, in0_x_tile_size);
+    // Row-major bf16 x staging and its bf8_b tilize output (x_is_row_major only;
+    // skipped when x is TILE so the bf8_b path's L1 is unchanged).
+    // Single slot each: only the K-block's owner uses them, and a core owns at most one
+    // block per owner-rotation period, so one block is in flight per core. cb_x_rm is no
+    // longer a multicast source; cb_x_tilized is, and its reader frees it only after the
+    // multicast has been acked.
     if (op.x_is_row_major) {
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
-            /*tiles=*/gu_in0_block_num_tiles * 2,
+            /*tiles=*/gu_in0_block_num_tiles,
             tt::tile_size(tt::DataFormat::Float16_b));
+        make_cb(CB_X_TILIZED, in0_x_df, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
@@ -1860,9 +1905,10 @@ void append_to_descriptor(
     };
     // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
     // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
-    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * 2u, in0_block_w_gu);
     if (op.x_is_row_major) {
-        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+        check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
+        check_ring("cb_x_tilized", gu_in0_block_num_tiles, in0_block_w_gu);
     }
     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
@@ -1936,26 +1982,14 @@ void append_to_descriptor(
         }},
     });
 
-    // CB_START_SCRATCH holds the device-side `start` (expert_region_offsets)
-    // page for the writer in direct-write mode. Same sizing rationale as the
-    // counts scratch: expert_region_offsets is validated to have the same
-    // length as counts, so size it to the real per-call requirement (lands the
-    // tensor's page and holds every region-offset entry) rather than the old
-    // fixed MAX_GLOBAL_EXPERTS floor.
+    // CB_START_SCRATCH_READER holds the device-side `start` (expert_region_offsets)
+    // page for reader and writer. Same sizing rationale as the counts scratch:
+    // expert_region_offsets is validated to have the same length as counts, so
+    // size it to the real per-call requirement (lands the tensor's page and holds
+    // every region-offset entry) rather than the old fixed MAX_GLOBAL_EXPERTS floor.
     const uint32_t start_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(start_buffer->aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
-    descriptor.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = start_scratch_bytes,
-        .core_ranges = core_range_set,
-        .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CB_START_SCRATCH),
-            .data_format = tt::DataFormat::UInt32,
-            .page_size = start_scratch_bytes,
-        }},
-    });
-    // Reader's `start` scratch. Same sizing; separate CB so
-    // reader (NCRISC) and writer (BRISC) never share one scratch page.
     descriptor.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = start_scratch_bytes,
         .core_ranges = core_range_set,
@@ -2084,6 +2118,7 @@ void append_to_descriptor(
         .source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = core_range_set,
         .compile_time_args = reader_ct_args,
+        .named_compile_time_args = {{"cb_x_tilized", CB_X_TILIZED}},
         .defines = {reader_defines.begin(), reader_defines.end()},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
@@ -2113,8 +2148,8 @@ void append_to_descriptor(
         M_tiles_full,  // 13
         // dst_M_tiles: tile-row count of the shared destination buffer, which
         // bounds the writer's destination rows.
-        dst_M_tiles,       // 14
-        CB_START_SCRATCH,  // 15
+        dst_M_tiles,              // 14
+        CB_START_SCRATCH_READER,  // 15: shared with the reader (counts broadcast)
         // UP_SPLIT up-weight read: CB + dims let the writer replicate the gate
         // read on NoC 1, and writer_split_up gates it (1 = UP_SPLIT).
         CB_IN1_UP,                            // 16
@@ -2222,6 +2257,8 @@ void append_to_descriptor(
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
         {"cb_x_rm", CB_X_RM},
+        // bf8_b tilize-once staging (x_is_row_major only); tilize output on owner cores.
+        {"cb_x_tilized", CB_X_TILIZED},
         {"cb_in0_x", CB_IN0_X},
         {"cb_in1_gate", CB_IN1_GATE},
         {"cb_in1_up", CB_IN1_UP},
@@ -2464,13 +2501,14 @@ void append_to_descriptor(
         // Per-expert weight base addresses, appended after start_addr in three
         // contiguous blocks of experts_per_chip each: gate[0..N), up[0..N),
         // down[0..N).
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        // Left out when the union kernel reads them from its weight table instead.
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             reader_args.push_back(t.gate_projs[e].buffer());
         }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             reader_args.push_back(t.up_projs[e].buffer());
         }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             reader_args.push_back(t.down_projs[e].buffer());
         }
         // FUSE_BIAS: per-expert bias base addresses in three further blocks
@@ -2507,13 +2545,14 @@ void append_to_descriptor(
             up_go_sem_id,                          // 6
             up_done_sem_id,                        // 7
         });
-        // Per-expert `up` base addresses (UP_SPLIT)
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        // Per-expert `up` base addresses (UP_SPLIT). Both blocks are left out when the union kernel
+        // reads them from its weight table instead.
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             writer_args.push_back(t.up_projs[e].buffer());
         }
         // DOWN_SPLIT: per-expert down base addresses follow the up block (DOWN_RT),
         // then the two dedicated go/done sem ids.
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             writer_args.push_back(t.down_projs[e].buffer());
         }
         writer_args.push_back(down_go_sem_id);
@@ -2548,7 +2587,10 @@ void append_to_descriptor(
         compute_descriptor.emplace_runtime_args(
             core,
             {(valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
-             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w});   // 1 down valid N subblocks
+             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+             gx,                                                        // 2 tilize-once: own column
+             GRID_X,                                                    // 3 tilize-once: M-row width
+             gy});                                                      // 4 tilize-once: own row
     }
 
     descriptor.kernels.push_back(std::move(reader_descriptor));
@@ -2558,6 +2600,17 @@ void append_to_descriptor(
 
 void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
+    // This half's kernels are built for LoFi, a bf16 DEST and exact SFPU whatever the caller
+    // asks for, while the fused half honours the config. Reject any other setting so the two
+    // halves never silently run at different fidelities.
+    if (op.compute_kernel_config.has_value()) {
+        const auto& config = *op.compute_kernel_config;
+        TT_FATAL(
+            config.math_fidelity == tt::tt_metal::MathFidelity::LoFi,
+            "hybrid_routed_expert_ffn runs at LoFi only; pass math_fidelity=LoFi");
+        TT_FATAL(!config.fp32_dest_acc_en, "hybrid_routed_expert_ffn needs fp32_dest_acc_en=False (bf16 DEST)");
+        TT_FATAL(!config.math_approx_mode, "hybrid_routed_expert_ffn needs math_approx_mode=False");
+    }
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
     if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {
@@ -2688,6 +2741,10 @@ void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertF
              {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
         TT_FATAL(a.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
+        // The reader indexes page 0 as a flat uint32 vector; a TILE page is in face order, so
+        // entries past the first face row would be read from the wrong expert.
+        TT_FATAL(
+            a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout, got {}", name, a.layout());
         TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
         const uint32_t num_entries = a.logical_shape()[-1];
         TT_FATAL(
@@ -3042,6 +3099,34 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
     // Each half validates what it will actually be handed, including its own band, so a merged
     // dispatch cannot pass a configuration either op alone would reject.
     unified::validate(unified_attributes(op), unified_inputs(t));
+    if (t.weight_table.has_value()) {
+        // The kernels read the table as one page from bank 0 at its base, rounded up to the DRAM
+        // alignment, so anything but exactly that layout reads the wrong words.
+        const auto& table = *t.weight_table;
+        const uint32_t entries = 3 * op.experts_per_chip;
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t read_bytes =
+            (entries * static_cast<uint32_t>(sizeof(uint32_t)) + dram_alignment - 1) / dram_alignment * dram_alignment;
+        TT_FATAL(
+            table.storage_type() == StorageType::DEVICE && table.buffer() != nullptr && table.device() == t.x.device(),
+            "hybrid_routed_expert_moe: weight_address_table must be on dispatched_buffer's device");
+        TT_FATAL(
+            table.dtype() == DataType::UINT32 && table.layout() == Layout::ROW_MAJOR &&
+                table.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                table.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "hybrid_routed_expert_moe: weight_address_table must be UINT32 ROW_MAJOR DRAM-interleaved, got {} {} {}",
+            table.dtype(),
+            table.layout(),
+            table.memory_config());
+        TT_FATAL(
+            table.logical_volume() == entries && table.buffer()->num_pages() == 1 &&
+                table.buffer()->aligned_page_size() >= read_bytes,
+            "hybrid_routed_expert_moe: weight_address_table must be one page of 3 * experts_per_chip = {} entries "
+            "(gate, up, down), got shape {} in {} pages",
+            entries,
+            table.logical_shape(),
+            table.buffer()->num_pages());
+    }
     if (op.hybrid_token_threshold > 0) {
         fused::validate(fused_attributes(op, t), fused_inputs(t));
 
@@ -3082,11 +3167,14 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // run in sequence, the unified pass then a grid-wide barrier then the fused pass. Each half therefore sees the
     // whole grid, exactly as it does when the two ops are dispatched back to back.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
+    // Only a merged program reads the weight bases from the table: the unified half alone fits the
+    // kernel-config ring with them in its runtime args, and it is built exactly as the op alone is.
+    const bool weights_from_table = run_fused_pass && t.weight_table.has_value();
 
     tt::tt_metal::ProgramDescriptor unified_descriptor;
     uint32_t next_semaphore_id = 0;
     unified::append_to_descriptor(
-        unified_descriptor, next_semaphore_id, unified_attributes(op), unified_inputs(t), output);
+        unified_descriptor, next_semaphore_id, unified_attributes(op), unified_inputs(t), output, weights_from_table);
 
     // No expert reaches the fused half, so it is not carried at all -- not merged, not compiled
     // into the binaries, not present in the defines. Folding it in anyway would be wrong, not
@@ -3102,12 +3190,12 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // join each pair's argument lists behind the right base.
     tt::tt_metal::ProgramDescriptor fused_descriptor;
     TT_FATAL(l1_arena != nullptr, "the fused pass runs, so both halves' circular buffers need an L1 arena to share");
-    fused::append_to_descriptor(
-        fused_descriptor,
-        fused_attributes(op, t, static_cast<uint32_t>(l1_arena->aligned_size_per_bank())),
-        fused_inputs(t),
-        output);
+    auto fused_args = fused_attributes(op, t, static_cast<uint32_t>(l1_arena->aligned_size_per_bank()));
+    fused_args.weights_from_table = weights_from_table;
+    fused::append_to_descriptor(fused_descriptor, fused_args, fused_inputs(t), output);
 
+    const WeightTablePlan table{
+        .buffer = weights_from_table ? t.weight_table->buffer() : nullptr, .experts_per_chip = op.experts_per_chip};
     MergeReport report;
     auto merged = merge_halves(
         std::move(fused_descriptor),
@@ -3116,6 +3204,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
         /*run_fused_pass=*/true,
         l1_arena,
         barrier_plan(t.x.device()),
+        table,
         report);
 
     // The merge's own numbers, on a program-cache miss only. Every one of them is a silent-failure

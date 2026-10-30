@@ -32,7 +32,15 @@
 #if defined(SWIGLU_OAI) && defined(SITU_GLU)
 #error "SWIGLU_OAI and SITU_GLU are mutually exclusive activation variants"
 #endif
-#if defined(SWIGLU_OAI) || defined(SITU_GLU)
+// Plain SiLU takes the same fused fold + binary-SFPU path (silu(g) * u in DEST) unless
+// MOE_SILU_FUSED is 0, which restores the three bf16 slice-CB round trips.
+#ifndef MOE_SILU_FUSED
+#define MOE_SILU_FUSED 1
+#endif
+#if !defined(SWIGLU_OAI) && !defined(SITU_GLU) && MOE_SILU_FUSED
+#define SILU_GLU_FUSED 1
+#endif
+#if defined(SWIGLU_OAI) || defined(SITU_GLU) || defined(SILU_GLU_FUSED)
 #define FUSED_BINARY_ACT 1
 #endif
 #ifdef SWIGLU_OAI
@@ -82,6 +90,10 @@ constexpr bool kFp32DestAccEn = FP32_DEST_ACC_EN != 0;
 // situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() situ_glu_tile_init()
 #define BINARY_ACT_TILE(g, u, o) situ_glu_tile(g, u, o)
+#elif defined(SILU_GLU_FUSED)
+// Op-local, in moe_fused_swiglu_compute_helpers.hpp; uses the fast sigmoid (MOE_SILU_FAST).
+#define BINARY_ACT_INIT() moe_silu_glu_tile_init()
+#define BINARY_ACT_TILE(g, u, o) moe_silu_glu_tile(g, u, o)
 #endif
 #endif
 
@@ -560,10 +572,12 @@ void kernel_main() {
             // shape and trip count below is derived from it, so count 128 does HALF the gate/up matmul,
             // reduce and `down` work of count 256 instead of the same amount.
             const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
-            const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
+            const bool wd_mrow =
+                WD_MROW_ROUNDS && moe_fused_swiglu::h_row_plan(m_eff, M_BLOCK, HN_PAD, KGROUPS, HGROUPS).on;
+            const uint32_t h_rounds = wd_mgroup ? MGROUP_ROWS : m_eff;
+            const uint32_t h_pad_slots = moe_fused_swiglu::h_row_pad_slots(h_rounds, M_BLOCK, DEPTH_H, wd_mgroup);
             // The reader's twin, from the same grid-uniform inputs.
-            h_cursor += wd_mrow ? ((wd_mgroup ? MGROUP_ROWS : KGROUPS) * HID_T + (wd_mgroup ? 0u : HID_T))
-                                : (HGROUPS * m_eff * HN_PAD);
+            h_cursor += wd_mrow ? ((h_rounds + h_pad_slots) * HID_T) : (HGROUPS * m_eff * HN_PAD);
             while (h_cursor >= H_CAP) {
                 h_cursor -= H_CAP;
             }
@@ -819,6 +833,12 @@ void kernel_main() {
                 reconfig_data_format(cb_w_down, cb_h);
                 pack_reconfig_data_format(cb_out_tiles);
                 if (wd_mrow) {
+                    // At bfp8 output cb_h_slice shares SRAM with cb_out_tiles, and output rows whose H
+                    // round does not carry this core's h fragment are not ordered after the writer's
+                    // NoC read of it. Reserving the slice CB's whole capacity on PACK waits for the pop.
+                    uint32_t h_slice_pages = 0;
+                    PACK((h_slice_pages = get_local_cb_interface(cb_h_slice).fifo_num_pages));
+                    h_slice_buf.reserve_back(h_slice_pages);
                     // The reader publishes the complete resident W_down shard once, while cb_h carries
                     // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
                     // result never leaves DEST for an intermediate BF16 accumulation spill.
@@ -845,9 +865,9 @@ void kernel_main() {
                         // writer issue row r while compute works on the next W_down matmul.
                         out_tiles_buf.push_back(out_ec_max);
                     }
-                    if (!wd_mgroup) {
-                        h_buf.wait_front(HID_T);
-                        h_buf.pop_front(HID_T);  // ordinary path's payload-free alignment slot
+                    if (h_pad_slots != 0) {
+                        h_buf.wait_front(h_pad_slots * HID_T);
+                        h_buf.pop_front(h_pad_slots * HID_T);  // payload-free alignment slots
                     }
                     wd_buf.pop_front(WD_RESIDENT_TILES);
                 } else if constexpr (WD_PACKED) {

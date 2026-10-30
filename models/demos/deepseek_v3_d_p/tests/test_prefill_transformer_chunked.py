@@ -221,13 +221,15 @@ def _sparse_cache_format(has_indexer, kv_cache_format):
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), TP-deduped KV cache. CI run 39223403349 / job 117967468990.
-    (61, 11, 10): [0.324, 0.336, 0.367, 0.397, 0.426, 0.456, 0.485, 0.515, 0.553, 0.590, 0.624],
+    # (55k / code_debug), TP-deduped KV cache. Per-chunk median of CI runs 40424879138, 40494538796,
+    # 40532334659 and 40610708699.
+    (61, 11, 10): [0.311, 0.325, 0.356, 0.386, 0.418, 0.449, 0.475, 0.509, 0.551, 0.590, 0.623],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
-    (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations. Per-chunk median of
+    # CI runs 40424879138, 40532334659, 40610708699 (attempts 1 and 3) and 40737604734.
+    (61, 11, 10): [0.380, 0.384, 0.407, 0.436, 0.469, 0.499, 0.523, 0.553, 0.592, 0.624, 0.657],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -241,9 +243,8 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
-    # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
-    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
+    # Scaled-FP8 KV cache, hybrid routed expert. CI run 40610708699 / job 122574403774.
+    (78, 11, 10): [0.400, 0.397, 0.404, 0.402, 0.410, 0.411, 0.405, 0.408, 0.415, 0.422, 0.428],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -258,29 +259,30 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
 # from a CI run, not a galaxy box.
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power (run 39359928012), with the routed expert overlapped with combine_fabric2d.
+    # Cut on bh_sc1_high_power (run 40610708699 / job 122574403753), with the routed expert overlapped with
+    # combine_fabric2d.
     # On plain bh_sc1 the same rows split into two clusters 1.5x apart depending on the box.
     (36, 20, 10): [
-        0.080,
-        0.085,
-        0.089,
-        0.096,
-        0.100,
-        0.106,
+        0.076,
+        0.081,
+        0.086,
+        0.092,
+        0.097,
+        0.102,
+        0.110,
         0.113,
-        0.117,
-        0.120,
-        0.127,
-        0.134,
-        0.135,
-        0.141,
-        0.146,
-        0.151,
-        0.157,
-        0.162,
-        0.169,
-        0.173,
-        0.178,
+        0.118,
+        0.124,
+        0.131,
+        0.132,
+        0.138,
+        0.143,
+        0.148,
+        0.154,
+        0.159,
+        0.166,
+        0.170,
+        0.175,
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {

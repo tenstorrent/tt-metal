@@ -475,6 +475,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             hybrid_token_threshold=threshold,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
+            weight_address_table=tt_expert.weight_address_table,
             **overlap,
         )
 

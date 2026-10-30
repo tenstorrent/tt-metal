@@ -214,6 +214,42 @@ inline uint32_t slice_assigned(uint32_t t, uint32_t cap, uint32_t row) {
     return (row < w) ? (t / w) : 0;
 }
 
+// Row-mode phase 2 for one M-block: h is assembled per token tile-row on the diagonal core C(t, t)
+// and broadcast as one HID_T-wide round per row, against the resident W_down shard. A full block
+// always qualifies (its slice plan gives row r exactly token row r). A short block qualifies when
+// every reduce slice lies inside one token row, i.e. the slice width divides HN_PAD; then token row
+// t is owned by the `per_row` consecutive workers [t * per_row, (t + 1) * per_row) of every column.
+// A pure function of grid constants and m_eff, so all cores and all RISC-Vs agree.
+struct HRowPlan {
+    bool on;
+    uint32_t per_row;  // reduce workers (and h fragments) per token row in each column
+    uint32_t slice;    // tiles per worker slice
+};
+
+inline HRowPlan h_row_plan(uint32_t m_eff, uint32_t m_block, uint32_t hn_pad, uint32_t kgroups, uint32_t hgroups) {
+    const uint32_t t = m_eff * hn_pad;
+    const uint32_t w = slice_workers(t, kgroups);
+    const uint32_t a = t / w;
+    const bool fits = (hn_pad % a == 0) && (m_eff <= kgroups) && (m_eff <= hgroups);
+    if (m_eff != m_block && !fits) {
+        return HRowPlan{false, 0, a};
+    }
+    return HRowPlan{true, hn_pad / a, a};
+}
+
+// Payload-free cb_h slots a row-mode block publishes after its rounds so the next block starts at
+// the CB base. Full blocks keep their historical single slot.
+inline uint32_t h_row_pad_slots(uint32_t rounds, uint32_t m_block, uint32_t depth_h, bool grouped) {
+    if (rounds == m_block) {
+        return grouped ? 0u : 1u;
+    }
+    return (depth_h - rounds % depth_h) % depth_h;
+}
+
+// Mailbox words [MBOX_ROW_AGG, MBOX_ROW_AGG + m_block): the reader's virtual coordinates of the
+// diagonal aggregator C(t, t), packed `vx | vy << 16`, for the writer's short-block h fragments.
+constexpr uint32_t MBOX_ROW_AGG = 8;
+
 // Tile-rows that core `my_col` injects into the x row-multicast for a block of `m_eff` tile-rows.
 // Round `t`'s rotating injector is column `t % hgroups`, so this counts t in [0, m_eff) with
 // `t % hgroups == my_col`. Shared so the reader's staging loop and compute's fused-tilize count
