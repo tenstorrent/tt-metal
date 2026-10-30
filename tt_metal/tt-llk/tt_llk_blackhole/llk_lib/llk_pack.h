@@ -505,6 +505,10 @@ inline void _llk_pack_hw_configure_(
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param num_tiles: Number of tiles processed per MOP run.
  * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
+ * @note Keep num_tiles within the DEST region the kernel synchronizes on, at the width the packer reads DEST
+ *       with (32-bit when the DEST accumulates in fp32 or the pack source is a 32-bit format). This init has
+ *       neither input and asserts only the whole-DEST bound for the pack source's datum width:
+ *       DEST_NUM_TILES_FP16 / 2 tiles for a Float32/Int32/UInt32 source, DEST_NUM_TILES_FP16 for any other.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only: the other modes embed ADC
@@ -531,14 +535,20 @@ inline void _llk_pack_init_(
         "which the mutex cannot cover");
 
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    // Hard bound only: the packer reads DEST as 32-bit datums for a Float32/Int32/UInt32 pack source (the
+    // same formats set_packer_config programs Read_32b_data from) and as 16-bit datums for every other source,
+    // the 8-bit ones included (DEST has no narrower datum; Read_int8 only reinterprets the 16-bit read), so the
+    // whole DEST holds DEST_NUM_TILES_FP16 / 2 or DEST_NUM_TILES_FP16 32x32 tiles. This init has no DstSync and
+    // no DEST-width input (a 16-bit pack source may read a 32-bit DEST), so the block width against the
+    // synchronized DEST region the kernel runs with is the caller's contract (see the @note on num_tiles).
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
-    if (src_format == DataFormat::Float32)
+    if ((src_format == DataFormat::Float32) || (src_format == DataFormat::Int32) || (src_format == DataFormat::UInt32))
     {
-        LLK_ASSERT(num_tiles <= 4, "Max supported num_tiles for FLOAT32 is 4.");
+        LLK_ASSERT(num_tiles <= DEST_NUM_TILES_FP16 / 2, "num_tiles exceeds the DEST capacity for 32-bit datums (DEST_NUM_TILES_FP16 / 2).");
     }
-    else if ((src_format == DataFormat::Float16) || (src_format == DataFormat::Float16_b))
+    else
     {
-        LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
+        LLK_ASSERT(num_tiles <= DEST_NUM_TILES_FP16, "num_tiles exceeds the DEST capacity for 16-bit datums (DEST_NUM_TILES_FP16).");
     }
 
     // 8bit datums in the unpack src format are not affected by the blackhole issue,

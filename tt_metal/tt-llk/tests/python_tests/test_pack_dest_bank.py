@@ -20,6 +20,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
+    DEST_SYNC,
     L1_ACC,
     NUM_BLOCKS,
     NUM_FACES,
@@ -80,7 +81,72 @@ def get_valid_num_faces_datacopy(tilize):
 def test_pack_dest_bank(
     formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
 ):
+    _run_pack_dest_bank(
+        formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+    )
 
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_pack_dest_bank_sync_full(formats, dest_acc):
+    """SyncFull pack blocks with a 16-bit (Float16_b) pack source, [512, 32] = 16 tiles.
+
+    dest_acc=No: one block of 16 tiles, the whole 16-bit DEST, twice the width the Blackhole
+    init used to cap a 16-bit pack source at. dest_acc=Yes: two blocks of 8 tiles on a 32-bit
+    DEST; the pack source stays Float16_b (it is the output format under dest accumulation), so
+    the block width equals the old cap and this cell is a regression guard, not a fail-without.
+    """
+    _run_pack_dest_bank(
+        formats,
+        dest_acc,
+        L1Accumulation.No,
+        4,  # num_faces
+        Tilize.No,
+        0,  # dest_index
+        [512, 32],  # input_dimensions
+        dest_sync=DestSync.Full,
+        pack_src=DataFormat.Float16_b,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32, DataFormat.Int32], same=True),
+    dest_acc=DestAccumulation.Yes,
+)
+def test_pack_dest_bank_sync_full_32bit_source(formats, dest_acc):
+    """One SyncFull block of 8 tiles, the whole 32-bit DEST, with a 32-bit pack source.
+
+    [256, 32] = 8 tiles. Float32: twice the width the Blackhole init used to cap a Float32 pack
+    source at. Int32: the init used to have no bound for an integer source at all; the whole DEST
+    has to stay accepted. The pack source is asserted to be the 32-bit output format so each case
+    keeps exercising the 32-bit bound.
+    """
+    _run_pack_dest_bank(
+        formats,
+        dest_acc,
+        L1Accumulation.No,
+        4,  # num_faces
+        Tilize.No,
+        0,  # dest_index
+        [256, 32],  # input_dimensions
+        dest_sync=DestSync.Full,
+        pack_src=formats.output_format,
+    )
+
+
+def _run_pack_dest_bank(
+    formats,
+    dest_acc,
+    l1_acc,
+    num_faces,
+    tilize,
+    dest_index,
+    input_dimensions,
+    dest_sync=DestSync.Half,
+    pack_src=None,
+):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -94,7 +160,7 @@ def test_pack_dest_bank(
     unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc, tilize)
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -111,6 +177,7 @@ def test_pack_dest_bank(
         formats,
         templates=[
             TILIZE(tilize),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
@@ -136,6 +203,14 @@ def test_pack_dest_bank(
         l1_acc=l1_acc,
         unpack_to_dest=unpack_to_dest,
     )
+
+    if pack_src is not None:
+        # The init bound under test is keyed on the pack source's datum width; pin the inferred
+        # source so the case cannot silently drift to a different bound.
+        inferred_pack_src = configuration.formats_config[0].pack_src
+        assert (
+            inferred_pack_src == pack_src
+        ), f"pack source inferred as {inferred_pack_src}, the case needs {pack_src}"
 
     configuration.generate_variant_hash()
     if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
@@ -204,6 +279,7 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
         formats,
         templates=[
             TILIZE(tilize),
+            DEST_SYNC(DestSync.Half),
         ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
