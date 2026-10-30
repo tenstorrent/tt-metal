@@ -4,9 +4,9 @@
 """Large inputs as chunks of whole sequences: tt/chunking.py's plans and the model's chunked paths.
 
 A chunk runs the whole backbone on its own, so the chunked forward must return, for each sequence, what
-a forward of that sequence's chunk alone returns, bit for bit; and embed(), which also sorts the texts and
-cuts each chunk to its longest one, must return the unchunked embeddings to within the routing flips a
-different batch shape brings.
+a forward of that sequence's chunk alone returns, bit for bit. embed() also sorts the texts and cuts each
+chunk to its longest one: in one chunk at the batch's own shape it must return the unchunked embeddings
+exactly, and in several it must match the reference at the model's own tolerance.
 """
 
 from dataclasses import replace
@@ -18,15 +18,13 @@ import ttnn
 
 from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.common import random_input_ids
+from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import l2_normalize, mean_pool
+from models.experimental.nomic_embed_text_v2_moe.tests.pcc.test_ttnn_model import COSINE_TOLERANCE
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.common import pooling_mask
 from models.experimental.nomic_embed_text_v2_moe.tt.model import TtNomicBertModel, embed
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
-
-# embed() against the unchunked, untrimmed backbone: the chunks have other shapes, so near-tied tokens
-# route differently (measured min cosine 0.99974 over a 24-sequence ragged batch at 2048-token chunks).
-CHUNKED_EMBED_COSINE = 0.999
 
 
 @pytest.mark.parametrize(
@@ -96,6 +94,14 @@ def test_chunked_forward_equals_its_chunks(config, tt_model, batch, seqlen, max_
         ttnn.deallocate(alone)
 
 
+def ragged_batch(config, seed, batch=24, seqlen=512):
+    """Right-padded texts of 20 to seqlen tokens, the first one full length."""
+    generator = torch.Generator().manual_seed(seed)
+    lengths = torch.randint(20, seqlen + 1, (batch,), generator=generator)
+    lengths[0] = seqlen
+    return random_input_ids(batch, seqlen, config, seed=seed, pad_lengths=[seqlen - int(n) for n in lengths])
+
+
 def unchunked_embeddings(model, input_ids, attention_mask):
     kernel = model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = model.backbone(input_ids, attention_mask)
@@ -108,16 +114,40 @@ def unchunked_embeddings(model, input_ids, attention_mask):
 @run_for_blackhole()
 @pytest.mark.use_module_device
 @pytest.mark.needs_weights
-def test_embed_matches_the_unchunked_embeddings_in_input_order(config, tt_model):
-    """embed() sorts by length, cuts each chunk to its longest text and pools per chunk; the rows come
-    back in input order and match one unchunked, untrimmed pass of the whole ragged batch."""
-    generator = torch.Generator().manual_seed(3)
-    lengths = torch.randint(20, 513, (24,), generator=generator)
-    input_ids, attention_mask = random_input_ids(24, 512, config, seed=3, pad_lengths=[512 - int(n) for n in lengths])
+def test_one_chunk_embed_equals_the_unchunked_pass(config, tt_model):
+    """With every text in one chunk and the longest at the full S, embed() runs the batch's own shape with
+    its rows sorted by length, so each row must come back in input order holding exactly the embedding of
+    one unchunked pass."""
+    input_ids, attention_mask = ragged_batch(config, seed=3)
+    batch, seqlen = input_ids.shape
     want = unchunked_embeddings(tt_model, input_ids, attention_mask)
 
-    got = embed(small_chunks(tt_model, 2048), input_ids, attention_mask)
+    got = embed(small_chunks(tt_model, batch * seqlen), input_ids, attention_mask)
 
-    assert got.shape == want.shape
-    cosine = (got * want).sum(-1) / (got.norm(dim=-1) * want.norm(dim=-1))
-    assert bool((cosine > CHUNKED_EMBED_COSINE).all()), f"worst row cosine {float(cosine.min()):.6f}"
+    assert torch.equal(got, want)
+
+
+@run_for_blackhole()
+@pytest.mark.use_module_device
+@pytest.mark.needs_weights
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_chunked_embed_matches_the_reference(config, reference_model, tt_model, seed):
+    """embed() over a ragged batch in several length-sorted chunks, each cut to its longest text, against
+    the reference per row in input order.
+
+    Gated on the reference rather than on an unchunked device pass: the chunks' shapes reroute other
+    near-tied tokens than the unchunked pass does, so the two device runs differ by both errors (worst row
+    cosine 0.9955 against each other on one draw, with each of them within 6e-03 of the reference). The short
+    texts are the worst rows, as at the model's own gate, so this sweeps seeds too.
+    """
+    input_ids, attention_mask = ragged_batch(config, seed)
+    max_tokens = 2048
+    assert len(plan_sorted_chunks(sorted(attention_mask.sum(-1).tolist(), reverse=True), max_tokens)) > 1
+
+    got = embed(small_chunks(tt_model, max_tokens), input_ids, attention_mask)
+
+    with torch.no_grad():
+        ref = l2_normalize(mean_pool(reference_model(input_ids, attention_mask=attention_mask), attention_mask))
+    cosine = (got * ref).sum(-1)
+    assert torch.allclose(got.norm(dim=-1), torch.ones(len(got)), atol=1e-2), "output is not unit norm"
+    assert bool((cosine > 1.0 - COSINE_TOLERANCE).all()), f"worst row cosine {float(cosine.min()):.6f}"
