@@ -889,12 +889,11 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
 
 detail::BoundTensorFootprint detail::make_bound_tensor_footprint(const MeshTensor& tensor) {
     const auto& mesh_buffer = tensor.mesh_buffer();
-    const Buffer* backing_buffer = mesh_buffer.get_backing_buffer();
     return BoundTensorFootprint{
         .buffer_type = mesh_buffer.device_local_config().buffer_type,
         .address = mesh_buffer.address(),
         .size_per_bank = mesh_buffer.get_reference_buffer()->aligned_size_per_bank(),
-        .buffer_id = backing_buffer != nullptr ? std::optional{backing_buffer->unique_id()} : std::nullopt};
+        .buffer_id = mesh_buffer.unique_id()};
 }
 
 void ProgramImpl::set_bound_tensor_footprint(const std::string& name, const detail::BoundTensorFootprint& footprint) {
