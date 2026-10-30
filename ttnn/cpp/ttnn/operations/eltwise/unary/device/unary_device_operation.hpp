@@ -9,6 +9,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
+#include "ttnn/command_list_parameter.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -61,6 +62,11 @@ struct UnaryDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // "input" and "output", plus "scalar1" and "scalar2" when the first op reads its two scalars at runtime (WHERE_TSS,
+    // MAC_TSS). Scalars are packed for the input dtype, as pack_scalar_runtime_arg_impl does.
+    static std::vector<ttnn::experimental::CommandListParameter> command_list_parameters(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::unary

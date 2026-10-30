@@ -209,8 +209,10 @@ struct CopyRowsOp {
         const operation_attributes_t&, const tensor_args_t& tensor_args) {
         const uint32_t tile_rows = capacity(tensor_args);
         return {
-            {.name = "tile_rows", .kernel = kReader, .arg_name = "num_tile_rows", .capacity = tile_rows},
-            {.name = "tile_rows", .kernel = kWriter, .arg_name = "num_tile_rows", .capacity = tile_rows},
+            {.name = "tile_rows", .target = CommonRuntimeArgTarget{kReader, "num_tile_rows", tile_rows}},
+            {.name = "tile_rows", .target = CommonRuntimeArgTarget{kWriter, "num_tile_rows", tile_rows}},
+            {.name = "input", .target = TensorTarget{kSrc}},
+            {.name = "output", .target = TensorTarget{kDst}},
         };
     }
 
@@ -243,6 +245,9 @@ struct CopyRowsOp {
 };
 
 static_assert(HasCommandListParameters<CopyRowsOp>);
+
+// Every CopyRowsOp recorded with this reads the list parameter "tile_rows".
+inline const CommandListBindings kSharedTileRows = {{"tile_rows", "tile_rows"}};
 
 // A pre-Metal 2.0 op, built from a raw Program.
 struct LegacyOp {

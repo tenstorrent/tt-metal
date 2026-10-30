@@ -821,4 +821,22 @@ tt::tt_metal::experimental::ProgramRunArgs UnaryDeviceOperation::ProgramFactory:
     return make_run_args(operation_attributes, tensor_args, output);
 }
 
+std::vector<ttnn::experimental::CommandListParameter> UnaryDeviceOperation::command_list_parameters(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    using ttnn::experimental::CommonRuntimeArgTarget;
+    using ttnn::experimental::TensorTarget;
+
+    std::vector<ttnn::experimental::CommandListParameter> parameters = {
+        {.name = "input", .target = TensorTarget{INPUT}},
+        {.name = "output", .target = TensorTarget{OUTPUT}},
+    };
+    const auto type = operation_attributes.op_chain.front().type();
+    if (type == UnaryOpType::WHERE_TSS || type == UnaryOpType::MAC_TSS) {
+        parameters.push_back({.name = "scalar1", .target = CommonRuntimeArgTarget{COMPUTE, "packed_scalar1"}});
+        parameters.push_back({.name = "scalar2", .target = CommonRuntimeArgTarget{COMPUTE, "packed_scalar2"}});
+    }
+    return parameters;
+}
+
 }  // namespace ttnn::operations::unary

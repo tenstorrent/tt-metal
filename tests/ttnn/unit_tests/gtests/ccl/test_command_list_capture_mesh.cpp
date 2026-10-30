@@ -85,7 +85,7 @@ protected:
         const auto zeros = replicated_host(Tensor::from_vector(std::vector<uint32_t>(values.size(), 0), spec));
 
         CommandListCapture capture(mesh());
-        auto out = capture.record<CopyRowsOp>({.num_tile_rows = kCapacity}, {.input = input});
+        auto out = capture.record<CopyRowsOp>({.num_tile_rows = kCapacity}, {.input = input}, kSharedTileRows);
         auto list = capture.build();
         for (uint32_t tile_rows : {2u, kCapacity}) {
             copy_to_device(zeros, out);
