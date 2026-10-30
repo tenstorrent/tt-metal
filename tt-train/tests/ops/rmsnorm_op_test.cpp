@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <utility>
 #include <vector>
 

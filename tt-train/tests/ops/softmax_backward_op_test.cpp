@@ -8,7 +8,7 @@
 #include <optional>
 #include <string_view>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 
