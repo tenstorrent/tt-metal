@@ -6,7 +6,6 @@
 #   single-user-mtp      one user, lossless MTP speculative decoding (greedy only)
 #   multi-user           several users on the rows-mode resident engine (paged KV pool, chunked prefill, device sampling)
 #   multi-user-long      multi-user with a 25 % larger KV pool (no 128-token prefill chunk), for long-context-heavy use
-#   batch32              (TBD) up to 32 users on the old ttnn decode path, only if it beats multi-user at >= 16 users
 # Replaces the ttnn-path manifest of the same repo (branch qwen36-p300x2-pkg, tt-metal b220c901dec, plugin 96d4416,
 # image f6edb50771ac: profiles plain / batch8-dflash2 / single-user-dflash2). tt-model.yaml on this branch is the p150x2
 # package (changh95/qwen3.8-27b-p150x2) and is untouched.
@@ -146,27 +145,6 @@ serve_profiles:
       tt:                                # deep-merged over serve.additional_config.tt
         prefill_chunk_tokens: 1024       # the TT chunk core: chunked prefill between decode steps
         sample_on_device_mode: decode_only   # the rows-mode hub feed (WP7)
-  - name: batch32
-    description: Up to 32 concurrent requests on the ttnn decode path (plain batched decode, full sampling); kept only where it beats multi-user.
-    # TBD: in the package only if it beats multi-user at >= 16 users (device comparison queued). The old package's
-    # `plain` profile (b220c901dec, plugin 96d4416), unchanged, on this image's plugin (resident-mu: every feature it
-    # needs is upstream, plugin-fallback-deps.md).
-    max_num_seqs: 32
-    additional_config:
-      tt:                                  # deep-merged over serve.additional_config.tt
-        trace_region_size: 1073741824
-        l1_small_size: 24576
-    env:
-      # the image's bundle main_class is the resident class: the override (keyed on the plugin's TT-prefixed arch, and
-      # the raw arch for the plain lookup path) selects the ttnn class, as the old package's plain profile did
-      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM,Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
-      TT_QWEN35_TEXT_VER: qwen36_blackhole
-      QWEN36_MAX_TOKENS_ALL_USERS: "525312"   # bf8 paged KV pool (as published)
-      QWEN36_MTP: "0"
-      QWEN36_PLAIN_GDN_SLOT_FAST: "1"
-      QWEN36_DRAFTER: mtp                     # (backstop, as published: the plain class never speculates)
-    args:
-      - [--max-num-batched-tokens, "262144"]
 default_profile: single-user-dflash2     # PROVISIONAL: decided after the grid
 
 card:
@@ -254,6 +232,5 @@ card:
 verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentMTPForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
   - "from qwen36_resident.dflash import ResidentDFlash, DRAFTER_WEIGHTS; assert DRAFTER_WEIGHTS.endswith('dedf8df68adfb1afeaf7b7480c0a0243108177b4')"
-  - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"   # batch32
   # multi-user-long's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
   - "import os; os.environ['RESIDENT_PREFILL_CHUNKS'] = '256,512,1024'; from qwen36_resident.generator_vllm import PREFILL_CHUNKS; assert PREFILL_CHUNKS == (256, 512, 1024), PREFILL_CHUNKS"
