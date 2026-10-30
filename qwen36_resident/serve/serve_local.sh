@@ -41,9 +41,15 @@ esac
 VLLM=${VLLM_VENV:+$VLLM_VENV/bin/}vllm
 # kernel sources resolve from the working directory first
 cd "$WT"
-# log which plugin, ttnn and adapter this server runs
-"${VLLM_VENV:+$VLLM_VENV/bin/}python" -c "import vllm_tt_plugin, ttnn, qwen36_resident
-for m in (vllm_tt_plugin, ttnn, qwen36_resident): print('serving', m.__name__, 'from', m.__file__)" 2>&1 | grep '^serving'
+# log which plugin, ttnn and adapter this server runs; an import failure prints its traceback (under set -e a filtered
+# pipe exited here with no output: ttnn without its build/lib looked like a silent server death)
+if ! IMPORTS=$("${VLLM_VENV:+$VLLM_VENV/bin/}python" -c "import vllm_tt_plugin, ttnn, qwen36_resident
+for m in (vllm_tt_plugin, ttnn, qwen36_resident): print('serving', m.__name__, 'from', m.__file__)" 2>&1); then
+  echo "$IMPORTS" >&2
+  echo "cannot import vllm_tt_plugin, ttnn or qwen36_resident (PYTHONPATH=$PYTHONPATH)" >&2
+  exit 1
+fi
+grep '^serving' <<< "$IMPORTS"
 exec "$VLLM" serve "$HF_MODEL" \
   --served-model-name "${SERVED_MODEL_NAME:-Qwen/Qwen3.8-27B}" \
   --max-model-len "${MAX_MODEL_LEN:-32768}" \
