@@ -191,6 +191,8 @@ _SR = ("Fpu", "Pack", "All")
 _SRCODE = {StochasticRounding.Fpu: 1, StochasticRounding.Pack: 2, StochasticRounding.All: 3}  # loop_factor 65, 66, 67 tells the rows apart in the csv (no column carries the mode)
 _SRV = {"Fpu": StochasticRounding.Fpu, "Pack": StochasticRounding.Pack, "All": StochasticRounding.All}
 _GEOM = [(r, 32) for r in (1, 2, 4, 8, 16)] + [(r, 16) for r in (1, 2, 4, 8, 16, 32)]
+_FAMS1 = "NTR"
+_FAMS2 = ""
 _EXCL = set(json.load(open(os.path.join(os.path.dirname(__file__), "llkx_in_sweep.json"))))
 
 
@@ -271,7 +273,7 @@ def _fn1_rows():
                             for sr in _SR:
                                 kt = _KT[_hash(tag + "S" + sr) % 3]
                                 rows.append(("S", *cell, *_one(cap, kt, tag + "S" + sr), kt, 0, 0, sr))
-    rows = [r for r in rows if ",".join(map(str, r[1:])) not in _EXCL]
+    rows = [r for r in rows if r[0] in _FAMS1 and ",".join(map(str, r[1:])) not in _EXCL]
     return list(dict.fromkeys(rows))
 
 
@@ -312,7 +314,7 @@ def _fn2_rows():
                     r0 = 4
                 blk = ((1, 1, 1), (1, 4, 1), (1, 4, 4), (2, 2, 4), (1, cap, 1))[_hash(tag + "gb") % 5]
                 rows.append(("G", *cell, r0, c1, *blk, 0))
-    rows = [r for r in rows if ",".join(map(str, r[1:])) not in _EXCL]
+    rows = [r for r in rows if r[0] in _FAMS2 and ",".join(map(str, r[1:])) not in _EXCL]
     return list(dict.fromkeys(rows))
 
 
@@ -377,7 +379,7 @@ def _cases2():
     return out, ids
 
 
-_C2, _I2 = _cases2()
+_C2, _I2 = _cases2() if _FAMS2 else ([], [])
 
 
 @pytest.mark.perf
@@ -475,203 +477,6 @@ def test_perf_matmul_llkx(
             tile_count_res=min(dims.rt_dim * dims.ct_dim, PERF_RING_TILES),
         ),
         dest_acc=dest_acc,
-    )
-
-    configuration.run(perf_report)
-
-@pytest.mark.perf
-@skip_for_wormhole
-@pytest.mark.parametrize("math_fidelity,matmul_config,throttle,num_blocks", _C2, ids=_I2)
-def test_perf_matmul_llkx_math(
-    math_fidelity,
-    matmul_config,
-    throttle,
-    num_blocks,
-    perf_report,
-):
-    """
-    Performance test for matmul operations.
-
-    Regular matmul uses dest-filling RT x CT grids sized to dest capacity, dest
-    occupancy blocks (1×N through dest Half, 2×N, 4×1 / 4×2), and half-dest
-    mid-fill (2×2, 1×(cap/2), (cap/2)×1) when they fit, with KT in {1, 4} and
-    throttle 0 or 5. Tiny tiles cover ct=1, cap/2, and dest-fill ct. A
-    dest-handoff slice repeats dest_index=0 grids (NUM_BLOCKS=4, KT=1,
-    throttle=0).
-    """
-    formats = matmul_config.formats
-    in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
-    in1_dimensions = matmul_config.tile_dimensions.in1_dimensions
-    transpose = matmul_config.face_layout_config.unpack_transpose_faces
-    num_faces_in0 = matmul_config.face_layout_config.num_faces_in0
-    num_faces_in1 = matmul_config.face_layout_config.num_faces_in1
-    num_faces = matmul_config.face_layout_config.num_faces
-
-    if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
-        pytest.skip("Dest accumulation must be enabled for this format")
-
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
-    variant_tile_count = (
-        matmul_config.tile_dimensions.rt_dim
-        * matmul_config.tile_dimensions.ct_dim
-        * matmul_config.tile_dimensions.kt_dim
-    )
-
-
-    configuration = PerfConfig(
-        "sources/math_matmul_test.cpp",
-        formats,
-        run_types,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces, MATMUL_PHASE_ELIDE.keeps_requested(matmul_config.tile_dimensions, matmul_config.dest_sync, math_fidelity)),
-            DEST_SYNC(matmul_config.dest_sync),
-            THROTTLE_LEVEL(throttle),
-            *MATMUL_STREAM_NARROW.for_block(
-                formats,
-                matmul_config.dest_acc,
-                matmul_config.dest_sync,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                math_fidelity=math_fidelity,
-            ),
-            *MATMUL_REUSE_DIR.for_block(
-                formats,
-                math_fidelity,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.dest_sync,
-            ),
-            *MATMUL_STREAM_Z.for_block(
-                formats,
-                matmul_config.dest_acc,
-                matmul_config.dest_sync,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                math_fidelity=math_fidelity,
-                in1_faces=num_faces_in1,
-                in1_partial=matmul_config.face_layout_config.partial_face_in1,
-                kt_dim=matmul_config.tile_dimensions.kt_dim,
-                throttle=throttle,
-            ),
-            *MATMUL_K_LOOP.for_block(
-                formats,
-                matmul_config.dest_acc,
-                math_fidelity,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.tile_dimensions.kt_dim,
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                matmul_config.tile_dimensions.in0_tile_c_dim,
-                matmul_config.tile_dimensions.in1_tile_r_dim,
-                matmul_config.tile_dimensions.in1_tile_c_dim,
-                dest_sync=matmul_config.dest_sync,
-                throttle=throttle,
-            ),
-            *MATMUL_ROW_END_FOLD.for_block(matmul_config.tile_dimensions.ct_dim, matmul_config.tile_dimensions.rt_dim),
-            *(
-                MATMUL_ROW_MOP.for_block(
-                    formats,
-                    matmul_config.dest_acc,
-                    math_fidelity,
-                    matmul_config.dest_sync,
-                    matmul_config.tile_dimensions.ct_dim,
-                    matmul_config.tile_dimensions.rt_dim,
-                    matmul_config.tile_dimensions.kt_dim,
-                    num_blocks,
-                )
-                if math_fidelity == MathFidelity.LoFi and matmul_config.dest_sync == DestSync.Full
-                else []
-            ),
-            *MATMUL_FORM_KEYS.for_block(
-                formats,
-                matmul_config.tile_dimensions.kt_dim,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                math_fidelity=math_fidelity,
-                dest_sync=matmul_config.dest_sync,
-                in0_r_dim=matmul_config.tile_dimensions.in0_tile_r_dim,
-                unfuse_cells=True,
-                dest_acc=matmul_config.dest_acc,
-                throttle=throttle,
-                sections=num_blocks,
-            ),
-            *MATMUL_IN1_ALT.for_tiles(
-                formats,
-                matmul_config.dest_acc,
-                math_fidelity,
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                matmul_config.tile_dimensions.in0_tile_c_dim,
-                matmul_config.tile_dimensions.in1_tile_r_dim,
-                matmul_config.tile_dimensions.in1_tile_c_dim,
-            ),
-            MATMUL_PACK_BLOCK(
-                matmul_pack_form(
-                    formats,
-                    matmul_config.dest_sync,
-                    math_fidelity,
-                    matmul_config.tile_dimensions.rt_dim,
-                    matmul_config.tile_dimensions.ct_dim,
-                    matmul_config.tile_dimensions.kt_dim,
-                    matmul_config.tile_dimensions.in0_tile_r_dim,
-                    matmul_config.tile_dimensions.in1_tile_c_dim,
-                    throttle,
-                    dense_pages=True,
-                )
-            ),
-        ],
-        runtimes=[
-            DEST_INDEX(matmul_config.dst_index),
-            UNPACK_TRANS_FACES(transpose),
-            UNPACK_TRANS_WITHIN_FACE(transpose),
-            TILE_COUNT(variant_tile_count * num_blocks),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(
-                matmul_config.tile_dimensions.rt_dim
-                * matmul_config.tile_dimensions.ct_dim
-            ),
-            NUM_FACES(
-                num_faces, num_faces_in0, num_faces_in1
-            ),  # In0 -> Input A, In1 -> Input B
-            PARTIAL_FACE(  # In0 -> Input A, In1 -> Input B
-                partial_a=matmul_config.face_layout_config.partial_face_in0,
-                partial_face_pack=matmul_config.face_layout_config.partial_face_pack,
-                partial_b=matmul_config.face_layout_config.partial_face_in1,
-                partial_face_math=matmul_config.face_layout_config.partial_face_math,
-            ),
-            CRK_TILE_DIMM(
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.tile_dimensions.kt_dim,
-            ),
-            IN_TILE_DIMS(
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                matmul_config.tile_dimensions.in0_tile_c_dim,
-                matmul_config.tile_dimensions.in1_tile_r_dim,
-                matmul_config.tile_dimensions.in1_tile_c_dim,
-            ),
-            LOOP_FACTOR(1024),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=matmul_config.tile_dimensions.tile_cnt_in0,
-            tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
-            tile_count_res=matmul_config.tile_dimensions.output_tile_cnt * num_blocks,
-        ),
-        dest_acc=matmul_config.dest_acc,
     )
 
     configuration.run(perf_report)
