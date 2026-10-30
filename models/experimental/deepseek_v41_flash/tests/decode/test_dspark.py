@@ -10,11 +10,12 @@ later positions. Each draft compares the pre-Markov logits by PCC, the proposals
 * ``test_dspark_draft``: eager, one ring row written before each draft, as the reference's ``forward_spec``
   does; the stages' attention and MoE are compared one by one.
 * ``test_dspark_spec_rounds``: the drafter as the spec loop drives it. ``write_main`` and ``draft`` are
-  captured as traces and replayed; each round verifies a block of ``SPEC_DRAFTS + 1`` rows and writes only
-  the accepted ones. The rings must change at the written slots and nowhere else (exact), the replays must
-  allocate nothing, and the upload and replay times are logged.
+  captured as traces and replayed; each round verifies a block of ``SPEC_DRAFTS + 1`` rows and writes all of
+  them, rejected ones included. The rings must change at the written slots and nowhere else (exact), the
+  replays must allocate nothing, and the upload and replay times are logged.
 
-The routed experts come from the cache ``tools/fill_expert_cache.py --dspark`` fills.
+The routed experts come from the cache ``tools/fill_expert_cache.py --dspark --dtype bfloat8_b`` fills (and
+``--dtype bfloat4_b`` for ``prefetch_bf4_experts``).
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_dspark.py
 """
@@ -100,7 +101,7 @@ def _spy(obj, method: str, outputs: dict, key) -> None:
 
 @contextlib.contextmanager
 def _drafters(
-    mesh_device, max_seq: int, use_prefetcher: bool = True, weight_dtype=WEIGHT_DTYPE, expert_dtype=ttnn.bfloat4_b
+    mesh_device, max_seq: int, use_prefetcher: bool = True, weight_dtype=WEIGHT_DTYPE, expert_dtype=ttnn.bfloat8_b
 ):
     """``(config, reference, drafter, logits_seen)``: the CPU drafter (:func:`reference_dspark`) and the device one on
     the first 1x4 submesh, alone on it as on its own pipeline stage. The device ``lm_head`` keeps its last output in
@@ -162,8 +163,7 @@ def _seed(config, reference, drafter, prompt: int, max_seq: int):
     reference.spec(tokens[:1], main_hidden[:, :prompt], 0)
     seed = list(range(max(0, prompt - drafter.window), prompt))
     for i in range(0, len(seed), drafter.main_rows):
-        chunk = seed[i : i + drafter.main_rows]
-        drafter.set_main_rows(chunk, [True] * len(chunk))
+        drafter.set_main_rows(seed[i : i + drafter.main_rows])
         drafter.write_main()
     return main_hidden, tokens
 
@@ -181,7 +181,7 @@ def _reference_draft(reference, tokens, main_hidden, frontier: int, block: int):
 def _device_draft(out, logits, block: int):
     """``(ids [block], pre-Markov logits [block, V], confidence [block])`` of a device draft: ``out`` as
     :meth:`DeepSeekV41DSpark.draft` returns it, ``logits`` what its ``lm_head`` returned."""
-    ids, conf = out
+    ids, conf, _ = out
     return (
         _to_torch(ids).flatten().long(),
         _to_torch(logits).float().reshape(block, -1),
@@ -196,8 +196,8 @@ def _device_draft(out, logits, block: int):
 @pytest.mark.parametrize("prompt", (10, 140), ids=("first_lap", "wrapped"))
 @pytest.mark.parametrize(
     "use_prefetcher, expert_dtype",
-    ((True, ttnn.bfloat4_b), (False, ttnn.bfloat4_b), (True, ttnn.bfloat8_b)),
-    ids=("prefetch", "l1", "prefetch_bf8_experts"),
+    ((True, ttnn.bfloat8_b), (False, ttnn.bfloat8_b), (True, ttnn.bfloat4_b)),
+    ids=("prefetch", "l1", "prefetch_bf4_experts"),
 )
 @torch.no_grad()
 def test_dspark_draft(mesh_device, prompt, use_prefetcher, expert_dtype):
@@ -223,7 +223,7 @@ def test_dspark_draft(mesh_device, prompt, use_prefetcher, expert_dtype):
         failures, first_matches, pccs, moe_alone = [], 0, [], []
         for f in range(prompt, prompt + DRAFTS):
             want_ids, want_logits, want_conf = _reference_draft(reference, tokens, main_hidden, f, drafter.block)
-            drafter.set_main_rows([f], [True])
+            drafter.set_main_rows([f])
             drafter.write_main()
             drafter.set_block(int(tokens[f + 1]), f)
             got_ids, got_logits, got_conf = _device_draft(drafter.draft(), logits_seen["logits"], drafter.block)
@@ -271,22 +271,23 @@ def test_dspark_draft(mesh_device, prompt, use_prefetcher, expert_dtype):
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
-@pytest.mark.parametrize("prompt", (10, 140), ids=("first_lap", "wrapped"))
+@pytest.mark.parametrize("prompt", (10, 140, 200), ids=("first_lap", "wrapped", "ring_wrapped"))
 @torch.no_grad()
 def test_dspark_spec_rounds(mesh_device, prompt):
-    """Rounds of the spec loop on the traced drafter: draft at the frontier, then write the verified block
-    ``[frontier + 1, frontier + 1 + SPEC_DRAFTS]`` with only its first ``accepted + 1`` rows written.
+    """Rounds of the spec loop on the traced drafter: draft at the frontier, then write the whole verified block
+    ``[frontier + 1, frontier + 1 + SPEC_DRAFTS]``, of which only the first ``accepted + 1`` rows are accepted.
 
-    The CPU drafter takes only the accepted rows, one position at a time, so a rejected row that reached a ring
-    shows up in the next draft. ``wrapped`` is the case that matters: there a rejected row's slot still holds the
-    position ``window`` back, which the next drafts attend."""
+    The CPU drafter takes only the accepted rows, one position at a time, so a rejected row the draft's mask let
+    through shows up in the next draft. ``wrapped`` puts the frontier past the window, where the mask must also
+    hide positions that left it; ``ring_wrapped`` puts it past the ring, so the window and the rejected rows wrap
+    around slot 0 and the ring's slots outside the window hold real, older rows."""
     if tuple(mesh_device.shape) != PARENT_MESH:
         pytest.skip(f"needs an {PARENT_MESH[0]}x{PARENT_MESH[1]} mesh, got {tuple(mesh_device.shape)}")
     k = SPEC_DRAFTS
     max_seq = prompt + sum(m + 1 for m in ACCEPTED) + k + 16
     with _drafters(mesh_device, max_seq) as (config, reference, drafter, logits_seen):
         assert k + 1 <= drafter.main_rows and k <= drafter.block
-        device, window, block = drafter.device, drafter.window, drafter.block
+        device, ring_rows, block = drafter.device, drafter.ring_rows, drafter.block
         main_hidden, tokens = _seed(config, reference, drafter, prompt, max_seq)
 
         # The seeding compiled write_main; this eager draft compiles draft (every program runs before the first
@@ -314,6 +315,9 @@ def test_dspark_spec_rounds(mesh_device, prompt):
             return time.perf_counter() - t0
 
         failures, pccs, first_matches = [], [], 0
+        # The position each ring slot last took: a round rewrites the rows the previous one rejected from the same
+        # stash rows, so those slots keep their values.
+        slot_position = {p % ring_rows: p for p in range(max(0, prompt - drafter.window), prompt)}
         seconds = {"set_block": [], "draft": [], "set_main_rows": [], "write_main": []}
         for r, accepted in enumerate(ACCEPTED):
             want_ids, want_logits, want_conf = _reference_draft(reference, tokens, main_hidden, frontier, block)
@@ -338,13 +342,14 @@ def test_dspark_spec_rounds(mesh_device, prompt):
             )
 
             positions = list(range(frontier + 1, frontier + 2 + k))
-            written = [j <= accepted for j in range(k + 1)]
-            slots = [p % window for p, keep in zip(positions, written) if keep]
-            untouched = torch.ones(window, dtype=torch.bool)
+            slots = [p % ring_rows for p in positions]
+            untouched = torch.ones(ring_rows, dtype=torch.bool)
             untouched[slots] = False
+            fresh = [s for s, p in zip(slots, positions) if slot_position.get(s) != p]
+            slot_position.update(zip(slots, positions))
             before = [_to_torch(stage.ring) for stage in drafter.stages]
             t0 = time.perf_counter()
-            drafter.set_main_rows(positions, written)
+            drafter.set_main_rows(positions)
             seconds["set_main_rows"].append(time.perf_counter() - t0)
             seconds["write_main"].append(replay("write_main"))
             for s, (stage, old) in enumerate(zip(drafter.stages, before)):
@@ -353,10 +358,10 @@ def test_dspark_spec_rounds(mesh_device, prompt):
                     changed = (new[0, 0] != old[0, 0]).any(-1) & untouched
                     failures.append(
                         f"round {r}: stage {s} write_main changed slots {changed.nonzero().flatten().tolist()} "
-                        f"it was not given (rejected positions {positions[accepted + 1 :]})"
+                        f"it was not given (positions {positions})"
                     )
-                if (new[0, 0, slots] == old[0, 0, slots]).all(-1).any():
-                    failures.append(f"round {r}: stage {s} write_main left a written slot of {slots} as it was")
+                if (new[0, 0, fresh] == old[0, 0, fresh]).all(-1).any():
+                    failures.append(f"round {r}: stage {s} write_main left a newly written slot of {fresh} as it was")
             # The CPU rings take the accepted rows; the new frontier's row is written by the next round's draft.
             for q in positions[:accepted]:
                 reference.spec(tokens[q + 1 : q + 2], main_hidden[:, q : q + 1], q)
