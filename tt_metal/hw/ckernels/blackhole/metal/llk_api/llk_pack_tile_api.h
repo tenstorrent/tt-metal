@@ -286,8 +286,8 @@ constexpr bool llk_pack_block_closed_pays(const std::uint32_t dst_format, const 
 template <bool is_fp32_dest_acc_en, bool dense_small = false, bool guard_dest_straddle = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
-    // Blocks of fewer tiles read slower than the per-tile pack in the tt-llk sweep, whatever the format.
-    const bool block_form = ntiles >= LLK_PACK_BLOCK_MIN_TILES;
+    // Full tiles in blocks of fewer tiles read slower than the per-tile pack in the tt-llk sweep; tiny tiles read faster as a closed block from two tiles on.
+    const bool block_form = ntiles >= LLK_PACK_BLOCK_MIN_TILES || (ntiles >= 2 && llk_pack_block_is_small(output_id));
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
