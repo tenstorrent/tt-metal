@@ -397,6 +397,23 @@ symlink to it), the agent definition (agents/*.md) or the framework the same hou
 session's private memory (owner, said many times; 2026-10-30): memory stays on one machine, is not versioned, and the
 next overseer never sees it.
 
+Standing owner decisions (moved here from private memory, 2026-10-30):
+- Perf picks (owner, 2026-10-28/29, DeepSeek-V4.1; apply to every model unless its owner says otherwise): accept a pick
+  yourself when its gate passes, every accuracy metric is within its limit, and it wins on speed (device or wall) or
+  on memory; also one that only removes work by construction (fewer ops, cached programs, work off the main thread)
+  with identical accuracy, even inside the wall noise. Anything that misses a limit, is measurably slower without a
+  memory or precision reason, or departs from an owner rule goes to the owner with the A/B table and a recommendation.
+- No Python-built op stays non-prepared (owner, 2026-10-29): every generic_op / ProgramDescriptor / ttnn.bringup
+  Python fork the model calls goes through ttnn.bringup.prepare_program / run_prepared; say so in every perf / fix brief.
+- DeepSeek-V4.1 galaxy_8x4 (branch dnijemcevic/model_bringup; owner, 2026-10-28): work autonomously; push after each
+  milestone (a gate PASS such as Paris, a published profile, an accepted pick or fix job) with a hand-off-quality
+  supervision.md entry (/scratch is node-local: only what is pushed survives a move). Other branches still need the
+  owner's word.
+- DeepSeek-V4.1 serving (owner, 2026-10-29): every bf16 cache served to tt-d-gen is a temporary compatibility copy; the
+  goal is decode and tt-d-gen reading the low-bit caches prefill keeps. Compare prefill's own caches with decode, do
+  not optimize the copies, plan the contract change as a follow-up; whether a copy holds rounded values is not worth
+  raising.
+
 Never idle the box on a decision that does not matter (owner, 2026-10-30). A pick that is bit-identical, harmless, or
 moves the chunk by a few tenths of a millisecond (totals within run-to-run noise) is decided by you, at once, and the
 run goes on with the owner's queued plan; one line in the report says what you decided. Ask only for a choice whose
