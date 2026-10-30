@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_1d_type.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 
 namespace ttnn::prim {
 
@@ -38,6 +39,11 @@ struct MatmulMultiCoreReuseMcast1DProgramFactory {
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
+
+    // in1's PrefetcherPipes, rebound on a cache hit (empty without prefetcher_pipes).
+    static tt::tt_metal::experimental::
+        Table<tt::tt_metal::experimental::PrefetcherPipeParamName, tt::tt_metal::experimental::PrefetcherPipeArgument>
+        prefetcher_pipe_args(const ttnn::prim::MatmulParams& operation_attributes);
 };
 
 struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {

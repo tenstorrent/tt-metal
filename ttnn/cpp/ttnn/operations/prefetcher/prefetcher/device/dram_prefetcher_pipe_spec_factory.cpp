@@ -42,6 +42,23 @@ using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
+namespace {
+
+// Reader i's pipe parameter.
+PrefetcherPipeParamName out_pipe_name(uint32_t i) { return PrefetcherPipeParamName{fmt::format("out_pipe_{}", i)}; }
+
+}  // namespace
+
+tt::tt_metal::experimental::Table<PrefetcherPipeParamName, PrefetcherPipeArgument>
+DramPrefetcherPipeSpecFactory::prefetcher_pipe_args(const DramPrefetcherParams& operation_attributes) {
+    tt::tt_metal::experimental::Table<PrefetcherPipeParamName, PrefetcherPipeArgument> args;
+    const ttnn::PrefetcherPipeList& pipes = operation_attributes.prefetcher_pipes;
+    for (uint32_t i = 0; i < pipes.size(); ++i) {
+        args.emplace(out_pipe_name(i), PrefetcherPipeArgument{*pipes[i]});
+    }
+    return args;
+}
+
 ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_program_artifacts(
     const DramPrefetcherParams& operation_attributes,
     const DramPrefetcherInputs& tensor_args,
@@ -105,7 +122,7 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
     Group<PrefetcherPipeParamName> prefetcher_pipe_names;
     for (uint32_t i = 0; i < num_readers; ++i) {
-        const PrefetcherPipeParamName name{fmt::format("out_pipe_{}", i)};
+        const PrefetcherPipeParamName name = out_pipe_name(i);
         prefetcher_pipe_names.push_back(name);
         prefetcher_pipe_parameters.push_back(PrefetcherPipeParameter{
             .unique_id = name,
@@ -240,10 +257,7 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     // The weights are reached through the addresses the address tensor holds, as on the GlobalCircularBuffer
     // path, so the address tensor is the one tensor bound.
     run_args.tensor_args = {{TENSOR_ADDRS, tensor_addrs.mesh_tensor()}};
-    for (uint32_t i = 0; i < num_readers; ++i) {
-        run_args.advanced_options.prefetcher_pipe_args.emplace(
-            prefetcher_pipe_names[i], PrefetcherPipeArgument{*pipes[i]});
-    }
+    run_args.advanced_options.prefetcher_pipe_args = prefetcher_pipe_args(operation_attributes);
 
     ProgramSpec spec{
         .name = "dram_prefetcher_prefetcher_pipe",

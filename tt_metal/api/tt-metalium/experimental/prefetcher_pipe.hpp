@@ -101,7 +101,7 @@ public:
     SenderCoreType sender_core_type() const;
 
     // Stable process-local identity. Unlike the implementation address, this is never reused
-    // after a pipe is destroyed, so program-cache keys can safely distinguish re-carved pipes.
+    // after a pipe is destroyed, so a Program can tell a re-carved pipe from the one it bound.
     PrefetcherPipeIdentity identity() const;
 
     // Initial applied entry size stamped into a DRAM sender's persistent page. Programs and
@@ -109,27 +109,14 @@ public:
     uint32_t initial_entry_size() const;
 
     // Reflection follows shared_ptr<PrefetcherPipe> through the pointer for profiler output and
-    // exact cache keys. identity() is monotonic, so destroying and re-carving the same geometry
-    // cannot collide even if the allocator reuses both addresses and the host implementation slot.
+    // cache keys. The key is what a Program bakes in, not identity(): a pipe re-carved with the same
+    // geometry at the same addresses hits the programs built for the one it replaces, and they rebind
+    // to it (see ProgramImpl::PrefetcherPipeBindingKey).
     static constexpr bool ttsl_reflect_through_shared_ptr = true;
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "identity",
-        "sender_core",
-        "receiver_cores",
-        "config_address",
-        "buffer_address",
-        "initial_entry_size",
-        "ring_size");
-    std::tuple<PrefetcherPipeIdentity, CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t>
-    attribute_values() const {
-        return {
-            identity(),
-            sender_core(),
-            receiver_cores(),
-            config_address(),
-            buffer_address(),
-            initial_entry_size(),
-            ring_size()};
+        "sender_core", "receiver_cores", "config_address", "buffer_address", "initial_entry_size", "ring_size");
+    std::tuple<CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t> attribute_values() const {
+        return {sender_core(), receiver_cores(), config_address(), buffer_address(), initial_entry_size(), ring_size()};
     }
 
     // Internal (host runtime, tests): the implementation object this pipe owns.

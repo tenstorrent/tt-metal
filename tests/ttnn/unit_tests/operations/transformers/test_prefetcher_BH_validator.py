@@ -492,12 +492,12 @@ def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, rec
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
-def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_bank):
-    """The same pipe hits the consumer cache, while a same-address recarve misses it.
+def test_pipe_consumer_cache_reuses_recarved_pipe(device, K, N, dtype, recv_per_bank):
+    """A pipe recarved at the addresses and geometry of a dropped one hits the programs cached for it.
 
-    Dropping and recarving from one space deliberately reproduces every piece of geometry and
-    every allocation address. The replacement still has fresh persistent sender state, so a
-    compiled program whose pipe slots are sticky must not be reused for it.
+    Dropping and recarving from one space reproduces every piece of geometry and every allocation
+    address. The cached programs rebind to the replacement, and the validator checks the bytes the
+    replacement delivers through them.
     """
     tt_weight, pipes, _bank_to_receivers, page_size, ring_size, pipe_space = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, return_space=True
@@ -517,16 +517,10 @@ def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_ba
             device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
         )
         ttnn.synchronize_device(device)
-        after_first = device.num_program_cache_entries()
-        assert after_first == before_first + 1
-
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
-        before_second = device.num_program_cache_entries()
-        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
-        )
+        assert device.num_program_cache_entries() == before_first + 1
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size)
         ttnn.synchronize_device(device)
-        assert device.num_program_cache_entries() == before_second
+    entries = device.num_program_cache_entries()
 
     del pipes
     gc.collect()
@@ -539,12 +533,12 @@ def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_ba
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight, ring_size)], prefetcher_pipes=replacement
         )
-        before_replacement = device.num_program_cache_entries()
         ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
             device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=replacement
         )
+        _queue_and_validate_pipes(device, tt_weight, replacement, bank_to_receivers, ring_size)
         ttnn.synchronize_device(device)
-        assert device.num_program_cache_entries() == before_replacement + 1
+    assert device.num_program_cache_entries() == entries
 
 
 def test_pipe_consumer_trace_replay(device):

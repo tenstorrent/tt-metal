@@ -1577,6 +1577,7 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
     uint8_t prefetcher_pipe_id,
     const CoreRangeSet& cores,
     const experimental::PrefetcherPipeImpl& prefetcher_pipe,
+    const experimental::PrefetcherPipeImpl* replaced,
     PrefetcherPipeBindPreflight& preflight) const {
     const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
     TT_FATAL(cores.num_cores() > 0, "PrefetcherPipe slot {} bind requires a non-empty core set", prefetcher_pipe_id);
@@ -1627,7 +1628,7 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
             pipe_receivers_here.str());
     }
 
-    // Sticky: a core binds one pipe object for the program's lifetime.
+    // Sticky: a core binds one pipe object, until a pipe with the same binding key replaces it.
     for (const CoreCoord& core : corerange_to_cores(cores)) {
         const auto& participants = per_core_prefetcher_pipes_.at(core);
         auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
@@ -1639,9 +1640,10 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
             prefetcher_pipe_id,
             core.str());
         TT_FATAL(
-            participant->pipe == nullptr || participant->pipe == &prefetcher_pipe,
+            participant->pipe == nullptr || participant->pipe == &prefetcher_pipe ||
+                (replaced != nullptr && participant->pipe == replaced),
             "PrefetcherPipe slot {} on core {} is already bound to a different PrefetcherPipe object; a Program "
-            "binds one pipe per slot for its lifetime",
+            "binds one pipe per slot, or one that replaces it at the same addresses with the same geometry",
             prefetcher_pipe_id,
             core.str());
         auto [claimed, first_claim] = preflight.claimed.try_emplace({prefetcher_pipe_id, core}, &prefetcher_pipe);
@@ -1949,9 +1951,10 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             continue;  // sticky: same object again is a no-op
         }
         TT_FATAL(
-            binding.bound_pipe == nullptr,
+            binding.accepts(prefetcher_pipe),
             "PrefetcherPipeParameter '{}' is already bound to a different PrefetcherPipe object; a Program binds a "
-            "parameter to one pipe for its lifetime (re-supplying the same pipe is a no-op)",
+            "parameter to one pipe, or to one that replaces it at the same addresses with the same geometry "
+            "(re-supplying the same pipe is a no-op)",
             bind.name);
         TT_FATAL(
             prefetcher_pipe.get_device() == binding.device,
@@ -1978,6 +1981,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
                 slot_cores.prefetcher_pipe_id,
                 prefetcher_pipe_slot_bind_cores(bind.name, slot_cores, prefetcher_pipe),
                 prefetcher_pipe,
+                binding.bound_pipe,
                 preflight);
         }
         to_commit.push_back({.name = &bind.name, .binding = &binding, .pipe = &prefetcher_pipe});
@@ -1993,7 +1997,25 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
         }
         checked.binding->bound_pipe = checked.pipe;
         checked.binding->bound_pipe_identity = checked.pipe->identity();
+        checked.binding->bound_pipe_key = prefetcher_pipe_binding_key(*checked.pipe);
     }
+}
+
+detail::ProgramImpl::PrefetcherPipeBindingKey detail::ProgramImpl::prefetcher_pipe_binding_key(
+    const experimental::PrefetcherPipeImpl& prefetcher_pipe) {
+    return {
+        .sender_core_type = prefetcher_pipe.sender_core_type(),
+        .sender_cores = prefetcher_pipe.sender_cores(),
+        .receiver_cores = prefetcher_pipe.receiver_cores(),
+        .config_address = prefetcher_pipe.config_address(),
+        .buffer_address = prefetcher_pipe.buffer_address(),
+        .initial_entry_size = prefetcher_pipe.initial_entry_size(),
+        .ring_size = prefetcher_pipe.ring_size()};
+}
+
+bool detail::ProgramImpl::PrefetcherPipeParameterBinding::accepts(const experimental::PrefetcherPipeImpl& pipe) const {
+    return bound_pipe == nullptr || bound_pipe_identity == pipe.identity() ||
+           bound_pipe_key == prefetcher_pipe_binding_key(pipe);
 }
 
 CoreRangeSet detail::ProgramImpl::prefetcher_pipe_slot_bind_cores(

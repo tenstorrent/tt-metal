@@ -1007,10 +1007,23 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& /*attrs*/,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
+            // PrefetcherPipes key the cache by geometry and addresses, so a hit may bring a pipe re-carved
+            // in place of the one the program bound; supplying the pipes rebinds it (a no-op for the same pipe).
+            if constexpr (requires { SpecFactory::prefetcher_pipe_args(attrs); }) {
+                tt::tt_metal::experimental::ProgramRunArgs run_args;
+                run_args.advanced_options.prefetcher_pipe_args = SpecFactory::prefetcher_pipe_args(attrs);
+                if (run_args.advanced_options.prefetcher_pipe_args.empty()) {
+                    return;
+                }
+                const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
+                }
+            }
         }
     };
 

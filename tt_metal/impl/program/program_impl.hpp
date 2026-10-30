@@ -469,7 +469,8 @@ public:
     //   commit_prefetcher_pipe_slot_bind arms the pipe's credit lanes when receivers are bound,
     //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
     //     Only valid right after a successful check of the same batch.
-    // Rebinding the same pipe is a no-op; a different pipe on an already-bound core is rejected.
+    // Rebinding the same pipe is a no-op. A different pipe on an already-bound core is rejected
+    // unless it replaces `replaced`, the pipe the parameter was bound to, whose key it matches.
     // Legal after compile.
     struct PrefetcherPipeBindPreflight {
         std::unordered_map<const experimental::PrefetcherPipeImpl*, uint32_t> armed_lanes;
@@ -482,6 +483,7 @@ public:
         uint8_t prefetcher_pipe_id,
         const CoreRangeSet& cores,
         const experimental::PrefetcherPipeImpl& prefetcher_pipe,
+        const experimental::PrefetcherPipeImpl* replaced,
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
         uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
@@ -502,6 +504,22 @@ public:
     // on receiver cores and consumed by PrefetcherPipe::bind_relay().
     void register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
 
+    // What a program bakes in from the pipe it binds: config page and ring addresses, entry size
+    // and core layout. A pipe whose key matches the bound one's can replace it, e.g. one re-carved at
+    // the same addresses after the bound pipe was destroyed; the program cache keys pipes the same way.
+    struct PrefetcherPipeBindingKey {
+        experimental::SenderCoreType sender_core_type{};
+        CoreRangeSet sender_cores;
+        CoreRangeSet receiver_cores;
+        uint32_t config_address = 0;
+        uint32_t buffer_address = 0;
+        uint32_t initial_entry_size = 0;
+        uint32_t ring_size = 0;
+        bool operator==(const PrefetcherPipeBindingKey&) const = default;
+    };
+    static PrefetcherPipeBindingKey prefetcher_pipe_binding_key(
+        const experimental::PrefetcherPipeImpl& prefetcher_pipe);
+
     // Metal 2.0: a PrefetcherPipeParameter's placement in this program. One parameter may feed
     // several slots (one per accessor group that names it), on the cores where that group's
     // kernel runs and the parameter's pipe is present. The spec names no sender: on a sender-role
@@ -519,11 +537,17 @@ public:
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;
-        // Pipe object bound by SetProgramRunArgs; sticky for the program's lifetime.
+        // Pipe object bound by SetProgramRunArgs. A later bind may replace it only with a pipe of
+        // the same bound_pipe_key; bound_pipe may be destroyed by then, so it is never dereferenced
+        // for that check.
         experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
         // identity() of bound_pipe. Same-pipe checks compare this, not the address: a destroyed
         // pipe's address can be reused by a new pipe, but its identity never is.
         experimental::PrefetcherPipeIdentity bound_pipe_identity{0};
+        PrefetcherPipeBindingKey bound_pipe_key;
+        // Whether `pipe` may be bound: nothing is bound yet, it is the bound pipe, or it matches the
+        // bound pipe's key.
+        bool accepts(const experimental::PrefetcherPipeImpl& pipe) const;
     };
     void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding&& binding);
     const PrefetcherPipeParameterBinding* get_prefetcher_pipe_parameter(const std::string& name) const;
@@ -531,7 +555,8 @@ public:
     // Bind each named parameter to its pipe, on every slot the parameter feeds. All-or-nothing:
     // every pair is validated (pipe geometry against the parameter, then every slot bind) before
     // the first mutation, so a rejected batch leaves the program and the pipes as they were. A
-    // parameter already bound to the same pipe is a no-op; to a different pipe: rejected.
+    // parameter already bound to the same pipe is a no-op; to a pipe with the same binding key, the
+    // new pipe replaces it; to any other pipe: rejected.
     struct PrefetcherPipeParameterBind {
         std::string name;
         experimental::PrefetcherPipeImpl* pipe;
