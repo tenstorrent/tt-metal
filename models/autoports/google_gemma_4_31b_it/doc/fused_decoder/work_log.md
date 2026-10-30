@@ -162,3 +162,5 @@ Final production SHA256: cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c
 Final closure checks: strict fused-decoder context-contract checker passed with target=supported=262144. All staged-file pre-commit hooks passed after adding missing terminal newlines to generated JSON (no measurement or source changes). Telemetry target workload and both whole-layer roofline formulas validated; packet written at the exact requested continuation path.
 
 Independent final stage-review returned **clean-pass**, with no required work. All earlier findings were repaired and rereviewed; see stage_review.md. Stage-owned source/tests/docs are checkpointed locally below; no push or later-stage work performed.
+
+Local implementation/evidence checkpoint: `b52847985fc2e818042939113edcf7c254152ca5` (all commit hooks passed). The following documentation-only checkpoint records this SHA; its own SHA is recorded in the external continuation telemetry packet. Execution checkout remains without remotes.
