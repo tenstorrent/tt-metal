@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
-# MiniMax-M3 pipeline-prefill perf matrix in CI (bh_sc4: 4 galaxies, 16 stages of [2,4]). Same measurement as
-# run_matrix.sh, launched through tt-run with hosts from /etc/ttop (no Slurm, no reset). One runner with a
-# KV_CAPACITY-token cache (default 1M, the model's max context) serves every row; each row is one producer session.
-# Perf is reported, not gated.
+# MiniMax-M3 pipeline-prefill perf matrix in CI (bh_sc4_high_power: 4 galaxies at 14 kW, 16 stages of [2,4]).
+# Same measurement as run_matrix.sh, launched through tt-run with hosts from /etc/ttop (no Slurm, no reset).
+# One runner with a KV_CAPACITY-token cache (default 1M, the model's max context) serves every row; each row is
+# one producer session. Perf is reported, not gated.
 #
 # Env (optional, defaults below): CACHED NEW ITERS USERS TARGET_CHUNKS REQS SKIP_IDLE CHUNK LAYER_COUNTS MAX_NEW
 #   KV_CAPACITY EXPERT_DTYPE HF_MODEL TT_CACHE_PATH PREFILL_TRACE_DIR TABLE_WAIT_SECS PRODUCER_TIMEOUT_SECS

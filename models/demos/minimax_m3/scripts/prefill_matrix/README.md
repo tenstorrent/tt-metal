@@ -125,7 +125,7 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 ## CI (Blaze prefill, SC4)
 
 `ci/run_matrix_ci.sh` runs the same measurement (`matrix_producer.py`, unchanged) as a CI job on the 4-galaxy
-`bh_sc4` pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"` in
+`bh_sc4_high_power` (14 kW) pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"` in
 `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, `test_type: minimax_prefill_matrix`. It runs weekly,
 on the workflow's Saturday 20:00 UTC cron (`test_group: weekly`), not in the nightly run. Dispatch it alone with
 

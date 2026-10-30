@@ -1406,8 +1406,8 @@
   test_group: weekly # Saturday only, not daily
   artifact_subdir: m3_prefill_matrix
   skus:
-    bh_sc4_high_power: # TEMPORARY: probe the 14 kW SC4 pool
-      timeout: 60 # ~20-22 min expected
+    bh_sc4_high_power:
+      timeout: 30 # ~19 min measured
       tier: 2
       release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
