@@ -959,12 +959,13 @@ std::string ordering_leg_name(uint32_t leg) {
 
 inline constexpr uint32_t kOrderingPasses = 8;
 
-// The four section 4.1 legs, each kOrderingPasses passes of a producer hart against a consumer hart that reads TL1
+// Three section 4.1 legs, each kOrderingPasses passes of a producer hart against a consumer hart that reads TL1
 // through the uncached alias. Data movement: the pass's data reaches TL1 within the consumer's window. Ordering: the
-// data is complete at the consumer's first read after the flag. The negative legs (no fence, no flush) record both;
-// the L1-then-L2 and full-hierarchy legs gate on ordering. Rdcycle stamps of the two harts are not shown to share a
-// clock, so cycle counts are recorded only. The full-hierarchy leg flushes all of L1 D$ and L2 each pass (cflush.d.l1
-// x0 then flush_l2_cache_full()); the full invalidate is FullInvalidate's.
+// data is complete at the consumer's first read after the flag. The no-fence leg gates on data movement and records
+// ordering; the L1-then-L2 and full-hierarchy legs gate on ordering. Those two discard the data lines from L1 D$
+// after their cflush, so a cflush that leaves the data in L1 D$ loses it. Rdcycle stamps of the two harts are not
+// shown to share a clock, so cycle counts are recorded only. The full-hierarchy leg flushes all of L1 D$ and L2 each
+// pass (cflush.d.l1 x0 then flush_l2_cache_full()); the full invalidate is FullInvalidate's.
 TEST_P(MimirCacheOps, FlushFenceOrdering) {
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
@@ -974,7 +975,8 @@ TEST_P(MimirCacheOps, FlushFenceOrdering) {
 
     const uint64_t data_offset = tl1_data(kProducerHart);
     const uint64_t flag_offset = data_offset + kFlagLinesFromData;
-    for (uint32_t leg = abi::kOrderingLegFlushNoFence; leg <= abi::kOrderingLegFullHierarchy; ++leg) {
+    for (const uint32_t leg :
+         {abi::kOrderingLegFlushNoFence, abi::kOrderingLegL1ThenL2, abi::kOrderingLegFullHierarchy}) {
         const uint32_t tag = 0x50 + leg;
         const uint32_t value = 0x0D000000u | (leg << 20);
         prefill_on_cce(device, cce_index, data_offset, pattern_words(kOldValue, kCacheWords), tag);
@@ -1027,6 +1029,10 @@ TEST_P(MimirCacheOps, FlushFenceOrdering) {
         ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << mm41_detail(producer);
         ASSERT_EQ(consumer[abi::kStatusCode], abi::kCodeDone) << label << ": consumer " << mm41_detail(consumer);
         EXPECT_EQ(consumer[abi::kStatusPasses], kOrderingPasses) << label;
+        if (leg == abi::kOrderingLegFlushNoFence) {
+            EXPECT_EQ(consumer[abi::kStatusRegisterB], 0u)
+                << label << ": data never complete within the consumer's window; " << result;
+        }
         if (leg == abi::kOrderingLegL1ThenL2 || leg == abi::kOrderingLegFullHierarchy) {
             EXPECT_EQ(consumer[abi::kStatusMatches], kOrderingPasses)
                 << label << ": data incomplete at the consumer's first read after the flag; " << result;

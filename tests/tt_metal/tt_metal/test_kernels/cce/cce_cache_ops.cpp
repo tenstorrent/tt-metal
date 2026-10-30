@@ -470,11 +470,13 @@ static void run_ordering_producer(const Args& args, Report& report) {
             case abi::kOrderingLegFenceNoFlush: asm volatile("fence rw, rw" ::: "memory"); break;
             case abi::kOrderingLegL1ThenL2:
                 for_each_line(args.data_offset, args.num_bytes(), [](uint32_t line) { flush_l1_dcache(line); });
+                invalidate_l1_lines(args.data_offset, args.num_bytes());
                 flush_l2_cache_range(args.data_offset, args.num_bytes());
                 drain_flushed_range(args.data_offset, args.num_bytes());
                 break;
             case abi::kOrderingLegFullHierarchy:
                 flush_l1_dcache(0);
+                invalidate_l1_lines(args.data_offset, args.num_bytes());
                 flush_l2_cache_full();
                 drain_flushed_range(args.data_offset, args.num_bytes());
                 break;

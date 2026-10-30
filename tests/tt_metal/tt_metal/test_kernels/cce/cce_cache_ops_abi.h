@@ -164,7 +164,8 @@ inline constexpr uint32_t kMaxWords = 48 * 1024;
 inline constexpr uint32_t kFlagReady = 0xF1A60001u, kFlagWarmed = 0xF1A60002u;
 
 // kModeOrdering* legs (kArgSteps): bare FLUSH64 per line and the flag with no fence; a fence and the flag with no
-// flush; cflush.d.l1 per line then the L2 range flush; cflush.d.l1 x0 then flush_l2_cache_full().
+// flush; cflush.d.l1 per line then the L2 range flush; cflush.d.l1 x0 then flush_l2_cache_full(). The two cflush legs
+// run cdiscard.d.l1 per data line before the L2 flush, so data a cflush left in L1 D$ is lost.
 inline constexpr uint32_t kOrderingLegFlushNoFence = 0, kOrderingLegFenceNoFlush = 1, kOrderingLegL1ThenL2 = 2,
                           kOrderingLegFullHierarchy = 3;
 // kModeExternalReader / kModeChurnConsumer steps (kArgSteps bits).
