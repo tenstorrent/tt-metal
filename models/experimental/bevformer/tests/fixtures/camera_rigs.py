@@ -13,7 +13,8 @@ from typing import Sequence, Tuple
 
 import torch
 
-from models.experimental.bevformer.model_config import CAMERA_IMAGE_SIZE
+# Resolution at which the nominal nuScenes intrinsics below are calibrated.
+CAMERA_IMAGE_SIZE = (1600, 900)
 
 
 NUSCENES_NARROW_FOCAL_PX = 1266.4
