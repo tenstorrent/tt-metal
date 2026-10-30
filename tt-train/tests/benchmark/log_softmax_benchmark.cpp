@@ -23,6 +23,8 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/unary_ops.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
@@ -244,6 +246,29 @@ void run_argmax(benchmark::State& state) {
     }
 }
 
+// Include the layout conversion and keepdim restoration used by log_softmax's
+// last-axis path, so this measures the reusable operation rather than only its scan.
+void run_multicore_argmax(benchmark::State& state) {
+    const auto& test_case = kCases[static_cast<size_t>(state.range(0))];
+    const ttnn::Shape shape(std::vector<uint32_t>(test_case.shape.begin(), test_case.shape.end()));
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto value = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(
+        ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.F, 1.F, 2026U), shape, device);
+    std::vector<uint32_t> indices_shape(shape.cbegin(), shape.cend());
+    indices_shape[test_case.dim] = 1;
+    for ([[maybe_unused]] auto _ : state) {
+        const double elapsed_us =
+            ttml::benchmark_utils::time_device_avg_us(*device, test_case.warmup, test_case.iterations, [&]() {
+                auto row_major = ttnn::to_layout(value, ttnn::Layout::ROW_MAJOR);
+                auto indices = ttnn::argmax(row_major, test_case.dim, /* keepdim */ false);
+                auto result = ttnn::reshape(indices, ttnn::Shape(indices_shape));
+                benchmark::DoNotOptimize(result);
+            });
+        state.SetIterationTime(elapsed_us / 1e6);
+        state.counters["Time_us"] = elapsed_us;
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -276,6 +301,13 @@ int main(int argc, char** argv) {
             ->UseManualTime()
             ->Iterations(1)
             ->Repetitions(kCases[6].samples);
+        benchmark::RegisterBenchmark("LogSoftmaxMulticoreArgmax", run_multicore_argmax)
+            ->Arg(1)
+            ->Arg(4)
+            ->Arg(6)
+            ->UseManualTime()
+            ->Iterations(1)
+            ->Repetitions(3);
         benchmark::RunSpecifiedBenchmarks();
         benchmark::Shutdown();
         ttml::autograd::ctx().close_device();

@@ -4,6 +4,8 @@
 
 #include "trivial_ttnn_ops.hpp"
 
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -52,8 +54,33 @@ LogSoftmaxContext log_softmax_with_context(const ttnn::Tensor& t, int dim) {
     // Select exactly one maximum, including for tied logits. FP32 indices are exact
     // up to 2^24; BF16 indices would alias adjacent classes beyond 256.
     TT_FATAL(t.logical_shape()[dim] <= (1U << 24), "log_softmax: reduction dimension exceeds exact FP32 index range");
-    auto indices = ttnn::typecast(
-        ttnn::to_layout(ttnn::argmax(input, dim, /* keepdim */ true), ttnn::Layout::TILE), ttnn::DataType::FLOAT32);
+    ttnn::Tensor max_indices;
+    if (dim == rank - 1 && t.logical_volume() != 0) {
+        // TILE W argmax uses a single scalar reader. Reuse the ROW_MAJOR
+        // multicore path instead. keepdim=false batches the output rows and
+        // enables its second data-movement processor where supported.
+        auto row_major = ttnn::to_layout(input, ttnn::Layout::ROW_MAJOR);
+        // The multicore op stages one max/index pair per row per worker in L1.
+        // Bound each group to 256 rows, including for long sequence dimensions.
+        const auto row_count = t.logical_volume() / t.logical_shape()[dim];
+        auto group_rows = static_cast<uint32_t>(std::min<uint64_t>(row_count, 256));
+        while (row_count % group_rows != 0) {
+            --group_rows;
+        }
+        TT_FATAL(
+            row_count / group_rows <= std::numeric_limits<uint32_t>::max(),
+            "log_softmax: too many row groups for multicore argmax");
+        auto grouped = ttnn::reshape(
+            row_major,
+            ttnn::Shape({static_cast<uint32_t>(row_count / group_rows), 1, group_rows, t.logical_shape()[dim]}));
+        auto squeezed_indices = ttnn::argmax(grouped, /* dim */ 3, /* keepdim */ false);
+        std::vector<uint32_t> indices_shape(t.logical_shape().cbegin(), t.logical_shape().cend());
+        indices_shape[dim] = 1;
+        max_indices = ttnn::reshape(squeezed_indices, ttnn::Shape(indices_shape));
+    } else {
+        max_indices = ttnn::argmax(input, dim, /* keepdim */ true);
+    }
+    auto indices = ttnn::typecast(ttnn::to_layout(max_indices, ttnn::Layout::TILE), ttnn::DataType::FLOAT32);
     auto positions = ttnn::arange(t.logical_shape()[dim], ttnn::DataType::FLOAT32, *t.device(), t.memory_config());
     std::vector<uint32_t> index_shape(rank, 1);
     index_shape[dim] = t.logical_shape()[dim];

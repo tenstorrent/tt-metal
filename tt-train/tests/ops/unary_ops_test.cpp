@@ -24,6 +24,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/core/xmath.hpp"
 
 namespace ttml::ops::tests {
@@ -310,6 +311,28 @@ TEST_F(UnaryOpsTest, LogSoftmaxLargeClassIndexAndGradientAccumulation) {
         EXPECT_FLOAT_EQ(accumulated[i], 2.F * first[i]);
     }
     autograd::ctx().reset_graph();
+}
+
+TEST_F(UnaryOpsTest, LogSoftmaxTiedMaximumSelection) {
+    // Odd row/column sizes exercise untilization padding. Ties span worker
+    // partitions and include indices above BF16's consecutive integer range.
+    for (const auto& shape : {ttnn::Shape({2, 1, 35, 513}), ttnn::Shape({1, 1, 2048, 35})}) {
+        const size_t width = shape[-1];
+        const size_t rows = shape.volume() / width;
+        SCOPED_TRACE(rows);
+        std::vector<float> logits(shape.volume(), -18.F);
+        std::vector<float> expected_mask(shape.volume(), 0.F);
+        for (size_t row = 0; row < rows; ++row) {
+            const size_t first = (row * 127) % width;
+            const size_t second = (first + 233) % width;
+            logits[row * width + first] = -1.F;
+            logits[row * width + second] = -1.F;
+            expected_mask[row * width + std::min(first, second)] = 1.F;
+        }
+        auto input = core::from_vector(logits, shape, &autograd::ctx().get_device());
+        const auto context = ttnn_fixed::log_softmax_with_context(input, -1);
+        EXPECT_EQ(core::to_vector(context.max_mask), expected_mask);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
