@@ -32,6 +32,7 @@
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
+#include "ttnn-nanobind/reduce_planner.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
 #include "ttnn-nanobind/reports.hpp"
 #include "ttnn-nanobind/tensor.hpp"
@@ -347,6 +348,11 @@ NB_MODULE(_ttnn, mod) {
     // TODO: pull them out of the ttnn::operations::py_module.
     ttnn::operations::py_module(m_operations);
     // tt::operations::primary::py_module(m_primary_ops);
+
+    auto m_reduce_planner = mod.def_submodule(
+        "reduce_planner",
+        "Host-side reduction planning and compile-time argument serialization. Planning never executes a kernel.");
+    ttnn::reduce_planner::py_module(m_reduce_planner);
 
     // CONFIG is a shared mutable global: Python code reads and writes properties
     // via setattr (e.g. manage_config context manager).  We must bind by reference
