@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
+#include <limits>
 
 namespace ttnn::prim {
 
@@ -87,7 +88,8 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
     const operation_attributes_t& args, const Tensor& input) {
     const auto input_shape = get_input_shape(args, input);
 
-    // Compute output dimensions (floor for PyTorch compatibility)
+    // Compute output dimensions (floor for PyTorch compatibility).
+    // launch() calls this before validate_on_program_cache_miss, so the shape checks must live here.
     const uint32_t out_n = input_shape[0];
     const float out_h_f = std::floor(input_shape[1] * args.scale_factor_h);
     const float out_w_f = std::floor(input_shape[2] * args.scale_factor_w);
@@ -95,6 +97,16 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
         out_n > 0 && out_h_f >= 1.0f && out_w_f >= 1.0f,
         "upsample: output shape must be non-empty, got N={}, H={}, W={} for input H={}, W={} with scale ({}, {})",
         out_n,
+        out_h_f,
+        out_w_f,
+        input_shape[1],
+        input_shape[2],
+        args.scale_factor_h,
+        args.scale_factor_w);
+    constexpr float uint32_limit = static_cast<float>(std::numeric_limits<uint32_t>::max());
+    TT_FATAL(
+        out_h_f < uint32_limit && out_w_f < uint32_limit,
+        "upsample: output H={}, W={} for input H={}, W={} with scale ({}, {}) overflows uint32",
         out_h_f,
         out_w_f,
         input_shape[1],
