@@ -21,13 +21,12 @@ inline void calculate_hardtanh(uint param0, uint param1) {
     // Materialize both bounds outside the loop for better performance
     sfpi::vFloat min_val = Converter::as_float(param0);
     sfpi::vFloat max_val = Converter::as_float(param1);
+    sfpi::vInt inf = 0x7f800000;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         // A NaN input is left in place; clamp would return one of the bounds.
-        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(v, 0)) <= 0x7f800000) {
-            sfpi::dst_reg[0] = sfpi::clamp(v, min_val, max_val);
-        }
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(v, 0)) <= inf) { sfpi::dst_reg[0] = sfpi::clamp(v, min_val, max_val); }
         v_endif;
         sfpi::dst_reg++;
     }

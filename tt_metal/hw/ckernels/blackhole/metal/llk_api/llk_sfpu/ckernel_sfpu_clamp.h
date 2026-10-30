@@ -22,11 +22,12 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_clamp(uint min_val, uint max_val) {
     sfpi::vFloat lo = Converter::as_float(min_val);
     sfpi::vFloat hi = Converter::as_float(max_val);
+    sfpi::vInt inf = 0x7f800000;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         // A NaN input is left in place; clamp would return one of the bounds.
-        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(v, 0)) <= 0x7f800000) { sfpi::dst_reg[0] = sfpi::clamp(v, lo, hi); }
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(v, 0)) <= inf) { sfpi::dst_reg[0] = sfpi::clamp(v, lo, hi); }
         v_endif;
         sfpi::dst_reg++;
     }
