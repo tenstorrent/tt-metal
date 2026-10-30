@@ -103,7 +103,7 @@ class NpFeedForward:
 
     def __call__(self, x):
         p = x @ self.wp.T
-        value, gate = p[:, :F], p[:, F:]
+        gate, value = p[:, :F], p[:, F:]
         return (value * (gate / (1.0 + np.exp(-gate)))) @ self.wo.T
 
 

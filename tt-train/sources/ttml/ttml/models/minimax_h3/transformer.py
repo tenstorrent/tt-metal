@@ -268,14 +268,14 @@ class H3Attention(AbstractModuleBase):
 
 
 class H3FeedForward(AbstractModuleBase):
-    """SwiGLU with the fused `proj` of the checkpoint: first half value, second half gate."""
+    """SwiGLU with the fused `proj` of the checkpoint; the loader orders its rows [gate | value] per TP shard,
+    the layout `swiglu_packed` reads."""
 
     def __init__(self, config: H3Config) -> None:
         super().__init__()
         tp = _tp_size(config)
-        if config.ffn_dim % tp:
-            raise ValueError(f"ffn_dim {config.ffn_dim} not divisible by tp {tp}")
-        self.local_ffn = config.ffn_dim // tp
+        if config.ffn_dim % (tp * TILE):
+            raise ValueError(f"ffn_dim {config.ffn_dim} not divisible by tp {tp} x {TILE}")
         dim = config.hidden_size
         col_init, row_init = _empty_init(config, 2), _empty_init(config, 3)
         if tp > 1:
@@ -290,8 +290,7 @@ class H3FeedForward(AbstractModuleBase):
             self.out = LinearLayer(config.ffn_dim, dim, False, weight_init=row_init)
 
     def forward(self, x):
-        value, gate = Split.apply(self.proj(x), (self.local_ffn, self.local_ffn), 3)
-        return self.out(value * ttml.ops.unary.silu(gate))
+        return self.out(ttml.ops.swiglu_packed.swiglu_packed(self.proj(x)))
 
 
 class H3RefinerBlock(AbstractModuleBase):

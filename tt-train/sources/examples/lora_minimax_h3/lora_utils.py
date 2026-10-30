@@ -92,8 +92,8 @@ def device_to_hf(name: str, arr: np.ndarray, config: H3Config) -> np.ndarray:
     if name.endswith("ff.proj.lora_B"):
         tp = _tp()
         per = arr.shape[0] // (2 * tp)
-        blocks = arr.reshape(tp, 2, per, arr.shape[1])
-        return np.concatenate([blocks[:, 0].reshape(-1, arr.shape[1]), blocks[:, 1].reshape(-1, arr.shape[1])])
+        blocks = arr.reshape(tp, 2, per, arr.shape[1])  # per shard [gate | value]
+        return np.concatenate([blocks[:, 1].reshape(-1, arr.shape[1]), blocks[:, 0].reshape(-1, arr.shape[1])])
     return arr
 
 

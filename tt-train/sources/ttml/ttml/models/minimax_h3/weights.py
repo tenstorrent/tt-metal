@@ -86,13 +86,14 @@ def unpermute_qk_rows(w: np.ndarray, num_heads: int, head_dim: int, rotary_dim: 
 
 
 def interleave_halves_per_shard(w: np.ndarray, tp: int) -> np.ndarray:
-    """[value (F) | gate (F)] rows -> [value_s0 | gate_s0 | value_s1 | ...] so each TP shard holds both halves."""
+    """[value (F) | gate (F)] rows -> [gate_s0 | value_s0 | gate_s1 | ...]: each TP shard holds both halves, gate
+    first as `swiglu_packed` reads them."""
     rows = w.shape[0]
     half = rows // 2
     per = half // tp
     value, gate = w[:half], w[half:]
     return np.concatenate(
-        [np.concatenate([value[s * per : (s + 1) * per], gate[s * per : (s + 1) * per]]) for s in range(tp)]
+        [np.concatenate([gate[s * per : (s + 1) * per], value[s * per : (s + 1) * per]]) for s in range(tp)]
     )
 
 
