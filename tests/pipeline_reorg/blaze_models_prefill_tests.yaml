@@ -2261,6 +2261,8 @@
   # TorusXY descriptor (see fabric_profile); it holds split KV within 2.5% of the classic SP
   # ring measured back to back. Its accuracy cases run on QB2 (blackhole_multi_card_sanity_tests).
   cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     export MESH_DEVICE=TG
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
