@@ -8,7 +8,6 @@
 
 #include "cce_amo_ops_abi.h"
 #include "cce_test_common.h"
-#include "dev_mem_map.h"
 #include "risc_common.h"
 
 #if !defined(__riscv_zaamo) || !defined(__riscv_zalrsc)
@@ -18,6 +17,7 @@
 namespace abi = cce_amo_ops_abi;
 using cce_test::arg_u64;
 using cce_test::own_tl1_words;
+using cce_test::peer_tl1_word;
 using cce_test::poll_bounded;
 using cce_test::read_cycle_counter;
 using cce_test::WaitDeadline;
@@ -295,11 +295,9 @@ static bool wait_until(
     uint32_t value,
     const WaitDeadline& deadline,
     uint32_t& seen) {
-    bool reached = flags_reach(flag_offset, first_index, count, value, seen);
-    while (!reached && !deadline.expired()) {
-        reached = flags_reach(flag_offset, first_index, count, value, seen);
-    }
-    return reached;
+    return cce_test::wait_until(deadline, [flag_offset, first_index, count, value, &seen] {
+        return flags_reach(flag_offset, first_index, count, value, seen);
+    });
 }
 
 // Generation `generation` of the ready-flag barrier; returns whether every participant reached it.
@@ -371,14 +369,10 @@ struct Status {
 
 static bool aligned(uint32_t offset) { return offset % abi::kLineBytes == 0; }
 
-// Start of the test TL1 area: the HAL's UNRESERVED base for the DRAM core before its alignment (qa_hal_dram.cpp:67-68).
-inline constexpr uint64_t kTestAreaStart =
-    MEM_CCE_KERNEL_BASE + static_cast<uint64_t>(MEM_CCE_KERNEL_SIZE) * MEM_CCE_LOCAL_HARTS;
-
-// [offset, offset + num_bytes) is a nonempty, 64 B aligned region of the test area inside the cacheable port.
+// [offset, offset + num_bytes) is a nonempty, 64 B aligned region of the test area.
 static bool region_valid(uint32_t offset, uint64_t num_bytes) {
-    return offset != 0 && aligned(offset) && offset >= kTestAreaStart && num_bytes != 0 &&
-           static_cast<uint64_t>(offset) + num_bytes <= MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE;
+    return offset != 0 && aligned(offset) && offset >= cce_test::kTestAreaBegin && num_bytes != 0 &&
+           static_cast<uint64_t>(offset) + num_bytes <= cce_test::kTestAreaEnd;
 }
 
 static uint64_t lines(uint64_t num_lines) { return num_lines * abi::kLineBytes; }
@@ -680,11 +674,7 @@ static void release_swap_w(uintptr_t address, uint32_t value) {
 }
 
 static bool wait_acquire(uintptr_t address, uint32_t value, const WaitDeadline& deadline) {
-    bool reached = acquire_read_w(address) == value;
-    while (!reached && !deadline.expired()) {
-        reached = acquire_read_w(address) == value;
-    }
-    return reached;
+    return cce_test::wait_until(deadline, [address, value] { return acquire_read_w(address) == value; });
 }
 
 static void run_ordering(const Args& args, const WaitDeadline& deadline, Status& status) {
@@ -918,19 +908,13 @@ static void run_storm(const Args& args, const WaitDeadline& deadline, Status& st
 }
 
 static void run_itn_writer(const Args& args, const WaitDeadline& deadline, Status& status) {
-    volatile uint32_t* ready = reinterpret_cast<volatile uint32_t*>(
-        experimental::cce_sram_address(args.peer_cce, flag_line(args.flag_offset, 0)));
-    bool is_ready = *ready == 1;
-    while (!is_ready && !deadline.expired()) {
-        is_ready = *ready == 1;
-    }
-    if (!is_ready) {
+    volatile uint32_t* ready = peer_tl1_word(args.peer_cce, flag_line(args.flag_offset, 0));
+    if (!cce_test::wait_until(deadline, [ready] { return *ready == 1; })) {
         status.fail(abi::kCodePeerTimeout);
         return;
     }
     status.words[abi::kStatusPeersSeen] = 1;
-    volatile uint32_t* data =
-        reinterpret_cast<volatile uint32_t*>(experimental::cce_sram_address(args.peer_cce, args.target_offset));
+    volatile uint32_t* data = peer_tl1_word(args.peer_cce, args.target_offset);
     *data = args.value;
     // SPA accesses are outside the cacheable port and may be I/O, which `fence w, w` does not order.
     asm volatile("fence" ::: "memory");
@@ -944,8 +928,7 @@ static void run_itn_writer(const Args& args, const WaitDeadline& deadline, Statu
         return;
     }
     asm volatile("fence" ::: "memory");
-    *reinterpret_cast<volatile uint32_t*>(
-        experimental::cce_sram_address(args.peer_cce, flag_line(args.flag_offset, 1))) = 1;
+    *peer_tl1_word(args.peer_cce, flag_line(args.flag_offset, 1)) = 1;
     asm volatile("fence" ::: "memory");
 }
 
@@ -958,11 +941,7 @@ static void run_itn_receiver(const Args& args, const WaitDeadline& deadline, Sta
     *own_tl1_words(flag_line(args.flag_offset, 0)) = 1;
     // Only uncached loads until the writer's flag shows its ITN writes have landed (MIM-560).
     volatile uint32_t* written = own_tl1_words(flag_line(args.flag_offset, 1));
-    bool is_written = *written == 1;
-    while (!is_written && !deadline.expired()) {
-        is_written = *written == 1;
-    }
-    if (!is_written) {
+    if (!cce_test::wait_until(deadline, [written] { return *written == 1; })) {
         status.fail(abi::kCodePeerTimeout);
         return;
     }
@@ -1023,6 +1002,5 @@ void kernel_main() {
     for (uint32_t word = abi::kStatusCode + 1; word < abi::kStatusWords; ++word) {
         status_line[word] = status.words[word];
     }
-    asm volatile("fence w, w" ::: "memory");
-    status_line[abi::kStatusMagic] = abi::kDoneMagic;
+    cce_test::publish_done_magic(status_line, abi::kDoneMagic);
 }
