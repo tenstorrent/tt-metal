@@ -7,14 +7,14 @@ import torch
 import ttnn
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
     run_device_profiler,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
 
 # Every test in this module takes the function-scoped `device` fixture without
 # parametrizing device_params, so the device is opened once per module rather than
@@ -452,6 +452,12 @@ def test_run_performance_split(device, chunks, shape):
     assert check_result["relative_rmse"] < 0.02
 
 
+# The real-time profiler's D2H socket needs host IOMMU on Blackhole (no hugepage fallback), and
+# ETH-dispatch SKUs (N300) cannot supply records at all, so this gate runs on the BH viommu job.
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="perf gate measured on Blackhole")
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 @pytest.mark.parametrize(
     "chunks, shape",
     [
@@ -466,6 +472,7 @@ def test_performance_split(device, chunks, shape):
     # Measured in-process with the real-time profiler. The Tracy path re-ran the
     # inner test in a subprocess with its own device open and a CSV post-process,
     # once per parametrization.
+    require_realtime_profiler("minimal_matmul split perf checks")
     core_grid = ttnn.CoreCoord(8, 8)
     core_count = core_grid.x * core_grid.y
     M, K, N = shape
