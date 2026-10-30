@@ -37,11 +37,12 @@ _matmul_golden = _t.get_golden_generator(_t.MatmulGolden)
 
 def _golden(op1, op2, out_fmt, fidelity, input_A_dimensions=None, input_B_dimensions=None, tilize=False, input_A_format=None, input_B_format=None, **k):
     """MatmulGolden with Bfp8 (5 bit exponent) operands quantised to what the unpacker writes and a Bfp8 output quantised as the packer writes it."""
-    def operand(x, f):
-        return (_bfp8a_to_float16(x), DataFormat.Float16) if f == DataFormat.Bfp8 else (x, f)
+    def operand(x, f, dims):
+        # with tilize the operand arrives in tile order: quantise by 16 datum blocks (a face row) and untilize as the other block float formats do
+        return (_bfp8a_to_float16(x, dims if tilize else None), DataFormat.Float16) if f == DataFormat.Bfp8 else (x, f)
 
-    op1, fa = operand(op1, input_A_format)
-    op2, fb = operand(op2, input_B_format)
+    op1, fa = operand(op1, input_A_format, input_A_dimensions)
+    op2, fb = operand(op2, input_B_format, input_B_dimensions)
     out = _matmul_golden(op1, op2, DataFormat.Float16 if out_fmt == DataFormat.Bfp8 else out_fmt, fidelity, input_A_dimensions=input_A_dimensions, input_B_dimensions=input_B_dimensions, tilize=tilize, input_A_format=fa, input_B_format=fb, **k)
     return _bfp8a_to_float16(out) if out_fmt == DataFormat.Bfp8 else out
 
@@ -64,10 +65,10 @@ def _partial_int_cases():
     return [(x, x, "I32", "Y", "H", getattr(MathFidelity, fi), 32, 32, 1, 2, 2) for x in ("I8", "U8") for fi in ("LoFi", "HiFi2", "HiFi3")]
 
 
-def _b8a_marks(c):
-    """Open: the unpacker reads Bfp8 (5 bit exponent) operands of constants and two-valued columns exactly (probes pass), but random data comes back up to 11 percent off the quantised golden on the head and on main alike; the tile layout or the unpack of that format is not what the model assumes."""
-    if "B8a" in c[:3]:
-        return [pytest.mark.xfail(reason="Bfp8 5 bit exponent: random data off the golden by up to 11 percent on head and main, constants exact", strict=False)]
+def _marks(c):
+    """Bfp8 (5 bit exponent) output from a 32-bit DEST: the packer table has FP32 to FP32, FP16, FP16B and BFP8B only (knowledge/rtl/blackhole_tensix_core_architecture.md, PR:303-322), so the pair is undefined and the device writes zeros."""
+    if c[2] == "B8a" and c[3] == "Y":
+        return [pytest.mark.xfail(reason="packer: FP32 DEST to Bfp8 (5 bit exponent) is not in the packer conversion table; the device returns zeros", strict=True)]
     return []
 
 
@@ -75,7 +76,7 @@ def _b8a_marks(c):
 @skip_for_wormhole
 @pytest.mark.parametrize(
     "case",
-    [pytest.param(c, marks=_b8a_marks(c), id="in1fmt_%s_in0fmt_%s_out_%s_acc_%s_%s_1x2x2" % (c[0], c[1], c[2], c[3], c[5].name)) for c in _golden_cases()],
+    [pytest.param(c, marks=_marks(c), id="in1fmt_%s_in0fmt_%s_out_%s_acc_%s_%s_1x2x2" % (c[0], c[1], c[2], c[3], c[5].name)) for c in _golden_cases()],
 )
 def test_matmul_llkx(case):
     _t.test_matmul_grid2_tiny(case)
