@@ -26,6 +26,22 @@ def lora_matmul_config():
     )
 
 
+# `x @ A^T` / `g @ B` produce rank-wide outputs ([T, r], one tile column): ttnn's matmul parallelises over output
+# tiles and runs them on T/32 cores (33 of 110 at T=1024, 75-120 us for K=5120-8192). `skinny_matmul` splits K over
+# the cores instead (iteration 10); below this K the two are equal within dispatch noise.
+SKINNY_MIN_K = 2048
+
+
+def skinny_matmul(a, b, transpose_b=False):
+    """``a @ (b^T if transpose_b else b)`` (HiFi4, fp32 accumulation) for a rank-wide ``b``: the K-split op when it
+    pays, ttnn's matmul otherwise."""
+    k = a.shape[-1]
+    n = b.shape[-2] if transpose_b else b.shape[-1]
+    if n <= 64 and k >= SKINNY_MIN_K and k % 32 == 0 and b.shape[0] == 1 and b.shape[1] == 1:
+        return ttml.ops.metal.skinny_matmul(a, b, transpose_b)
+    return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=lora_matmul_config())
+
+
 class LoraApply(Function):
     """``base + scaling * (x @ A^T) @ (B * mask)^T`` with a TP-correct backward.
 
@@ -51,7 +67,7 @@ class LoraApply(Function):
         cfg = lora_matmul_config()
         x_val, a_val = x.get_value(), lora_A.get_value()
         b_val = lora_B.get_value() if mask is None else ttnn.multiply(lora_B.get_value(), mask)
-        h = ttnn.matmul(x_val, a_val, transpose_b=True, compute_kernel_config=cfg)
+        h = skinny_matmul(x_val, a_val, transpose_b=True)
         update = ttnn.matmul(h, b_val, transpose_b=True, compute_kernel_config=cfg)
         ctx.save_for_backward(x_val, a_val, b_val, h)
         ctx.mask, ctx.scaling, ctx.reduce_axis = mask, scaling, reduce_axis
@@ -63,7 +79,7 @@ class LoraApply(Function):
         ctx.save_for_backward()
         cfg = lora_matmul_config()
         s = ctx.scaling
-        grad_h = ttnn.multiply(ttnn.matmul(grad_output, b_val, compute_kernel_config=cfg), s)
+        grad_h = ttnn.multiply(skinny_matmul(grad_output, b_val), s)
         grad_b = ttnn.multiply(ttnn.matmul(grad_output, h, transpose_a=True, compute_kernel_config=cfg), s)
         if ctx.mask is not None:
             grad_b = ttnn.multiply(grad_b, ctx.mask)
@@ -90,7 +106,7 @@ class _LoraUpdateAdd(Function):
         h_val, b_val = ctx.saved_tensors
         ctx.save_for_backward()
         cfg = lora_matmul_config()
-        grad_h = ttnn.multiply(ttnn.matmul(grad_output, b_val, compute_kernel_config=cfg), ctx.scaling)
+        grad_h = ttnn.multiply(skinny_matmul(grad_output, b_val), ctx.scaling)
         grad_b = ttnn.multiply(
             ttnn.matmul(grad_output, h_val, transpose_a=True, compute_kernel_config=cfg), ctx.scaling
         )

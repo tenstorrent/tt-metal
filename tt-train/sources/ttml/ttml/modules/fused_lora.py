@@ -30,6 +30,7 @@ import ttml
 from ttml.autograd import Function
 
 from .frozen_linear import TRANSPOSED_SHAPES, _compute_config, forward_matmul_kwargs, full_core_grid, local_in_out
+from .lora import skinny_matmul
 
 __all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "reduce_partial_lora_grads", "TAIL_ROWS"]
 
@@ -79,7 +80,7 @@ class FusedLoraLinearT(Function):
         if rank != 32:
             bt = ttnn.pad(bt, padding=[(0, 0), (0, 0), (0, 32 - rank), (0, 0)], value=0.0)
         write_tail(w_val, bt, in_features)
-        h = ttnn.matmul(x_val, a_val, transpose_b=True, compute_kernel_config=cfg)  # [T, rank]
+        h = skinny_matmul(x_val, a_val, transpose_b=True)  # [T, rank], K split over the cores (iteration 10)
         if h_reduce_axis is not None:  # row-parallel: A is sharded on in, h is a partial sum
             h = ttml.core.distributed.all_reduce(h, h_reduce_axis)
         h_pad = ttnn.pad(h, padding=[(0, 0), (0, 0), (0, 0), (0, TAIL_ROWS - rank)], value=0.0)

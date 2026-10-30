@@ -23,6 +23,7 @@
 #include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.hpp"
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
+#include "metal/ops/skinny_matmul/skinny_matmul.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "metal/ops/write_tile_block/write_tile_block.hpp"
@@ -776,6 +777,15 @@ void py_module(nb::module_& m) {
             nb::arg("epsilon") = 1e-6F,
             "Residual add fused with RMSNorm, every tile-row split over several cores: sum = residual + delta, "
             "out = sum / sqrt(mean(sum^2) + eps) * gamma -> [sum, out, rms].");
+        py_metal.def(
+            "skinny_matmul",
+            &ttml::metal::skinny_matmul,
+            nb::arg("x"),
+            nb::arg("w"),
+            nb::arg("transpose_b") = false,
+            "x [.., M, K] @ W for a skinny W (N <= 64; w is [N, K] with transpose_b, else [K, N]) -> [.., M, N] bf16, "
+            "K split over the cores (fp32 partials per K slice, then summed) instead of one core per output tile. "
+            "HiFi4, fp32 accumulation.");
         py_metal.def(
             "write_tile_block",
             &ttml::metal::write_tile_block,
