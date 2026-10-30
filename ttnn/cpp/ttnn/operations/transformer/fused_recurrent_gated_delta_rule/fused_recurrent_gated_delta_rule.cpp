@@ -17,7 +17,6 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
@@ -95,12 +94,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     }
     ttnn::Tensor v = head_split(v_in, B, T, HV, V);  // [BH, T, V]
 
-    // decay = exp(g); beta as-is (already sigmoid'd).
-    ttnn::Tensor decay = ttnn::exp(headvec_split(g_in, B, T, HV));  // [BH, T]
-    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);           // [BH, T]
+    // g (log decay) as-is: the kernel computes exp(g) on the SFPU; beta as-is (already sigmoid'd).
+    ttnn::Tensor g = headvec_split(g_in, B, T, HV);        // [BH, T]
+    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);  // [BH, T]
 
     // Per-token layout: each (head, token) its own zero-padded tile-block.
-    //   q/k [BH*T,1,K], v [BH*T,1,V], decay/beta [BH*T,1,1].
+    //   q/k [BH*T,1,K], v [BH*T,1,V], g/beta [BH*T,1,1].
     // T==1 fast path: head_split already yields [BH,1,D] == [BH*T,1,D], so the q/k/v relayout is a
     // no-op — skip the RM round-trip (it is ~5x the cost of the permute; see test_headsplit_bench).
     if (T > 1) {
@@ -108,9 +107,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         k = reshape_rm(k, ttnn::Shape({BH * T, 1, K}));
         v = reshape_rm(v, ttnn::Shape({BH * T, 1, V}));
     }
-    // decay/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
-    // relayout to per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. They are tiny.
-    decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, 1}));
+    // g/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
+    // relayout to per-scalar tiles [BH*T,1,1] so the reader finds the value at element [0,0]. They are tiny.
+    g = reshape_rm(g, ttnn::Shape({BH * T, 1, 1}));
     beta = reshape_rm(beta, ttnn::Shape({BH * T, 1, 1}));
 
     // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
@@ -145,7 +144,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         q,
         k,
         v,
-        decay,
+        g,
         beta,
         s0,
         initial_state_block_idx,
