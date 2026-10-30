@@ -3151,6 +3151,17 @@ class ModelArgs:
             else None
         )
 
+        # A sliding window with no layer_types (Mistral-7B-v0.1, Phi-3-mini-4k) applies to every layer in HF.
+        if (
+            self.sliding_window is not None
+            and self.layer_types is None
+            and self.use_sliding_window is not False
+            and self.rope_scaling is None
+            and self.sliding_window < text_config.get("max_position_embeddings", float("inf"))
+        ):
+            self.layer_types = ["sliding_attention"] * self.n_layers
+            self.sliding_window_pattern = [True] * self.n_layers
+
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
         # Command-R (cohere): final-logit scalar applied post-linear on the LM head.
         self.logit_scale = text_config.get("logit_scale", None)
