@@ -1061,3 +1061,4 @@ cache writes 19 ms), the fused MoE head and sparse_all_gather_2d still keyed on 
 Open: decode team's answers (KV handover page https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR); F215 + official_floor
 CPU job (+ 2x2's swap limits lost at FIX.6); F216 (close FIX.11 / FIX.13); F227 (last-window limit); 2 pre-existing
 selftest failures. Remaining ledger: X.3 -> O.1 -> Z.1 -> F.1 (not launched; owner's call on what next).
+- 06:00 OWNER: queue P.15 HOST_ALLOC = P.4 retried (buffers at load time) + shape-keyed MoE head / dispatch + fewer allocations + fewer slices; launched --until P.15.
