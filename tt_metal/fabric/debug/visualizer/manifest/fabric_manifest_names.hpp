@@ -17,8 +17,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
-
 // The names and keys the fabric manifest writes. Changing one changes the manifest format.
 namespace tt::tt_fabric::manifest {
 
@@ -78,43 +76,6 @@ inline char direction_letter(eth_chan_directions direction) {
 
 inline std::string router_key(eth_chan_directions direction, routing_plane_id_t routing_plane) {
     return fmt::format("{}{}", direction_letter(direction), routing_plane);
-}
-
-// The size in bytes of one of a type's elements.
-inline uint32_t element_size(const layout::Type& type) { return type.count == 0 ? type.size : type.size / type.count; }
-
-// The prefixes of a schema that names a struct in the arch's types, an enum in enums or a tagged union, before the
-// type's name.
-inline constexpr std::string_view k_struct_schema = "struct:";
-inline constexpr std::string_view k_enum_schema = "enum:";
-inline constexpr std::string_view k_union_schema = "union:";
-
-// The manifest's spelling of a type's element, which L1 contents and type layouts both use. An element carries no
-// width, so integers take theirs from the size of one element.
-inline std::string schema_name(const layout::Type& type) {
-    namespace element = layout::element;
-    return std::visit(
-        [&type](const auto& e) -> std::string {
-            using E = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<E, element::Uint>) {
-                return fmt::format("u{}", element_size(type) * 8);
-            } else if constexpr (std::is_same_v<E, element::Int>) {
-                return fmt::format("i{}", element_size(type) * 8);
-            } else if constexpr (std::is_same_v<E, element::Enum>) {
-                return fmt::format("{}{}", k_enum_schema, e.description->name);
-            } else if constexpr (std::is_same_v<E, element::Struct>) {
-                return fmt::format("{}{}", k_struct_schema, e.description->name);
-            } else if constexpr (std::is_same_v<E, element::TaggedUnion>) {
-                return fmt::format("{}{}", k_union_schema, e.description->name);
-            } else if constexpr (std::is_same_v<E, element::Bytes>) {
-                return "bytes";
-            } else if constexpr (std::is_same_v<E, element::Pad>) {
-                return "pad";
-            } else { /* always fails if we get here */
-                static_assert(!sizeof(E*), "schema_name has no spelling for this element");
-            }
-        },
-        type.element);
 }
 
 }  // namespace tt::tt_fabric::manifest
