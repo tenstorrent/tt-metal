@@ -289,8 +289,10 @@ runtime:
     bh_p150b_civ2_viommu: 60
     bh_loudbox: 20
   perf:
-    wh_n300_civ2: 65
-    bh_p150_perf: 50
+    wh_n300_civ2: 35
+    wh_n300_perf: 35
+    bh_p150_perf: 45
+    bh_p150_perf_high_core_count: 10
     bh_p150b_civ2_viommu: 10
   perf_profiler:
     wh_n300_civ2: 5
