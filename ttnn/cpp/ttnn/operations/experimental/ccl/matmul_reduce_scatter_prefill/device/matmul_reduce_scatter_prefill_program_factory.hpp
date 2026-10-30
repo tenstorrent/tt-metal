@@ -82,8 +82,9 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 //   - persistent, one tensor per staging size: no host cost and trace-safe, but holds L1 for every size used;
 //   - persistent, grow-only: no host cost, smallest persistent footprint, but a trace stays valid only if the largest
 //     shape ran before capture.
-// A cheaper per-call allocation (e.g. a buffer without the sharded page mapping) would remove the cost without the
-// persistent L1.
+// Most of that cost was building the buffer configs, above all the sharding description over the full grid, on every
+// call. allocate_staging now builds them once per (mesh, size) as a PreparedTensorAllocation and allocates from it
+// through create_device_tensor, so a call pays only the allocation and the free.
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles);
 // Lookup only (factory and the hit path); TT_FATAL when the entry has not created them.
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);

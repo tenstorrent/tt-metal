@@ -19,6 +19,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -1061,11 +1062,12 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 }
 
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles) {
-    // The staging spec and topology of a size are the same on every call: build them once and allocate through
-    // create_device_tensor, which keeps its trace-allocation and graph-capture bookkeeping. Mesh ids are never reused,
-    // so a mesh's grid and shape are fixed under its key.
+    // The staging spec of a size, its buffer configs and its topology are the same on every call: build them once
+    // (above all the sharding description over the full grid, most of what a sharded allocation costs) and allocate
+    // from them through create_device_tensor, which keeps its trace-allocation and graph-capture bookkeeping. Mesh ids
+    // are never reused, so a mesh's grid and shape are fixed under its key.
     struct StagingLayout {
-        TensorSpec spec;
+        tt::tt_metal::PreparedTensorAllocation prepared;
         tt::tt_metal::TensorTopology topology;
     };
     static ttsl::Indestructible<std::map<std::pair<MeshKey, uint32_t>, StagingLayout>> layouts;
@@ -1079,7 +1081,7 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
         }
     }
     if (layout != nullptr) {
-        return create_device_tensor(layout->spec, mesh, layout->topology);
+        return create_device_tensor(layout->prepared, mesh, layout->topology);
     }
     const CoreCoord g = mesh->compute_with_storage_grid_size();
     const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
@@ -1091,12 +1093,13 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
             grid,
             {staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR));
-    const TensorSpec spec(
+    tt::tt_metal::PreparedTensorAllocation prepared(TensorSpec(
         ttnn::Shape({n * staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
-        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
-    Tensor first = create_device_tensor(spec, mesh);
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg)));
+    Tensor first = create_device_tensor(prepared, mesh);
     const std::lock_guard<std::mutex> lock(layouts_mutex);
-    layouts.get().try_emplace(key, StagingLayout{.spec = spec, .topology = first.tensor_topology()});
+    layouts.get().try_emplace(
+        key, StagingLayout{.prepared = std::move(prepared), .topology = first.tensor_topology()});
     return first;
 }
 
