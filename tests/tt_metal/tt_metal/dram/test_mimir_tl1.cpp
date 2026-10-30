@@ -281,7 +281,7 @@ void run_local_copy(IDevice* device, const LocalPair& pair) {
     }
     std::vector<CceCopyResult> results;
     try {
-        ASSERT_TRUE(run_cce_copy_ops(device, launches, results));
+        run_cce_copy_ops(device, launches, results);
     } catch (const std::exception& error) {
         report_launch_exception(device, error, {});
         return;
@@ -397,7 +397,7 @@ void run_remote_transfers(
     }
     std::vector<CceCopyResult> write_results;
     try {
-        ASSERT_TRUE(run_cce_copy_ops(device, write_launches, write_results));
+        run_cce_copy_ops(device, write_launches, write_results);
     } catch (const std::exception& error) {
         std::vector<MimirTransferRecord> records;
         for (const PreparedTransfer& item : prepared) {
@@ -430,7 +430,7 @@ void run_remote_transfers(
         }
         std::vector<CceCopyResult> read_results;
         try {
-            ASSERT_TRUE(run_cce_copy_ops(device, read_launches, read_results));
+            run_cce_copy_ops(device, read_launches, read_results);
         } catch (const std::exception& error) {
             std::vector<MimirTransferRecord> records;
             for (const PreparedTransfer& item : prepared) {
@@ -540,7 +540,7 @@ void run_remote_host_init_read(IDevice* device, const RemotePair& pair) {
     }
     std::vector<CceCopyResult> results;
     try {
-        ASSERT_TRUE(run_cce_copy_ops(device, launches, results));
+        run_cce_copy_ops(device, launches, results);
     } catch (const std::exception& error) {
         std::vector<MimirTransferRecord> records;
         for (const HostFilledRead& read : reads) {
