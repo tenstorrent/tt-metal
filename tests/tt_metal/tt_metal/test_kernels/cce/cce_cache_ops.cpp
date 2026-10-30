@@ -638,8 +638,9 @@ static void run_l1_flush_target(const Args& args, Report& report) {
 }
 
 static void run_shared_writer(const Args& args, Report& report) {
-    invalidate_l1_lines(
-        args.data_offset & ~(abi::kLineBytes - 1), args.num_bytes() + args.data_offset % abi::kLineBytes);
+    const uint32_t first_line = args.data_offset & ~(abi::kLineBytes - 1);
+    const uint32_t line_span_bytes = args.num_bytes() + args.data_offset % abi::kLineBytes;
+    invalidate_l1_lines(first_line, line_span_bytes);
     report.flag_ready = wait_for_flag(args.flag_offset, abi::kFlagWarmed, args.budget_cycles) ? 1 : 0;
     if (report.flag_ready == 0) {
         report.code = abi::kCodeFlagTimeout;
@@ -651,6 +652,13 @@ static void run_shared_writer(const Args& args, Report& report) {
     *uncached<uint32_t>(args.flag_offset) = abi::kFlagReady;
     report.uncached_before = check_words(uncached<uint32_t>(args.data_offset), args.num_words, args.value).matches;
     report.cached_before = check_words(cached_words, args.num_words, args.value).matches;
+    for_each_line(first_line, line_span_bytes, [](uint32_t line) { flush_l1_dcache(line); });
+    const uint32_t shared_l2_flag_offset = args.flag_offset + 2 * abi::kLineBytes;
+    *uncached<uint32_t>(shared_l2_flag_offset) = abi::kFlagReady;
+    if (!wait_for_flag(shared_l2_flag_offset, abi::kFlagWarmed, args.budget_cycles)) {
+        report.code = abi::kCodeFlagTimeout;
+        return;
+    }
     flush_l2_cache_range(args.data_offset, args.num_bytes());
     drain_flushed_range(args.data_offset, args.num_bytes());
     asm volatile("fence w, w" ::: "memory");
@@ -697,6 +705,16 @@ static void run_shared_reader(const Args& args, Report& report) {
     asm volatile("fence r, rw" ::: "memory");
     report.register_b = check_shared_region(args).matches;
     report.register_a = check_words(uncached<uint32_t>(args.other_offset), args.other_words, args.value).matches;
+    const uint32_t shared_l2_flag_offset = args.flag_offset + 2 * abi::kLineBytes;
+    if (!wait_for_flag(shared_l2_flag_offset, abi::kFlagReady, args.budget_cycles)) {
+        report.code = abi::kCodeFlagTimeout;
+        return;
+    }
+    asm volatile("fence r, rw" ::: "memory");
+    invalidate_l1_lines(args.aux_offset, args.count * sizeof(uint32_t));
+    report.register_c = check_shared_region(args).matches;
+    asm volatile("fence r, w" ::: "memory");
+    *uncached<uint32_t>(shared_l2_flag_offset) = abi::kFlagWarmed;
     if (!wait_for_flag(args.flag_offset + abi::kLineBytes, abi::kFlagReady, args.budget_cycles)) {
         report.code = abi::kCodeFlagTimeout;
         return;
@@ -1013,13 +1031,13 @@ static bool mm41_args_valid(const Args& args) {
             return whole_lines && args.stride_bytes % abi::kLineBytes == 0 && args.stride_bytes != 0 &&
                    args.count != 0 && args.count <= abi::kMaxSweepLines &&
                    strided_lines_in_test_area(args.aux_offset, args.count, args.stride_bytes);
-        case abi::kModeSharedWriter: return words && budget && lines_in_test_area(args.flag_offset, 2);
+        case abi::kModeSharedWriter: return words && budget && lines_in_test_area(args.flag_offset, 3);
         case abi::kModeSharedReader: {
             const uint64_t region_end =
                 static_cast<uint64_t>(args.aux_offset) + static_cast<uint64_t>(args.count) * sizeof(uint32_t);
             const uint64_t other_end =
                 static_cast<uint64_t>(args.other_offset) + static_cast<uint64_t>(args.other_words) * sizeof(uint32_t);
-            return words && budget && lines_in_test_area(args.flag_offset, 2) && args.count != 0 &&
+            return words && budget && lines_in_test_area(args.flag_offset, 3) && args.count != 0 &&
                    args.count % (abi::kLineBytes / 4) == 0 && args.count <= abi::kMaxWords &&
                    lines_in_test_area(args.aux_offset, args.count / (abi::kLineBytes / 4)) &&
                    args.data_offset >= args.aux_offset && args.data_offset + data_bytes <= region_end &&
