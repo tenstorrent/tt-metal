@@ -13,9 +13,9 @@
 //              the floored corner, handed back to the gathers — and the four
 //              `attn * bilinear_corner_coefficient` scalar tiles.
 //              With TILED_GEOMETRY the operands arrive once per block instead
-//              (msda_tiled_geometry.hpp): one window solves every point of the
-//              block, and each point's four scalar tiles are then extracted
-//              from the block's weight tiles by matmul.
+//              (msda_tiled_geometry.hpp): one window solves each group of 16
+//              points of the block, and each point's four scalar tiles are
+//              then extracted from its group's weight tiles by matmul.
 //
 //   REDUCTION  for each of 4 * L * P (input_tiles, scalar_tile) groups:
 //                for each d-tile k:
@@ -36,8 +36,8 @@
 // them. Solving one point ahead of the reduction is what keeps both busy: while
 // the reader gathers point j, the SFPU is already solving point j+1. The tiled
 // geometry solves a block ahead instead: block t+1 right after block t's first
-// reduction (SOLVE_NEXT_BLOCK_AT), so its corner tile is ready long before the
-// reader finishes block t.
+// reduction (SOLVE_NEXT_BLOCK_AT), so its corner tiles are ready long before
+// the reader finishes block t.
 //
 // Reader contract (see fused_msda_reader_common.hpp):
 //   * geom / attn tiles: column 0 holds one query per row, 0 past v_rows; on
@@ -95,14 +95,18 @@ constexpr uint32_t geom_operand_cb_index = get_compile_time_arg_val(15);
 constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(16);
 constexpr uint32_t const_cb_index = get_compile_time_arg_val(17);
 constexpr uint32_t weight_cb_index = get_compile_time_arg_val(18);
+// float32 reference points on the tiled geometry. The per-point path needs no
+// flag: the factory's UnpackToDestFp32 on geom_x / geom_y carries them.
+constexpr bool TILED_REF_FP32 = get_compile_time_arg_val(19) != 0;
+constexpr uint32_t ref_parts_cb_index = get_compile_time_arg_val(20);
 
 constexpr uint32_t POINTS_PER_BLOCK = NUM_LEVELS * NUM_POINTS;
-static_assert(!TILED_GEOMETRY || POINTS_PER_BLOCK == fused_msda_tiled_geometry::POINTS);
+static_assert(!TILED_GEOMETRY || POINTS_PER_BLOCK <= fused_msda_tiled_geometry::MAX_POINTS);
 // Tiled geometry solves block t+1 before reducing this point of block t. The
 // reader publishes block t+1 right after pushing block t's first point, which
 // reduce(0) has waited for, so the solve waits at most for that publish.
-constexpr uint32_t SOLVE_NEXT_BLOCK_AT = 1;
-static_assert(!TILED_GEOMETRY || SOLVE_NEXT_BLOCK_AT < POINTS_PER_BLOCK);
+constexpr uint32_t SOLVE_NEXT_BLOCK_AT = fused_msda_tiled_geometry::SOLVE_NEXT_BLOCK_AT;
+static_assert(!TILED_GEOMETRY || POINTS_PER_BLOCK >= fused_msda_tiled_geometry::MIN_POINTS);
 
 // Runtime args: [0] output tiles, then CONSTANTS_PER_LEVEL uint32 per level,
 // in the order fused_msda_program_factory.cpp::append_axis_constants emits.
@@ -144,6 +148,9 @@ void kernel_main() {
         .rm = geom_rm_cb_index,
         .operands = geom_operand_cb_index,
         .ref = ref_tile_cb_index,
+        // Must agree with block<..., TILED_REF_FP32>: it pops one tile here,
+        // the split's tiles when float32.
+        .ref_parts = TILED_REF_FP32 ? ref_parts_cb_index : ref_tile_cb_index,
         .consts = const_cb_index,
         .weights = weight_cb_index,
         .corner = corner_cb_index,
@@ -158,9 +165,9 @@ void kernel_main() {
     uint32_t srca_cb = input_cb_index;
 
     if constexpr (TILED_GEOMETRY) {
-        CircularBuffer(const_cb_index).wait_front(fused_msda_tiled_geometry::CONST_TILES);
+        CircularBuffer(const_cb_index).wait_front(fused_msda_tiled_geometry::const_tiles(POINTS_PER_BLOCK));
         if (num_output_tiles > 0) {
-            fused_msda_geometry::block(block_cb, srca_cb);
+            fused_msda_geometry::block<POINTS_PER_BLOCK, TILED_REF_FP32>(block_cb, srca_cb);
         }
     }
 
@@ -189,9 +196,9 @@ void kernel_main() {
                 // The previous point's reduction left L1 accumulate enabled;
                 // these packs must overwrite.
                 pack_reconfig_l1_acc(0);
-                fused_msda_geometry::extract(block_cb, scalar_cb_index, j, srca_cb);
+                fused_msda_geometry::extract<POINTS_PER_BLOCK>(block_cb, scalar_cb_index, j, srca_cb);
                 if (j == SOLVE_NEXT_BLOCK_AT && out + 1 < num_output_tiles) {
-                    fused_msda_geometry::block(block_cb, srca_cb);
+                    fused_msda_geometry::block<POINTS_PER_BLOCK, TILED_REF_FP32>(block_cb, srca_cb);
                 }
             } else if (j + 1 < POINTS_PER_BLOCK) {
                 solve_geometry(j + 1);

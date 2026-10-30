@@ -275,6 +275,8 @@ class DatasetPreset:
         embed_dims, num_heads, num_levels, num_points: The spatial cross-attention's deformable
             attention sizes. Every BEV pillar samples ``NUM_POINTS_IN_PILLAR`` heights.
         tsa_num_points: The temporal self-attention's points per head.
+        first_stride: The first feature level's stride in image pixels: 8 for an FPN over C3-C5,
+            32 for one over C5 alone.
     """
 
     name: str
@@ -286,12 +288,13 @@ class DatasetPreset:
     num_levels: int
     num_points: int
     tsa_num_points: int
+    first_stride: int = 8
 
     @property
     def spatial_shapes(self):
         """The preset's feature levels, each as (h, w), as ``SPATIAL_SHAPES``."""
         width, height = self.input_size
-        return list(fpn_spatial_shapes(height, width, self.num_levels))
+        return list(fpn_spatial_shapes(height, width, self.num_levels, self.first_stride))
 
     @property
     def z_cfg(self):
@@ -312,6 +315,21 @@ _BASE = dict(
     tsa_num_points=TSA_NUM_POINTS,
 )
 
+
+def _upstream_preset(variant):
+    """An upstream variant's encoder attention, whichever variant is selected: base's sizes over the
+    variant's camera levels and images."""
+    v = VARIANTS[variant]
+    size = tuple(round(side * v.image_scale) for side in CAMERA_IMAGE_SIZE)
+    return DatasetPreset(
+        "nuscenes_v1.0_full_{}x{}".format(*size),
+        PC_RANGE,
+        NUM_CAMS,
+        size,
+        **dict(_BASE, num_levels=v.num_levels, first_stride=4 << v.out_indices[0]),
+    )
+
+
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
     "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
@@ -330,6 +348,8 @@ PRESETS = {
         num_points=SCA_NUM_POINTS,
         tsa_num_points=TSA_NUM_POINTS,
     ),
+    "nuscenes_small_upstream": _upstream_preset("small"),
+    "nuscenes_tiny_upstream": _upstream_preset("tiny"),
 }
 
 
