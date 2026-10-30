@@ -321,6 +321,7 @@ class Gemma4Model:
         # GEMMA4_* flag still an override); recorded before the layers are built since the weight loaders and
         # the norm modules read the switches at construction.
         set_decode_fusion_profile(tuple(mesh_device.shape), blackhole=is_blackhole(), moe=hf_config.enable_moe_block)
+        self.tensor_cache_path = tensor_cache_path
         # Keep prompt-dependent slice bounds in persistent buffers. Literal
         # offsets compile a new program after prefill traces are already live.
         self._tail_slice_start = ttnn.from_torch(
@@ -873,6 +874,125 @@ class Gemma4Model:
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
+    def _validate_pli_stacked(self, pli_stacked):
+        if self.hidden_size_per_layer_input and pli_stacked.shape[0] != len(self.layers):
+            raise ValueError(
+                f"pli_stacked has {pli_stacked.shape[0]} layer entries in dim 0 "
+                f"but PLI model has {len(self.layers)} layers"
+            )
+
+    def init_pli_device_weights(self):
+        """Upload per-layer-input weights before device execution or trace capture."""
+        if getattr(self, "_pli_dev_ready", False):
+            return
+        weights = self.per_layer_input_weights
+        if not self.hidden_size_per_layer_input or not weights:
+            raise ValueError("init_pli_device_weights requires a PLI target")
+        pli_size = self.hidden_size_per_layer_input
+        embed_weight = weights["embed_tokens_per_layer"]
+        if embed_weight.shape[-1] % pli_size:
+            raise ValueError("per-layer embedding width must be divisible by pli_size")
+        self._pli_full_layers = embed_weight.shape[-1] // pli_size
+        if self._pli_full_layers < len(self.layers):
+            raise ValueError("per-layer embedding table has fewer layers than this model")
+        mapper = self._replicate_to_mesh_mapper()
+        self._pli_embed_tt = ttnn.as_tensor(
+            embed_weight.unsqueeze(0).unsqueeze(0),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(self.tensor_cache_path, "pli_embed_table"),
+        )
+        self._pli_proj_tt = ttnn.as_tensor(
+            weights["per_layer_model_projection"].transpose(-2, -1).unsqueeze(0).unsqueeze(0),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(self.tensor_cache_path, "pli_proj_w"),
+        )
+        self._pli_norm_tt = ttnn.as_tensor(
+            weights["per_layer_projection_norm"].reshape(1, 1, 1, pli_size),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(self.tensor_cache_path, "pli_norm_w"),
+        )
+        self._pli_kernel_cfg = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self._pli_dev_ready = True
+
+    def compute_pli_device(self, ids_tt, embeds_tt):
+        """Compute [n_layers, 1, rows, pli_size] PLI from device token IDs.
+
+        ``embeds_tt`` must be the already scaled main embedding returned by
+        ``embed_tokens``. This follows the host embedding/projection/norm/merge
+        order; BF16 device weights can still differ by a rounding unit from the
+        FP32 host projection. Call ``init_pli_device_weights`` first, outside any
+        trace capture.
+        """
+        if not getattr(self, "_pli_dev_ready", False):
+            raise RuntimeError("device PLI weights must be initialized before compute_pli_device")
+        pli_size = self.hidden_size_per_layer_input
+        full_layers = self._pli_full_layers
+        rows = int(embeds_tt.shape[-2])
+        active_layers = len(self.layers)
+
+        embedded_raw = ttnn.embedding(ids_tt, self._pli_embed_tt, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        if len(embedded_raw.shape) == 3:
+            embedded_raw = ttnn.unsqueeze_to_4D(embedded_raw)
+        embedded = ttnn.multiply(embedded_raw, self.per_layer_embed_scale)
+        ttnn.deallocate(embedded_raw)
+
+        projected_raw = ttnn.linear(embeds_tt, self._pli_proj_tt, compute_kernel_config=self._pli_kernel_cfg)
+        projected = ttnn.multiply(projected_raw, self.per_layer_model_projection_scale)
+        ttnn.deallocate(projected_raw)
+
+        def fold(tensor):
+            row_major = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+            folded = ttnn.reshape(row_major, (1, 1, rows * full_layers, pli_size))
+            tiled = ttnn.to_layout(folded, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(row_major)
+            return tiled
+
+        embedded_folded, projected_folded = fold(embedded), fold(projected)
+        ttnn.deallocate(embedded)
+        ttnn.deallocate(projected)
+        normalized = ttnn.rms_norm(
+            projected_folded,
+            epsilon=self.hf_config.rms_norm_eps,
+            weight=self._pli_norm_tt,
+            compute_kernel_config=self._pli_kernel_cfg,
+        )
+        ttnn.deallocate(projected_folded)
+        summed = ttnn.add(normalized, embedded_folded)
+        combined = ttnn.multiply(summed, self.per_layer_input_scale)
+        ttnn.deallocate(summed)
+        ttnn.deallocate(normalized)
+        ttnn.deallocate(embedded_folded)
+        row_major = ttnn.to_layout(combined, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(combined)
+        reshaped = ttnn.reshape(row_major, (1, rows, full_layers, pli_size))
+        reordered = ttnn.permute(reshaped, (2, 0, 1, 3))
+        ttnn.deallocate(row_major)
+        if full_layers != active_layers:
+            selected = ttnn.slice(reordered, [0, 0, 0, 0], [active_layers, 1, rows, pli_size])
+            ttnn.deallocate(reordered)
+            reordered = selected
+        output = ttnn.to_layout(reordered, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(reordered)
+        return output
+
     def _ensure_rope_slice_bufs(self, head_dim: int):
         """Allocate shared start-zeros / ends buffers for device RoPE slicing."""
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
@@ -967,6 +1087,7 @@ class Gemma4Model:
         input_ids_torch=None,
         embeds_torch=None,
         pli_device_tensors=None,
+        pli_stacked=None,
         position_idx_cache=None,
         pli_combined=None,
         get_last_token=-1,
@@ -1006,6 +1127,8 @@ class Gemma4Model:
             input_ids_torch: CPU tensor of input_ids for per-layer input computation (E2B)
             embeds_torch: CPU tensor of embeddings for per-layer input projection (E2B)
             pli_device_tensors: optional list of pre-computed PLI device tensors (trace mode)
+            pli_stacked: optional [n_layers,1,rows,pli_size] device tensor from
+                ``compute_pli_device``, sliced by layer.
             position_idx_cache: optional [batch] int32 tensor for KV cache update (when position_idx is uint32)
             pli_combined: optional [1,1,n_layers,pli_size] device tensor of pre-computed PLI (decode)
             page_tables_per_layer: optional list of per-layer page tables, one
@@ -1056,6 +1179,8 @@ class Gemma4Model:
         per_layer_inputs = None
         if pli_combined is not None:
             pli_combined_tt = pli_combined
+        elif pli_stacked is not None:
+            self._validate_pli_stacked(pli_stacked)
         elif pli_device_tensors is not None:
             # Pre-computed device tensors provided externally (legacy trace mode).
             # For PLI models every layer must receive its per-layer input: a short
@@ -1146,6 +1271,8 @@ class Gemma4Model:
             if pli_combined_tt is not None:
                 # On-device decode: slice layer i from combined [1, 1, n_layers, pli_size]
                 pli_tt = pli_combined_tt[:, :, i : i + 1, :]
+            elif pli_stacked is not None:
+                pli_tt = pli_stacked[i : i + 1]
             elif pli_device_tensors is not None:
                 # Pre-computed device tensors (legacy trace mode). Length was
                 # validated to match len(self.layers) for PLI models above.
@@ -1513,7 +1640,8 @@ class Gemma4Model:
             return None
         if token_ids_host is None:
             raise ValueError(
-                "This target uses per-layer inputs, so verification requires token_ids_host or pli_device_tensors"
+                "This target uses per-layer inputs, so verification requires token_ids_host, "
+                "pli_device_tensors, or pli_on_device=True"
             )
         pli_host = self.compute_host_pli_batch(token_ids_host)
         pli_all = ttnn.from_torch(
@@ -1536,6 +1664,7 @@ class Gemma4Model:
         page_tables_per_layer=None,
         token_ids_host=None,
         pli_device_tensors=None,
+        pli_on_device=False,
     ):
         """Multi-token speculative *verify* forward (batch holds the candidates).
 
@@ -1556,13 +1685,17 @@ class Gemma4Model:
             kv_cache: optional KV cache override (defaults to self.tt_kv_cache).
             token_ids_host: host candidate ids used to compute PLI for PLI targets.
             pli_device_tensors: optional list with exactly one PLI tensor per layer.
+            pli_on_device: derive PLI from token IDs and scaled embeddings on device.
 
         Returns:
             (logits, hidden) — logits [1,1,K,vocab] from the post-norm hidden;
             ``hidden`` is the post-final-norm hidden [1,1,K,hidden], the
             it-assistant drafter's recurrent seed.
         """
-        pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
+        if pli_on_device and pli_device_tensors is not None:
+            raise ValueError("pass either pli_on_device=True or pli_device_tensors, not both")
+        if not pli_on_device:
+            pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
 
         if x.dtype in (ttnn.uint32, ttnn.int32):
             input_embeds = self.embed_tokens(x)
@@ -1571,13 +1704,19 @@ class Gemma4Model:
             input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
         else:
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        pli_stacked = None
+        owns_pli_stacked = pli_on_device and bool(self.hidden_size_per_layer_input)
+        if owns_pli_stacked:
+            if x.dtype not in (ttnn.uint32, ttnn.int32):
+                raise ValueError("device PLI verification requires token-id input")
+            pli_stacked = self.compute_pli_device(x, input_embeds)
 
         token_index = None if self.rope_caches_2d else 0
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
 
-        return self(
+        result = self(
             hidden_states=input_embeds,
             position_idx=current_pos,
             page_table=page_table,
@@ -1587,12 +1726,16 @@ class Gemma4Model:
             position_idx_cache=current_pos_cache if current_pos_cache is not None else current_pos,
             page_tables_per_layer=page_tables_per_layer,
             pli_device_tensors=pli_device_tensors,
+            pli_stacked=pli_stacked,
             return_hidden=True,
             # Default True (race-safe). A timing/experiment harness can set
             # `_verify_seq_kv_write=False` to measure the cost of the per-candidate
             # serialized KV-write loop (KV is corrupted when False — timing only).
             sequential_kv_write=getattr(self, "_verify_seq_kv_write", True),
         )
+        if owns_pli_stacked:
+            pli_stacked.deallocate(True)
+        return result
 
     def ttnn_packed_verify_forward(
         self,
@@ -1612,6 +1755,7 @@ class Gemma4Model:
         page_tables_per_layer=None,
         token_ids_host=None,
         pli_device_tensors=None,
+        pli_on_device=False,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1637,16 +1781,24 @@ class Gemma4Model:
             hot_pt: [1, PV_HOT_BLOCKS] int32 physical fill pages (-1 = skip).
             token_ids_host: host candidate ids used to compute PLI for PLI targets.
             pli_device_tensors: optional list with exactly one PLI tensor per layer.
+            pli_on_device: compute PLI from ``x`` inside the device forward.
 
         Returns:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
             ``ttnn_verify_forward``.
         """
-        pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
+        if pli_on_device and pli_device_tensors is not None:
+            raise ValueError("pass either pli_on_device=True or pli_device_tensors, not both")
+        if not pli_on_device:
+            pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
         input_embeds = self.embed_tokens(x)
         if len(input_embeds.shape) == 3:
             input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
         input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+        pli_stacked = None
+        owns_pli_stacked = pli_on_device and bool(self.hidden_size_per_layer_input)
+        if owns_pli_stacked:
+            pli_stacked = self.compute_pli_device(x, input_embeds)
 
         # Pre-gather RoPE once per layer type (identical for all layers of a
         # type — saves 2 embedding gathers per layer).
@@ -1690,10 +1842,13 @@ class Gemma4Model:
             packed=packed,
             page_tables_per_layer=page_tables_per_layer,
             pli_device_tensors=pli_device_tensors,
+            pli_stacked=pli_stacked,
         )
         for cos_bp, sin_bp in rope_packed.values():
             cos_bp.deallocate(True)
             sin_bp.deallocate(True)
+        if owns_pli_stacked:
+            pli_stacked.deallocate(True)
         return out
 
     def compute_host_pli(self, token_id):
