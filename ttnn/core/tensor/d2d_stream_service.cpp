@@ -2128,13 +2128,43 @@ uint32_t relay_source_lanes(
     return std::min<uint32_t>(relay.max_lanes, links.size());
 }
 
-// Lanes from the entry relay to target `t`. The relay kernels have at most two lanes.
-uint32_t relay_target_lanes(
+// tt::tt_metal::NUM_SEMAPHORES, which no public header exposes to ttnn.
+constexpr uint32_t kSemaphoresPerCore = 16;
+
+// Lanes from the entry relay to target `t` that the links allow. The relay kernels have at most two lanes.
+uint32_t relay_target_link_lanes(
     const distributed::MeshDevice& mesh, const RelayLocal& relay, const distributed::MeshCoordinate& t, uint32_t p) {
     const auto links = tt::tt_fabric::get_forwarding_link_indices(
         mesh, relay.receiver_nodes.at(relay.plan.cables[p].entry_coord), relay.receiver_nodes.at(t));
     TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link from the entry chip to coord {}", t);
     return std::min<uint32_t>({relay.max_lanes, static_cast<uint32_t>(links.size()), 2u});
+}
+
+// Each fabric connection takes two program semaphores on the entry relay's core
+// (append_fabric_connection_rt_args): one for the cable, plus one per first-hop direction on each lane.
+// Four directions on two lanes would need 18 of the core's 16, so then every target of cable p gets one lane.
+bool relay_entry_two_lanes_fit(const distributed::MeshDevice& mesh, const RelayLocal& relay, uint32_t p) {
+    const auto& cable = relay.plan.cables[p];
+    const auto entry_node = relay.receiver_nodes.at(cable.entry_coord);
+    std::set<tt::tt_fabric::RoutingDirection> dirs[2];
+    for (const auto& t : cable.slots) {
+        if (t == cable.entry_coord) {
+            continue;
+        }
+        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(mesh, entry_node, relay.receiver_nodes.at(t));
+        TT_FATAL(
+            dir.has_value(), "D2DStreamService relay: no route from entry chip {} to coord {}", cable.entry_coord, t);
+        for (uint32_t lane = 0; lane < relay_target_link_lanes(mesh, relay, t, p); ++lane) {
+            dirs[lane].insert(*dir);
+        }
+    }
+    return 2 * (1 + dirs[0].size() + dirs[1].size()) <= kSemaphoresPerCore;
+}
+
+// Lanes from the entry relay to target `t`. The receiver at `t` waits for this many increments.
+uint32_t relay_target_lanes(
+    const distributed::MeshDevice& mesh, const RelayLocal& relay, const distributed::MeshCoordinate& t, uint32_t p) {
+    return relay_entry_two_lanes_fit(mesh, relay, p) ? relay_target_link_lanes(mesh, relay, t, p) : 1u;
 }
 
 // Lanes over cable p (sender side only; the receiver side gets it from the peer).
@@ -2519,6 +2549,11 @@ Program build_entry_relay_program(
         }
     }
     const uint32_t num_lanes = conns[1].empty() ? 1 : 2;
+    TT_FATAL(
+        2 * (1 + conns[0].size() + conns[1].size()) <= kSemaphoresPerCore,
+        "D2DStreamService relay: the entry relay on coord {} needs more fabric connections than its core has "
+        "semaphores for",
+        e);
 
     auto program = CreateProgram();
     create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
