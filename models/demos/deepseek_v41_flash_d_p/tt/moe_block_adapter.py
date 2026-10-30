@@ -233,6 +233,10 @@ class TtMoEBlockLayer:
                 dtypes=self.dtypes,
                 options=block_options(),
             )
+            if settings.get("PREPARED_ALL") == "on":  # (P.14: the fused tail keyed on shapes, addresses patched)
+                from .prepared_tail import install
+
+                install(blk)
             hit = _BLOCKS[key] = (self.mesh, blk)
         return hit[1]
 

@@ -4368,3 +4368,58 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   - stock comparison: `scripts/run_safe_pytest.sh --device auto --no-precompile
     ttnn/ttnn/bringup/topk_large_indices/tests/unit/test_stock_identity.py -s`;
   - old path: `DS41_INDEX_TOPK_OP=stock`.
+
+## P.14 (perf, galaxy 8x4): PREPARED_ALL, every Python-built op as a prepared program (OV-23)
+
+- Census (8x4, the profile rung's last chunk [51200, 56320), DS41_ENGRAM_TABLE=resident, 3 warm chunks after
+  profile.warm_up; wrappers on ttnn.generic_op / ttnn.bringup.prepare_program / run_prepared and FastOperation by name,
+  plugin /scratch/dnijemcevic/p14/plug/p14census_plugin.py, logs census_base.log (before) / census_on.log). DS41-171.
+  Python-built (ProgramDescriptor) programs, all already prepared; host a call = run_prepared (C++) alone:
+
+  | op (call site) | calls / chunk | host us / call | ms / chunk | prepared? | keyed on |
+  |---|---|---|---|---|---|
+  | fused head (moe_block fused_head._run) | 40 | 729-741 | 29.2-29.7 | yes (P.2-era, shared program, weights patched) | arena base + io addresses (skey) |
+  | ckv_bfp4 window blocks (attention._window_packed) | 80 | 97-101 | 7.8-8.1 | yes (P.7 / P.12 compact) | shapes |
+  | fused tail (TailA2A.run) | 40 | 157 off / 146 on | 6.3 / 5.8 | yes (P.2) | off: y / se / out ADDRESSES; on: shapes |
+  | sparse_all_gather_2d (K3 exchange dispatch) | 40 | 142-151 | 5.7-6.0 | yes (prepared_program.generic_op, 512 by descriptor id) | addresses (256 LRU) |
+  | bfp_round (indexer._round) | 12 | 160-163 | 1.9 | yes (P.12 compact) | shapes |
+  | ckv_bfp4 compressor (append_tiles / _write_packed) | 4 + 4 | 487 / 164 | 1.95 / 0.65 | yes (P.7 / P.11) | shapes |
+  | ttnn.generic_op (any site) | 0 | - | - | - | - |
+  | fabric_reduce_scatter | 0 (none left after P.8-P.10) | - | - | yes (P.1) | addresses |
+
+  The brief's other candidates are C++ device ops (nanobind, TTNN program cache: addresses patched on a hit, nothing
+  to prepare): fabric_all_gather 294 x 120 us (35.2 ms), flat_routed_expert_with_program 40 x 487 (19.5),
+  update_padded_kv_cache 168 x 114 (19.1), rms_norm 208 x 63 (13.2), mhc_post 82 x 136 (11.2), rotary_embedding_indexed
+  136 x 70 (9.5), mhc_pre_xing 80 x 113 (9.0), topk_large_indices 9 x 405, ring_indexer_score_dsa 8 x 291,
+  mhc_pre_xing_pack 3 x 106, sparse_sdpa 40 x 56. moe_grouped_topk and the combine_rf ops (except the exchange's
+  dispatch and the fused head / tail) are not called on the block MoE path. Also stock: allocate_tensor_on_device 372 x
+  83 us (30.7 ms), slice 219 x 91 (19.9), all_to_all_async_generic 80 x 170 (13.6), to_layout 176 x 64 (11.3), linear
+  144 x 77 (11.1). ~2950 op calls a chunk in all.
+- What changed: setting PREPARED_ALL (tt/settings.py, default on; off = the path before). On, the block MoE's fused
+  tail (TailA2A, one instance for 40 layers) runs tt/prepared_tail.ShapeKeyedTailA2A: one descriptor built and
+  prepared per (y, se, out) shape / dtype / layout / memory config, run_prepared patches y / se / out per call (z / zrw
+  are the instance's). Guard: patch_count must equal the address slots the descriptor holds (workers 4 + se, ports 3
+  a chip), else that shape takes TailA2A's own path (fallbacks: 0 seen). moe_block/ is outside this step's paths, so
+  tt/moe_block_adapter.block() swaps the class of the built block's TailA2A instance (`prepared_tail.install`), after
+  the block's own warm-up; tail_a2a.py is unchanged and is the off path. Device program and arguments are the same
+  (same hash: patched slots are out of the key), so no device change.
+- Not done: persistent CCL outputs (P.4, reverted by the owner; its code is not in the tree). P.4 measured ~10-13 ms
+  host a chunk under cProfile and a wall change within noise; with the tail shape-keyed its DS41-146 regression should
+  be gone, so it can be retried as its own pick. Not done either (outside the paths, behaviour change of other models'
+  code): the fused head's skey and sparse_all_gather_2d's descriptor cache still key on addresses (both hit in steady
+  state: 0 prepares a warm chunk).
+- Evidence (tt/perf_prepared_all.py, one process, golden prefix reloaded each run, 16 runs): final hidden state
+  bit-identical on == off on every run (PCC vs golden 0.578422 = P.13). A DRAM buffer allocated after the middle layer
+  and kept (1.25-3.75 MB a chip): on 0 tail builds every run; off 1-2 builds a shifted run (+21-105 ms in those runs).
+  Unshifted warm walls: on 337-351 ms, off 336-395 ms (medians of the last 3: 349.6 / 346.2) - the same within noise.
+- measure --task P.14 (quick, on): PASSED inside pytest, "every layer and state within its limit"; every err / pcc
+  metric equal to P.13's quick on to the last digit (205 err metrics, pcc_chunk_out 0.578422, err_layer_L39 0.875);
+  host_transfers_per_layer 0; chunk_wall_ms 350.4 (spread 72.3, loadavg 19.6; P.13's A/B: on 343.5, off 346.3). The
+  process was killed by the 10-minute shell cap in its teardown (596 s; the safe runner marked the cards dirty, they
+  are reset at the next run). Device time / host_overhead not profiled here (no device change by construction); the
+  orchestrator's A/B profile gives both sides.
+- OV-3: nothing padded. OV-23: no Python-built op is dispatched outside the prepared path (census above).
+- Re-run: census `/scratch/dnijemcevic/p14/census.sh <tag> DS41_PREPARED_ALL=on|off` (8 min); identity
+  `PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_prepared_all.py -s` (8 min); `python -m
+  models.demos.common.bringup.orchestrator measure --task P.14`; old path DS41_PREPARED_ALL=off.
