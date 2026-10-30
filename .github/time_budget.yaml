@@ -93,8 +93,8 @@ ttnn:
     bh_galaxy: 40
     bh_p100: 815
     bh_p150b_civ2: 900  # data_movement leg 80 -> 100 min (#61862)
-    wh_n150_civ2: 1050
-    wh_n300_civ2: 1470
+    wh_n150_civ2: 1055  # graph report test in its own nightly job (#60436)
+    wh_n300_civ2: 1475  # graph report test in its own nightly job (#60436)
     bh_p150b_civ2_viommu: 125
     bh_p300: 60
     bh_quietbox_2: 60
