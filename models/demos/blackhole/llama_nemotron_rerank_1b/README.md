@@ -293,6 +293,9 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   `perf_tools/probe_small_mm.py`). The flat grid (rows over the 10 core rows, no row padding) for WO / FF2 at
   10 x 512 is also slower (FF2 519 vs 474 us, WO 280 vs 275), and block sweeps of FF2 / WO / QKV at 10 x 512 find
   nothing faster than the current blocks.
+* 10 x 512 with the SwiGLU product (FF1 + FF3 output, 44.6 MB) kept in L1 instead of DRAM (fits only with the K-16
+  FF1 + FF3 block): one batch 41.1 ms either way, back-to-back 60.9 vs 60.0 ms. Its DRAM round trip is not
+  what limits the forward, so a fused FF1 + FF3 -> FF2 kernel would not reach 40 ms back-to-back either.
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
