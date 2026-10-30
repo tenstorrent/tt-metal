@@ -30,8 +30,14 @@
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <tt-metalium/tt_align.hpp>
 #include <internal/mesh_device.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -791,6 +797,38 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     // A ring below the LIM window entirely is also invalid in HOST_PUSH.
     EXPECT_ANY_THROW(
         H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data_fifo_address=*/0x1000, H2DMode::HOST_PUSH));
+}
+
+TEST(HDSocketConnect, MissingShmThrows) {
+    HDSocketDescriptor desc;
+    desc.socket_type = "h2d";
+    desc.shm_name = "/tt_missing_" + std::to_string(getpid());
+    desc.shm_size = 4096;
+    EXPECT_ANY_THROW(H2DSocket::connect_from_descriptor(desc));
+}
+
+TEST(ShmResourceTracker, StaleCleanupReclaimsPrefixWithUnderscore) {
+    pid_t dead_pid = fork();
+    if (dead_pid == 0) {
+        _exit(0);
+    }
+    ASSERT_GT(dead_pid, 0);
+    ASSERT_EQ(waitpid(dead_pid, nullptr, 0), dead_pid);
+
+    // Same shape as generate_shm_name("h2d_completion") from a process that is gone.
+    const std::string name = "/tt_h2d_completion_" + std::to_string(dead_pid) + "_1_0";
+    int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0600);
+    ASSERT_NE(fd, -1);
+    close(fd);
+
+    ShmResourceTracker::cleanup_stale_resources();
+
+    fd = shm_open(name.c_str(), O_RDWR, 0600);
+    if (fd != -1) {
+        close(fd);
+        shm_unlink(name.c_str());
+    }
+    EXPECT_EQ(fd, -1);
 }
 
 }  // namespace tt::tt_metal::distributed

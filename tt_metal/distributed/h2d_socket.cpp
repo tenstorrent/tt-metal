@@ -862,6 +862,10 @@ void H2DSocketImpl::set_page_size(uint32_t page_size) {
 }
 
 void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
+    // A connector whose SHM failed to map has nothing to drain.
+    if (bytes_acked_ptr_ == nullptr) {
+        return;
+    }
     if (mesh_device_ && !mesh_device_->is_local(recv_core_.device_coord)) {
         return;
     }
