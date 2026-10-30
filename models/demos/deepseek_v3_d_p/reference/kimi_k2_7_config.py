@@ -31,6 +31,9 @@ class KimiK27Config:
     # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
+    # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
+    # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
+    MOE_FABRIC2D_TRANSPORT = True
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
@@ -40,6 +43,12 @@ class KimiK27Config:
     # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 2.0% on hot_expert traffic and
     # nothing on balanced, the flattest of the eight, for 47 -> 23 MB a chip.
     COMBINE_FWD_REDUCTION = 16
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at +1.3% balanced and +3.5% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1

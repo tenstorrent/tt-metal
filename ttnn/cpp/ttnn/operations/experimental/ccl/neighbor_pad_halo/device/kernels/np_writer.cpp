@@ -63,7 +63,7 @@ constexpr bool H_CORNER_FIRST = get_compile_time_arg_val(ct_after_dst + 8);
 
 // W-send bank-major coalesce factor (0 = per-stick)
 constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst + 9);
-constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+constexpr uint32_t NP_NUM_DRAM_BANKS = NP_DRAM_BANKS;
 
 void kernel_main() {
     // ///////////////////////////////////////////////// ARGS /////////////////////////////////////////////////

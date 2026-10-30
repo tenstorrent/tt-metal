@@ -319,10 +319,19 @@ bool h_reduce_negate_fits_in_l1(
     const uint32_t Ht = H / tile_height;
 
     auto* device = input_tensor.device();
-    // Mirror the H factory: shard-based CB sizing is only valid on the width-sharded L1 path.
-    const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-                                    output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-                                    input_tensor.memory_config().is_l1() && output_mem_config.is_l1();
+    // Shard-based CB sizing is only valid on the H factory's width-sharded fast path.
+    const auto& input_mem_config = input_tensor.memory_config();
+    MemoryConfig resolved_output_mem_config = output_mem_config;
+    if (input_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && input_mem_config.is_l1() &&
+        output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && output_mem_config.is_l1()) {
+        auto output_shape = input_tensor.logical_shape();
+        output_shape[2] = 1;
+        resolved_output_mem_config =
+            build_reduce_output_tensor_spec(
+                output_shape, input_tensor.dtype(), output_mem_config, input_mem_config, ReduceOpDim::H)
+                .memory_config();
+    }
+    const bool use_width_sharding = reduce_h_uses_width_sharded_fast_path(input_mem_config, resolved_output_mem_config);
 
     uint32_t num_cols_per_core_group_1 = 0;
     uint32_t num_cols_per_core_group_2 = 0;

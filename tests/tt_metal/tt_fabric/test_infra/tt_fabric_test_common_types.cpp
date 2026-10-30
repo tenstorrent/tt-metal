@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <numeric>
+
+#include <fmt/ranges.h>
 #include <tt_stl/reflection.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp"
@@ -43,9 +47,74 @@ std::string fetch_pattern_ftype(const TrafficPatternConfig& pattern) {
     return fetch_pattern_test_type(pattern, [](const auto& pattern) { return pattern.ftype; });
 }
 
+std::vector<uint32_t> scatter_chunk_sizes(
+    const ScatterWriteOptions& options, uint32_t payload_size_bytes, uint32_t alignment) {
+    const std::vector<uint32_t> weights =
+        options.chunk_weights.empty() ? std::vector<uint32_t>(kDefaultScatterWriteChunks, 1) : options.chunk_weights;
+    const uint64_t total_weight = std::accumulate(weights.begin(), weights.end(), uint64_t{0});
+
+    std::vector<uint32_t> sizes;
+    sizes.reserve(weights.size());
+    uint32_t assigned_bytes = 0;
+    for (size_t i = 0; i + 1 < weights.size(); i++) {
+        const uint64_t share = uint64_t{payload_size_bytes} * weights[i] / total_weight;
+        const auto size = static_cast<uint32_t>(share - (share % alignment));
+        sizes.push_back(size);
+        assigned_bytes += size;
+    }
+    sizes.push_back(payload_size_bytes - assigned_bytes);
+
+    // Chunk sizes travel in 16-bit header fields, and the router writes every chunk.
+    for (const uint32_t size : sizes) {
+        TT_FATAL(
+            size > 0 && size <= std::numeric_limits<uint16_t>::max(),
+            "Scatter chunk weights [{}] give a chunk of {} B for a {} B payload ({} B alignment); every chunk must be "
+            "1..65535 B.",
+            fmt::format("{}", fmt::join(weights, ", ")),
+            size,
+            payload_size_bytes,
+            alignment);
+    }
+    return sizes;
+}
+
+std::vector<std::string> noc_send_type_option_tags(const NocSendTypeSpec& spec) {
+    std::vector<std::string> tags;
+    if (const auto* scatter = std::get_if<ScatterWriteOptions>(&spec.options)) {
+        const auto& weights = scatter->chunk_weights;
+        if (!weights.empty()) {
+            if (std::all_of(weights.begin(), weights.end(), [&](uint32_t w) { return w == weights.front(); })) {
+                tags.push_back(fmt::format("chunks_{}", weights.size()));
+            } else {
+                tags.push_back(fmt::format("weights_{}", fmt::join(weights, "_")));
+            }
+        }
+        if (scatter->atomic_inc) {
+            tags.emplace_back("atomic_inc");
+        }
+        if (scatter->flush) {
+            tags.emplace_back("flush");
+        }
+    } else if (const auto* fused = std::get_if<FusedAtomicIncOptions>(&spec.options)) {
+        if (fused->flush) {
+            tags.emplace_back("flush");
+        }
+    }
+    return tags;
+}
+
+std::string noc_send_type_label(const NocSendTypeSpec& spec) {
+    std::string label(enchantum::to_string(spec.type));
+    for (const auto& tag : noc_send_type_option_tags(spec)) {
+        label += "+" + tag;
+    }
+    return label;
+}
+
 std::string fetch_pattern_ntype(const TrafficPatternConfig& pattern) {
     log_debug(tt::LogTest, "Fetching ntype from pattern");
-    return fetch_pattern_test_type(pattern, [](const auto& pattern) { return pattern.ntype; });
+    TT_FATAL(pattern.ntype.has_value(), "Test type not found in pattern");
+    return noc_send_type_label(pattern.ntype.value());
 }
 
 uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter) {

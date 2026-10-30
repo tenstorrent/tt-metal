@@ -88,7 +88,7 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 _TILE_ROWS = [32, 16]
 
 
-def _run_canonical_bcast_col(
+def _canonical_bcast_col_config(
     formats,
     mathop,
     math_fidelity,
@@ -154,7 +154,7 @@ def _run_canonical_bcast_col(
         ),
         dest_acc=dest_acc,
     )
-    return configuration.run().result
+    return configuration
 
 
 @parametrize(
@@ -316,6 +316,23 @@ def test_eltwise_bcast_col_custom(
         ),
         dest_acc=dest_acc,
     )
+    canonical = None
+    if mathop == MathOperation.Elwmul:
+        canonical = _canonical_bcast_col_config(
+            formats,
+            mathop,
+            math_fidelity,
+            dest_acc,
+            src_A_tilized,
+            src_B_tilized,
+            input_dimensions_A,
+            tile_dims,
+            num_blocks,
+            num_tiles_in_block,
+        )
+        # Build both first: under --compile-producer `run()` skips once the first variant is built.
+        configuration.prepare()
+        canonical.prepare()
     res_from_L1 = configuration.run().result
     res_tilized = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
@@ -362,18 +379,7 @@ def test_eltwise_bcast_col_custom(
     # MUL kernel on the same operands is bit-identical to this scaffold at every fidelity, so match it.
     if mathop == MathOperation.Elwmul:
         ref_tilized = torch.tensor(
-            _run_canonical_bcast_col(
-                formats,
-                mathop,
-                math_fidelity,
-                dest_acc,
-                src_A_tilized,
-                src_B_tilized,
-                input_dimensions_A,
-                tile_dims,
-                num_blocks,
-                num_tiles_in_block,
-            ),
+            canonical.run().result,
             dtype=format_dict[formats.output_format],
         )
         mismatched = int((res_tilized != ref_tilized).sum())
