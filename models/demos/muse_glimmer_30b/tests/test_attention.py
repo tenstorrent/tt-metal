@@ -4,11 +4,12 @@
 
 """Device test: MuseGlimmerAttention (prefill + decode) vs the torch reference, real weights, layers 0 (sliding+RoPE) and 3 (full+NoPE)."""
 
+import functools
+
 import pytest
 import torch
 from loguru import logger
 
-import models.demos.gemma4.tt.attention.operations as gemma4_ops
 import models.demos.muse_glimmer_30b.tt.attention as attention_mod
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -104,7 +105,10 @@ def test_attention_prefill_chunked(mesh_device, tp, layer_idx, seq_len, monkeypa
     user 1 checks the page-table row slice."""
     monkeypatch.setattr(attention_mod, "PREFILL_SDPA_MAX_SEQ", 1024)
     monkeypatch.setattr(attention_mod, "GLOBAL_PREFILL_CHUNK", 1024)
-    monkeypatch.setattr(gemma4_ops, "PREFILL_SLIDING_CHUNK_SIZE", 1024)
+    # Several sliding strides (with history, trimming and a short tail); the default stride is bound at def time.
+    monkeypatch.setattr(
+        attention_mod, "sliding_prefill_sdpa", functools.partial(attention_mod.sliding_prefill_sdpa, stride=1024)
+    )
     _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=1)
 
 

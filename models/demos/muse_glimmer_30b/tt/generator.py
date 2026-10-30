@@ -138,12 +138,21 @@ class MuseGlimmerGenerator:
         t_b = time.perf_counter()
         for r, m in enumerate(self.models):
             if traced_sampling:
-                key = (r, "sample", bool(m.sampling.tt_sampling.force_argmax_sampling))
-                m.sampling.seed_manager.get_new_values()
+                s = m.sampling
+                # The sampler picks its penalty and log-prob ops at capture time, so they are part of the key.
+                key = (
+                    r,
+                    "sample",
+                    bool(s.tt_sampling.force_argmax_sampling),
+                    s._penalties_active,
+                    getattr(s, "_log_probs_active", False),
+                )
+                s.seed_manager.get_new_values()
                 if key not in self.trace_ids:
                     assert reload, "first traced step needs reload=True"
-                    # eager compile run, then capture; the captured run's output buffer is the trace output
-                    ttnn.deallocate(m.decode_and_sample(*self.decode_inputs[r]))
+                    # eager compile run (its token is discarded, so not counted for penalties), then capture;
+                    # the captured run's output buffer is the trace output
+                    ttnn.deallocate(m.decode_and_sample(*self.decode_inputs[r], count_tokens=False))
                     ttnn.synchronize_device(m.mesh_device)
                     self.trace_ids[key] = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
                     self.trace_outputs[key] = m.decode_and_sample(*self.decode_inputs[r])
