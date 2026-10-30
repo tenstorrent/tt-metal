@@ -52,6 +52,44 @@ STAGE_ZONES = [
     "ST_END_SYNC",
 ]
 WANTED = set([COMPUTE_ZONE] + READER_ZONES + OTHER_ZONES + KERNEL_ZONES + STAGE_ZONES)
+# Whole-op totals (TT_SPARSE_PROF_TOTALS=1, sparse_prof_window.hpp kTotalNames): one TS_DATA record per RISC and name,
+# cycles for the timed names and plain counts for the N_* names.
+TOTAL_NAMES = [
+    "KERNEL",
+    "RING_STEP_SUM",
+    "RING_STEP",
+    "ST_S1_QK",
+    "ST_WAIT_QK",
+    "ST_S2_MAX",
+    "ST_S2B_TEST",
+    "ST_S3_ALPHA",
+    "ST_S4_RESCALE",
+    "ST_S56_EXP_PV",
+    "ST_S6B_ROWSUM",
+    "ST_END_SYNC",
+    "C_K_WAIT",
+    "C_POP_KV",
+    "C_PLAN_WAIT",
+    "C_V_WAIT",
+    "C_ITER",
+    "RES_NORM",
+    "N_STEPS",
+    "N_SCORE_TILES",
+    "N_RESCALE",
+    "N_MEMBERS",
+    "RD_SYNC",
+    "RD_RES_Q",
+    "RD_RES_BITS",
+    "RD_RES_PLAN",
+    "RD_RES_PIECES",
+    "RD_GROUP_RX",
+    "RD_GROUP_TX",
+    "RD_FETCH_K",
+    "RD_CHAIN_RX",
+    "RD_CHAIN_TX",
+    "RD_RES_POOLED",
+    "WR_RES_OUT",
+]
 
 
 def pct(vals, p):
@@ -88,6 +126,8 @@ def main(path):
     # Sum zones (TT_METAL_PROFILER_SUM=1, SPARSE_PROF_SUM in sparse_prof_window.hpp): one ZONE_TOTAL row per RISC with
     # the whole op's summed step cycles in the data column. (run, dev, x, y, risc) -> cycles.
     step_sums = {}
+    totals = {}  # (run, dev, x, y, risc, name) -> whole-op total (TT_SPARSE_PROF_TOTALS)
+    unknown_ts = collections.Counter()
     with open(path) as f:
         head = f.readline()
         if "CHIP_FREQ[MHz]:" in head:
@@ -99,6 +139,12 @@ def main(path):
                 mt, mv, mr = re_type.search(c[12]), re_val.search(c[12]), re_ref.search(c[12])
                 if mt and mv and mr:
                     counters[(c[7], c[0], c[1], c[2])][mt.group(1)] = (int(mv.group(1)), int(mr.group(1)))
+                continue
+            if len(c) >= 12 and c[11].startswith("TS_DATA"):
+                if c[10] in TOTAL_NAMES:
+                    totals[(c[7], c[0], c[1], c[2], c[3], c[10])] = int(c[6])
+                else:
+                    unknown_ts[c[10]] += 1
                 continue
             if len(c) >= 12 and c[11] == "ZONE_TOTAL" and c[10] == SUM_ZONE:
                 step_sums[(c[7], c[0], c[1], c[2], c[3])] = int(c[6])
@@ -130,6 +176,9 @@ def main(path):
                     s[0], s[1] = min(s[0], t0), max(s[1], t)
     us = lambda cyc: cyc / freq_mhz
     report_step_sums(step_sums, us)
+    report_totals(totals, us)
+    if unknown_ts:
+        print("\nTS_DATA records with other names: %s" % dict(unknown_ts.most_common(8)))
 
     # Run host IDs are per device: the attention op is each device's longest run.
     runs = collections.defaultdict(list)
@@ -351,6 +400,95 @@ def report_step_sums(step_sums, us):
         print("  %-6s %6d %9.1f %9.1f %9.1f" % (dev, len(vals), us(vals[0]), us(vals[len(vals) // 2]), us(vals[-1])))
     for cyc, dev, x, y in sorted(busiest, reverse=True)[:5]:
         print("  busiest: dev %s core (%s, %s) %.1f us" % (dev, x, y, us(cyc)))
+
+
+def report_totals(totals, us):
+    """Whole-op totals per RISC (TT_SPARSE_PROF_TOTALS=1): every timed zone and wait summed over the whole op, the
+    step / score-tile / rescale counts, and per-core derived numbers (time per step and per score tile, time outside
+    steps). Per device the attention op is the run with the largest compute KERNEL total."""
+    if not totals:
+        return
+    risc_order = ["TRISC_0", "TRISC_1", "TRISC_2", "NCRISC", "BRISC"]
+    run_total = collections.defaultdict(int)
+    for (run, dev, x, y, risc, name), v in totals.items():
+        if name == "KERNEL" and risc.startswith("TRISC"):
+            run_total[(run, dev)] += v
+    main_run = {}
+    for (run, dev), v in run_total.items():
+        if v > run_total.get((main_run.get(dev), dev), -1):
+            main_run[dev] = run
+    core = collections.defaultdict(dict)  # (dev, x, y) -> {(risc, name): value}
+    for (run, dev, x, y, risc, name), v in totals.items():
+        if main_run.get(dev) == run:
+            core[(dev, x, y)][(risc, name)] = v
+    print(
+        "\nwhole-op totals (TT_SPARSE_PROF_TOTALS), %d cores on %d devices; us (N_* are counts):"
+        % (len(core), len(main_run))
+    )
+    print("  %-14s %-8s %5s %10s %10s %10s %10s" % ("name", "risc", "cores", "min", "median", "p90", "max"))
+    for name in TOTAL_NAMES:
+        for risc in risc_order:
+            vals = [c[(risc, name)] for c in core.values() if (risc, name) in c]
+            if not vals:
+                continue
+            f = (lambda v: float(v)) if name.startswith("N_") else us
+            vals = [f(v) for v in vals]
+            print(
+                "  %-14s %-8s %5d %10.1f %10.1f %10.1f %10.1f"
+                % (name, risc, len(vals), min(vals), pct(vals, 0.5), pct(vals, 0.9), max(vals))
+            )
+    # Per compute core: steps, tiles, time per step / per tile on each TRISC, and the time outside steps.
+    rows = []
+    for key, c in core.items():
+        steps = c.get(("TRISC_1", "N_STEPS"), 0)
+        tiles = c.get(("TRISC_1", "N_SCORE_TILES"), 0)
+        if not steps:
+            continue
+        step_t = {r: c.get((r, "RING_STEP_SUM"), 0) for r in risc_order[:3]}
+        kern = max(c.get((r, "KERNEL"), 0) for r in risc_order[:3])
+        rows.append((key, steps, tiles, step_t, kern, c))
+    if not rows:
+        return
+    print("\nper compute core (median / max over cores):")
+
+    def line(label, vals, unit=""):
+        print("  %-44s %10.3f %10.3f %s" % (label, pct(vals, 0.5), max(vals), unit))
+
+    line("steps", [r[1] for r in rows])
+    line("score tiles", [r[2] for r in rows])
+    line("score tiles per step", [r[2] / r[1] for r in rows])
+    line("rescale steps / steps", [r[5].get(("TRISC_1", "N_RESCALE"), 0) / r[1] for r in rows])
+    line("members per step", [r[5].get(("TRISC_1", "N_MEMBERS"), 0) / r[1] for r in rows])
+    for risc in risc_order[:3]:
+        line("step time %s (ms)" % risc, [us(r[3][risc]) / 1e3 for r in rows])
+        line("  per step %s (us)" % risc, [us(r[3][risc]) / r[1] for r in rows])
+        line("  per score tile %s (us)" % risc, [us(r[3][risc]) / r[2] for r in rows])
+    line("compute kernel (max TRISC, ms)", [us(r[4]) / 1e3 for r in rows])
+    line("outside steps = kernel - max TRISC steps (ms)", [us(r[4] - max(r[3].values())) / 1e3 for r in rows])
+    print("\nwhole-op stage split per thread (sum over cores of the stage / sum of RING_STEP_SUM):")
+    stages = [n for n in TOTAL_NAMES if n.startswith("ST_")] + ["C_V_WAIT"]
+    for risc in risc_order[:3]:
+        denom = sum(r[3][risc] for r in rows) or 1
+        print(
+            "  %-8s %s"
+            % (
+                risc,
+                "  ".join(
+                    "%s %.1f%%"
+                    % (n[3:] if n.startswith("ST_") else n, 100.0 * sum(r[5].get((risc, n), 0) for r in rows) / denom)
+                    for n in stages
+                ),
+            )
+        )
+    # The slowest compute core's breakdown (its op-critical path), and the median core's.
+    rows.sort(key=lambda r: r[4])
+    for label, r in (("median", rows[len(rows) // 2]), ("slowest", rows[-1])):
+        (dev, x, y), c = r[0], r[5]
+        print("\n%s compute core: dev %s (%s, %s), %d steps, %d score tiles" % (label, dev, x, y, r[1], r[2]))
+        for risc in risc_order:
+            items = [(n, c[(risc, n)]) for n in TOTAL_NAMES if (risc, n) in c and not n.startswith("N_")]
+            if items:
+                print("  %-8s %s" % (risc, "  ".join("%s %.1f" % (n, us(v)) for n, v in items)))
 
 
 if __name__ == "__main__":

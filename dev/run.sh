@@ -28,6 +28,11 @@
 #   ./dev/run.sh check_rescale # the check step with TT_SPARSE_FAST_RESCALE=1
 #   ./dev/run.sh structures # correctness over the mask family (random, band, clustered, uneven; also in check)
 #   ./dev/run.sh family     # traced op time over the mask family at 5 / 10 / 15 s (family5: 5 s only)
+#   ./dev/run.sh review     # everything the 10-30 review needs in one job: bench (validated), structures, passes,
+#                           # totals5 / totals10 / totals10_nopairs / totals15, family (longest, last)
+#   ./dev/run.sh totals10   # whole-op totals of every stage and wait plus engine counters, one untraced call at 10 s
+#                           # (TT_SPARSE_PROF_TOTALS=1; also totals5, totals15, totals10_nopairs); log_val_totals10_summary.txt
+#   ./dev/run.sh passes     # traced op time at the factory's Q pass count and at one more pass, 5 / 10 / 15 s
 #
 # Knobs (dev branch only, read by the DEBUG factory code; set once per process, they are not in the op's program
 # hash): TT_SPARSE_PROF_PASS / _ITER / _SKIP / _STEPS pick the profile window (defaults 0 / 1 / 0 / 100; ITER=-1 =
@@ -46,6 +51,7 @@ case "${1:-all}" in
     quick) set -- smoke perf profile5 ;;
     diag10) set -- sum10 sum10_nopairs profile10 profile10_dense ;;
     stages) set -- stages5 stages10 stages15 ;;
+    review) set -- bench structures passes totals5 totals10 totals10_nopairs totals15 family ;;
     night) set -- bench smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15 ;;
 esac
 if [ $# -gt 1 ]; then
@@ -71,7 +77,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 passes totals5 totals10 totals10_nopairs totals15 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -124,6 +130,7 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 [ "$ONLY" = perf_all ] && run perf_all 10800 pytest "$PERF" -s
 # structures: test_mask_structures alone. family: test_mask_family_perf (dense + gather baselines, then every
 # structure x density at k 256, pooled); the per-case records go to the results.jsonl the log names.
+[ "$ONLY" = passes ] && run passes 3600 pytest dev/passes_case.py -s
 [ "$ONLY" = structures ] && run structures 1800 pytest "$SPARSE" -s -k "test_mask_structures"
 [ "$ONLY" = family ] && run family 7200 pytest "$PERF" -s -k "dense_and_gather or mask_family"
 [ "$ONLY" = family5 ] && run family5 2400 pytest "$PERF" -s -k "5s and not 15s and (dense_and_gather or mask_family)"
@@ -212,6 +219,20 @@ case "$ONLY" in
         run "$ONLY" 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
             pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only and qauto}"
         summarize_profile "profile${n}_summary"
+        ;;
+    # totals5 / totals10 / totals15: the same call with TT_SPARSE_PROF_TOTALS=1 (every zone summed over the whole op per
+    # RISC, plus waits and step / score-tile counts; no windowed zones) and the engine counters; totals10_nopairs with
+    # D4 pair steps off.
+    totals5 | totals10 | totals15 | totals10_nopairs)
+        n=${ONLY#totals}
+        n=${n%_nopairs}
+        shape=s$(printf '%02d' "$n")
+        pairs_env=()
+        [ "$ONLY" = totals10_nopairs ] && pairs_env=(TT_SPARSE_PAIR_STEPS=0)
+        run "$ONLY" 1800 env ${pairs_env[@]+"${pairs_env[@]}"} TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
+            TT_SPARSE_PROF_TOTALS=1 \
+            pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only and qauto}"
+        summarize_profile "${ONLY}_summary"
         ;;
     # sum5 / sum10 / sum15: the same call under TT_METAL_PROFILER_SUM=1 with the zone window empty, so the buffer
     # keeps room for the per-RISC totals (RING_STEP_SUM); the summary prints min / median / max per device.
