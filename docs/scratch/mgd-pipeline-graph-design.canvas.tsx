@@ -1082,12 +1082,14 @@ const PIPELINE_SESSION_DECL = `
 //     chip at (entry_row, entry_col) in submesh node_to_submesh.at(edge.dst);
 //   - H2D enters at (h2d_entry_row, h2d_entry_col) and D2H leaves at (d2h_exit_row, d2h_exit_col), both in the
 //     submesh of layout.stage_order[0];
-//   - each InternalChip holds its FabricNodeId (fid), so a (submesh, row, col) gives the chip with no reverse map.
+//   - so any chip the layout names is stage_chips_by_submesh[i].at({row, col}), one lookup.
 struct PipelinePlacement {
-    std::vector<std::vector<::tt::tt_fabric::detail::InternalChip>> stage_chips_by_submesh;
-        // Resolver input, indexed by submesh index (the values of layout.node_to_submesh). On this carve submesh i
-        // is the position of stage_order[i]; entry i lists every chip of that position: its FabricNodeId and its
-        // slot-local (row, col), the coordinates the layout's rows and columns refer to.
+    std::vector<std::map<std::pair<std::uint32_t, std::uint32_t>, FabricNodeId>> stage_chips_by_submesh;
+        // The resolver's chips, indexed by submesh index (the values of layout.node_to_submesh) and keyed by
+        // slot-local (row, col), the coordinates the layout's rows and columns refer to. On this carve submesh i is
+        // the position of stage_order[i]; entry i maps every chip of that position to its FabricNodeId. The resolver
+        // was given the same chips as InternalChip lists ({fid, row, col}, from position_chips_); next() keys them
+        // by (row, col) here so a reader never searches a list.
     GraphLayoutResult layout;
         // Resolver output, as the resolver returns it: stage_order; node_to_submesh (stage -> submesh index above);
         // resolved_edges, one per MGD edge in the same order (src and dst stage names, the loopback mark, the exit and
@@ -1580,7 +1582,8 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
 // File-local: distinct_shapes, host_ranges_filling, chip_id (row-major over the mesh the grid tiles), disjoint,
 // mgd_connects, drop_fanned_out_sources, pipeline_pre_checks, positions_that_fit, both_ways, by_index, add_resource_completeness and
 // kPipelineConflictCap (the per-solve conflict budget); for the resolver, stages_by_pipeline, edge_tuples,
-// node_names, in_stage_order, chip_counts, core_counts and today's topological_sort.
+// node_names, in_stage_order, chip_counts, core_counts, by_row_col (a position's chips keyed by slot-local
+// (row, col)) and today's topological_sort.
 PipelinePlacementEnumerationSession::PipelinePlacementEnumerationSession(
     const LogicalMultiMeshGraph& logical, const tt::tt_metal::PhysicalSystemDescriptor& psd,
     const TopologyMappingResult& full) {
@@ -1727,11 +1730,14 @@ PipelineLayoutResult PipelinePlacementEnumerationSession::next() {
         for (const PipelineStageNode& stage : in.stages) {
             positions.push_back(carve.target_to_global.at(stage));
         }
-        PipelinePlacement placement{.stage_chips_by_submesh = submesh_chips(positions)};   // submesh i: stage i
+                const std::vector<std::vector<InternalChip>> chips = submesh_chips(positions);   // submesh i: stage i
+        PipelinePlacement placement;
+        for (const std::vector<InternalChip>& submesh : chips) {
+            placement.stage_chips_by_submesh.push_back(by_row_col(submesh));   // (row, col) -> FabricNodeId
+        }
         try {
             placement.layout = resolve_pipeline_placement(
-                in.stage_order, in.edges, submesh_links(positions), in.stage_chip_counts, placement.stage_chips_by_submesh,
-                in.capacity_overrides);
+                in.stage_order, in.edges, submesh_links(positions), in.stage_chip_counts, chips, in.capacity_overrides);
             placement.layout.stage_order = in.stage_order;
         } catch (const std::runtime_error& e) {
             result.pipelines.clear();
@@ -1951,25 +1957,26 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
      return result;
  }
 
-+// Each resolved edge's two stage positions come from node_to_submesh and the carve; its chips from the edge's
-+// slot-local row and col. Between two meshes every link between the two positions can carry the edge (the resolver
-+// chose among exactly these), so every channel of every one is recorded: the resolver's chip pair first, then the
-+// others in chip-id order. C1 links only cabled chip pairs, so each lookup finds at least one channel.
++// Each resolved edge's two submeshes come from node_to_submesh, and its chips from looking the edge's slot-local
++// (row, col) up in stage_chips_by_submesh; the carve gives the two positions. Between two meshes every link between
++// the two positions can carry the edge (the resolver chose among exactly these), so every channel of every one is
++// recorded: the resolver's chip pair first, then the others in chip-id order. C1 links only cabled chip pairs, so
++// each lookup finds at least one channel.
 +void PipelinePlacementEnumerationSession::record_channels(
 +    const std::string& pipeline,
 +    const ResolverInputs& in,
 +    PipelinePlacement& placement,
 +    const std::vector<std::size_t>& positions,
 +    std::vector<RequiredCrossing>& required_links) const {
-+    const auto chip = [&](std::size_t position, std::uint32_t row, std::uint32_t col) {
-+        return chip_at(position_chips_[position], row, col);
-+    };
++    const auto& chips = placement.stage_chips_by_submesh;                  // submesh i: (row, col) -> FabricNodeId
+
 +    std::set<std::pair<std::size_t, std::size_t>> recorded;     // position pairs, lower index first
 +    for (const ResolvedEdge& edge : placement.layout.resolved_edges) {
-+        const std::size_t p = positions.at(placement.layout.node_to_submesh.at(edge.src));
-+        const std::size_t q = positions.at(placement.layout.node_to_submesh.at(edge.dst));
-+        const FabricNodeId exit = chip(p, edge.exit_row, edge.exit_col);       // the link the resolver chose
-+        const FabricNodeId entry = chip(q, edge.entry_row, edge.entry_col);
++        const std::size_t i = placement.layout.node_to_submesh.at(edge.src);
++        const std::size_t j = placement.layout.node_to_submesh.at(edge.dst);
++        const std::size_t p = positions.at(i), q = positions.at(j);          // the two positions, for position_links_
++        const FabricNodeId exit = chips[i].at({edge.exit_row, edge.exit_col});      // the link the resolver chose
++        const FabricNodeId entry = chips[j].at({edge.entry_row, edge.entry_col});
 +        if (exit.mesh_id == entry.mesh_id) {
 +            placement.channels_by_resolved_edge.emplace_back();                 // intra-mesh fabric; the pairing does not touch it
 +            continue;
@@ -1979,8 +1986,8 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
 +        // could have chosen but did not check. Option 2: skip this loop, so R carries only the chip pair the layout
 +        // determined, with every channel on it.
 +        for (const LinkPair& link : position_links_.at({p, q})) {   // every other path between the two positions
-+            const FabricNodeId a = chip(p, link.exit_row, link.exit_col);
-+            const FabricNodeId b = chip(q, link.entry_row, link.entry_col);
++            const FabricNodeId a = chips[i].at({link.exit_row, link.exit_col});   // slot-local in submeshes i and j
++            const FabricNodeId b = chips[j].at({link.entry_row, link.entry_col});
 +            if (a != exit || b != entry) {
 +                links.push_back({a, b, channels_.at({a, b})});
 +            }
@@ -2023,7 +2030,7 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
 +}
 
  // pipeline_builder.cpp, anonymous namespace
-+FabricNodeId chip_at(const std::vector<InternalChip>& chips, std::uint32_t row, std::uint32_t col);   // by slot-local row, col
+
 +std::uint32_t edges_between(const std::vector<EdgeInputTuple>& edges, const std::string& a, const std::string& b);
 +                                                                // either direction, repeats included (Tier B's count)
 +std::size_t channel_count(const RequiredCrossing& crossing);      // channels over all its links`,
