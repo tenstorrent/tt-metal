@@ -143,7 +143,6 @@ Copy `glm53_4rank.yaml` and add the variables to its `global_env`:
 ```yaml
 global_env:
   PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/${GLM53_VARIANT}.json"
-  TT_METAL_SHM_TRACKING_DISABLED: "1"
   LOGURU_LEVEL: "ERROR"
   PREFILL_H2D_SERVICE_ID: "glm53-prefill"
   PREFILL_ENABLE_MIGRATION: "1"

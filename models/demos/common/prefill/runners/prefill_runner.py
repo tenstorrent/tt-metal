@@ -13,6 +13,8 @@ from typing import Optional
 import torch
 from loguru import logger
 
+os.environ.setdefault("TT_METAL_SHM_TRACKING_DISABLED", "1")
+
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
