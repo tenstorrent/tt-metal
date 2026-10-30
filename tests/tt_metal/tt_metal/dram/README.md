@@ -57,14 +57,14 @@ Run the tests once per descriptor:
 | 3 | `*MimirKernelLoad*:*MimirLocalTl1*` | Kernel load, same-chiplet TL1 | all |
 | 3a | `MM8/MimirDmIdma.Copy/OwnTl1:MM8/MimirDmIdma.Copy/LocalGddr*` | iDMA smoke before row 3b: one copy to own TL1, and a write and a read of local GDDR0 and of GDDR1, on CCE 0 hart 0 (the single-command modes) | all |
 | 3b | `MM4/MimirLocalDram.*` | Local DRAM copies by iDMA (`cce_idma_copy` `kModeTridBatch`): every CCE, all 8 harts, every local view and anchor; DRAM to TL1, TL1 to DRAM and the loopback through TL1; the size and alignment matrix (write direction); repeated overlapping copies, one launch per copy. Own row (see the note) | all |
-| 4 | `*MimirRemoteTl1Direct*` | Remote TL1 write/read, host-initiated remote read, size and alignment; direct pairs | 2x only |
+| 4 | `MM5Direct/MimirRemoteTl1.*` | Remote TL1 write/read, host-initiated remote read, size and alignment; direct pairs | 2x only |
 | 5 | `*MimirRemoteTl1Bidir*` | Concurrent remote TL1 in both directions, direct pairs | 2x only |
-| 6 | `*MimirRemoteTl1Routed*/M0Cce0ToM1Cce0` | Remote TL1 as in row 4, one-hop pair | 2x only |
-| 7 | `*MimirRemoteTl1Routed*/M0Cce1ToM1Cce1` | Remote TL1 as in row 4, one-hop pair | 2x only |
-| 8 | `*MimirRemoteTl1Routed*/M1Cce0ToM0Cce0` | Remote TL1 as in row 4, one-hop pair | 2x only |
-| 9 | `*MimirRemoteTl1Routed*/M1Cce1ToM0Cce1` | Remote TL1 as in row 4, one-hop pair | 2x only |
-| 10 | `*MimirRemoteTl1Routed*/M0Cce0ToM1Cce1` | Remote TL1 as in row 4, two-hop pair | 2x only |
-| 11 | `*MimirRemoteTl1Routed*/M1Cce1ToM0Cce0` | Remote TL1 as in row 4, two-hop pair | 2x only |
+| 6 | `MM5Routed/MimirRemoteTl1.*/M0Cce0ToM1Cce0` | Remote TL1 as in row 4, one-hop pair | 2x only |
+| 7 | `MM5Routed/MimirRemoteTl1.*/M0Cce1ToM1Cce1` | Remote TL1 as in row 4, one-hop pair | 2x only |
+| 8 | `MM5Routed/MimirRemoteTl1.*/M1Cce0ToM0Cce0` | Remote TL1 as in row 4, one-hop pair | 2x only |
+| 9 | `MM5Routed/MimirRemoteTl1.*/M1Cce1ToM0Cce1` | Remote TL1 as in row 4, one-hop pair | 2x only |
+| 10 | `MM5Routed/MimirRemoteTl1.*/M0Cce0ToM1Cce1` | Remote TL1 as in row 4, two-hop pair | 2x only |
+| 11 | `MM5Routed/MimirRemoteTl1.*/M1Cce1ToM0Cce0` | Remote TL1 as in row 4, two-hop pair | 2x only |
 | 12 | `*MimirRemoteDram*/SrcM0Cce1*` | Remote DRAM write, read, round trip and traffic matrix; one-hop source | 2x only |
 | 13 | `*MimirRemoteDram*/SrcM1Cce0*` | Remote DRAM write, read, round trip and traffic matrix; one-hop source | 2x only |
 | 14 | `*MimirRemoteDram*/SrcM0Cce0*` | Remote DRAM write, read, round trip and traffic matrix; two-hop source | 2x only |
@@ -174,19 +174,19 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | `data_movement/reshard_hardcoded/test_reshard_hardcoded.cpp` | C | — | — | Hardcoded Tensix/CB kernel; no worker cores | — |
 | `data_movement/deinterleave_hardcoded/test_deinterleave_hardcoded.cpp` | C | — | — | Hardcoded Tensix/CB kernel; no worker cores | — |
 | `data_movement/conv_hardcoded/test_conv_hardcoded.cpp` | C | — | — | Hardcoded Tensix/CB kernel; no worker cores | — |
-| `data_movement/one_to_one/test_one_to_one.cpp` | covered | `*MimirLocalTl1*`, `*MimirRemoteTl1Direct.WriteRead*`, `*MimirRemoteTl1Routed.WriteRead*`, `MimirPrefetcher.MM7T1D2d0To2`, `MimirPrefetcher.MM7T1D2d3To1`, `MimirPrefetcher.MM7T1Local3To2` | `*MimirLocalTl1*`, `MimirPrefetcher.MM7T1Local0To1` | No CCE NoC; TL1-to-TL1 copy and prefetch cover the intent | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
-| `data_movement/one_from_one/test_one_from_one.cpp` | covered | `*MimirLocalTl1*`, `*MimirRemoteTl1Direct.HostInitRemoteRead*`, `*MimirRemoteTl1Routed.HostInitRemoteRead*` | `*MimirLocalTl1*`; gap: host-initiated remote read | 1x1 gap: host-initiated remote read (D4) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
+| `data_movement/one_to_one/test_one_to_one.cpp` | covered | `*MimirLocalTl1*`, `MM5Direct/MimirRemoteTl1.WriteRead/*`, `MM5Routed/MimirRemoteTl1.WriteRead/*`, `MimirPrefetcher.MM7T1D2d0To2`, `MimirPrefetcher.MM7T1D2d3To1`, `MimirPrefetcher.MM7T1Local3To2` | `*MimirLocalTl1*`, `MimirPrefetcher.MM7T1Local0To1` | No CCE NoC; TL1-to-TL1 copy and prefetch cover the intent | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
+| `data_movement/one_from_one/test_one_from_one.cpp` | covered | `*MimirLocalTl1*`, `MM5Direct/MimirRemoteTl1.HostInitRemoteRead/*`, `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/*` | `*MimirLocalTl1*`; gap: host-initiated remote read | 1x1 gap: host-initiated remote read (D4) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/core_bidirectional/test_core_bidirectional.cpp` | covered | `*MimirRemoteTl1Bidir*.Concurrent*` | gap | PacketSizes only (7 of 9 TEST_F cases skip upstream); 1x1 gap: same-chiplet instances are separate launches, not concurrent (D4) | — |
 | `data_movement/one_from_all/test_one_from_all.cpp` | covered | `*MimirRemoteMixed.FanOutFanIn*`, `MimirPrefetcher.MM7T2TwoSenders01To2`, `MimirPrefetcher.MM7T2TwoSenders02To3` | gap | 1x1 gap: fan-in/all-to-all on mimir_1x1 (D4) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/all_to_all/test_all_to_all.cpp` | covered | `*MimirRemoteMixed.FanOutFanIn*`, `MimirPrefetcher.MM7T2TwoSenders01To2`, `MimirPrefetcher.MM7T2TwoSenders02To3` | gap | 1x1 gap: fan-in/all-to-all on mimir_1x1 (D4) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/all_from_all/test_all_from_all.cpp` | covered | `*MimirRemoteMixed.FanOutFanIn*`, `MimirPrefetcher.MM7T2TwoSenders01To2`, `MimirPrefetcher.MM7T2TwoSenders02To3` | gap | 1x1 gap: fan-in/all-to-all on mimir_1x1 (D4) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/interleaved/test_interleaved.cpp` | B-blocked | — | — | Interleaved bank addressing from a CCE (int64 bank offsets, D3) | Sync cases: B-blocked (CBs); L1 cases: C (no L1 banks) |
-| `data_movement/one_packet/test_one_packet.cpp` | covered | `*MimirRemoteTl1Direct.SizeAlignment*` | gap | SizeAlignment runs with read_back=false; 1x1 gap: sub-word and odd-size TL1 transfers (D4); iDMA max packet size is in iDMA probe case 4 | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
+| `data_movement/one_packet/test_one_packet.cpp` | covered | `MM5Direct/MimirRemoteTl1.SizeAlignment/*` | gap | SizeAlignment runs with read_back=false; 1x1 gap: sub-word and odd-size TL1 transfers (D4); iDMA max packet size is in iDMA probe case 4 | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/interleaved_to_sharded_hardcoded/test_interleaved_to_sharded_hardcoded.cpp` | C | — | — | Hardcoded Tensix/CB kernel; no worker cores | — |
 | `data_movement/multi_interleaved/test_multi_interleaved.cpp` | B-blocked | — | — | Interleaved bank addressing from a CCE (D3); CBs | — |
 | `data_movement/dram_sharded/test_dram_sharded.cpp` | covered | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirRemoteDram.ReadToTl1*`, `MimirPrefetcher.MM7T1Local0To1`, `MimirPrefetcher.MM7T1Local3To2`, `MimirPrefetcher.MM7T1D2d0To2`, `MimirPrefetcher.MM7T1D2d3To1` | `*MimirLocalDram.CceReadsDramToTl1*`, `MimirPrefetcher.MM7T1Local0To1` | Intent: read DRAM shards into TL1 | *Trid* cases: covered by `MM43/MimirTridIdma.UniqueIdsLocalGddr*`; `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/transaction_id/test_transaction_id.cpp` | covered | `MM43/MimirTridIdma.BarrierThenDependent*`, `MM43/MimirTridIdma.UniqueIds*` | `MM43/MimirTridIdma.BarrierThenDependent*`, `MM43/MimirTridIdma.UniqueIds*` | iDMA command-buffer trids: unique trids, per-trid ack wait, then the dependent transfer; final data gates; the dependent transfer's data gates too (the read-after-write destination, and the write-after-read read checked at ack) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
-| `data_movement/direct_write/test_direct_write.cpp` | covered | `*MimirRemoteTl1Direct.SizeAlignment*` | gap | 4 B case of SizeAlignment; upstream tests inline dword writes, which the CCE does not have, so the 4 B CPU store is a stand-in; 1x1 gap: sub-word direct write (D4) | Mcast cases: C |
+| `data_movement/direct_write/test_direct_write.cpp` | covered | `MM5Direct/MimirRemoteTl1.SizeAlignment/*` | gap | 4 B case of SizeAlignment; upstream tests inline dword writes, which the CCE does not have, so the 4 B CPU store is a stand-in; 1x1 gap: sub-word direct write (D4) | Mcast cases: C |
 | `data_movement/pcie_read_bw/test_pcie_read_bw.cpp` | C | — | — | No PCIe | — |
 | `data_movement/pcie_write_bw/test_pcie_write_bw.cpp` | C | — | — | No PCIe | — |
 | `data_movement/device_pcie_loopback/test_device_pcie_loopback.cpp` | C | — | — | No PCIe | — |

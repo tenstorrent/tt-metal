@@ -607,9 +607,9 @@ TEST_P(MimirLocalTl1, SameChipletControl) {
 
 INSTANTIATE_TEST_SUITE_P(MM5, MimirLocalTl1, ::testing::ValuesIn(same_chiplet_pairs()), local_pair_name);
 
-class MimirRemoteTl1Direct : public MimirRemoteParamTest<RemotePair> {};
+class MimirRemoteTl1 : public MimirRemoteParamTest<RemotePair> {};
 
-TEST_P(MimirRemoteTl1Direct, WriteRead) {
+TEST_P(MimirRemoteTl1, WriteRead) {
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -619,7 +619,7 @@ TEST_P(MimirRemoteTl1Direct, WriteRead) {
     run_remote_write_read(device, {pair}, fmt::format("{} WriteRead", remote_pair_label(pair)));
 }
 
-TEST_P(MimirRemoteTl1Direct, HostInitRemoteRead) {
+TEST_P(MimirRemoteTl1, HostInitRemoteRead) {
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -629,7 +629,7 @@ TEST_P(MimirRemoteTl1Direct, HostInitRemoteRead) {
     run_remote_host_init_read(device, pair);
 }
 
-TEST_P(MimirRemoteTl1Direct, SizeAlignment) {
+TEST_P(MimirRemoteTl1, SizeAlignment) {
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -639,41 +639,9 @@ TEST_P(MimirRemoteTl1Direct, SizeAlignment) {
     run_remote_size_alignment(device, pair);
 }
 
-INSTANTIATE_TEST_SUITE_P(MM5, MimirRemoteTl1Direct, ::testing::ValuesIn(direct_remote_pairs()), remote_pair_name);
+INSTANTIATE_TEST_SUITE_P(MM5Direct, MimirRemoteTl1, ::testing::ValuesIn(direct_remote_pairs()), remote_pair_name);
 
-class MimirRemoteTl1Routed : public MimirRemoteParamTest<RemotePair> {};
-
-TEST_P(MimirRemoteTl1Routed, WriteRead) {
-    const RemotePair pair = GetParam();
-    if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
-    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    IDevice* device = open_remote_device();
-    run_remote_write_read(device, {pair}, fmt::format("{} WriteRead", remote_pair_label(pair)));
-}
-
-TEST_P(MimirRemoteTl1Routed, HostInitRemoteRead) {
-    const RemotePair pair = GetParam();
-    if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
-    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    IDevice* device = open_remote_device();
-    run_remote_host_init_read(device, pair);
-}
-
-TEST_P(MimirRemoteTl1Routed, SizeAlignment) {
-    const RemotePair pair = GetParam();
-    if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
-    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    IDevice* device = open_remote_device();
-    run_remote_size_alignment(device, pair);
-}
-
-INSTANTIATE_TEST_SUITE_P(MM5, MimirRemoteTl1Routed, ::testing::ValuesIn(routed_remote_pairs()), remote_pair_name);
+INSTANTIATE_TEST_SUITE_P(MM5Routed, MimirRemoteTl1, ::testing::ValuesIn(routed_remote_pairs()), remote_pair_name);
 
 class MimirRemoteTl1Bidir : public MimirRemoteTest {};
 
