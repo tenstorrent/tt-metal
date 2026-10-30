@@ -49,6 +49,7 @@ from models.demos.glm53_flash.custom_ops.dsa_decode_state.op import DsaDecodeSta
 from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
 from models.demos.glm53_flash.custom_ops.kda_decode.op import selector_tiles
 from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGather
+from models.demos.glm53_flash.custom_ops.paged_sparse_sdpa.op import PagedSparseSdpa
 from models.demos.glm53_flash.custom_ops.sparse_bound import live_bound_pools
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
@@ -140,6 +141,11 @@ PREFIX_INCREMENTAL_BUDGET_MB = int(os.environ.get("GLM53_PREFIX_INCREMENTAL_BUDG
 # the slot's full length (1 GiB at 1 M), so sparse_sdpa's T is constant and the DRAM footprint is paid once; the
 # piecewise fill moves ~3x the bytes of the direct untilize (~40 ms per layer-chunk at 1 M, 1.4 % of a wave step).
 PREFIX_SCRATCH_ENV = "GLM53_PREFIX_SCRATCH"
+# GLM53_PAGED_SPARSE=1: the per-row wave's sparse attention reads the paged TILE latent cache in place through the
+# model-local ``paged_sparse_sdpa`` op (custom_ops/paged_sparse_sdpa: the stock compute kernel, the K rows gathered as
+# 4-token pools out of the cache's tiles) -- no whole-prefix ROW_MAJOR copy at all, the fix the 1 M profile's waves need
+# (user decision 2026-10-30). The sequence-parallel path keeps the copy (it fits there).
+PAGED_SPARSE_ENV = "GLM53_PAGED_SPARSE"
 PREFIX_SCRATCH_PIECE_ROWS = int(os.environ.get("GLM53_PREFIX_SCRATCH_PIECE_ROWS", "131072"))
 
 
@@ -899,6 +905,13 @@ class TtLatentCache:
             TtLatentCache._shared_scratch[key] = t
         return t
 
+    def paged_slot_block0(self, user: int) -> int | None:
+        """The first physical block of ``user``'s prefill slot when its pages are contiguous (the identity table the
+        serving caches use: block of token ``id`` = block0 + id // 32), else None (the paged sparse attention needs
+        the contiguous form; scattered pages fall back to the copy)."""
+        ids = self.page_table_host[self.prefill_slot(user)].tolist()
+        return int(ids[0]) if ids == list(range(ids[0], ids[0] + len(ids))) else None
+
     def whole_rows_rm(self, user: int, n_rows: int) -> tuple[ttnn.Tensor, bool]:
         """The sparse_sdpa kv of ``user``'s first ``n_rows`` as ``(kv, owned)``: a fresh ``user_rows_rm`` copy the
         caller deallocates, or (GLM53_PREFIX_SCRATCH=1, contiguous pages) the shared scratch refilled piecewise
@@ -1031,6 +1044,8 @@ class TtDSA(LightweightModule):
         self.H_total = H
         self.H, self.Dq, self.Dv, self.L = H // tp, Dq, Dv, L
         self.scale = cfg.mla_softmax_scale
+        self.paged_sparse = os.environ.get(PAGED_SPARSE_ENV, "0") == "1"
+        self._paged_op: PagedSparseSdpa | None = None  # built on first use (the device's grid)
         sd = attn_state_dict
         up = self.mesh.upload
         self.w_qa = up(sd["q_a_proj.weight"].t(), weight_dtype)  # [4096,1536]
@@ -1529,9 +1544,13 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(o_dense)
             self._mark("out_proj")
             return y
-        kv_rm, kv_owned = cache.whole_rows_rm(
-            user, max(starts) + T
-        )  # the wave's longest prefix on every row (superset)
+        # the sparse attention's keys: the paged op reads the cache's tiles in place (GLM53_PAGED_SPARSE, contiguous
+        # pages), else the whole-prefix ROW_MAJOR copy of the wave's longest prefix on every row (a superset)
+        paged = (cache, user) if self.paged_sparse and cache.paged_slot_block0(user) is not None else None
+        if paged is None:
+            kv_rm, kv_owned = cache.whole_rows_rm(user, max(starts) + T)
+        else:
+            kv_rm, kv_owned = None, False
         ttnn.deallocate(c)
         self._mark("kv_copy")
         o_sparse = self._sparse_rows(
@@ -1547,6 +1566,7 @@ class TtDSA(LightweightModule):
             r1=T,
             row_starts_of=lambda q0: tuple(s0 + q0 for s0 in starts),
             pos_floor=self.sparse_row_start,
+            paged=paged,
         )
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
@@ -1872,7 +1892,7 @@ class TtDSA(LightweightModule):
         q: ttnn.Tensor,
         cache: TtLatentCache,
         user: int,
-        kv_rm: ttnn.Tensor,
+        kv_rm: ttnn.Tensor | None,
         *,
         start: int,
         end: int,
@@ -1880,6 +1900,7 @@ class TtDSA(LightweightModule):
         r1: int,
         row_starts_of=None,
         pos_floor: int = 0,
+        paged: tuple["TtLatentCache", int] | None = None,
     ) -> ttnn.Tensor:
         """The sparse-path attention output [1,1,r1-r0,H*Dv] of chunk (or slab) rows [r0, r1) of ``x`` /
         ``q_resid`` / ``q`` (all [1,1,T,*] of the chunk; ``x`` is the normalized input, ``q`` the per-head queries)
@@ -1976,7 +1997,7 @@ class TtDSA(LightweightModule):
                 ttnn.deallocate(q_a)
             self._mark("absorb_q")
             o_lat = self._sparse_attention(
-                q_lat, kv_rm, indices, owner=cache.owner_of(user)
+                q_lat, kv_rm, indices, owner=cache.owner_of(user), paged=paged
             )  # [1,H,a1-a0,L] TILE (consumes q_lat, indices)
             o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,a1-a0,H*Dv]
             ttnn.deallocate(o_lat)
@@ -1990,8 +2011,19 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(part)
         return o_sparse
 
+    def _paged_sparse_op(self) -> PagedSparseSdpa:
+        if self._paged_op is None:
+            self._paged_op = PagedSparseSdpa(self.device)
+        return self._paged_op
+
     def _sparse_attention(
-        self, q_lat: ttnn.Tensor, kv_rm: ttnn.Tensor, indices: ttnn.Tensor, *, owner: int | None = None
+        self,
+        q_lat: ttnn.Tensor,
+        kv_rm: ttnn.Tensor | None,
+        indices: ttnn.Tensor,
+        *,
+        owner: int | None = None,
+        paged: tuple["TtLatentCache", int] | None = None,
     ) -> ttnn.Tensor:
         """``sparse_sdpa`` of the absorbed queries ``q_lat`` [1,H,n,L] TILE (H = this chip's heads) over the
         ROW_MAJOR prefix copy ``kv_rm`` with the index rows ``indices`` [1,1,n,W] (replicated over the columns):
@@ -2012,21 +2044,38 @@ class TtDSA(LightweightModule):
         ([cols,H,n,L]); entry ``owner`` is the owner's output for this column's head shard."""
         H, n = q_lat.shape[1], q_lat.shape[2]
         cols = self.mesh.cols
+
+        def attend(q_rm: ttnn.Tensor, idx: ttnn.Tensor) -> ttnn.Tensor:
+            """The attention op on ROW_MAJOR queries: the stock sparse_sdpa over the whole-prefix copy ``kv_rm``, or
+            (``paged`` = (cache, user), GLM53_PAGED_SPARSE) the model-local paged op over the cache's tiles in place."""
+            if paged is not None:
+                cache_, user_ = paged
+                return self._paged_sparse_op()(
+                    q_rm,
+                    cache_.cache,
+                    idx,
+                    slot_block0=cache_.paged_slot_block0(user_),
+                    blocks_per_seq=cache_.blocks_per_seq,
+                    v_dim=self.L,
+                    scale=self.scale,
+                )
+            return ttnn.transformer.sparse_sdpa(
+                q_rm,
+                kv_rm,
+                idx,
+                v_dim=self.L,
+                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                scale=self.scale,
+                k_chunk_size=128,
+            )
+
         if owner is not None and cols > 1:
             q_full = self.mesh.all_gather_cols(q_lat, dim=1)  # [1,H_total,n,L]
             ttnn.deallocate(q_lat)
             q_rm = ttnn.to_layout(q_full, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(q_full)
             self._mark("gather_heads")
-            o_rm = ttnn.transformer.sparse_sdpa(
-                q_rm,
-                kv_rm,
-                indices,
-                v_dim=self.L,
-                kv_format=ttnn.transformer.SparseKVFormat.BF16,
-                scale=self.scale,
-                k_chunk_size=128,
-            )  # [1,H_total,n,L] row-major
+            o_rm = attend(q_rm, indices)  # [1,H_total,n,L] row-major
             self._mark("sparse_sdpa")
             ttnn.deallocate(q_rm)
             ttnn.deallocate(indices)
@@ -2054,15 +2103,7 @@ class TtDSA(LightweightModule):
             if q_rm is not q_rm0:
                 ttnn.deallocate(q_rm0)
             idx = indices
-        o_rm = ttnn.transformer.sparse_sdpa(
-            q_rm,
-            kv_rm,
-            idx,
-            v_dim=self.L,
-            kv_format=ttnn.transformer.SparseKVFormat.BF16,
-            scale=self.scale,
-            k_chunk_size=128,
-        )  # [1,H',n',L] row-major
+        o_rm = attend(q_rm, idx)  # [1,H',n',L] row-major
         self._mark("sparse_sdpa")
         ttnn.deallocate(q_rm)
         ttnn.deallocate(idx)

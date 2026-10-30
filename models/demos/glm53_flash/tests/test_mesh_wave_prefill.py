@@ -295,7 +295,9 @@ def test_wave_first_token_vs_hf(mesh_device):
     # any such ulp-level difference lands at the rows' own depth-chaotic spread, ~0.93-0.98, not at bit-identity).
     results = {}
     lone = 1 if rows > 1 else 0
-    for T_wave in (128, 256):
+    # GLM53_WAVE_TEST_TRACES picks the captured lengths (default both; the 128-row trace is layout-sensitive at depth)
+    traced_lengths = tuple(int(v) for v in os.environ.get("GLM53_WAVE_TEST_TRACES", "128,256").split(","))
+    for T_wave in traced_lengths:
         model.capture_waves([T_wave])
         traced = _timed(
             f"traced wave ({T_wave} per row)",
