@@ -6,22 +6,29 @@
 
 The prompt is real text, so the logits of its last ``SCORED`` positions are teacher-forced next-token
 predictions. Free-running V4.1 stacks are chaotic (top-k selection and MoE routing flips: real layer 20's MoE
-keeps the same experts on 77% of rows at input PCC 0.9987), so absolute bars on one token's logits measure flips.
+keeps the same experts on 77% of rows at input PCC 0.9987), so absolute bars on one token's logits measure
+flips.
 
 Gate (user decisions 2026-09-29; playbook ~/knowledge/wiki/playbooks/Acceptance bars.md): each layer's
 free-running streams (all rows and the last SCORED rows) vs the reference's single-shot prefill must be no
-further than the reference itself drifts when every attention and MoE output carries the error its component bar
+further than the reference itself drifts when every attention and MoE output carries the error its component
+bar
 allows and every attention and MoE input the error that flips selection and routing like the device's
-(``NOISE``, ``NOISE_SEEDS`` seeds, worst seed), minus ``DRIFT_MARGIN``: the stack composes its components' errors
+(``NOISE``, ``NOISE_SEEDS`` seeds, worst seed), minus ``DRIFT_MARGIN``: the stack composes its components'
+errors
 no worse than the components predict (a state or composition bug fails it). Top-1 agreement, top-5 recall and
 logits PCC over the scored positions are reported against the same floor; repeats are bit-identical.
 Cases: small dims (one chunk, two chunks, a padded last chunk), then production shape (S=2048) with synthetic
-and real weights, then long context on real weights (bead 8y7.19.1): N real-text chunks of 5120 tokens, the last
-one (e.g. at start 51200 for 11 chunks) attending over the caches the preceding chunks filled on device, with the
+and real weights, then long context on real weights (bead 8y7.19.1): N real-text chunks of 5120 tokens, the
+last
+one (e.g. at start 51200 for 11 chunks) attending over the caches the preceding chunks filled on device, with
+the
 released candidate count (2048 blocks). There the gate also covers the last chunk's rows (``chunk``), and the
 block acceptance of test_block_v41 runs at the last chunk: every chunk teacher-forced through every block on a
-fresh state (oracle inputs), the last chunk's block outputs >= the real block bar, the KV sources' compressed-KV and
-index-K rows and every window carry >= the cache bar. The single-shot oracle scores the indexer in query blocks
+fresh state (oracle inputs), the last chunk's block outputs >= the real block bar, the KV sources'
+compressed-KV and
+index-K rows and every window carry >= the cache bar. The single-shot oracle scores the indexer in query
+blocks
 (``oracle.INDEXER_QUERY_BLOCK``, bit-identical) so that it fits in host memory at S=56320.
 """
 
@@ -73,14 +80,18 @@ SEQ = 512
 SCORED = 256  # scored prompt positions (the last ones)
 # floor noise (user decisions 2026-09-29; playbook ~/knowledge/wiki/playbooks/Acceptance bars.md; evidence
 # evidence/F9-drift-diagnosis): on every attention and MoE output, the relative error a component PCC bar of
-# 0.999 allows (sqrt(2 * (1 - 0.999)) = 0.045; device components measure 3-5%); on every attention and MoE input,
+# 0.999 allows (sqrt(2 * (1 - 0.999)) = 0.045; device components measure 3-5%); on every attention and MoE
+# input,
 # the level at which the reference's component matches the device's on oracle inputs (selection and routing
-# flips): layer-20 attention 0.993 text / 0.988 random at 0.4% (small), real layer-20 MoE 0.9977 vs 0.9974 at 0.5%
+# flips): layer-20 attention 0.993 text / 0.988 random at 0.4% (small), real layer-20 MoE 0.9977 vs 0.9974 at
+# 0.5%
 NOISE = (0.045, 4e-3)
 NOISE_SEEDS = 5
-# below the worst reference self-agreement: ~1 binomial SD of an agreement rate at 256 positions; PCC is smooth
+# below the worst reference self-agreement: ~1 binomial SD of an agreement rate at 256 positions; PCC is
+# smooth
 MARGIN = {"top1": 0.02, "top5": 0.02, "pcc": 0.002}  # token metrics: reported against the floor, not gated
-# per-layer stream PCC below the reference's worst noisy drift (user decision 2026-09-29: gate per-layer drift;
+# per-layer stream PCC below the reference's worst noisy drift (user decision 2026-09-29: gate per-layer
+# drift;
 # Gaussian noise matches the stream error's size but not its flip-shaped per-row distribution, which token
 # agreement is sensitive to)
 DRIFT_MARGIN = 0.003
@@ -95,9 +106,18 @@ PRODUCTION_CASES = {
     **{f"{n}x{LONG_CHUNK}": (n * LONG_CHUNK, LONG_CHUNK, None) for n in (2, 4, 11)},
     "padded_8120": (LONG_CHUNK + 3000, LONG_CHUNK, None),
     "4x5120_scaled_fp8": (4 * LONG_CHUNK, LONG_CHUNK, None),
+    # the 10,240-row chunk (TT_V41_CHUNK=10240) on the 2x5120 and 11x5120
+    # prompts: one full chunk; five full chunks and a partial one (5,120 of 10,240 rows, the same last-chunk
+    # window
+    # [51200, 56320) as 11x5120). The same oracle, drifts and bars as the 5,120-row cases (the drift's "chunk"
+    # window stays the last LONG_CHUNK rows, so the cached references serve).
+    "1x10240": (2 * LONG_CHUNK, 2 * LONG_CHUNK, None),
+    "6x10240": (11 * LONG_CHUNK, 2 * LONG_CHUNK, None),
 }
-# cases whose compressed KV uses another format (test_block_v41 KV_FORMATS): the transformer's free-running prefill
-# has no format choice, so these gate only the teacher-forced block acceptance at the last chunk, in that format
+# cases whose compressed KV uses another format (test_block_v41 KV_FORMATS): the transformer's free-running
+# prefill
+# has no format choice, so these gate only the teacher-forced block acceptance at the last chunk, in that
+# format
 KV_FORMAT_CASES = {"4x5120_scaled_fp8": "scaled_fp8"}
 MESH = [
     pytest.param(
@@ -118,14 +138,17 @@ MESH_4X2 = [  # LoudBox 4x2 (SP4 x TP2): production gate only (beads 8y7.20.*.2)
 
 
 def last_chunk_rows(case: str) -> int | None:
-    """The valid rows of the last chunk of a long production ``case`` (the rows its ``chunk`` gate window covers);
+    """The valid rows of the last chunk of a long production ``case`` (the rows its ``chunk`` gate window
+    covers);
     None for the short cases (no chunk window)."""
     seq, chunk, _ = PRODUCTION_CASES[case]
-    return seq - (seq - 1) // chunk * chunk if chunk == LONG_CHUNK else None
+    # a chunk that is a multiple of LONG_CHUNK keeps LONG_CHUNK's window: the cached drifts are per window
+    return seq - (seq - 1) // LONG_CHUNK * LONG_CHUNK if chunk % LONG_CHUNK == 0 else None
 
 
 def setup_small(mesh_device, case, schedule):
-    """Everything before the small prefill: prompt, reference, Engram / DSpark modules and the transformer (device
+    """Everything before the small prefill: prompt, reference, Engram / DSpark modules and the transformer
+    (device
     MoE tensors from / into the weight cache). Shared by the test and the cache prepare step (mock mesh)."""
     layers = SCHEDULES[schedule]
     chunk, total = {"one_chunk": (SEQ, SEQ), "two_chunks": (SEQ // 2, SEQ), "padded": (SEQ // 2, SEQ - 12)}[case]
@@ -195,7 +218,8 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
 
 @contextmanager
 def _stage(name: str, kind: str):
-    """Log a stage's start and elapsed time (visible while the run runs) and emit it as a ``kind`` timing phase
+    """Log a stage's start and elapsed time (visible while the run runs) and emit it as a ``kind`` timing
+    phase
     (reference / oracle / weights / compute) for the lock-phase breakdown."""
     logger.info(f"stage {name}: start")
     t = time.perf_counter()
@@ -215,8 +239,10 @@ def _agreement(expected: torch.Tensor, actual: torch.Tensor) -> dict:
 
 
 def reference_data(spec, tokens, reference, last_chunk=None):
-    """What the gate compares against: the clean oracle, the scored tail logits, the per-layer noisy drifts (with
-    ``last_chunk``, also over the last chunk's rows) and the token-agreement floor (all disk-cached; the prepare step
+    """What the gate compares against: the clean oracle, the scored tail logits, the per-layer noisy drifts
+    (with
+    ``last_chunk``, also over the last chunk's rows) and the token-agreement floor (all disk-cached; the
+    prepare step
     fills them outside the device lock)."""
     scored = min(SCORED, tokens.shape[1])
     clean = orc.oracle(spec, tokens, reference)
@@ -232,7 +258,8 @@ def reference_data(spec, tokens, reference, last_chunk=None):
 
 
 def kv_format_reference(spec, tokens, reference):
-    """What a KV_FORMAT_CASES case compares against (disk-cached; the prepare step fills it): the clean oracle and
+    """What a KV_FORMAT_CASES case compares against (disk-cached; the prepare step fills it): the clean oracle
+    and
     the KV sources' unrounded compressed KV."""
     clean = orc.oracle(spec, tokens, reference)
     return clean, unrounded_kv(spec, tokens, reference, clean)
@@ -240,8 +267,10 @@ def kv_format_reference(spec, tokens, reference):
 
 def _check(model, spec, tokens, reference, name, last_chunk=None):
     """Two prefills of ``tokens`` [1, S]: bit-identical; each layer's free-running streams (all rows, the last
-    SCORED rows and, with ``last_chunk``, the last chunk's rows) no further from the reference than its drift under
-    the floor noise (worst seed) minus DRIFT_MARGIN. Token agreement vs the same floor is reported. Returns the
+    SCORED rows and, with ``last_chunk``, the last chunk's rows) no further from the reference than its drift
+    under
+    the floor noise (worst seed) minus DRIFT_MARGIN. Token agreement vs the same floor is reported. Returns
+    the
     first prefill's state and the clean oracle result."""
     scored = min(SCORED, tokens.shape[1])
     mesh, tp = model.mesh_device, model.mesh_device.shape[1]
@@ -292,11 +321,16 @@ def _check(model, spec, tokens, reference, name, last_chunk=None):
 
 
 def _teacher_forced_last_chunk(model, clean, total, name, kv_format=MlaKvCacheFormat.BF16_RM, unrounded=None):
-    """The block acceptance of test_block_v41 at the last chunk of a chunked prefill of ``total`` tokens: every chunk
-    through every block on the oracle's inputs (streams and pre-mix) over a fresh state, so each block reads caches
-    it wrote itself from teacher-forced inputs. Gates the last chunk's block outputs (>= BLOCK_PCC real), the KV
-    sources' compressed-KV and index-K rows (all rows) and every window carry (>= CACHE_PCC). With ``kv_format``
-    SCALED_FP8 the compressed KV is compared with ``unrounded`` (test_block_v41.unrounded_kv; vs the FP4-QDQ rows
+    """The block acceptance of test_block_v41 at the last chunk of a chunked prefill of ``total`` tokens:
+    every chunk
+    through every block on the oracle's inputs (streams and pre-mix) over a fresh state, so each block reads
+    caches
+    it wrote itself from teacher-forced inputs. Gates the last chunk's block outputs (>= BLOCK_PCC real), the
+    KV
+    sources' compressed-KV and index-K rows (all rows) and every window carry (>= CACHE_PCC). With
+    ``kv_format``
+    SCALED_FP8 the compressed KV is compared with ``unrounded`` (test_block_v41.unrounded_kv; vs the FP4-QDQ
+    rows
     reported)."""
     mesh, cfg, chunk = model.mesh_device, model.config, model.chunk
     shape, tp, n = tuple(mesh.shape), mesh.shape[1], cfg.HC_MULT
@@ -428,8 +462,10 @@ def setup_production(mesh_device, weights, case):
 @pytest.mark.parametrize("mesh_device, device_params", MESH + MESH_4X2 + galaxy_meshes(), indirect=True)
 def test_v41_transformer_production(mesh_device, device_params, weights, chunks):
     """Real dims, layers 0 2 3 20 21 24 (every sharing role and SWA-only; Engram layer 1 needs checkpoint
-    tables, not downloaded). Precompute the reference outside the device lock first (tests/v41/prepare_caches.py:
-    oracle, ``tail_logits`` clean and per noise seed; disk-cached). Long cases (``<n>x5120``) also gate the last
+    tables, not downloaded). Precompute the reference outside the device lock first
+    (tests/v41/prepare_caches.py:
+    oracle, ``tail_logits`` clean and per noise seed; disk-cached). Long cases (``<n>x5120``) also gate the
+    last
     chunk's rows and run the block acceptance at the last chunk (module docstring). Galaxy 8x4 / 4x8 (bead
     8y7.13.4): the same cases and bars; the oracle is mesh-independent (LoudBox caches are reused)."""
     setup = setup_production(mesh_device, weights, chunks)
