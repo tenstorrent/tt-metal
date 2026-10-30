@@ -732,6 +732,7 @@ std::string idma_code_name(uint32_t code) {
         case idma_abi::kCodeAckTimeout: return "ack_timeout";
         case idma_abi::kCodeDataTimeout: return "data_timeout";
         case idma_abi::kCodeBadArgs: return "bad_args";
+        case idma_abi::kCodePeerTimeout: return "peer_timeout";
     }
     return fmt::format("unknown_code_0x{:x}", code);
 }
@@ -775,7 +776,8 @@ uint64_t gddr_source_view_offset() {
 }
 
 // One cce_idma_copy kModeTridBatch launch: num_commands commands from one source block (source stride 0) to
-// destination + i * len_bytes, on trids 1, 2, ...
+// destination + i * len_bytes, on trids 1, 2, ... With a nonzero start_flag_offset (the writer's own TL1) the writer
+// issues only once that word is nonzero.
 struct IdmaWriter {
     uint32_t cce_index = 0;
     uint32_t hart = 0;
@@ -787,6 +789,7 @@ struct IdmaWriter {
     bool snoop = false;
     bool host_verified = false;
     uint32_t expected_xor = 0;
+    uint64_t start_flag_offset = 0;
 };
 
 HartKernel idma_writer_kernel(const IdmaWriter& writer) {
@@ -812,6 +815,7 @@ HartKernel idma_writer_kernel(const IdmaWriter& writer) {
     args[idma_abi::kArgDestinationStrideBytes] = writer.len_bytes;
     args[idma_abi::kArgTridStride] = 1;
     args[idma_abi::kArgHostVerified] = writer.host_verified ? 1 : 0;
+    args[idma_abi::kArgPeerFlagOffset] = static_cast<uint32_t>(writer.start_flag_offset);
     return {
         .cce_index = writer.cce_index,
         .hart = writer.hart,
@@ -1417,7 +1421,9 @@ std::string writer_param_name(const ::testing::TestParamInfo<WriterParam>& info)
         snoop_mode_name(std::get<2>(info.param)));
 }
 
-// The host and a remote CCE's SPA stores have no snoop-on mechanism (plan R2 reaches only same-Mimir writers).
+// The host and a remote CCE's SPA stores have no snoop-on mechanism (plan R2 reaches only same-Mimir writers). Every
+// iDMA writer here is the reader's own CCE, and the hardware never snoops a CCE's iDMA writes into its own TL1
+// (GRENSV-3774, GRENSV-1577), so SnoopOn runs only for SiblingSpa.
 std::vector<WriterParam> writer_params() {
     std::vector<WriterParam> params;
     for (const uint32_t cce_index : mimir_contract::cce_indices()) {
@@ -1430,8 +1436,7 @@ std::vector<WriterParam> writer_params() {
               ExternalWriter::RemoteGddrIdma}) {
             for (const SnoopMode mode :
                  {SnoopMode::SnoopOn, SnoopMode::SnoopOffInvalidate, SnoopMode::InvalidateOnly}) {
-                const bool no_snoop_mechanism = writer == ExternalWriter::Host || writer == ExternalWriter::RemoteCce;
-                if (!(mode == SnoopMode::SnoopOn && no_snoop_mechanism)) {
+                if (!(mode == SnoopMode::SnoopOn && writer != ExternalWriter::SiblingSpa)) {
                     params.emplace_back(cce_index, writer, mode);
                 }
             }
@@ -1552,10 +1557,11 @@ protected:
 
 // One writer and one snoop mode against a reader hart that warmed the lines cached (plan PC4). Records whether the
 // writer's TL1 writes reach the reader's cached copy, separating L2 from L1 D$ with a per-line discard. Gates on the
-// invalidated read being fresh (SnoopOffInvalidate), on a snooped writer refreshing the cached copy with no invalidate
-// (SnoopOn: the iDMA snoop packet tag per GRENSV-2290, or R2's RegionAttrs cmd_snoop), and on the data in TL1. Same-CCE
-// iDMA writers start with the reader in one Program, so a writer that lands before the warm read is recorded as
-// inconclusive. The iDMA writer writes 56 KiB of which the reader's lines are the end, so the reader also waits for the
+// warm read seeing the old values, on the invalidated read being fresh (SnoopOffInvalidate, InvalidateOnly), on a
+// snooped writer refreshing the cached copy with no invalidate (SnoopOn, SiblingSpa only: R2's RegionAttrs cmd_snoop
+// per GRENSV-2290), and on the data in TL1. Every writer waits for
+// the reader's warmed flag; a same-CCE iDMA writer starts with the reader in one Program and polls the flag before it
+// issues. The iDMA writer writes 56 KiB of which the reader's lines are the end, so the reader also waits for the
 // writer's done magic, which the writer stores only after its whole destination has landed, before any store of its own
 // (MIM-560).
 TEST_P(MimirCacheWriterProbe, ExternalWriters) {
@@ -1573,17 +1579,15 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
     const uint64_t region_offset = data_offset + kExternalRegionFromData;
     const uint64_t flag_offset = data_offset + kFlagLinesFromData;
     const uint32_t tag = 0x70 + static_cast<uint32_t>(writer) * 4 + static_cast<uint32_t>(mode);
-    const uint32_t value = 0x80000000u | (mimir_test_seed() & 0x7FF00000u) | (static_cast<uint32_t>(writer) << 16) |
-                           (static_cast<uint32_t>(mode) << 12);
+    // The gtest seed is below 2^17, so it is spread over the high bits before the mask.
+    const uint32_t value = 0x80000000u | ((mimir_test_seed() * 0x9E3779B9u) & 0x7FF00000u) |
+                           (static_cast<uint32_t>(writer) << 16) | (static_cast<uint32_t>(mode) << 12);
     record_leg("writer", "seed", fmt::format("value 0x{:08x} from mimir_test_seed 0x{:08x}", value, mimir_test_seed()));
     prefill_on_cce(device, cce_index, region_offset, pattern_words(kOldValue, kExternalWords), tag);
     write_cce_tl1(device, cce_index, flag_offset, std::vector<uint32_t>(kWordsPerLine, 0));
     const bool snoop = mode == SnoopMode::SnoopOn;
     const uint32_t steps = reader_steps(mode);
-    const bool writer_waits_for_warm =
-        writer == ExternalWriter::Host || writer == ExternalWriter::SiblingSpa || writer == ExternalWriter::RemoteCce;
-    HartKernel reader = external_reader_kernel(
-        cce_index, region_offset, kExternalWords, value, writer_waits_for_warm ? flag_offset : 0, steps);
+    HartKernel reader = external_reader_kernel(cce_index, region_offset, kExternalWords, value, flag_offset, steps);
 
     std::string writer_detail;
     std::optional<IdmaWriter> idma_writer;
@@ -1613,7 +1617,8 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
                     writer == ExternalWriter::LocalIdma ? idma_abi::kBackendLocalSram : idma_abi::kBackendFromRemote,
                 .len_bytes = kIdmaCommandBytes,
                 .num_commands = kIdmaCommands,
-                .snoop = snoop};
+                .snoop = snoop,
+                .start_flag_offset = flag_offset};
             if (writer == ExternalWriter::LocalIdma) {
                 write_cce_tl1(device, cce_index, tl1_data(kWriterHart), source);
                 batch.source = own_tl1_operand(cce_index, tl1_data(kWriterHart));
@@ -1700,14 +1705,14 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
     }
     ASSERT_EQ(reader_status[abi::kStatusCode], abi::kCodeDone)
         << label << ": reader " << mm41_detail(reader_status) << cache_code_note(reader_status[abi::kStatusCode]);
-    if (mode == SnoopMode::SnoopOffInvalidate) {
+    if (mode == SnoopMode::SnoopOffInvalidate || mode == SnoopMode::InvalidateOnly) {
+        EXPECT_EQ(reader_status[abi::kStatusWarmOld], kExternalWords)
+            << label << ": the writer landed before the warm read; " << verdict;
         EXPECT_EQ(reader_status[abi::kStatusMatches], kExternalWords)
             << label << ": cached read after INVALIDATE64; " << mm41_detail(reader_status);
     }
     if (mode == SnoopMode::SnoopOn) {
-        const std::string note = idma_writer.has_value()
-                                     ? std::string(kIdmaSnoopNote)
-                                     : std::string("RegionAttrs cmd_snoop (R2) not honoured; it was on 2026-10-22");
+        const std::string note = "RegionAttrs cmd_snoop (R2) not honoured; it was on 2026-10-22";
         EXPECT_EQ(reader_status[abi::kStatusWarmOld], kExternalWords)
             << label << ": the writer landed before the warm read, so the leg cannot show the snoop; " << verdict;
         EXPECT_EQ(reader_status[abi::kStatusStaleBefore], 0u)
