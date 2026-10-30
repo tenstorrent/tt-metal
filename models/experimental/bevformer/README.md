@@ -1,7 +1,7 @@
 # BEVFormer
 
 ## Platforms:
-    Blackhole (p100)
+    Blackhole (P100, P150)
 
 ## Introduction
 This directory runs BEVFormer end to end on device, base by default and tiny or small through the

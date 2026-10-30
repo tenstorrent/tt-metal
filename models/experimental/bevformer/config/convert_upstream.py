@@ -19,7 +19,6 @@ from pathlib import Path
 from .loader import load_builtin_config, read_source_bytes
 from .schema import SUPPORTED_VARIANTS
 
-
 _BINARY_OPERATORS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -27,6 +26,7 @@ _BINARY_OPERATORS = {
     ast.Div: operator.truediv,
     ast.FloorDiv: operator.floordiv,
 }
+_CONVERTED_ASSIGNMENTS = {"model", "test_pipeline", "img_norm_cfg", "class_names", "point_cloud_range"}
 
 
 def _safe_eval(node, environment):
@@ -51,7 +51,14 @@ def _safe_eval(node, environment):
         if len(node.args) > 1:
             raise ValueError("dict() with more than one positional argument is unsupported")
         result = {} if not node.args else dict(_safe_eval(node.args[0], environment))
-        result.update({keyword.arg: _safe_eval(keyword.value, environment) for keyword in node.keywords})
+        for keyword in node.keywords:
+            value = _safe_eval(keyword.value, environment)
+            if keyword.arg is None:
+                if not isinstance(value, dict):
+                    raise ValueError("dict() expansion must evaluate to a dictionary")
+                result.update(value)
+            else:
+                result[keyword.arg] = value
         return result
     raise ValueError(f"unsupported expression {type(node).__name__}")
 
@@ -67,7 +74,9 @@ def _assignments(source: str) -> dict:
             continue
         try:
             environment[target.id] = _safe_eval(statement.value, environment)
-        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+            if target.id in _CONVERTED_ASSIGNMENTS:
+                raise ValueError(f"could not statically read {target.id}") from error
             continue
     return environment
 
@@ -75,6 +84,80 @@ def _assignments(source: str) -> dict:
 def variant_from_source(source: str) -> str | None:
     match = re.search(r"bevformer[_-](tiny|small|base)", source, flags=re.IGNORECASE)
     return match.group(1).lower() if match else None
+
+
+def _pipeline_stages(pipeline):
+    if not isinstance(pipeline, (list, tuple)):
+        raise ValueError("test_pipeline must be a list of transform dictionaries")
+    for stage in pipeline:
+        if not isinstance(stage, dict) or not isinstance(stage.get("type"), str):
+            raise ValueError("test_pipeline must contain transform dictionaries with string types")
+        yield stage
+        if "transforms" in stage:
+            yield from _pipeline_stages(stage["transforms"])
+
+
+def _single_pipeline_stage(stages, stage_type):
+    matches = [stage for stage in stages if stage["type"] == stage_type]
+    if len(matches) > 1:
+        raise ValueError(f"test_pipeline has multiple {stage_type} stages")
+    return matches[0] if matches else None
+
+
+def _inference_input_settings(values, config):
+    pipeline = values.get("test_pipeline")
+    if pipeline is None:
+        return config.camera_image_size, config.image_scale, config.image_size_divisor
+    stages = list(_pipeline_stages(pipeline))
+
+    augmentation = _single_pipeline_stage(stages, "MultiScaleFlipAug3D")
+    camera_image_size = config.camera_image_size
+    if augmentation is not None:
+        camera_image_size = augmentation.get("img_scale")
+        if (
+            not isinstance(camera_image_size, (list, tuple))
+            or len(camera_image_size) != 2
+            or not all(isinstance(size, int) and not isinstance(size, bool) and size > 0 for size in camera_image_size)
+        ):
+            raise ValueError("MultiScaleFlipAug3D.img_scale must be one positive (width, height) pair")
+        camera_image_size = tuple(camera_image_size)
+        if augmentation.get("pts_scale_ratio", 1) != 1:
+            raise ValueError("MultiScaleFlipAug3D.pts_scale_ratio must be 1")
+        if augmentation.get("flip", False) is not False:
+            raise ValueError("MultiScaleFlipAug3D.flip must be false")
+
+    scale_stage = _single_pipeline_stage(stages, "RandomScaleImageMultiViewImage")
+    image_scale = 1.0
+    if scale_stage is not None:
+        scales = scale_stage.get("scales")
+        if (
+            not isinstance(scales, (list, tuple))
+            or len(scales) != 1
+            or not isinstance(scales[0], (int, float))
+            or isinstance(scales[0], bool)
+            or scales[0] <= 0
+        ):
+            raise ValueError("RandomScaleImageMultiViewImage.scales must contain one positive scale")
+        image_scale = float(scales[0])
+
+    pad_stage = _single_pipeline_stage(stages, "PadMultiViewImage")
+    image_size_divisor = 1
+    if pad_stage is not None:
+        image_size_divisor = pad_stage.get("size_divisor")
+        if not isinstance(image_size_divisor, int) or isinstance(image_size_divisor, bool) or image_size_divisor < 1:
+            raise ValueError("PadMultiViewImage.size_divisor must be a positive integer")
+        if pad_stage.get("size") is not None:
+            raise ValueError("fixed PadMultiViewImage.size is unsupported")
+        if pad_stage.get("pad_val", 0) != 0:
+            raise ValueError("non-zero PadMultiViewImage.pad_val is unsupported")
+
+    return camera_image_size, image_scale, image_size_divisor
+
+
+def _validate_transformer_flags(transformer):
+    for flag in ("rotate_prev_bev", "use_shift", "use_can_bus", "can_bus_norm", "use_cams_embeds"):
+        if flag in transformer and transformer[flag] is not True:
+            raise ValueError(f"transformer.{flag}={transformer[flag]!r} is unsupported; only True is supported")
 
 
 def convert_upstream_config(source_text: str, variant: str):
@@ -100,14 +183,19 @@ def convert_upstream_config(source_text: str, variant: str):
     normalization = values.get("img_norm_cfg", {})
     class_names = tuple(values.get("class_names", config.class_names))
     point_cloud_range = tuple(values.get("point_cloud_range", config.point_cloud_range))
+    camera_image_size, image_scale, image_size_divisor = _inference_input_settings(values, config)
+    _validate_transformer_flags(transformer)
 
     converted = replace(
         config,
         name=f"bevformer_{variant}",
         class_names=class_names,
+        camera_image_size=camera_image_size,
+        image_scale=image_scale,
         image_mean=tuple(normalization.get("mean", config.image_mean)),
         image_std=tuple(normalization.get("std", config.image_std)),
         color_order="RGB" if normalization.get("to_rgb", config.color_order == "RGB") else "BGR",
+        image_size_divisor=image_size_divisor,
         resnet_depth=backbone.get("depth", config.resnet_depth),
         resnet_style=backbone.get("style", config.resnet_style),
         with_dcn=bool(backbone.get("dcn", config.with_dcn)),
