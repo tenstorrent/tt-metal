@@ -7,8 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <ostream>
 #include <type_traits>
+#include <vector>
 
 #include <fmt/base.h>
 
@@ -67,6 +69,53 @@ private:
     static std::uint32_t implicitly_converted(std::uint32_t value) { return value; }
 };
 
+// ============================================================================
+//  ArrayArgValue
+// ============================================================================
+//
+// The value of an array kernel argument: a sequence of ArgValues, one per element.
+//
+// NOTES:
+//  - An ArrayArgValue is implicitly constructible from a braced list of values
+//    (= {a, b, c}) or from a std::vector<uint32_t>.
+//  - Its length must equal the array argument's declared length; this is validated
+//    when the argument is set.
+//
+// ============================================================================
+
+class ArrayArgValue {
+public:
+    ArrayArgValue() = default;
+
+    // Implicit construction from a braced list of values: = {a, b, c}
+    ArrayArgValue(std::initializer_list<ArgValue> values) : values_(values) {}
+
+    // Implicit construction from a vector of uint32_t values
+    ArrayArgValue(const std::vector<std::uint32_t>& values) : values_(values.begin(), values.end()) {}
+
+    // Number of elements
+    std::size_t size() const { return values_.size(); }
+
+    // Element access (unchecked, like std::vector::operator[])
+    const ArgValue& operator[](std::size_t index) const { return values_[index]; }
+
+    // Equality comparison (there is deliberately no ordering)
+    friend bool operator==(const ArrayArgValue&, const ArrayArgValue&) = default;
+
+    friend std::ostream& operator<<(std::ostream& os, const ArrayArgValue& value) {
+        os << '{';
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            os << (i == 0 ? "" : ", ") << value[i];
+        }
+        return os << '}';
+    }
+
+private:
+    // MAINTAINER: Keep the representation private, as for ArgValue. Typed arguments will add
+    // constructors (e.g. from std::vector<float>) but must not change what existing calls store.
+    std::vector<ArgValue> values_;
+};
+
 }  // namespace tt::tt_metal::experimental
 
 template <>
@@ -83,5 +132,31 @@ struct fmt::formatter<tt::tt_metal::experimental::ArgValue> {
     auto format(const tt::tt_metal::experimental::ArgValue& value, format_context& ctx) const
         -> format_context::iterator {
         return fmt::format_to(ctx.out(), "{}", value.to_uint32());
+    }
+};
+
+template <>
+struct std::hash<tt::tt_metal::experimental::ArrayArgValue> {
+    std::size_t operator()(const tt::tt_metal::experimental::ArrayArgValue& value) const noexcept {
+        std::size_t seed = value.size();
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            seed ^=
+                std::hash<tt::tt_metal::experimental::ArgValue>{}(value[i]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        }
+        return seed;
+    }
+};
+
+template <>
+struct fmt::formatter<tt::tt_metal::experimental::ArrayArgValue> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::experimental::ArrayArgValue& value, format_context& ctx) const
+        -> format_context::iterator {
+        auto out = fmt::format_to(ctx.out(), "{{");
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            out = fmt::format_to(out, "{}{}", i == 0 ? "" : ", ", value[i]);
+        }
+        return fmt::format_to(out, "}}");
     }
 };
