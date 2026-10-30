@@ -420,6 +420,99 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
     return schemas
 
 
+def _config_sites_in_function(fn, specs, helpers, post_init):
+    """(label, emitted fields) for the templates=/runtimes= lists this function builds.
+
+    Same three shapes as ``_param_fields_in_tree``, read inside one function
+    instead of over the whole file. The label is the kernel source the config
+    names, so a report says which kernel differs rather than which Python
+    function does; it falls back to the function's own name.
+    """
+    fields, label = set(), None
+
+    def add_list(list_node):
+        for elt in list_node.elts:
+            if isinstance(elt, ast.Call):
+                fields.update(emitted_fields(elt, specs, helpers, post_init))
+
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if not isinstance(key, ast.Constant):
+                    continue
+                if key.value == "test_name" and isinstance(value, ast.Constant):
+                    label = value.value
+                elif key.value in LIST_KWARGS and isinstance(
+                    value, (ast.List, ast.Tuple, ast.Set)
+                ):
+                    add_list(value)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in PERF_CONFIG_BUILDERS
+        ):
+            for kw in node.keywords:
+                if kw.arg in LIST_KWARGS and isinstance(
+                    kw.value, (ast.List, ast.Tuple, ast.Set)
+                ):
+                    add_list(kw.value)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id in LIST_KWARGS
+                    and isinstance(node.value, (ast.List, ast.Tuple, ast.Set))
+                ):
+                    add_list(node.value)
+    return (label or fn.name), fields
+
+
+def derive_perf_test_column_sets(quasar: bool = False) -> dict:
+    """{perf_test_name -> {frozenset of fields: [labels]}}, one entry per test function.
+
+    ``derive_perf_test_schemas`` unions a file's columns before comparing it to
+    the catalog, which is right for the catalog and blind to the case where the
+    test functions inside one file do not agree. One file writes one CSV, so
+    disagreement there is the contamination ``helpers/perf/core.py`` raises on
+    teardown, and only a run on a board reaches it.
+
+    A source that backs more than one perf test is left out: its tests write one
+    CSV each, so its functions may differ on purpose, and which function serves
+    which test is not visible here. Leaving it out can only miss a difference.
+
+    Same static approximation as ``derive_perf_test_schemas``: params built
+    purely at runtime stay invisible, so a difference can be missed, never
+    invented.
+    """
+    specs = class_field_specs()
+    helpers = helper_returned_param_calls(specs)
+    post_init = class_post_init_copies()
+    sources = list(_perf_test_sources(quasar))
+    keys_per_path: dict = {}
+    for key, path in sources:
+        keys_per_path.setdefault(path, []).append(key)
+    out: dict[str, dict] = {}
+    for key, path in sources:
+        if len(keys_per_path[path]) > 1:
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        if _is_fuser_perf_test(tree) or not _has_perfconfig(tree):
+            continue
+        groups: dict = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            label, fields = _config_sites_in_function(node, specs, helpers, post_init)
+            if fields:
+                groups.setdefault(frozenset(fields), []).append(label)
+        if groups:
+            out[key] = {cols: sorted(set(labels)) for cols, labels in groups.items()}
+    return out
+
+
 def enum_member_names(module_filename: str, enum_name: str) -> set:
     """Names assigned in an Enum class body, read statically (no import)."""
     path = ROOT / "helpers" / module_filename

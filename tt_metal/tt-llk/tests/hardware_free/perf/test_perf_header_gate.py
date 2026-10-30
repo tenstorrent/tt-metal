@@ -30,6 +30,7 @@ from perf_schema_derive import (  # noqa: E402
     ROOT,
     class_field_specs,
     class_post_init_copies,
+    derive_perf_test_column_sets,
     derive_perf_test_schemas,
     emitted_fields,
     enum_member_names,
@@ -228,6 +229,75 @@ def test_test_name_aliases_reject_missing_and_stale_key():
     problems = _test_name_alias_problems(catalog)
     assert any("missing test_name_aliases" in p for p in problems)
     assert any("still a catalog key" in p for p in problems)
+
+
+def _column_set_problems(column_sets) -> list:
+    """One line per file whose test functions do not all emit the same columns.
+
+    One perf test file writes one CSV. A test function that emits a column the
+    others do not leaves two column sets in that file, pandas NaN-fills the
+    gaps, and ``helpers/perf/core.py`` stops the run on teardown with
+    PerfSchemaError. That only happens on a board, in a measuring leg, after the
+    change has merged: the catalog gate above unions a file's columns, so it
+    cannot see the split.
+    """
+    problems = []
+    for name, groups in sorted(column_sets.items()):
+        if len(groups) < 2:
+            continue
+        common = frozenset.intersection(*groups)
+        problems.append(f"  '{name}': {len(groups)} column sets in one CSV")
+        for cols, labels in sorted(groups.items(), key=lambda g: -len(g[1])):
+            unique = sorted(cols - common)
+            problems.append(
+                f"    {', '.join(labels)}: "
+                + (f"also emits {unique}" if unique else "emits the common set")
+            )
+    return problems
+
+
+def _assert_one_column_set_per_file(column_sets, arch):
+    problems = _column_set_problems(column_sets)
+    msg = [
+        f"{arch} perf test file(s) emit more than one column set:",
+        "",
+        *problems,
+        "",
+        "One file writes one CSV, so every test function in it must emit the "
+        "same columns. Give the test functions that lack a parameter that "
+        "parameter with a neutral value, the way a kernel that does not read it "
+        "already carries the others. If two families genuinely need different "
+        "columns, split them into separate test files, one schema per file.",
+    ]
+    assert not problems, "\n".join(msg)
+
+
+def test_one_column_set_per_perf_test_file():
+    _assert_one_column_set_per_file(derive_perf_test_column_sets(quasar=False), "WH/BH")
+
+
+def test_one_column_set_per_perf_test_file_qsr():
+    _assert_one_column_set_per_file(derive_perf_test_column_sets(quasar=True), "Quasar")
+
+
+def test_functions_that_disagree_are_reported_with_the_odd_column():
+    problems = _column_set_problems(
+        {
+            "perf_x": {
+                frozenset({"a", "b"}): ["sources/x.cpp"],
+                frozenset({"a"}): ["sources/x_bcast.cpp"],
+            }
+        }
+    )
+    assert any("'perf_x': 2 column sets in one CSV" in p for p in problems)
+    assert any("sources/x.cpp: also emits ['b']" in p for p in problems)
+    assert any("sources/x_bcast.cpp: emits the common set" in p for p in problems)
+
+
+def test_functions_that_agree_are_not_reported():
+    assert not _column_set_problems(
+        {"perf_x": {frozenset({"a", "b"}): ["sources/x.cpp", "sources/y.cpp"]}}
+    )
 
 
 # ── Metric-vocabulary drift (global) ──────────────────────────────────
