@@ -18,4 +18,4 @@ migration:
 
 env:
   PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb
-  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/prefill_kv_device_map.json
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/prefill_device_map.txt
