@@ -27,14 +27,12 @@ void kernel_main() {
     for (uint32_t op_index = 0; op_index < n_ops; op_index++) {
         const uint32_t src_kind = get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpSrcKind));
         const uint32_t src_sel = get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpSrcSelector));
-        const uint64_t src_offset =
-            (static_cast<uint64_t>(get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpSrcOffsetHi))) << 32) |
-            get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpSrcOffsetLo));
+        const uint64_t src_offset = cce_test::arg_u64(
+            abi::op_arg_index(op_index, abi::kOpSrcOffsetLo), abi::op_arg_index(op_index, abi::kOpSrcOffsetHi));
         const uint32_t dst_kind = get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpDstKind));
         const uint32_t dst_sel = get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpDstSelector));
-        const uint64_t dst_offset =
-            (static_cast<uint64_t>(get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpDstOffsetHi))) << 32) |
-            get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpDstOffsetLo));
+        const uint64_t dst_offset = cce_test::arg_u64(
+            abi::op_arg_index(op_index, abi::kOpDstOffsetLo), abi::op_arg_index(op_index, abi::kOpDstOffsetHi));
         const uint32_t n_words = get_arg_val<uint32_t>(abi::op_arg_index(op_index, abi::kOpNumWords));
 
         uint64_t src_address = 0;
@@ -53,8 +51,7 @@ void kernel_main() {
             xor_signature);
     }
 
-    volatile uint32_t* done = reinterpret_cast<volatile uint32_t*>(
-        static_cast<uint64_t>(done_offset) + static_cast<uint64_t>(MEM_L1_UNCACHED_BASE));
+    volatile uint32_t* done = cce_test::own_tl1_words(done_offset);
     done[abi::kDoneXorWord] = xor_signature;
     asm volatile("fence rw, rw" ::: "memory");
     done[abi::kDoneMagicWord] = abi::kDoneMagic;
