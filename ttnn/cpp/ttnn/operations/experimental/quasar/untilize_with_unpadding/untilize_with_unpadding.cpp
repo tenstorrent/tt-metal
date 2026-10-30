@@ -45,24 +45,25 @@ MassagedUntilizeVal build_ndiml_untilize_val(
     BaseUntilizeValType base_untilize,
     const Shape& output_tensor_end,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    auto output_shape = std::make_shared<Shape>();
+    // output_tensor_end holds inclusive end indices, so the cropped ND shape is end + 1 per dim. It depends only on
+    // output_tensor_end, so build it once here and let post_transform capture it by value.
+    ttsl::SmallVector<uint32_t> output_shape_vector;
+    output_shape_vector.reserve(output_tensor_end.rank());
+    for (size_t index = 0; index < output_tensor_end.rank(); ++index) {
+        output_shape_vector.push_back(output_tensor_end[index] + 1);
+    }
+    const Shape output_shape(std::move(output_shape_vector));
 
     return MassagedUntilizeVal(MassagedUntilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
-            ttsl::SmallVector<uint32_t> output_shape_vector;
-            output_shape_vector.reserve(output_tensor_end.rank());
-            for (auto index = 0; index < output_tensor_end.rank(); ++index) {
-                output_shape_vector.push_back(output_tensor_end[index] + 1);
-            }
-            *output_shape = ttnn::Shape(std::move(output_shape_vector));
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor, sub_core_grids);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
             auto unsqueezed_tensor = ttnn::operations::experimental::quasar::reshape(
                 output,
-                *output_shape,
+                output_shape,
                 std::nullopt,              /*Memory Config*/
                 std::nullopt,              /*Pad value*/
                 TileReshapeMapMode::CACHE, /*Reshape map mode*/
@@ -88,7 +89,25 @@ Tensor untilize_with_unpadding(
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
+    const auto& input_padded_shape = input_tensor.padded_shape();
+    // One end index per input dim: a shorter output_tensor_end would be read out of bounds below, and a longer one
+    // would be silently truncated on rank <= 4 but would set the rank of the reshape target on rank > 4.
+    TT_FATAL(
+        output_tensor_end.rank() == input_shape.rank(),
+        "untilize_with_unpadding: output_tensor_end {} has rank {} but the input {} has rank {}",
+        output_tensor_end,
+        output_tensor_end.rank(),
+        input_shape,
+        input_shape.rank());
     for (auto index = 0; index < input_shape.rank(); ++index) {
+        // Unpadding only shrinks. An end past the input would ask the prim for a larger output than it has,
+        // and on rank > 4 the fusion below would hide an overshoot on one leading dim behind the others.
+        TT_FATAL(
+            output_tensor_end[index] < input_padded_shape[index],
+            "untilize_with_unpadding: output_tensor_end {} is out of range for dimension {} of input {}",
+            output_tensor_end,
+            index,
+            input_padded_shape);
         output_end_vector.push_back(output_tensor_end[index]);
     }
 
