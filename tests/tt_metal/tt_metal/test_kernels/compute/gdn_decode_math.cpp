@@ -118,6 +118,50 @@ void kernel_main() {
                 EMIT_STATE);
         }
         stamp(1);
+    } else if constexpr (VARIANT == 5 || VARIANT == 6) {
+        // Update-pass cost decomposition (experiment, same loop shape as update_pass): 5 = seed + rank-1 + pack (no
+        // decay), 6 = seed + decay + pack (no rank-1). S_next -> c_16.
+        startup<cb::kT16, cb::u16, cb::out16>();
+        CircularBuffer kT(cb::kT16), u(cb::u16), s(cb::S), ecol(cb::ecol32), sn(cb::out16);
+        kT.wait_front(KT);
+        u.wait_front(VT);
+        s.wait_front(KV);
+        ecol.wait_front(1);
+        stamp(0);
+        for (uint32_t r = 0; r < REPS; r++) {
+            sn.reserve_back(KV);
+            reconfig_full_operand<SrcOrder::Reverse>(cb::kT16, cb::u16);
+            for (uint32_t i = 0; i < KT; i++) {
+                for (uint32_t j0 = 0; j0 < VT; j0 += gdn_decode::kUpdateGroup) {
+                    const uint32_t nn = (VT - j0 < gdn_decode::kUpdateGroup) ? (VT - j0) : gdn_decode::kUpdateGroup;
+                    tile_regs_acquire();
+                    copy_init(cb::S);
+                    for (uint32_t jj = 0; jj < nn; jj++) {
+                        copy_tile(cb::S, i * VT + j0 + jj, jj);
+                    }
+                    if constexpr (VARIANT == 6) {
+                        copy_tile(cb::ecol32, 0, gdn_decode::kUpdateGroup);
+                        for (uint32_t jj = 0; jj < nn; jj++) {
+                            gdn_decode_sfpu::mul_col_bcast<32>(jj, gdn_decode::kUpdateGroup);
+                        }
+                    } else {
+                        matmul_init(cb::kT16, cb::u16, 0);
+                        for (uint32_t jj = 0; jj < nn; jj++) {
+                            matmul_tiles(cb::kT16, cb::u16, i, j0 + jj, jj);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_init(cb::out16);
+                    for (uint32_t jj = 0; jj < nn; jj++) {
+                        pack_tile<true>(jj, cb::out16, i * VT + j0 + jj);
+                    }
+                    tile_regs_release();
+                }
+            }
+            sn.push_back(KV);
+        }
+        stamp(1);
     } else if constexpr (VARIANT == 3) {
         // ecol32 (c_9) is internal (the pass reads it back for ebc16); ebc16 goes to the output CB c_16.
         startup<cb::qk16, cb::qcol32, cb::out16>();
@@ -130,7 +174,8 @@ void kernel_main() {
             ecol.pop_front(1);
         }
         stamp(1);
-    } else if constexpr (VARIANT == 4) {
+    } else if constexpr (VARIANT == 4 || VARIANT == 7) {
+        // 7: the fused read + vector form (read_vector_pass), otherwise the two-pass form.
         startup<cb::qk16, STARTUP_ON_UTD ? cb::S : cb::S_mm, cb::out16>();
         constexpr gdn_decode::TokenCbs cbs{
             .qk16 = cb::qk16,
@@ -153,7 +198,8 @@ void kernel_main() {
         stamp(0);
         for (uint32_t r = 0; r < REPS; r++) {
             pass_clock_start();
-            gdn_decode::decode_token<KT, VT>(cbs, s_cur, s_next, EMIT_STATE, /*pop_inputs=*/false, StampHook{});
+            gdn_decode::decode_token<KT, VT, (VARIANT == 7)>(
+                cbs, s_cur, s_next, EMIT_STATE, /*pop_inputs=*/false, StampHook{});
             // Every repetition starts from the same S (c_6): recycle the ring slot the token wrote (both ids).
             sn.wait_front(KV);
             sn.pop_front(KV);
