@@ -8,14 +8,14 @@
 # .ddeb files flat and uncompressed (their compression-level 0), and the
 # stripped ttnn-import tree with zstd -1 (their compression-level 1). Names
 # drop the ref and run-id suffix: TorrentCI scopes artifacts to the producing
-# job execution. CPM's source cache is a TorrentCI cache; ccache is remote.
-# Not yet here: triggers (run it by hand).
+# job execution. ccache is remote; no TorrentCI cache (large restores fail
+# today, torrentci#1179). Not yet here: triggers (run it by hand).
 jobs:
   - id: asan-build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
     timeout: 4h
     # Remote ccache through the platform's proxy: TorrentCI sets
-    # CCACHE_REMOTE_STORAGE (civ2). The local ccache cache below stays.
+    # CCACHE_REMOTE_STORAGE (civ2).
     # Run marker: cpm warm 1
     compiler-cache: ccache
     runs-on:
@@ -52,19 +52,6 @@ jobs:
         - name: ttnn-import-ASan
           path: ttnn-import.tar.zst
           content-type: application/zstd
-    # CPM's source cache (Boost, protobuf, fmt, ... and the git-cloned
-    # packages). One cache per job, so it replaces the local ccache archive:
-    # at 1.6 GB that never restored, and remote ccache now serves the hits.
-    # TorrentCI keys cannot hash repository files; CPM names each package
-    # directory by a hash of its declaration, so restoring an older entry is
-    # safe and new declarations just add directories. Bump cpm-v1 to prune.
-    cache:
-      key: cpm-v1-${ref_name}-${commit_sha}
-      restore-keys:
-        - cpm-v1-${ref_name}-
-        - cpm-v1-main-
-        - cpm-v1-
-      save-paths: [.cpmcache]
     steps:
       - id: check-image
         kind: shell
@@ -91,15 +78,10 @@ jobs:
             - ccache -s -v
             - ccache -z
             - >-
-              echo "restored .cpmcache: $(du -sh .cpmcache 2>/dev/null | cut -f1), $(ls .cpmcache 2>/dev/null | wc -l) packages"
-            # Timestamped configure output (EPOCHREALTIME) to time each CPM fetch.
-            - >-
-              bash -o pipefail -c './build_metal.sh --build-dir build --build-type ASan
+              ./build_metal.sh --build-dir build --build-type ASan
               --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
               --build-all --enable-ccache --configure-only
-              --use-system-sfpi --disable-profiler 2>&1
-              | while IFS= read -r l; do printf "%s %s\\n" "$EPOCHREALTIME" "$l"; done'
-            - du -sh .cpmcache
+              --use-system-sfpi --disable-profiler
       - id: compile
         kind: shell
         shell:
