@@ -21,6 +21,7 @@ orchestration can be unit-tested with a fake generator.
 import os
 from typing import Callable, List, Optional
 
+import torch
 from loguru import logger
 
 ENV_VAR = "GEMMA4_WARMUP_PREFILL_ISLS"
@@ -110,14 +111,40 @@ def run_prefill_ladder(
 CONTINUATION_TAIL = 128
 
 
+def warmup_page_table_with_real_blocks(page_table, pool_blocks: Optional[int] = None):
+    """A mock page table with real block ids: the stock warmup table is all zeros, and block 0 is vLLM's null block,
+    so the continuation's prior-window reads (``_paged_tail_block_range`` drops leading null blocks and finds no
+    tail; the window frame reads block 0) never ran at boot and compiled on the first served hit. Each column gets
+    its own id ``1, 2, ...`` (wrapping inside ``pool_blocks`` when the pool is known); a table that already holds
+    real ids is returned as is. Non-tensor tables (fakes) pass through."""
+    if not torch.is_tensor(page_table) or page_table.numel() == 0 or int(page_table.max()) > 0:
+        return page_table
+    table = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+    ids = torch.arange(1, table.numel() + 1, dtype=torch.int64)
+    if pool_blocks is not None and int(pool_blocks) > 2:
+        ids = (ids - 1) % (int(pool_blocks) - 1) + 1  # real ids stay in [1, pool_blocks)
+    out = ids.reshape(table.shape).to(page_table.dtype)
+    return out if page_table.dim() > 1 else out.reshape(page_table.shape)
+
+
+def _kv_pool_blocks(kv_cache, model_id) -> Optional[int]:
+    """Blocks of the model's layer-0 K pool (``[blocks, kv_heads, block, head_dim]``), or None when unknown."""
+    try:
+        return int(kv_cache[model_id][0][0].shape[0])
+    except (TypeError, IndexError, AttributeError, KeyError):
+        return None
+
+
 def run_prefix_continuation_warmup(
     generator, kv_cache, prefill_forward: Callable, *, chunk: int, tail: int = CONTINUATION_TAIL
 ) -> bool:
     """Run one eager batch-1 prefill of ``tail`` tokens past ``chunk`` cached tokens (``start_pos=[chunk]``) on every
     data-parallel model of ``generator``, once per process: the shape a prefix-cache hit prefills in serving. The
     continuation is eager by design and its first use compiled on the request that hit the cache (the 12B QB2's
-    first cached request took 2.7 s against 0.6 s for the next, 2026-10-30). Returns whether it ran: with paged
-    attention off (no page table) there is no cached prefix to continue from."""
+    first cached request took 2.7 s against 0.6 s for the next, 2026-10-30). The mock page table carries real
+    block ids (``warmup_page_table_with_real_blocks``) so the continuation runs the same programs a served hit
+    runs (the prior window read from the paged cache). Returns whether it ran: with paged attention off (no page
+    table) there is no cached prefix to continue from."""
     if getattr(generator, "_warmed_prefix_continuation", False):
         return False
     generator._warmed_prefix_continuation = True
@@ -126,6 +153,9 @@ def run_prefix_continuation_warmup(
         if warmup_args.get("page_table") is None:
             logger.warning("Skipping the prefix-cache continuation warmup: paged attention off (no page table)")
             return False
+        warmup_args["page_table"] = warmup_page_table_with_real_blocks(
+            warmup_args["page_table"], pool_blocks=_kv_pool_blocks(kv_cache, model_id)
+        )
         logger.info("Warming up the eager prefix-cache continuation: {} tokens past {} cached", tail, chunk)
         prefill_forward(
             **warmup_args,

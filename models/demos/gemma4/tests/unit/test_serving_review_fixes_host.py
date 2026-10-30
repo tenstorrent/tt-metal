@@ -632,3 +632,288 @@ def test_prefill_forward_without_metadata_or_payloads_stays_text(bridge, monkeyp
         page_tables_per_layer=[_row(range(1, 20))] * 2,
     )
     assert recorded["start_pos"] == [896] and recorded["pixel_values"] == [[None]] and encoded == []
+
+
+# ── the eager continuation's programs are position-independent (tt/attention/continuation.py) ───────────────────
+#
+# A served prefix-cache hit at a new position compiled ~2.4 s of programs keyed on the position / the physical
+# block ids (the RoPE slice, the per-block tail gathers, the page-table chunk slice, the int chunk start of the
+# chunked SDPA). The recorder below stubs ``ttnn`` so every op records its name and the integers among its
+# arguments; two continuations at different positions over different block sets must record the same multiset,
+# and no recorded integer may be a block id or a position.
+
+from models.demos.gemma4.tt.attention import continuation as continuation_mod  # noqa: E402
+from models.demos.gemma4.tt.attention import operations as operations_mod  # noqa: E402
+
+
+class _Dev:
+    """A device tensor stand-in: shape, dtype, the host values it was uploaded with, and a device handle."""
+
+    def __init__(self, shape, dtype="bf16", host=None):
+        self.shape = tuple(int(s) for s in shape)
+        self.padded_shape = self.shape
+        self.dtype = dtype
+        self.layout = "row_major"
+        self.host = host
+
+    def device(self):
+        return SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=8, y=8), arch=lambda: "bh")
+
+    def deallocate(self, *_):
+        pass
+
+
+_SDPA_ENV = (
+    "GEMMA4_PREFILL_SDPA_PROGCFG",
+    "GEMMA4_PREFILL_SDPA_QCHUNK",
+    "GEMMA4_PREFILL_SDPA_KCHUNK",
+    "GEMMA4_PREFILL_SDPA_GRID",
+    "GEMMA4_PREFILL_SDPA_WIDE",
+    "GEMMA4_PREFILL_SDPA_EXP_APPROX",
+    "GEMMA4_TEST_GRID",
+    "GEMMA4_CONTINUATION_CHUNKED_SDPA",
+)
+
+
+def _continuation_recorder(monkeypatch):
+    """A recording ``ttnn`` for the continuation helpers: ``(op, integers among its arguments)`` per call; uploads
+    record the host shape (their values are the position-carrying data) and keep the host copy for inspection."""
+    ops = []
+
+    def _ints(values):
+        out = []
+        for v in values:
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, int):
+                out.append(v)
+            elif isinstance(v, (list, tuple)):
+                out.extend(_ints(v))
+        return tuple(out)
+
+    def _record(name, *args, **kwargs):
+        ops.append((name, _ints(args) + _ints(kwargs.values())))
+
+    def _from_torch(host, device=None, dtype=None, layout=None, mesh_mapper=None):
+        _record("from_torch", tuple(host.shape))
+        return _Dev(host.shape, dtype=str(dtype), host=host.clone())
+
+    def _slice(t, starts, ends):
+        _record("slice", starts, ends)
+        return _Dev([e - s for s, e in zip(starts, ends)])
+
+    def _pad(t, padding, value=0.0):
+        _record("pad", padding)
+        return _Dev([s + a + b for s, (a, b) in zip(t.shape, padding)])
+
+    def _chunked_sdpa(
+        q,
+        k,
+        v,
+        pt,
+        chunk_start_idx=None,
+        *,
+        chunk_start_idx_tensor=None,
+        scale=None,
+        program_config=None,
+        compute_kernel_config=None,
+        paged_cache_geometry=None,
+        sliding_window_size=None,
+    ):
+        assert chunk_start_idx is None and chunk_start_idx_tensor is not None, "the continuation passes a tensor start"
+        _record(
+            "chunked_sdpa",
+            q.shape,
+            pt.shape,
+            program_config.q_chunk_size,
+            program_config.k_chunk_size,
+            sliding_window_size,
+            compute_kernel_config,
+        )
+        return _Dev(q.shape)
+
+    def _geometry(block_size, num_kv_heads):
+        _record("geometry", block_size, num_kv_heads)
+        return SimpleNamespace(block_size=block_size, num_kv_heads=num_kv_heads)
+
+    def _embedding(idx, weight, layout=None):
+        _record("embedding", idx.shape, weight.shape)
+        return _Dev((idx.shape[0], idx.shape[1], weight.shape[1]))
+
+    def _full(shape, fill_value, dtype=None, layout=None, device=None):
+        _record("full", shape, fill_value)
+        return _Dev(shape, host=torch.full(tuple(shape), fill_value))
+
+    def _add(a, b):
+        _record("add", a.shape, b.shape)
+        return _Dev(a.shape, host=a.host + b.host)
+
+    def _concat(parts, dim):
+        _record("concat", [p.shape for p in parts], dim)
+        shape = list(parts[0].shape)
+        shape[dim] = sum(p.shape[dim] for p in parts)
+        return _Dev(shape)
+
+    stub = SimpleNamespace(
+        Tensor=_Dev,
+        from_torch=_from_torch,
+        slice=_slice,
+        pad=_pad,
+        full=_full,
+        add=_add,
+        concat=_concat,
+        embedding=_embedding,
+        unsqueeze_to_4D=lambda t: _Dev((1,) + t.shape),
+        SDPAProgramConfig=lambda compute_with_storage_grid_size, q_chunk_size, k_chunk_size, exp_approx_mode: (
+            SimpleNamespace(
+                compute_with_storage_grid_size=compute_with_storage_grid_size,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=exp_approx_mode,
+            )
+        ),
+        CoreCoord=lambda x, y: SimpleNamespace(x=x, y=y),
+        PagedCacheGeometryOverride=_geometry,
+        transformer=SimpleNamespace(chunked_scaled_dot_product_attention=_chunked_sdpa),
+        int32="int32",
+        uint32="uint32",
+        ROW_MAJOR_LAYOUT="row_major",
+        TILE_LAYOUT="tile",
+    )
+    for mod in (prefill_mod, continuation_mod, operations_mod):
+        monkeypatch.setattr(mod, "ttnn", stub)
+    monkeypatch.setattr(operations_mod, "is_blackhole", lambda: False)
+    for var in _SDPA_ENV:
+        monkeypatch.delenv(var, raising=False)
+    return ops
+
+
+_WINDOW, _BLOCK, _SEQ, _KV, _HD = 1024, 256, 128, 2, 256
+
+
+def _run_continuation(ops, chunk_start, blocks):
+    """One sliding layer's continuation at ``chunk_start`` over the user's ``blocks`` (the sliding group's table):
+    the fill cut, the window-frame SDPA and the RoPE gather. Returns what the helpers uploaded / configured."""
+    row = torch.tensor([blocks], dtype=torch.int32)
+    cont = continuation_mod.PrefillContinuation(
+        "mesh", None, chunk_start=chunk_start, seq_len=_SEQ, legacy_table=row, legacy_mapper=None
+    )
+    view = cont.for_layer(0)
+    config = SimpleNamespace(head_dim=_HD, num_key_value_heads=_KV, sliding_window=_WINDOW, cache_position_modulo=None)
+    weights = SimpleNamespace(kv_replicated=False)
+    tt_q = _Dev((1, 4, _SEQ, _HD))
+    # the pool declared on another layer's view (block 128 x head_dim 512): the layer's effective block is 256
+    k_cache, v_cache = _Dev((64, _KV, 128, 512)), _Dev((64, _KV, 128, 512))
+    fill = view.fill_table(_BLOCK, chunk_start // _BLOCK, 1)
+    window_table, start_tensor, program_config, geometry = prefill_mod._sliding_continuation_inputs(
+        view, tt_q, k_cache, config, weights, 1, _WINDOW
+    )
+    out = continuation_mod.sliding_continuation_sdpa(
+        tt_q,
+        k_cache,
+        v_cache,
+        window_table,
+        start_tensor,
+        0,
+        sliding_window=_WINDOW,
+        program_config=program_config,
+        compute_kernel_config="hifi4_fp32acc",
+        paged_cache_geometry=geometry,
+    )
+    cos, sin = cont.rope_mats("sliding_attention", (_Dev((262144, _HD)), _Dev((262144, _HD))))
+    assert out.shape == tt_q.shape and cos.shape == sin.shape == (1, 1, _SEQ, _HD)
+    assert geometry.block_size == _BLOCK and geometry.num_kv_heads == _KV
+    cont.release()
+    return {
+        "start": int(cont.start_tensor.host.item()),
+        "positions": cont.positions.host.flatten().tolist(),
+        "fill": fill.host.flatten().tolist(),
+        "window": window_table.host.flatten().tolist(),
+        "rel_start": int(start_tensor.host.item()),
+        "chunks": (program_config.q_chunk_size, program_config.k_chunk_size),
+    }
+
+
+def test_continuation_records_the_same_programs_at_two_positions_over_two_block_sets(monkeypatch):
+    ops = _continuation_recorder(monkeypatch)
+    # Blocks 1.. of a 64-block pool at 2176 (an admission chunk inside a 256-token block) and at 8448 (a block
+    # boundary): the window frames differ in content and relative start, the programs must not.
+    runs = {}
+    for chunk_start, blocks in ((2176, list(range(61, 61 + 10))), (8448, [50, 52, 54, 56, 58] + list(range(30, 60)))):
+        del ops[:]
+        runs[chunk_start] = (_run_continuation(ops, chunk_start, blocks), list(ops), blocks)
+    (a, ops_a, blocks_a), (b, ops_b, blocks_b) = runs[2176], runs[8448]
+    assert ops_a and sorted(ops_a) == sorted(ops_b), "one program set for every hit position / block set"
+    assert [op for op, _ in ops_a].count("chunked_sdpa") == 1 and "concat" not in {op for op, _ in ops_a}
+    for ints, blocks, chunk_start in ((ops_a, blocks_a, 2176), (ops_b, blocks_b, 8448)):
+        forbidden = set(blocks) | {chunk_start, chunk_start // _BLOCK, chunk_start - _WINDOW}
+        recorded = {v for _, values in ints for v in values}
+        assert not (recorded & forbidden), f"a program keyed on a block id or the position: {recorded & forbidden}"
+        assert ("from_torch", (1,)) in ints, "the starts travel as uploaded [1] tensors, never as program arguments"
+    # the values live in the uploaded tensors: the absolute start, the positions, the window frame and the fill cut
+    assert a["start"] == 2176 and b["start"] == 8448
+    assert a["positions"] == list(range(2176, 2176 + _SEQ)) and b["positions"] == list(range(8448, 8448 + _SEQ))
+    assert a["fill"] == [blocks_a[8]] and b["fill"] == [blocks_b[33]]
+    assert a["chunks"] == b["chunks"] == (128, 128), "the SDPA chunks are capped at the hit alignment"
+    # frame A: origin 1024 (window start 1152 aligned down to the 256-block / 128-chunk lcm), 6 columns, start 1152
+    assert a["window"] == blocks_a[4:10] and a["rel_start"] == 1152
+    # frame B: origin 7424 = block 29, columns 29..34 (the table has 35), start 1024
+    assert b["window"] == blocks_b[29:35] and b["rel_start"] == 1024
+    for run, chunk_start in ((a, 2176), (b, 8448)):
+        origin = chunk_start - run["rel_start"]
+        assert origin % _BLOCK == 0 and run["rel_start"] % 128 == 0
+        assert origin <= chunk_start - _WINDOW < origin + _BLOCK * 2  # the frame starts at most one slack block early
+        assert origin + len(run["window"]) * _BLOCK >= chunk_start + _SEQ  # and covers the chunk
+
+
+def test_continuation_window_plan_is_fixed_width_and_covers_the_window(monkeypatch):
+    _continuation_recorder(monkeypatch)  # the chunk fit builds an SDPAProgramConfig
+    plan = continuation_mod.continuation_window_plan
+    for block_size in (64, 128, 256):
+        widths = set()
+        for chunk_start in range(0, 16384, 128):
+            first_block, cols, rel_start = plan(chunk_start, 128, _WINDOW, block_size, 128)
+            widths.add(cols)
+            origin = first_block * block_size
+            assert rel_start == chunk_start - origin and rel_start % 128 == 0
+            assert origin <= max(0, chunk_start - _WINDOW) and origin + cols * block_size >= chunk_start + 128
+        assert len(widths) == 1, f"one frame width per block size, got {widths} at block {block_size}"
+    assert plan(128, 128, _WINDOW, 256, 128)[:1] == (0,), "a hit inside the first window starts at position 0"
+    # the SDPA chunk fit: capped at the hit alignment, shrunk to a 32-multiple divisor of an off-grid start
+    cfg = SimpleNamespace(
+        compute_with_storage_grid_size="grid", q_chunk_size=256, k_chunk_size=128, exp_approx_mode=False
+    )
+    assert continuation_mod.align_sdpa_chunks(None, 2176) == (None, 32)
+    assert continuation_mod.align_sdpa_chunks(cfg, 2176)[1] == 128
+    fitted, align = continuation_mod.align_sdpa_chunks(cfg, 2208)
+    assert 2208 % fitted.q_chunk_size == 0 and 2208 % fitted.k_chunk_size == 0 and align % 32 == 0
+    assert continuation_mod.continuation_window_table(torch.tensor([[7, 8, 9]]), 2, 3).tolist() == [[9, 0, 0]]
+
+
+def test_continuation_sdpa_walks_a_long_chunk_in_fixed_pieces(monkeypatch):
+    """A continuation chunk longer than ``PREFILL_CHUNK_SIZE`` runs one SDPA per piece, each at the start tensor
+    plus the piece's fixed offset (added on device), and the pieces are concatenated: the recorded integers are
+    the piece offsets and shapes, never the position."""
+    ops = _continuation_recorder(monkeypatch)
+    piece = operations_mod.PREFILL_CHUNK_SIZE
+    seq_len = 2 * piece + 32  # two full pieces and a tile remnant that needs the q-chunk pad
+    chunk_start = 40960
+    program_config = SimpleNamespace(compute_with_storage_grid_size="grid", q_chunk_size=128, k_chunk_size=128)
+    start = _Dev((1,), host=torch.tensor([1024]))
+    window = _Dev((1, 72), host=torch.zeros(1, 72, dtype=torch.int32))
+    out = continuation_mod.sliding_continuation_sdpa(
+        _Dev((1, 4, seq_len, _HD)),
+        _Dev((64, _KV, 256, _HD)),
+        _Dev((64, _KV, 256, _HD)),
+        window,
+        start,
+        0,
+        sliding_window=_WINDOW,
+        program_config=program_config,
+        compute_kernel_config="ckc",
+    )
+    assert out.shape == (1, 4, seq_len, _HD)
+    names = [op for op, _ in ops]
+    assert names.count("chunked_sdpa") == 3 and names.count("concat") == 1 and names.count("pad") == 1
+    assert [values[1] for op, values in ops if op == "full"] == [piece, 2 * piece], "piece offsets, not positions"
+    assert chunk_start not in {v for _, values in ops for v in values}

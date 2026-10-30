@@ -484,6 +484,8 @@ class Gemma4Model:
         # ``ttnn_prefill_forward`` and bypass this stash.
         self._prefill_input_ids_torch = None
         self._prefill_embeds_torch = None
+        # The eager continuation's device inputs (attention/continuation.py), per prefill call.
+        self._g4_prefill_continuation = None
         # Multimodal prefill (vLLM bridge): the host-merged text + soft-token embeddings
         # of the user being prefilled, as ``(embeds [N, hidden] bf16, base_offset)`` with
         # row ``i`` = prompt position ``base_offset + i``. ``prepare_inputs_prefill`` feeds
@@ -1105,6 +1107,26 @@ class Gemma4Model:
         # fewer); freed with the presliced tensors after the loop.
         decode_rope_prepared = {lt: {} for lt in decode_rope_presliced}
 
+        # The eager continuation (a prefix-cache hit, a later scheduler / generator chunk at a Python-int offset):
+        # the device inputs ``prepare_inputs_prefill`` built for this (start, length), else None (cold prefill,
+        # traced chunk, batched prefill, direct callers).
+        continuation = None
+        if (
+            not is_decode
+            and chunk_start_idx is not None
+            and not isinstance(chunk_start_idx, ttnn.Tensor)
+            and int(chunk_start_idx) > 0
+            and chunk_page_table is not None
+            and batch_size == 1
+        ):
+            candidate = getattr(self, "_g4_prefill_continuation", None)
+            if (
+                candidate is not None
+                and candidate.chunk_start == int(chunk_start_idx)
+                and candidate.seq_len == int(rope_seq_len)
+            ):
+                continuation = candidate
+
         # copy-mode dFlash taps index buffers per forward
         self._dflash_tap_idx = 0
         for i, layer in enumerate(self.layers):
@@ -1137,6 +1159,11 @@ class Gemma4Model:
                         chunk_start_idx,
                         rope_seq_len,
                     )
+                elif continuation is not None and self.hf_config.layer_types[i] in self.rope_caches_2d:
+                    # The chunk's positions gathered from the 2-D caches (once per layer type, as decode does):
+                    # the 4-D cache slice at the start position keys a new slice program per position.
+                    layer_type = self.hf_config.layer_types[i]
+                    layer_rope = continuation.rope_mats(layer_type, self.rope_caches_2d[layer_type])
                 else:
                     rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
                     layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
@@ -1222,6 +1249,7 @@ class Gemma4Model:
                 chunk_page_table=chunk_page_table,
                 mm_attn_mask=mm_attn_masks,
                 traced_short_bucket=traced_short_bucket,
+                continuation=continuation.for_layer(i) if continuation is not None else None,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1252,6 +1280,11 @@ class Gemma4Model:
                     keep = getattr(self, "_dflash_tap_keep", None)
                     if keep and len(self._dflash_taps) > keep:
                         self._dflash_taps.pop(0).deallocate(True)
+
+        if continuation is not None:
+            continuation.release()
+            if getattr(self, "_g4_prefill_continuation", None) is continuation:
+                self._g4_prefill_continuation = None
 
         # Free the per-layer-type decode RoPE tensors shared across the loop.
         for cos_pos, sin_pos in decode_rope_presliced.values():
@@ -2155,6 +2188,31 @@ class Gemma4Model:
                     mesh_mapper=mesh_mapper,
                 )
 
+        # The eager continuation's position-independent inputs (attention/continuation.py): built here with the
+        # page table in its device layout, picked up by ``__call__`` for the same (start, length) and released
+        # after its layer loop. Cold prefills (start 0), traced chunks and batched prefills keep the plain paths.
+        from models.demos.gemma4.tt.attention.continuation import PrefillContinuation, continuation_chunked_sdpa_enabled
+
+        previous = getattr(self, "_g4_prefill_continuation", None)
+        if previous is not None:
+            previous.release()
+        self._g4_prefill_continuation = None
+        if (
+            not trace_enabled
+            and prefill_start > 0
+            and chunk_page_table is not None
+            and batch_size == 1
+            and continuation_chunked_sdpa_enabled()
+        ):
+            self._g4_prefill_continuation = PrefillContinuation(
+                self.mesh_device,
+                mesh_mapper,
+                chunk_start=prefill_start,
+                seq_len=per_user_seq_len,
+                legacy_table=page_table,
+                legacy_mapper=pt_mapper,
+            )
+
         self._prefill_input_ids_torch = tokens_torch
         self._prefill_batch_size = batch_size
         self._prefill_seq_len_per_user = per_user_seq_len
@@ -2296,6 +2354,10 @@ class Gemma4Model:
             embeds_torch = self._prefill_embeds_torch
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        continuation = getattr(self, "_g4_prefill_continuation", None)
+        if continuation is not None and page_tables_per_layer is not None:
+            # The hybrid groups' host tables, cut on the host per group (the device layout is the model's).
+            continuation.attach_per_layer_tables(page_tables_per_layer, self._page_table_host_layout)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         mm_attn_masks = self._g4_mm_prefill_vision(x, chunk_start_idx)
         try:

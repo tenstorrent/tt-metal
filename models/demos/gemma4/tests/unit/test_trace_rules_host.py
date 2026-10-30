@@ -7,6 +7,7 @@ from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
@@ -19,6 +20,7 @@ from models.demos.gemma4.tt.warmup_isls import (
     parse_warmup_isls,
     run_prefill_ladder,
     run_prefix_continuation_warmup,
+    warmup_page_table_with_real_blocks,
     warmup_prefill_isls,
 )
 
@@ -500,7 +502,9 @@ class _FakeGenerator:
         self.calls = []
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
-        return {"tokens": (batch_size, seq_len), "page_table": object() if self.paged else None, "model_id": model_id}
+        # the stock mock table: all zeros (every column the null block 0), 128-token blocks
+        table = torch.zeros(batch_size, -(-seq_len // 128), dtype=torch.int32) if self.paged else None
+        return {"tokens": (batch_size, seq_len), "page_table": table, "model_id": model_id}
 
 
 def _prefill_recorder(gen):
@@ -543,6 +547,18 @@ def test_prefix_continuation_warmup_prefills_a_tail_past_one_chunk_once_per_proc
     assert [c["start_pos"] for c in calls] == [[4096], [4096]], "one continuation per model, past one chunk"
     assert all(c["tokens"] == (1, 4096 + 128) and c["enable_trace"] is False for c in calls)
     assert [c["model_id_warmup"] for c in calls] == [0, 1] and all(c["kv_cache"] == "kv" for c in calls)
+    # the mock user holds real block ids: a zero table (the null block) never reads the prior window at boot, so
+    # the served hit compiled the continuation's programs on the first cached request
+    for c in calls:
+        table = c["page_table"]
+        assert tuple(table.shape) == (1, 33) and bool((table > 0).all()), "non-zero block ids for the mock user"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
+    # the pool bound: ids wrap inside [1, pool) when the kv pool is known; real tables and fakes pass through
+    assert warmup_page_table_with_real_blocks(torch.zeros(1, 6, dtype=torch.int32), pool_blocks=4).tolist() == [
+        [1, 2, 3, 1, 2, 3]
+    ]
+    real = torch.tensor([[9, 4, 0]], dtype=torch.int32)
+    assert warmup_page_table_with_real_blocks(real) is real and warmup_page_table_with_real_blocks(None) is None
     calls.clear()
     assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
     assert calls == [], "once per process"
