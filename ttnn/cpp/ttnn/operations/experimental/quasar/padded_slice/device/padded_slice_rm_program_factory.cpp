@@ -37,9 +37,9 @@ namespace ttnn::prim::qsr {
 using namespace tt::tt_metal::experimental;
 
 // Per-core reader/writer arg vectors (geometry unchanged from the shared RM factory). Reader vector:
-//   [0]=src abs addr (aligned-down)+width_offset, [1]=padded_stick, [2]=unpadded_stick, [3]=stick_offset,
-//   [4]=num_dims, [5]=start_id, [6..8]=num_sticks(x3), [9..)=num_output_sticks_per_dim, num_input_sticks_
-//   per_dim, id_per_dim (each num_dims). Writer vector: {num_sticks, out_row_elems, in_row_bytes, out_row_bytes}.
+//   [0]=src abs addr (aligned-down)+width_offset, [1]=unpadded_stick, [2]=stick_offset, [3]=num_dims,
+//   [4]=start_id, [5..7]=num_sticks(x3), [8..)=num_output_sticks_per_dim, num_input_sticks_per_dim,
+//   id_per_dim (each num_dims). Writer vector: {num_sticks, out_row_elems, in_row_bytes, out_row_bytes}.
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
     const Tensor& input_tensor,
@@ -56,8 +56,6 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-
-    int input_page_size = input_shape[-1] * input_tensor.element_size();
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
@@ -97,7 +95,6 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,
-        input_page_size,
         output_row_size_bytes,
         output_row_size_bytes_offset,
         num_dims,
@@ -164,8 +161,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
-        reader_kernel_args[2] = this_input_row_size_bytes;
-        uint32_t addr_offset = 5;
+        reader_kernel_args[1] = this_input_row_size_bytes;
+        uint32_t addr_offset = 4;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
@@ -308,7 +305,6 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     reader.runtime_arg_schema = {
         .runtime_arg_names = {
             "src_byte_offset",
-            "padded_stick_size",
             "unpadded_stick_size",
             "stick_size_offset",
             "num_dims",
@@ -356,16 +352,15 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             reader_rtas,
             core,
             {{"src_byte_offset", src_byte_offset},
-             {"padded_stick_size", r[1]},
-             {"unpadded_stick_size", r[2]},
-             {"stick_size_offset", r[3]},
-             {"num_dims", r[4]},
-             {"start_id", r[5]},
-             {"num_sticks_per_core", r[6]},
-             {"num_sticks_per_core_read", r[7]},
-             {"num_read_per_barrier", r[8]}});
-        // Vararg tail: r[9 ..) == num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim.
-        reader_run.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(r.begin() + 9, r.end());
+             {"unpadded_stick_size", r[1]},
+             {"stick_size_offset", r[2]},
+             {"num_dims", r[3]},
+             {"start_id", r[4]},
+             {"num_sticks_per_core", r[5]},
+             {"num_sticks_per_core_read", r[6]},
+             {"num_read_per_barrier", r[7]}});
+        // Vararg tail: r[8 ..) == num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim.
+        reader_run.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(r.begin() + 8, r.end());
 
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
         AddRuntimeArgsForNode(writer_rtas, core, {{"num_units", w[0]}});
