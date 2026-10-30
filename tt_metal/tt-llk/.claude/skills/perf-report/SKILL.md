@@ -72,14 +72,13 @@ Rules:
   report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build; NC
   compiles no counter code): the run emits the wall-clock
   `mean(<run type>)` columns plus the `<RUN_TYPE>_...` counter metric columns.
-  It also writes to the same `<module>.csv` path, overwriting the timing
-  report. Move the timing report out of the way first (see Refresh and
-  compare), run counters as a separate sweep, and validate the result as a
-  counter report. `--dump-perf-counters`
-  additionally writes raw counter values to `<module>.counters.csv`.
-- Perf counters are unavailable on Quasar. The build gate keeps the define off
-  there and `counters.h` `#error`s if it ever slips through, so the flag
-  yields no counter columns.
+  Run counters as a separate sweep (it lands in its own run directory, see
+  Refresh and compare) and validate the result as a counter report.
+  `--dump-perf-counters` additionally writes raw counter values to
+  `<module>.counters.csv`.
+- Perf counters work on Quasar too: four banks in every NEO and one l1_client
+  event CSR in place of the L1 bank (see
+  `docs/performance_counters/hardware_reference.md`).
 - SFPU sweep modules need `--mode perf`; the selector defaults to `accuracy`
   and deselects the perf sweep.
 - Do not pass `--coverage`. Instrumentation invalidates perf numbers.
@@ -173,12 +172,11 @@ Report back, and keep alongside the CSV when it is archived:
   and the previous run is untouched, so a rerun that skips everything or dies
   before the consumer phase cannot leave an earlier CSV looking like the new
   result. Read the run you mean, not `latest`, when comparing two runs.
-- A counter run is still a separate report kind from a timing run, and the two
-  share no metric columns — but they now land in different run directories, so
-  one no longer replaces the other.
+- A counter run is a separate report kind from a timing run. It has the same
+  `mean(<run type>)` columns, but they are timed with counters on (a different
+  build), so compare its wall-clock means only with other counter reports.
 - Compare like with like: same architecture, same speed-of-light setting, same
-  `loop_factor` and marker, and the same report kind. Timing and counter
-  reports measure different things and share no metric columns.
+  `loop_factor` and marker, and the same report kind.
 - Repeat a run before attributing a small delta to a code change.
 
 ## Checklist
