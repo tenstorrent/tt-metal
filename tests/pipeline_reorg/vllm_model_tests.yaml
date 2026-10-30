@@ -514,7 +514,11 @@
   mesh-device: "(4, 8)"
   arch: arch-blackhole
   tt-config: '{"trace_mode": "decode_only", "trace_region_size": 1000000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_gather_ms": 200, "prefill_gather_quiet_ms": 25}'
-  additional-server-args: "--data_parallel_size 4 --max_num_seqs 4 --block_size 64 --max_model_len 1048576 --max_num_batched_tokens 4096 --enable_chunked_prefill --enable-prefix-caching --trust-remote-code --reasoning-parser mimo --enable-auto-tool-choice --tool-call-parser mimo --enable-prompt-tokens-details"
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 4 --block_size 64 --max_model_len 1048576 --max_num_batched_tokens 4096 --enable_chunked_prefill --enable-prefix-caching --trust-remote-code --reasoning-parser mimo --enable-auto-tool-choice --tool-call-parser mimo --enable-prompt-tokens-details --prefix-cache-retention-interval 1024"
+  # --prefix-cache-retention-interval 1024: vLLM 0.30's default (0) keeps a sliding-window
+  # layer's cached KV only at the end of each prompt, so a request that shares a
+  # prefix but not the whole prompt (the gate's resume) hits nothing; 1024 keeps
+  # a window every 1024 tokens (a hit lands up to 1023 tokens short of the shared prefix).
   # VLLM_ENGINE_READY_TIMEOUT_S: the first-use start (TT cache build) runs for hours.
   # MIMO_APC_DEBUG=1: per-request lane and prefix-cache hit logs (tt/apc_debug.py) while the gate misses.
   extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400 MIMO_APC_DEBUG=1"
