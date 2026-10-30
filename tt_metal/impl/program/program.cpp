@@ -448,7 +448,7 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
     context_id_(context_id),
     programmable_core_count_(MetalContext::instance(context_id).hal().get_programmable_core_type_count()),
     max_dfbs_(MetalContext::instance(context_id).hal().get_num_dataflow_buffers()),
-    builder_(programmable_core_count_, max_dfbs_),
+    builder_(*this, programmable_core_count_, max_dfbs_),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         grid_extent_.push_back({});
@@ -496,11 +496,11 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     }
 
     for (const auto& cb_descriptor : descriptor.cbs) {
-        internal_->add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
+        internal_->builder().add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
     }
 
     for (const auto& semaphore_descriptor : descriptor.semaphores) {
-        internal_->add_semaphore(
+        internal_->builder().add_semaphore(
             semaphore_descriptor.core_ranges,
             semaphore_descriptor.id,
             semaphore_descriptor.initial_value,
@@ -588,30 +588,6 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
         }
     }
-}
-
-KernelHandle detail::ProgramImpl::add_kernel(
-    const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& programmable_core_type) {
-    TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
-
-    // Metal 2.0 kernels (with named bindings, e.g. dfb::/tensor::/args::) are only legal on Metal 2.0 Programs
-    if (kernel->is_metal2_kernel()) {
-        TT_FATAL(
-            this->created_from_spec_,
-            "Internal error: Metal 2.0 named bindings (dfb::/sem::/tensor::/args::) are only valid in a "
-            "Metal 2.0 Program (created from a ProgramSpec).");
-    }
-
-    uint32_t index = MetalContext::instance(context_id_).hal().get_programmable_core_type_index(programmable_core_type);
-    KernelHandle kernel_handle = builder_.add_kernel(kernel, index);
-
-    if (!kernel->scratchpad_binding_handles().empty()) {
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
-    }
-
-    kernel_groups_[index].resize(0);
-    core_to_kernel_group_index_table_[index].clear();
-    return kernel_handle;
 }
 
 std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) const {
@@ -1287,67 +1263,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
     }
 }
 
-CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer) {
-    // Metal 2.0 programs use DataflowBuffers, never legacy circular buffers.
-    TT_FATAL(
-        !this->created_from_spec_,
-        "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
-        "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
-
-    builder_.validate_circular_buffer_indices(*circular_buffer);
-
-    // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
-    // allocator
-    if (not circular_buffer->globally_allocated()) {
-        this->invalidate_circular_buffer_allocation();
-    } else {
-        circular_buffer->assign_global_address();
-        // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
-        // the program has to be laid out again.
-        this->compile_and_allocate_needed_ = true;
-    }
-
-    CBHandle handle = builder_.add_circular_buffer(circular_buffer);
-
-    // A globally allocated CB does need l1 allocation
-    if (!circular_buffer->globally_allocated()) {
-        register_ephemeral_allocation(this->cb_allocation_metadata_, circular_buffer->core_ranges());
-    }
-    return handle;
-}
-
-CBHandle detail::ProgramImpl::add_circular_buffer(
-    const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
-    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
-    TT_FATAL(
-        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
-    // Merge ranges to reduce the number of multicasts needed to initialize CBs.
-    std::shared_ptr<CircularBufferImpl> circular_buffer =
-        std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config);
-    return add_circular_buffer_(circular_buffer);
-}
-
-CBHandle detail::ProgramImpl::add_circular_buffer(
-    const CoreRangeSet& core_range_set,
-    const CircularBufferConfig& config,
-    const experimental::GlobalCircularBuffer& global_circular_buffer) {
-    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
-    TT_FATAL(
-        this->dataflow_buffers_.empty(), "Cannot add circular buffer to a program that already has dataflow buffers");
-    TT_FATAL(
-        this->per_core_cross_node_dfbs_.empty(),
-        "Cannot add a GlobalCircularBuffer to a program that already has CrossNodeDFB participants. "
-        "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
-    TT_FATAL(
-        this->per_core_prefetcher_pipes_.empty(),
-        "Cannot add a GlobalCircularBuffer to a program that already has PrefetcherPipe attachments. "
-        "GlobalCircularBuffer and PrefetcherPipe are mutually exclusive within a program.");
-    // Merge ranges to reduce the number of multicasts needed to initialize CBs.
-    std::shared_ptr<CircularBufferImpl> circular_buffer =
-        std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
-    return add_circular_buffer_(circular_buffer);
-}
-
 uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb) {
     TT_FATAL(this->compiled_.empty(), "Cannot add CrossNodeDFB to an already compiled program {}", this->id);
     // Check mutual exclusion: GlobalCircularBuffer and CrossNodeDFB cannot coexist in the same program.
@@ -2018,13 +1933,6 @@ void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(uint8_t remote_d
     trace_cached_program_command_sequences_.clear();
 }
 
-std::shared_ptr<CircularBufferImpl> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
-    if (!builder_.circular_buffer_by_id().contains(cb_id)) {
-        TT_THROW("No circular buffer with id {} exists in Program {}", cb_id, this->id);
-    }
-    return builder_.circular_buffer_by_id().at(cb_id);
-}
-
 std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers_on_core(
     const CoreCoord& core) const {
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs_on_core;
@@ -2592,24 +2500,6 @@ void detail::ProgramImpl::init_semaphores(
             std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
-}
-
-void detail::ProgramImpl::add_semaphore(
-    const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
-    TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
-    const uint32_t l1_alignment = MetalContext::instance(context_id_).hal().get_alignment(HalMemType::L1);
-    builder_.add_semaphore(crs, semaphore_id, init_value, l1_alignment, core_type);
-}
-
-uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
-    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
-    TT_FATAL(
-        MetalContext::instance(context_id_).is_coord_in_range(crs.ranges().back().end_coord, core_type),
-        "Coordinates out of range");
-
-    uint32_t semaphore_id = builder_.allocate_semaphore_id(crs, core_type);
-    this->add_semaphore(crs, semaphore_id, initial_value, core_type);
-    return semaphore_id;
 }
 
 std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {

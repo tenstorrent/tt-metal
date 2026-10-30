@@ -89,84 +89,6 @@ struct TraceDescriptor;
 
 namespace {
 
-struct DataMovementConfigStatus {
-    bool riscv0_in_use;
-    bool riscv1_in_use;
-    bool noc0_in_use;
-    bool noc1_in_use;
-};
-
-DataMovementConfigStatus CheckDataMovementConfig(
-    const HalProgrammableCoreType& programmable_core, Program& program, const CoreRangeSet& core_ranges) {
-    DataMovementConfigStatus data_movement_config_status{
-        .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
-
-    auto set_global_and_local_noc_usage =
-        [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
-            int noc_value;
-            switch (programmable_core) {
-                case HalProgrammableCoreType::TENSIX:
-                    noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
-                    break;
-                case HalProgrammableCoreType::ACTIVE_ETH:
-                case HalProgrammableCoreType::IDLE_ETH:
-                    noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
-                    break;
-                default:
-                    TT_THROW(
-                        "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                        enchantum::to_string(programmable_core));
-            }
-            local_noc0_usage = noc_value == 0;
-            local_noc1_usage = noc_value == 1;
-            data_movement_config_status.noc0_in_use = local_noc0_usage;
-            data_movement_config_status.noc1_in_use = local_noc1_usage;
-        };
-
-    const auto& hal = MetalContext::instance(program.impl().get_context_id()).hal();
-    for (const auto& core_range : core_ranges.ranges()) {
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup* kernel_group = program.impl().kernels_on_core(
-                    CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
-                if (kernel_group != nullptr) {
-                    bool local_noc0_in_use = false;
-                    bool local_noc1_in_use = false;
-                    bool has_dm0 = false;
-                    bool has_dm1 = false;
-                    for (auto kernel_id : kernel_group->kernel_ids) {
-                        const auto kernel = program.impl().get_kernel(kernel_id);
-                        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                            switch (kernel->get_kernel_processor_type(0)) {
-                                case 0:
-                                    has_dm0 = true;
-                                    data_movement_config_status.riscv0_in_use = true;
-                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
-                                    break;
-                                case 1:
-                                    has_dm1 = true;
-                                    data_movement_config_status.riscv1_in_use = true;
-                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
-                                    break;
-                                default: TT_THROW("Unknown DataMovementProcessor type"); break;
-                            }
-                        }
-                    }
-                    if (has_dm0 and has_dm1) {
-                        TT_FATAL(
-                            local_noc0_in_use and local_noc1_in_use,
-                            "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
-                            "doing so results in hangs!",
-                            CoreCoord(x, y).str());
-                    }
-                }
-            }
-        }
-    }
-
-    return data_movement_config_status;
-}
-
 void ValidateLegacyRuntimeArgsAPI(const Program& program, std::string_view api_name) {
     TT_FATAL(
         !program.impl().has_metal2_registry(),
@@ -604,178 +526,6 @@ Program CreateProgram(distributed::MeshDevice& mesh_device) {
     return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
 }
 
-KernelHandle CreateDataMovementKernel(
-    Program& program,
-    const KernelSource& kernel_src,
-    const CoreRangeSet& core_range_set,
-    const DataMovementConfig& config) {
-    const DataMovementConfigStatus& data_movement_config_status =
-        CheckDataMovementConfig(HalProgrammableCoreType::TENSIX, program, core_range_set);
-    const bool are_both_riscv_in_use =
-        data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
-    const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
-
-    std::string kernel_name;
-    if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
-        kernel_name = kernel_src.source_;
-    } else {
-        TT_FATAL(kernel_src.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
-        kernel_name = "kernel";
-    }
-
-    TT_FATAL(
-        !(are_both_riscv_in_use),
-        "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified "
-        "cores because both data movement processors are in use!",
-        kernel_name);
-    TT_FATAL(
-        !(are_both_noc_in_use),
-        "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified "
-        "cores because both NOCs are in use!",
-        kernel_name);
-
-    TT_FATAL(
-        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
-        "DataMovementKernel creation failure: Data movement kernels can only be created on DM0 or DM1 processors.");
-
-    const ContextId context_id = program.impl().get_context_id();
-    std::shared_ptr<Kernel> kernel =
-        std::make_shared<DataMovementKernel>(context_id, kernel_src, core_range_set, config);
-
-    // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
-    const auto fabric_defines = MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines();
-    if (!fabric_defines.empty()) {
-        kernel->add_defines(fabric_defines);
-    }
-
-    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-}
-
-KernelHandle CreateComputeKernel(
-    Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const ComputeConfig& config) {
-    std::shared_ptr<Kernel> kernel =
-        std::make_shared<ComputeKernel>(program.impl().get_context_id(), kernel_src, core_range_set, config);
-    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-}
-
-KernelHandle CreateEthernetKernel(
-    Program& program,
-    const KernelSource& kernel_src,
-    const CoreRangeSet& core_range_set,
-    const EthernetConfig& config) {
-    HalProgrammableCoreType eth_core_type =
-        config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-    const DataMovementConfigStatus& data_movement_config_status =
-        CheckDataMovementConfig(eth_core_type, program, core_range_set);
-    const bool are_both_riscv_in_use =
-        data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
-    const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
-
-    TT_FATAL(
-        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
-        "EthernetKernel creation failure: Ethernet kernels can only be created on DM0 or DM1 processors.");
-
-    const ContextId context_id = program.impl().get_context_id();
-    auto& metal_context = MetalContext::instance(context_id);
-    std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(context_id, kernel_src, core_range_set, config);
-
-    // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
-    const auto fabric_defines = metal_context.get_control_plane().get_fabric_kernel_defines();
-    if (!fabric_defines.empty()) {
-        kernel->add_defines(fabric_defines);
-    }
-
-    // Disable watcher on ethernet cores if requested
-    const auto& rt_options = metal_context.rtoptions();
-    if (rt_options.watcher_eth_disabled()) {
-        kernel->add_defines({{"FORCE_WATCHER_OFF", "1"}});
-    }
-
-    TT_FATAL(
-        ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
-            metal_context.hal().get_num_risc_processors(eth_core_type),
-        "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
-        "processors. "
-        "Update DataMovementProcessor in the config.",
-        kernel->name(),
-        enchantum::to_string(config.processor),
-        metal_context.hal().get_num_risc_processors(eth_core_type));
-    TT_FATAL(
-        !(are_both_riscv_in_use),
-        "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
-        "cores because both data movement processors are in use!",
-        kernel->name());
-    TT_FATAL(
-        !(are_both_noc_in_use),
-        "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
-        "cores because both NOCs are in use!",
-        kernel->name());
-
-    //
-    // Valid configurations for Blackhole ERISC
-    //
-    // |                | Valid NOC Configuration     |                             |
-    // |----------------|-----------------------------|-----------------------------|
-    // | **ERISC Mode** | **Physical ERISC0**         | **Physical ERISC1**         |
-    // | Single         | Not enabled for dispatch    | Dedicated NOC1              |
-    // | Dual           | Dedicated NOC0, Dynamic NOC | Dedicated NOC1, Dynamic NOC |
-    //
-    if (!metal_context.hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
-        config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC) {
-        bool is_dual_erisc_mode = metal_context.rtoptions().get_enable_2_erisc_mode();
-        bool is_erisc0 = (config.processor == DataMovementProcessor::RISCV_0);
-        bool is_erisc1 = (config.processor == DataMovementProcessor::RISCV_1);
-
-        if (is_dual_erisc_mode) {
-            // Dual ERISC mode: ERISC0 uses NOC0, ERISC1 uses NOC1 (when in dedicated mode)
-            if (is_erisc0) {
-                TT_FATAL(
-                    config.noc == NOC::NOC_0,
-                    "EthernetKernel creation failure: In dual ERISC mode, ERISC0 in dedicated mode must use NOC0. "
-                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_0. Use Dynamic NOC mode for flexible routing.",
-                    kernel->name(),
-                    config.noc);
-            } else if (is_erisc1) {
-                TT_FATAL(
-                    config.noc == NOC::NOC_1,
-                    "EthernetKernel creation failure: In dual ERISC mode, ERISC1 in dedicated mode must use NOC1. "
-                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_1. Use Dynamic NOC mode for flexible routing.",
-                    kernel->name(),
-                    config.noc);
-            }
-        } else {
-            // ERISC1 must use NOC1 in dedicated mode
-            TT_FATAL(
-                config.noc == NOC::NOC_1,
-                "EthernetKernel creation failure: In single ERISC mode, ERISC0 must use NOC1. "
-                "Kernel: {}, Current NOC: {}, Required NOC: NOC_1.",
-                kernel->name(),
-                config.noc);
-        }
-    }
-
-    // Dynamic noc is not supported on single erisc mode
-    if (!metal_context.hal().get_eth_fw_is_cooperative() && !metal_context.rtoptions().get_enable_2_erisc_mode()) {
-        TT_FATAL(
-            config.noc_mode == NOC_MODE::DM_DEDICATED_NOC,
-            "EthernetKernel creation failure: Dynamic NOC is not supported on single ERISC mode. "
-            "Kernel: {}, Current NOC Mode: {}, Required NOC Mode: DM_DEDICATED_NOC.",
-            kernel->name(),
-            config.noc_mode);
-    }
-
-    if (metal_context.hal().get_eth_fw_is_cooperative()) {
-        // Dynamic NOC is not supported with this configuration
-        TT_FATAL(
-            config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC,
-            "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
-            "cores because NOC Mode {} is not supported on this platform",
-            kernel->name(),
-            config.noc_mode);
-    }
-    return program.impl().add_kernel(kernel, eth_core_type);
-}
-
 void ValidateKernelConfigDefines(const std::map<std::string, std::string>& defines) {
     for (const auto& [key, value] : defines) {
         if (value.find('\0') != std::string::npos) {
@@ -798,9 +548,9 @@ KernelHandle CreateKernel(
         [&](const auto& cfg) -> KernelHandle {
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+                return program.impl().builder().create_data_movement_kernel(kernel_src, core_ranges, cfg);
             } else {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+                return program.impl().builder().create_compute_kernel(kernel_src, core_ranges, cfg);
             }
         },
         config);
@@ -821,7 +571,7 @@ KernelHandle CreateKernel(
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src = KernelSource::from_path(program.impl().get_context_id(), file_name);
-    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
+    return program.impl().builder().create_ethernet_kernel(kernel_src, core_ranges, config);
 }
 
 KernelHandle CreateKernelFromString(
@@ -836,9 +586,9 @@ KernelHandle CreateKernelFromString(
         [&](const auto& cfg) -> KernelHandle {
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+                return program.impl().builder().create_data_movement_kernel(kernel_src, core_ranges, cfg);
             } else {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+                return program.impl().builder().create_compute_kernel(kernel_src, core_ranges, cfg);
             }
         },
         config);
@@ -852,19 +602,7 @@ KernelHandle CreateKernelFromString(
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src = KernelSource::from_source(kernel_src_code);
-    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
-}
-
-static KernelHandle CreateDramKernel(
-    Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const DramConfig& config) {
-    const ContextId context_id = program.impl().get_context_id();
-    auto& metal_context = MetalContext::instance(context_id);
-    TT_FATAL(metal_context.get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
-    TT_FATAL(
-        metal_context.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0.");
-    std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(context_id, kernel_src, core_range_set, config);
-    return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
+    return program.impl().builder().create_ethernet_kernel(kernel_src, core_ranges, config);
 }
 
 KernelHandle CreateKernel(
@@ -875,7 +613,7 @@ KernelHandle CreateKernel(
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src = KernelSource::from_path(program.impl().get_context_id(), file_name);
-    return CreateDramKernel(program, kernel_src, core_ranges, config);
+    return program.impl().builder().create_dram_kernel(kernel_src, core_ranges, config);
 }
 
 KernelHandle CreateKernelFromString(
@@ -886,7 +624,7 @@ KernelHandle CreateKernelFromString(
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     KernelSource kernel_src = KernelSource::from_source(kernel_src_code);
-    return CreateDramKernel(program, kernel_src, core_ranges, config);
+    return program.impl().builder().create_dram_kernel(kernel_src, core_ranges, config);
 }
 
 CBHandle CreateCircularBuffer(
@@ -895,61 +633,44 @@ CBHandle CreateCircularBuffer(
     const CircularBufferConfig& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    auto cb_handle = program.impl().add_circular_buffer(core_ranges, config);
+    auto cb_handle = program.impl().builder().add_circular_buffer(core_ranges, config);
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateCircularBuffer, cb_handle, program, core_spec, config);
     return cb_handle;
 }
 
 const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle cb_handle) {
-    return program.impl().get_circular_buffer(cb_handle)->config();
+    return program.impl().builder().get_circular_buffer(cb_handle)->config();
 }
 
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
-    std::shared_ptr<CircularBufferImpl> circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    if (not circular_buffer->globally_allocated()) {
-        program.impl().invalidate_circular_buffer_allocation();
-    }
-    circular_buffer->set_total_size(total_size);
+    program.impl().builder().update_circular_buffer_total_size(cb_handle, total_size);
 }
 
 void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->set_page_size(buffer_index, page_size);
+    program.impl().builder().update_circular_buffer_page_size(cb_handle, buffer_index, page_size);
 }
 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
-    circular_buffer->set_global_buffer(buffer, circular_buffer->size(), circular_buffer->config().address_offset());
+    program.impl().builder().update_dynamic_circular_buffer_address(cb_handle, buffer);
 }
 
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
-    circular_buffer->set_global_buffer(buffer, circular_buffer->size(), address_offset);
+    program.impl().builder().update_dynamic_circular_buffer_address(cb_handle, buffer, address_offset);
 }
 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
-    circular_buffer->set_global_buffer(
-        *tensor.mesh_buffer().get_reference_buffer(),
-        circular_buffer->size(),
-        circular_buffer->config().address_offset());
+    program.impl().builder().update_dynamic_circular_buffer_address(cb_handle, tensor);
 }
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->set_global_buffer(buffer, total_size, circular_buffer->config().address_offset());
+    program.impl().builder().update_dynamic_circular_buffer_address_and_total_size(cb_handle, buffer, total_size);
 }
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->set_global_buffer(
-        *tensor.mesh_buffer().get_reference_buffer(), total_size, circular_buffer->config().address_offset());
+    program.impl().builder().update_dynamic_circular_buffer_address_and_total_size(cb_handle, tensor, total_size);
 }
 
 uint32_t CreateSemaphore(
@@ -962,16 +683,7 @@ uint32_t CreateSemaphore(
     const std::variant<CoreRange, CoreRangeSet>& core_spec,
     uint32_t initial_value,
     CoreType core_type) {
-    CoreRangeSet crs = std::visit(
-        ttsl::overloaded{
-            [](const CoreRange& c) { return CoreRangeSet(c); },
-            [](const CoreRangeSet& c) {
-                // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
-                return c.merge_ranges();
-            },
-        },
-        core_spec);
-    return program.impl().create_semaphore(crs, initial_value, core_type);
+    return program.impl().builder().create_semaphore(core_spec, initial_value, core_type);
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
@@ -1124,14 +836,12 @@ CBHandle CreateCircularBuffer(
     const CircularBufferConfig& config,
     const GlobalCircularBuffer& global_circular_buffer) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    return program.impl().add_circular_buffer(core_ranges, config, global_circular_buffer);
+    return program.impl().builder().add_circular_buffer(core_ranges, config, global_circular_buffer);
 }
 
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const GlobalCircularBuffer& global_circular_buffer) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
-    circular_buffer->set_global_circular_buffer(global_circular_buffer);
+    program.impl().builder().update_dynamic_circular_buffer_address(cb_handle, global_circular_buffer);
 }
 
 PrecompiledKernelNotFoundError::PrecompiledKernelNotFoundError(
