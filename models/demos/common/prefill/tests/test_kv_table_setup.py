@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Device-free checks of setup_kv_chunk_table's dispatch: which transport each
-PREFILL_ENABLE_MIGRATION x PREFILL_MIGRATION_EXPORT_TO_FILE combination drives, who builds and
-publishes the table, and how a runtime that reports no KV stage is handled."""
+"""Device-free checks of setup_kv_chunk_table: every rank exports its device map, rank 0 alone builds
+the table, storage placement is validated, and a runtime that reports no KV stage is handled."""
 
 import pytest
 
@@ -27,25 +26,16 @@ class _Runtime:
 
 
 @pytest.fixture
-def calls(monkeypatch, tmp_path):
+def exports(monkeypatch, tmp_path):
     seen = []
 
-    def record(name, result=None):
-        def fn(*args, **kwargs):
-            seen.append(name)
-            return result
-
-        return fn
+    def export(mesh_device, kv_stages, mesh_shape, device_map_path):
+        seen.append(device_map_path)
+        return STAGE_LAYOUTS
 
     monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", str(tmp_path / "table.pb"))
-    monkeypatch.delenv("PREFILL_ENABLE_MIGRATION", raising=False)
-    monkeypatch.delenv("PREFILL_MIGRATION_EXPORT_TO_FILE", raising=False)
-    monkeypatch.setattr(migration, "remove_stale_device_map_sidecars", record("remove_sidecars"))
-    monkeypatch.setattr(migration, "export_device_map_file_and_gather_stage_layouts", record("export", STAGE_LAYOUTS))
-    monkeypatch.setattr(migration, "deliver_device_map_and_gather_stage_layouts", record("deliver", STAGE_LAYOUTS))
-    monkeypatch.setattr(migration, "allgather_kv_stage_layouts", record("allgather", STAGE_LAYOUTS))
-    monkeypatch.setattr(migration, "serialize_device_map", record("serialize_json"))
-    monkeypatch.setattr(migration, "publish_serialized_table_and_wait_ready", record("publish", "client"))
+    monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_device_map.txt")
+    monkeypatch.setattr(migration, "export_device_map_file_and_gather_stage_layouts", export)
     return seen
 
 
@@ -55,63 +45,59 @@ def _setup(runtime, *, rank=0, num_ranks=1):
     )
 
 
-@pytest.mark.parametrize(
-    "enable, export, transport, publishes",
-    [
-        ("0", "0", ["remove_sidecars", "allgather", "serialize_json"], False),
-        ("1", "0", ["remove_sidecars", "deliver", "serialize_json"], True),
-        ("0", "1", ["export"], False),
-        ("1", "1", ["export"], False),
-    ],
-    ids=["mock", "publish", "file-export", "file-export-wins-over-publish"],
-)
-def test_rank0_transport_matrix(monkeypatch, calls, enable, export, transport, publishes):
-    monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", enable)
-    monkeypatch.setenv("PREFILL_MIGRATION_EXPORT_TO_FILE", export)
+def test_rank0_exports_device_map_and_builds_table(exports, tmp_path):
     runtime = _Runtime([KvCacheStage(0x1000, 0, 4)])
 
-    endpoint = _setup(runtime)
-
-    assert calls == transport + (["publish"] if publishes else [])
-    assert endpoint == ("client" if publishes else None)
-    assert [layouts for _, layouts in runtime.built] == [STAGE_LAYOUTS]
+    assert _setup(runtime) is None
+    assert exports == ["/tmp/prefill_device_map.txt"]
+    assert runtime.built == [(str(tmp_path / "table.pb"), STAGE_LAYOUTS)]
 
 
-@pytest.mark.parametrize("enable", ["0", "1"], ids=["mock", "publish"])
-def test_non_first_rank_gathers_but_never_builds_or_publishes(monkeypatch, calls, enable):
-    monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", "/data/shared/table.pb")
-    monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", enable)
+def test_non_first_rank_exports_but_never_builds(exports):
     runtime = _Runtime([KvCacheStage(0x1000, 4, 4)])
 
     assert _setup(runtime, rank=1, num_ranks=2) is None
-    assert "publish" not in calls
+    assert exports == ["/tmp/prefill_device_map.txt"]
     assert not runtime.built
 
 
-def test_no_stage_single_rank_mock_serves_without_table(calls):
+def test_shared_device_map_path_rejected_multi_rank(monkeypatch, exports, expect_error, tmp_path):
+    monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", str(tmp_path / "device_map.txt"))
+
+    with expect_error(ValueError, "not on per-host storage"):
+        _setup(_Runtime([KvCacheStage(0x1000, 0, 4)]), num_ranks=2)
+    assert not exports
+
+
+def test_shared_device_map_path_allowed_single_rank(monkeypatch, exports, tmp_path):
+    monkeypatch.setenv("PREFILL_MIGRATION_DEVICE_MAP_PATH", str(tmp_path / "device_map.txt"))
+
+    _setup(_Runtime([KvCacheStage(0x1000, 0, 4)]))
+    assert exports == [str(tmp_path / "device_map.txt")]
+
+
+def test_per_host_table_path_rejected_multi_rank(monkeypatch, exports, expect_error):
+    monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", "/tmp/table.pb")
+
+    with expect_error(ValueError, "is on per-host storage"):
+        _setup(_Runtime([KvCacheStage(0x1000, 0, 4)]), num_ranks=2)
+    assert not exports
+
+
+def test_no_stage_single_rank_serves_without_table(exports):
     runtime = _Runtime([])
 
     assert _setup(runtime) is None
-    assert calls == ["remove_sidecars"]
+    assert not exports
     assert not runtime.built
 
 
-@pytest.mark.parametrize(
-    "enable, export, num_ranks",
-    [("1", "0", 1), ("0", "1", 1), ("0", "0", 2)],
-    ids=["publish", "file-export", "multi-rank"],
-)
-def test_no_stage_raises_when_a_table_is_required(monkeypatch, calls, expect_error, enable, export, num_ranks):
-    monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", "/data/shared/table.pb")
-    monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", enable)
-    monkeypatch.setenv("PREFILL_MIGRATION_EXPORT_TO_FILE", export)
-    runtime = _Runtime([])
-
+def test_no_stage_raises_multi_rank(exports, expect_error):
     with expect_error(RuntimeError, "reported no KV cache stage"):
-        _setup(runtime, num_ranks=num_ranks)
-    assert not {"allgather", "deliver", "export", "publish"} & set(calls)
+        _setup(_Runtime([]), num_ranks=2)
+    assert not exports
 
 
-def test_runtime_without_stage_hook_is_rejected(calls, expect_error):
+def test_runtime_without_stage_hook_is_rejected(exports, expect_error):
     with expect_error(RuntimeError, "kv_migration_stages"):
         _setup(object())

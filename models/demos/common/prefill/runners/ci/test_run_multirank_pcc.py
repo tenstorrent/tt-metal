@@ -56,6 +56,7 @@ elif name.startswith("mpirun"):
         log.write_text("stub rank log\n")
     os.environ["TEST_MPI_HOST"] = args[args.index("--host") + 1] if "--host" in args else ""
     os.environ["OMPI_COMM_WORLD_RANK"] = "0"
+    os.environ["TEST_MPI_NP"] = args[args.index("-np") + 1] if "-np" in args else "1"
     if "bash" in args:
         sys.exit(shell_command())
     index = next(i for i, arg in enumerate(args) if arg.endswith("python3"))
@@ -88,12 +89,13 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     verdict_dir = Path(os.environ["PREFILL_PCC_SUMMARY_DIR"])
     verdict_dir.mkdir(parents=True, exist_ok=True)
     mode = os.environ.get("TEST_VERDICT", "pass")
-    for rank in range(4):
-        if rank == 3 and mode == "missing":
+    last = int(os.environ["TEST_MPI_NP"]) - 1
+    for rank in range(last + 1):
+        if rank == last and mode == "missing":
             continue
         verdict = {"rank": rank, "ok": True, "min_pcc": 0.99, "threshold": 0.85,
                    "slots_checked": 1, "per_cache": {"kvpe": 0.99}}
-        if rank == 3:
+        if rank == last:
             if mode == "false":
                 verdict["ok"] = False
             elif mode == "truthy":
@@ -104,7 +106,7 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
             elif mode == "nan":
                 verdict["min_pcc"] = float("nan")
                 verdict["per_cache"]["kvpe"] = float("nan")
-        filename_rank = 4 if rank == 3 and mode == "wrong_rank" else rank
+        filename_rank = last + 1 if rank == last and mode == "wrong_rank" else rank
         (verdict_dir / ("rank%d.json" % filename_rank)).write_text(json.dumps(verdict))
     (root / "producer_done").touch()
 elif args and args[0].endswith("summarize_ci_run.py"):
@@ -236,12 +238,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         ]
         self.assertEqual(len(producer_mpi), 1)
         mpi_args = producer_mpi[0]["args"]
-        self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "4")
-        self.assertTrue(producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"].endswith("device_map_r0.json"))
-        self.assertEqual(
-            runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"].replace(".json", "_r0.json"),
-            producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"],
-        )
+        self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "1")
+        self.assertNotIn("PREFILL_MIGRATION_DEVICE_MAP_PATH", runner)
+        self.assertNotIn("PREFILL_MIGRATION_DEVICE_MAP_PATH", producer)
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_existing_models_use_discovery_and_four_hosts(self):
@@ -333,12 +332,12 @@ class MultirankPccHarnessTests(unittest.TestCase):
         # The expected reason is asserted, not just the failure: every one of these would also fail
         # for the wrong reason if a clause were dropped, and the gate names the clause that tripped.
         reasons = {
-            "missing": "expected exactly ranks 0..3",
+            "missing": "expected exactly ranks 0..0",
             "false": "ok is not literally true",
             "truthy": "ok is not literally true",
             "empty": "slots_checked is 0",
             "nan": "non-finite",
-            "wrong_rank": "expected exactly ranks 0..3",
+            "wrong_rank": "expected exactly ranks 0..0",
         }
         for verdict, reason in reasons.items():
             with self.subTest(verdict=verdict):

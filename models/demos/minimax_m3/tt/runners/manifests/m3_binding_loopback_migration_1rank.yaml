@@ -3,7 +3,7 @@
 # The runner publishes the KV chunk table to the migration worker, blocks on WORKER_READY, then serves the
 # producer's H2D pushes for as long as the stream stays open. It validates nothing: migration_driver owns
 # both read-backs, so run it with PREFILL_SEND_SHUTDOWN=1 or the runner never leaves its request loop.
-# Only THIS binding is single-rank; PREFILL_ENABLE_MIGRATION publishes a merged table at any rank count.
+# Only THIS binding is single-rank; the runner writes a merged table at any rank count.
 #
 # Launch (endpoint must already be up — see PREFILL_MIGRATION_TESTING.md Gate 2):
 #   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
@@ -30,9 +30,7 @@ global_env:
   PREFILL_NUM_USERS: "4"
   PREFILL_TRACE_DIR: "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240"
 
-  PREFILL_ENABLE_MIGRATION: "1"
   PREFILL_USE_TRACE: "1"
-  PREFILL_MIGRATION_WAIT_READY_MS: "120000"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/m3_kv_chunk_table.pb"
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"

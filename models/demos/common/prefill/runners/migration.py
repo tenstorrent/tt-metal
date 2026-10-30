@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 
-import glob
 import os
 import socket
 import sys
@@ -40,14 +39,6 @@ def migration_table_path() -> str:
 def is_per_host_storage(path: str) -> bool:
     abs_path = os.path.abspath(path)
     return any(abs_path == p or abs_path.startswith(p + "/") for p in _PER_HOST_FS_PREFIXES)
-
-
-def migration_file_export_enabled() -> bool:
-    return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
-
-
-def migration_publish_enabled() -> bool:
-    return os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
 
 
 def migration_device_map_file_path() -> str:
@@ -163,92 +154,6 @@ def _attach_with_retry(make_client, what: str, on_timeout: str, timeout_s: float
         time.sleep(0.25)
 
 
-def _deliver_local_device_map(device_map, rank: int, timeout_s: float | None = None) -> None:
-    mod = _import_migration_client()
-
-    def _discover():
-        trios = []
-        skipped = []
-        for side in ("a", "b"):
-            candidates = glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")
-            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-            for c in candidates:
-                name = "/" + os.path.basename(c)
-                if not os.access(c, os.R_OK | os.W_OK):
-                    st = os.stat(c)
-                    import pwd
-
-                    owner = pwd.getpwuid(st.st_uid).pw_name
-                    skipped.append(
-                        f"{name} (owner={owner}, mtime={time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))})"
-                    )
-                    continue
-                trios.append(
-                    (
-                        name,
-                        name.replace(f"_{side}_cmd", f"_{side}_table"),
-                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
-                    )
-                )
-        return trios, skipped
-
-    budget = _migration_attach_wait_s() if timeout_s is None else timeout_s
-    start = time.monotonic()
-    # None => no deadline: poll forever, but log so the wait is never mistaken for a hang.
-    deadline = start + budget if budget > 0 else None
-    last_log = start
-    trios, skipped = _discover()
-    # Queues that are not ours NEVER become usable, and with no deadline the raise below is dead code.
-    if skipped and not trios:
-        logger.warning(
-            f"[migration] {len(skipped)} local worker queue(s) present but NOT accessible by this user — "
-            f"likely stale shm from another user's run, which waiting will not clear:\n  " + "\n  ".join(skipped)
-        )
-    while not trios:
-        if deadline is not None and time.monotonic() >= deadline:
-            if skipped:
-                details = "\n  ".join(skipped)
-                raise RuntimeError(
-                    f"[migration] local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) are present "
-                    f"but none are accessible by this user. Skipped {len(skipped)}:\n  {details}\n"
-                    f"This is usually caused by stale shm files from another user's previous run."
-                )
-            raise RuntimeError(
-                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
-                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
-                "master-only control channel, NOT the device-map queues.)"
-            )
-        now = time.monotonic()
-        if now - last_log >= _MIGRATION_ATTACH_HEARTBEAT_S:
-            last_log = now
-            bound = "no timeout" if deadline is None else f"{budget:.0f}s budget"
-            inaccessible = f", {len(skipped)} present but not ours" if skipped else ""
-            logger.info(
-                f"[migration] still waiting for local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) after "
-                f"{now - start:.0f}s ({bound}{inaccessible}) — is the migration layer up on this host yet?"
-            )
-        time.sleep(0.25)
-        trios, skipped = _discover()
-
-    # _discover() only proves the cmd file is ours, not that the worker is past init: same wait applies.
-    for cmd, table, resp in trios:
-        try:
-            client = _attach_with_retry(
-                lambda cmd=cmd, table=table, resp=resp: mod.MigrationLayerClient(cmd, table, resp),
-                f"worker queue header init ({resp})",
-                f"[migration] worker queues found but never became attachable ({resp}) — is the "
-                f"migration_worker for this host healthy?",
-                timeout_s,
-            )
-            client.send_device_map(device_map)
-            logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
-        except RuntimeError as e:
-            if "Permission denied" in str(e):
-                logger.warning(f"[migration] skipping inaccessible worker queue {cmd}: {e}")
-                continue
-            raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
-
-
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
     rows, cols = mesh_device.shape[0], mesh_device.shape[1]
     out: list[tuple[int, int, int]] = []
@@ -281,13 +186,6 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
     return device_map
 
 
-def rank_scoped_device_map_path(path: str, rank: int, num_ranks: int) -> str:
-    if num_ranks <= 1:
-        return path
-    stem, ext = os.path.splitext(path)
-    return f"{stem}_r{rank}{ext}"
-
-
 def validate_stage_layout_contiguous(stage_layout) -> int:
     expected = 0
     for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
@@ -298,35 +196,6 @@ def validate_stage_layout_contiguous(stage_layout) -> int:
             )
         expected += s["count"]
     return expected
-
-
-def remove_stale_device_map_sidecars(path: str) -> None:
-    stem, ext = os.path.splitext(path)
-    for stale in [path, *glob.glob(f"{stem}_r*{ext}")]:
-        try:
-            os.remove(stale)
-            logger.warning(f"[migration] removed stale device map {stale} from a prior run")
-        except FileNotFoundError:
-            pass
-
-
-def serialize_device_map(mesh_device, path: str) -> str:
-    import json
-    import os
-
-    enumerated = _enumerate_devices(mesh_device)
-    device_map = {f"{mesh}:{chip}": unique_id for (unique_id, mesh, chip) in enumerated}
-    if len(device_map) != len(enumerated):
-        raise RuntimeError(
-            f"[migration] device-map fabric-node collision: {len(enumerated)} chips but only "
-            f"{len(device_map)} unique (mesh_id, chip_id) keys"
-        )
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as mp:
-        json.dump(device_map, mp)
-    os.replace(tmp, path)
-    logger.info(f"[migration] device map ({len(device_map)} chips) serialized to {path}")
-    return path
 
 
 def serialize_kv_chunk_table(
@@ -418,29 +287,6 @@ def export_device_map_file_and_gather_stage_layouts(mesh_device, stages, mesh_sh
     return stage_layouts
 
 
-def deliver_device_map_and_gather_stage_layouts(mesh_device, stages, mesh_shape, rank):
-    device_map = _build_device_map(mesh_device, mesh_shape)
-    _deliver_local_device_map(device_map, rank)
-    return allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
-
-
-def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeout_ms: int = 120_000):
-    client, cmd_q, table_q, resp_q = _attach_migration_client()
-    logger.info(
-        f"[migration] publishing table={table_path} (queues cmd={cmd_q}, table={table_q}, resp={resp_q}) "
-        f"wait_ready_ms={wait_ready_timeout_ms}"
-    )
-    client.send_kv_chunk_table(table_path)
-    try:
-        client.wait_ready(wait_ready_timeout_ms)
-    except RuntimeError as e:
-        logger.warning(f"[migration] WORKER_READY not observed ({e}); serving anyway")
-        return client
-    logger.info(f"[migration] WORKER_READY: table={table_path}")
-
-    return client
-
-
 def _host_tag_int():
     return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
 
@@ -502,21 +348,17 @@ def get_num_dram_banks(mesh_device):
 def setup_kv_chunk_table(
     runtime, kv_caches, mesh_device, mesh_shape, *, rank: int, num_ranks: int, first_layer_idx: int, num_my_layers: int
 ):
-    """Gather every rank's KV stage layouts, have rank 0 build the merged chunk table, and hand it on.
+    """Gather every rank's KV stage layouts, export each host's device map, and have rank 0 write the merged
+    chunk table.
 
-    ``PREFILL_MIGRATION_EXPORT_TO_FILE=1`` writes the device-map file and leaves the table on disk;
-    otherwise ``PREFILL_ENABLE_MIGRATION=1`` delivers the device map and publishes the table to the
-    live worker, and ``0`` (mock migration) leaves it on disk for an offline reader. Returns the
-    migration client on the rank that published, else None.
+    The table goes to ``PREFILL_MIGRATION_TABLE_PATH`` (shared storage past one rank) and the device map to
+    ``PREFILL_MIGRATION_DEVICE_MAP_PATH`` (per-host storage past one rank), the layout the KV migration
+    service reads in deployment.
 
-    A runtime may report no stage (GPT-OSS with a bounded sliding cache); that serves without a table,
-    and only single-rank in mock mode, since every rank must join the same stage all-gathers."""
-    file_export = migration_file_export_enabled()
-    publish = migration_publish_enabled() and not file_export
-
+    A runtime may report no stage (GPT-OSS with a bounded sliding cache); that serves without a table, and
+    only single-rank, since every rank must join the same stage all-gathers."""
     table_path = migration_table_path()
-    wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-    device_map_json_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+    device_map_path = migration_device_map_file_path()
 
     if num_ranks > 1 and is_per_host_storage(table_path):
         if migration_table_path_is_explicit():
@@ -531,12 +373,16 @@ def setup_kv_chunk_table(
             "if one is expected."
         )
 
+    if num_ranks > 1 and not is_per_host_storage(device_map_path):
+        raise ValueError(
+            f"PREFILL_MIGRATION_DEVICE_MAP_PATH={os.path.abspath(device_map_path)} is not on per-host storage; "
+            f"with num_ranks={num_ranks} every host writes its own chips to that one path. Point it at a "
+            f"host-local path (one of {', '.join(_PER_HOST_FS_PREFIXES)})."
+        )
+
     if rank == 0 and os.path.exists(table_path):
         logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
         os.remove(table_path)
-
-    if not file_export:
-        remove_stale_device_map_sidecars(device_map_json_path)
 
     if not hasattr(runtime, "kv_migration_stages"):
         raise RuntimeError(
@@ -546,39 +392,26 @@ def setup_kv_chunk_table(
     kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
 
     if not kv_stages:
-        if num_ranks > 1 or publish or file_export:
+        if num_ranks > 1:
             raise RuntimeError(
                 f"[migration] rank {rank}: {type(runtime).__name__} reported no KV cache stage, so no chunk "
-                f"table can be built, but num_ranks={num_ranks}, PREFILL_ENABLE_MIGRATION="
-                f"{int(migration_publish_enabled())}, PREFILL_MIGRATION_EXPORT_TO_FILE={int(file_export)} "
-                "need one. Serve single-rank with both off, or give the cache a stage."
+                f"table can be built, but num_ranks={num_ranks} needs one. Serve single-rank, or give the "
+                "cache a stage."
             )
         logger.warning(
             f"[migration] {type(runtime).__name__} reported no KV cache stage (GPT-OSS does this for a "
             "bounded sliding cache), so no chunk table is built and this cache cannot be migrated."
         )
-        return None
+        return
 
-    if file_export:
-        stage_layouts = export_device_map_file_and_gather_stage_layouts(
-            mesh_device, kv_stages, mesh_shape, migration_device_map_file_path()
-        )
-        logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
-    else:
-        if publish:
-            stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, mesh_shape, rank)
-        else:
-            stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, mesh_shape)
-        device_map_path = rank_scoped_device_map_path(device_map_json_path, rank, num_ranks)
-        serialize_device_map(mesh_device, device_map_path)
-        logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
+    stage_layouts = export_device_map_file_and_gather_stage_layouts(mesh_device, kv_stages, mesh_shape, device_map_path)
 
     if rank != 0:
         logger.info(
             f"[migration] rank {rank}: contributed stage (first_layer={first_layer_idx}, "
             f"count={num_my_layers}); rank 0 owns the merged table."
         )
-        return None
+        return
 
     table_path = runtime.build_kv_chunk_table(
         kv_caches,
@@ -587,7 +420,4 @@ def setup_kv_chunk_table(
         num_my_layers=num_my_layers,
         stage_layouts=stage_layouts,
     )
-    if not publish:
-        logger.info(f"[migration] merged KV chunk table -> {table_path} (no worker handshake)")
-        return None
-    return publish_serialized_table_and_wait_ready(table_path=table_path, wait_ready_timeout_ms=wait_ready_ms)
+    logger.info(f"[migration] merged KV chunk table -> {table_path}")

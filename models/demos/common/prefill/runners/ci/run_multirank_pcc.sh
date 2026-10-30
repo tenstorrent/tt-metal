@@ -57,6 +57,7 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
+PRODUCER_RANKS=""
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
 MTP_PCC_THRESHOLD=""
@@ -332,6 +333,8 @@ if [ "${PP_RANKS}" -ne 0 ]; then
   }
   HOSTS="${RESOLVED_HOSTS}:${PP_RANKS}"
   EXPECTED_RANKS=${PP_RANKS}
+  # The device map is per host, so one producer reads every stage on this galaxy.
+  PRODUCER_RANKS=1
   BINDING="${MR_DIR}/mistral4_pp4_binding.yaml"
   "${MPIRUN}" -np 1 --host "${RESOLVED_HOSTS}:1" --bind-to none --allow-run-as-root \
     bash -lc "set -e; cd '${TT_METAL_HOME}'; \
@@ -346,10 +349,6 @@ if [ "${PP_RANKS}" -ne 0 ]; then
       exec python3 models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --out '${BINDING}'"
   TTRUN_ARGS=(--rank-binding "${BINDING}")
   RUNNER_PLACEMENT="--host ${HOSTS} --map-by slot"
-  # Each producer reads its own stage's nine layers; merging the four maps would read the whole
-  # galaxy four times.
-  RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
-  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
 else
   TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
   RUNNER_PLACEMENT=""
@@ -369,7 +368,6 @@ setsid python3 "${TTRUN_PY}" \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     ${RUNNER_OVERRIDES} \
     ${NUM_LAYERS_ENV} \
@@ -411,7 +409,8 @@ if [ "${PP_RANKS}" -eq 0 ]; then
   EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 fi
 
-PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+PRODUCER_RANKS=${PRODUCER_RANKS:-${EXPECTED_RANKS}}
+PRODUCER_PLACEMENT=(-np "${PRODUCER_RANKS}" --map-by slot)
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
@@ -501,7 +500,7 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
 fi
 
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" "${MTP_PCC_THRESHOLD}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${PRODUCER_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" "${MTP_PCC_THRESHOLD}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
 pcc_dir, expected, threshold = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
