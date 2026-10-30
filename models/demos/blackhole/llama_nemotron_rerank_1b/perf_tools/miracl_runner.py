@@ -39,6 +39,13 @@ for item in sys.argv[2].split(";") if len(sys.argv) > 2 and "=" in sys.argv[2] e
 r.warmup()
 
 
+def run_rows(rows, S):
+    """One batch of rows through the runner's trace; blocks until its scores are back."""
+    out_host, lens, _inputs = r._launch(rows, S)
+    ttnn.synchronize_device(dev)
+    return r.model.scores_from_host(out_host, lens)
+
+
 def one_per_row_512(ids_list):
     """One pair per row, every row 512 tokens: the packed shape without packing."""
     scores, pos = [0.0] * len(ids_list), 0
@@ -47,7 +54,7 @@ def one_per_row_512(ids_list):
         pos += len(chunk)
         rows = [[ids_list[i]] for i in chunk]
         rows += [rows[0]] * (B - len(rows))
-        for i, s in zip(chunk, r._run(rows, 512)):
+        for i, s in zip(chunk, run_rows(rows, 512)):
             scores[i] = s
     return scores
 
@@ -64,7 +71,7 @@ def unpacked(ids_list):
             pos += len(chunk)
             rows = [[ids_list[i]] for i in chunk]
             rows += [rows[0]] * (B - len(rows))
-            for i, s in zip(chunk, r._run(rows, S)):
+            for i, s in zip(chunk, run_rows(rows, S)):
                 scores[i] = s
     return scores
 

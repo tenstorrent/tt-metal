@@ -30,7 +30,7 @@ def test_decoder_layer(device, hf_model, state_dict, batch, seq_len, n_real):
 
     host, _ = model.prepare_host_inputs([[0] * n_real] * batch, seq_len=seq_len)
     _, valid, block_map = model.to_device(host)
-    mask = model._segment_mask(valid)
+    mask = model._segment_mask(model._segments(valid))
     rope = model.rot_mats(seq_len)
     tt_x = ttnn.from_torch(
         x.reshape(1, 1, batch * seq_len, cfg.dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device

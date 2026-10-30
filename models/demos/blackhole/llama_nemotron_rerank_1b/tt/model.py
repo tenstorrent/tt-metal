@@ -18,6 +18,7 @@ division by the real-token count happens on the host.
 
 import math
 
+import numpy as np
 import torch
 
 import ttnn
@@ -131,12 +132,25 @@ class NemotronReranker:
         self._freq_cos, self._freq_sin = cos[: cfg.max_seq_len].float(), sin[: cfg.max_seq_len].float()
         self._cos_host, self._sin_host = gather_cos_sin(torch.arange(cfg.max_seq_len), cos, sin)
         self._rot = {}
+        self._ones = {}
+        # Pair numbers 1..32 down the rows of one tile column: segments = (pair index row == this column).
+        self.pair_iota = ttnn.from_torch(
+            torch.arange(1, 33, dtype=torch.float32).reshape(1, 1, 32, 1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
         self._norm_cfgs = {}
 
     # ------------------------------------------------------------------ inputs
     def rot_mats(self, seq_len):
         """Per sequence length: one [1, 1, S, 64] table for matmul_qkv_rope (cos and sin tiles of the
         32 frequencies), or [cos, sin] in rotary_embedding_llama's layout."""
+        if seq_len not in self._ones:
+            # [S, 32] ones: segments @ ones gives each pair's token count in every column (fp32, exact).
+            self._ones[seq_len] = ttnn.from_torch(
+                torch.ones(1, 1, seq_len, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
         if seq_len not in self._rot:
             if self.cfg.fuse_qkv_rope:
                 self._rot[seq_len] = make_rope_table(self._freq_cos[:seq_len], self._freq_sin[:seq_len], self.device)
@@ -162,40 +176,42 @@ class NemotronReranker:
 
     def prepare_packed_inputs(self, rows, S):
         """rows[b] = the pairs (token id lists) packed back to back into row b of S tokens, at most 32 per
-        row -> host tensors (tokens, segments, block map) plus the pair lengths per row.
+        row -> host tensors (tokens, pair index, block map) plus the pair lengths per row.
 
-        ``segments`` [B, 1, 32, S] holds one row per pair: 1 on that pair's tokens, 0 elsewhere (rows of
-        absent pairs are all 0). The device builds the attention mask from it (a token only sees the
-        tokens of its own pair, so packed pairs do not interact and padding is never attended) and uses
-        it as the pooling matrix (row j of segments @ per-token scores = pair j's score sum). Positions run
-        on across a row; RoPE depends only on the distance between query and key, and both are in the
-        same pair, so a pair scores the same at any offset.
+        ``pair index`` [B, 1, 1, S] int32 is j + 1 on pair j's tokens and 0 on padding. The device expands it
+        into the [B, 1, 32, S] segment matrix (row j = 1 on pair j's tokens, ``_segments``), builds the
+        attention mask from it (a token only sees the tokens of its own pair, so packed pairs do not interact
+        and padding is never attended) and uses it as the pooling matrix (row j of segments @ per-token
+        scores = pair j's score sum). Positions run on across a row; RoPE depends only on the distance
+        between query and key, and both are in the same pair, so a pair scores the same at any offset.
+        Only row-major tensors are built here: nothing is tilized on the host.
         """
         B = len(rows)
         qc, kc = self.sdpa_chunks(B, S)
-        tokens = torch.full((B, S), PAD_TOKEN_ID, dtype=torch.int32)
-        segments = torch.zeros(B, 1, 32, S, dtype=torch.bfloat16)
+        tokens = np.full((B, S), PAD_TOKEN_ID, dtype=np.int32)
+        pair_idx = np.zeros((B, 1, 1, S), dtype=np.int32)
         # (q chunk, k chunk) blocks: 1 = some pair has tokens in both chunks (computed), 0 = skipped.
-        block_map = torch.zeros(B, 1, (S + qc - 1) // qc, (S + kc - 1) // kc, dtype=torch.int32)
+        block_map = np.zeros((B, 1, (S + qc - 1) // qc, (S + kc - 1) // kc), dtype=np.int32)
         lens = []
         for b, pairs in enumerate(rows):
             if len(pairs) > 32:
                 raise ValueError(f"row {b} holds {len(pairs)} pairs; at most 32 fit")
-            pos, row_lens = 0, []
-            for j, ids in enumerate(pairs):
-                n = len(ids)
-                if pos + n > S:
-                    raise ValueError(f"row {b}: pairs take more than {S} tokens")
-                tokens[b, pos : pos + n] = torch.tensor(ids, dtype=torch.int32)
-                segments[b, 0, j, pos : pos + n] = 1.0
+            row_lens = [len(ids) for ids in pairs]
+            total = sum(row_lens)
+            if total > S:
+                raise ValueError(f"row {b}: pairs take more than {S} tokens")
+            if pairs:
+                tokens[b, :total] = np.concatenate([np.asarray(ids, dtype=np.int32) for ids in pairs])
+                pair_idx[b, 0, 0, :total] = np.repeat(np.arange(1, len(pairs) + 1, dtype=np.int32), row_lens)
+            pos = 0
+            for n in row_lens:
                 block_map[b, 0, pos // qc : (pos + n - 1) // qc + 1, pos // kc : (pos + n - 1) // kc + 1] = 1
                 pos += n
-                row_lens.append(n)
             lens.append(row_lens)
         host = (
-            ttnn.from_torch(tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            ttnn.from_torch(segments, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            ttnn.from_torch(block_map, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(torch.from_numpy(tokens), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(torch.from_numpy(pair_idx), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(torch.from_numpy(block_map), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
         )
         return host, lens
 
@@ -498,6 +514,16 @@ class NemotronReranker:
             in1_depth=MM_ADD_NORM_IN1_DEPTH[kind],
         )
 
+    def _segments(self, pair_idx):
+        """pair index [B, 1, 1, S] int32 (j + 1 on pair j's tokens, 0 on padding) -> segments [B, 1, 32, S] bf16,
+        row j = 1 on pair j's tokens: one broadcast compare of the index row with the column 1..32."""
+        p = ttnn.to_layout(pair_idx, ttnn.TILE_LAYOUT)
+        pf = ttnn.typecast(p, ttnn.bfloat16)
+        ttnn.deallocate(p)
+        segments = ttnn.eq(pf, self.pair_iota, dtype=ttnn.bfloat16)
+        ttnn.deallocate(pf)
+        return segments
+
     def _segment_mask(self, segments):
         """segments [B, 1, 32, S] (row j = 1 on pair j's tokens) -> additive mask [B, 1, S, S]: 0 where query
         and key belong to the same pair, MASK_NEG elsewhere (other pairs and padding). segments^T @ segments
@@ -518,15 +544,16 @@ class NemotronReranker:
         ttnn.deallocate(same)
         return mask
 
-    def forward(self, tokens, valid, block_map, masked=True):
-        """Device inputs from ``prepare_packed_inputs`` (``valid`` is its segments tensor) -> [B, 1, 32, 32]
-        fp32 tile, pair j of row b's score sum at [b, 0, j, 0].
+    def forward(self, tokens, pair_idx, block_map, masked=True):
+        """Device inputs from ``prepare_packed_inputs`` -> [B, 1, 32, 32] fp32 tile, pair j of row b's score (the
+        mean over its tokens) at [b, 0, j, 0]; rows of absent pairs are not meaningful.
 
         ``masked=False`` is for a batch where every row is one pair of S tokens: its mask would be all
         zeros, so SDPA runs without one. Masked SDPA reads and adds every mask tile, and at 32 x 512 costs
         1101 vs 623 us per layer (perf_tools/probe_sdpa_windowed.py --full)."""
         B, S = tokens.shape[0], tokens.shape[1]
         rope = self.rot_mats(S)
+        valid = self._segments(pair_idx)
         mask = self._segment_mask(valid) if masked else None
         fused = self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows
         resid_l1 = fused and self.cfg.residual_l1
@@ -627,9 +654,15 @@ class NemotronReranker:
         # Row j of the segments matrix selects pair j's tokens: output row j holds that pair's score sum.
         pooled = ttnn.matmul(valid, t, dtype=ttnn.float32, compute_kernel_config=self.mm_ckc)
         ttnn.deallocate(t)
+        # Mean on device: each pair's token count (segments @ ones, fp32: exact), then sum / count.
+        count = ttnn.matmul(valid, self._ones[S], dtype=ttnn.float32, compute_kernel_config=self.mm_ckc)
+        ttnn.deallocate(valid)
+        mean = ttnn.divide(pooled, count)
+        ttnn.deallocate(pooled)
+        ttnn.deallocate(count)
         if mask is not None:
             ttnn.deallocate(mask)
-        return pooled
+        return mean
 
     @staticmethod
     def needs_mask(lens, S):
@@ -638,9 +671,17 @@ class NemotronReranker:
         return any(row != [S] for row in lens)
 
     def scores_from_output(self, out, lens):
-        """``lens`` from prepare_packed_inputs (pair lengths per row) -> scores in row-major pair order."""
-        sums = ttnn.to_torch(out).float()[:, 0, :, 0]
-        return [sums[b, j].item() / n for b, row in enumerate(lens) for j, n in enumerate(row)]
+        """Device output of ``forward`` -> scores in row-major pair order (blocking read)."""
+        return self.scores_from_host(ttnn.from_device(out), lens)
+
+    @staticmethod
+    def scores_from_host(out_host, lens):
+        """Host copy of ``forward``'s output, ``lens`` from prepare_packed_inputs -> scores in row-major pair
+        order: pair j of row b is element [b, 0, j, 0]."""
+        means = ttnn.to_torch(out_host)[:, 0, :, 0]
+        b_idx = [b for b, row in enumerate(lens) for _ in row]
+        j_idx = [j for row in lens for j in range(len(row))]
+        return means[b_idx, j_idx].float().tolist()
 
     def score(self, batch_ids, seq_len=None):
         """Convenience path (no trace): token id lists -> list of float scores."""

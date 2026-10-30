@@ -109,14 +109,18 @@ class TracedReranker:
                 best = (cost, S, rows)
         return best[1], best[2]
 
-    def _run(self, batch_rows, S):
+    def _launch(self, batch_rows, S):
+        """Queue one batch: input copies, trace replay and the output read-back, all on command queue 0 in
+        order, without waiting. Returns the host tensor the output lands in (valid after a device sync) and
+        the pair lengths. The host can prepare the next batch while the device runs this one; a later batch
+        that reuses this trace overwrites its inputs and output only after this batch's read is queued."""
         B = len(batch_rows)
         host, lens = self.model.prepare_packed_inputs(batch_rows, S)
         tid, dev_in, out = self._trace(B, S, self.model.needs_mask(lens, S))
         for h, d in zip(host, dev_in):
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
-        return self.model.scores_from_output(out, lens)
+        return ttnn.from_device(out, blocking=False), lens, host
 
     def score_ids(self, ids_list):
         """Token id lists (each <= max_seq_len) -> list of float logits, in input order."""
@@ -128,15 +132,19 @@ class TracedReranker:
             if len(ids) > self.max_seq_len:
                 raise ValueError(f"sequence {i} has {len(ids)} tokens > max_seq_len {self.max_seq_len}")
         S, rows = self._plan([len(ids) for ids in ids_list])
-        scores = [0.0] * len(ids_list)
+        launched = []
         pos = 0
         for B in self._batch_plan(len(rows)):
             chunk = rows[pos : pos + B]
             pos += len(chunk)
             batch_rows = [[ids_list[i] for i in row] for row in chunk]
             batch_rows += [batch_rows[0]] * (B - len(batch_rows))
+            launched.append(([i for row in chunk for i in row], *self._launch(batch_rows, S)))
+        ttnn.synchronize_device(self.device)
+        scores = [0.0] * len(ids_list)
+        for order, out_host, lens, _inputs in launched:
             # scores come back in row-major pair order; the repeated rows' scores are past the end
-            for i, s in zip([i for row in chunk for i in row], self._run(batch_rows, S)):
+            for i, s in zip(order, self.model.scores_from_host(out_host, lens)):
                 scores[i] = s
         return scores
 
