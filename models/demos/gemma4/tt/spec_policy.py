@@ -760,15 +760,16 @@ class Calibration:
         self.intervals += 1
         if idle:
             clean, cause = False, "idle"
-        elif mode[0] == "plain" and cause == "switch":
-            # A plain step right after a record step is the plain probe a speculating batch serves to refresh its
-            # plain estimate (or the first step after an exit): the step's wall is a plain sample (the runner's input
-            # reload is its only extra), so it calibrates the plain cost and resets the probe cadence. Dirty, it never
-            # did either: the 26B QB2 served 16 probes in one 30 s window instead of one per 256 steps (2026-10-29).
-            clean, cause = True, None
+        probe = mode[0] == "plain" and cause == "switch"
+        # A plain step right after a record step (the probe a speculating batch serves, or the first step after an
+        # exit) carries the runner's input reload and the drained pipeline bubble: 44-49 ms against a 35 ms plain
+        # step on the 31B QB2. Counted, it inflated the plain estimate in every enter/exit churn and the record then
+        # read 1.75x instead of 2.5x (9 spurious entries in a 40 s window, 2026-10-30). It is reported, never a cost
+        # sample; it does end the probe cadence below (a probe did run), else the probe recurred at the overhead
+        # bound (the 26B QB2 served 16 in one 30 s window instead of one per 256 steps).
         # the step right after a reseed carries the entry (charged as entry_ms): it is reported, never a cost
         # sample, else a run of one-step retries measures the mode at reseed + step and declines every next one
-        uncounted = cause == "reseed"
+        uncounted = cause == "reseed" or probe
         counted = False
         for table in (self.modes, self.window):
             counted = table.setdefault(mode, ModeStats()).note(
@@ -794,7 +795,7 @@ class Calibration:
                 entry[0] += 1
                 entry[1] += float(wall_ms)
         for kind in ("plain", "step"):
-            if kind == mode[0] and clean:
+            if kind == mode[0] and (clean or probe):
                 self.steps_since[kind] = 0
             else:
                 self.steps_since[kind] = self.steps_since.get(kind, 0) + 1

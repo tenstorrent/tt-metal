@@ -3781,7 +3781,7 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
     modes = {mode: (stats.steps, stats.clean + stats.outliers[0]) for mode, stats in calib.modes.items()}
     assert modes[("step", (1, 5), 1024)] == (6, 5), "the first interval starts with a reseed"
     assert modes[("step", (8, 3), 1024)] == (11, 10), "the first (8,3) interval starts at a switch"
-    assert modes[("plain", 32)] == (4, 4), "a plain step after a record step is a clean plain sample (the probe)"
+    assert modes[("plain", 32)] == (4, 2), "the plain steps after a record step are reported, never cost samples"
     assert modes[("step", (16, 1), 1024)] == (1, 0), "the retry reseeds"
     assert calib.reseeds[(1, 5)][0] == 1 and calib.reseeds[(16, 1)][0] == 1
     assert {name: calls for name, (calls, _ms) in calib.phases.items()} == {
