@@ -617,6 +617,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {
+    LLK_ASSERT_PACK_NOT_FAST_UNTILIZE();
     static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
 
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
@@ -652,6 +653,7 @@ inline void _llk_pack_block_closed_(
     const std::uint32_t tile_stride,
     const std::uint32_t num_faces = TILE_NUM_FACES)
 {
+    LLK_ASSERT_PACK_NOT_FAST_UNTILIZE();
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(

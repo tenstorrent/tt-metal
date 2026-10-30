@@ -317,6 +317,7 @@ inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const 
 template <bool is_fp32_dest_acc_en, bool dense_small = false, bool guard_dest_straddle = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
+    LLK_ASSERT_PACK_NOT_FAST_UNTILIZE();
     // Full tiles in blocks of fewer tiles read slower than the per-tile pack in the tt-llk sweep; tiny tiles read faster as a closed block from two tiles on.
     const bool block_form = ntiles >= LLK_PACK_BLOCK_MIN_TILES || (ntiles >= 2 && llk_pack_block_is_small(output_id));
 
