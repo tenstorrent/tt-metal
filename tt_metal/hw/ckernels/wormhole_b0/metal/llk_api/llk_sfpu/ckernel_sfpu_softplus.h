@@ -51,9 +51,10 @@ namespace ckernel::sfpu {
 //       keeps a degree-4 h (Blackhole is degree 3) and yh/round-to-nearest
 //       exponent extraction. Clamps are predicated moves: LReg[9] is read-only
 //       and SFPSWAP only writes LReg below 8, so the constant is not clobbered.
-//       On sfpi 7.91 the swap's second write lands in the next instruction, and
-//       SFPSTOCHRND right after it collides with that write (the old y1 clamp
-//       was sfpswap L9, L0, 1 then sfpstochrnd). Odd columns stored -inf.
+//       The late second write is the Wormhole SFPSWAP itself. sfpi does not
+//       insert the SFPNOP (7.91 and 7.92), so sfpi::max followed by a vUInt16
+//       convert is still sfpswap then sfpstochrnd. That was the old y1 clamp,
+//       and the odd columns stored -inf.
 //       Measured on Blackhole over all 65536 bf16 encodings, scoring the
 //       49,711 whose exact answer is a normal bf16: max 0.52 ULP end-to-end.
 // ======================================================================
@@ -161,11 +162,14 @@ sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat yh) {
 
 // sfpi::max(v, 0) lowers to SFPSWAP against LReg[9] (LCONST_0). That register is
 // read-only and SFPSWAP only writes LReg below 8, so the constant is not clobbered.
-// sfpi 7.91 retires the swap's second write in the next instruction, and
-// SFPSTOCHRND or SFPSHFT2 issued immediately after collides with it. The pre-fix
-// y1 clamp (sfpswap L9, L0, 1) was followed by sfpstochrnd with no SFPNOP, and the
-// odd columns stored -inf. A predicated move only reads the constant. Blackhole
-// keeps sfpi::max.
+// The late second write is the Wormhole SFPSWAP itself: it retires in the next
+// instruction, and an SFPSTOCHRND or SFPSHFT2 issued immediately after collides
+// with it. sfpi only leaves out the SFPNOP, on 7.91 and on 7.92 (the current pin):
+// sfpi::max(y, 0) followed by a vUInt16 convert still compiles to
+// sfpswap L9, L0, 1 directly followed by sfpstochrnd. The pre-fix y1 clamp was
+// that sequence, and the odd columns stored -inf. A predicated move only reads
+// the constant. Do not switch back to sfpi::max on a newer sfpi unless it
+// inserts the SFPNOP. Blackhole keeps sfpi::max.
 sfpi_inline sfpi::vFloat softplus_clamp_nonneg(sfpi::vFloat v) {
     v_if(v < 0.0f) { v = 0.0f; }
     v_endif;

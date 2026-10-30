@@ -36,7 +36,7 @@ constexpr float SOFTPLUS_POLY_C6 = -3.4358495031e-04f;
 constexpr float SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
 constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
 
-// BF16: same coefficients as the Blackhole/Wormhole kernel. -1/ln2, P1 and H1 live in the
+// BF16: Wormhole coefficients. Blackhole has its own P2 and a degree-3 h. -1/ln2, P1 and H1 live in the
 // programmable constant registers (loaded by softplus_init); the rest are fp16-exact.
 // EXP_BIAS is the fp32 exponent bias y is offset by so k = trunc(y) is the biased exponent of u.
 // p(f) ~ 2^f on [0, 1) is pinned to p(0) = 1 and p(1) = 2 - 2^-16 so it stays in [1, 2).
