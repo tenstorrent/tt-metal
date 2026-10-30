@@ -54,7 +54,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _traced_max_seq,
 )
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, load_config
-from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
+from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_ram_needed
 from models.experimental.deepseek_v41_flash.tt.spec import DSparkSpeculator
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages, eos_token
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
@@ -107,7 +107,7 @@ def test_dspark_spec_decode(mesh_device):
     loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     config = load_config(loader.snapshot_dir)
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
-    nbytes = sum(engram_table_nbytes(loader, i) for i in config.engram_layer_ids)
+    nbytes = engram_ram_needed(loader, config.engram_layer_ids)
     if _available_bytes() < _ENGRAM_RAM_MARGIN * nbytes:
         pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
 
@@ -254,7 +254,7 @@ def test_parallel_verify_rows(mesh_device):
     loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     config = load_config(loader.snapshot_dir)
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
-    nbytes = sum(engram_table_nbytes(loader, i) for i in config.engram_layer_ids)
+    nbytes = engram_ram_needed(loader, config.engram_layer_ids)
     if _available_bytes() < _ENGRAM_RAM_MARGIN * nbytes:
         pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
     t = DRAFTS + 1
