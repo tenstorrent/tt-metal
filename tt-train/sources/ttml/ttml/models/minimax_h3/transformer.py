@@ -162,6 +162,19 @@ class Concat(ttml.autograd.Function):
         return _slices(grad_output, ctx.sizes, ctx.dim)
 
 
+class GatedResidual(ttml.autograd.Function):
+    """x + a * gate in one ttnn.addcmul pass; `gate` is a frozen raw ttnn tensor, so it takes no gradient."""
+
+    @staticmethod
+    def forward(ctx, x, a, gate):
+        ctx.gate = gate
+        return ttnn.addcmul(x.get_value(), a.get_value(), gate)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, ttnn.multiply(grad_output, ctx.gate)
+
+
 class RMSNorm(AbstractModuleBase):
     def __init__(self, dim: int, eps: float) -> None:
         super().__init__()
@@ -358,9 +371,9 @@ class H3Block(AbstractModuleBase):
     def forward(self, x, mods, mask, rope_params):
         shift1, scale1, gate1, shift2, scale2, gate2 = mods
         n = self.norm1(x) * scale1 + shift1
-        x = x + self.attn(n, mask, rope_params) * gate1
+        x = GatedResidual.apply(x, self.attn(n, mask, rope_params), gate1.get_value())
         n = self.norm2(x) * scale2 + shift2
-        return x + self.ff(n) * gate2
+        return GatedResidual.apply(x, self.ff(n), gate2.get_value())
 
 
 @dataclass
