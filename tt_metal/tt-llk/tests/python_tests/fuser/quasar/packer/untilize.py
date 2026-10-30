@@ -70,6 +70,6 @@ class PackUntilize(Packer):
         l1_row_idx = f"{row_stride} * ({tile_row}) + ({tile_col})"
 
         return (
-            f"_llk_pack_untilize_<{full_ct_dim}>"
+            f"_llk_pack_untilize_"
             f"({block.tile_id_dest}, {l1_row_idx}, {tensor_shape});\n"
         )

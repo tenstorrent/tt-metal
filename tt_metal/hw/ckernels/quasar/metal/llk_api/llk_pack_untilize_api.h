@@ -37,6 +37,16 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
+    // PACR_STRIDE cannot pack MX output formats.
+    const DataFormat output_format = static_cast<DataFormat>(pack_dst_format[output_id]);
+    LLK_ASSERT(
+        !_llk_pack_untilize_is_strided_(tensor_shape) ||
+            (output_format != DataFormat::MxFp8R && output_format != DataFormat::MxFp8P &&
+             output_format != DataFormat::MxFp6R && output_format != DataFormat::MxFp6P &&
+             output_format != DataFormat::MxFp4 && output_format != DataFormat::MxInt8 &&
+             output_format != DataFormat::MxInt4 && output_format != DataFormat::MxInt2),
+        "Strided pack untilize does not support MX output formats");
+
     // Strided pack untilize (every tile shape but 32x32) needs a buffer descriptor that indexes L1 rows.
     const std::uint8_t bfd_id = _llk_pack_untilize_is_strided_(tensor_shape)
                                     ? llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id)
@@ -95,6 +105,6 @@ inline void llk_pack_untilize(
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;
         const std::uint32_t l1_tile_idx = base_l1 + block_rt * y_stride + block_c_index * block_ct_dim;
-        _llk_pack_untilize_<full_ct_dim>(dest_idx, l1_tile_idx, tensor_shape);
+        _llk_pack_untilize_(dest_idx, l1_tile_idx, tensor_shape);
     }
 }

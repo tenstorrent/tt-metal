@@ -1,6 +1,8 @@
 # Datacopy that reads through UnpackerTilizeA and packs out with PackUntilize:
 # a row-major input goes through dest and comes back row-major.
 
+supported_archs: ["wormhole", "quasar"]
+
 operands:
   - name: "input_A"
     tile_dims: all

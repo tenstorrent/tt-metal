@@ -152,6 +152,7 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
     static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by BLOCK_CT_DIM");
     static_assert(BLOCK_CT_DIM <= MOP_LOOP_LEN_MAX, "BLOCK_CT_DIM exceeds the MOP inner loop length");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Unsupported tile shape for pack untilize");
+    LLK_ASSERT(tensor_shape.total_num_faces() > 1 || tensor_shape.face_r_dim == FACE_R_DIM, "Pack untilize of 1-face tiles needs 16-row faces");
 
     TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
@@ -176,7 +177,8 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
     cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32]  = stride_cfg.val[1];
 
     // Rows of a 4-row group past face_r_dim belong to the next face: mask them and skip their L1 writes.
-    const std::uint32_t row_mask = (0xF << tensor_shape.face_r_dim) & 0xF;
+    constexpr std::uint32_t row_group_mask = (1u << PACR_STRIDE_ROWS) - 1;
+    const std::uint32_t row_mask           = (row_group_mask << tensor_shape.face_r_dim) & row_group_mask;
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // row k goes to start + k * STRIDE_OFFSET_0
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_COL_MASK_RMW, 0);
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, row_mask);
@@ -188,13 +190,11 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
 /**
  * @brief Packs out tiles and untilizes them; always uses Packer 0 for untilize.
  *
- * @tparam FULL_CT_DIM: Number of tiles per block in c_dim * number of blocks = full c_dim size of the tensor.
  * @param dest_idx: Index into the DEST register for a tile.
  * @param l1_tile_idx: Index into the L1 buffer for the first tile of the row, in tile widths.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
- * @note Call @ref _llk_pack_untilize_init_ with matching template args before this function.
+ * @note Call @ref _llk_pack_untilize_init_ with the same tensor_shape before this function.
  */
-template <std::uint32_t FULL_CT_DIM>
 inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape)
 {
     if (!_llk_pack_untilize_is_strided_(tensor_shape))

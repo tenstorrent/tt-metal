@@ -309,7 +309,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Each tile row is produced in alternating banks (SyncHalf).
                     // Read from dest_idx 0; section_done zeroes the current bank
                     // and switches the packer to the other bank.
-                    _llk_pack_untilize_<FULL_CT_DIM>(0 /*dest_idx*/, y * y_stride_external, tensor_shape);
+                    _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external, tensor_shape);
                 }
             }
         }
@@ -319,7 +319,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                 {
-                    _llk_pack_untilize_<FULL_CT_DIM>(0 /*dest_idx*/, y * y_stride_external, tensor_shape);
+                    _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external, tensor_shape);
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
