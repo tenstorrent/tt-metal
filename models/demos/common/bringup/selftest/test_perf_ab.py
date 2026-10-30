@@ -325,6 +325,31 @@ def test_a_measured_side_is_reused(mk):
     assert sum(" reused (same code and switch)" in x for x in mk.lines) == 8  # F116: per run, 4 a side
 
 
+def test_a_side_killed_before_any_test_is_measured_again_on_rerun(mk):
+    """F228: DeepSeek-V4.1 P.16's 'on' side was SIGKILLed at model load (rc 1, no metric); `decide --rerun` then
+    reused it as 'same code and switch' and the report showed nothing for the change."""
+    o = mk([pick(ab_mode="quick")], CHANGE)
+    real, killed = o.run_cmd, []
+
+    def run_cmd(cmd, env, log):
+        if env.get("TOY_FIDELITY", "hifi2") == "hifi2" and not killed:
+            killed.append(cmd)
+            Path(env[M.RESULTS_ENV]).mkdir(parents=True, exist_ok=True)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text("Killed\n")
+            return 1
+        return real(cmd, env, log)
+
+    o.run_cmd = run_cmd
+    assert o.run() == HUMAN, mk.lines
+    assert killed and o.led.state()["P.1"]["ab"]["quick"]["new"]["chunk_wall_ms"] is None
+    n = len(mk.calls)
+    assert decide(o, "P.1", "rerun") == 0
+    assert o.run() == HUMAN, mk.lines
+    assert [c["on"] for c in mk.calls[n:]] == [True]  # the killed side ran again, the finished one was reused
+    assert o.led.state()["P.1"]["ab"]["quick"]["new"]["chunk_wall_ms"] == 250.0
+
+
 def test_a_setting_name_switches_its_variable(mk, monkeypatch):
     """F103: ab names a model setting (EXPERTS_IMPL), the code reads its variable (DS41_EXPERTS_IMPL): the report sets
     the variable on both sides (DeepSeek-V4.1 P.1 measured bfp8 against bfp8: an identical table); a value outside the
