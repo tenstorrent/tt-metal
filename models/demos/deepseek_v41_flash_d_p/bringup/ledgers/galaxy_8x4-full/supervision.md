@@ -1093,3 +1093,28 @@ Open: F228 (an A/B side whose run did not finish must not be reused by decide --
 the killed side); P.16's note on the 'eval' package import errors in the rms_norm / mhc golden tests (DS41-173);
 F215 / F216 / F227; decode team's answers (KV handover page); X.3 / O.1 / Z.1 / F.1 not run.
 Skill updated (both copies): no fork regression suites on large boxes; on a killed run, no improvising.
+
+## 2026-10-30 11:30 overseer session on bh-glx-110-c10u02 after the node REBOOT (INFRA)
+- ~11:05 INFRA: node rebooted (Slurm 158554 ended, automated fabric-health job, the login-node guard re-reserved the node
+  and ran autoresume.sh: overseer only, build_ok stale a681324c835 vs HEAD 5405cca1be1). Every process from before gone.
+  After the reboot: 506 GiB free of 566 (the ~304 GiB held outside every process before is released), so the resident
+  engram tables (~198 GB) fit again: P.16 is A/B-measured HERE, as the 10:30 hand-off describes. Tree = branch
+  dnijemcevic/model_bringup_p16wip (P.16 code done; only its A/B is pending, owner).
+- F228 fixed (framework): an A/B side whose run did not finish is never reused (ab_finished; selftest; 34/34
+  test_perf_ab.py). So `decide --rerun` keeps the finished off side and measures the killed on side; no records moved
+  by hand. "F229" withdrawn: the second resume correctly waited (the rerun decision had been consumed).
+- run_ds41_8x4.sh: --until K.1 -> --until P.16. Incremental rebuild started (tmux build, fork sources newer than the
+  08:01 build); then the box test, build_ok, `ps -u dlukic`, decide --rerun, resume --until P.16.
+- Watch layers: cron heartbeat 7,37; Stop hook present; tmux overseer pane-died guard present.
+- 11:31 rebuild done (ttnn import ok), box test PASS (16 s), build_ok = 5405cca1be1, ps -u dlukic empty.
+  RAM checkpoint (owner, leak check): /scratch/dnijemcevic/p16/mem_checkpoint_after_reboot.txt (MemAvailable 510.5 GiB,
+  hugetlb 34.8 GiB, held outside every counter 4.2 GiB vs ~304 GiB before the reboot); logger every 10 s in tmux memlog
+  -> /scratch/dnijemcevic/p16/mem_after_reboot.log.
+- 11:32 decide --task P.16 --rerun; resume --until P.16: off side reused (finished, same code key 9da00a190a4069be),
+  on side measuring. Caveat for the table: the off side's wall (327.3) was measured at 09:32 under host-RAM pressure.
+- 11:40 OWNER: if P.16 is ok, device + host profile of 50k -> 55k (posprof POS 51200; scripts series_tag.sh /
+  hostprof_pos.sh); then the new MoE block drop on dnijemcevic/model_bringup_lowbit (5 commits 6f7fc85f27b..5e86f048ad4
+  over 8deddc500ea: Marko sync, SPC_ACC_PERCHIP combine, routing exchange DRAM slots, flat DRISC fix): take it, measure
+  device + host at 50k -> 55k and 500k -> 505k. Plan: baseline posprof 51200 + 512000 after P.16 commits (tag P16), merge
+  the drop (merge-tree: 0 conflicts, no overlap with P.16's files), rebuild, box test, accuracy through the framework,
+  posprof again (tag MOE), before/after table; revert if it loses.

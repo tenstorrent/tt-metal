@@ -68,7 +68,9 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     bool deepseek,
     const std::optional<Tensor>& collapse_pre,
-    int64_t partials) {
+    int64_t partials,
+    const std::optional<Tensor>& hc_output,
+    const std::optional<Tensor>& y_output) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     if (!cfg.fp32_dest_acc_en) {
         throw UnsupportedAxisError("mhc_pre_xing: fp32_dest_acc_en=False not in SUPPORTED [True]");
@@ -179,7 +181,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     p.clamp_max = clamp_max;
     p.deepseek = deepseek;
     p.compute_config = cfg;
-    auto out = ttnn::prim::bringup::mhc_pre_xing(input, streams, p, collapse_pre);
+    auto out = ttnn::prim::bringup::mhc_pre_xing(input, streams, p, collapse_pre, hc_output, y_output);
     std::optional<Tensor> hc, y;
     size_t k = 0;
     if (p.compute_coef) {
@@ -196,13 +198,17 @@ Tensor mhc_pre_xing_pack(
     const Tensor& streams,
     int64_t n,
     const std::optional<Tensor>& engram_keys,
-    const std::optional<Tensor>& engram_weight) {
+    const std::optional<Tensor>& engram_weight,
+    const std::optional<Tensor>& output_tensor) {
     if (n < 1 || n > 4) {
         throw ValueErrorCpp(fmt::format("mhc_pre_xing_pack: n={} must be in [1, 4]", n));
     }
     if (engram_keys.has_value() || engram_weight.has_value()) {
         if (!engram_keys.has_value() || !engram_weight.has_value() || mix_opt.has_value()) {
             throw ValueErrorCpp("mhc_pre_xing_pack: engram mode needs engram_keys and engram_weight, and mix None");
+        }
+        if (output_tensor.has_value()) {
+            throw ValueErrorCpp("mhc_pre_xing_pack: output_tensor is not supported in engram mode");
         }
         check_tile_dram_stream(streams, "streams");
         check_tile_dram_stream(*engram_keys, "engram_keys");
@@ -261,7 +267,7 @@ Tensor mhc_pre_xing_pack(
     p.compute_coef = false;
     p.pack_stats = true;
     p.compute_config = default_compute_kernel_config();
-    return ttnn::prim::bringup::mhc_pre_xing(mix, streams, p).at(0);
+    return ttnn::prim::bringup::mhc_pre_xing(mix, streams, p, std::nullopt, output_tensor).at(0);
 }
 
 }  // namespace ttnn::operations::bringup::mhc_pre_ttnn

@@ -37,6 +37,10 @@ struct MhcPostStatsInputs {
     Tensor post;      // (..., T, n)          fp32
     Tensor comb;      // (..., T, n*n)        fp32
     Tensor weight;    // W   (..., n*C, 32)   fp32, leading dims 1
+    // P.16 (default absent = the op allocates): the caller's X', stats and scratch buffers
+    std::optional<Tensor> output;
+    std::optional<Tensor> stats_output;
+    std::optional<Tensor> stats_scratch;
 };
 
 // The work plan (host): column blocks of `cols_per_block` tiles; a unit = one block of one token tile-row, units
@@ -87,5 +91,8 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
     bool comb_transposed,
     uint32_t post_col = 0,
-    uint32_t comb_col = 0);
+    uint32_t comb_col = 0,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& stats_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& stats_scratch = std::nullopt);
 }  // namespace ttnn::prim::bringup

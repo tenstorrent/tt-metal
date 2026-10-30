@@ -34,7 +34,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 
-from . import ccl
+from . import ccl, host_alloc
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, compute_config, fpu_weight, tp_sum
@@ -51,6 +51,8 @@ class TtHcMixes:
     """One mHC coefficient block (attn_hc or ffn_hc of one layer). Call with the per-chip streams
     [1, 1, S/SP, 4 x H/TP] fp32 TILE; returns [1, 1, S/SP, 24] fp32 TILE (pre | post | comb), replicated over
     axis 1. Does not consume its input."""
+
+    out_sites = (None, None)  # FORK_OUT_BUFFERS=on (P.16, tt/host_alloc.reserve_forks): fused()'s hc / y sites
 
     def __init__(self, mesh, fn, scale, base, hidden: int, norm_eps: float, hc_eps: float, iters: int):
         fn = fn.float()
@@ -127,6 +129,10 @@ class TtHcMixes:
         else:
             red = tp_sum(self.mesh, row)
         dealloc(row)
+        hs, ys = self.out_sites  # FORK_OUT_BUFFERS=on (P.16): load-time outputs of an in-layer hc / y
+        rows = x.shape[-2]
+        hco = host_alloc.fork_out(self.mesh, hs, (1, 1, rows, HC * (HC + 2)), ttnn.float32)
+        yo = host_alloc.fork_out(self.mesh, ys, (1, 1, rows, x.shape[-1] // HC), x.dtype)
         hc, y = ttnn.bringup.mhc_pre_xing(
             red,
             x,
@@ -139,10 +145,13 @@ class TtHcMixes:
             sinkhorn_iters=self.iters,
             deepseek=True,
             collapse_pre=pre,
+            hc_output=hco,
+            y_output=yo,
             **partials,
         )
         dealloc(red)
-        return hc, y
+        # (the kept objects: the op returns new wrappers of their buffers, DS41-149)
+        return (hc if hco is None else hco), (y if yo is None else yo)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         rows = x.shape[-2]

@@ -210,3 +210,131 @@ def install_moe(blk) -> None:
         return
     k3.arena_fits = types.MethodType(_arena_fits_kept, k3)
     k3.alloc_arena = types.MethodType(_alloc_arena_kept, k3)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# FORK_OUT_BUFFERS (P.16): the bring-up forks' outputs
+# ---------------------------------------------------------------------------------------------------------------------
+#
+# ttnn.bringup.rms_norm / mhc_pre_xing / mhc_post (stats variant) / rotary_embedding_indexed take the caller's output
+# buffers (fork options output_tensor, hc_output / y_output, stats_output / stats_scratch). A site whose output is read
+# and dropped inside its layer writes ONE load-time buffer for every layer: the next layer's call of that site is
+# queued after every reader of this layer's output (each chip runs its programs in order). Outputs kept across a
+# layer or a chunk keep allocating (the mHC streams, ffn_hc's hc = the next layer's pending pre, ffn_residual's stats
+# row for the next layer, the final norm). The buffers are reserved here AT LOAD TIME (reserve_forks, from the model's
+# shapes; never mid-forward, DS41-146) and pinned (ccl.dealloc skips them); a call whose spec has no buffer (another
+# box's shapes this table does not cover) allocates as before, counted in FORK_MISSES. The ops return a new Python
+# wrapper of the buffer; the call sites hand on the kept object (DS41-149).
+
+_FORKS: dict = {}  # id(mesh) -> (mesh, {(site, shape, dtype): load-time output})
+FORK_MISSES: dict = {}  # site -> calls whose output spec had no load-time buffer (allocated as before; diagnostic)
+
+# mhc_post(stats_weight=)'s partials scratch plan (mhc_post_stats_device_operation.cpp mhc_post_stats_plan)
+_POST_MAX_COLS, _POST_UNIT_COST, _POST_MAX_PARTIALS = 8, 4, 64
+
+
+def forks_on() -> bool:
+    return settings.get("FORK_OUT_BUFFERS") == "on"
+
+
+def _reserve_fork(mesh, site: str, shape, dtype) -> None:
+    hit = _FORKS.get(id(mesh))
+    if hit is None or hit[0] is not mesh:
+        hit = _FORKS[id(mesh)] = (mesh, {})
+    key = (site, tuple(int(d) for d in shape), dtype)
+    if key in hit[1]:
+        return
+    t = ttnn.allocate_tensor_on_device(ttnn.Shape(list(key[1])), dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+    ccl.pin(mesh, t)
+    hit[1][key] = t
+
+
+def fork_out(mesh, site: str | None, shape, dtype):
+    """The load-time output of ``site`` for a [shape] ``dtype`` TILE DRAM output, or None (FORK_OUT_BUFFERS off, a site
+    that keeps allocating, or no such spec: allocate as before)."""
+    if site is None or not _FORKS:
+        return None
+    hit = _FORKS.get(id(mesh))
+    if hit is None or hit[0] is not mesh:
+        return None
+    t = hit[1].get((site, tuple(int(d) for d in shape), dtype))
+    if t is None:
+        FORK_MISSES[site] = FORK_MISSES.get(site, 0) + 1
+    return t
+
+
+def post_scratch_shape(mesh, rows: int, cols: int) -> list[int]:
+    """mhc_post(stats_weight=)'s scratch spec [1, 1, R, 32 blocks] for F [1, 1, rows, cols] (the op's plan: the block
+    width minimising the busiest core's work, at most 64 partials a row, ties to the wider block)."""
+    g = mesh.compute_with_storage_grid_size()
+    cores = max(1, g.x * g.y)
+    col_tiles, row_tiles = cols // 32, rows // 32
+    top = min(_POST_MAX_COLS, col_tiles)
+    best_cost, best_cb = None, 0
+    for cb in range(1, top + 1):
+        nb = -(-col_tiles // cb)
+        if nb > _POST_MAX_PARTIALS and cb < top:
+            continue
+        cost = -(-(nb * row_tiles) // cores) * (cb + _POST_UNIT_COST)
+        if best_cost is None or cost <= best_cost:
+            best_cost, best_cb = cost, cb
+    return [1, 1, row_tiles * 32, -(-col_tiles // best_cb) * 32]
+
+
+def reserve_forks(model) -> None:
+    """Load time (TtDS41Model's constructor, after reserve_sites): name every block's in-layer fork sites and reserve one
+    output a site from the model's shapes. Off: no site is named, every call allocates (today's path)."""
+    if not forks_on():
+        return
+    from .common import stream_dtype
+
+    mesh, cfg = model.mesh, model.cfg
+    sp, tp = tuple(mesh.shape)
+    rows = model.chunk // sp  # S/SP: the streams' rows
+    hid = cfg.dim // tp  # H/TP: a stream's columns on a chip
+    q = model.tables.geo.q_rows  # S/(SP TP): the chip's own rows (ATTN_SP32)
+    f32, bf16 = ttnn.float32, ttnn.bfloat16
+    for blk in model.blocks.values():
+        # mHC (MHC_FUSED=on): attn_hc's hc lives to ffn_collapse, both collapses' y to their norm; ffn_hc's hc is the
+        # next layer's pending pre (allocates)
+        if getattr(blk, "fused", False):
+            blk.attn_hc.out_sites = ("fork.attn_hc.hc", "fork.attn_hc.y")
+            blk.ffn_hc.out_sites = (None, "fork.ffn_hc.y")
+            _reserve_fork(mesh, "fork.attn_hc.hc", [1, 1, rows, cfg.hc * (cfg.hc + 2)], f32)
+            for s in ("fork.attn_hc.y", "fork.ffn_hc.y"):
+                _reserve_fork(mesh, s, [1, 1, rows, hid], stream_dtype())
+            # the residuals' mhc_post(stats_weight=): attn_residual's row is read by this layer's ffn_hc (ffn's row
+            # by the next layer: allocates); the partials scratch is dead when the op ends (one for both)
+            blk.attn_res.out_sites = ("fork.post.row", "fork.post.scratch")
+            blk.ffn_res.out_sites = (None, "fork.post.scratch")
+            _reserve_fork(mesh, "fork.post.row", [1, 1, rows, 32], f32)
+            _reserve_fork(mesh, "fork.post.scratch", post_scratch_shape(mesh, rows, hid), f32)
+        # the norms: attn_norm (the chip's rows under ATTN_SP32, else the column split), q_norm / kv_norm on the
+        # projection's rows, ffn_norm (column split: the stats and the output)
+        sp32 = getattr(blk, "sp32", False)
+        _name_norm(mesh, blk.attn_norm, "fork.attn_norm", q if sp32 else rows)
+        prow = q if blk.q_a.proj.full_rows else rows
+        _name_norm(mesh, blk.q_a.norm, "fork.q_norm", prow)
+        _name_norm(mesh, blk.kv.norm, "fork.kv_norm", prow)
+        _name_norm(mesh, blk.ffn_norm, "fork.ffn_norm", rows)
+        # RoPE: kv (the window rows; to_layout / gathered copies are what the cache keeps), q and the output's inverse
+        att = getattr(blk, "attention", None)
+        if blk.kv.stock:
+            blk.kv.rope_site = "fork.rope.kv"
+            _reserve_fork(mesh, "fork.rope.kv", [1, 1, prow, blk.kv.k1 - blk.kv.k0], bf16)
+        if att is not None and att.stock and att.sp32:
+            att.rope_sites = ("fork.rope.q", "fork.rope.o")
+            for s in att.rope_sites:
+                _reserve_fork(mesh, s, [1, att.h_l, q, att.d], bf16)
+
+
+def _name_norm(mesh, norm, site: str, rows: int) -> None:
+    """A TtDistributedRmsNorm's site and its load-time outputs (NORM_IMPL=on): [1, 1, rows, width] in its out dtype;
+    a column-split norm also its stats [1, 1, rows, 32 B] (fp32)."""
+    if norm.impl != "on":
+        return
+    width = norm.hidden // norm.tp
+    norm.site = site
+    _reserve_fork(mesh, site, [1, 1, rows, width], norm.out_dtype)
+    if norm.split:
+        _reserve_fork(mesh, site + ".stats", [1, 1, rows, norm_stats_width(mesh, rows, width)], ttnn.float32)

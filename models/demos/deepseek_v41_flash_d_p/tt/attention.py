@@ -605,6 +605,8 @@ class TtWindowAttention:
     end = actual_end -> attn_out [1, 1, S/SP, H/TP] fp32 (hidden split); writes the chunk's window rows into ``cache``.
     Does not consume its inputs."""
 
+    rope_sites = (None, None)  # FORK_OUT_BUFFERS=on (P.16): the q / output rope's load-time outputs (host_alloc)
+
     INTERLEAVED = False  # q / table rope tail order in the sparse_sdpa (False: [even | odd], the table transformed)
 
     def __init__(self, mesh, cfg, w: dict, rope: RopeTable, tables: WindowTables):
@@ -934,7 +936,9 @@ class TtWindowAttention:
             qb, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM
         )
         dealloc(qb)
-        q = rope_stock(qr, cos, sin, self.rope.trans, prefix=qn)
+        q = rope_stock(
+            qr, cos, sin, self.rope.trans, prefix=qn, site=self.rope_sites[0], mesh=self.mesh
+        )  # (FORK_OUT_BUFFERS)
         dealloc(qr)
         dealloc(qn)
         return q
@@ -1014,7 +1018,9 @@ class TtWindowAttention:
         ATTN_GLUE=on with CCL_IMPL=fabric_bf16)."""
         ot = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
         if self.sp32:  # ATTN_SP32_PROJ=on (P.9): every head of the chip's rows stays here
-            oq = rope_stock(ot, cos, sin, self.rope.trans_inv)
+            oq = rope_stock(
+                ot, cos, sin, self.rope.trans_inv, site=self.rope_sites[1], mesh=self.mesh
+            )  # (FORK_OUT_BUFFERS)
             dealloc(ot)
             return self._out_proj(oq, oq.shape[2])
         oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512]
