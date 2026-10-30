@@ -220,6 +220,18 @@ class DownstreamGitTests(unittest.TestCase):
         self.env["GIT_CONFIG_GLOBAL"] = str(explicit)
         self.assertEqual(self.run_git("config", "--get", "user.name"), "Explicit")
 
+    def test_inactive_prepare_keeps_global_writes_in_the_selected_file(self):
+        (self.session / "cache-disabled").touch()
+        (self.session / "state.json").write_text(json.dumps({"active": False}))
+        shutil.copyfile(self.session / "upstream.config", self.session / "global.config")
+        self.run_git("config", "--global", "safe.directory", str(self.root))
+        for name, expected in (("global.config", 0), ("upstream.config", 1)):
+            result = subprocess.run(
+                [self.real_git, "config", "--file", str(self.session / name), "--get", "safe.directory"],
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -123,9 +123,6 @@ def run(arguments, environ):
     owned_config = Path(environ.get("GIT_CONFIG_GLOBAL", "")).resolve() == (session / "global.config").resolve()
     if not owned_config:
         return subprocess.call([real_git, *arguments], env=environ)
-    disabled = (session / "cache-disabled").exists()
-    if disabled:
-        return subprocess.call([real_git, *arguments], env=upstream_environment(environ, session))
     try:
         state = json.loads((session / "state.json").read_text())
     except (OSError, ValueError):
@@ -133,6 +130,8 @@ def run(arguments, environ):
         return subprocess.call([real_git, *arguments], env=environ)
     if not state.get("active"):
         return subprocess.call([real_git, *arguments], env=environ)
+    if (session / "cache-disabled").exists():
+        return subprocess.call([real_git, *arguments], env=upstream_environment(environ, session))
     if arguments[index] in (
         "clone",
         "fetch",

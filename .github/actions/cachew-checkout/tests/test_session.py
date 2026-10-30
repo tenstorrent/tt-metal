@@ -23,6 +23,9 @@ class SessionTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.env = self.fixture.env
+        # Checkout v6 scopes its credential include to the absolute gitdir.
+        # macOS /var aliases must agree with Git's canonical /private/var path.
+        self.env["GITHUB_WORKSPACE"] = str(self.fixture.workspace.resolve())
         self.env["CACHEW_ACTION_PATH"] = str(fixtures.ACTION)
         self.env["CACHEW_PERSIST_CREDENTIALS"] = "true"
         self.posts = []
@@ -75,7 +78,7 @@ class SessionTests(unittest.TestCase):
             "submodules": self.env["CACHEW_SUBMODULES"],
             "clean": "true",
             "persist-credentials": self.env["CACHEW_PERSIST_CREDENTIALS"],
-            "set-safe-directory": "false",
+            "set-safe-directory": self.env.get("CACHEW_SET_SAFE_DIRECTORY", "true"),
         }.items():
             env["INPUT_" + name.upper()] = value
         before = list(self.fixture.cache.requests)
@@ -141,6 +144,68 @@ class SessionTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout.strip()
+
+    def safe_directories(self, file=None):
+        selection = ["--file", str(file)] if file else ["--global"]
+        result = subprocess.run(
+            [self.env["CACHEW_REAL_GIT"], "config", *selection, "--includes", "--null", "--get-all", "safe.directory"],
+            cwd=self.fixture.workspace,
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        return result.stdout.split("\0")[:-1] if result.returncode == 0 else []
+
+    def test_default_safe_directory_survives_activation_and_later_prepare(self):
+        self.prepare()
+        self.assertTrue(self.fixture.attempt())
+        self.checkout()
+        before = self.safe_directories()
+        self.assertIn(str(self.fixture.target.resolve()), [str(Path(value).resolve()) for value in before if value])
+        self.assertTrue(self.activate())
+        self.assertEqual(self.safe_directories(), before)
+        self.prepare()
+        self.assertEqual(self.safe_directories(), before)
+        self.assertTrue(self.activate("true"))
+        self.assertEqual(self.safe_directories(), before)
+        self.finish()
+
+    def test_repeated_default_checkouts_keep_both_safe_directories_in_fallback(self):
+        self.assertEqual(self.flow(), (True, True))
+        directory = Path(self.env["CACHEW_SESSION_DIR"])
+        (directory / "cache-disabled").touch()
+        shutil.copyfile(directory / "upstream.config", directory / "global.config")
+        self.env["CACHEW_PATH"] = "second-checkout"
+        self.assertEqual(self.flow(), (False, False))
+        expected = {str(self.fixture.target.resolve()), str((self.fixture.workspace / "second-checkout").resolve())}
+        for config in (directory / "global.config", directory / "upstream.config"):
+            self.assertEqual({str(Path(value).resolve()) for value in self.safe_directories(config) if value}, expected)
+        self.finish()
+
+    def test_safe_directory_false_does_not_add_checkout_path(self):
+        self.env["CACHEW_SET_SAFE_DIRECTORY"] = "false"
+        self.assertEqual(self.flow(), (True, True))
+        directory = Path(self.env["CACHEW_SESSION_DIR"])
+        self.assertEqual(self.safe_directories(), [])
+        self.assertEqual(self.safe_directories(directory / "upstream.config"), [])
+        self.finish()
+
+    def test_safe_directory_empty_reset_and_deduplication_survive_rebuild(self):
+        self.prepare()
+        self.assertTrue(self.fixture.attempt())
+        self.checkout()
+        trusted = str(self.fixture.workspace / "explicitly-trusted")
+        self.real_git("config", "--global", "--add", "safe.directory", "")
+        self.real_git("config", "--global", "--add", "safe.directory", trusted)
+        self.real_git("config", "--global", "--add", "safe.directory", trusted)
+        self.assertTrue(self.activate())
+        self.assertEqual(self.safe_directories(), ["", trusted])
+        self.prepare()
+        self.assertEqual(self.safe_directories(), ["", trusted])
+        self.assertTrue(self.activate("true"))
+        self.assertEqual(self.safe_directories(), ["", trusted])
+        self.finish()
 
     def test_downstream_new_repository_uses_global_cache_and_post_cleans_auth(self):
         self.fixture.repository("dependency")
@@ -260,6 +325,33 @@ class SessionTests(unittest.TestCase):
         expected = "basic " + base64.b64encode(f"x-access-token:{fixtures.TOKEN}".encode()).decode()
         last = [auth for _, url, auth in self.fixture.cache.requests if "/main/" in url][-1]
         self.assertEqual(last.lower(), expected.lower())
+        self.finish()
+
+    def test_disabled_cache_secondary_private_checkout_uses_its_current_token(self):
+        self.fixture.repository("secondary")
+        secondary_token = "secondary-private-token"
+        self.fixture.upstream.required_auth.update(
+            main="basic " + base64.b64encode(f"x-access-token:{fixtures.TOKEN}".encode()).decode(),
+            secondary="basic " + base64.b64encode(f"x-access-token:{secondary_token}".encode()).decode(),
+        )
+        self.fixture.cache.fail_repo = "main"
+        self.assertEqual(self.flow(), (False, False))
+        cache_before = list(self.fixture.cache.requests)
+        self.env.update(
+            CACHEW_REPOSITORY="org/secondary", CACHEW_PATH="secondary", CACHEW_REF="main", CACHEW_TOKEN=secondary_token
+        )
+        self.assertEqual(self.flow(), (False, False))
+        for repository in ("main", "secondary"):
+            result = subprocess.run(
+                ["git", "ls-remote", self.fixture.upstream.url + "/org/" + repository],
+                cwd=self.fixture.workspace,
+                env=self.env,
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.fixture.cache.requests, cache_before)
         self.finish()
 
     def test_sparse_or_existing_target_still_configures_later_dependencies(self):

@@ -171,6 +171,26 @@ function copyGlobals(directory, state, selectedCache, upstream, stripAuth) {
   return originals.map(copy).filter(Boolean).map(file => entry('include.path', file)).join('');
 }
 
+function captureSafeDirectories(directory, state) {
+  const selected = state.active && fs.existsSync(path.join(directory, 'cache-disabled')) ? 'upstream.config' : 'global.config';
+  const file = path.join(directory, selected);
+  if (!fs.existsSync(file)) return;
+  const contents = git(state, ['config', '--file', file, '--no-includes', '--null', '--list']);
+  const directories = [];
+  for (const item of contents.split('\0')) {
+    const separator = item.indexOf('\n');
+    if (separator < 0 || item.slice(0, separator).toLowerCase() !== 'safe.directory') continue;
+    const value = item.slice(separator + 1);
+    if (value === '') directories.length = 0;
+    if (!directories.includes(value)) directories.push(value);
+  }
+  state.safeDirectories = directories;
+}
+
+function safeDirectoryConfig(state) {
+  return (state.safeDirectories || []).map(value => entry('safe.directory', value)).join('');
+}
+
 function prepare() {
   const config = settings();
   let directory = process.env.CACHEW_SESSION_DIR;
@@ -186,10 +206,12 @@ function prepare() {
     state.base = copyGlobals(directory, state, config.cache, config.upstream, false);
     state.clean = copyGlobals(directory, state, config.cache, config.upstream, true);
   }
+  captureSafeDirectories(directory, state);
   state.refs += 1;
   state.active = false;
-  writePrivate(path.join(directory, 'global.config'), state.clean + PERFORMANCE.map(([key, value]) => entry(key, value)).join(''));
-  if (!fs.existsSync(path.join(directory, 'upstream.config'))) fs.copyFileSync(path.join(directory, 'global.config'), path.join(directory, 'upstream.config'));
+  const clean = state.clean + PERFORMANCE.map(([key, value]) => entry(key, value)).join('') + safeDirectoryConfig(state);
+  writePrivate(path.join(directory, 'global.config'), clean);
+  writePrivate(path.join(directory, 'upstream.config'), clean);
   writeState(directory, state);
   save('cachew-session', directory);
   output('session-dir', directory);
@@ -215,6 +237,7 @@ function shellQuote(value) { return `'${value.replaceAll("'", "'\\''")}'`; }
 function activate() {
   const directory = process.env.CACHEW_SESSION_DIR;
   const state = readState(directory);
+  captureSafeDirectories(directory, state);
   const config = settings();
   const token = process.env.CACHEW_TOKEN || '';
   const header = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
@@ -224,7 +247,7 @@ function activate() {
     state.tokens[`${config.upstream}/${config.repository}`] = header;
     if (config.repository.toLowerCase() === process.env.GITHUB_REPOSITORY.toLowerCase()) state.defaults[config.upstream] = header;
   }
-  let upstream = state.base + PERFORMANCE.map(([key, value]) => entry(key, value)).join('');
+  let upstream = state.base + PERFORMANCE.map(([key, value]) => entry(key, value)).join('') + safeDirectoryConfig(state);
   for (const [url, auth] of Object.entries(state.defaults)) upstream += authEntry(url, auth);
   for (const [url, auth] of Object.entries(state.tokens)) {
     upstream += authEntry(url, auth);
