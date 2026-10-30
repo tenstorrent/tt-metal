@@ -1581,6 +1581,25 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 20:25: eight decode steps per prefill step; the whole-prefix scratch; the 128-row trace is layout-sensitive
+
+`ab_interleave_d8_32` (the plugin's `decode_interleave_decode_steps` 8, confirmed in its log): 128 x 128 x 32 TTFT
+5.82 s mean / 5.97 s median against 5.47 / 5.61 with one decode step, ITL 60.9 vs 60.3 ms, 16.5 tok/s per user; the
+short burst pays +6 % TTFT so a decoder beside a 1 M prefill gets 8 tokens per 7.9 s chunk (~1 tok/s) instead of one
+(0.13, capstone r4). Catalog: `decode_interleave_decode_steps: 8` on the 1 M profile (TIS 98c43f5e9).
+`needle1m_8_direct_r2` (a constant 1 GiB copy) died at 112 K: the copy's 128 MiB per bank met a largest free block of
+126.5 MiB one step after the log showed 220, the scorer's blocks splitting the hole within a layer; a per-chunk
+transient of that size cannot be found step after step in ~2 GiB of headroom. `GLM53_PREFIX_SCRATCH=1` (95cd85f849d)
+keeps the whole-prefix ROW_MAJOR kv in ONE persistent scratch per chip (the slot's full length, allocated at the first
+sparse copy of the warm-up), shared by the DSA layers and refilled piecewise from the pages (slice -> untilize ->
+`slice_write`, 131072 rows at a time): two pieces of transient, a constant sparse_sdpa T, ~1.4 % of a 1 M wave step.
+The 4-layer 8x4 gate under the scratch: the eager wave and SP equal HF on all rows (pcc 0.99988) and the 256-row trace
+is bit-identical, so the copy is right; the 128-row TRACE gives garbage on rows 0, 2 and 3 (pcc 0.04): the known
+128-row form dependence is layout-sensitive (the scratch moved the DRAM layout; that trace holds no sparse copy), a
+stale or aliased buffer read inside the trace. The served profiles capture [256, 512] only; the taps gate under the
+scratch (`wave_gate_taps_scratch_8x4_l4`) will name the layer. `needle1m_8_direct_r3` (scratch + the allocator and
+program-count log) runs now.
+
 ### 2026-10-30 19:40: the placement is settled (waves of 8 for bursts, SP for lone prompts); the wave wall moved to 477 K
 
 `needle64k_8_adaptive_r3`: 8/8 needles, TTFT 246 s against the SP-first run's 332 s: one SP chunk for the lone first
