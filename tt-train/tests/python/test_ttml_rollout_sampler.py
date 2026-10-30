@@ -19,7 +19,7 @@ import ttml
 import ttnn
 
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad, run_mode
+from ttml.common.utils import build_mesh, no_grad, run_mode
 from ttml.modules import RunMode
 from ttml.trainers.grpo_trainer import (
     RolloutBatch,
@@ -327,4 +327,23 @@ def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
     transformer_config, model_source, template_kwargs, temperature
 ):
     rows = _rollout_vs_teacher_forced(transformer_config, model_source, template_kwargs, DEVICE_CONFIG, temperature)
+    _assert_rows_match_teacher_forced(rows)
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+@pytest.mark.parametrize("parallelism", ["enable_ddp", "enable_fsdp"])
+def test_rollout_logprobs_match_teacher_forced_on_two_devices(fresh_device_mesh, parallelism):
+    """The batch is sharded over a [1, 2] mesh, so each device holds rows of mixed prompt lengths."""
+    device_config = DeviceConfig({"device_config": {parallelism: True, "mesh_shape": [1, 2]}})
+    mesh = build_mesh(device_config)
+    with fresh_device_mesh(mesh.shape, mesh.axis_names, what="per-row RoPE rollout on two devices"):
+        rows = _rollout_vs_teacher_forced(
+            QWEN3_TRANSFORMER_CONFIG,
+            HF_QWEN3_MODEL_ID,
+            {"enable_thinking": False},
+            device_config,
+            temperature=0.0,
+            completions_per_prompt=2,
+        )
     _assert_rows_match_teacher_forced(rows)
