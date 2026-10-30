@@ -8,6 +8,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <vector>
@@ -200,8 +201,9 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     TT_FATAL(num_cores_available >= B, "Cores available ({}) must be >= batch size ({})", num_cores_available, B);
 
     // ========== Core Allocation ==========
-    const uint32_t max_cores_per_head =
-        program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    const uint32_t max_cores_per_head = program_config.has_value()
+                                            ? program_config->max_cores_per_head_batch
+                                            : std::min<uint32_t>(num_cores_available, 1u << MAX_TREE_REDUCTION_ROUNDS);
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
@@ -413,19 +415,23 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
     uint32_t out_num_blocks = Sk_chunk_t > 0 ? 1 : 0;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    while (out_out_subblock_w > 1 && vDHt % out_out_subblock_w != 0) {
+        out_out_subblock_w--;
+    }
     const uint32_t out_out_subblock_h =
         (out_out_subblock_w == vDHt) ? std::min(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
-    // DHt granularity for compute loops (must be power of 2)
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
-    if (dht_granularity != (1u << log2_dht_granularity)) {
-        dht_granularity = 1;
-        log2_dht_granularity = 0;
+    // DHt granularity for compute loops: a power of 2 that divides both DHt and vDHt, since the
+    // normalisation loops run over vDHt-wide rows.
+    const uint32_t dht_divisor = std::gcd(DHt, vDHt);
+    uint32_t dht_granularity = std::bit_floor(std::min(dht_divisor, dst_size));
+    while (dht_granularity > 1 && dht_divisor % dht_granularity != 0) {
+        dht_granularity /= 2;
     }
+    const uint32_t log2_dht_granularity = std::countr_zero(dht_granularity);
 
     // ========== Tile Counts for Circular Buffers ==========
     const uint32_t q_tiles = PNHt * DHt;

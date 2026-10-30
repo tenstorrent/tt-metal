@@ -54,10 +54,13 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
- * Also the unpack thread's once-per-program DEST bank reset in the unpack-to-dest path (see below).
+ * Also the unpack thread's once-per-program unpack-to-dest init: its DEST bank reset and the seeds of the semaphores
+ * this thread posts.
  *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
+ * @note With UnpackToDestEn, call exactly once per program, paired with @ref llk_math_pack_sync_init on the math
+ *       thread: a second call re-seeds UNPACK_MATH / UNPACK_PACK and can wipe posts not yet consumed.
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
@@ -67,12 +70,20 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
 
-    // Unpack-to-dest: the unpack thread owns the DEST section base, and this is its once-per-program init. Every
-    // compute-API site that calls llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and
-    // math reset their bank parity together. The reset must NOT live in the per-op llk_unpack_A_init: op writers
-    // call copy_init inside their tile loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
+    // Unpack-to-dest: the unpack thread carries its DEST bank in the UNP_DEST tile index (the SEC registers do not move
+    // UNPACR_DEST), and this is the once-per-program reset of that bank. Every compute-API site that calls
+    // llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and math reset their bank parity
+    // together. The reset must NOT live in the per-op llk_unpack_A_init: op writers call copy_init inside their tile
+    // loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
     if constexpr (UnpackToDestEn) {
         _llk_unpack_dest_init_();
+        // Seed the semaphores this thread posts, in front of its own first wait and post on them. Math arms no wait on
+        // UNPACK_MATH before this thread's first post (llk_math_wait_for_dest_available), and pack's first get on
+        // UNPACK_PACK follows math's first MATH_PACK post, so neither SEMINIT lands on a pending wait.
+        constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
+        _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
+        // DEST occupancy: unpack posts, pack gets; the unpacker's only gate, see llk_unpack_wait_for_dest_available.
+        _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
     }
 }
 
@@ -81,32 +92,34 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
  * unpack-to-dest section begin.
  *
  * Unpack side of the DEST section handshake, the counterpart of @ref _llk_math_wait_for_dest_available_ and
- * @ref _llk_packer_wait_for_math_done_. Math is the middleman with two semaphores of max N (1 in SyncFull, 2 in
- * SyncHalf): UNPACK_MATH counts sections unpacked but not yet committed by math, MATH_PACK counts sections committed
- * but not yet released by pack. Waiting on both keeps unpack within N sections of pack.
+ * @ref _llk_packer_wait_for_math_done_. UNPACK_PACK counts the sections the unpacker has written into DEST and the
+ * packer has not yet released, max N (1 in SyncFull, 2 in SyncHalf), so stalling on its max is exactly "a bank is
+ * free". UNPACK_MATH and MATH_PACK do not gate the unpacker: they are data-ready signals, and checking each below N
+ * separately would admit UNPACK_MATH = 1 and MATH_PACK = 1, a third section into a two-bank DEST (tt-metal #58903).
  *
  * @note One call per section, paired with one @ref llk_unpack_dest_section_done. The section is the unit on all
  *       three threads: however many tiles the section holds, each thread posts or gets once.
- * @note In SyncHalf the per-semaphore wait still admits UNPACK_MATH = 1 and MATH_PACK = 1 at once, i.e. a third section
- *       into a two-bank DEST (tt-metal #58903). A DEST occupancy count that unpack posts and pack gets closes that.
  */
 inline void llk_unpack_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
-        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
+        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);
     }
 }
 
 /**
  * @brief Unpack thread of tile_regs_commit: hand the current DEST section to math: unpack-to-dest section end.
  *
- * Posts UNPACK_MATH once UNPACK0 has drained, so the post cannot overtake the DEST writes math and pack will read, then
- * (SyncHalf) moves the unpack thread's section base to the other bank. Counterpart of @ref llk_math_dest_section_done
- * and @ref llk_pack_dest_section_done.
+ * Once UNPACK0 has drained, so that no post can overtake the DEST writes math and pack will read, posts UNPACK_PACK
+ * (the section now occupies a bank, see @ref llk_unpack_wait_for_dest_available) and then UNPACK_MATH (the section is
+ * ready for math). UNPACK_PACK goes first: the packer gets it only after math has forwarded the section, which needs
+ * the UNPACK_MATH post, so the get can never land before the post. Then (SyncHalf) moves the unpack thread to the other
+ * bank: the bank is carried in the UNP_DEST tile index (@ref _llk_unpack_dest_bank_tile_offset_), the SEC registers do
+ * not move UNPACR_DEST. Counterpart of @ref llk_math_dest_section_done and @ref llk_pack_dest_section_done.
  *
  * @tparam EN_32BIT_DEST: Sizes the SyncHalf bank flip: bank-1 base at 256 rows when true, 512 when false (see
  *         @ref _update_dest_register_offset_). Must equal the value the pack thread passes to
- *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
- *         calls live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
+ *         @ref llk_pack_dest_section_done for this op, or the two sides address different DEST halves (the two calls
+ *         live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
  * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
  *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
  *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
@@ -115,9 +128,10 @@ inline void llk_unpack_wait_for_dest_available() {
 template <bool EN_32BIT_DEST>
 inline void llk_unpack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
+        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _llk_sync_advance_dest_section_<to_underlying(TriscID::Unpack), EN_32BIT_DEST, p_stall::UNPACK0>();
+            _llk_unpack_dest_section_advance_<EN_32BIT_DEST>();
         }
     }
 }

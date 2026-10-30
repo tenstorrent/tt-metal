@@ -33,7 +33,7 @@ from models.experimental.llama32_1b_quasar.modules.tt_ccl import (
     get_tt_ccl,
 )
 from models.experimental.llama32_1b_quasar.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
-from models.experimental.llama32_1b_quasar.utility_functions import is_blackhole
+from models.experimental.llama32_1b_quasar.utility_functions import is_blackhole, is_quasar, linear
 from models.tt_transformers.tt.common import Mode
 
 # =============================================================================
@@ -133,6 +133,14 @@ class MLP1DConfig:
         # topology: None for single_device (CCL not needed)
         if self.mesh_device and self.mesh_device.get_num_devices() == 1:
             optional.add("topology")
+        if is_quasar():
+            # Quasar runs the matmuls with no program config (the unified matmul).
+            optional |= {
+                "decode_w1_w3_prg_config",
+                "decode_w2_prg_config",
+                "prefill_w1_w3_prg_config",
+                "prefill_w2_prg_config",
+            }
 
         return all(getattr(self, f) is not None for f in self.__dataclass_fields__ if f not in optional)
 
@@ -224,7 +232,7 @@ class MLP1D(LightweightModule):
         cfg = self.config
 
         # --- STAGE 1: W1/W3 Linear (L1 sharded) ---
-        w1_out = ttnn.linear(
+        w1_out = linear(
             x,
             self.w1,
             dtype=cfg.linear_dtype,
@@ -238,7 +246,7 @@ class MLP1D(LightweightModule):
             ttnn.deallocate(w1_out)
             w1_out = w1_dram
 
-        w3_out = ttnn.linear(
+        w3_out = linear(
             x,
             self.w3,
             dtype=cfg.linear_dtype,
@@ -270,7 +278,7 @@ class MLP1D(LightweightModule):
         # --- STAGE 4: No all_gather for non-TG ---
 
         # --- STAGE 5: W2 Linear ---
-        w2_out = ttnn.linear(
+        w2_out = linear(
             w2_in,
             self.w2,
             compute_kernel_config=cfg.decode_ff2_compute_kernel_cfg,
@@ -314,11 +322,11 @@ class MLP1D(LightweightModule):
             x = ttnn.reshape(x, [1, seq_len // cfg.prefill_len_cutoff, cfg.prefill_len_cutoff, -1])
 
         # Seq_len-dependent: get program configs by calling methods on config
-        pc_w1_w3 = cfg.prefill_w1_w3_prg_config(seq_len)
-        pc_w2 = cfg.prefill_w2_prg_config(seq_len)
+        pc_w1_w3 = cfg.prefill_w1_w3_prg_config and cfg.prefill_w1_w3_prg_config(seq_len)
+        pc_w2 = cfg.prefill_w2_prg_config and cfg.prefill_w2_prg_config(seq_len)
 
         # --- STAGE 1: W1/W3 Linear (DRAM) ---
-        w1_out = ttnn.linear(
+        w1_out = linear(
             x,
             self.w1,
             dtype=cfg.linear_dtype,
@@ -327,7 +335,7 @@ class MLP1D(LightweightModule):
             program_config=pc_w1_w3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        w3_out = ttnn.linear(
+        w3_out = linear(
             x,
             self.w3,
             dtype=cfg.linear_dtype,
@@ -368,7 +376,7 @@ class MLP1D(LightweightModule):
                 config=cfg.prefill_w2_minimal_matmul_config(seq_len),
             )
         else:
-            w2_out = ttnn.linear(
+            w2_out = linear(
                 w2_in,
                 self.w2,
                 compute_kernel_config=cfg.ff2_compute_kernel_cfg,
@@ -885,7 +893,10 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
             use_height_and_width_as_shard_shape=True,
         )
 
-    if config.decode_w1_w3_prg_config is None:
+    # Quasar runs every matmul with no program config (the unified matmul places it), so none is built there.
+    quasar = is_quasar()
+
+    if config.decode_w1_w3_prg_config is None and not quasar:
         to_set["decode_w1_w3_prg_config"] = _dram_matmul_config(
             m=tile_padded_batch_rows,
             k=dim,
@@ -895,7 +906,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
     mlp2_core_grid = _dram_shard_core_grid_k_n(padded_hidden_dim // num_devices, dim)
 
-    if config.decode_w2_prg_config is None:
+    if config.decode_w2_prg_config is None and not quasar:
         to_set["decode_w2_prg_config"] = _dram_matmul_config(
             m=tile_padded_batch_rows,
             k=padded_hidden_dim // num_devices,
@@ -932,7 +943,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     if config.prefill_input_memcfg is None:
         to_set["prefill_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
-    if config.prefill_w1_w3_prg_config is None:
+    if config.prefill_w1_w3_prg_config is None and not quasar:
         prefill_rows = 8
         prefill_mlp_grid_size = _find_prefill_grid(prefill_rows, dim // tile_size)
         n_w1_w3 = padded_hidden_dim // num_devices
@@ -949,7 +960,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
         to_set["prefill_w1_w3_prg_config"] = lambda seq_len: w1_w3_prg_config(seq_len)
 
-    if config.prefill_w2_prg_config is None:
+    if config.prefill_w2_prg_config is None and not quasar:
         n_w2 = dim
         prefill_rows = 8
         grid_size = _find_prefill_grid(prefill_rows, padded_hidden_dim // tile_size)

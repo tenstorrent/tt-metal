@@ -40,10 +40,11 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include <ttnn/distributed/distributed_tensor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -106,8 +107,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     // Create output CB based on the output shape's last dimension
     const tt::CBIndex src_cb_idx = tt::CBIndex::c_0;
     const tt::CBIndex dst_cb_idx = tt::CBIndex::c_1;
-    const uint32_t src_page_size = round_up_to_mul32(red_dim_units * unit_size);
-    const uint32_t dst_page_size = round_up_to_mul32(output_last_dim * unit_size);
+    const uint32_t src_page_size = tt::round_up(red_dim_units * unit_size, 32u);
+    const uint32_t dst_page_size = tt::round_up(output_last_dim * unit_size, 32u);
 
     CBFormatDescriptor input_format_descriptor = {
         .buffer_index = src_cb_idx,
@@ -232,7 +233,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
 
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
 
@@ -1231,7 +1232,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     // Configuration - hardcoded for this test case
     // =========================================================================
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::BFLOAT16);
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device_);
     const uint32_t page_size = tensor_spec.compute_page_size_bytes();
     const uint32_t num_pages_per_packet = static_cast<uint32_t>(packet_size_bytes / page_size);
     const uint32_t num_tiles_to_write_per_packet = std::min(4u, num_pages_per_packet);
@@ -1257,16 +1258,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     const uint32_t chunks_per_sync =
         std::min(std::max(tile_end / num_tiles_to_write_per_packet, 1u), HEURISTIC_MAX_CHUNKS_PER_SYNC);
 
-    const uint32_t l1_unreserved_base =
-        mesh_device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    tt::tt_fabric::FabricMuxConfig mux_config(
-        1,  // num_workers_per_direction
-        0,  // num_header_only_channels
-        1,  // num_buffers_per_channel
-        0,  // num_buffers_header_only_channel
-        packet_size_bytes,
-        l1_unreserved_base);
-
     auto sd_id = mesh_device_->get_sub_device_ids().at(0);
     auto available_cores = mesh_device_->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<ttnn::GlobalSemaphore> global_semaphores = {
@@ -1289,8 +1280,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     auto mux_bwd_virtual = mesh_device_->worker_core_from_logical_core(mux_bwd_core);
     auto worker_fwd_virtual = mesh_device_->worker_core_from_logical_core(worker_fwd_core);
     auto worker_bwd_virtual = mesh_device_->worker_core_from_logical_core(worker_bwd_core);
-
-    auto mux_ct_args = mux_config.get_fabric_mux_compile_time_args();
 
     // =========================================================================
     // Build MeshProgramDescriptor for each device in the 1x4 line
@@ -1317,6 +1306,44 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             .core_ranges = worker_cores,
             .format_descriptors = {{sender_cb_index, df, page_size}},
         };
+
+        // Semaphores - 5 per worker core
+        ProgramDescriptor::SemaphoreDescriptors semaphores;
+        for (uint32_t i = 0; i < 5; i++) {
+            semaphores.push_back(
+                {.id = i,
+                 .core_type = tt::CoreType::WORKER,
+                 .core_ranges = CoreRangeSet({CoreRange(worker_fwd_core)}),
+                 .initial_value = 0});
+        }
+        for (uint32_t i = 0; i < 5; i++) {
+            semaphores.push_back(
+                {.id = i,
+                 .core_type = tt::CoreType::WORKER,
+                 .core_ranges = CoreRangeSet({CoreRange(worker_bwd_core)}),
+                 .initial_value = 0});
+        }
+
+        ProgramDescriptor program_desc = {.kernels = {}, .semaphores = semaphores, .cbs = {cb_desc}};
+
+        // The mux map goes in program-local L1 on this device's mux cores, so the config's addresses are offsets.
+        // The writer waits for the address the mux publishes and adds it to them.
+        tt::tt_fabric::FabricMuxConfig mux_config(
+            1,  // num_workers_per_direction
+            0,  // num_header_only_channels
+            1,  // num_buffers_per_channel
+            0,  // num_buffers_header_only_channel
+            packet_size_bytes,
+            0);  // base_l1_address
+        std::set<CoreRange> active_mux_cores;
+        if (has_forward) {
+            active_mux_cores.insert(CoreRange(mux_fwd_core));
+        }
+        if (has_backward) {
+            active_mux_cores.insert(CoreRange(mux_bwd_core));
+        }
+        mux_config.place_in_program_local_l1(program_desc, CoreRangeSet(active_mux_cores));
+        const auto mux_ct_args = mux_config.get_fabric_mux_compile_time_args();
 
         // Common CT args for reader/writer
         std::vector<uint32_t> common_ct_args = {
@@ -1355,7 +1382,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         writer_ct_args.push_back(mux_config.get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
         writer_ct_args.push_back(
             mux_config.get_buffer_size_bytes(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
-        writer_ct_args.push_back(mux_config.get_status_address());
+        writer_ct_args.push_back(mux_config.get_l1_base_semaphore_id());
         writer_ct_args.push_back(mux_config.get_termination_signal_address());
         writer_ct_args.push_back(1);  // num_workers_per_direction
 
@@ -1375,23 +1402,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             writer_ct_args.insert(writer_ct_args.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u});  // no target
         }
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
-
-        // Semaphores - 5 per worker core
-        ProgramDescriptor::SemaphoreDescriptors semaphores;
-        for (uint32_t i = 0; i < 5; i++) {
-            semaphores.push_back(
-                {.id = i,
-                 .core_type = tt::CoreType::WORKER,
-                 .core_ranges = CoreRangeSet({CoreRange(worker_fwd_core)}),
-                 .initial_value = 0});
-        }
-        for (uint32_t i = 0; i < 5; i++) {
-            semaphores.push_back(
-                {.id = i,
-                 .core_type = tt::CoreType::WORKER,
-                 .core_ranges = CoreRangeSet({CoreRange(worker_bwd_core)}),
-                 .initial_value = 0});
-        }
 
         // Keep this manual descriptor in sync with minimal_default_reader.cpp / minimal_default_writer.cpp.
         // Tensor addresses and semaphores are common RT args laid out by ttnn::ccl::AllGatherCommonArgs;
@@ -1465,9 +1475,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             build_worker_rt_args(0, worker_fwd_virtual, mux_fwd_virtual, worker_bwd_virtual, has_forward);
         auto [bwd_reader_rt, bwd_writer_rt] =
             build_worker_rt_args(1, worker_bwd_virtual, mux_bwd_virtual, worker_fwd_virtual, has_backward);
-
-        // Build ProgramDescriptor
-        ProgramDescriptor program_desc = {.kernels = {}, .semaphores = semaphores, .cbs = {cb_desc}};
 
         // MUX RT args
         const auto src_node_id = mesh_device_->get_fabric_node_id(device_coord);
@@ -1735,6 +1742,164 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpPreparationUnderNoDispatchCaptureLeav
         ttnn::experimental::prepare_generic_op(io_tensors, uncached_program_descriptor);
     }
     EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpRejectsOverlappingMeshCoordinateRanges) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    const ProgramDescriptor program = make_single_core_program(kEmptyKernelSource);
+    const std::size_t cache_entries_before = this->device_->num_program_cache_entries();
+
+    auto expect_overlap_rejected = [&](ttnn::MeshCoordinateRange left, ttnn::MeshCoordinateRange right) {
+        tt::tt_metal::experimental::MeshProgramDescriptor mesh_program;
+        mesh_program.mesh_programs.emplace_back(std::move(left), program);
+        mesh_program.mesh_programs.emplace_back(std::move(right), program);
+        EXPECT_THAT(
+            [&] { ttnn::experimental::prepare_generic_op(io_tensors, mesh_program); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("overlaps")));
+    };
+
+    expect_overlap_rejected(
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 0), ttnn::MeshCoordinate(0, 1)),
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 1), ttnn::MeshCoordinate(0, 2)));
+    expect_overlap_rejected(
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 0), ttnn::MeshCoordinate(0, 1)),
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 0), ttnn::MeshCoordinate(0, 1)));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitRejectsRuntimeArgCountChange) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.kernels[0].core_ranges = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    cached.kernels[0].runtime_args = {
+        {CoreCoord(0, 0), {1u, 2u, 3u, 4u}},
+        {CoreCoord(0, 1), {5u, 6u, 7u, 8u}},
+    };
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor longer = cached;
+    longer.kernels[0].runtime_args[0].second = {1u, 2u, 3u, 4u, 90u, 91u, 92u, 93u};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, longer); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Runtime args size mismatch")));
+
+    ProgramDescriptor shorter = cached;
+    shorter.kernels[0].runtime_args[0].second = {1u, 2u};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, shorter); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Runtime args size mismatch")));
+
+    ProgramDescriptor empty_core = cached;
+    empty_core.kernels[0].runtime_args[0].second.clear();
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, empty_core); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Runtime args size mismatch")));
+
+    ProgramDescriptor same_count = cached;
+    same_count.kernels[0].runtime_args[0].second = {9u, 8u, 7u, 6u};
+    same_count.kernels[0].runtime_args[1].second = {4u, 3u, 2u, 1u};
+    ttnn::experimental::prepare_generic_op(io_tensors, same_count);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitRejectsCommonRuntimeArgCountChange) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    // A fixed custom hash keeps common-arg length out of the cache key.
+    constexpr std::uint64_t kSharedProgramHash = 7;
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.custom_program_hash = kSharedProgramHash;
+    cached.kernels[0].runtime_args = {{CoreCoord(0, 0), {1u, 2u, 3u, 4u}}};
+    cached.kernels[0].common_runtime_args = {10u, 11u};
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor longer = cached;
+    longer.kernels[0].common_runtime_args = {10u, 11u, 12u};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, longer); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Common runtime args size mismatch")));
+
+    ProgramDescriptor empty_common = cached;
+    empty_common.kernels[0].common_runtime_args.clear();
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, empty_common); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Common runtime args size mismatch")));
+
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitAcceptsUnequalRuntimeArgCounts) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.kernels[0].core_ranges = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    cached.kernels[0].runtime_args = {
+        {CoreCoord(0, 0), {1u, 2u}},
+        {CoreCoord(0, 1), {5u, 6u, 7u, 8u}},
+    };
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor same_count = cached;
+    same_count.kernels[0].runtime_args[0].second = {3u, 4u};
+    same_count.kernels[0].runtime_args[1].second = {9u, 10u, 11u, 12u};
+    ttnn::experimental::prepare_generic_op(io_tensors, same_count);
+
+    // 2 -> 4 matches the dispatch padding of the longer core and must still be rejected.
+    ProgramDescriptor padded = same_count;
+    padded.kernels[0].runtime_args[0].second = {3u, 4u, 90u, 91u};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, padded); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Runtime args size mismatch")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitRejectsMissingRuntimeArgCore) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    // Dropping a core changes the default key, so a shared custom hash is what keeps the entry.
+    constexpr std::uint64_t kSharedProgramHash = 13;
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.custom_program_hash = kSharedProgramHash;
+    cached.kernels[0].core_ranges = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    cached.kernels[0].runtime_args = {
+        {CoreCoord(0, 0), {1u, 2u, 3u, 4u}},
+        {CoreCoord(0, 1), {5u, 6u, 7u, 8u}},
+    };
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor missing_core = cached;
+    missing_core.kernels[0].runtime_args = {{CoreCoord(0, 0), {1u, 2u, 3u, 4u}}};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, missing_core); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Runtime args size mismatch")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitAcceptsEmptyCommonRuntimeArgs) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    constexpr std::uint64_t kSharedProgramHash = 17;
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.custom_program_hash = kSharedProgramHash;
+    cached.kernels[0].runtime_args = {{CoreCoord(0, 0), {1u, 2u, 3u, 4u}}};
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor same = cached;
+    same.kernels[0].runtime_args[0].second = {9u, 8u, 7u, 6u};
+    ttnn::experimental::prepare_generic_op(io_tensors, same);
+
+    ProgramDescriptor nonempty = same;
+    nonempty.kernels[0].common_runtime_args = {1u};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, nonempty); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Common runtime args size mismatch")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
 }
 
 // Kernels compile after the workload is created, so a compilation failure exercises the order in which a new workload

@@ -62,7 +62,7 @@ bool reader_only(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -131,7 +131,7 @@ bool writer_only(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -475,7 +475,7 @@ bool reader_datacopy_writer(
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
     experimental::ComputeHardwareConfig compute_hw_config;
     experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
-    if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
+    if (fp32_dest_acc_en) {
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     compute_hw_config = experimental::ComputeHardwareConfig{

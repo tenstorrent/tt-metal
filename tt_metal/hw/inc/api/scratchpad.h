@@ -12,8 +12,6 @@
 #include "api/scratchpad_binding_token.h"
 #include "experimental/kernel_args.h"
 
-enum class DataFormat : std::uint8_t;
-
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
  *
@@ -33,6 +31,7 @@ enum class DataFormat : std::uint8_t;
  * 1. Reading uninitialized data.
  * 2. Data races across threads in multi-threaded kernels.
  * 3. Data races across pipeline stages (Unpack/Math/Pack) in compute kernels.
+ * 4. Data races across kernels when ScratchpadSpec::advanced_options.allow_instance_multi_binding is enabled.
  *
  * Indexed access via operator[] is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
  *
@@ -88,8 +87,10 @@ public:
      * @return size of the scratchpad in bytes.
      */
     [[nodiscard]] size_type size_in_bytes() const noexcept {
-        // get_address() returns uintptr_t (64-bit on Gen2); narrow explicitly (always safe).
-        return static_cast<size_type>(sentinel_addr_.get_address() - start_addr_.get_address());
+        // Addresses are uintptr_t (64-bit on Gen2); narrow explicitly (always safe).
+        return static_cast<size_type>(
+            local_mem::detail::AddressAccess::address(sentinel_addr_) -
+            local_mem::detail::AddressAccess::address(start_addr_));
     }
 
     /** @brief Get the LLK data format configured for this scratchpad.
@@ -97,16 +98,6 @@ public:
      * Returns DataFormat::Invalid when the host ScratchpadSpec did not provide data format metadata.
      */
     [[nodiscard]] constexpr DataFormat get_dataformat() const noexcept { return data_format_; }
-
-    /** @brief L1 base address of the scratchpad, as a raw uint32_t byte address.
-     *
-     * This is the form most kernel-side APIs consume (NOC transfers, CB/LLK configuration, ...).
-     *
-     * @return the base address of the scratchpad (as uint32_t)
-     */
-    [[nodiscard]] uint32_t get_base_address() const noexcept {
-        return static_cast<uint32_t>(start_addr_.get_address());
-    }
 
 #if defined(COMPILE_FOR_TRISC)
     // Returns the LLKOperand pointing to the base address of the scratchpad
@@ -116,7 +107,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<scratchpad::token>)
     template <typename Operand>
     [[nodiscard]] Operand operand() const noexcept {
-        return Operand{(get_base_address() >> 4) - 1};
+        return Operand{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(start_addr_)) >> 4) - 1};
     }
 #endif
 
@@ -131,7 +122,8 @@ public:
      * (pointer arithmetic, comparisons, ...).
      *
      * For element access, prefer operator[] (bounds-checked) within a scoped_lock() scope. Reach
-     * for this only when you need the raw underlying handle (e.g. local_mem().get_unsafe_ptr()).
+     * for this only when you need the underlying handle (e.g. pointer arithmetic, or a helper's CoreLocalMem
+     * overload).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized (matches begin()/end()).
     [[nodiscard]] pointer local_mem() const noexcept { return start_addr_; }
@@ -152,18 +144,18 @@ private:
     // A user may NOT construct a Scratchpad from an arbitrary address/size. (Use CoreLocalMem for that use case.)
     [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes, DataFormat data_format) noexcept :
         start_addr_(base_addr),
-        sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}),
+        sentinel_addr_(pointer{local_mem::detail::AddressAccess::address(base_addr) + uintptr_t{size_in_bytes}}),
         data_format_(data_format) {
-        ASSERT(base_addr.get_address() % alignof(T) == 0);
+        ASSERT(local_mem::detail::AddressAccess::address(base_addr) % alignof(T) == 0);
         ASSERT(size_in_bytes % sizeof(T) == 0);
     }
 
     // constexpr note:
     // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
-    // construction/copy and a constexpr `get_address()`:
+    // construction/copy and constexpr address access:
     //   - Scratchpad(pointer, size_type, DataFormat)
     //   - size(), size_in_bytes()
-    //   - get_base_address(), local_mem()
+    //   - local_mem()
     //   - begin(), end()
     // They are currently runtime-only because `CoreLocalMem<T>` does not provide constexpr support
     // for those operations.
@@ -178,47 +170,6 @@ private:
     DataFormat data_format_;
 };
 
-// A scratchpad is a node-local SRAM (L1) allocation, so it can be either endpoint of a NoC transaction.
-// This specialization makes it usable directly as the Src or Dst of any Noc operation.
-//
-// Notes:
-//  - `offset_bytes` addresses within the region. For Scratchpad, this is bounds-checked with an assertion.
-//  - Scratchpad may be used by both DM and compute (TRISC) kernels, but only DM kernels have NoC access.
-//
-#if !defined(COMPILE_FOR_TRISC)
-template <typename T>
-struct noc_traits_t<Scratchpad<T>> {
-    struct src_args_type {
-        uint32_t offset_bytes = 0;
-    };
-    struct dst_args_type {
-        uint32_t offset_bytes = 0;
-    };
-    struct dst_args_mcast_type {};
-
-    template <Noc::AddressType address_type>
-    static auto src_addr(const Scratchpad<T>& src, const Noc&, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "Scratchpad can only be used as a local L1 source");
-        ASSERT(args.offset_bytes < src.size_in_bytes());
-        return src.get_base_address() + args.offset_bytes;
-    }
-    template <Noc::AddressType address_type>
-    static auto dst_addr(const Scratchpad<T>& dst, const Noc&, const dst_args_type& args) {
-        static_assert(
-            address_type == Noc::AddressType::LOCAL_L1, "Scratchpad can only be used as a local L1 destination");
-        ASSERT(args.offset_bytes < dst.size_in_bytes());
-        return dst.get_base_address() + args.offset_bytes;
-    }
-    template <Noc::AddressType address_type>
-    static auto dst_addr_mcast(const Scratchpad<T>&, const Noc&, const dst_args_mcast_type&) {
-        // A scratchpad is private to one kernel instance per node, so multicasting into it would be
-        // writing into other kernels' private memory. Revisit only if a real use case appears.
-        static_assert(false, "Scratchpad cannot be used as a NoC multicast destination");
-    }
-};
-
-template <typename T>
-inline constexpr bool noc_zero_l1_endpoint_v<Scratchpad<T>> = true;
-template <typename T>
-inline constexpr bool is_scratchpad_v<Scratchpad<T>> = true;
-#endif  // !defined(COMPILE_FOR_TRISC)
+// A scratchpad is a node-local SRAM (L1) allocation, so it can be either endpoint of a NoC transaction (DM kernels
+// only): see internal/local_mem/noc_traits.h.
+#include "internal/local_mem/noc_traits.h"

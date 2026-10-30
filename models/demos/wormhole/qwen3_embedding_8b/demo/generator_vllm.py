@@ -26,6 +26,25 @@ from models.tt_transformers.tt.generator_vllm import initialize_vllm_text_transf
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
+def left_align_real_tokens(input_ids: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, list[int]]:
+    """Move each row's real tokens to the front and return the rows with their real lengths.
+
+    Qwen3-Embedding embeds a text as the hidden state of its last real token. In a batch padded to its
+    longest request, a shorter row ends in padding (right padding), or starts with padding that the
+    prefill attends to, since it gets no padding mask (left padding). With the real tokens at the front,
+    a causal prefill computes them exactly as for the text alone, and prompt_len - 1 indexes the last
+    of them.
+    """
+    real_tokens = attention_mask.bool()
+    prompt_lens = real_tokens.sum(dim=1).tolist()
+    if min(prompt_lens) == 0:
+        raise ValueError(f"Every row needs at least one real token to embed, got real lengths {prompt_lens}")
+    aligned_input_ids = torch.zeros_like(input_ids)
+    for row, prompt_len in enumerate(prompt_lens):
+        aligned_input_ids[row, :prompt_len] = input_ids[row][real_tokens[row]]
+    return aligned_input_ids, prompt_lens
+
+
 class Qwen3ForEmbedding:
     """
     vLLM-compatible wrapper for Qwen3-Embedding-8B embedding model.
@@ -274,6 +293,12 @@ class Qwen3ForEmbedding:
         # with max_batch_size to support future requests up to that size
         self._initialize_model(self.max_batch_size, self.max_seq_len)
 
+        # A batch is padded to its longest request, so each row gets its own real length
+        if attention_mask is not None:
+            input_ids, prompt_lens = left_align_real_tokens(input_ids, attention_mask)
+        else:
+            prompt_lens = [seq_len] * batch_size
+
         # Pad sequence length to max_seq_len if needed
         original_seq_len = seq_len  # Keep original for attention mask
         if input_ids.shape[1] < self.max_seq_len:
@@ -342,18 +367,17 @@ class Qwen3ForEmbedding:
         # and reused for all subsequent batches with the same sequence length. This means:
         # - First batch: Captures trace (slower, ~1-2 seconds)
         # - Subsequent batches: Reuses trace (faster, ~100-200ms per batch)
-        # The trace key is: f"{prefill_seq_len}_{model_id}", where prefill_seq_len comes from
-        # get_padded_prefill_len(seq_len). We use the padded seq_len (max_seq_len) for trace
-        # reuse, but use original_seq_len for prompt_lens to correctly extract the last real token.
+        # The trace key includes prefill_seq_len, which comes from get_padded_prefill_len(prompt_len):
+        # the generator cuts each row to its prompt_len before padding it, so rows of one batch can
+        # run different traces, and padding input_ids to max_seq_len does not change which trace runs.
         #
-        # CRITICAL: Use original_seq_len for prompt_lens, not padded seq_len!
-        # prompt_lens is used to set last_token_idx = seq_len - 1, which must point to the
-        # actual last token, not a padding token. The padding is only for trace reuse.
+        # CRITICAL: prompt_lens sets last_token_idx = prompt_len - 1 for each row, which must point
+        # to that row's last real token, not to padding from a longer request in the same batch.
         hidden_states = self.generator.prefill_forward_text(
             input_tokens_pt,
             page_table=page_table,
             kv_cache=self._kv_cache,
-            prompt_lens=[original_seq_len] * batch_size,  # Use original_seq_len, not padded seq_len!
+            prompt_lens=prompt_lens,
             enable_trace=True,  # Explicitly enable trace for best performance
             return_hidden_states=True,  # Return hidden states before LM head, not logits
         )

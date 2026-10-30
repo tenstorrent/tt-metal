@@ -7,13 +7,14 @@
 
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
 // clang-format off: sfpi_inline must be defined before ckernel_sfpu_polyval.h
 #include "sfpi.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
@@ -101,23 +102,61 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     return _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
+// exp_21f constants. The one-argument _sfpu_exp_21f_bf16_(val) materialises them per call; callers that
+// evaluate exp inside a row loop pass them in through the five-argument overload instead, built once before
+// the loop (sfpi (through 7.89.0) never hoists an SFPLOADI literal out of a loop on its own, so each fp32 literal
+// otherwise costs an SFPLOADI pair per row). Same values either way: the two forms are bit-identical.
+constexpr float EXP_21F_ONE_LN2 = 1.4426950216293334961f;  // 0x3FB8AA3B
+constexpr float EXP_21F_C0 = EXP_21F_BF16_C0;
+constexpr float EXP_21F_C1 = EXP_21F_BF16_C1;
+constexpr float EXP_21F_C2 = EXP_21F_BF16_C2;
+
+// A loop constant a kernel keeps in an LReg when COND, and a plain float otherwise. Kernels whose arms
+// (bf16 / fp32 dest) hoist different constants declare all of them before the loop with the arm's condition,
+// so the arm that never reads one pays nothing: a float is folded away, an sfpi::vFloat is an SFPLOADI pair
+// per call. sfpi cannot spill, so each kernel hoists only what fits beside its live data -- one LReg too
+// many is a compile error ("too few lregs"), never a slowdown. Declare these non-const: a const vFloat
+// that lives across a partially unrolled loop makes sfpi (through 7.89.0) try to spill it ("cannot write SFPU
+// object to memory").
+template <bool COND>
+using HoistedIf = std::conditional_t<COND, sfpi::vFloat, float>;
+
+// Programs vConstFloatPrgm1 = 1/ln2 for the hoisted-constant exp callers (sigmoid, silu, mish), which read
+// it on every row. 1/ln2 is the same fp32 (0x3FB8AA3B) as the Juffa fp32 exp's log2(e),
+// so one register serves a kernel's bf16 and fp32 arms. Prgm0 is left alone (sfpu_reciprocal_init's 2.0f,
+// which those kernels' Newton step needs), and Prgm2 deliberately so: fused kernels run sigmoid/silu with
+// one init before a loop that interleaves other SFPU code, and the MoE gate kernels
+// (ckernel_sfpu_generalized_moe_gate_topk_single_face.h, ckernel_sfpu_generic_moe_gate_topk.h) write
+// LREG14 = Prgm2 there. So the contract those kernels already keep for Prgm0 extends to Prgm1 only.
+inline void _init_exp_hoisted_prgm_consts_() { sfpi::vConstFloatPrgm1 = EXP_21F_ONE_LN2; }
+
 /*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
  * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
  * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
  *
- * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ * This overload takes the four constants from the caller (see EXP_21F_* above). Each may be a float
+ * (materialised by SFPLOADI where it is used, exactly as a literal would be) or an sfpi::vFloat /
+ * vConstFloatPrgmN the caller holds across its row loop. The arithmetic is identical either way; only the
+ * source of the constants differs. The constants are template-typed rather than plain sfpi::vFloat on
+ * purpose: a vFloat parameter is built before the call and stays live through the body, which reorders
+ * the SFPLOADIs of the non-hoisting callers (their codegen would no longer be identical) and costs an
+ * LReg per constant for the whole body.
+ *
+ * @param val     The input value (sfpi::vFloat vector), can be any floating point number
+ * @param one_ln2 1/ln(2) (EXP_21F_ONE_LN2)
+ * @param c0      Constant term of the 2**x_f refinement polynomial (EXP_21F_C0)
+ * @param c1      Linear coefficient of that polynomial (EXP_21F_C1)
+ * @param c2      Quadratic coefficient of that polynomial (EXP_21F_C2)
  *
  * @return sfpi::vFloat Result of exp(val)
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-// Like the unsafe overload, accepts EXP_21F_BF16_C0..C2 as floats or preloaded
-// vFloats. A fused caller can retain them across its loop without changing the clamp.
-template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
+template <bool is_fp32_dest_acc_en, typename K, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, K one_ln2, C0 c0, C1 c1, C2 c2) {
     // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
@@ -132,8 +171,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 
     // This formula prepares for the computation of exp(x) = 2^(x/log(2))
     //
     // In our case, we will let the multiplication by 2^23 be done implicitly in _float_to_int32_exp21f_ function
-    constexpr float ONE_LN2 = 1.4426950216293334961f;
-    sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
+    sfpi::vFloat xlog2 = (val * one_ln2 + 127.f);
 
     // Intermediary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid results instead of 0
     // (when input < -88.5) and +inf (when input > 88.5)
@@ -167,9 +205,27 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 
     return y;
 }
 
+// exp_21f with every constant a literal; see the five-argument overload above.
+// @param val The input value (sfpi::vFloat vector), can be any floating point number
+// @return sfpi::vFloat Result of exp(val)
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
-    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_ONE_LN2, EXP_21F_C0, EXP_21F_C1, EXP_21F_C2);
+}
+
+// Like the unsafe overload, accepts EXP_21F_BF16_C0..C2 as floats or preloaded vFloats with 1/ln2 a
+// literal. A fused caller can retain the coefficients across its loop without changing the clamp.
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_ONE_LN2, c0, c1, c2);
+}
+
+// Row-loop form of _sfpu_exp_21f_bf16_: 1/ln2 from vConstFloatPrgm1 (the kernel's init must have run
+// _init_exp_hoisted_prgm_consts_()), c0..c2 from the caller -- each an sfpi::vFloat built once before the
+// loop, or a float literal where the caller's LRegs are all spoken for.
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, sfpi::vConstFloatPrgm1, c0, c1, c2);
 }
 
 /*
@@ -228,10 +284,11 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // by ADDR_MOD_6 inside the body so each replay walks to the next
     // element correctly.
     //
-    // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
-    // the replay buffer, so slot 0 is free here. Callers that mix this
-    // function with other replay-buffer clients should ensure they don't
-    // require slot 0 to survive across the call.
+    // The fp32-accurate path (_sfpu_exp_fp32_accurate_tti_) records into the
+    // same SFPU slots; the two never run under one init, since the DEST
+    // accumulation mode picks one of them. Callers that mix this function
+    // with other replay-buffer clients should not rely on slots
+    // [0, BODY_LEN) surviving the call.
     //
     // The record goes through load_replay_buf, which brackets it with
     // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined
@@ -301,7 +358,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0,
-                p_sfpu::LREG0,
+                p_sfpu::LCONST_0,
                 p_sfpu::LREG0,
                 p_sfpu::LREG0,
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
@@ -337,6 +394,13 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
     return k;
 }
 
+// Compile-time views of a float constant as the SFPLOADI immediates that load it.
+namespace exp_detail {
+constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
+constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
+constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
+}  // namespace exp_detail
+
 /*
  * The _sfpu_exp_fp32_accurate_ code is derived from code by Norbert Juffa.
  *
@@ -367,29 +431,58 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
+// Juffa exp constants that the hoisted-constant overload below takes from its caller (see EXP_21F_*
+// for the rationale). LOG2E is the same fp32 as EXP_21F_ONE_LN2, so one Prgm register can serve both exps.
+constexpr float EXP_FP32_LOG2E = EXP_21F_ONE_LN2;  // log2(e) == 1/ln(2), 0x3FB8AA3B
+constexpr float EXP_FP32_NEG_LN2_HI = -6.93145752e-1f;
+constexpr float EXP_FP32_P0 = 1.37805939e-3f;
+constexpr float EXP_FP32_P1 = 8.37312452e-3f;  // 0x1.125edcp-7
+
+// Non-finite behaviour of the guarded base-e form (unsafe = false, base_two = false), measured on
+// Blackhole silicon:
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
-template <bool unsafe = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+//
+// base_two = true computes 2^a instead of e^a. The reduction is then exact: j = round(a) and
+// a - j are both representable, so the only rounding before the polynomial is one multiply by
+// ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
+// and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
+//
+// This overload takes log2(e), -ln2_hi and the two leading polynomial coefficients from the caller, each
+// either a float (materialised where used, as a literal is) or a vFloat / vConstFloatPrgmN held across a
+// row loop. They are template-typed rather than plain sfpi::vFloat for the reason given at
+// _sfpu_exp_21f_bf16_, and here it bit: vFloat parameters stay live through the body, which pushed
+// tanhshrink's fp32 path (this exp inside its large-|x| branch, with x, |x| and the result live) past the
+// eight LRegs ("too few lregs"). The base_two form reads neither log2(e) nor -ln2_hi.
+// _sfpu_exp_fp32_accurate_(a) below passes the literals and is what everything not hoisting reads.
+template <bool unsafe = false, bool base_two = false, typename K, typename H, typename P0, typename P1>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a, K log2e, H neg_ln2_hi, P0 p0, P1 p1) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
-    // j = round(a / ln2)
-    // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
-    sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
+    if constexpr (base_two) {
+        // j = round(a), f = (a - j) * ln2
+        r = p0;
+        sm = sfpi::convert<sfpi::vSMag16>(a, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
+        f = (a - j) * 6.93147182e-1f;
+    } else {
+        // j = round(a / ln2)
+        // interleaved with first coefficient of polynomial
+        j = log2e * a;
+        r = p0;
+        sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
-    // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+        // f = a - i*j (two-part cody-waite)
+        f = j * neg_ln2_hi + a;
+        f = j * -1.42860677e-6f + f;
+    }
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
     // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
-    r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
+    r = r * f + p1;
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
@@ -423,8 +516,151 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
+template <bool unsafe = false, bool base_two = false>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    return _sfpu_exp_fp32_accurate_<unsafe, base_two>(a, EXP_FP32_LOG2E, EXP_FP32_NEG_LN2_HI, EXP_FP32_P0, EXP_FP32_P1);
+}
+
+// Row-loop form of _sfpu_exp_fp32_accurate_: log2(e) from vConstFloatPrgm1 -- the same register and bit
+// pattern as exp_21f's 1/ln2, so one _init_exp_hoisted_prgm_consts_() serves a kernel's bf16 and fp32 arms --
+// and -ln2_hi, p0, p1 from the caller (sfpi::vFloat built before the loop, or a float literal).
+template <bool unsafe, typename H, typename P0, typename P1>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_prgm_(sfpi::vFloat a, H neg_ln2_hi, P0 p0, P1 p1) {
+    return _sfpu_exp_fp32_accurate_<unsafe>(a, sfpi::vConstFloatPrgm1, neg_ln2_hi, p0, p1);
+}
+
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
     return _sfpu_exp_fp32_accurate_<true>(x);
+}
+
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. The base-e
+// form multiplies by log2(e) before rounding, which canonicalizes NaN to +NaN; here x is rounded
+// directly, so -NaN saturates the rounding to -32767 and the underflow arm returns +0. The only
+// caller, logaddexp2, zeroes NaN gaps first. Other |x| >= 32768 saturate the same way and get the
+// guards' +Inf / +0, which is the exact result in either direction.
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
+}
+
+// The constants of _sfpu_exp_fp32_accurate_<false> as _sfpu_exp_fp32_accurate_tti_ holds them. 1/ln2, the high
+// part of -ln2 and the first two polynomial coefficients are the hoisted EXP_FP32_LOG2E, EXP_FP32_NEG_LN2_HI,
+// EXP_FP32_P0 and EXP_FP32_P1 above (P0 as the fp16 immediate below); the rest are only here. LREG12..14
+// (LOG2E, NEG_LN2_HI, NEG_LN2_LO) are programmed by exp_init<false, scale, clamp, true>, LREG4..7 (P1, C2..C4)
+// are loaded per call, r0 stays an fp16 immediate.
+constexpr float EXP_FP32_NEG_LN2_LO = -1.42860677e-6f;  // LREG14, 0xB5BFBE8E
+constexpr float EXP_FP32_C2 = 4.16695364e-2f;           // LREG5, 0x3D2AADAD
+constexpr float EXP_FP32_C3 = 1.66664720e-1f;           // LREG6, 0x3E2AAA28
+constexpr float EXP_FP32_C4 = 4.99999851e-1f;           // LREG7, 0x3EFFFFFB
+constexpr std::uint16_t EXP_FP32_R0_FP16A = 0x15A5;     // EXP_FP32_P0 = 1.37805939e-3f, exact in fp16
+
+constexpr std::uint16_t EXP_FP32_INF_FP16B = 0x7F80;  // +inf as an fp16b SFPMULI immediate
+
+// LREG = BITS as two SFPLOADI immediates, lower half first as the sfpi form loads them; BITS is a template argument
+// so both words stay compile-time TTI_ encodings.
+template <std::uint32_t LREG, std::uint32_t BITS>
+inline void _sfpu_exp_fp32_load_imm32_() {
+    TTI_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_LOWER, BITS & 0xFFFFu);
+    TTI_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_UPPER, BITS >> 16);
+}
+
+/**
+ * @brief _sfpu_exp_fp32_accurate_<false> over ITERATIONS vectors, its head replayed from the SFPU's replay slots.
+ *
+ * Same instructions, operand roles and order as the sfpi form, so the result is bit-identical to it; the constants
+ * come from LREG4..7 and LREG12..14 instead of per-vector SFPLOADIs, the sign-magnitude to two's complement step
+ * is one SFPCAST, and the store advances DEST by ADDR_MOD_6.
+ *
+ * The body is 24 instructions (25 with SCALE_EN). Blackhole splits each thread's 32-entry replay buffer: slots
+ * [0, ckernel::math::replay_buf_offset) belong to the SFPU and the rest hold the FPU ops' recorded sequences
+ * (matmul records its MVMUL sequence there once per matmul_init and replays it on every matmul_tiles). So only the
+ * head of the body, the input load through y *= inf, is recorded into slots [0, HEAD_LEN) and replayed; the
+ * 9-instruction tail (exponent assembly, the overflow and underflow lanes, the store) is issued inline per vector.
+ *
+ * @tparam SCALE_EN: Multiply the input by exp_base_scale_factor first
+ * @tparam ITERATIONS: Vectors per call
+ * @param exp_base_scale_factor: fp16b scale, read when SCALE_EN.
+ * @note Requires exp_init<false, scale, clamp, true> (LREG12..14 and ADDR_MOD_6). Writes LREG0..7 and replay
+ * slots [0, 15 + SCALE_EN).
+ * @note LREG12..14 are the SFPU's shared programmable constants (sfpi::vConstFloatPrgm0..2). Other SFPU ops'
+ * inits (reciprocal, tanh, sqrt, typecast, reduce, ...) reprogram them, so any such init between exp_init and
+ * this call makes the body read their values as 1/ln2 and -ln2: re-run exp_init after it. This is the same
+ * contract as the bf16 body (_sfpu_exp_21f_bf16_tti_), which takes LREG12..13 from exp_init the same way, and
+ * new to the fp32 DEST path: the sfpi form this replaces (still the Wormhole fp32 path) loads every constant
+ * as an immediate, so an exp_init, other init, exp sequence that was correct with it is not correct here.
+ */
+template <bool SCALE_EN, int ITERATIONS>
+inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_factor) {
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG4, exp_detail::bits(EXP_FP32_P1)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG5, exp_detail::bits(EXP_FP32_C2)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG6, exp_detail::bits(EXP_FP32_C3)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG7, exp_detail::bits(EXP_FP32_C4)>();
+
+    // Instructions the head emits; MUST match the lambda exactly (load_replay_buf does not check the count, and a
+    // mismatch misaligns every replay):
+    //   SFPLOAD, [SFPMULI scale], SFPMUL, SFPLOADI r0, SFP_STOCH_RND, SFPCAST,
+    //   2 SFPMAD (f), 4 SFPMAD (Horner), SFPCAST, 2 SFPMAD (y, r), SFPMULI inf      = 15 + SCALE_EN
+    constexpr std::uint32_t HEAD_LEN = 15 + (SCALE_EN ? 1 : 0);
+    static_assert(HEAD_LEN <= ckernel::math::replay_buf_offset, "the head must stay inside the SFPU's replay slots");
+
+    auto head = [exp_base_scale_factor] {
+        // LREG1 = a; LREG3 = j = a / ln2; LREG0 = r0
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        if constexpr (SCALE_EN) {
+            TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG1, 0);
+        }
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATA, EXP_FP32_R0_FP16A);
+        // LREG3 = sm = round(j) as a sign-magnitude int16; LREG2 = j = float(sm)
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_NEAREST,
+            0,
+            p_sfpu::LREG0,
+            p_sfpu::LREG3,
+            p_sfpu::LREG3,
+            sfpi::SFPSTOCHRND_MOD1_FP32_TO_SMAG16);
+        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+        // LREG1 = f = a - j ln2, two parts
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+        // LREG0 = r = (((r0 f + c1) f + c2) f + c3) f + c4;
+        // LREG3 = i = two's complement of sm, in the chain's shadow
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+        // INT32_TO_SM32 is its own inverse on sign-magnitude values, so on sm it gives the two's complement the
+        // sfpi form builds with abs and copysgn. Exact because FP32_TO_SMAG16 never produces SM -0, the one input
+        // where the two would differ.
+        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPCAST_MOD1_INT32_TO_SM32);
+        // LREG0 = y = r f + 1; LREG1 = r = y f + 1; y *= inf
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+        TTI_SFPMULI(EXP_FP32_INF_FP16B, p_sfpu::LREG0, 0);
+    };
+    auto tail = [] {
+        // LREG2 = e = biased exponent of r + i; lanes with e < 255: y = setexp(r, e); lanes with e < 1: y = 0
+        TTI_SFPEXEXP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(
+            0xF01 /* -255 */, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPIADD(
+            0xFFF /* -1 */, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    };
+
+    // The first vector records the head while executing it; load_replay_buf brackets the record with
+    // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined.
+    load_replay_buf<Exec>(0 /*start*/, HEAD_LEN, head);
+    tail();
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        TTI_REPLAY(0, HEAD_LEN, 0, 0);
+        tail();
+    }
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -491,12 +727,19 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             // effectively free (no other instruction to interleave with SFPMAD).
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
+            // The replayed form uses no SFPLOADMACRO, but DISABLE_SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO, the
+            // simulator build) selects the sfpi form here too, so that switch gives the plain reference stream.
+            // TensixSfpuExpFp32ReplayBitExact builds both forms through it and skips when the variable is set.
+#ifdef DISABLE_SFPLOADMACRO
             for (int d = 0; d < ITERATIONS; d++) {
                 sfpi::vFloat val = sfpi::dst_reg[0];
                 sfpi::dst_reg[0] =
                     _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
                 sfpi::dst_reg++;
             }
+#else
+            _sfpu_exp_fp32_accurate_tti_<SCALE_EN, ITERATIONS>(exp_base_scale_factor);
+#endif
         }
     } else if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
 #ifdef DISABLE_SFPLOADMACRO
@@ -504,7 +747,8 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
             sfpi::dst_reg++;
@@ -638,7 +882,8 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg[0] preserves sign, copies e/m from lreg[1]
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
@@ -710,10 +955,6 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
 #endif
 }
 
-constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
-constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
-
 template <
     bool APPROXIMATION_MODE,
     uint32_t scale,
@@ -755,16 +996,16 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
         constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-        TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(THRESHOLD_scaled));
         TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
 #ifndef DISABLE_SFPLOADMACRO
@@ -931,13 +1172,13 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
 
         // Load constant A into LREG[12]
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);
 
         // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);
 
         // Load shift amount (15) into LREG[14] for SFPSHFT2
@@ -1063,10 +1304,21 @@ void exp_init() {
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
             TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
         } else {
+#ifdef DISABLE_SFPLOADMACRO
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be
             // primed here.
             sfpu_reciprocal_init<false>();
+#else
+            // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store; LREG12..14 hold 1/ln2 and -ln2 in two
+            // parts.
+            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+            _sfpu_load_config32_(p_sfpu::LREG12, exp_detail::hi16(EXP_FP32_LOG2E), exp_detail::lo16(EXP_FP32_LOG2E));
+            _sfpu_load_config32_(
+                p_sfpu::LREG13, exp_detail::hi16(EXP_FP32_NEG_LN2_HI), exp_detail::lo16(EXP_FP32_NEG_LN2_HI));
+            _sfpu_load_config32_(
+                p_sfpu::LREG14, exp_detail::hi16(EXP_FP32_NEG_LN2_LO), exp_detail::lo16(EXP_FP32_NEG_LN2_LO));
+#endif
         }
     }
 }

@@ -15,7 +15,7 @@ import ttml
 import ttnn
 from ttml import checkpointing
 from ttml.common.muon_optimizer import MuonWithAdamW
-from ttml.modules import AbstractModuleBase, LinearLayer
+from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
 DIM = 32  # tile-aligned: LinearLayer weights are (1,1,DIM,DIM), bias (1,1,1,DIM)
 
@@ -252,6 +252,33 @@ def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
     ctx.reset_graph()
 
 
+class LowRank(AbstractModuleBase):
+    """A rank-2 and a rank-1 parameter, both filled with `fill`."""
+
+    def __init__(self, fill: float) -> None:
+        super().__init__()
+        self.matrix = Parameter(ttml.autograd.Tensor.from_numpy(np.full((DIM, 2 * DIM), fill, dtype=np.float32)))
+        self.vector = Parameter(ttml.autograd.Tensor.from_numpy(np.full((DIM,), fill, dtype=np.float32)))
+
+
+@pytest.mark.requires_device
+def test_roundtrip_keeps_lower_rank_shapes(tmp_path):
+    """Parameters below rank 4 load back in their own shape, not padded to 4D."""
+    ctx = ttml.autograd.AutoContext.get_instance()
+    path = str(tmp_path / "low_rank.pkl")
+    checkpointing.save_checkpoint(path, header={}, model_params=LowRank(1.5).parameters())
+
+    restored = LowRank(0.0)
+    checkpointing.load_checkpoint(path, model_params=restored.parameters())
+
+    for name, tensor in restored.parameters().items():
+        expected = (DIM, 2 * DIM) if name.endswith("matrix") else (DIM,)
+        assert tuple(tensor.shape()) == expected, name
+        np.testing.assert_array_equal(tensor.to_numpy(), np.full(expected, 1.5, dtype=np.float32), err_msg=name)
+
+    ctx.reset_graph()
+
+
 @pytest.mark.requires_device
 def test_bf16_dtype_preserved_on_disk(tmp_path):
     """A bf16 weight is stored as bf16 on disk, not widened to float32."""
@@ -310,3 +337,39 @@ def test_bad_file_raises(tmp_path, expect_error):
         pickle.dump({"not": "a checkpoint"}, f)
     with expect_error(ValueError, "not a ttml checkpoint or unsupported format"):
         checkpointing.read_header(str(wrong_format))
+
+
+@pytest.mark.requires_device
+def test_param_groups_survive_checkpoint(tmp_path):
+    """Per-group options and initial LRs are written to the checkpoint and restored into a fresh AdamW."""
+    from ttml.common.schedulers import CosineAnnealingScheduler
+
+    def make(model):
+        params = model.parameters()
+        biases = [name for name in params.keys() if name.endswith("/bias")]
+        cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1)
+        return ttml.optimizers.AdamW(params, cfg, param_groups=[{"params": biases, "lr": 2e-3, "weight_decay": 0.0}])
+
+    x_np = np.random.default_rng(0).standard_normal((1, 1, DIM, DIM)).astype(np.float32)
+    ttml.init.manual_seed(0)
+    orig = TwoLayer()
+    opt = make(orig)
+    sched = CosineAnnealingScheduler(opt, T_max=10, eta_min=1e-4)
+    for _ in range(3):
+        _train_steps(orig, opt, n=1, x_np=x_np)
+        sched.step()
+    opt.set_param_group_option(1, "beta2", 0.95)
+
+    path = str(tmp_path / "ckpt.pkl")
+    checkpointing.save_checkpoint(path, header={"step": 3}, model_params=orig.parameters(), optimizer=opt)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    restored = TwoLayer()
+    opt2 = make(restored)
+    checkpointing.load_checkpoint(path, model_params=restored.parameters(), optimizer=opt2)
+
+    for got, want in zip(opt2.get_param_groups(), opt.get_param_groups()):
+        assert got["params"] == want["params"]
+        for key in ("lr", "beta1", "beta2", "epsilon", "weight_decay"):
+            assert got[key] == pytest.approx(want[key], rel=1e-6), key
+    assert opt2.get_initial_group_lrs() == pytest.approx([1e-3, 2e-3], rel=1e-6)

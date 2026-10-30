@@ -8,12 +8,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
 // Test stream scratch register APIs on Tensix cores (both RISC0 and RISC1)
 TEST_F(UnitMeshFixture, StreamScratchRegisterTensixCores) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     // Use core (0,0) for testing
     CoreCoord test_core = {0, 0};
@@ -32,12 +33,12 @@ TEST_F(UnitMeshFixture, StreamScratchRegisterTensixCores) {
 // Test stream scratch register APIs on Erisc cores
 TEST_F(UnitMeshFixture, StreamScratchRegisterEriscCores) {
     // Check if device has active ethernet cores
-    auto ethernet_cores = this->device().get_devices()[0]->get_active_ethernet_cores(true);
+    auto ethernet_cores = this->device().impl().get_devices()[0]->get_active_ethernet_cores(true);
     if (ethernet_cores.empty()) {
         GTEST_SKIP() << "No active ethernet cores available on this device";
     }
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     // Get first available ethernet core
     auto eth_core = *ethernet_cores.begin();

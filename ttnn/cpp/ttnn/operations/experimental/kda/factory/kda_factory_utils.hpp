@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -35,9 +36,24 @@ void check_matching_dtype(
 void check_same_device(
     const Tensor& reference, const Tensor& candidate, std::string_view operation_name, std::string_view candidate_name);
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
+void check_device_scalar(
+    const Tensor& reference, const Tensor& scalar, std::string_view operation_name, std::string_view scalar_name);
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
+
+// Affine summaries are one tensor [S, N, K, K+V] holding K rows of [A | B] per transform: slot 0 holds head
+// transforms and slot 1, when present, tail transforms. Kernels address it by page through TensorAccessor.
+struct PackedSummaryShape {
+    uint32_t slots;
+    uint32_t transforms;
+    uint32_t key_dim;
+    uint32_t value_dim;
+};
+// Interleaved, height-sharded and ND-sharded placements are accepted.
+void check_summary_memory_layout(
+    const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name, std::string_view tensor_name);
+PackedSummaryShape check_packed_summaries(const Tensor& summaries, std::string_view operation_name);
 
 struct KdaPrepWorkDist {
     std::vector<tt::tt_metal::CoreCoord> cores;
@@ -46,7 +62,12 @@ struct KdaPrepWorkDist {
     tt::tt_metal::CoreRangeSet core_set;
 };
 
-KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap);
+// Row-major over the grid, skipping `excluded` (a core another kernel of the program occupies).
+KdaPrepWorkDist distribute_prep(
+    tt::tt_metal::CoreCoord grid,
+    uint32_t total,
+    uint32_t core_cap,
+    std::optional<tt::tt_metal::CoreCoord> excluded = std::nullopt);
 
 // One core per (head, value block). A head's state columns evolve independently, so its value tiles are split
 // across as many cores as fit. A head's blocks share one grid column (or, when no column split fits, one grid row) so
