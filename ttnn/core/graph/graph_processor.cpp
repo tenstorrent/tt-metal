@@ -21,10 +21,10 @@
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <string>
+#include <tt-metalium/experimental/kernel_cores.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -569,65 +569,52 @@ struct ProgramPlacement {
     std::string_view unresolved_reason;
 };
 
-// True when the program runs kernels on a core type this resolver cannot place.
-//
-// KernelMeta is the only public view of a program's core types, and it carries no core ranges, so
-// non-Tensix work can be detected but not intersected against a sub-device. Called only on the
-// failure path, where it turns "we found nothing" into a reason worth printing.
+// True when the program runs kernels on a core type other than Tensix, which this resolver does not place. Called only
+// on the failure path, where it turns "we found nothing" into a reason worth printing.
 bool has_non_tensix_kernels(const tt::tt_metal::Program& program) {
-    for (const auto& kernel : tt::tt_metal::detail::collect_kernel_meta(program, /*device=*/nullptr)) {
-        if (kernel.programmable_core_type != tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+    for (const auto core_type : enchantum::values<tt::tt_metal::HalProgrammableCoreType>) {
+        if (core_type != tt::tt_metal::HalProgrammableCoreType::TENSIX &&
+            core_type != tt::tt_metal::HalProgrammableCoreType::COUNT &&
+            !tt::tt_metal::experimental::GetKernelCores(program, core_type).empty()) {
             return true;
         }
     }
     return false;
 }
 
-// Places a program on a sub-device using only the public Metalium surface.
+// Places a program on the sub-device holding the cores its Tensix kernels run on, which is how
+// detail::ProgramImpl::determine_sub_device_ids, the authority dispatch uses, decides it. Dispatch has
+// already enforced that every kernel core of the program lies in one sub-device by the time capture
+// runs, so a single Tensix match settles the whole program -- including any eth cores it also uses.
 //
-// detail::ProgramImpl::determine_sub_device_ids is the authority for this, but it lives in a
-// private header that TTNN cannot include: tt_metal exports only api/, so pulling in
-// program_impl.hpp drags llrt/hal.hpp and the rest of Metalium's private include roots with it.
-// Rather than widen that boundary for a reporting feature, capture re-derives the answer and is
-// explicit about the cases it cannot.
-//
-// ProgramImpl intersects kernel-group core ranges, which are private; circular buffers are the
-// public proxy for the same compute cores. Dispatch has already enforced that every core of the
-// program belongs to one sub-device by the time capture runs, so a single Tensix match settles the
-// whole program -- including any eth cores it also uses.
-//
-// Two cases resolve to nothing, and both report it rather than guessing:
-//   * A program with no circular buffers on any sub-device's Tensix cores -- an eth-only program,
-//     most likely a CCL op.
-//   * A program whose circular buffers straddle sub-devices, which contradicts the dispatch
-//     invariant and so means the proxy has diverged from kernel groups.
+// These cases resolve to nothing, and each reports it rather than guessing:
+//   * A program with no Tensix kernels -- an eth-only program, most likely a CCL op.
+//   * A program whose Tensix kernels straddle sub-devices, or lie on cores of none; dispatch refuses
+//     both before capture runs.
 //
 // The caller records the execution either way; only the placement is dropped.
 ProgramPlacement resolve_program_placement(
     const tt::tt_metal::Program& program, const std::vector<tt::tt_metal::CoreRangeSet>& tensix_cores_by_sub_device) {
-    // circular_buffers() returns by value, so it is built once rather than per sub-device.
-    const auto circular_buffers = program.circular_buffers();
+    const auto kernel_cores =
+        tt::tt_metal::experimental::GetKernelCores(program, tt::tt_metal::HalProgrammableCoreType::TENSIX);
+    if (kernel_cores.empty()) {
+        return {
+            std::nullopt, has_non_tensix_kernels(program) ? "it runs only on non-Tensix cores" : "it runs no kernels"};
+    }
     std::optional<tt::tt_metal::SubDeviceId> match;
     for (uint32_t index = 0; index < tensix_cores_by_sub_device.size(); ++index) {
-        const auto& sub_device_cores = tensix_cores_by_sub_device[index];
-        for (const auto& circular_buffer : circular_buffers) {
-            if (sub_device_cores.intersection(circular_buffer->core_ranges()).empty()) {
-                continue;
-            }
-            if (match.has_value()) {
-                return {std::nullopt, "its circular buffers straddle more than one sub-device"};
-            }
-            match = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
-            break;
+        if (!tensix_cores_by_sub_device[index].intersects(kernel_cores)) {
+            continue;
         }
+        if (match.has_value()) {
+            return {std::nullopt, "its kernels straddle more than one sub-device"};
+        }
+        match = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
     }
     if (match.has_value()) {
         return {match, {}};
     }
-    return {
-        std::nullopt,
-        has_non_tensix_kernels(program) ? "it runs only on non-Tensix cores"
-                                        : "it allocates no circular buffers to match against"};
+    return {std::nullopt, "its kernels run on no sub-device's Tensix cores"};
 }
 }  // namespace
 
@@ -692,8 +679,8 @@ void track_mesh_workload_execution(
     for (const auto& [coordinate_range, program] : workload.get_programs()) {
         // The default manager makes the whole grid one sub-device, so the answer is 0 with no
         // program inspection at all. This is both the common case and the one ProgramImpl itself
-        // short-circuits, which keeps the proxy in resolve_program_placement off the path that
-        // almost every capture takes.
+        // short-circuits, which keeps resolve_program_placement (a merge of each program's kernel
+        // cores) off the path that almost every capture takes.
         ProgramPlacement placement = default_manager ? ProgramPlacement{tt::tt_metal::SubDeviceId{0}, {}}
                                                      : resolve_program_placement(program, tensix_cores_by_sub_device);
 

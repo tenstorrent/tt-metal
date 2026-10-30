@@ -252,6 +252,8 @@ public:
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
+    // The cores of `core_type` that run at least one kernel.
+    CoreRangeSet kernel_cores(HalProgrammableCoreType core_type) const;
     /// Compiles all kernels in the program for `device`. Binaries are written to
     /// `<cache root>/<build key>/kernels/<kernel name>/<kernel hash>/`, where the cache root is TT_METAL_CACHE
     /// (default ~/.cache/tt-metal-cache/).

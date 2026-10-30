@@ -70,6 +70,7 @@
 #include "program_impl.hpp"
 #include "slow_dispatch.hpp"
 #include "tt-metalium/program.hpp"
+#include <tt-metalium/experimental/kernel_cores.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -908,6 +909,24 @@ std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
 
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
+}
+
+CoreRangeSet experimental::GetKernelCores(const Program& program, HalProgrammableCoreType core_type) {
+    return program.impl().kernel_cores(core_type);
+}
+
+CoreRangeSet ProgramImpl::kernel_cores(HalProgrammableCoreType core_type) const {
+    // An index past kernels_ (including the -1 the HAL returns for a core type this architecture lacks) has no
+    // kernels.
+    const uint32_t index = MetalContext::instance(context_id_).hal().get_programmable_core_type_index(core_type);
+    CoreRangeSet cores;
+    if (index >= kernels_.size()) {
+        return cores;
+    }
+    for (const auto& [handle, kernel] : kernels_[index]) {
+        cores = cores.merge(kernel->core_range_set());
+    }
+    return cores;
 }
 
 std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
