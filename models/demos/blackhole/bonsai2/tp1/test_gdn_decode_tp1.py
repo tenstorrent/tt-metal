@@ -32,6 +32,7 @@ STEPS = 8
 REPLAYS = 200
 REPEATS = 5
 MIN_PCC = 0.99
+PROFILE_STEPS = 4
 
 DEVICE_PARAMS = [{"l1_small_size": max(24576, GDN_CONV1D_L1_SMALL_SIZE), "trace_region_size": 64 * 1024 * 1024}]
 
@@ -82,10 +83,8 @@ def _traced_ms(mesh_device, step, x_tt):
     return statistics.median(times)
 
 
-@torch.no_grad()
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_gdn_decode_tp1(mesh_device):
+def _build(mesh_device):
+    """Both GDN modules for the first linear-attention layer, on one chip."""
     os.environ.setdefault("HF_MODEL", model_path())
     torch.manual_seed(0)
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
@@ -94,10 +93,17 @@ def test_gdn_decode_tp1(mesh_device):
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     n_gdn = sum(t == "linear_attention" for t in args.attention_type_list)
     sd = load_gdn_layer(args.CKPT_DIR, li)
-
     old = Qwen36GatedDeltaNet(mesh_device, GDNConfig.from_args(args), _single_device_keys(sd, args.linear_q_dim))
     tp = TPGatedDeltaNet(mesh_device, tp1, load_gdn_weights_tp(mesh_device, sd, tp1), None)
     tp._fuse_agmm = False
+    return args, li, n_gdn, old, tp
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_gdn_decode_tp1(mesh_device):
+    args, li, n_gdn, old, tp = _build(mesh_device)
 
     def run_old(x_tt):
         return old.forward(x_tt, mode="recurrent")
@@ -137,3 +143,38 @@ def test_gdn_decode_tp1(mesh_device):
         with open(os.environ["GDN_TP1_RESULTS"], "w") as f:
             json.dump(results, f, indent=2)
     assert min(pccs) > MIN_PCC, f"single-device and TP=1 decode disagree: {pccs}"
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_gdn_decode_tp1_profile(mesh_device):
+    """PROFILE_STEPS eager decode steps of each path between tracy signposts, for a per-op device profile:
+        TT_METAL_DEVICE_PROFILER=1 python -m tracy -r -v --no-web-server -m pytest <this file>::test_gdn_decode_tp1_profile
+    then summarize the ops_perf_results CSV with profile_summary.py."""
+    if os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
+        pytest.skip("needs the device profiler (TT_METAL_DEVICE_PROFILER=1 under python -m tracy)")
+    from tracy import signpost
+
+    args, _, _, old, tp = _build(mesh_device)
+    x_tt = _to_dev(mesh_device, torch.randn(1, 1, args.dim, dtype=torch.bfloat16))
+    steps = (
+        ("single_device", lambda x: old.forward(x, mode="recurrent")),
+        ("tp1_composite", tp.forward_decode),
+        ("tp1_fused", tp.forward_decode),
+    )
+    # Warm every path up before the first signpost, so each region holds only its own PROFILE_STEPS steps.
+    for name, step in steps:
+        tp.use_fused_recurrent_decode = name == "tp1_fused"
+        for _ in range(2):
+            ttnn.deallocate(step(ttnn.clone(x_tt, memory_config=ttnn.L1_MEMORY_CONFIG)))
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
+    for name, step in steps:
+        tp.use_fused_recurrent_decode = name == "tp1_fused"
+        signpost(name)
+        for _ in range(PROFILE_STEPS):
+            ttnn.deallocate(step(ttnn.clone(x_tt, memory_config=ttnn.L1_MEMORY_CONFIG)))
+        ttnn.synchronize_device(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
+    signpost("end")
