@@ -11,6 +11,12 @@ per second of audio against the talker's 0.16 s, which made it the dominant bloc
 Same shape of fix as the talker's. Prefill the two-position prompt (the talker's hidden
 state and codebook 0) into a per-layer cache, then step one position at a time reading it.
 
+One structural difference: **each step reads a different output head.** Step k predicts
+codebook k+1 through `lm_head[k]`, so the traced graph covers the five transformer layers
+and the head is applied outside it. The head is one [1024, 2048] matmul against five layers
+of work, so leaving it out of the trace costs little and keeps a single graph serving all
+15 steps.
+
 The cache is tiny, 16 positions rounded up to the 64 that flash decode requires, but the
 step count is what matters here: this is a dispatch-bound block, which is exactly what a
 trace fixes.
@@ -205,10 +211,32 @@ class TtCodePredictorCachedDecoder:
             torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         self._position_inputs = {}
+        self._fp32_inputs = {}
+        if self._fp32:
+            rope = lambda: ttnn.from_torch(
+                torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            )
+            self._qcos, self._qsin = rope(), rope()
+            self._mask = ttnn.from_torch(
+                torch.zeros(1, 1, 1, self.max_seq), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+            )
+        tables = [parameters["talker_codec_embedding"], *parameters["codec_embedding"]]
+        self._offsets = [0]
+        for table in tables:
+            self._offsets.append(self._offsets[-1] + table.shape[0])
+        self._stacked = ttnn.from_torch(
+            torch.cat(tables + [torch.zeros(1, tables[0].shape[1], dtype=tables[0].dtype)]).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._zero_in = ttnn.from_torch(
+            torch.zeros(1, 1, parameters["input_width"]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
         self.trace_id = None
-        self._trace_ids = []
-        self._outs = []
+        self._out = None
 
     def _single_core_shard(self, column):
         return ttnn.MemoryConfig(
@@ -304,31 +332,30 @@ class TtCodePredictorCachedDecoder:
             )
         return self._position_inputs[position]
 
-    def _scaled_rope(self, position):
-        cos, sin = self._rotary(1, offset=int(position))
-        rows = lambda table: ttnn.from_torch(
-            (table * self.scale).reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        return rows(cos), rows(sin)
-
-    def _position_tensors(self):
-        if not hasattr(self, "_at"):
-            self._at = [
-                tuple(ttnn.to_device(t, self.device) for t in self._host_position_inputs(p))
-                + (p,)
-                + (self._scaled_rope(p) if self._fp32 else ())
-                for p in range(self.groups)
-            ]
-        return self._at
+    def _host_fp32_inputs(self, position):
+        if position not in self._fp32_inputs:
+            cos, sin = self._rotary(1, offset=int(position))
+            rows = lambda table: ttnn.from_torch(
+                (table * self.scale).reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            mask = ttnn.from_torch(
+                torch.where(torch.arange(self.max_seq) <= int(position), 0.0, -1e9).reshape(1, 1, 1, -1),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self._fp32_inputs[position] = (rows(cos), rows(sin), mask)
+        return self._fp32_inputs[position]
 
     def set_position(self, position):
         pos, cos, sin = self._host_position_inputs(position)
         ttnn.copy_host_to_device_tensor(pos, self._pos)
         ttnn.copy_host_to_device_tensor(cos, self._cos)
         ttnn.copy_host_to_device_tensor(sin, self._sin)
+        if self._fp32:
+            for source, target in zip(self._host_fp32_inputs(position), (self._qcos, self._qsin, self._mask)):
+                ttnn.copy_host_to_device_tensor(source, target)
 
     def prefill(self, embeddings):
         """Seed the cache from the two-position prompt and return its last hidden state."""
@@ -378,23 +405,13 @@ class TtCodePredictorCachedDecoder:
         hidden = self._rms(x, self.p["norm"])
         return ttnn.slice(hidden, [0, length - 1, 0], [1, length, self.hidden])
 
-    def _attend(self, query, key, value, index, position):
-        if not hasattr(self, "_causal"):
-            self._causal = [
-                ttnn.from_torch(
-                    torch.where(torch.arange(self.max_seq) <= j, 0.0, -1e9).reshape(1, 1, 1, -1),
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-                for j in range(self.groups)
-            ]
+    def _attend(self, query, key, value, index):
         ttnn.experimental.paged_fused_update_cache(
             self.k_cache[index],
             ttnn.to_memory_config(key, self._k_shard),
             self.v_cache[index],
             ttnn.to_memory_config(value, self._v_shard),
-            update_idxs_tensor=self._position_tensors()[position][0],
+            update_idxs_tensor=self._pos,
             page_table=None,
         )
         grid = ttnn.CoreGrid(y=1, x=self.kv_heads)
@@ -409,7 +426,7 @@ class TtCodePredictorCachedDecoder:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         weights = ttnn.softmax(
-            ttnn.add(scores, self._causal[position]),
+            ttnn.add(scores, self._mask),
             dim=-1,
             compute_kernel_config=self.compute_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -424,9 +441,8 @@ class TtCodePredictorCachedDecoder:
         )
         return ttnn.reshape(out, (1, 1, self.heads * self.head_dim))
 
-    def _step_ops(self, x, at=None):
-        pos, cos, sin = at[:3] if at is not None else (self._pos, self._cos, self._sin)
-        grouped = self._fp32 and at is not None
+    def _step_ops(self, x):
+        """One position through the five layers. The output head stays outside the trace."""
         x = self._widen(project(x, self.p, self.compute_config))
         for index, layer in enumerate(self.p["layers"]):
             qkv = self._qkv(self._norm(x, layer, "input_layernorm"), layer, "qkv")
@@ -435,25 +451,26 @@ class TtCodePredictorCachedDecoder:
             )
             query = ttnn.sharded_to_interleaved(query)
             key = ttnn.sharded_to_interleaved(key)
-            query = self._rotate(self._rms(query, layer["q_norm"]), *(at[4:6] if grouped else (cos, sin)))
-            key = self._rotate(self._rms(key, layer["k_norm"]), cos, sin)
+            rope = (self._qcos, self._qsin) if self._fp32 else (self._cos, self._sin)
+            query = self._rotate(self._rms(query, layer["q_norm"]), *rope)
+            key = self._rotate(self._rms(key, layer["k_norm"]), self._cos, self._sin)
 
-            if grouped:
-                attended = self._attend(query, key, value, index, at[3])
+            if self._fp32:
+                attended = self._attend(query, key, value, index)
             else:
                 ttnn.experimental.paged_fused_update_cache(
                     self.k_cache[index],
                     ttnn.to_memory_config(key, self._k_shard),
                     self.v_cache[index],
                     ttnn.to_memory_config(value, self._v_shard),
-                    update_idxs_tensor=pos,
+                    update_idxs_tensor=self._pos,
                     page_table=None,
                 )
                 attended = ttnn.transformer.scaled_dot_product_attention_decode(
                     query,
                     self.k_cache[index],
                     self.v_cache[index],
-                    cur_pos_tensor=pos,
+                    cur_pos_tensor=self._pos,
                     scale=self.scale,
                     compute_kernel_config=self.compute_config,
                 )
@@ -465,19 +482,9 @@ class TtCodePredictorCachedDecoder:
         final = {"norm": self.p["norm"], "norm_wide": getattr(self, "_final_norm_wide", None)}
         return self._norm(x, final, "norm")
 
-    def _lookup(self, table):
-        row = ttnn.embedding(self._index, table, layout=ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.to_layout(ttnn.reshape(row, (1, 1, self.p["input_width"])), ttnn.TILE_LAYOUT)
-
-    def _position(self, p):
-        if p == 0:
-            x = self._in
-        else:
-            x = self._lookup(
-                self.p["talker_codec_embedding_device"] if p == 1 else self.p["codec_embedding_device"][p - 2]
-            )
-        out = self._step_ops(x, self._position_tensors()[p])
-        return self._head(out, p - 1) if p else out
+    def _row(self):
+        row = ttnn.embedding(self._index, self._stacked, layout=ttnn.TILE_LAYOUT)
+        return ttnn.add(ttnn.reshape(row, (1, 1, self.p["input_width"])), self._in)
 
     def warmup(self):
         """Compile the step eagerly, without capturing.
@@ -485,34 +492,40 @@ class TtCodePredictorCachedDecoder:
         Separate from `capture` so a caller driving two decoders can warm both before
         capturing either. The warmup allocates a buffer per op, and a buffer allocated
         while another trace exists is corrupt once that trace runs unless released first.
+        Warms at the last cache slot, which no real decode reaches, and leaves the cache
+        alone so this can follow `prefill`.
         """
         self.set_position(self.max_seq - 1)
-        self._step_ops(self._in)
-        self._position_tensors()
-        for table in (self.p["talker_codec_embedding_device"], self.p["codec_embedding_device"][0]):
-            ttnn.deallocate(self._lookup(table))
-        ttnn.deallocate(self._head(self._step_ops(self._in, self._position_tensors()[0]), 0))
+        out = self._step_ops(self._row())
+        ttnn.deallocate(self._head(out, 0))
+        ttnn.deallocate(out)
         ttnn.synchronize_device(self.device)
         self._warmed = True
 
     def capture(self):
+        """Capture the step so later ones replay a single graph.
+
+        Every trace must be captured before any of them executes. Capturing a second trace
+        after the first has run hangs the device: measured, and it took a board reset.
+        """
         if not getattr(self, "_warmed", False):
             self.warmup()  # a trace cannot compile new programs
-        self._trace_ids, self._outs = [], []
-        for p in range(self.groups):
-            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-            self._outs.append(self._position(p))
-            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
-            self._trace_ids.append(trace_id)
-        self.trace_id = self._trace_ids[0]
+        self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self._out = self._step_ops(self._row())
+        ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 
     def release(self):
-        for trace_id in self._trace_ids:
-            ttnn.release_trace(self.device, trace_id)
-        self._trace_ids, self._outs = [], []
-        self.trace_id = None
-        self._warmed = False
+        """Drop the captured trace so eager work is safe again.
+
+        A prefill runs ops a trace never compiled and allocates as it goes, and buffers
+        allocated while a trace is live are corrupt once it runs. So a second utterance
+        has to release before it prefills, and capture again afterwards.
+        """
+        if self.trace_id is not None:
+            ttnn.release_trace(self.device, self.trace_id)
+            self.trace_id = None
+            self._warmed = False
 
     def reset(self):
         """Clear the caches without allocating."""
@@ -528,9 +541,13 @@ class TtCodePredictorCachedDecoder:
             dtype=ttnn.float32 if self._fp32 else None,
         )
 
-    def _run(self, position):
+    def _run(self, position, code=None):
         self.set_position(position)
-        return self._step_ops(self._in)
+        self._write_index(self._offsets[-1] if code is None else self._offsets[position - 1] + int(code))
+        if self.trace_id is not None:
+            ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
+            return self._out
+        return self._step_ops(self._row())
 
     def _fill_from_host(self, embedding):
         """`_in` <- a host row. The slow way in, kept for callers holding torch tensors."""
@@ -558,37 +575,31 @@ class TtCodePredictorCachedDecoder:
 
         `talker_hidden` may be the device tensor the talker returned, which is what the pipeline
         passes. `pick` defaults to argmax, but greedy sends this model into a silence code it
-        never leaves.
+        never leaves. The two prompt positions go through the traced step like the rest: a
+        per-frame prefill allocated buffers, and buffers allocated under a live trace are corrupt
+        once it runs.
         """
         charge = watch.split if watch is not None else (lambda name: None)
-        pick = pick or (lambda row: int(row.argmax()))
         self.reset()
         if isinstance(talker_hidden, ttnn.Tensor):
             ttnn.copy(ttnn.reshape(talker_hidden, (1, 1, -1)), self._in)
         else:
             self._fill_from_host(talker_hidden.reshape(1, 1, -1))
-        traced = bool(self._trace_ids)
+        self._run(0)
+        ttnn.copy(self._zero_in, self._in)
+        hidden = self._run(1, first_code)
 
-        def run(p, code=None):
-            if code is not None:
-                self._write_index(code)
-            if traced:
-                ttnn.execute_trace(self.device, self._trace_ids[p], cq_id=0, blocking=False)
-                return self._outs[p]
-            return self._position(p)
-
-        run(0)
-        logits = run(1, first_code)
+        pick = pick or (lambda row: int(row.argmax()))
         codes = []
         for step in range(self.groups - 1):
+            logits = self._head(hidden, step)
             row = ttnn.to_torch(logits).float().reshape(-1)
-            if not traced:
-                ttnn.deallocate(logits)
+            ttnn.deallocate(logits)  # released before the next trace execution
             charge("predictor")
             code = int(pick(row))
             charge("predictor_sample")
             codes.append(code)
             if step == self.groups - 2:
                 break
-            logits = run(2 + step, code)
+            hidden = self._run(2 + step, code)
         return codes

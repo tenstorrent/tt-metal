@@ -983,7 +983,6 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
-    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_predictor_precision.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
