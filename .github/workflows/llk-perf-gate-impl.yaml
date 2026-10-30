@@ -423,7 +423,6 @@ jobs:
           path: stage2
 
       - name: Add stage 2 to the report
-        id: stage2
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
         env:
           ARCH: ${{ inputs.arch }}
@@ -434,12 +433,11 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
           GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
-          BLOCKS=false
+          # Report-only: stage 2 adds to the report and does not change the verdict.
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
             --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md || BLOCKS=true
-          echo "blocks=$BLOCKS" >> "$GITHUB_OUTPUT"
+            --arch "$ARCH" --report stage2.md || true
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
 
@@ -498,8 +496,7 @@ jobs:
                 || '' }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          # Stage 2 clearing every stage-1 regression makes the post clean, like the job.
-          GATE_EXIT_CODE: ${{ steps.stage2.outputs.blocks == 'false' && '0' || steps.compare.outputs.gate_exit_code }}
+          GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           MEASURE_RESULT: ${{ steps.measured.outputs.result }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
@@ -633,8 +630,6 @@ jobs:
         env:
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
         run: |
-          # The merge gate's blocking job reads this.
-          trap 'echo $? > gate_verdict.txt' EXIT
           # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
           if [ -f perf_gate_report.md ]; then
             cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
@@ -663,10 +658,6 @@ jobs:
           if [ "$EXIT_CODE" != "0" ]; then
             echo "❌ Performance regressions detected"
             cat perf_gate_report.md
-            if [ "${{ steps.stage2.outputs.blocks }}" = "false" ]; then
-              echo "Stage 2 re-measured all of them in every leg and none is slower at every code position: the job does not fail."
-              exit 0
-            fi
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
               exit 1
             fi
@@ -676,11 +667,3 @@ jobs:
 
           echo "✅ No regressions detected"
           cat perf_gate_report.md
-
-      - name: Upload the gate verdict
-        if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
-        with:
-          name: llk-perf-gate-verdict-${{ inputs.arch }}
-          path: gate_verdict.txt
-          if-no-files-found: ignore
