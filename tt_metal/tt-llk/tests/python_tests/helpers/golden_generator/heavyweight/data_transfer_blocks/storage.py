@@ -91,6 +91,19 @@ def round_mantissa_away(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     return torch.where(torch.isfinite(wide), rounded, wide)
 
 
+def mantissa_ties(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
+    """Where rounding to `keep_bits` lands exactly half an ULP from both sides.
+
+    The only place the rounding mode is observable. Everywhere else ties-to-even
+    and ties-away agree, so a model that has not pinned the mode down is still
+    right until one of these appears.
+    """
+    dropped = FP32_MANTISSA_BITS - keep_bits
+    wide = values.to(torch.float32)
+    low = wide.contiguous().view(torch.int32) & ((1 << dropped) - 1)
+    return (low == (1 << (dropped - 1))) & torch.isfinite(wide)
+
+
 def truncate_src_mantissa(values: torch.Tensor) -> torch.Tensor:
     """Keep the top 10 mantissa bits, truncating as the unpacker does."""
     return truncate_mantissa(values, SRC_MANT_BITS)

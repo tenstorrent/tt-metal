@@ -125,18 +125,9 @@ class QuasarArch(ArchGolden):
             DataFormat.UInt8: frozenset({DataFormat.UInt8}),
         },
         has_srcs=True,
-        # Wormhole and Blackhole keep 7, which is the default and is what the
-        # ISA documents: a BF16 src datum is overlaid onto Tf32 with the low
-        # three mantissa bits zeroed. Quasar is read as keeping all 10, from
-        # its own gasket rather than that document, which covers neither
-        # Quasar nor this case. Unconfirmed, and currently unreachable: a
-        # Float16_b L1 datum carries 7 bits whatever the register keeps, so
-        # this only bites when a wider L1 format lands in a bf16 src register.
         src_mantissa_bits={DataFormat.Float16_b: SRC_MANT_BITS},
     )
-    #: 7x7 bits per fidelity phase, so a src datum's 10 explicit mantissa bits
-    #: split 7 high / 3 low on **both** operands.
-    fpu = Fpu(_QUASAR_L1, mantissa_split=(7, 7))
+    fpu = Fpu(_QUASAR_L1, mantissa_split=(7, 7), dest_ties_away=False)
 
     #: Quasar inverts the edge-mask register, so a set bit masks the datum,
     #: the opposite of Wormhole and Blackhole. And ``TestConfig`` skips the
@@ -200,6 +191,9 @@ class WormholeArch(ArchGolden):
 
     l1 = _WORMHOLE_L1
     unpack = Unpack(_WORMHOLE_L1)
+    # Deliberately unset. The evidence for ties away from zero covers the
+    # matmul path, not the add and subtract one modelled here, and ties to
+    # even is no safer a guess. Unset means a write landing on a tie warns.
     fpu = Fpu(_WORMHOLE_L1)
     pack = Pack(_WORMHOLE_L1)
 
@@ -225,19 +219,13 @@ _BLACKHOLE_L1 = L1Support(
 
 
 class BlackholeArch(ArchGolden):
-    """Blackhole: block float, **no MX**.
-
-    Differs from Wormhole in one format, ``Fp8_e4m3``, and nothing
-    else, which is the point of assembling an architecture rather than
-    subclassing one.
-    """
+    """Blackhole: block float, **no MX**."""
 
     l1 = _BLACKHOLE_L1
     unpack = Unpack(_BLACKHOLE_L1)
-    # A 16-bit Dest write rounds ties away from zero here, not to even. Only
-    # visible where the dropped bits are exactly half an ULP, which an add or
-    # subtract of two datums already on the Dest grid hits often. Measured on
-    # a card; Wormhole is left at the IEEE default because nobody has checked.
+    # A 16-bit Dest write rounds ties away from zero here, not to even.
+    # Measured on a card: Float16_b elwadd and elwsub match on 8192/8192 that
+    # way, against 1292 and 876 wrong with ties to even.
     fpu = Fpu(_BLACKHOLE_L1, dest_ties_away=True)
     pack = Pack(_BLACKHOLE_L1)
 
