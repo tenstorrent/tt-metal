@@ -1583,3 +1583,50 @@ def test_topk_large_indices_metadata_matches_scalar_ties(device, valid_end, grid
                 f"scalar vs {label}: {len(differ)} rows differ, first {differ[0]}, {len(set_differ)} as sets"
             )
     assert not failures, f"end={valid_end} grid={grid}: " + "; ".join(failures)
+
+
+@pytest.mark.parametrize("grid", ["default", "topk108"], ids=["grid_default", "grid_topk108"])
+@pytest.mark.parametrize("valid_end", [56320, 71680, 102400], ids=["end56320", "end71680", "end102400"])
+def test_topk_large_indices_long_rows_ties(device, valid_end, grid):
+    """Long rows with bf16 ties: past 32 K' chunks a row is reduced in 32-chunk segments joined by the unfused
+    (value-only) merge, so the fused cross-core join of #63408 does not cover it.
+
+    Asserted: the scalar and metadata bounds (eager and traced) return the same order, since both plan the same
+    segments and the same split. Logged, not asserted: the order against a longer bound over the same real
+    columns (the same tokens in a full chunk), which can differ once either bound passes 32 chunks."""
+    k, n, num_rows = 2048, 131072, 160
+    torch_input = torch.randn(num_rows, n, generator=torch.Generator().manual_seed(56320))
+    torch_input[:, valid_end:] = float("-inf")
+    torch_input = torch_input.to(torch.bfloat16)
+    kwargs = {}
+    if grid == "topk108":
+        g_size = device.compute_with_storage_grid_size()
+        if (g_size.x, g_size.y) != (12, 10):
+            pytest.skip(f"the top-k overlap sub-grid is defined on a 12x10 grid, got {g_size.x}x{g_size.y}")
+        kwargs["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(11, 9))])
+
+    def run(**bound):
+        out = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, **bound, **kwargs)
+        return ttnn.to_torch(out, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+
+    def compare(a, b):
+        differ = [r for r in range(num_rows) if not torch.equal(a[r], b[r])]
+        set_differ = [r for r in differ if not torch.equal(a[r].sort().values, b[r].sort().values)]
+        return differ, set_differ
+
+    s = run(valid_length=valid_end)
+    m = run(
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+        valid_length_offset=n,
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+    )
+    full = run(valid_length=n)
+    chunks = -(-valid_end // k)
+    for label, other in (("metadata", m), ("scalar-full", full)):
+        differ, set_differ = compare(s, other)
+        logger.info(
+            f"long end={valid_end} ({chunks} chunks) grid={grid} scalar vs {label}: {len(differ)} of {num_rows} rows "
+            f"differ (rows >= 108: {sum(r >= 108 for r in differ)}), {len(set_differ)} as sets"
+        )
+        if label == "metadata":
+            assert not differ, f"end={valid_end} grid={grid}: scalar vs metadata: {len(differ)} rows differ"
