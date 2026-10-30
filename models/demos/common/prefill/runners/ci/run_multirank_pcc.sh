@@ -156,6 +156,9 @@ case "${MODEL}" in
       RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K3_CACHE}';"
       # The producer does not see the binding's global_env; its row count is the SP factor.
       PRODUCER_ENV+=" export PREFILL_SP=4; export PREFILL_TP=4;"
+      # Half the 8x4 chunk, as the 4x4 bindings set it: 640 tokens per chip at SP=4. Runner and
+      # producer both take CHUNK_SIZE, and the stage settings below must agree with it.
+      CHUNK_SIZE=2560
     fi
     ;;
   mistral4)
@@ -368,6 +371,10 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   case "${STAGE_ENV}" in
     *PREFILL_SP_AXIS=1*) ;;
     *) echo "no 4x4 stage settings (PREFILL_SP_AXIS) in ${TEMPLATE_4X4}'s global_env" >&2; exit 2 ;;
+  esac
+  case "${STAGE_ENV}" in
+    *"PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"*) ;;
+    *) echo "${TEMPLATE_4X4}'s PREFILL_CHUNK_SIZE does not match the launcher's ${CHUNK_SIZE}" >&2; exit 2 ;;
   esac
   RUNNER_ENV+=" ${STAGE_ENV}"
   TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
