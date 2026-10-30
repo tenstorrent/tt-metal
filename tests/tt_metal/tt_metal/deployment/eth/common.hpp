@@ -28,6 +28,7 @@
     } while (0)
 
 namespace tt::tt_metal {
+using namespace std::chrono_literals;
 
 struct LinkError {
     int send_device_id;
@@ -173,14 +174,14 @@ static void track_eth_progress_timeout(
     const CoreCoord& send_core,
     const CoreCoord& recv_core,
     uint32_t iter_l1_addr,
-    uint32_t expected_count) {
+    uint32_t expected_count,
+    const std::chrono::duration<uint64_t, std::milli>& poll_period) {
     /* =================== */
     uint32_t prev_send = -1;
     uint32_t prev_recv = -1;
 
     for (;;) {
-        using namespace std::chrono_literals;
-        std::this_thread::sleep_for(10ms);
+        std::this_thread::sleep_for(poll_period);
 
         uint32_t curr_send = read_eth_l1_u32(send_device, send_core, iter_l1_addr);
         uint32_t curr_recv = expected_count;
@@ -224,7 +225,9 @@ struct core_setup {
 };
 
 [[maybe_unused]]
-static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores) {
+static void track_eth_progress_timeout_cores(
+    std::span<struct core_setup> cores, const std::chrono::duration<uint64_t, std::milli>& poll_period) {
+    /* =================== */
     std::vector<std::thread> threads;
 
     for (const auto& c : cores) {
@@ -233,7 +236,7 @@ static void track_eth_progress_timeout_cores(std::span<struct core_setup> cores)
         }
         threads.emplace_back([&] {
             auto* const device = c.mesh_device->impl().get_devices()[0];
-            track_eth_progress_timeout(device, nullptr, c.core, c.core, c.iter_l1_addr, c.expected_count);
+            track_eth_progress_timeout(device, nullptr, c.core, c.core, c.iter_l1_addr, c.expected_count, poll_period);
         });
     }
 
@@ -247,7 +250,8 @@ template <typename FIXTURE>
 static void wait_to_finish_eth_timeout_cores(
     FIXTURE* fixture,
     std::span<struct core_setup> cores,
-    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs) {
+    std::map<std::shared_ptr<distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>& programs,
+    const std::chrono::duration<uint64_t, std::milli>& poll_period = 10ms) {
     /* ==================== */
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -266,7 +270,7 @@ static void wait_to_finish_eth_timeout_cores(
         fixture->RunProgram(dev, *workload, true);
     }
 
-    track_eth_progress_timeout_cores(cores);
+    track_eth_progress_timeout_cores(cores, poll_period);
 
     for (const auto& [dev, _] : devices) {
         fixture->FinishCommands(dev);

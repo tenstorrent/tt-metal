@@ -114,7 +114,8 @@ static bool run_test_bandwidth_bidir(
             .expected_count = transfer_count,
         },
     };
-    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
+    using namespace std::chrono_literals;
+    wait_to_finish_eth_timeout_cores(fixture, cores, programs, 1s);
 
     double threshold = get_eth_bw() * 0.7;
 
