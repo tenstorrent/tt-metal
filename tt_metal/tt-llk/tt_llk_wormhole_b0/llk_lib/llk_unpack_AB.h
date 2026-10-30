@@ -23,141 +23,159 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
+ * @brief Rows per face that unpacker B reads in a two-operand unpack: only the rows the math thread consumes.
+ *
+ * ROW and SCALAR broadcast use SrcB row 0 alone (the math SrcB address does not advance inside a face, see
+ * @ref eltwise_binary_configure_addrmod), so B reads one row per face whatever its shape. NONE and COL consume
+ * every row A does, so B reads A's face rows and must have at least that many.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param tensor_shape_a: Tensor shape of source A
+ * @param tensor_shape_b: Tensor shape of source B
+ */
+template <BroadcastType BType>
+inline std::uint32_t _llk_unpack_AB_srcb_face_r_dim_(const ckernel::TensorShape tensor_shape_a, const ckernel::TensorShape tensor_shape_b)
+{
+    if constexpr (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
+    {
+        return 1;
+    }
+    else
+    {
+        LLK_ASSERT(tensor_shape_b.face_r_dim >= tensor_shape_a.face_r_dim, "SrcB faces must have at least as many rows as SrcA faces for NONE/COL");
+        return tensor_shape_a.face_r_dim;
+    }
+}
+
+/**
  * @brief Configure the MOP (Micro-Operation Program) for unpacking two source operands A and B
  *
- * Sets up the unpacker MOP to handle various broadcast modes and transpose configurations.
- * The MOP programs the sequence of unpack operations based on tile geometry and broadcast type.
+ * SrcA walks its faces row by row (column by column with inter-face transpose). SrcB follows the broadcast:
+ * - NONE: one B face per A face.
+ * - COL: one B face per row of A faces, at the start of the matching row of B faces.
+ * - ROW: B's first row of faces, re-read for every row of A faces.
+ * - SCALAR: B's first face, read once per tile.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param transpose_of_faces: Whether to transpose faces (reorder faces 0,2,1,3)
- * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @param tensor_shape_a: Tensor shape of source A; sets the face loop
+ * @param tensor_shape_b: Tensor shape of source B; sets where each row of B faces starts
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape)
+inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape_a, const ckernel::TensorShape tensor_shape_b)
 {
-    const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
-    const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+    const std::uint32_t num_faces_r_dim = tensor_shape_a.num_faces_r_dim;
+    const std::uint32_t num_faces_c_dim = tensor_shape_a.num_faces_c_dim;
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_mop_config_", tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_mop_config_", tensor_shape_a);
 
     if (transpose_of_faces)
     {
         LLK_ASSERT(num_faces_r_dim == num_faces_c_dim, "num_faces_r_dim must be equal to num_faces_c_dim when transpose_of_faces is true");
         LLK_ASSERT(
             num_faces_c_dim == 1 || num_faces_c_dim == 2,
-            "num_faces_c_dim has to be either 1 or 2 with transpose due to stride limitations in UNPACR instruction,"
-            "this limitation can be removed when TensorShapes are passed at compile time");
+            "num_faces_c_dim has to be either 1 or 2 with transpose due to stride limitations in UNPACR instruction");
     }
 
     static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srca_transpose =
-        TT_OP_UNPACR(SrcA, 0b10 /*This is an inc of 2, which is meant to be num_faces_c_dim*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    // Z increment of 2 steps down a column of faces; with transpose num_faces_c_dim is 1 or 2, and 1 has one face per column.
+    static constexpr std::uint32_t unpack_srca_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     const std::uint32_t outerloop = transpose_of_faces ? num_faces_c_dim : num_faces_r_dim;
     const std::uint32_t innerloop = transpose_of_faces ? num_faces_r_dim : num_faces_c_dim;
     const std::uint32_t srca_op   = transpose_of_faces ? unpack_srca_transpose : unpack_srca;
-
-    // Helper to set end op(s) based on transpose mode
-    auto set_end_op_with_transpose = [&](ckernel_template &tmp, std::uint32_t primary_end_op)
-    {
-        if (transpose_of_faces)
-        {
-            tmp.set_end_ops(primary_end_op, TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001));
-        }
-        else
-        {
-            tmp.set_end_op(primary_end_op);
-        }
-    };
+    // With transpose, each outer pass ends at the bottom of a column of faces; move SrcA to the top of the next.
+    const std::uint32_t srca_next_column = transpose_of_faces ? TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001) : TT_OP_NOP;
 
     if constexpr (BType == BroadcastType::COL)
     {
-        // COL broadcast: First col in Src B face is broadcast across A faces in the same row
-        LLK_ASSERT(
-            num_faces_c_dim >= num_faces_r_dim,
-            "If num_faces_c_dim is less than num_faces_r_dim (i.e 32x16), then BROADCAST_TYPE::COL is not supported, Can be fixed in the future");
+        LLK_ASSERT(num_faces_c_dim >= num_faces_r_dim, "BroadcastType::COL does not support a 32x16 SrcA tile");
+        LLK_ASSERT(tensor_shape_b.num_faces_r_dim >= num_faces_r_dim, "BroadcastType::COL needs a SrcB face for every row of SrcA faces");
+        // B's first column is broadcast across a row of A faces; then point B at the start of its next row of faces.
         ckernel_template tmp(outerloop, innerloop, srca_op);
         tmp.set_start_op(unpack_srcb);
-
-        if (num_faces_c_dim < MAX_NUM_FACES_C_DIM)
-        {
-            set_end_op_with_transpose(
-                tmp, TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 1 /*this should be num_faces_c_dim, but can't pass it here until its compile time*/, 0b0001));
-        }
-        else
-        {
-            set_end_op_with_transpose(
-                tmp, TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2 /*this should be num_faces_c_dim, but can't pass it here until its compile time*/, 0b0001));
-        }
-
+        tmp.set_end_ops(TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, tensor_shape_b.num_faces_c_dim, 0b0001), srca_next_column);
         tmp.program();
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        LLK_ASSERT(
-            num_faces_c_dim >= num_faces_r_dim,
-            "If num_faces_c_dim is less than num_faces_r_dim (i.e 32x16), then BROADCAST_TYPE::ROW is not supported, Can be fixed in the future");
-        // ROW broadcast: First row in Src B face is broadcast across A faces in the same column
-        static constexpr std::uint32_t unpack_srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);
-
+        LLK_ASSERT(num_faces_c_dim >= num_faces_r_dim, "BroadcastType::ROW does not support a 32x16 SrcA tile");
+        LLK_ASSERT(tensor_shape_b.num_faces_c_dim >= num_faces_c_dim, "BroadcastType::ROW needs a SrcB face for every column of SrcA faces");
+        // B's first row of faces pairs with every row of A faces.
         ckernel_template tmp(outerloop, innerloop, unpack_srcb, srca_op);
-        set_end_op_with_transpose(tmp, unpack_srcb_clear_z);
+        tmp.set_end_ops(TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001), srca_next_column);
         tmp.program();
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
-        // SCALAR broadcast: single B value broadcast to all A faces
         LLK_ASSERT(!transpose_of_faces, "SrcA transpose is not supported with scalar broadcast");
-
-        ckernel_template tmp(1, tensor_shape.total_num_faces(), unpack_srca);
+        ckernel_template tmp(1, tensor_shape_a.total_num_faces(), unpack_srca);
         tmp.set_start_op(unpack_srcb);
         tmp.program();
     }
     else // BType == BroadcastType::NONE
     {
-        // NONE: no broadcast, A and B faces are paired 1:1
-        if (transpose_of_faces)
-        {
-            static constexpr std::uint32_t srca_set_z = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
-            // Flip r & c dimension due to transpose of SrcA, SrcA unpack increments L1 pointer by num_faces_c_dim
-            ckernel_template tmp(num_faces_c_dim, num_faces_r_dim, unpack_srca_transpose, unpack_srcb);
-            tmp.set_end_op(srca_set_z);
-            tmp.program();
-        }
-        else
-        {
-            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca, unpack_srcb);
-            tmp.program();
-        }
+        LLK_ASSERT(tensor_shape_b.total_num_faces() >= tensor_shape_a.total_num_faces(), "SrcB needs a face for every SrcA face");
+        ckernel_template tmp(outerloop, innerloop, srca_op, unpack_srcb);
+        tmp.set_end_op(srca_next_column);
+        tmp.program();
     }
 }
 
 /**
  * @brief Initialize unpacker to unpack two source operands A and B into SrcA and SrcB registers
  *
- * Configures the unpacker hardware for dual-operand unpacking with support for various
- * broadcast modes and optional transpose. Sets up number of datums to unpack based on face dimensions.
+ * Configures the unpacker hardware for dual-operand unpacking with support for various broadcast modes and
+ * optional transpose. Each unpacker reads only what the math thread consumes from its operand: A reads its
+ * full faces, and B reads the rows given by @ref _llk_unpack_AB_srcb_face_r_dim_ (one row for ROW/SCALAR).
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @param tensor_shape_a: Tensor shape of source A (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @param tensor_shape_b: Tensor shape of source B, e.g. a [1,32] tile for a ROW/SCALAR broadcast operand
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
  * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, const ckernel::TensorShape tensor_shape_b, const ckernel::Transpose transpose)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape_a);
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 
-    config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
+    const std::uint32_t srcb_face_r_dim = _llk_unpack_AB_srcb_face_r_dim_<BType>(tensor_shape_a, tensor_shape_b);
+    if (srcb_face_r_dim == tensor_shape_a.face_r_dim)
+    {
+        config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape_a.face_r_dim);
+    }
+    else
+    {
+        config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape_a.face_r_dim);
+        config_unpacker_x_end<p_setadc::UNP_B>(srcb_face_r_dim);
+    }
 
-    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape); // transpose of faces 0,2,1,3
+    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape_a, tensor_shape_b);
+}
+
+/**
+ * @brief Initialize unpacker to unpack two source operands A and B that share one tensor shape.
+ *
+ * Forwards to the two-shape init with B's shape equal to A's.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param tensor_shape: Tensor shape of both sources (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
+ * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_ is the matching execute call.
+ */
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, tensor_shape, transpose);
 }
 
 /**
