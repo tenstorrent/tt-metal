@@ -459,8 +459,16 @@ jobs:
           export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))
           # The container runs as another user than the checkout's owner; stage 2 fetches the base with git.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          LLK_STAGE2_BASE_REF="${{ inputs.stage2-baseline-ref }}" \
-            tests/run_llk_perf_merge_stage2.sh "$RUNNER_TEMP/stage2-baseline/$CHIP_ARCH" "$RUNNER_TEMP/stage2"
+          # The script stops measuring at the deadline. This limit also covers its other steps (git fetch, compare),
+          # with 30 s past the deadline to write the result, so stage 2 cannot run the leg into its timeout.
+          LEFT=$(( LLK_STAGE2_DEADLINE + 30 - $(date +%s) ))
+          if (( LEFT < 60 )); then
+            echo "::warning::No time left for stage 2 in this leg."
+            exit 0
+          fi
+          LLK_STAGE2_BASE_REF="${{ inputs.stage2-baseline-ref }}" timeout -k 10 "$LEFT" \
+            tests/run_llk_perf_merge_stage2.sh "$RUNNER_TEMP/stage2-baseline/$CHIP_ARCH" "$RUNNER_TEMP/stage2" \
+            || echo "::warning::Stage 2 did not finish in this leg (exit $?); the gate report counts this leg as missing."
       - name: "Stage 2: upload the result"
         if: ${{ !cancelled() && steps.stage2-baseline.outcome == 'success' }}
         continue-on-error: true

@@ -72,7 +72,7 @@ git -C "$REPO" fetch -q --depth 1 origin "$BASE_SHA"
 git -C "$REPO" archive FETCH_HEAD tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon tt_metal/sfpi-version \
   ttnn/cpp/ttnn/operations/experimental | tar -x -C "$BASE"
 
-# No stage2.json from here on means the gate keeps the stage-1 verdict.
+# No stage2.json from here on: the gate report counts this leg as missing.
 if [[ ! -x "$BASE/tt_metal/tt-llk/tests/run_llk_perf_placement.sh" ]]; then
   echo "::warning::The baseline commit ${BASE_SHA} predates stage 2; nothing to compare with."
   exit 0
@@ -84,9 +84,9 @@ elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-versio
   exit 0
 fi
 ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
-# No test limit: stage 2 measures until the deadline, and what it did not measure on both sides blocks.
+# No test limit: stage 2 measures until the deadline, and the report lists what it did not measure on both sides.
 # The largest slowdowns go first, as a part of their own on both sides, so a leg that runs out of time
-# still has verdicts for them. Within a part, each side gets half of the time left.
+# still has results for them. Within a part, each side gets half of the time left.
 FIRST="${LLK_STAGE2_FIRST:-10}"
 head -n "$FIRST" "$OUT/nodes.txt" > "$OUT/nodes.1"
 tail -n +"$(( FIRST + 1 ))" "$OUT/nodes.txt" > "$OUT/nodes.2"
