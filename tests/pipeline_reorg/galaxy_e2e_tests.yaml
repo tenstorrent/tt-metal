@@ -30,9 +30,9 @@
   cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_nightly.yaml
   skus:
     wh_galaxy:
-      timeout: 45
+      timeout: 39
     bh_galaxy:
-      timeout: 45
+      timeout: 37
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
@@ -94,20 +94,12 @@
   team: scaleout
   budget_type: e2e
 
-# Per-mesh fabric config (#60499/#60690): heterogeneous per-mesh 2D fabric configs derived from the MGD.
-# Each of the four MGDs below is a SEPARATE scenario -- each mesh's dim_types imply its own 2D fabric config,
-# and the dedicated heterogeneous yaml's HeterogeneousFabric* groups (topology: FromMgd) make each process run its own mesh's config. One job runs all four in
-# sequence (kernel-compile cache is shared, so this is far cheaper than four separate jobs) and fails if any
-# tt-run does. Covered scenarios:
+# Per-mesh heterogeneous fabric config: each mesh's dim_types imply its own 2D config. Four MGDs run in one job
+# (shared compile cache), each selecting the HeterogeneousFabric* groups from test_fabric_per_mesh_heterogeneous.yaml:
 #   1. torus_yx      -- TORUS_Y + TORUS_X + TORUS_Y (3 meshes)
-#   2. split_2x4     -- 2x4 TORUS_X split across 2 processes + 2x2 TORUS_Y (one mesh over 2 host ranks)
-#   3. config_combo  -- ALL four 2D configs: TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D, ring-connected
-#   4. bigmesh_combo -- 4x4 TORUS_X split across 2 processes + 2x2 TORUS_Y + 2x2 FABRIC_2D, all inter-linked
-#
-# The HeterogeneousFabric* groups live in the dedicated test_fabric_per_mesh_heterogeneous.yaml (topology: FromMgd); one run
-# per MGD selects them all with --filter name.HeterogeneousFabric*: unicast neighbor_exchange + all_to_all (intra & inter
-# mesh) plus multicast all_to_all (intra only -- multicast can't cross mesh boundaries). Each pattern is its own
-# group (a combined workload deadlocks).
+#   2. split_2x4     -- 2x4 TORUS_X split across 2 processes + 2x2 TORUS_Y
+#   3. config_combo  -- TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D, ring-connected
+#   4. bigmesh_combo -- 4x4 TORUS_X split across 2 processes + 2x2 TORUS_Y + 2x2 FABRIC_2D
 - id: galaxy-fabric-per-mesh-torus-yx
   name: Galaxy Fabric per-mesh heterogeneous-config sanity + multicast (4 MGDs)
   cmd: |
@@ -144,7 +136,7 @@
     done
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 8
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
@@ -178,7 +170,7 @@
     fi
   skus:
     wh_galaxy:
-      timeout: 20
+      timeout: 6
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e

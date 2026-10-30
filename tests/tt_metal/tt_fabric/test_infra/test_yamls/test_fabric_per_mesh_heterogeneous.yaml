@@ -1,24 +1,10 @@
-# Per-mesh heterogeneous fabric config (#60499/#60690).
-#
-# Every group uses `topology: FromMgd`, a test-infra marker that hands FabricConfig::MGD_DEFAULT to the control
-# plane, which resolves each process's config from its OWN mesh's dim_types (TORUS_X / TORUS_Y / TORUS_XY /
-# FABRIC_2D). Dedicated yaml (kept out of the shared sanity/express yamls, so the suites that run those unfiltered
-# are unaffected). One filter -- name.HeterogeneousFabric* -- selects every group below.
-#
-# NOTE: each traffic pattern is its OWN group on purpose. Combining neighbor_exchange + all_to_all (intra + inter)
-# into a single group's workload deadlocks at traffic execution; isolated per-pattern groups do not. Deduped
-# matrix (the MGD picks the torus axis, so per-axis variants would be duplicates):
-#   unicast  neighbor_exchange  intra_mesh
-#   unicast  neighbor_exchange  inter_mesh
-#   unicast  all_to_all         intra_mesh
-#   unicast  all_to_all         inter_mesh
-#   mcast    all_to_all         intra_mesh   (multicast cannot cross mesh boundaries -> no inter-mesh case)
+# Per-mesh heterogeneous fabric config. Omitting topology resolves each process's config from its own mesh's
+# dim_types. Each traffic pattern is a separate group: combining patterns in one group deadlocks at execution.
 
 Tests:
 
   - name: "HeterogeneousFabricNeighborExchangeIntra"
-    fabric_setup:
-      topology: FromMgd
+    fabric_setup: {}
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
@@ -34,8 +20,7 @@ Tests:
         mesh_scope: intra_mesh
 
   - name: "HeterogeneousFabricNeighborExchangeInter"
-    fabric_setup:
-      topology: FromMgd
+    fabric_setup: {}
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
@@ -52,8 +37,7 @@ Tests:
 
   - name: "HeterogeneousFabricAllToAllIntra"
     sync: true
-    fabric_setup:
-      topology: FromMgd
+    fabric_setup: {}
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
@@ -70,8 +54,7 @@ Tests:
 
   - name: "HeterogeneousFabricAllToAllInter"
     sync: true
-    fabric_setup:
-      topology: FromMgd
+    fabric_setup: {}
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
@@ -89,8 +72,7 @@ Tests:
   - name: "HeterogeneousFabricMulticastAllToAllIntra"
     sync: true
     enable_flow_control: true
-    fabric_setup:
-      topology: FromMgd
+    fabric_setup: {}
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]

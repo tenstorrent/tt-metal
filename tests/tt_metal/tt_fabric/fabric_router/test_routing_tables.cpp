@@ -298,9 +298,8 @@ TEST_F(ControlPlaneFixture, TestDisconnectedQuadsZeroIntermeshResolved) {
         << "The quads come from different captures with no shared links; nothing may resolve 1 -> 0";
 }
 
-// Per-mesh FabricConfig declared in the llama line MGD: verifies the host topology matches runtime AND
-// that each mesh resolved to its own declared config -- the 4x8 RING,LINE meshes to FABRIC_2D_TORUS_Y
-// and the 4x2 LINE,LINE meshes to FABRIC_2D. Run on the SC4 single-pod llama line entry.
+// Each mesh in the llama line MGD resolves to its own declared config: 4x8 RING,LINE -> FABRIC_2D_TORUS_Y,
+// 4x2 LINE,LINE -> FABRIC_2D.
 TEST_F(ControlPlaneFixture, TestLlamaLinePerMeshFabricConfig) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -323,20 +322,13 @@ TEST_F(ControlPlaneFixture, TestLlamaLinePerMeshFabricConfig) {
     }
 }
 
-// Regression (#per-mesh heterogeneous): a genuinely DIFFERENT concrete fabric config per mesh / per rank must
-// build a control plane that is consistent on every rank. This test assigns each rank's OWN mesh a concrete config
-// inline (no shared helper): mesh 1 is the only mesh kept as FABRIC_2D_TORUS_Y and every other mesh -> FABRIC_2D.
-// That forces the 32-chip mesh 0 off its FABRIC_2D_TORUS_Y dim_types default down to plain FABRIC_2D, so the two
-// 32-chip meshes (0 and 1) run DIFFERENT configs and one of them deviates from the MGD default. init_control_plane
-// gathers these per-mesh configs before building the MeshGraph, so every rank builds every mesh identically.
-// Without that gather a rank would apply its own mesh's concrete config to every mesh -- asking the 4x2 mesh for a
-// torus it cannot provide (requires_more_connectivity throw) or diverging the per-mesh edge-port maps
-// (unordered_map::at / MPI_ERR_TRUNCATE in inter-mesh validation).
+// A different concrete config per mesh must still build a control plane consistent on every rank. Mesh 1 keeps
+// FABRIC_2D_TORUS_Y, every other mesh -> FABRIC_2D, so the two 32-chip meshes (0 and 1) run different configs and
+// mesh 0 deviates from its dim_types default. init_control_plane gathers these configs before building the
+// MeshGraph; without that gather a rank would apply its own mesh's config to every mesh and throw.
 TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigDiffersPerRank) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
-    // Per-mesh heterogeneous assignment for the llama line, set inline for THIS rank's own mesh: mesh 1 stays
-    // FABRIC_2D_TORUS_Y; every other mesh (including the 32-chip mesh 0 whose dim_types default is TORUS_Y) is
-    // forced to plain FABRIC_2D. So mesh 0 -> FABRIC_2D, mesh 1 -> FABRIC_2D_TORUS_Y, meshes 2/3 -> FABRIC_2D.
+    // Set this rank's own mesh inline: mesh 1 stays FABRIC_2D_TORUS_Y, every other mesh -> FABRIC_2D.
     const auto owned_mesh_id = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_mesh_id();
     const auto rank_fabric_config =
         (*owned_mesh_id == 1) ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y : tt::tt_fabric::FabricConfig::FABRIC_2D;
@@ -345,9 +337,7 @@ TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigDiffersPerRank) {
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Building the control plane without a cross-rank throw is the regression. Also confirm every rank agrees on
-    // the full set of meshes, and that this rank's control plane resolved to the concrete config we assigned its
-    // OWN mesh -- get_fabric_config() returns this rank's resolved config, so across all 34 ranks this covers
-    // every mesh and confirms the gather preserved each mesh's distinct config instead of collapsing them.
+    // the mesh set and that this rank resolved to the config assigned to its own mesh.
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     expect_mesh_graph_host_topology_matches_runtime(control_plane);
 
@@ -356,10 +346,8 @@ TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigDiffersPerRank) {
     EXPECT_EQ(control_plane.get_fabric_config(), rank_fabric_config) << "owned mesh " << *owned_mesh_id;
 }
 
-// Regression (#per-mesh heterogeneous): "FROM MGD" (FabricConfig::MGD_DEFAULT) -- each mesh takes its OWN declared
-// dim_types config, resolved identically on every rank from the descriptor (4x8 meshes -> FABRIC_2D_TORUS_Y, 4x2
-// meshes -> FABRIC_2D). Companion to TestPerMeshHeterogeneousConfigDiffersPerRank (which sets the per-mesh config
-// manually via SetFabricConfig); both must build a control plane that is consistent across ranks.
+// MGD_DEFAULT ("FROM MGD"): each mesh takes its own dim_types config, resolved identically on every rank (4x8 ->
+// FABRIC_2D_TORUS_Y, 4x2 -> FABRIC_2D). Companion to TestPerMeshHeterogeneousConfigDiffersPerRank.
 TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigFromMgd) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -382,24 +370,19 @@ TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigFromMgd) {
     }
 }
 
-// Negative (#per-mesh heterogeneous): the per-mesh gather must REJECT a split where ranks of the SAME mesh ask
-// for different fabric configs. Here one rank of mesh 0 asks for FABRIC_2D_TORUS_Y while mesh 0's other ranks ask
-// for FABRIC_2D; every other mesh stays internally consistent. init_control_plane gathers every rank's descriptor
-// and validate_fabric_config_compatibility() fatals identically on every rank ("FabricConfig must match across all
-// ranks of a mesh"). The gather completes before the fatal, so the throw is purely local -- every rank throws.
+// Negative: the gather must reject a split where ranks of the SAME mesh ask for different configs. Here mesh 0's
+// host_rank 0 asks for FABRIC_2D_TORUS_Y while its other ranks ask for FABRIC_2D;
+// validate_fabric_config_compatibility() fatals identically on every rank ("FabricConfig must match...").
 TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentConfigWithinMesh) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto mesh_id = rtoptions.get_fabric_mesh_id();
     const auto host_rank = rtoptions.get_fabric_mesh_host_rank();
-    // Break mesh 0's per-mesh agreement: its host_rank 0 asks for TORUS_Y, the rest of mesh 0 (and every other
-    // mesh) asks for FABRIC_2D.
+    // Break mesh 0's agreement: host_rank 0 asks for TORUS_Y, every other rank asks for FABRIC_2D.
     const auto bad_config = (*mesh_id == 0 && *host_rank == 0) ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y
                                                                : tt::tt_fabric::FabricConfig::FABRIC_2D;
-    // set_fabric_config() itself (re)builds the control plane -- which gathers every rank's config and fatals on
-    // the mesh-0 split -- so the throw can fire there rather than in the explicit initialize_fabric_config();
-    // wrap both. The gather is a collective every rank completes before the fatal, so the throw is purely local
-    // and fires identically on every rank.
+    // set_fabric_config() may itself rebuild the control plane and throw there, so wrap it and
+    // initialize_fabric_config() together.
     EXPECT_ANY_THROW({
         tt::tt_metal::MetalContext::instance().set_fabric_config(
             bad_config, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -407,13 +390,9 @@ TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentConfig
     });
 }
 
-// Negative (#per-mesh heterogeneous): every FabricConfigDescriptor field OTHER than fabric_config (checked per
-// mesh above), mesh_id and host_rank must be identical on EVERY rank. Here all ranks agree on the per-mesh
-// fabric_config (FABRIC_2D) but one rank uses a different reliability_mode -- a non-fabric_config field that must
-// be uniform. validate_fabric_config_compatibility() must reject it ("Fabric settings other than fabric_config,
-// mesh_id and host_rank must be identical on every rank"). Same mechanism applies to the other such fields
-// (num_routing_planes, fabric_tensix_config, fabric_udm_mode, fabric_manager, max_packet_payload_size_bytes,
-// enable_fabric_vc2, enable_fabric_mesh_pass_through) -- reliability_mode stands in for all of them.
+// Negative: every FabricConfigDescriptor field other than fabric_config, mesh_id and host_rank must be identical on
+// every rank. Here all ranks agree on fabric_config (FABRIC_2D) but one rank uses a different reliability_mode, and
+// validate_fabric_config_compatibility() must reject it. reliability_mode stands in for all such uniform fields.
 TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentReliabilityMode) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();

@@ -324,10 +324,8 @@ static std::vector<std::pair<ChipId, ChipId>> expand_express_link_edges(
 
 void MeshGraph::initialize_from_mgd(
     const MeshGraphDescriptor& mgd, bool is_ubb_galaxy, const std::map<MeshId, FabricConfig>& per_mesh_fabric_config) {
-    // Each mesh's and switch's fabric config is resolved the same way on every rank below: its entry in
-    // per_mesh_fabric_config (gathered so every rank agrees, and already resolved -- MGD_DEFAULT is rejected), with no
-    // entry meaning it takes its own declared dim_types. No rank special-cases an owned mesh, so every rank builds an
-    // identical graph.
+    // Each mesh's and switch's fabric config comes from its entry in per_mesh_fabric_config (already resolved, no
+    // MGD_DEFAULT); no entry means it takes its own declared dim_types. Every rank resolves identically.
     // Intentionally leaked: a control plane (and thus a MeshGraph) can be constructed from the atexit
     // teardown path, after a plain function-local static's destructor has already run.
     static const auto& proto_arch_to_arch = *new std::unordered_map<const proto::Architecture, tt::ARCH>{
@@ -478,8 +476,8 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        // Resolve this mesh's fabric type from its own entry in per_mesh_fabric_config; no entry keeps the declared
-        // dim_types. The entry also decides torus edge-port reservation and patterned express links below.
+        // Resolve this mesh's fabric type from its entry in per_mesh_fabric_config; no entry keeps the declared
+        // dim_types. The entry also drives torus edge-port reservation and express links below.
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
         FabricType effective_fabric_type = mgd_fabric_type;
         std::optional<FabricConfig> effective_fabric_config;

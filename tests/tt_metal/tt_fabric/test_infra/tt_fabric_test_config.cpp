@@ -403,21 +403,16 @@ CoreAllocationConfig YamlConfigParser::parse_core_allocation_config(
 }
 
 TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_setup_yaml) {
-    TT_FATAL(fabric_setup_yaml.IsMap(), "Expected fabric setup to be a map");
-    TT_FATAL(fabric_setup_yaml["topology"], "Fabric setup missing Topolgy key");
+    TT_FATAL(fabric_setup_yaml.IsMap() || fabric_setup_yaml.IsNull(), "Expected fabric setup to be a map");
     TestFabricSetup fabric_setup;
-    auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
 
-    // topology: FromMgd is a test-infra-only marker (not a tt_fabric::Topology value) -- it hands
-    // FabricConfig::MGD_DEFAULT to SetFabricConfig so the control plane resolves this rank's config from its mesh's
-    // dim_types. We handle it here before the enum mapper so the core Topology enum stays untouched;
-    // apply_mgd_default_fabric_setup then overwrites topology/torus_config with the resolved concrete values the
-    // test's own traffic logic needs.
-    if (topology_str == "FromMgd") {
-        // Don't set a topology here: the fabric config is MGD_DEFAULT, and apply_mgd_default_fabric_setup fills in
-        // fabric_setup.topology/torus_config per rank (from the resolved config) for the test's own traffic logic.
+    // No topology -> hand FabricConfig::MGD_DEFAULT to SetFabricConfig and let the control plane resolve this rank's
+    // config from its mesh's dim_types. apply_mgd_default_fabric_setup then fills in topology/torus_config per rank
+    // (from the resolved config) for the test's own traffic logic.
+    if (!fabric_setup_yaml["topology"]) {
         fabric_setup.fabric_config_from_mgd = true;
     } else {
+        auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
         fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
     }
 

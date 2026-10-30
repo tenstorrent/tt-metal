@@ -256,7 +256,7 @@ public:
 
         FabricConfig new_fabric_config;
         if (fabric_setup.fabric_config_from_mgd) {
-            // topology: FromMgd -- the control plane resolves this rank's config from its mesh's dim_types. We pass
+            // No topology -- the control plane resolves this rank's config from its mesh's dim_types. We pass
             // MGD_DEFAULT straight through and read the resolved topology back from the control plane after init
             // (below); the yaml's topology/torus_config are unused in this mode.
             new_fabric_config = tt::tt_fabric::FabricConfig::MGD_DEFAULT;
@@ -350,7 +350,7 @@ public:
                                       resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
                                       resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
                 topology_ = is_torus ? Topology::Torus : Topology::Mesh;
-                log_info(tt::LogTest, "topology: FromMgd resolved to {} (topology_ = {})", resolved, topology_);
+                log_info(tt::LogTest, "MGD-default topology resolved to {} (topology_ = {})", resolved, topology_);
             } else {
                 topology_ = topology;
             }
@@ -2111,7 +2111,7 @@ private:
             router_config.max_packet_payload_size_bytes = fabric_setup.max_packet_size.value();
         }
 
-        // For topology: FromMgd, fabric_config is MGD_DEFAULT and the control plane resolves it per rank.
+        // When no topology is specified, fabric_config is MGD_DEFAULT and the control plane resolves it per rank.
         tt::tt_fabric::SetFabricConfig(
             fabric_config,
             reliability_mode,
@@ -2482,9 +2482,7 @@ private:
         if (dim != NS_DIM && dim != EW_DIM) {
             return MeshCoordinate::BoundaryMode::NONE;
         }
-        // Wrap is a property of the actual per-mesh fabric config (torus links physically exist), not the
-        // yaml topology: a topology:Mesh sync case on a TORUS_X mesh must still wrap, to match
-        // get_full_mcast_hops which keys off the per-mesh config.
+        // Follow this rank's local fabric config: the per-mesh config can differ per mesh.
         const auto fabric_type = get_local_mesh_fabric_type();
         return tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, static_cast<uint32_t>(dim))
                    ? MeshCoordinate::BoundaryMode::WRAP

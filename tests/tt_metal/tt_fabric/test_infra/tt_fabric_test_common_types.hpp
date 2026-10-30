@@ -246,9 +246,9 @@ struct TestFabricSetup {
     //   nullopt (key absent) → obey TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE / TT_METAL_FABRIC_TRIMMING_PROFILE
     std::optional<bool> enable_channel_trimming;
     bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
-    // When true (set when the yaml uses topology: FromMgd), hand FabricConfig::MGD_DEFAULT to SetFabricConfig so the
-    // control plane resolves this rank's config from its mesh's dim_types. topology/torus_config above are still
-    // the resolved concrete values the test's own traffic logic needs (filled in by apply_mgd_default_fabric_setup).
+    // When true (set when the yaml omits topology), hand FabricConfig::MGD_DEFAULT to SetFabricConfig so the control
+    // plane resolves this rank's config from its mesh's dim_types. topology/torus_config above are still the resolved
+    // concrete values the test's own traffic logic needs (filled in by apply_mgd_default_fabric_setup).
     bool fabric_config_from_mgd = false;
 };
 

@@ -2879,12 +2879,9 @@ bool build_sat_placement_constraints(
         if (!constraints.set_same_rank_groups_constraint({}, host_seat_groups)) {
             return false;
         }
-        // HARD host-count cap = sum the single-host meshes' chip footprints and divide by the largest
-        // host, so a heterogeneous MGD packs small meshes together and compacts toward the fewest hosts.
-        // This is a lower bound (it ignores per-mesh fragmentation when mesh sizes don't divide the host);
-        // an infeasible cap is retried via next(), then dropped. A pool can hold both single-host and
-        // split-host candidates, so a mesh counts as single-host when ANY of its candidates fits on one
-        // host -- never just candidates().front(); the chip count is the mesh size, equal across candidates.
+        // HARD host-count cap = sum the single-host meshes' chip footprints / largest host, so small meshes pack
+        // toward the fewest hosts. A lower bound (ignores per-mesh fragmentation); an infeasible cap is retried then
+        // dropped. A mesh counts as single-host when ANY of its candidates fits on one host.
         std::size_t total_single_host_asics = 0;
         for (const auto& [mesh_id, pool] : pools) {
             (void)mesh_id;

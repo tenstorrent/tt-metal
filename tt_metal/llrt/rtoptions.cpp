@@ -590,18 +590,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->custom_fabric_mesh_graph_desc_path = std::string(value);
             break;
 
-        // TT_MESH_ID
-        // Mesh this process binds to in the mesh graph descriptor. Set per rank by tt-run.
-        // Default: unset (mesh 0)
-        // Usage: export TT_MESH_ID=1
+        // Mesh this process binds to in the mesh graph descriptor. Set per rank by tt-run; default mesh 0.
         case EnvVarID::TT_MESH_ID:
             this->fabric_mesh_id = tt::tt_fabric::MeshId{static_cast<uint32_t>(std::stoul(value))};
             break;
 
-        // TT_MESH_HOST_RANK
-        // Host rank of this process within its mesh. Set per rank by tt-run.
-        // Default: unset (host rank 0)
-        // Usage: export TT_MESH_HOST_RANK=0
+        // Host rank of this process within its mesh. Set per rank by tt-run; default host rank 0.
         case EnvVarID::TT_MESH_HOST_RANK:
             this->fabric_mesh_host_rank = tt::tt_fabric::MeshHostRankId{static_cast<uint32_t>(std::stoul(value))};
             break;

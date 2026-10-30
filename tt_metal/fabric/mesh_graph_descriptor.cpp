@@ -681,9 +681,8 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Sw
     return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
-// Derive a mesh's default FabricConfig from its declared device_topology dim_types (used when no process-wide
-// override is set). ALWAYS 2D-family -- 1D is never auto-derived, only requested explicitly. Torus variant
-// follows the ring axes: dim 0 => TORUS_Y, dim 1 => TORUS_X, both => TORUS_XY.
+// Derive a mesh's default FabricConfig from its dim_types. Always 2D-family (1D is only ever requested explicitly);
+// torus follows the ring axes: dim 0 => TORUS_Y, dim 1 => TORUS_X, both => TORUS_XY.
 FabricConfig MeshGraphDescriptor::default_fabric_config_from_dim_types(MeshId mesh_id) const {
     // Switches share the MeshId space with meshes and can be owned by a process the same way.
     const auto has_mesh_id = [&](GlobalNodeId id) { return MeshId{get_instance(id).local_id} == mesh_id; };

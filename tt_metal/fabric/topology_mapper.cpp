@@ -367,9 +367,8 @@ TopologyMapper::TopologyMapper(
         info->hostname = physical_system_descriptor_.get_host_name_for_asic(info->asic_id);
         info->mpi_rank = static_cast<int>(physical_system_descriptor_.get_mpi_rank_for_asic(info->asic_id));
 
-        // Assign mesh host rank: if local_host_rank_ is set (not UNSET),
-        // use it for all fabric nodes on the current physical host to ensure get_local_host_rank() works correctly.
-        // The coordinate ranges will be rebuilt using the mesh graph's original assignments.
+        // If local_host_rank_ is set, use it for all fabric nodes on this physical host so get_local_host_rank()
+        // works correctly. Coordinate ranges are rebuilt from the mesh graph's original assignments.
         const auto my_host = physical_system_descriptor_.my_host_name();
         const auto my_rank = static_cast<uint32_t>(*distributed_context_.get().rank());
         auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
