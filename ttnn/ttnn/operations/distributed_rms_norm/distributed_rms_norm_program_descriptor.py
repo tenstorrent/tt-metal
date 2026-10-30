@@ -22,7 +22,10 @@ Knobs (single source of truth; every CB page count, trip count and the grid deri
     W_CHUNK_TILES  cap on the streaming chunk C (halved until the blocking fits L1)
     STREAM_DEPTH   depth of cb_output in C-tile quanta
     SCALE_BLOCK_TILES  tiles per DEST window of the scaling chains (clamped by the chain to DEST capacity)
-    MIN_BLOCKS_PER_CORE  an interleaved core with >= 2 tile-rows walks >= 2 blocks (prefetch of block k+1)
+    MIN_BLOCKS_PER_CORE  cap R at ceil(rows_max / MIN_BLOCKS_PER_CORE). The base op uses 2 (prefetch of block k+1);
+                   here 1: a block's waves already overlap its reads / exchange / scale, while splitting a core's rows
+                   into blocks serializes one exchange round per block. Measured (ring 1x4, 2 links, fastest chip):
+                   640x1792 30.9 -> 23.6 us (slowest 31.5 -> 25.5), other perf cases unchanged (1 row per core).
     NUM_WAVES      target waves per block (lamp L1); Rw = R / nwpb with nwpb the largest divisor of R <= NUM_WAVES
                    (every full block's waves are exactly Rw rows, so every CB quantum divides its capacity)
     R3_*           the base op's interleaved W-split layout rule, run on N_fused = grid - 2L cores
@@ -34,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +54,7 @@ TILE_HW = TILE_DIM * TILE_DIM
 W_CHUNK_TILES = 32
 STREAM_DEPTH = 2
 SCALE_BLOCK_TILES = 8
-MIN_BLOCKS_PER_CORE = 2
+MIN_BLOCKS_PER_CORE = 1
 NUM_WAVES = 2
 R3_ROWS_PER_GROUP = 2
 R3_MAX_GROUP_CORES = 24
@@ -88,13 +92,17 @@ CB_STATS_GATHER = 18
 CB_STATS_RECORD = 19
 
 # ---- Program-local semaphores (declared on every compute and port core, before the fabric setup) ----
-SEM_GATHER = 0
-SEM_INV = 1
-SEM_OWN_STATS = 2
-SEM_LANDED_FWD = 3
-SEM_LANDED_BWD = 4
-SEM_OWN_COUNTED = 5
-NUM_SEMS = 6
+SEM_INV = 0  # members: the root's inv_rms writes (one ordered sender -> one cumulative counter)
+SEM_OWN_STATS = 1  # ports: publications of the link's roots
+SEM_LANDED_FWD = 2  # roots: entries landed on the link's forward port
+SEM_LANDED_BWD = 3  # roots: entries landed on the link's backward port
+SEM_OWN_COUNTED = 4  # roots: the link's sending ports counted wave w
+# R3 roots: member partial arrivals, ONE PER WAVE OF A BLOCK (ids SEM_GATHER_BASE + k). G_w - 1 members send each
+# wave: on one cumulative counter a fast member's wave-(k+1) increment could satisfy the wave-k threshold before a slow
+# member's wave-k partial landed (measured: stale wave-0 rows at 640x1792 with 2 waves per block). Across blocks the
+# per-wave count stays cumulative: a member sends block b+1 only after it received block b's inv_rms.
+SEM_GATHER_BASE = 5
+MAX_WAVES_PER_BLOCK = 8  # 5 + 8 program semaphores + 2 per fabric connection <= 16 ids per core
 SEM_LANDED = {FWD: SEM_LANDED_FWD, BWD: SEM_LANDED_BWD}
 
 
@@ -316,8 +324,9 @@ def compute_geometry(input_tensor, gamma, chunk_cap, fp32_acc, S, sharded, combi
 
 
 def wave_split(block_rows: int):
-    """(Rw, nwpb): nwpb = the largest divisor of R that is <= NUM_WAVES, Rw = R / nwpb."""
-    nwpb = max(d for d in range(1, max(1, min(block_rows, NUM_WAVES)) + 1) if block_rows % d == 0)
+    """(Rw, nwpb): nwpb = the largest divisor of R that is <= min(NUM_WAVES, MAX_WAVES_PER_BLOCK), Rw = R / nwpb."""
+    cap = max(1, min(block_rows, NUM_WAVES, MAX_WAVES_PER_BLOCK))
+    nwpb = max(d for d in range(1, cap + 1) if block_rows % d == 0)
     return block_rows // nwpb, nwpb
 
 
@@ -351,17 +360,20 @@ def _max_block_rows(g, x_depth, cap, budget):
 
 
 def choose_block_rows(g: Geometry, rows_per_core_max: int, budget: int):
+    """(R, x_depth): the coarsest R <= ceil(rows_max / MIN_BLOCKS_PER_CORE) that fits L1. x_depth = 2 (block k+1 read
+    while block k exchanges and scales) only when the core walks more than one block; one block needs one buffer."""
     if g.sharded:
         r = _max_block_rows(g, 1, rows_per_core_max, budget)
         return (r, 1) if r >= 1 else None
-    if rows_per_core_max <= 1:
-        return (1, 1) if footprint(g, 1, 1) <= budget else None
     cap = max(1, math.ceil(rows_per_core_max / MIN_BLOCKS_PER_CORE))
+    r1 = _max_block_rows(g, 1, cap, budget)
+    if r1 >= rows_per_core_max:
+        return r1, 1  # one block per core: nothing to prefetch
     r2 = _max_block_rows(g, 2, cap, budget)
     if r2 >= 1:
         return r2, 2
-    if footprint(g, 1, 1) <= budget:
-        return 1, 1
+    if r1 >= 1:
+        return r1, 1
     return None
 
 
@@ -372,7 +384,7 @@ def choose_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded,
         g = compute_geometry(input_tensor, gamma, cap, fp32_acc, S, sharded, combine, G_w, masked, G)
         choice = choose_block_rows(g, rows_max, budget)
         if choice is not None:
-            if choice[1] == 2 or sharded or rows_max <= 1:
+            if choice[1] == 2 or sharded or choice[0] >= rows_max:
                 return g, choice[0], choice[1]
             if fallback is None:
                 fallback = (g, choice[0], choice[1])
@@ -600,6 +612,14 @@ def _pack(v):
     return (v.x << 16) | v.y
 
 
+def _port_defines():
+    """Measurement-only defines (never set in production: unset env -> no define, the production hash is unchanged).
+    DRMS_ABLATE_EXCHANGE=1: the ports skip the fabric (op_design.md -> Measurement hooks)."""
+    if os.environ.get("DRMS_ABLATE_EXCHANGE", "0") not in ("", "0"):
+        return [("DRMS_ABLATE_EXCHANGE", "1")]
+    return []
+
+
 def _compute_config(cfg, fp32_acc):
     out = ttnn.ComputeConfigDescriptor(
         math_fidelity=cfg.math_fidelity,
@@ -804,6 +824,7 @@ def create_mesh_program_descriptor(
             compute_kernel_config.math_fidelity,
             compute_kernel_config.math_approx_mode,
             payload,
+            _port_defines(),
         )
     )
 
@@ -815,7 +836,7 @@ def create_mesh_program_descriptor(
         program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
         # Our semaphores first: the fabric setup takes the lowest free ids on the port cores.
         program.semaphores = [
-            ttnn.SemaphoreDescriptor(id=s, core_ranges=all_crs, initial_value=0) for s in range(NUM_SEMS)
+            ttnn.SemaphoreDescriptor(id=s, core_ranges=all_crs, initial_value=0) for s in range(SEM_GATHER_BASE + nwpb)
         ]
         program.cbs = cbs
 
@@ -949,6 +970,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "distributed_rms_norm_port.cpp"),
                 core_ranges=port_crs,
                 compile_time_args=port_ct,
+                defines=_port_defines(),
                 runtime_args=port_rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1

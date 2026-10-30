@@ -30,6 +30,10 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#ifndef DRMS_ABLATE_EXCHANGE
+#define DRMS_ABLATE_EXCHANGE 0
+#endif
+
 using namespace tt::tt_fabric;
 
 namespace {
@@ -124,7 +128,35 @@ void kernel_main() {
         }
     };
 
+#if DRMS_ABLATE_EXCHANGE
+    // Measurement-only (host DRMS_ABLATE_EXCHANGE=1): no connection, fence or sends. Every entry "lands" at once (its
+    // arrival counter is bumped locally by every wave), the roots' publications are still counted (SEM_OWN_COUNTED)
+    // and notified as usual. Output is wrong, timing is valid: t(op) - t(op, ablated) = the exposed transport.
+    for (uint32_t i = 0; i < n_in; ++i) {
+        noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(arrival_idx + i)), num_waves);
+    }
+    noc_async_atomic_barrier();
+    {
+        const uint32_t count_waves = n_send > 0 ? num_waves : 0;
+        uint32_t sw = 0;
+        while (sw < count_waves || notified < notify_total) {
+            invalidate_l1_cache();
+            if (sw < count_waves && *own_stats >= (sw + 1) * n_roots) {
+                if (sw + 1 < num_waves) {
+                    for (uint32_t k = 0; k < n_counted; ++k) {
+                        const uint32_t r = get_arg_val<uint32_t>(roots_idx + k);
+                        noc_semaphore_inc(get_noc_addr(r >> 16, r & 0xFFFF, counted_sem_addr), 1);
+                    }
+                }
+                ++sw;
+            }
+            poll_notify();
+        }
+    }
+    if (false) {
+#else
     if (has_conn) {
+#endif
         DeviceZoneScopedN("prt_conn");
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
         ASSERT(n_dest <= num_headers);

@@ -14,10 +14,10 @@
 //   load        (interleaved) the next tile-row of x: V page reads, one barrier, W-pad columns zeroed, push WS
 //   member (R3, index > 0):
 //     send      wave w's collapsed partials (cb_partial_col) -> the root's cb_gather slots [(k*G_w + index)*Rw, +n)
-//               as faces 0/2, barrier, root SEM_GATHER += 1
+//               as faces 0/2, barrier, root SEM_GATHER_k += 1 (k = wave index within the block)
 //     receive   SEM_INV counts the root's inv_rms writes into cb_inv_rms; push n per wave
 //   root (index 0):
-//     gather    (R3) own partial -> its gather slot 0, SEM_GATHER >= (G_w-1) per wave -> push G_w*Rw
+//     gather    (R3) own partial -> its gather slot 0, SEM_GATHER_k >= (G_w-1) per wave -> push G_w*Rw
 //     publish   every wave of the call (empty ones too: the port counts every root every wave): column 0 of the
 //               device partial (cb_dev_partial) -> 32 fp32 words per tile-row -> one NoC write into slot p of the
 //               landing of each sending port of this root's link, barrier, port SEM_OWN_STATS += 1.
@@ -50,12 +50,16 @@ constexpr uint32_t cb_dev_partial = 17;
 constexpr uint32_t cb_stats_gather = 18;
 constexpr uint32_t cb_stats_record = 19;
 
-constexpr uint32_t SEM_GATHER = 0;
-constexpr uint32_t SEM_INV = 1;
-constexpr uint32_t SEM_OWN_STATS = 2;
-constexpr uint32_t SEM_LANDED_FWD = 3;
-constexpr uint32_t SEM_LANDED_BWD = 4;
-constexpr uint32_t SEM_OWN_COUNTED = 5;
+// Program semaphore ids (mirror the host). SEM_GATHER_BASE + k: member partial arrivals of wave k of a block — one
+// counter per wave, because G_w - 1 members send each wave and a single cumulative counter could be satisfied by a fast
+// member's wave k+1 before a slow member's wave k landed.
+constexpr uint32_t SEM_INV = 0;
+constexpr uint32_t SEM_OWN_STATS = 1;
+constexpr uint32_t SEM_LANDED_FWD = 2;
+constexpr uint32_t SEM_LANDED_BWD = 3;
+constexpr uint32_t SEM_OWN_COUNTED = 4;
+constexpr uint32_t SEM_GATHER_BASE = 5;
+constexpr uint32_t MAX_WAVES_PER_BLOCK = 8;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -280,7 +284,7 @@ void kernel_main() {
         write_faces_0_2<T_i>(
             partial_cb.get_read_ptr(), root_x, root_y, gather_base + (k * G_w + my_index) * Rw * T_i, n);
         noc_async_write_barrier();  // the partial has landed before the root can count it
-        noc_semaphore_inc(get_noc_addr(root_x, root_y, get_semaphore(SEM_GATHER)), 1);
+        noc_semaphore_inc(get_noc_addr(root_x, root_y, get_semaphore(SEM_GATHER_BASE + k)), 1);
         partial_cb.pop_front(n);
         ++ws;
         return true;
@@ -304,7 +308,9 @@ void kernel_main() {
     };
 
     // ---- root cursors ----
-    uint32_t wg = 0, gather_count = 0;
+    static_assert(nwpb <= MAX_WAVES_PER_BLOCK, "one gather semaphore per wave of a block");
+    uint32_t wg = 0;
+    uint32_t gather_count[nwpb] = {};  // per wave-in-block: arrivals consumed so far (cumulative over blocks)
     auto try_gather = [&]() -> bool {
         while (wg < own_waves && wave_n(wg) == 0) {
             ++wg;
@@ -313,8 +319,9 @@ void kernel_main() {
             return false;
         }
         const uint32_t n = wave_n(wg);
+        const uint32_t k = wg % nwpb;
         if (!partial_cb.pages_available_at_front(n) || !gather_cb.pages_reservable_at_back(G_w * Rw) ||
-            sem_value(SEM_GATHER) < gather_count + (G_w - 1)) {
+            sem_value(SEM_GATHER_BASE + k) < gather_count[k] + (G_w - 1)) {
             return false;
         }
         gather_cb.reserve_back(G_w * Rw);
@@ -322,7 +329,7 @@ void kernel_main() {
         noc_async_read_barrier();
         gather_cb.push_back(G_w * Rw);
         partial_cb.pop_front(n);
-        gather_count += G_w - 1;
+        gather_count[k] += G_w - 1;
         ++wg;
         return true;
     };
