@@ -188,6 +188,7 @@ set(TTNNCPP_API_HEADERS
     api/tools/profiler/op_profiler_serialize.hpp
     api/ttnn/async_runtime.hpp
     api/ttnn/cluster.hpp
+    api/ttnn/command_list_capture.hpp
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp

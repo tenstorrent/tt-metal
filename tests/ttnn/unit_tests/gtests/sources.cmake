@@ -19,6 +19,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_scalar_lhs_binary.cpp
     test_add_int.cpp
     test_broadcast_to.cpp
+    test_command_list_capture.cpp
     test_convert_to_hwc_gather.cpp
     test_eltwise.cpp
     test_gelu_bw_ulp.cpp
@@ -72,6 +73,7 @@ set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_reduce_scatter_host_helpers.cpp
     ccl/test_moe_compute_host_helpers.cpp
     ccl/test_ccl_tensor_slicers.cpp
+    ccl/test_command_list_capture_mesh.cpp
     ccl/test_erisc_data_mover_with_workers.cpp
     ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp
     ccl/test_fabric_mux_connection_args.cpp
