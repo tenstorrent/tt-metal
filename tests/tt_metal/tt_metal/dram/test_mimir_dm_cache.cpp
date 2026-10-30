@@ -33,6 +33,7 @@
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_dm_common.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
+#include "tt_metal/tt_metal/dram/mimir_idma_copy.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_snoop_ctl.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
@@ -551,7 +552,6 @@ inline constexpr const char* kIdmaSnoopNote =
     "iDMA snoop packet tag not honoured; it applies only to a sibling CCE's iDMA writes into this CCE's TL1 "
     "(GRENSV-3774, GRENSV-1577), and the hardware never snoops a CCE's iDMA writes into its own TL1";
 
-inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
 // Up to three sequential polls plus launch, as MM-8 sizes 400 s for three.
 inline constexpr std::chrono::seconds kMm41HostDeadline{400};
 // Stress launches: up to 192 KiB per pass, an L2 range flush and an uncached check of every word.
@@ -753,12 +753,6 @@ std::string idma_detail(const std::vector<uint32_t>& status) {
         status[idma_abi::kStatusDataCycles]);
 }
 
-struct IdmaOperand {
-    uint32_t kind = 0;
-    uint32_t selector = 0;
-    uint64_t offset = 0;
-};
-
 IdmaOperand own_tl1_operand(uint32_t cce_index, uint64_t offset) { return {idma_abi::kKindOwnTl1, cce_index, offset}; }
 
 IdmaOperand sram_operand(uint32_t cce_index, uint64_t offset) { return {idma_abi::kKindSramSpa, cce_index, offset}; }
@@ -787,34 +781,26 @@ struct IdmaWriter {
 };
 
 HartKernel idma_writer_kernel(const IdmaWriter& writer) {
-    std::vector<uint32_t> args(idma_abi::kNumArgs, 0);
-    args[idma_abi::kArgMode] = idma_abi::kModeTridBatch;
-    args[idma_abi::kArgBackendVc] = writer.backend_vc;
-    args[idma_abi::kArgStatusOffset] = static_cast<uint32_t>(tl1_done_block(writer.hart));
-    args[idma_abi::kArgLenBytes] = writer.len_bytes;
-    args[idma_abi::kArgPollBudgetLo] = static_cast<uint32_t>(kPollBudgetCycles);
-    args[idma_abi::kArgPollBudgetHi] = static_cast<uint32_t>(kPollBudgetCycles >> 32);
-    args[idma_abi::kArgSrcKind] = writer.source.kind;
-    args[idma_abi::kArgSrcSelector] = writer.source.selector;
-    args[idma_abi::kArgSrcOffsetLo] = static_cast<uint32_t>(writer.source.offset);
-    args[idma_abi::kArgSrcOffsetHi] = static_cast<uint32_t>(writer.source.offset >> 32);
-    args[idma_abi::kArgDstKind] = writer.destination.kind;
-    args[idma_abi::kArgDstSelector] = writer.destination.selector;
-    args[idma_abi::kArgDstOffsetLo] = static_cast<uint32_t>(writer.destination.offset);
-    args[idma_abi::kArgDstOffsetHi] = static_cast<uint32_t>(writer.destination.offset >> 32);
-    args[idma_abi::kArgExpectedXor] = writer.expected_xor;
-    args[idma_abi::kArgNumElements] = writer.num_commands;
-    args[idma_abi::kArgTrid] = 1;
-    args[idma_abi::kArgSnoop] = writer.snoop ? 1 : 0;
-    args[idma_abi::kArgDestinationStrideBytes] = writer.len_bytes;
-    args[idma_abi::kArgTridStride] = 1;
-    args[idma_abi::kArgHostVerified] = writer.host_verified ? 1 : 0;
-    args[idma_abi::kArgPeerFlagOffset] = static_cast<uint32_t>(writer.start_flag_offset);
     return {
         .cce_index = writer.cce_index,
         .hart = writer.hart,
         .kernel_path = kIdmaCopyKernel,
-        .args = std::move(args),
+        .args = idma_copy_args(
+            {.mode = idma_abi::kModeTridBatch,
+             .backend_vc = writer.backend_vc,
+             .status_offset = tl1_done_block(writer.hart),
+             .len_bytes = writer.len_bytes,
+             .poll_budget_cycles = kPollBudgetCycles,
+             .source = writer.source,
+             .destination = writer.destination,
+             .expected_xor = writer.expected_xor,
+             .num_elements = writer.num_commands,
+             .trid = 1,
+             .snoop = writer.snoop,
+             .destination_stride_bytes = writer.len_bytes,
+             .trid_stride = 1,
+             .peer_flag_offset = writer.start_flag_offset,
+             .host_verified = writer.host_verified}),
         .done_magic = idma_abi::kDoneMagic};
 }
 

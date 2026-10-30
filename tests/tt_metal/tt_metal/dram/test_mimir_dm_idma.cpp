@@ -23,8 +23,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_dm_common.hpp"
-#include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
+#include "tt_metal/tt_metal/dram/mimir_idma_copy.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
@@ -33,7 +33,6 @@ namespace tt::tt_metal::mimir_test::dm_idma {
 
 namespace abi = cce_idma_copy_abi;
 
-inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
 inline constexpr uint32_t kCopyHart = kCceKernelHart;
 inline constexpr uint32_t kCopyBytes = 1024;
 // Three polls at most, plus launch.
@@ -130,17 +129,6 @@ std::string idma_skip_reason(IdmaCase idma_case) {
     return "";
 }
 
-// Where a leg's source or destination lives. Tl1 kinds name the owning CCE and a TL1 offset; Gddr names a DRAM view
-// and an offset in it.
-enum class EndpointKind { OwnTl1, SramSpa, Gddr };
-
-struct Endpoint {
-    EndpointKind kind = EndpointKind::OwnTl1;
-    uint32_t cce_index = 0;
-    uint32_t view = 0;
-    uint64_t offset = 0;
-};
-
 Endpoint own_tl1_endpoint(uint32_t cce_index, uint64_t tl1_offset) {
     return {.kind = EndpointKind::OwnTl1, .cce_index = cce_index, .offset = tl1_offset};
 }
@@ -216,18 +204,6 @@ std::vector<uint32_t> gathered_elements(const IdmaLeg& leg, const std::vector<ui
     return words;
 }
 
-Endpoint leading_guard_of(const Endpoint& destination) {
-    Endpoint guard = destination;
-    guard.offset -= kGuardBytes;
-    return guard;
-}
-
-// MIM-407: GDDR0 is the low 4 GiB tile of a Mimir, GDDR1 the high one.
-uint32_t gddr_backend_for(const metal_SocDescriptor& soc, uint32_t view, uint64_t view_offset) {
-    return mimir_channel_location(chiplet_offset_of(soc, view, view_offset)).tile == 0 ? abi::kBackendGddr0
-                                                                                       : abi::kBackendGddr1;
-}
-
 // A write leg (own TL1 -> target, MIM-407 backend for the target) and a read leg (target -> own TL1, the remote-source
 // backend). Each leg seeds its own source, so the read leg does not depend on the write leg.
 std::vector<IdmaLeg> write_and_read_legs(
@@ -272,7 +248,7 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
         case IdmaCase::LocalGddr1: {
             const uint32_t view = local_dram_view_for_cce(soc, idma_case == IdmaCase::LocalGddr ? 0 : sibling_cce(0));
             const uint64_t view_offset = dram_unreserved + kGddrDataOffset;
-            const uint32_t backend = gddr_backend_for(soc, view, view_offset);
+            const uint32_t backend = gddr_backend_for(chiplet_offset_of(soc, view, view_offset));
             const uint32_t expected_backend =
                 idma_case == IdmaCase::LocalGddr ? abi::kBackendGddr0 : abi::kBackendGddr1;
             if (backend != expected_backend) {
@@ -342,13 +318,7 @@ std::vector<uint32_t> read_endpoint(
     return words;
 }
 
-struct KernelOperand {
-    uint32_t kind = 0;
-    uint32_t selector = 0;
-    uint64_t offset = 0;
-};
-
-KernelOperand kernel_operand(const metal_SocDescriptor& soc, uint32_t issuing_cce, const Endpoint& endpoint) {
+IdmaOperand kernel_operand(const metal_SocDescriptor& soc, uint32_t issuing_cce, const Endpoint& endpoint) {
     switch (endpoint.kind) {
         case EndpointKind::OwnTl1:
             TT_FATAL(endpoint.cce_index == issuing_cce, "own-TL1 operand names CCE {}", endpoint.cce_index);
@@ -365,27 +335,17 @@ KernelOperand kernel_operand(const metal_SocDescriptor& soc, uint32_t issuing_cc
 
 std::vector<uint32_t> kernel_args(
     const metal_SocDescriptor& soc, const IdmaLeg& leg, uint64_t status_offset, uint32_t expected_xor) {
-    const KernelOperand source = kernel_operand(soc, leg.cce_index, leg.source);
-    const KernelOperand destination = kernel_operand(soc, leg.cce_index, leg.destination);
-    std::vector<uint32_t> args(abi::kNumArgs, 0);
-    args[abi::kArgMode] = leg.mode;
-    args[abi::kArgBackendVc] = leg.backend_vc;
-    args[abi::kArgStatusOffset] = static_cast<uint32_t>(status_offset);
-    args[abi::kArgLenBytes] = leg.len_bytes;
-    args[abi::kArgPollBudgetLo] = static_cast<uint32_t>(kPollBudgetCycles);
-    args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kPollBudgetCycles >> 32);
-    args[abi::kArgSrcKind] = source.kind;
-    args[abi::kArgSrcSelector] = source.selector;
-    args[abi::kArgSrcOffsetLo] = static_cast<uint32_t>(source.offset);
-    args[abi::kArgSrcOffsetHi] = static_cast<uint32_t>(source.offset >> 32);
-    args[abi::kArgDstKind] = destination.kind;
-    args[abi::kArgDstSelector] = destination.selector;
-    args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(destination.offset);
-    args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(destination.offset >> 32);
-    args[abi::kArgExpectedXor] = expected_xor;
-    args[abi::kArgNumElements] = leg.num_elements;
-    args[abi::kArgSourceStrideBytes] = leg.source_stride_bytes;
-    return args;
+    return idma_copy_args(
+        {.mode = leg.mode,
+         .backend_vc = leg.backend_vc,
+         .status_offset = status_offset,
+         .len_bytes = leg.len_bytes,
+         .poll_budget_cycles = kPollBudgetCycles,
+         .source = kernel_operand(soc, leg.cce_index, leg.source),
+         .destination = kernel_operand(soc, leg.cce_index, leg.destination),
+         .expected_xor = expected_xor,
+         .num_elements = leg.num_elements,
+         .source_stride_bytes = leg.source_stride_bytes});
 }
 
 std::string code_name(uint32_t code) {

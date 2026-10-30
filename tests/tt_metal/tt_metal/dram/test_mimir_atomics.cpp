@@ -26,6 +26,7 @@
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_dm_common.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
+#include "tt_metal/tt_metal/dram/mimir_idma_copy.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_amo_ops_abi.h"
@@ -38,7 +39,6 @@ namespace idma_abi = cce_idma_copy_abi;
 static_assert(abi::kStatusWords == idma_abi::kStatusWords, "one Program reads both kernels' status lines");
 
 inline constexpr const char* kAmoOpsKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_amo_ops.cpp";
-inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
 // One poll budget for the ready wait and one for the done wait, plus launch. The later cce_amo_ops modes and
 // cce_idma_copy share one budget per launch; the long ones take kLongBudgetCycles, four poll budgets.
 inline constexpr std::chrono::seconds kHostDeadline{300};
@@ -366,37 +366,29 @@ struct IdmaBatch {
 };
 
 std::vector<uint32_t> idma_args(const IdmaBatch& batch) {
-    std::vector<uint32_t> args(idma_abi::kNumArgs, 0);
-    args[idma_abi::kArgMode] = batch.mode;
-    args[idma_abi::kArgBackendVc] = batch.backend_vc;
-    args[idma_abi::kArgStatusOffset] = static_cast<uint32_t>(tl1_done_block(batch.hart));
-    args[idma_abi::kArgLenBytes] = batch.len_bytes;
-    args[idma_abi::kArgPollBudgetLo] = static_cast<uint32_t>(batch.budget_cycles);
-    args[idma_abi::kArgPollBudgetHi] = static_cast<uint32_t>(batch.budget_cycles >> 32);
-    args[idma_abi::kArgSrcKind] = batch.source_kind;
-    args[idma_abi::kArgSrcSelector] = batch.source_selector;
-    args[idma_abi::kArgSrcOffsetLo] = static_cast<uint32_t>(batch.source_offset);
-    args[idma_abi::kArgSrcOffsetHi] = static_cast<uint32_t>(batch.source_offset >> 32);
-    args[idma_abi::kArgDstKind] = batch.destination_kind;
-    args[idma_abi::kArgDstSelector] = batch.destination_selector;
-    args[idma_abi::kArgDstOffsetLo] = static_cast<uint32_t>(batch.destination_offset);
-    args[idma_abi::kArgDstOffsetHi] = static_cast<uint32_t>(batch.destination_offset >> 32);
-    args[idma_abi::kArgNumElements] = batch.num_commands;
-    args[idma_abi::kArgSourceStrideBytes] = batch.source_stride_bytes;
-    args[idma_abi::kArgTrid] = batch.first_trid;
-    args[idma_abi::kArgSnoop] = batch.snoop;
-    args[idma_abi::kArgDestinationStrideBytes] = batch.destination_stride_bytes;
-    args[idma_abi::kArgTridStride] = batch.trid_stride;
-    args[idma_abi::kArgAccumulateFormat] = batch.format;
-    args[idma_abi::kArgAccumulateOp] = batch.operation;
-    args[idma_abi::kArgAccumulateDisableSaturation] = batch.disable_saturation;
-    args[idma_abi::kArgExpectedLo] = batch.expected_lo;
-    args[idma_abi::kArgExpectedHi] = batch.expected_hi;
-    args[idma_abi::kArgHostVerified] = batch.host_verified;
-    args[idma_abi::kArgCommandBuffer] = batch.command_buffer;
-    args[idma_abi::kArgPollRegionOffset] = static_cast<uint32_t>(batch.poll_region_offset);
-    args[idma_abi::kArgPollRegionBytes] = batch.poll_region_bytes;
-    return args;
+    return idma_copy_args(
+        {.mode = batch.mode,
+         .backend_vc = batch.backend_vc,
+         .status_offset = tl1_done_block(batch.hart),
+         .len_bytes = batch.len_bytes,
+         .poll_budget_cycles = batch.budget_cycles,
+         .source = {batch.source_kind, batch.source_selector, batch.source_offset},
+         .destination = {batch.destination_kind, batch.destination_selector, batch.destination_offset},
+         .num_elements = batch.num_commands,
+         .source_stride_bytes = batch.source_stride_bytes,
+         .trid = batch.first_trid,
+         .snoop = batch.snoop != 0,
+         .destination_stride_bytes = batch.destination_stride_bytes,
+         .trid_stride = batch.trid_stride,
+         .accumulate_format = batch.format,
+         .accumulate_op = batch.operation,
+         .accumulate_disable_saturation = batch.disable_saturation,
+         .expected_lo = batch.expected_lo,
+         .expected_hi = batch.expected_hi,
+         .host_verified = batch.host_verified != 0,
+         .command_buffer = batch.command_buffer,
+         .poll_region_offset = batch.poll_region_offset,
+         .poll_region_bytes = batch.poll_region_bytes});
 }
 
 IdmaBatch own_accumulate(uint32_t cce_index, uint32_t hart) {
@@ -594,11 +586,8 @@ bool apply_accumulate(const IdmaBatch& batch, const std::vector<uint32_t>& sourc
 
 // kModeAccumulate's data poll: the XOR of the destination span and its first word.
 void set_expected(IdmaBatch& batch, const std::vector<uint32_t>& final_destination) {
-    uint32_t xor_of_span = 0;
-    for (uint32_t word = 0; word < destination_span_bytes(batch) / sizeof(uint32_t); ++word) {
-        xor_of_span ^= final_destination[word];
-    }
-    batch.expected_lo = xor_of_span;
+    batch.expected_lo = xor_of(
+        {final_destination.begin(), final_destination.begin() + destination_span_bytes(batch) / sizeof(uint32_t)});
     batch.expected_hi = final_destination.front();
 }
 
@@ -606,10 +595,7 @@ void set_expected(IdmaBatch& batch, const std::vector<uint32_t>& final_destinati
 void set_expected_region(IdmaBatch& batch, uint64_t region_offset, const std::vector<uint32_t>& region) {
     batch.poll_region_offset = region_offset;
     batch.poll_region_bytes = static_cast<uint32_t>(region.size() * sizeof(uint32_t));
-    batch.expected_lo = 0;
-    for (const uint32_t word : region) {
-        batch.expected_lo ^= word;
-    }
+    batch.expected_lo = xor_of(region);
     batch.expected_hi = region.front();
 }
 
