@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_fabric_test_pattern.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -59,13 +60,6 @@ FORCE_INLINE T get_local_arg_val(size_t arg_idx) {
     return local_args_buffer.get_arg_val<T>(arg_idx);
 }
 
-inline uint32_t prng_next(uint32_t n) {
-    uint32_t x = n;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    return x;
-}
 
 // Helper functions for writing test results
 inline void write_test_status(uint32_t result_buffer_base, uint32_t status) {
@@ -93,6 +87,203 @@ inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buff
     }
 }
 
+// Opt-in cost breakdown (host sets FABRIC_TEST_PERF_BREAKDOWN when TT_FABRIC_TEST_PERF_BREAKDOWN=1).
+// Eight u64 slots written at word PERF_BREAKDOWN_BASE_WORD_INDEX of the result buffer; slot meanings
+// are defined in tt_fabric_test_perf_breakdown.hpp. Compiles to nothing when the define is absent.
+static constexpr uint32_t PERF_BREAKDOWN_BASE_WORD_INDEX = 16;
+static constexpr uint32_t PERF_BREAKDOWN_NUM_SLOTS = 8;
+
+#ifdef FABRIC_TEST_PERF_BREAKDOWN
+// Deltas use the low 32 bits of the wall clock: one register read, and unsigned subtraction stays correct
+// across a wrap. Any single measured interval must stay under 2^32 cycles (~3 s at 1.35 GHz).
+inline uint64_t perf_breakdown_slots[PERF_BREAKDOWN_NUM_SLOTS] = {};
+#define PERF_BD_NOW() get_timestamp_32b()
+#define PERF_BD_ADD_SINCE(slot, t0) (perf_breakdown_slots[(slot)] += static_cast<uint32_t>(get_timestamp_32b() - (t0)))
+#define PERF_BD_SET_SINCE(slot, t0) (perf_breakdown_slots[(slot)] = static_cast<uint32_t>(get_timestamp_32b() - (t0)))
+#define PERF_BD_INC(slot) (perf_breakdown_slots[(slot)]++)
+// Full 64-bit variants for whole-loop spans that can exceed 2^32 cycles.
+#define PERF_BD_NOW64() get_timestamp()
+#define PERF_BD_SET_SINCE64(slot, t0) (perf_breakdown_slots[(slot)] = get_timestamp() - (t0))
+
+inline void write_perf_breakdown(uint32_t result_buffer_base) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    for (uint32_t i = 0; i < PERF_BREAKDOWN_NUM_SLOTS; i++) {
+        result_buffer[PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * i] = static_cast<uint32_t>(perf_breakdown_slots[i]);
+        result_buffer[PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * i + 1] = static_cast<uint32_t>(perf_breakdown_slots[i] >> 32);
+    }
+}
+#else
+#define PERF_BD_NOW() uint64_t{0}
+#define PERF_BD_ADD_SINCE(slot, t0) ((void)(t0))
+#define PERF_BD_SET_SINCE(slot, t0) ((void)(t0))
+#define PERF_BD_INC(slot) ((void)0)
+#define PERF_BD_NOW64() uint64_t{0}
+#define PERF_BD_SET_SINCE64(slot, t0) ((void)(t0))
+
+inline void write_perf_breakdown(uint32_t) {}
+#endif
+
+// FABRIC_TEST_PERF_SEND_DETAIL (with FABRIC_TEST_PERF_BREAKDOWN) times each step of the sender's per-packet path in
+// slots 0, 5, 6 and 7, which otherwise hold setup, credit-blocked count, close and mux termination.
+#if defined(FABRIC_TEST_PERF_BREAKDOWN) && defined(FABRIC_TEST_PERF_SEND_DETAIL)
+#define PERF_BD_DETAIL_NOW() PERF_BD_NOW()
+#define PERF_BD_DETAIL_ADD_SINCE(slot, t0) PERF_BD_ADD_SINCE(slot, t0)
+#define PERF_BD_SUMMARY_SET_SINCE(slot, t0) ((void)(t0))
+#define PERF_BD_SUMMARY_INC(slot) ((void)0)
+#else
+#define PERF_BD_DETAIL_NOW() uint64_t{0}
+#define PERF_BD_DETAIL_ADD_SINCE(slot, t0) ((void)(t0))
+#define PERF_BD_SUMMARY_SET_SINCE(slot, t0) PERF_BD_SET_SINCE(slot, t0)
+#define PERF_BD_SUMMARY_INC(slot) PERF_BD_INC(slot)
+#endif
+
+// FABRIC_TEST_PERF_SCHED (with FABRIC_TEST_PERF_BREAKDOWN): the hot-state sender records how its send loop spent its
+// time and when each config sent its last packet, from word PERF_SCHED_BASE_WORD_INDEX of the result buffer:
+// PERF_SCHED_NUM_COUNTERS u64 counters (SenderSchedCounter), then per config its finish cycle (from loop start) and
+// its credit misses. Layout must match tt_fabric_test_perf_breakdown.hpp. PERF_SCHED(...) compiles its statements
+// only in this mode.
+static constexpr uint32_t PERF_SCHED_BASE_WORD_INDEX = 512;
+static constexpr uint32_t PERF_SCHED_NUM_COUNTERS = 8;
+static constexpr uint32_t PERF_SCHED_MAX_CONFIGS = 160;
+
+enum SenderSchedCounter : uint32_t {
+    SC_PACKETS = 0,        // packets sent
+    SC_IDLE_CYCLES = 1,    // loop passes that sent nothing, plus waits on one connection in the rotation loop
+    SC_RELOADS = 2,        // free-slot re-reads of a connection
+    SC_RELOADS_FULL = 3,   // re-reads that found the connection full
+    SC_CREDIT_MISSES = 4,  // send attempts without receiver credits
+    SC_PASSES = 5,         // passes over all configs / connections
+    SC_IDLE_PASSES = 6,    // passes that sent nothing
+    SC_BUDGET_SUM = 7,     // free slots found by the re-reads
+};
+
+#if defined(FABRIC_TEST_PERF_BREAKDOWN) && defined(FABRIC_TEST_PERF_SCHED)
+#define PERF_SCHED(...) __VA_ARGS__
+
+inline void write_sender_sched(
+    uint32_t result_buffer_base,
+    const uint64_t* counters,
+    const uint32_t* finish_cycles,
+    const uint32_t* credit_misses,
+    uint32_t num_configs) {
+    auto* words = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base) + PERF_SCHED_BASE_WORD_INDEX;
+    for (uint32_t i = 0; i < PERF_SCHED_NUM_COUNTERS; i++) {
+        words[2 * i] = static_cast<uint32_t>(counters[i]);
+        words[2 * i + 1] = static_cast<uint32_t>(counters[i] >> 32);
+    }
+    words += 2 * PERF_SCHED_NUM_COUNTERS;
+    for (uint32_t i = 0; i < num_configs && i < PERF_SCHED_MAX_CONFIGS; i++) {
+        words[i] = finish_cycles[i];
+        words[PERF_SCHED_MAX_CONFIGS + i] = credit_misses[i];
+    }
+}
+#else
+#define PERF_SCHED(...)
+#endif
+
+// FABRIC_TEST_PERF_HOT_DETAIL=<period> (with FABRIC_TEST_PERF_BREAKDOWN): the hot-state sender times the steps of one
+// send in every <period> (a power of two), one timestamp per step boundary, and the sends it does not sample run
+// untimed (the summary's per-packet fill / slot wait / flush timers are off). Recorded from word
+// PERF_HOT_DETAIL_BASE_WORD_INDEX of the result buffer as PERF_HOT_NUM_STEPS u64 (SenderHotStep), cycles except the
+// counts. Layout must match tt_fabric_test_perf_breakdown.hpp. PERF_HOT(...) compiles its statements only in this mode.
+static constexpr uint32_t PERF_HOT_DETAIL_BASE_WORD_INDEX = 864;
+static constexpr uint32_t PERF_HOT_CALIBRATION_STEPS = 64;
+
+enum SenderHotStep : uint32_t {
+    HS_SAMPLES = 0,      // count: sampled sends that sent a packet
+    HS_CALIBRATION = 1,  // PERF_HOT_CALIBRATION_STEPS empty steps (the cost of one step boundary)
+    HS_GAPS = 2,         // count: sampled sends followed by another send
+    HS_GAP = 3,          // send loop between a sampled send's return and the next send
+    HS_CREDIT = 4,       // receiver credit check
+    HS_SLOT = 5,         // free-slot poll of the fabric/mux connection, including any wait
+    HS_FILL = 6,         // SFPU page wait (or RISC pattern fill)
+    HS_PAYLOAD = 7,      // payload NOC write
+    HS_HEADER = 8,       // header NOC write + slot handoff to the fabric/mux
+    HS_FLUSH = 9,        // noc_async_writes_flushed
+    HS_POST = 10,        // page pop, header advance, seed, counters
+    HS_CALLS = 11,       // count: all hot sends, sampled or not
+    PERF_HOT_NUM_STEPS = 12,
+};
+
+#if defined(FABRIC_TEST_PERF_BREAKDOWN) && defined(FABRIC_TEST_PERF_HOT_DETAIL)
+#define PERF_HOT(...) __VA_ARGS__
+static_assert((FABRIC_TEST_PERF_HOT_DETAIL & (FABRIC_TEST_PERF_HOT_DETAIL - 1)) == 0);
+
+inline uint64_t perf_hot_steps[PERF_HOT_NUM_STEPS] = {};
+inline uint32_t perf_hot_calls = 0;
+inline uint32_t perf_hot_t = 0;
+inline bool perf_hot_sampled = false;
+
+// Ends the current step of a sampled send.
+FORCE_INLINE void perf_hot_step(SenderHotStep step) {
+    if (perf_hot_sampled) {
+        const uint32_t now = get_timestamp_32b();
+        perf_hot_steps[step] += now - perf_hot_t;
+        perf_hot_t = now;
+    }
+}
+
+// Starts a send: ends the loop gap after a sampled send and decides whether this send is sampled.
+FORCE_INLINE void perf_hot_begin() {
+    const bool after_sample = perf_hot_sampled;
+    perf_hot_sampled = (perf_hot_calls++ & (FABRIC_TEST_PERF_HOT_DETAIL - 1)) == 0;
+    if (after_sample || perf_hot_sampled) {
+        const uint32_t now = get_timestamp_32b();
+        if (after_sample) {
+            perf_hot_steps[HS_GAP] += now - perf_hot_t;
+            perf_hot_steps[HS_GAPS]++;
+        }
+        perf_hot_t = now;
+    }
+}
+
+// Ends a send that sent its packet.
+FORCE_INLINE void perf_hot_end() {
+    perf_hot_step(HS_POST);
+    perf_hot_steps[HS_SAMPLES] += perf_hot_sampled;
+}
+
+inline void perf_hot_calibrate() {
+    perf_hot_sampled = true;
+    perf_hot_t = get_timestamp_32b();
+    for (uint32_t i = 0; i < PERF_HOT_CALIBRATION_STEPS; i++) {
+        perf_hot_step(HS_CALIBRATION);
+    }
+    perf_hot_sampled = false;
+}
+
+inline void write_perf_hot_detail(uint32_t result_buffer_base) {
+    perf_hot_steps[HS_CALLS] = perf_hot_calls;
+    auto* words = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base) + PERF_HOT_DETAIL_BASE_WORD_INDEX;
+    for (uint32_t i = 0; i < PERF_HOT_NUM_STEPS; i++) {
+        words[2 * i] = static_cast<uint32_t>(perf_hot_steps[i]);
+        words[2 * i + 1] = static_cast<uint32_t>(perf_hot_steps[i] >> 32);
+    }
+}
+
+// The hot sender's per-packet summary timers, off while the steps are sampled.
+#define PERF_BD_HOT_NOW() uint64_t{0}
+#define PERF_BD_HOT_ADD_SINCE(slot, t0) ((void)(t0))
+#else
+#define PERF_HOT(...)
+#define PERF_BD_HOT_NOW() PERF_BD_NOW()
+#define PERF_BD_HOT_ADD_SINCE(slot, t0) PERF_BD_ADD_SINCE(slot, t0)
+#endif
+
+// Diagnostics: whether the router flushes its receive channel's outstanding NOC writes before applying the atomic
+// increments the infra sends, for the atomic_inc ntype's packets (FABRIC_TEST_ATOMIC_INC_NO_FLUSH turns it off) and
+// for receiver credit returns (FABRIC_TEST_CREDIT_RETURN_NO_FLUSH). Both default to the fabric header's flush.
+#ifdef FABRIC_TEST_ATOMIC_INC_NO_FLUSH
+constexpr bool ATOMIC_INC_FLUSH = false;
+#else
+constexpr bool ATOMIC_INC_FLUSH = true;
+#endif
+#ifdef FABRIC_TEST_CREDIT_RETURN_NO_FLUSH
+constexpr bool CREDIT_RETURN_FLUSH = false;
+#else
+constexpr bool CREDIT_RETURN_FLUSH = true;
+#endif
+
 // Per-config result entry for per-endpoint progress tracking.
 // Layout must match the host-side definition in tt_fabric_test_memory_map.hpp exactly.
 struct PerConfigResult {
@@ -119,7 +310,23 @@ struct SequentialDataPattern {
     static void fill(uint32_t buffer_address, uint32_t payload_size, uint32_t start_value) {
         auto* buffer_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(buffer_address);
         uint32_t num_words = payload_size / WORD_SIZE;
-        for (uint32_t i = 0; i < num_words; i++) {
+        uint32_t i = 0;
+#ifdef FABRIC_TEST_FAST_PATTERN
+        // Unrolled so each word costs one store plus one add, instead of also paying the pointer
+        // increment and loop branch per word.
+        for (; i + 8 <= num_words; i += 8) {
+            const uint32_t v = start_value + i;
+            buffer_ptr[i + 0] = v + 0;
+            buffer_ptr[i + 1] = v + 1;
+            buffer_ptr[i + 2] = v + 2;
+            buffer_ptr[i + 3] = v + 3;
+            buffer_ptr[i + 4] = v + 4;
+            buffer_ptr[i + 5] = v + 5;
+            buffer_ptr[i + 6] = v + 6;
+            buffer_ptr[i + 7] = v + 7;
+        }
+#endif
+        for (; i < num_words; i++) {
             buffer_ptr[i] = start_value + i;
         }
     }
@@ -134,7 +341,28 @@ struct SequentialDataPattern {
     static bool validate(uint32_t buffer_address, uint32_t payload_size, uint32_t start_value) {
         auto* buffer_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(buffer_address);
         uint32_t num_words = payload_size / WORD_SIZE;
-        for (uint32_t i = 0; i < num_words; i++) {
+        uint32_t i = 0;
+#ifdef FABRIC_TEST_FAST_PATTERN
+        // Issue eight independent loads before using any of them so their L1 latency overlaps, and
+        // branch once per block on the OR of the differences. Checks exactly the same words.
+        for (; i + 8 <= num_words; i += 8) {
+            const uint32_t w0 = buffer_ptr[i + 0];
+            const uint32_t w1 = buffer_ptr[i + 1];
+            const uint32_t w2 = buffer_ptr[i + 2];
+            const uint32_t w3 = buffer_ptr[i + 3];
+            const uint32_t w4 = buffer_ptr[i + 4];
+            const uint32_t w5 = buffer_ptr[i + 5];
+            const uint32_t w6 = buffer_ptr[i + 6];
+            const uint32_t w7 = buffer_ptr[i + 7];
+            const uint32_t v = start_value + i;
+            const uint32_t diff = (w0 ^ (v + 0)) | (w1 ^ (v + 1)) | (w2 ^ (v + 2)) | (w3 ^ (v + 3)) |
+                                  (w4 ^ (v + 4)) | (w5 ^ (v + 5)) | (w6 ^ (v + 6)) | (w7 ^ (v + 7));
+            if (diff != 0) {
+                return false;
+            }
+        }
+#endif
+        for (; i < num_words; i++) {
             if (buffer_ptr[i] != (start_value + i)) {
                 return false;
             }
@@ -154,6 +382,7 @@ public:
     }
 
     uint32_t get_current_offset() const { return current_offset_; }
+    uint32_t get_total_size() const { return total_size_; }
     constexpr bool has_wrapped() const { return has_wrapped_; }
 
     void advance() {
@@ -210,17 +439,24 @@ struct SenderTrafficConfigMetadata {
     static SenderTrafficConfigMetadata build_from_args(size_t& arg_idx) { return SenderTrafficConfigMetadata(arg_idx); }
 
     SenderTrafficConfigMetadata(const SenderTrafficConfigMetadata& other) :
-        num_packets(other.num_packets), seed(other.seed), payload_buffer_size(other.payload_buffer_size) {}
+        num_packets(other.num_packets),
+        seed(other.seed),
+        payload_buffer_size(other.payload_buffer_size),
+        sfpu_payload(other.sfpu_payload) {}
 
     uint32_t num_packets = 0;
     uint32_t seed = 0;
     uint32_t payload_buffer_size = 0;
+    // The config's payloads come from the core's compute engine (tt_fabric_test_payload_gen.cpp), as pages of the
+    // SFPU_PAYLOAD_CB_INDEX CB in strict round-robin order over such configs, instead of being stored by this kernel.
+    bool sfpu_payload = false;
 
 private:
     SenderTrafficConfigMetadata(size_t& arg_idx) {
         this->num_packets = get_local_arg_val<uint32_t>(arg_idx++);
         this->seed = get_local_arg_val<uint32_t>(arg_idx++);
         this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx++);
+        this->sfpu_payload = get_local_arg_val<uint32_t>(arg_idx++) != 0;
     }
 };
 
@@ -946,6 +1182,17 @@ struct SenderCreditManager {
         return true;
     }
 
+    // Hands the currently available credits to a caller that counts them down itself (the sender's local-memory
+    // hot state) and returns how many; 0 when none have come back yet.
+    uint32_t take_available_credits() {
+        if (estimated_available_credits_ == 0 && !update_available_credits()) {
+            return 0;
+        }
+        const uint32_t credits = estimated_available_credits_;
+        estimated_available_credits_ = 0;
+        return credits;
+    }
+
     // Consume one credit (called after successful send - decrements ALL receivers for mcast)
     FORCE_INLINE void consume_credit() {
         if (!enabled_) {
@@ -996,6 +1243,164 @@ private:
     static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;
     static constexpr uint32_t CREDIT_STRIDE_WORDS = CREDIT_ADDRESS_STRIDE / sizeof(uint32_t);
 };
+
+// A sender config's per-packet state, copied into the sender's local memory (its stack) for the send loop. The
+// config itself lives in L1, where every field read costs an L1 load (and the fabric adapters invalidate the L1 data
+// cache on each slot check); reading the hot fields from local memory keeps those loads off the per-packet path.
+// HOT_FALLBACK configs (multi-injection mcast) send through the L1 config as before.
+#ifdef FABRIC_TEST_CORRUPT_PAYLOAD
+// Verifier canary: one flipped bit in packet 7 of every config with a payload, whichever engine produced it, must fail
+// validation. FABRIC_TEST_CORRUPT_PAYLOAD 1 flips a word mid-payload, 2 the second-to-last word and 3 the third-to-last
+// (the last block's checks, on both word parities of a payload in 16 B steps). The last word itself is the receiver's
+// sign that the packet has landed (poll), so corrupting it hangs the receiver instead of failing it.
+FORCE_INLINE void corrupt_payload_canary(uint32_t payload_address, uint32_t payload_size_bytes, uint32_t packet_idx) {
+    if (packet_idx == 7) {
+        const uint32_t words = payload_size_bytes / 4;
+        const uint32_t word = FABRIC_TEST_CORRUPT_PAYLOAD == 1 ? words / 2 : words - FABRIC_TEST_CORRUPT_PAYLOAD;
+        reinterpret_cast<tt_l1_ptr uint32_t*>(payload_address)[word] ^= 0x10;
+    }
+}
+#endif
+
+struct SenderHotState {
+    enum Mode : uint8_t { HOT_FIXED_HEADER = 0, HOT_WRITE_ADDRESS = 1, HOT_FALLBACK = 2, HOT_SCATTER = 3 };
+
+    uint64_t header_noc_base;  // HOT_WRITE_ADDRESS: the header's write NOC address at ring offset 0
+    void* conn;                // the config's connection (in the local-memory connection array)
+    uint32_t header_addr;
+    uint32_t packets_left;
+    uint32_t credits;  // flow-control credits on hand
+    uint32_t ring_offset;
+    uint32_t ring_wrap;  // ring offsets past this wrap to 0
+    uint32_t payload_size;
+    uint32_t seed;
+    uint8_t is_mux;
+    uint8_t conn_idx;  // index of conn in the connection array (keys the per-connection slot cache)
+    uint8_t mode;
+    uint8_t flow_control;
+    uint8_t scatter_chunks;  // HOT_SCATTER: how many chunk NOC addresses the header carries
+    uint8_t header_stale;    // FABRIC_TEST_SENDER_BATCH: the header still describes the last packet sent
+    uint8_t sent_epoch;      // FABRIC_TEST_SENDER_BATCH: sender_batch.flush_epoch at the last send
+    uint8_t sfpu_payload;    // payloads come from the core's compute engine (SenderTrafficConfigMetadata)
+};
+
+enum class HotSendResult : uint8_t { SENT, NO_CREDITS, CONNECTION_FULL };
+
+#ifdef FABRIC_TEST_SENDER_BATCH
+// FABRIC_TEST_SENDER_BATCH: the hot sender flushes its NOC writes only when it must, instead of after every packet:
+// before a config's header is rewritten (or its payload refilled) while that config's last send may still be reading
+// it, and with SFPU payloads once per FABRIC_TEST_SENDER_BATCH_PAGES pages, when the pages sent since the last flush
+// go back to the generator in one CB update. Pages come from a count of pages known to be ready, so the CB is read
+// only when that count runs out. Headers are advanced at the config's next send, not right after a send.
+struct SenderBatchState {
+    uint32_t page_addr;    // next SFPU page to send
+    uint32_t pages_ready;  // pages generated and not yet sent
+    uint32_t pages_sent;   // pages sent since the last flush, not yet returned to the generator
+    uint32_t pages_acked;  // the CB's acked count (only this kernel writes it)
+    uint8_t flush_epoch;   // flushes so far, mod 256
+};
+inline SenderBatchState sender_batch{};
+
+// Picks up the payload CB's state, at the start and after the fallback path has used the CB directly. Every sender
+// core has the CB (a placeholder where no config takes SFPU pages), so this is harmless on cores that never use it.
+inline void sender_batch_sync() {
+    sender_batch.page_addr = get_read_ptr(SFPU_PAYLOAD_CB_INDEX);
+    sender_batch.pages_acked = *get_cb_tiles_acked_ptr(SFPU_PAYLOAD_CB_INDEX);
+    sender_batch.pages_ready = 0;
+}
+
+FORCE_INLINE void sender_batch_flush() {
+    noc_async_writes_flushed();
+    if (sender_batch.pages_sent > 0) {
+        sender_batch.pages_acked += sender_batch.pages_sent;
+        sender_batch.pages_sent = 0;
+        *get_cb_tiles_acked_ptr(SFPU_PAYLOAD_CB_INDEX) = sender_batch.pages_acked;
+        // Where cb_pop_front would leave the read pointer, for the fallback path.
+        get_local_cb_interface(SFPU_PAYLOAD_CB_INDEX).fifo_rd_ptr = sender_batch.page_addr;
+    }
+    sender_batch.flush_epoch++;
+}
+
+// The next generated page (strict generation order). A flush returns at least one page per
+// FABRIC_TEST_SENDER_BATCH_PAGES (at most half the CB) sent, so the generator always has room while this waits.
+FORCE_INLINE uint32_t sender_batch_take_page() {
+    if (sender_batch.pages_ready == 0) {
+        const uintptr_t received_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_received_ptr(SFPU_PAYLOAD_CB_INDEX));
+        const uint16_t taken = static_cast<uint16_t>(sender_batch.pages_acked + sender_batch.pages_sent);
+        uint16_t ready;
+        do {
+            ready = static_cast<uint16_t>(static_cast<uint16_t>(reg_read(received_ptr)) - taken);
+        } while (ready == 0);
+        sender_batch.pages_ready = ready;
+    }
+    sender_batch.pages_ready--;
+    sender_batch.pages_sent++;
+    const auto& cb = get_local_cb_interface(SFPU_PAYLOAD_CB_INDEX);
+    const uint32_t page = sender_batch.page_addr;
+    sender_batch.page_addr += cb.fifo_page_size;
+    if (sender_batch.page_addr == cb.fifo_limit) {
+        sender_batch.page_addr -= cb.fifo_size;
+    }
+    return page;
+}
+#endif
+
+#ifdef FABRIC_TEST_SENDER_CMDBUFS
+// FABRIC_TEST_SENDER_CMDBUFS: the hot sender writes a packet's payload, header and slot credit on three command
+// buffers (write, write-reg and atomic) whose control registers are set once (sender_cmdbuf_init). Moving to another
+// connection rewrites the data buffers' destination coordinates and reprograms the credit buffer; a send on the same
+// connection as the last one sets only its source and slot addresses (and the payload length when it changes).
+// FABRIC_TEST_SENDER_CREDIT_BATCH also holds back the slot credits of consecutive sends on one connection and returns
+// them in one write (sender_credits_flush) before the sender moves to another connection or waits on anything.
+// Anything else that uses these command buffers on this core must call sender_cmdbuf_init() afterwards.
+#if defined(FABRIC_TEST_SENDER_CREDIT_BATCH) && !defined(FABRIC_TEST_SENDER_SLOT_CACHE)
+#error "FABRIC_TEST_SENDER_CREDIT_BATCH needs FABRIC_TEST_SENDER_SLOT_CACHE (credits are returned before a slot re-read)"
+#endif
+#if defined(FABRIC_TEST_SENDER_CREDIT_BATCH) && defined(FABRIC_TEST_SENDER_SKIP)
+#error "FABRIC_TEST_SENDER_CREDIT_BATCH is not wired into the rotating (FABRIC_TEST_SENDER_SKIP) loop"
+#endif
+struct SenderCmdBufState {
+    uint8_t conn;              // the connection the command buffers point at (UINT8_MAX: none)
+    uint32_t payload_len;      // the length in the payload command buffer
+    uint32_t credits_pending;  // FABRIC_TEST_SENDER_CREDIT_BATCH: slot credits not yet returned to conn
+};
+inline SenderCmdBufState sender_cmdbuf{};
+
+inline void sender_cmdbuf_init() {
+    static_assert(noc_mode == DM_DEDICATED_NOC, "write and write-reg command buffers alias in dynamic NOC mode");
+    constexpr uint8_t noc = get_fabric_worker_noc();
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    noc_write_init_state<write_cmd_buf>(noc, NOC_UNICAST_WRITE_VC);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, 0);
+    while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+    noc_write_init_state<write_reg_cmd_buf>(noc, NOC_UNICAST_WRITE_VC);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_MID, 0);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, sizeof(PACKET_HEADER_TYPE));
+    sender_cmdbuf.conn = UINT8_MAX;
+    sender_cmdbuf.payload_len = 0;
+    sender_cmdbuf.credits_pending = 0;
+}
+
+// Returns the held-back slot credits of the current connection.
+FORCE_INLINE void sender_credits_flush() {
+#ifdef FABRIC_TEST_SENDER_CREDIT_BATCH
+    if (sender_cmdbuf.credits_pending > 0) {
+        noc_inline_dw_write_with_state<
+            /*update_addr_lo=*/false,
+            /*update_counter=*/true,
+            /*posted=*/false,
+            /*update_addr_hi=*/false,
+            /*update_val=*/true,
+            InlineWriteDst::REG>(
+            pack_value_for_inc_on_write_stream_reg_write(-static_cast<int32_t>(sender_cmdbuf.credits_pending)),
+            0,
+            write_at_cmd_buf,
+            get_fabric_worker_noc());
+        sender_cmdbuf.credits_pending = 0;
+    }
+#endif
+}
+#endif
 
 template <typename EdmSenderT>
 struct SenderKernelTrafficConfig {
@@ -1123,8 +1528,12 @@ struct SenderKernelTrafficConfig {
     bool send_one_packet() {
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
-            if (!credit_manager_.has_credits_available(num_packets_processed)) {
-                return false;  // No credits available - blocked
+            [[maybe_unused]] uint64_t credit_t0 = PERF_BD_DETAIL_NOW();
+            const bool has_credits = credit_manager_.has_credits_available(num_packets_processed);
+            PERF_BD_DETAIL_ADD_SINCE(0, credit_t0);  // SD_CREDIT_CHECK
+            if (!has_credits) {
+                PERF_BD_SUMMARY_INC(5);  // S_CREDIT_BLOCKED
+                return false;            // No credits available - blocked
             }
         }
 
@@ -1140,33 +1549,60 @@ struct SenderKernelTrafficConfig {
             }
         } else {
             const bool has_payload = payload_size_bytes > 0 && payload_buffer_;
+            uint32_t payload_address = 0;
             if (has_payload) {
-                payload_buffer_->fill_data(metadata.seed);
+                [[maybe_unused]] uint64_t fill_t0 = PERF_BD_NOW();
+                if (metadata.sfpu_payload) {
+                    // The core's compute kernel generates this packet's payload (same seed + i words) into the next
+                    // page of the payload CB, in the same strict round-robin order the sender consumes them.
+                    cb_wait_front(SFPU_PAYLOAD_CB_INDEX, 1);
+                    payload_address = get_read_ptr(SFPU_PAYLOAD_CB_INDEX);
+                } else {
+                    payload_buffer_->fill_data(metadata.seed);
+                    payload_address = payload_buffer_->get_physical_address();
+                }
+#ifdef FABRIC_TEST_CORRUPT_PAYLOAD
+                corrupt_payload_canary(payload_address, payload_size_bytes, num_packets_processed);
+#endif
+                PERF_BD_ADD_SINCE(2, fill_t0);  // S_FILL (S_FILL = waiting for the generated page in SFPU mode)
             }
             // STEP 3: Send packet, once per connection.
             for (uint8_t i = 0; i < num_connections_; i++) {
+                [[maybe_unused]] uint64_t slot_t0 = PERF_BD_NOW();
                 connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(
                     connection_ptrs_[i], connection_indices_[i]);
+                PERF_BD_ADD_SINCE(3, slot_t0);  // S_SLOT_WAIT
                 if (has_payload) {
+                    [[maybe_unused]] uint64_t payload_t0 = PERF_BD_DETAIL_NOW();
                     // Send payload without header
                     connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
                         connection_ptrs_[i],
                         connection_indices_[i],
-                        payload_buffer_->get_physical_address(),
+                        payload_address,
                         payload_size_bytes);
+                    PERF_BD_DETAIL_ADD_SINCE(5, payload_t0);  // SD_PAYLOAD_SEND
                 }
+                [[maybe_unused]] uint64_t header_t0 = PERF_BD_DETAIL_NOW();
                 // Send header
                 connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
                     connection_ptrs_[i], connection_indices_[i], (uint32_t)packet_header);
+                PERF_BD_DETAIL_ADD_SINCE(6, header_t0);  // SD_HEADER_SEND
             }
         }
 
         // STEP 4: Update state (after successful send)
         if constexpr (!BENCHMARK_MODE) {
             // avoid race condition where we update the ptrs but fabric write is not done yet.
+            [[maybe_unused]] uint64_t flush_t0 = PERF_BD_NOW();
             noc_async_writes_flushed();
+            PERF_BD_ADD_SINCE(4, flush_t0);  // S_FLUSH
 
+            [[maybe_unused]] uint64_t post_t0 = PERF_BD_DETAIL_NOW();
             if (payload_size_bytes > 0 && payload_buffer_) {
+                if (metadata.sfpu_payload) {
+                    // The flush above means the page has left L1, so the generator may reuse it.
+                    cb_pop_front(SFPU_PAYLOAD_CB_INDEX, 1);
+                }
                 payload_buffer_->advance();
                 update_header_for_next_packet();
                 metadata.seed = prng_next(metadata.seed);
@@ -1174,6 +1610,7 @@ struct SenderKernelTrafficConfig {
 
             // STEP 5: Consume credit AFTER successful send
             credit_manager_.consume_credit();
+            PERF_BD_DETAIL_ADD_SINCE(7, post_t0);  // SD_POST
         }
 
         num_packets_processed += 1;  // Always increment by 1
@@ -1197,12 +1634,321 @@ struct SenderKernelTrafficConfig {
 
     bool has_wrapped() const { return payload_buffer_ ? payload_buffer_->has_wrapped() : false; }
 
+    // Points this config at another copy of the connection array (the sender's local-memory copy, and back).
+    void rebind_connections(FabricConnectionArray<EdmSenderT>* connection_array) {
+        connection_manager_ = connection_array;
+        for (uint8_t i = 0; i < num_connections_; i++) {
+            const uint8_t idx = connection_indices_[i];
+            connection_ptrs_[i] = connection_array->is_mux[idx]
+                                      ? static_cast<void*>(&connection_array->get_mux_connection(idx))
+                                      : static_cast<void*>(&connection_array->get_fabric_connection(idx));
+        }
+        connection_ptr_ = connection_ptrs_[0];
+    }
+
+    // Call after rebind_connections() so the hot state carries the local-memory connection.
+    SenderHotState make_hot_state() {
+        SenderHotState h{};
+        h.conn = connection_ptr_;
+        h.conn_idx = connection_idx_;
+        h.is_mux = connection_manager_->is_mux[connection_idx_];
+        h.header_addr = reinterpret_cast<uint32_t>(packet_header);
+        h.packets_left = metadata.num_packets - num_packets_processed;
+        h.flow_control = credit_manager_.is_enabled();
+        h.credits = 0;
+        h.seed = metadata.seed;
+        h.payload_size = payload_buffer_ ? payload_size_bytes : 0;
+        h.sfpu_payload = h.payload_size > 0 && metadata.sfpu_payload;
+        h.ring_offset = payload_buffer_ ? payload_buffer_->get_current_offset() : 0;
+        h.ring_wrap = payload_buffer_ ? payload_buffer_->get_total_size() - payload_size_bytes : 0;
+        if (num_connections_ != 1) {
+            h.mode = SenderHotState::HOT_FALLBACK;
+        } else if (noc_send_type_ == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+            h.mode = SenderHotState::HOT_FIXED_HEADER;
+        } else if (
+            noc_send_type_ == NocSendType::NOC_UNICAST_WRITE ||
+            noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+            // Both headers keep the write address as the first word of the command fields.
+            static_assert(offsetof(NocUnicastAtomicIncFusedCommandHeader, noc_address) == 0);
+            static_assert(offsetof(NocUnicastCommandHeader, noc_address) == 0);
+            h.mode = SenderHotState::HOT_WRITE_ADDRESS;
+            h.header_noc_base = packet_header->command_fields.unicast_write.noc_address - h.ring_offset;
+        } else if (noc_send_type_ == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+            // Both scatter headers (with or without the fused increment) start with the chunks' NOC addresses.
+            static_assert(offsetof(NocUnicastScatterCommandHeader, noc_address) == 0);
+            static_assert(offsetof(NocUnicastScatterAtomicIncFusedCommandHeader, noc_address) == 0);
+            h.mode = SenderHotState::HOT_SCATTER;
+            h.scatter_chunks = noc_fields_.scatter_write_fields.chunk_count;
+        } else {
+            h.mode = SenderHotState::HOT_FALLBACK;
+        }
+        return h;
+    }
+
+    // Whether this config may be passed over while its connection is full (FABRIC_TEST_SENDER_SKIP). Configs that
+    // take SFPU-generated pages may not: the pages arrive in strict round-robin order.
+    FORCE_INLINE static bool can_skip_when_full([[maybe_unused]] const SenderHotState& h) {
+#ifdef FABRIC_TEST_SENDER_SKIP
+        return !h.sfpu_payload;
+#else
+        return false;
+#endif
+    }
+
+    // Free slots on h's connection right now (one read of the fabric/mux credit state).
+    FORCE_INLINE static uint32_t connection_free_slots(const SenderHotState& h) {
+        return h.is_mux ? static_cast<typename FabricConnectionArray<EdmSenderT>::MuxConnectionType*>(h.conn)
+                              ->get_num_free_write_slots()
+                        : static_cast<EdmSenderT*>(h.conn)->get_num_free_write_slots();
+    }
+
+    // send_one_packet() on local-memory state. slot_budget is the sender's cached count of free slots on this config's
+    // connection (FABRIC_TEST_SENDER_SLOT_CACHE): sends count it down and the connection is only re-read once it is
+    // used up. Returns CONNECTION_FULL only for configs that may be skipped.
+    FORCE_INLINE HotSendResult send_one_packet_hot(SenderHotState& h, [[maybe_unused]] uint32_t& slot_budget) {
+        PERF_HOT(perf_hot_begin();)
+        if (h.flow_control && h.credits == 0) {
+            h.credits = credit_manager_.take_available_credits();
+            if (h.credits == 0) {
+#ifdef FABRIC_TEST_SENDER_CMDBUFS
+                sender_credits_flush();  // the receivers may be waiting on the held-back packets
+#endif
+                PERF_BD_SUMMARY_INC(5);  // S_CREDIT_BLOCKED
+                PERF_HOT(perf_hot_step(HS_CREDIT);)
+                return HotSendResult::NO_CREDITS;
+            }
+        }
+        PERF_HOT(perf_hot_step(HS_CREDIT);)
+#ifdef FABRIC_TEST_SENDER_BATCH
+        // Advance the header past the last packet, once that packet has left L1.
+        if (h.header_stale) {
+            if (h.sent_epoch == sender_batch.flush_epoch) {
+                sender_batch_flush();
+                PERF_HOT(perf_hot_step(HS_FLUSH);)
+            }
+            advance_hot_header(h);
+            h.header_stale = 0;
+            PERF_HOT(perf_hot_step(HS_POST);)
+        }
+#endif
+#ifdef FABRIC_TEST_SENDER_SLOT_CACHE
+        if (slot_budget == 0) {
+#ifdef FABRIC_TEST_SENDER_CMDBUFS
+            sender_credits_flush();  // the connection frees no slot it has not been told about
+#endif
+            slot_budget = connection_free_slots(h);
+            if (slot_budget == 0) {
+                if (can_skip_when_full(h)) {
+                    PERF_BD_SUMMARY_INC(5);  // counts skips with the credit-blocked attempts
+                    PERF_HOT(perf_hot_step(HS_SLOT);)
+                    return HotSendResult::CONNECTION_FULL;
+                }
+                [[maybe_unused]] uint64_t slot_t0 = PERF_BD_HOT_NOW();
+                do {
+                    slot_budget = connection_free_slots(h);
+                } while (slot_budget == 0);
+                PERF_BD_HOT_ADD_SINCE(3, slot_t0);  // S_SLOT_WAIT
+            }
+        }
+        slot_budget--;
+        PERF_HOT(perf_hot_step(HS_SLOT);)
+#endif
+
+        uint32_t payload_address = 0;
+        if (h.payload_size > 0) {
+            [[maybe_unused]] uint64_t fill_t0 = PERF_BD_HOT_NOW();
+            if (h.sfpu_payload) {
+#ifdef FABRIC_TEST_SENDER_BATCH
+                payload_address = sender_batch_take_page();
+#else
+                cb_wait_front(SFPU_PAYLOAD_CB_INDEX, 1);
+                payload_address = get_read_ptr(SFPU_PAYLOAD_CB_INDEX);
+#endif
+            } else {
+                payload_buffer_->fill_data(h.seed);
+                payload_address = payload_buffer_->get_physical_address();
+            }
+#ifdef FABRIC_TEST_CORRUPT_PAYLOAD
+            corrupt_payload_canary(payload_address, h.payload_size, metadata.num_packets - h.packets_left);
+#endif
+            PERF_BD_HOT_ADD_SINCE(2, fill_t0);  // S_FILL
+            PERF_HOT(perf_hot_step(HS_FILL);)
+        }
+
+#ifdef FABRIC_TEST_SENDER_SLOT_CACHE
+        constexpr bool WAIT_FOR_SLOT = false;  // the slot was taken from slot_budget above
+#else
+        constexpr bool WAIT_FOR_SLOT = true;
+#endif
+        if (h.is_mux) {
+            send_on_connection_hot<WAIT_FOR_SLOT>(
+                static_cast<typename FabricConnectionArray<EdmSenderT>::MuxConnectionType*>(h.conn),
+                payload_address,
+                h);
+        } else {
+            send_on_connection_hot<WAIT_FOR_SLOT>(static_cast<EdmSenderT*>(h.conn), payload_address, h);
+        }
+
+#ifdef FABRIC_TEST_SENDER_BATCH
+        // Only a config whose header or payload source changes per packet needs its writes flushed before reuse.
+        if (h.payload_size > 0) {
+            h.header_stale = 1;
+            h.sent_epoch = sender_batch.flush_epoch;
+            if (sender_batch.pages_sent >= FABRIC_TEST_SENDER_BATCH_PAGES) {
+                sender_batch_flush();
+            }
+        }
+        PERF_HOT(perf_hot_step(HS_FLUSH);)
+#else
+        // The header and payload must leave L1 before the header is rewritten and the page is reused.
+        [[maybe_unused]] uint64_t flush_t0 = PERF_BD_HOT_NOW();
+        noc_async_writes_flushed();
+        PERF_BD_HOT_ADD_SINCE(4, flush_t0);  // S_FLUSH
+        PERF_HOT(perf_hot_step(HS_FLUSH);)
+
+        if (h.payload_size > 0) {
+            if (h.sfpu_payload) {
+                cb_pop_front(SFPU_PAYLOAD_CB_INDEX, 1);
+            }
+            advance_hot_header(h);
+        }
+#endif
+        h.credits--;  // unused (and harmless) without flow control
+        h.packets_left--;
+        PERF_HOT(perf_hot_end();)
+        return HotSendResult::SENT;
+    }
+
+    // Moves a payload config's header (destination address) and seed on to its next packet.
+    FORCE_INLINE static void advance_hot_header(SenderHotState& h) {
+        const uint32_t prev_ring_offset = h.ring_offset;
+        h.ring_offset += h.payload_size;
+        if (h.ring_offset > h.ring_wrap) {
+            h.ring_offset = 0;
+        }
+        auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(h.header_addr);
+        if (h.mode == SenderHotState::HOT_WRITE_ADDRESS) {
+            header->command_fields.unicast_write.noc_address = h.header_noc_base + h.ring_offset;
+        } else if (h.mode == SenderHotState::HOT_SCATTER) {
+            // Every chunk keeps its place in the slot: move each chunk address with the slot.
+            const uint64_t step = static_cast<uint64_t>(h.ring_offset) - prev_ring_offset;
+            for (uint8_t i = 0; i < h.scatter_chunks; i++) {
+                header->command_fields.unicast_scatter_write.noc_address[i] += step;
+            }
+        }
+        h.seed = prng_next(h.seed);
+    }
+
+    // Writes the hot state's progress back to this L1 config (packet count; the rest is not read after the loop).
+    void write_back_hot_state(const SenderHotState& h) {
+        if (h.mode != SenderHotState::HOT_FALLBACK) {
+            num_packets_processed = metadata.num_packets - h.packets_left;
+        }
+    }
+
     friend struct NocWriteSenderOperations<EdmSenderT>;
     friend struct NocAtomicSenderOperations<EdmSenderT>;
     friend struct NocFusedSenderOperations<EdmSenderT>;
     friend struct NocScatterWriteSenderOperations<EdmSenderT>;
 
 private:
+    template <bool WAIT_FOR_SLOT, typename ConnT>
+    FORCE_INLINE void send_on_connection_hot(ConnT* conn, uint32_t payload_address, const SenderHotState& h) {
+        if constexpr (WAIT_FOR_SLOT) {
+            [[maybe_unused]] uint64_t slot_t0 = PERF_BD_HOT_NOW();
+            conn->wait_for_empty_write_slot();
+            PERF_BD_HOT_ADD_SINCE(3, slot_t0);  // S_SLOT_WAIT
+            PERF_HOT(perf_hot_step(HS_SLOT);)
+        }
+#ifdef FABRIC_TEST_SENDER_CMDBUFS
+        send_on_connection_cmdbufs(conn, payload_address, h);
+#else
+        if (h.payload_size > 0) {
+            conn->send_payload_without_header_non_blocking_from_address(payload_address, h.payload_size);
+            PERF_HOT(perf_hot_step(HS_PAYLOAD);)
+        }
+        conn->send_payload_flush_non_blocking_from_address(h.header_addr, sizeof(PACKET_HEADER_TYPE));
+        PERF_HOT(perf_hot_step(HS_HEADER);)
+#endif
+    }
+
+#ifdef FABRIC_TEST_SENDER_CMDBUFS
+    // The adapter's send_payload_without_header / send_payload_flush pair plus its slot credit and slot advance
+    // (advance_buffer_slot_write_index), on this file's command buffers (see SenderCmdBufState).
+    template <typename ConnT>
+    FORCE_INLINE void send_on_connection_cmdbufs(ConnT* conn, uint32_t payload_address, const SenderHotState& h) {
+        static_assert(ConnT::IS_WORKER, "only a worker connection returns its slot credit with one inline write");
+        constexpr uint32_t HEADER_SIZE = sizeof(PACKET_HEADER_TYPE);
+        constexpr uint8_t noc = get_fabric_worker_noc();
+        const bool switched = sender_cmdbuf.conn != h.conn_idx;
+        if (switched) {
+            sender_credits_flush();
+            noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
+                get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, conn->edm_buffer_remote_free_slots_update_addr, noc),
+                pack_value_for_inc_on_write_stream_reg_write(-1),
+                0xF,
+                write_at_cmd_buf,
+                noc,
+                NOC_UNICAST_WRITE_VC);
+            sender_cmdbuf.conn = h.conn_idx;
+        }
+        uint32_t slot;
+        if constexpr (ConnT::USER_DEFINED_NUM_BUFFER_SLOTS) {
+            slot = conn->edm_buffer_slot_addrs[conn->buffer_slot_index.get()];
+        } else {
+            slot = conn->edm_buffer_addr;
+        }
+        const uint64_t slot_noc_addr = get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, slot, noc);
+        if (h.payload_size > 0) {
+            const bool new_len = h.payload_size != sender_cmdbuf.payload_len;
+            sender_cmdbuf.payload_len = h.payload_size;
+            const uint64_t dst = slot_noc_addr + HEADER_SIZE;
+            if (switched) {
+                if (new_len) {
+                    noc_write_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL>(noc, payload_address, dst, h.payload_size);
+                } else {
+                    noc_write_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDl>(noc, payload_address, dst);
+                }
+            } else {
+                if (new_len) {
+                    noc_write_with_state<noc_mode, write_cmd_buf, CQ_NOC_SnDL>(noc, payload_address, dst, h.payload_size);
+                } else {
+                    noc_write_with_state<noc_mode, write_cmd_buf, CQ_NOC_SnDl>(noc, payload_address, dst);
+                }
+            }
+            PERF_HOT(perf_hot_step(HS_PAYLOAD);)
+        }
+        if (switched) {
+            noc_write_with_state<noc_mode, write_reg_cmd_buf, CQ_NOC_SNDl>(noc, h.header_addr, slot_noc_addr);
+        } else {
+            noc_write_with_state<noc_mode, write_reg_cmd_buf, CQ_NOC_SnDl>(noc, h.header_addr, slot_noc_addr);
+        }
+#ifdef FABRIC_TEST_SENDER_CREDIT_BATCH
+        sender_cmdbuf.credits_pending++;
+#else
+        noc_inline_dw_write_with_state<
+            /*update_addr_lo=*/false,
+            /*update_counter=*/true,
+            /*posted=*/false,
+            /*update_addr_hi=*/false,
+            /*update_val=*/false,
+            InlineWriteDst::REG>(0, 0, write_at_cmd_buf, noc);
+#endif
+        // The adapter's slot advance (advance_buffer_slot_write_index) for a worker connection.
+        conn->buffer_slot_write_counter.counter++;
+        if constexpr (ConnT::USER_DEFINED_NUM_BUFFER_SLOTS) {
+            constexpr size_t NUM_SLOTS = std::tuple_size_v<decltype(ConnT::edm_buffer_slot_addrs)>;
+            conn->buffer_slot_index = BufferIndex{wrap_increment<NUM_SLOTS>(conn->buffer_slot_index.get())};
+        } else {
+            conn->buffer_slot_index =
+                BufferIndex{wrap_increment(conn->buffer_slot_index.get(), conn->num_buffers_per_channel)};
+            conn->edm_buffer_addr =
+                conn->edm_buffer_base_addr + conn->buffer_slot_index.get() * conn->buffer_size_bytes;
+        }
+        PERF_HOT(perf_hot_step(HS_HEADER);)
+    }
+#endif
+
     void update_header_for_next_packet() {
         if (payload_buffer_) {
             noc_ops_.update_header(this);
@@ -1273,7 +2019,8 @@ inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-    config->packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
+    config->packet_header->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, ATOMIC_INC_FLUSH});
 
     config->noc_fields_.atomic_inc_fields = fields;
     config->payload_size_bytes = 0;
@@ -1794,7 +2541,7 @@ struct ReceiverCreditManager {
         credit_fields_ = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
         uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
         packet_header_->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{noc_addr, credit_fields_.atomic_inc_val});
+            NocUnicastAtomicIncCommandHeader{noc_addr, credit_fields_.atomic_inc_val, CREDIT_RETURN_FLUSH});
     }
 
     // Initialize with credit info and fabric connection array
@@ -1852,7 +2599,8 @@ private:
         noc_async_writes_flushed();
 
         uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
-        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, num_credits});
+        packet_header_->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{noc_addr, num_credits, CREDIT_RETURN_FLUSH});
 
         connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
         connection_manager_->send_header_flush_blocking<false>(
@@ -1874,17 +2622,24 @@ struct ReceiverTrafficConfigMetadata {
     }
 
     ReceiverTrafficConfigMetadata(const ReceiverTrafficConfigMetadata& other) :
-        num_packets(other.num_packets), seed(other.seed), payload_buffer_size(other.payload_buffer_size) {}
+        num_packets(other.num_packets),
+        seed(other.seed),
+        payload_buffer_size(other.payload_buffer_size),
+        sfpu_verify(other.sfpu_verify) {}
 
     uint32_t num_packets = 0;
     uint32_t seed = 0;
     uint32_t payload_buffer_size = 0;
+    // The config's payloads are checked on the core's compute engine (tt_fabric_test_payload_verify.cpp) instead of
+    // by this kernel.
+    bool sfpu_verify = false;
 
 private:
     ReceiverTrafficConfigMetadata(size_t& arg_idx) {
         this->num_packets = get_local_arg_val<uint32_t>(arg_idx++);
         this->seed = get_local_arg_val<uint32_t>(arg_idx++);
         this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx++);
+        this->sfpu_verify = get_local_arg_val<uint32_t>(arg_idx++) != 0;
     }
 };
 
@@ -1916,8 +2671,20 @@ struct TrafficValidationConfigBase {
     bool validate() { return ops.validate(this); }
 
     void advance() {
-        num_packets_processed++;
+        advance_cursor();
+        retire();
+    }
+
+    // The two halves of advance(), for receivers that verify packets asynchronously: advance_cursor() moves on to
+    // the next packet's slot and expected values (so it can be polled), retire() counts a packet and returns its
+    // credit once it has been checked. Both happen in packet order per config.
+    void advance_cursor() {
         ops.update(this);
+        num_packets_issued++;
+    }
+
+    void retire() {
+        num_packets_processed++;
 
         // Automatically handle credit return after processing packet
         if (credit_manager_ != nullptr) {
@@ -1925,9 +2692,27 @@ struct TrafficValidationConfigBase {
         }
     }
 
+    bool has_packets_to_issue() const { return num_packets_issued < metadata.num_packets; }
+
     ReceiverTrafficConfigMetadata metadata;
     uint32_t num_packets_processed = 0;
+    uint32_t num_packets_issued = 0;  // packets whose slot the cursor has moved past (>= num_packets_processed)
     ValidationOps ops;
+    // The payload at the current buffer slot as the core's compute engine verifies it (metadata.sfpu_verify): its
+    // words (0 when the config has no payload), and the segments its expected words shift at
+    // (SFPU_VERIFY_REQ_SEGMENTS: segment s ends at slot word payload_segment_end[s] and expects word w to be
+    // seed + w + payload_segment_delta[s]).
+    uint32_t payload_words = 0;
+    uint32_t num_payload_segments = 0;
+    uint32_t payload_segment_end[SFPU_VERIFY_MAX_SEGMENTS] = {};
+    uint32_t payload_segment_delta[SFPU_VERIFY_MAX_SEGMENTS] = {};
+
+    void set_contiguous_payload(uint32_t words) {
+        payload_words = words;
+        num_payload_segments = 1;
+        payload_segment_end[0] = words;
+        payload_segment_delta[0] = 0;
+    }
 
     // Pointer to credit manager (set by ReceiverKernelConfig during initialization)
     void* credit_manager_ = nullptr;  // Type-erased pointer to ReceiverCreditManager
@@ -1979,6 +2764,7 @@ struct WriteValidationConfig : public TrafficValidationConfigBase {
 
         payload_buffer_ = new (payload_buffer_storage.data()) ReceiverPayloadBuffer(
             write_fields.dst_address, metadata.payload_buffer_size, write_fields.payload_size_bytes);
+        set_contiguous_payload(write_fields.payload_size_bytes / sizeof(uint32_t));
     }
 
     static bool poll_impl(TrafficValidationConfigBase* base_config) {
@@ -2015,6 +2801,7 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
 
         payload_buffer_ = new (payload_buffer_storage.data()) ReceiverPayloadBuffer(
             write_fields.dst_address, metadata.payload_buffer_size, write_fields.payload_size_bytes);
+        set_contiguous_payload(write_fields.payload_size_bytes / sizeof(uint32_t));
 
         atomic_inc_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_fields.dst_address);
         atomic_inc_val = atomic_fields.atomic_inc_val;
@@ -2076,6 +2863,30 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
 
         payload_size_bytes = scatter_write_fields.payload_size_bytes;
         current_offset = 0;
+
+        // For the compute verifier: the chunks tile the slot (the host places them in reverse payload order), and
+        // each one carries the pattern from its offset in the payload. Segments go in slot order.
+        static_assert(NocUnicastScatterWriteFields::MAX_CHUNKS <= SFPU_VERIFY_MAX_SEGMENTS);
+        std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> payload_offsets{};
+        std::array<uint8_t, NocUnicastScatterWriteFields::MAX_CHUNKS> slot_order{};
+        for (uint32_t i = 0; i < chunk_count; i++) {
+            payload_offsets[i] = i == 0 ? 0 : payload_offsets[i - 1] + chunk_sizes[i - 1];
+            uint32_t j = i;  // insertion sort by slot address
+            for (; j > 0 && base_dst_addresses[slot_order[j - 1]] > base_dst_addresses[i]; j--) {
+                slot_order[j] = slot_order[j - 1];
+            }
+            slot_order[j] = static_cast<uint8_t>(i);
+        }
+        const uint32_t slot_base = base_dst_addresses[slot_order[0]];
+        payload_words = payload_size_bytes / sizeof(uint32_t);
+        num_payload_segments = chunk_count;
+        for (uint32_t s = 0; s < chunk_count; s++) {
+            const uint32_t i = slot_order[s];
+            const uint32_t slot_offset = base_dst_addresses[i] - slot_base;
+            ASSERT(slot_offset == (s == 0 ? 0 : payload_segment_end[s - 1] * sizeof(uint32_t)));
+            payload_segment_end[s] = (slot_offset + chunk_sizes[i]) / sizeof(uint32_t);
+            payload_segment_delta[s] = payload_offsets[i] / sizeof(uint32_t) - slot_offset / sizeof(uint32_t);
+        }
     }
 
     static bool poll_impl(TrafficValidationConfigBase* base_config) {

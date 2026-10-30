@@ -971,36 +971,29 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     pattern.size.value(),
                     chunk_size);
 
-                // Use histogram analysis to find uniform receiver core and memory address
-                std::map<CoreCoord, uint32_t> core_counts;
-                std::map<CoreCoord, std::map<uint32_t, uint32_t>> payload_memory_histograms;
-                std::map<CoreCoord, std::map<uint32_t, uint32_t>> atomic_memory_histograms;
+                bool needs_payload =
+                    (pattern.ntype->type == NocSendType::NOC_UNICAST_WRITE ||
+                     pattern.ntype->type == NocSendType::NOC_UNICAST_SCATTER_WRITE ||
+                     pattern.ntype->type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
+                bool needs_atomic = pattern_needs_atomic_inc(pattern);
 
-                // Build histograms for all destination devices
+                // Count on how many destination devices each receiver core is available. A multicast needs one
+                // core (and addresses on it) that is free on every destination device.
+                std::map<CoreCoord, uint32_t> core_counts;
+                std::vector<TestDeviceResources*> dst_device_resources;
+                dst_device_resources.reserve(dst_node_ids.size());
                 for (const auto& device_id : dst_node_ids) {
                     auto& device_resources = get_or_create_device_resources(device_id);
+                    dst_device_resources.push_back(&device_resources);
 
                     const auto& receiver_pool = device_resources.core_pools_[RECEIVER_TYPE_IDX];
                     if (!receiver_pool.initialized) {
                         device_resources.initialize_receiver_pool(receiver_partitions);
                     }
 
-                    const auto available_cores =
-                        receiver_pool.get_available_cores(device_resources.core_workload_, sender.link_id);
-                    for (const auto& core : available_cores) {
+                    for (const auto& core :
+                         receiver_pool.get_available_cores(device_resources.core_workload_, sender.link_id)) {
                         core_counts[core]++;
-                        auto& core_resources = device_resources.get_or_create_core_resources(core, CoreType::RECEIVER);
-                        // Build histogram for payload addresses
-                        if (core_resources.has_available_payload_chunk()) {
-                            const auto& available_chunks = core_resources.get_available_payload_chunks();
-                            for (auto addr : available_chunks) {
-                                payload_memory_histograms[core][addr]++;
-                            }
-                        }
-                        // Build histogram for atomic counter addresses
-                        for (auto addr : core_resources.get_available_atomic_counters()) {
-                            atomic_memory_histograms[core][addr]++;
-                        }
                     }
                 }
 
@@ -1008,27 +1001,23 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 std::optional<std::pair<CoreCoord, uint32_t>> uniform_atomic_receiver = std::nullopt;
                 std::optional<CoreCoord> selected_core = std::nullopt;
 
-                // Validate we found all required uniform addresses
-                bool needs_payload =
-                    (pattern.ntype->type == NocSendType::NOC_UNICAST_WRITE ||
-                     pattern.ntype->type == NocSendType::NOC_UNICAST_SCATTER_WRITE ||
-                     pattern.ntype->type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
-                bool needs_atomic = pattern_needs_atomic_inc(pattern);
-
-                // Find a core that satisfies ALL requirements (both payload and atomic if both needed)
+                // Take the first core (in CoreCoord order) available on every destination, using the lowest address
+                // free on all of them. Addresses are only examined for candidate cores, and only for the kinds this
+                // ntype needs, rather than histogramming every free address of every core up front.
                 for (const auto& [core, device_count] : core_counts) {
-                    // skip the core if it doesnt match the expected device count
                     if (device_count != dst_node_ids.size()) {
                         continue;
                     }
 
-                    bool core_has_all_required_addresses = true;
                     std::optional<uint32_t> payload_addr = std::nullopt;
-                    std::optional<uint32_t> atomic_addr = std::nullopt;
-
-                    // Check if this core has uniform payload address if needed
                     if (needs_payload) {
-                        const auto& payload_address_histogram = payload_memory_histograms[core];
+                        std::map<uint32_t, uint32_t> payload_address_histogram;
+                        for (auto* device_resources : dst_device_resources) {
+                            auto& core_resources = device_resources->get_or_create_core_resources(core, CoreType::RECEIVER);
+                            for (auto addr : core_resources.get_available_payload_chunks()) {
+                                payload_address_histogram[addr]++;
+                            }
+                        }
                         for (const auto& [addr, addr_device_count] : payload_address_histogram) {
                             if (addr_device_count == dst_node_ids.size()) {
                                 payload_addr = addr;
@@ -1036,35 +1025,39 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                             }
                         }
                         if (!payload_addr.has_value()) {
-                            core_has_all_required_addresses = false;
+                            continue;
                         }
                     }
 
-                    // Check if this core has uniform atomic address if needed
-                    if (needs_atomic && core_has_all_required_addresses) {
-                        const auto& atomic_address_histogram = atomic_memory_histograms[core];
-                        for (const auto& [addr, addr_device_count] : atomic_address_histogram) {
-                            if (addr_device_count == dst_node_ids.size()) {
-                                atomic_addr = addr;
+                    std::optional<uint32_t> atomic_addr = std::nullopt;
+                    if (needs_atomic) {
+                        // Free atomic counters on a core are the contiguous run [next free, region end), so the
+                        // lowest counter free on every device is the highest of the per-device first-free ones.
+                        std::optional<uint32_t> first_common;
+                        bool all_have_counters = true;
+                        for (auto* device_resources : dst_device_resources) {
+                            auto& core_resources = device_resources->get_or_create_core_resources(core, CoreType::RECEIVER);
+                            const auto counters = core_resources.get_available_atomic_counters();
+                            if (counters.empty()) {
+                                all_have_counters = false;
                                 break;
                             }
+                            first_common = std::max(first_common.value_or(0), counters.front());
                         }
-                        if (!atomic_addr.has_value()) {
-                            core_has_all_required_addresses = false;
+                        if (!all_have_counters) {
+                            continue;
                         }
+                        atomic_addr = first_common;
                     }
 
-                    // If this core has all required addresses, use it
-                    if (core_has_all_required_addresses) {
-                        selected_core = core;
-                        if (payload_addr.has_value()) {
-                            uniform_payload_receiver = std::make_pair(core, payload_addr.value());
-                        }
-                        if (atomic_addr.has_value()) {
-                            uniform_atomic_receiver = std::make_pair(core, atomic_addr.value());
-                        }
-                        break;  // Found a suitable core, stop searching
+                    selected_core = core;
+                    if (payload_addr.has_value()) {
+                        uniform_payload_receiver = std::make_pair(core, payload_addr.value());
                     }
+                    if (atomic_addr.has_value()) {
+                        uniform_atomic_receiver = std::make_pair(core, atomic_addr.value());
+                    }
+                    break;  // Found a suitable core, stop searching
                 }
 
                 if (!selected_core.has_value() || (needs_payload && !uniform_payload_receiver.has_value()) ||
