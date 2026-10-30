@@ -44,6 +44,28 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
 MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology);
 
+// A TensorSpec together with the buffer configs a device allocation of it uses.
+// The configs depend on nothing but the spec, yet building them (above all the sharding description of a sharded spec)
+// costs far more than allocating the buffer. A caller that allocates the same spec repeatedly can build this once,
+// on any mesh, and allocate from it.
+class PreparedTensorAllocation {
+public:
+    explicit PreparedTensorAllocation(TensorSpec spec);
+
+    const TensorSpec& tensor_spec() const { return spec_; }
+    const distributed::DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
+    const distributed::ReplicatedBufferConfig& replicated_config() const { return replicated_config_; }
+
+private:
+    TensorSpec spec_;
+    distributed::DeviceLocalBufferConfig device_local_config_;
+    distributed::ReplicatedBufferConfig replicated_config_;
+};
+
+// Same as the TensorSpec overload, but allocates from the buffer configs in `prepared` instead of computing them.
+MeshTensor allocate_mesh_tensor_on_device_with_topology(
+    distributed::MeshDevice& mesh_device, const PreparedTensorAllocation& prepared, TensorTopology topology);
+
 // ======================================================================================
 //                        Topology accessors
 // ======================================================================================

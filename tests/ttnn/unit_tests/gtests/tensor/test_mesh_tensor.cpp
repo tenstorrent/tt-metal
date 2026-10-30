@@ -33,6 +33,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -181,6 +182,67 @@ TEST_F(MeshTensorTest, Lifecycle) {
     input_tensor.deallocate();
     EXPECT_FALSE(input_tensor.is_allocated());
     EXPECT_THROW({ input_tensor.mesh_buffer(); }, std::runtime_error);
+}
+
+// A tensor allocated from a PreparedTensorAllocation has the same buffer as one allocated from its spec, one prepared
+// allocation serves any number of allocations, and data round-trips through the tensor.
+TEST_F(MeshTensorTest, CreateDeviceTensorFromPreparedAllocation) {
+    const ttnn::Shape shape{1, 1, 128, 64};
+    const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(1, 1)));
+    const std::vector<MemoryConfig> memory_configs = {
+        MemoryConfig{},
+        MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, ShardSpec(grid, {32, 64})),
+        MemoryConfig(BufferType::L1, NdShardSpec{ttnn::Shape{1, 1, 32, 32}, grid, ShardOrientation::ROW_MAJOR}),
+    };
+    std::vector<float> host_data(shape.volume());
+    std::iota(host_data.begin(), host_data.end(), 0);
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+
+    for (size_t i = 0; i < memory_configs.size(); ++i) {
+        SCOPED_TRACE(fmt::format("memory config {}", i));
+        const MemoryConfig& memory_config = memory_configs[i];
+        const tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, Layout::TILE, memory_config));
+        const tt::tt_metal::PreparedTensorAllocation prepared(spec);
+        EXPECT_EQ(prepared.tensor_spec(), spec);
+
+        Tensor host_tensor = distribute_tensor(Tensor::from_vector(host_data, spec), *mapper);
+        Tensor reference = ttnn::create_device_tensor(spec, mesh_device_.get(), host_tensor.tensor_topology());
+        Tensor first = ttnn::create_device_tensor(prepared, mesh_device_.get(), host_tensor.tensor_topology());
+        Tensor second = ttnn::create_device_tensor(prepared, mesh_device_.get(), host_tensor.tensor_topology());
+
+        for (const Tensor* tensor : {&first, &second}) {
+            ASSERT_TRUE(tensor->is_allocated());
+            EXPECT_EQ(tensor->tensor_spec(), spec);
+            EXPECT_EQ(tensor->tensor_topology(), host_tensor.tensor_topology());
+            EXPECT_EQ(tensor->mesh_buffer().size(), reference.mesh_buffer().size());
+        }
+        EXPECT_NE(first.mesh_buffer().address(), second.mesh_buffer().address());
+
+        for (const auto& coordinate : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+            if (!mesh_device_->is_local(coordinate)) {
+                continue;
+            }
+            const auto* expected = reference.mesh_buffer().get_device_buffer(coordinate);
+            const auto* actual = first.mesh_buffer().get_device_buffer(coordinate);
+            EXPECT_EQ(actual->size(), expected->size());
+            EXPECT_EQ(actual->page_size(), expected->page_size());
+            EXPECT_EQ(actual->buffer_type(), expected->buffer_type());
+            EXPECT_EQ(actual->buffer_layout(), expected->buffer_layout());
+            ASSERT_EQ(actual->buffer_distribution_spec().has_value(), expected->buffer_distribution_spec().has_value());
+            if (expected->buffer_distribution_spec().has_value()) {
+                const auto& expected_spec = *expected->buffer_distribution_spec();
+                const auto& actual_spec = *actual->buffer_distribution_spec();
+                EXPECT_EQ(actual_spec.tensor_shape_in_pages(), expected_spec.tensor_shape_in_pages());
+                EXPECT_EQ(actual_spec.shard_shape_in_pages(), expected_spec.shard_shape_in_pages());
+                EXPECT_EQ(actual_spec.cores_with_data(), expected_spec.cores_with_data());
+            }
+        }
+
+        copy_to_device(host_tensor, second);
+        for (const auto& shard : get_device_tensors(cpu(second))) {
+            EXPECT_THAT(shard.to_vector<float>(), Pointwise(FloatEq(), host_data));
+        }
+    }
 }
 
 TEST_F(MeshTensorTest, ToDeviceMemoryConfigOverride) {
