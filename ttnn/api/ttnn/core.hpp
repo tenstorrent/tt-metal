@@ -47,6 +47,12 @@ void segfault_handler(int sig);
 
 void dump_stack_trace_on_segfault();
 
+// Thread-local "current command queue id" selection.
+//
+// TTNN entry points that take an optional cq_id resolve a missing value through current_mesh_command_queue() below,
+// which is what makes `with_command_queue_id` / `ttnn.command_queue` work.
+// The stack is not tied to a device or MetalContext: get returns 0 when nothing has been pushed, and push/pop never
+// create a context. pop on an empty stack is a fatal error.
 QueueId get_current_command_queue_id_for_thread();
 void push_current_command_queue_id_for_thread(QueueId cq_id);
 QueueId pop_current_command_queue_id_for_thread();

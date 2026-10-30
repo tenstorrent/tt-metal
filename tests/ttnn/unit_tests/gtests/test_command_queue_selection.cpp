@@ -45,6 +45,14 @@ TEST_F(CommandQueueSelectionFixture, ExplicitQueueWinsOverThreadScope) {
     EXPECT_EQ(ttnn::core::current_mesh_command_queue(*device_, QueueId(1)).id(), 1);
 }
 
+// TTNN's selection is not visible to Metal: a Metal lookup without a queue id stays cq 0 inside a TTNN scope, which is
+// why every TTNN call site resolves its queue through current_mesh_command_queue.
+TEST_F(CommandQueueSelectionFixture, MetalNoArgQueueIsZeroInsideTtnnScope) {
+    auto guard = ttnn::with_command_queue_id(QueueId(1));
+    EXPECT_EQ(device_->mesh_command_queue().id(), 0);
+    EXPECT_EQ(ttnn::core::current_mesh_command_queue(*device_).id(), 1);
+}
+
 TEST_F(CommandQueueSelectionFixture, ThreadScopeIsPerThread) {
     auto guard = ttnn::with_command_queue_id(QueueId(1));
     uint8_t other_thread_cq = 99;
