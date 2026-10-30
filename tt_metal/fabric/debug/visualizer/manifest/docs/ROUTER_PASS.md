@@ -19,7 +19,7 @@ wraps or crosses hosts, which sibling router each downstream edge lands on, and 
 2. **The router's shape.** It must agree with the number of ERISCs given arguments.
 3. **The channel context.** What every channel needs: the channel allocator, which sender channel is each VC's worker
 
-   channel, whether 2D routing and the channel trimming capture are on, speedy VC0, mux mode, the trimming profile the
+   channel, whether 2D routing and the channel trimming capture are on, speedy VC0, the trimming profile the
     builder applied, and the channel buffer size.
 4. **Channels**, VC by VC: each sender, then each receiver.
 5. **Downstream edges**, VC by VC.
@@ -57,6 +57,7 @@ the link is a dispatch link, from its location. The peer, `cross_host` and `wrap
 | `num_active_eriscs` | `NUM_ACTIVE_ERISCS` |
 | `channel_trimming_overrides_applied` | Whether the builder applied a channel trimming profile to the router |
 | `vc0_bubble_flow_control` | `ENABLE_DEADLOCK_AVOIDANCE` |
+| `has_tensix_extension` | `FABRIC_TENSIX_EXTENSION_MUX_MODE`, the ERISC builder's `has_tensix_extension`: the router's tensix mux carries its VC0 senders other than the worker channel. False on a dispatch link, even in mux mode |
 
 The receivers the VC shape lists must add up to the kernel's `NUM_RECEIVER_CHANNELS`. Otherwise the manifest would list
 receivers the kernel doesn't loop over, or leave out ones it does.
@@ -92,7 +93,8 @@ builder applies them:
 1. `vc_not_serviced`: the kernel doesn't run the VC on this router. VC0 always runs, VC1 only under
 
    `FABRIC_2D_VC1_SERVICED`, and VC2 only under `FABRIC_2D_VC2_SERVICED`.
-2. `mux`: a VC0 sender other than the worker channel, in mux mode. The tensix mux carries its traffic.
+2. `mux`: a VC0 sender other than the worker channel, on a router with a tensix extension. The tensix mux carries its
+   traffic.
 3. `trimmed`: the applied channel trimming profile turned it off (a sender it doesn't use, or a receiver whose data it
 
    doesn't forward).
@@ -110,7 +112,7 @@ the channel has no slots.
 ### Senders
 
 **Producer** (`producer`): what feeds the channel. Each VC's worker channel is fed by `"worker"`, or by `"tensix_mux"` for
-VC0 in mux mode. A channel fed by a sibling router gets that sibling's path from the topology pass. Otherwise null.
+VC0 on a router with a tensix extension. A channel fed by a sibling router gets that sibling's path from the topology pass. Otherwise null.
 
 **Credits** (`credits`): where the channel's credits come back to it. `completed` always, and `acked` only on VC0 with
 bubble flow control (first-level acks). How depends on the VC's backing:
@@ -140,8 +142,7 @@ same chip and routing plane, by VC. They come from the receiver's downstream ada
 router's other directions, plus one. In 1D there's one edge, `edge1`.
 - **Landing channel**: the sibling's sender channel the edge lands on, by the builder's rule for the edge's VC and the
 two routers' directions. The topology pass turns this and the sibling's direction into `downstream_channel`.
-- **Core**: the NoC core the connection writes to. The topology pass compares it with the sibling's ERISC to set
-`through_tensix_mux`.
+- **Core**: the NoC core the connection writes to: the sibling's ERISC, or its tensix mux.
 - **Fields**: the edge's free-slots stream and teardown semaphore. The kernel takes an edge's teardown semaphore by its
 rank among the router's edges, VC0's before VC1's.
 

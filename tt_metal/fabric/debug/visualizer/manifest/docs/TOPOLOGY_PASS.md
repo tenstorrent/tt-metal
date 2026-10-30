@@ -75,12 +75,21 @@ to that router, which must exist.
 
 ### 4. Edge siblings
 
-Each downstream edge the router pass collected names its sibling by direction only. `resolve_edge_siblings` finds the
-sibling router: the router facing that direction on the same chip and routing plane. Then:
+The router pass knows only the direction each downstream edge points in, not which router is there.
+`resolve_edge_siblings` finds that router from the chip's connected router pairs.
+
+The chip's `FabricBuilder` decides which of its routers to connect (`get_router_connection_pairs`), and publishes those
+pairs with the chip. For each edge, the sibling is the router paired with this one that faces the edge's direction.
+
+Reading the pairs, rather than looking for any router facing that direction, gives the routers the builder actually
+connected. That matters where it pairs routers that don't face opposite ways, such as the corner fold in 1D.
+
+For each edge:
 
 - The edge's landing channel must be one of the sibling's sender channels on the edge's VC.
-- **`through_tensix_mux`** is set when the core the edge writes to isn't the sibling's ERISC, which means it writes to
-  the sibling's tensix mux.
+- **`through_tensix_mux`** comes from the builder's rule for which builder owns a VC's senders,
+  `builder_type_for_vc(vc, has_tensix_extension)` on the sibling's shape: the tensix mux owns VC0 on a router with a
+  tensix extension.
 - Only one edge may land on each sibling sender channel.
 
 Each edge that lands on a sender channel, other than through a tensix mux, makes that sibling the channel's

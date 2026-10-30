@@ -298,6 +298,8 @@ void FabricBuilder::create_kernels() {
 
 void FabricBuilder::publish_manifest_chip() const {
     const auto& ctx = kernel_creation_context_;
+
+    // Create the chip manifest
     manifest::Chip chip{
         .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
         .local_sync =
@@ -308,6 +310,8 @@ void FabricBuilder::publish_manifest_chip() const {
             },
         .routers = {},
     };
+
+    // Add the routers to the manifest
     chip.routers.reserve(routers_.size());
     for (const auto& [eth_chan, router_builder] : routers_) {
         chip.routers.push_back(router_builder->collect_manifest_router(chip_facts_));
@@ -315,6 +319,9 @@ void FabricBuilder::publish_manifest_chip() const {
     std::sort(chip.routers.begin(), chip.routers.end(), [](const manifest::Router& a, const manifest::Router& b) {
         return a.identity.eth_chan < b.identity.eth_chan;
     });
+    for (const auto& pair : get_router_connection_pairs()) {
+        chip.connected_routers.push_back({.eth_chan1 = pair.chan1, .eth_chan2 = pair.chan2});
+    }
     builder_context_.get_manifest_chips().publish(
         device_->id(), std::move(chip), builder_context_.get_num_fabric_initialized_routers(device_->id()));
 }

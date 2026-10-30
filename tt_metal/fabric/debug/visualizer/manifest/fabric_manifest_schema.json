@@ -365,11 +365,15 @@
             "receivers_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
             "num_active_eriscs": { "type": "integer", "minimum": 1 },
             "channel_trimming_overrides_applied": { "type": "boolean" },
-            "vc0_bubble_flow_control": { "type": "boolean" }
+            "vc0_bubble_flow_control": { "type": "boolean" },
+            "has_tensix_extension": {
+              "description": "The router's VC0 senders other than the worker channel are carried by its tensix mux, so a sibling's VC0 edge into it ends at the mux. False on a dispatch link, even in mux mode.",
+              "type": "boolean"
+            }
           },
           "required": [
             "num_vcs", "senders_per_vc", "receivers_per_vc", "num_active_eriscs",
-            "channel_trimming_overrides_applied", "vc0_bubble_flow_control"
+            "channel_trimming_overrides_applied", "vc0_bubble_flow_control", "has_tensix_extension"
           ],
           "additionalProperties": false
         },

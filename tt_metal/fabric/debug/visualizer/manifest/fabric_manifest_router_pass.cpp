@@ -143,6 +143,7 @@ manifest::RouterShape collect_shape(const ManifestRouterInputs& inputs) {
         .num_active_eriscs = read_emitted_value(args, "NUM_ACTIVE_ERISCS"),
         .channel_trimming_overrides_applied = inputs.erisc_builder.get_channel_trimming_overrides().has_value(),
         .vc0_bubble_flow_control = read_emitted_flag(args, "ENABLE_DEADLOCK_AVOIDANCE"),
+        .has_tensix_extension = read_emitted_flag(args, "FABRIC_TENSIX_EXTENSION_MUX_MODE"),
     };
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         shape.senders_per_vc[vc] = read_emitted_value(args, fmt::format("ACTUAL_VC{}_SENDER_CHANNELS", vc));
@@ -413,8 +414,6 @@ struct ChannelContext {
     const builder::RouterProducerSlots producer_slots;
     const Emission emission;
     const bool speedy_vc0;
-    // The router's VC0 senders other than the worker channel are carried by its tensix mux.
-    const bool mux_mode;
     // The channel trimming profile the builder applied to this router, if any.
     const std::optional<ChannelTrimmingOverrides>& trimming;
     const uint32_t channel_buffer_size;
@@ -496,7 +495,7 @@ std::optional<manifest::SenderChannelProducer> collect_local_producer(
     if (ctx.producer_slots.worker_channel(index.vc) != index.channel) {
         return std::nullopt;
     }
-    if (ctx.mux_mode && index.vc == 0) {
+    if (ctx.shape.has_tensix_extension && index.vc == 0) {
         return manifest::LocalTensixMux{};
     }
     return manifest::LocalWorker{};
@@ -538,7 +537,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         index.vc,
         index.channel,
         sender.serviced_by,
-        ctx.mux_mode && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
+        ctx.shape.has_tensix_extension && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
         ctx.trimming.has_value() && !ctx.trimming->is_sender_channel_used(c));
     sender.producer = collect_local_producer(ctx, index);
     sender.ring_buffer = describe_ring_buffer(
@@ -635,7 +634,6 @@ ChannelContext make_channel_context(const ManifestRouterInputs& inputs, const ma
                 .channel_trimming_capture = read_emitted_flag(args, "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE"),
             },
         .speedy_vc0 = read_emitted_flag(args, "ENABLE_SPEEDY_VC0"),
-        .mux_mode = read_emitted_flag(args, "FABRIC_TENSIX_EXTENSION_MUX_MODE"),
         .trimming = inputs.erisc_builder.get_channel_trimming_overrides(),
         .channel_buffer_size = read_emitted_value(args, "CHANNEL_BUFFER_SIZE"),
     };

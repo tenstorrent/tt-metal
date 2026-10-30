@@ -234,7 +234,7 @@ These are names the manifest writes as strings, so nothing appears both here and
 | --- | --- |
 | `identity` | `eth_chan`, `logical_core` and `virtual_core`. The router's mesh and chip are in its path, and its direction and routing plane in its key |
 | `link` | `edge_capability`, `peer` (a router path, or null when the link reaches no active router), `cross_host`, `wrap` and `dispatch_link` |
-| `shape` | `num_vcs`, `senders_per_vc`, `receivers_per_vc`, `num_active_eriscs`, `channel_trimming_overrides_applied` and `vc0_bubble_flow_control` |
+| `shape` | `num_vcs`, `senders_per_vc`, `receivers_per_vc`, `num_active_eriscs`, `channel_trimming_overrides_applied`, `vc0_bubble_flow_control` and `has_tensix_extension` (the router's tensix mux carries its VC0 senders other than the worker channel) |
 | `credit_counters` | The four L1 credit counter arrays, `to_sender_ack`, `to_sender_completion`, `receiver_ack` and `receiver_completion`, each an L1 region plus `indexed_by`: `own_sender_channel` for the `to_sender` arrays, `peer_sender_channel` for the `receiver` arrays. Each element is one sender channel's, by its compact index |
 | `channels` | `senders` and `receivers`, each keyed `vc<v>` then `ch<c>`. VCs with no channels of that kind are left out |
 | `intra_chip_downstream_edges` | Keyed `vc<v>` then `edge<n>`. VCs with no edges are left out |
@@ -288,7 +288,8 @@ One router from a 2D mock manifest, trimmed:
   "link": { "edge_capability": "intramesh_cardinal", "peer": "M0/C1/W1", "cross_host": false, "wrap": false,
             "dispatch_link": true },
   "shape": { "num_vcs": 1, "senders_per_vc": [4, 0, 0], "receivers_per_vc": [1, 0, 0], "num_active_eriscs": 1,
-             "channel_trimming_overrides_applied": false, "vc0_bubble_flow_control": false },
+             "channel_trimming_overrides_applied": false, "vc0_bubble_flow_control": false,
+             "has_tensix_extension": false },
   "channels": {
     "senders": { "vc0": { "ch0": {
       "status": "active", "serviced_by": ["erisc0"], "producer": "worker",
