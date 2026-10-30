@@ -287,6 +287,12 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   pair's real tokens in one window and its padding in another, so no mask tensor at all. Correct, but 2161 us
   against 1098 us for the masked [B, H, S, 64] call at 32 x 512 with mixed lengths
   (`perf_tools/probe_sdpa_windowed.py`).
+* Single requests (512 / 2048 rows) with ttnn.linear's 1D multicast-in0 layout (every core reads its own N slice
+  of the weight from DRAM, the activation block multicast to all): slower in every case, 0.40-0.82x of
+  minimal_matmul (512 rows: QKV 68 vs 49 us, WO 68 vs 37, FF1 + FF3 213 vs 174, FF2 236 vs 94;
+  `perf_tools/probe_small_mm.py`). The flat grid (rows over the 10 core rows, no row padding) for WO / FF2 at
+  10 x 512 is also slower (FF2 519 vs 474 us, WO 280 vs 275), and block sweeps of FF2 / WO / QKV at 10 x 512 find
+  nothing faster than the current blocks.
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
