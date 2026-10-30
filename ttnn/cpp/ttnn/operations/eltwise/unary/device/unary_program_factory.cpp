@@ -182,7 +182,8 @@ void enumerate_core_rt_args(
 
     const auto& input = tensor_args.input;
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
-    const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
+    const auto shard_specs =
+        get_shard_specs(input.tensor_spec(), output.tensor_spec(), operation_attributes.worker_grid);
     const bool has_sharding = shard_specs.has_value();
     const bool rm_interleaved = is_row_major && !has_sharding;
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -401,7 +402,8 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input = tensor_args.input;
-    const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
+    const auto shard_specs =
+        get_shard_specs(input.tensor_spec(), output.tensor_spec(), operation_attributes.worker_grid);
     const bool has_sharding = shard_specs.has_value();
     const bool rm_interleaved = input.layout() == Layout::ROW_MAJOR && !has_sharding;
     const auto plan = get_dram_read_plan(
@@ -483,7 +485,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     DataFormat dfb_data_format_output = cb_dataformat_for(output.dtype());
     uint32_t single_tile_size_output = tile_size(dfb_data_format_output);
 
-    const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
+    const auto shard_specs =
+        get_shard_specs(input.tensor_spec(), output.tensor_spec(), operation_attributes.worker_grid);
     const bool has_sharding = shard_specs.has_value();
     const bool src_sharded = has_sharding && input.is_sharded();
     const bool dst_sharded = has_sharding && output.is_sharded();

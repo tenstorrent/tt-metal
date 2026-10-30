@@ -222,8 +222,9 @@ place.
 Validation, output specs, factory selection and factories then take placement only from the record:
 
 * Kernels, circular/dataflow buffers and semaphores go on ``worker_cores``. Work is split with
-  ``split_work_to_cores(worker_cores, ...)`` (it need not start at (0, 0)), and a multicast grid is a
-  rectangle inside ``worker_cores`` (``ttnn::rectangle_in``), never ``compute_with_storage_grid_size()``.
+  ``split_work_to_cores(worker_cores, ...)`` (it need not start at (0, 0)), spec-less sharded outputs are
+  synthesized with the ``CoreRangeSet`` overload of ``synthesize_output_shard_spec``, and a multicast grid
+  is a rectangle inside ``worker_cores`` (``ttnn::rectangle_in``), never ``compute_with_storage_grid_size()``.
 * ``id`` is for what is keyed by the lane: host synchronization and semaphores.
 * A path that reads or writes shards in place (native sharding, borrowed buffers) is taken only when the
   operation's own cores hold the shards; otherwise it reads and writes them over the NoC, or, with no such

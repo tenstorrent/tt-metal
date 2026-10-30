@@ -571,8 +571,8 @@ def test_situ_glu_requires_cores_when_sub_devices_loaded(device, expect_error):
     device.load_sub_device_manager(manager)
     try:
         gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        # Unrestricted, the composed ops would take sub-device 0 -- the first strip -- instead of the
-        # full grid, with no error to show it. Make the caller name the cores once the grid is split.
+        # Once the grid is split, nothing names the sub-device the composed ops should run on: the caller
+        # names the cores or the sub-device.
         with expect_error(RuntimeError, "sub-devices are loaded"):
             ttnn.situ_glu(gate, gate, SITU_GLU_BETA1, SITU_GLU_BETA2)
     finally:
@@ -845,8 +845,7 @@ def test_clamped_silu_glu_requires_cores_when_sub_devices_loaded(device, expect_
     device.load_sub_device_manager(manager)
     try:
         gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        # Unrestricted, multiply would take sub-device 0 rather than the full grid, with no error
-        # to show it.
+        # Once the grid is split, nothing names the sub-device multiply should run on.
         with expect_error(RuntimeError, "sub-devices are loaded"):
             ttnn.clamped_silu_glu(gate, gate, CLAMPED_SILU_GLU_LIMIT)
     finally:

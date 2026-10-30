@@ -48,8 +48,13 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
         }
     }
 
-    return !args.sub_core_grids
-                .has_value();  // Typecast operation has no sub_core_grids support for optimized 2D sharded input path.
+    // The optimized path computes each input shard into the output shard on the same core, so the output must be
+    // sharded as the input is. It has no sub_core_grids support, and runs only where the typecast may.
+    const auto& output_memory_config = tensor_args.preallocated_output.has_value()
+                                           ? tensor_args.preallocated_output->memory_config()
+                                           : args.output_memory_config;
+    return !args.sub_core_grids.has_value() && output_memory_config.shard_spec() == input.shard_spec() &&
+           args.assigned_sub_device.holds(shard_spec.grid);
 }
 }  // namespace
 
@@ -185,6 +190,14 @@ Tensor typecast(
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    TypecastInputs tensor_args{.input = input, .preallocated_output = preallocated_output};
+    auto assigned_sub_device = ttnn::assign_sub_device(
+        input.device(),
+        {.cores = sub_core_grids,
+         .data = ttnn::l1_shard_cores(
+             tensor_args,
+             preallocated_output.has_value() ? std::nullopt : std::optional<MemoryConfig>(output_memory_config))},
+        "typecast");
     return ttnn::device_operation::launch<TypecastDeviceOperation>(
         TypecastParams{
             .input_dtype = input.dtype(),
@@ -194,7 +207,8 @@ Tensor typecast(
             .preserve_fp32_precision = preserve_fp32_precision,
             .bfp8_pack_precise = bfp8_pack_precise,
             .sub_core_grids = sub_core_grids,
+            .assigned_sub_device = std::move(assigned_sub_device),
         },
-        TypecastInputs{.input = input, .preallocated_output = preallocated_output});
+        tensor_args);
 }
 }  // namespace ttnn::prim

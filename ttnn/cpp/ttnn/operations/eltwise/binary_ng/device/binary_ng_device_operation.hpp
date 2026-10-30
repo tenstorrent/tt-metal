@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <tuple>
 
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
@@ -47,7 +48,8 @@ struct BinaryNgDeviceOperation {
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
         std::optional<CoreRangeSet> sub_core_grids;
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+        // The sub-device the op runs on; worker_grid is sub_core_grids within it, or all its cores.
+        ttnn::AssignedSubDevice assigned_sub_device;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
         // The scalar operand is the mathematical left-hand side, so the compute kernel
         // evaluates op(scalar, tensor). Only ever set on the scalar path, where the tensor
@@ -83,9 +85,7 @@ struct BinaryNgDeviceOperation {
             "dtype",
             "compute_kernel_config",
             "sub_core_grids",
-            // core_ranges of every CB and kernel. Depends on the device's sub-device layout, which
-            // nothing else here carries and which does not clear the cache when swapped. Same set on a
-            // single sub-device, so no extra entries there.
+            // core_ranges of every CB and kernel.
             "worker_grid",
             "subtile_broadcast_type",
             "scalar_is_lhs",
@@ -129,6 +129,10 @@ struct BinaryNgDeviceOperation {
                 binary_op_type == BinaryOpType::BIAS_GELU ? op_params : std::optional<binary::BinaryOpParams>{});
         }
     };
+
+    static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& attributes) {
+        return attributes.assigned_sub_device;
+    }
 
     struct tensor_args_t {
         const Tensor& input_tensor_a;

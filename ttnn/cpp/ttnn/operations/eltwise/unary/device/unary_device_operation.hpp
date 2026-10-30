@@ -9,6 +9,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -30,6 +31,8 @@ struct UnaryDeviceOperation {
         bool bfp8_pack_precise = false;
         const CoreRangeSet worker_grid;
         std::optional<CoreRangeSet> sub_core_grids;
+        // The sub-device the op runs on; worker_grid lies within its cores.
+        ttnn::AssignedSubDevice assigned_sub_device;
 
         ttsl::hash::hash_t to_hash() const;
     };
@@ -55,6 +58,10 @@ struct UnaryDeviceOperation {
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
+
+    static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& attributes) {
+        return attributes.assigned_sub_device;
+    }
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

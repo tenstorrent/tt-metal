@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -19,6 +20,8 @@ struct TypecastParams {
     const bool preserve_fp32_precision = false;
     const bool bfp8_pack_precise = false;
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    // The sub-device the typecast runs on (see ttnn::AssignedSubDevice); sub_core_grids narrow the interleaved path.
+    const ttnn::AssignedSubDevice assigned_sub_device;
 };
 
 struct TypecastInputs {

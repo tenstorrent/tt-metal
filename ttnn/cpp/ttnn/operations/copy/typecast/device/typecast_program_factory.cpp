@@ -118,9 +118,8 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const uint32_t entries_per_page =
         is_row_major ? tt::div_up(input_page_size / tt::datum_size(cb_data_format_input), TILE_HW) : 1u;
 
-    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages, is_row_major);
+        tt::tt_metal::split_work_to_cores(args.assigned_sub_device.worker_cores, num_pages, is_row_major);
     (void)num_cores;
 
     // ---- Resource names ----

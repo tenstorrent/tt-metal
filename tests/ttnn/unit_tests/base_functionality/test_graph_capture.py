@@ -710,7 +710,8 @@ def test_graph_capture_places_a_program_on_the_sub_device_of_its_kernels(device)
             torch.rand((1, 1, 32, 128), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
         )
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        ttnn.typecast(tt_input, ttnn.float32)
+        with ttnn.sub_device(0):
+            ttnn.typecast(tt_input, ttnn.float32)
         captured_graph = ttnn.graph.end_graph_capture()
     finally:
         ttnn.synchronize_device(device)

@@ -139,10 +139,14 @@ struct AllShardVolumes {
     std::optional<std::uint32_t> c_shard_volume;
 };
 
+// The shard volumes of the native L1-sharded path, which reads and writes the shards in place; nullopt when the op
+// takes the TensorAccessor path instead, including when `worker_grid`, the cores the op runs on, does not hold every
+// shard.
 std::optional<AllShardVolumes> get_shard_volumes(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c);
+    const tt::tt_metal::TensorSpec& c,
+    const tt::tt_metal::CoreRangeSet& worker_grid);
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 

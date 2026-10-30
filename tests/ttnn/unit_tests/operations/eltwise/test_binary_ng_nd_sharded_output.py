@@ -63,6 +63,13 @@ def test_binary_nd_sharded_operands(device, inputs_nd_sharded, preallocated_outp
 )
 def test_binary_nd_sharded_on_second_sub_device(device, inputs_nd_sharded, explicit_memory_config):
     """The output keeps the ND grid on the second sub-device, and the op runs there instead of on the first."""
+    torch.manual_seed(0)
+    torch_a = torch.randn(SHAPE).bfloat16()
+    torch_b = torch.randn(SHAPE).bfloat16()
+    # Computed before the sub-devices are loaded: with two of them, an add on interleaved tensors names neither.
+    expected = ttnn.to_torch(
+        ttnn.add(to_device(device, torch_a, ttnn.L1_MEMORY_CONFIG), to_device(device, torch_b, ttnn.L1_MEMORY_CONFIG))
+    )
     sub_device_0 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))})])
     sub_device_1 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))})])
     manager = device.create_sub_device_manager([sub_device_0, sub_device_1], 3200)
@@ -77,14 +84,6 @@ def test_binary_nd_sharded_on_second_sub_device(device, inputs_nd_sharded, expli
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
             ),
-        )
-        torch.manual_seed(0)
-        torch_a = torch.randn(SHAPE).bfloat16()
-        torch_b = torch.randn(SHAPE).bfloat16()
-        expected = ttnn.to_torch(
-            ttnn.add(
-                to_device(device, torch_a, ttnn.L1_MEMORY_CONFIG), to_device(device, torch_b, ttnn.L1_MEMORY_CONFIG)
-            )
         )
         input_config = config if inputs_nd_sharded else ttnn.L1_MEMORY_CONFIG
         a = to_device(device, torch_a, input_config)

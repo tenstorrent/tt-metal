@@ -130,8 +130,14 @@ void test_operation_infrastructure() {
 
     auto mem_config = tt::tt_metal::MemoryConfig{};
     const std::vector<EltwiseUnaryWithParam> op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}};
+    auto sub_device = ttnn::assign_sub_device(device, {}, "unary");
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        op_chain, input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt);
+        op_chain,
+        input_tensor,
+        std::nullopt,
+        std::optional<tt::tt_metal::MemoryConfig>(mem_config),
+        std::nullopt,
+        sub_device.worker_cores);
 
     Op::operation_attributes_t op_args{
         .op_chain = op_chain,
@@ -142,6 +148,7 @@ void test_operation_infrastructure() {
         .bfp8_pack_precise = false,
         .worker_grid = worker_grid,
         .sub_core_grids = std::nullopt,
+        .assigned_sub_device = sub_device,
     };
     Op::tensor_args_t tensor_args{.input = input_tensor, .output_tensor = std::nullopt};
     auto program_hash = Op::compute_program_hash(op_args, tensor_args);

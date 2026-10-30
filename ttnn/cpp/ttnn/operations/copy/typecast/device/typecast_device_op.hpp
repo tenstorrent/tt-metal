@@ -27,6 +27,10 @@ struct TypecastDeviceOperation {
         TypecastSubgridProgramFactory,
         TypecastRowMajorChunkedProgramFactory>;
 
+    static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& args) {
+        return args.assigned_sub_device;
+    }
+
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

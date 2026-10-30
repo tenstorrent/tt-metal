@@ -23,8 +23,12 @@ struct UnaryShardSpecs {
     tt::tt_metal::ShardSpec output_shard_spec;
 };
 
+// The native path reads and writes the shards in place, so it is taken only when `worker_grid`, the cores the op runs
+// on, holds both shard grids; otherwise the op reads and writes them over the NoC.
 std::optional<UnaryShardSpecs> get_shard_specs(
-    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+    const tt::tt_metal::TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const tt::tt_metal::CoreRangeSet& worker_grid);
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
@@ -75,13 +79,14 @@ DramReadPlan get_dram_read_plan(
     const tt::tt_metal::TensorSpec& output_spec,
     const tt::tt_metal::CoreRangeSet& worker_grid);
 
-// The cores an op runs on: sub_core_grids, a shard grid, or the device's workers, fewer for small DRAM tensors.
+// The cores an op runs on: sub_core_grids, or the cores of its sub-device, fewer for small DRAM tensors.
 tt::tt_metal::CoreRangeSet get_worker_grid(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const tt::tt_metal::CoreRangeSet& sub_device_cores);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
@@ -96,12 +101,14 @@ void require_buffer_distribution_matches_spec(
 
 void require_buffer_distribution_matches_spec(const Tensor& tensor, const char* slot);
 
-// Synthesize a populated-shard output ShardSpec for specless sharded eltwise-unary outputs.
+// Synthesize a populated-shard output ShardSpec for specless sharded eltwise-unary outputs, over `cores` (the op's
+// sub-device's), or over the device's grid when the op was assigned none.
 // `output_element_size_bytes` reflects the output dtype (typecast can differ from input dtype).
 tt::tt_metal::ShardSpec generate_output_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
-    uint32_t output_element_size_bytes);
+    uint32_t output_element_size_bytes,
+    const tt::tt_metal::CoreRangeSet& cores);
 
 }  // namespace ttnn::operations::unary

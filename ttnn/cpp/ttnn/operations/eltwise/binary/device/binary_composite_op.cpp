@@ -1322,15 +1322,13 @@ Tensor situ_glu(
         cores = gate.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
     }
     if (!cores.has_value()) {
-        // Unrestricted, the composed ops fall back to the worker cores of get_sub_device_ids().front().
-        // That is the whole grid only while the device is unpartitioned: the default manager holds one
-        // sub-device spanning it. Once a custom manager is loaded, front() is sub-device 0 -- some
-        // arbitrary strip -- and silently landing there is never what a caller means.
+        // With several sub-devices loaded and nothing naming one, the composed ops refuse
+        // (ttnn::assign_sub_device); refuse here first, naming situ_glu.
         const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
         TT_FATAL(
             loaded_sub_devices.size() == 1,
-            "situ_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on "
-            "sub-device 0 rather than the full grid. Pass sub_core_grids or sub_device_id.",
+            "situ_glu: {} sub-devices are loaded and nothing names the one to run on. Pass sub_core_grids or "
+            "sub_device_id.",
             loaded_sub_devices.size());
     }
 
@@ -1452,14 +1450,13 @@ Tensor clamped_silu_glu(
         cores = gate.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
     }
     if (!cores.has_value()) {
-        // Unrestricted, multiply falls back to get_sub_device_ids().front(), which is the whole grid
-        // only while the device is unpartitioned. Once a custom manager is loaded that is sub-device
-        // 0, an arbitrary strip, and landing there silently is never what a caller means.
+        // With several sub-devices loaded and nothing naming one, the composed ops refuse
+        // (ttnn::assign_sub_device); refuse here first, naming clamped_silu_glu.
         const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
         TT_FATAL(
             loaded_sub_devices.size() == 1,
-            "clamped_silu_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on "
-            "sub-device 0 rather than the full grid. Pass sub_core_grids or sub_device_id.",
+            "clamped_silu_glu: {} sub-devices are loaded and nothing names the one to run on. Pass sub_core_grids "
+            "or sub_device_id.",
             loaded_sub_devices.size());
     }
 

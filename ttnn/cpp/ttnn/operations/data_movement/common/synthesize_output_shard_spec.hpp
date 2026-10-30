@@ -38,6 +38,22 @@ tt::tt_metal::ShardSpec synthesize_output_shard_spec(
     tt::tt_metal::TensorMemoryLayout memory_layout,
     const SynthesizeOutputShardSpecOpts& opts = {});
 
+// The same over `cores`, the cores an operation may place the output on, instead of a grid at the origin. HEIGHT and
+// WIDTH take the cores they need in order from `cores`; BLOCK takes its grid at the start of the largest rectangle of
+// `cores`. Over a rectangle of cores starting at the origin, the result of the overloads above.
+tt::tt_metal::ShardSpec synthesize_output_shard_spec(
+    const tt::tt_metal::CoreRangeSet& cores,
+    uint64_t tensor_height,
+    uint64_t tensor_width,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    const SynthesizeOutputShardSpecOpts& opts = {});
+
+tt::tt_metal::ShardSpec synthesize_output_shard_spec(
+    const tt::tt_metal::CoreRangeSet& cores,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    const SynthesizeOutputShardSpecOpts& opts = {});
+
 // Strict: reject on no valid tensor_width divisor (caller falls back).
 // Lenient: never nullopt for RM — tile-pads shard_width (WIDTH_SHARDED) or returns `spec` unchanged.
 enum class RmPageAlignmentMode : uint8_t { Strict, Lenient };
@@ -50,6 +66,16 @@ std::optional<tt::tt_metal::ShardSpec> shrink_shard_for_rm_page_alignment(
     uint32_t element_size_bytes,
     uint64_t tensor_width,
     const tt::tt_metal::CoreCoord& compute_grid_size,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    RmPageAlignmentMode mode = RmPageAlignmentMode::Strict);
+
+// The same, taking the cores in order from `cores` instead of a grid at the origin.
+std::optional<tt::tt_metal::ShardSpec> shrink_shard_for_rm_page_alignment(
+    const tt::tt_metal::ShardSpec& spec,
+    tt::tt_metal::Layout input_layout,
+    uint32_t element_size_bytes,
+    uint64_t tensor_width,
+    const tt::tt_metal::CoreRangeSet& cores,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     RmPageAlignmentMode mode = RmPageAlignmentMode::Strict);
 

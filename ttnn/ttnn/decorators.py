@@ -388,7 +388,7 @@ def sub_device(sub_device_id):
     Example::
 
         with ttnn.sub_device(1):
-            y = ttnn.my_op(x)  # runs on sub-device 1's cores, or raises
+            y = ttnn.typecast(x, ttnn.bfloat16)  # runs on sub-device 1's cores, or raises
     """
     if isinstance(sub_device_id, int):
         sub_device_id = ttnn.SubDeviceId(sub_device_id)

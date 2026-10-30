@@ -14,6 +14,8 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/assigned_sub_device.hpp"
+
 namespace ttnn::operations::data_movement::common {
 
 using tt::tt_metal::CoreCoord;
@@ -24,6 +26,22 @@ using tt::tt_metal::ShardSpec;
 using tt::tt_metal::TensorMemoryLayout;
 
 namespace {
+
+// `cores` moved by `offset`.
+CoreRangeSet shifted(const CoreRangeSet& cores, const CoreCoord& offset) {
+    std::vector<CoreRange> ranges;
+    ranges.reserve(cores.ranges().size());
+    for (const CoreRange& range : cores.ranges()) {
+        ranges.emplace_back(
+            CoreCoord{range.start_coord.x + offset.x, range.start_coord.y + offset.y},
+            CoreCoord{range.end_coord.x + offset.x, range.end_coord.y + offset.y});
+    }
+    return CoreRangeSet(ranges);
+}
+
+CoreCoord size_of(const CoreRange& range) {
+    return {range.end_coord.x - range.start_coord.x + 1, range.end_coord.y - range.start_coord.y + 1};
+}
 
 ShardOrientation resolve_orientation(const SynthesizeOutputShardSpecOpts& opts) {
     if (opts.orientation_hint.has_value()) {
@@ -150,12 +168,57 @@ ShardSpec synthesize_output_shard_spec(
     return synthesize_output_shard_spec(compute_grid_size, tensor_height, tensor_width, memory_layout, opts);
 }
 
-std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
+ShardSpec synthesize_output_shard_spec(
+    const CoreRangeSet& cores,
+    uint64_t tensor_height,
+    uint64_t tensor_width,
+    TensorMemoryLayout memory_layout,
+    const SynthesizeOutputShardSpecOpts& opts) {
+    TT_FATAL(!cores.empty(), "{}: no cores to place the output on.", opts.caller_tag);
+    const bool one_rectangle = cores.ranges().size() == 1;
+    if (one_rectangle ||
+        (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED)) {
+        // The grid of a rectangle that size at the origin, moved to the rectangle.
+        const CoreRange rectangle = one_rectangle ? cores.ranges().front() : ttnn::rectangle_in(cores);
+        ShardSpec spec =
+            synthesize_output_shard_spec(size_of(rectangle), tensor_height, tensor_width, memory_layout, opts);
+        spec.grid = shifted(spec.grid, rectangle.start_coord);
+        return spec;
+    }
+    // HEIGHT or WIDTH over cores that are no rectangle: the shard shape depends only on how many cores there are.
+    ShardSpec spec =
+        synthesize_output_shard_spec(CoreCoord{cores.num_cores(), 1}, tensor_height, tensor_width, memory_layout, opts);
+    const uint32_t used = spec.grid.num_cores();
+    spec.grid =
+        used == cores.num_cores()
+            ? cores
+            : tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                  cores.ranges().front().start_coord, used, cores, spec.orientation == ShardOrientation::ROW_MAJOR);
+    return spec;
+}
+
+ShardSpec synthesize_output_shard_spec(
+    const CoreRangeSet& cores,
+    const ttnn::Shape& padded_out_shape,
+    TensorMemoryLayout memory_layout,
+    const SynthesizeOutputShardSpecOpts& opts) {
+    const uint64_t tensor_height =
+        std::accumulate(padded_out_shape.begin(), padded_out_shape.end() - 1, uint64_t{1}, std::multiplies<uint64_t>());
+    const uint64_t tensor_width = padded_out_shape[-1];
+    return synthesize_output_shard_spec(cores, tensor_height, tensor_width, memory_layout, opts);
+}
+
+namespace {
+
+// shrink_shard_for_rm_page_alignment over `max_cores` cores, placing the cores it keeps with `place(n, row_wise)`.
+template <typename Place>
+std::optional<ShardSpec> shrink_shard_for_rm_page_alignment_on(
     const ShardSpec& spec,
     tt::tt_metal::Layout input_layout,
     uint32_t element_size_bytes,
     uint64_t tensor_width,
-    const CoreCoord& compute_grid_size,
+    uint32_t max_cores,
+    const Place& place,
     TensorMemoryLayout memory_layout,
     RmPageAlignmentMode mode) {
     // TILE inputs land tile-aligned pages by construction; RM alignment coupling is the only concern.
@@ -179,7 +242,6 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     if (memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         return (mode == RmPageAlignmentMode::Strict) ? std::optional<ShardSpec>{std::nullopt} : std::optional{spec};
     }
-    const uint32_t max_cores = static_cast<uint32_t>(compute_grid_size.x) * static_cast<uint32_t>(compute_grid_size.y);
     const bool row_wise = (spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     uint32_t chosen_cores = 0;
     uint32_t new_shard_width = 0;
@@ -210,8 +272,59 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
             l1_page_align,
             element_size_bytes);
     }
-    auto new_grid = tt::tt_metal::num_cores_to_corerangeset(chosen_cores, compute_grid_size, row_wise);
-    return ShardSpec(new_grid, {spec.shape[0], new_shard_width}, spec.orientation);
+    return ShardSpec(place(chosen_cores, row_wise), {spec.shape[0], new_shard_width}, spec.orientation);
+}
+
+}  // namespace
+
+std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
+    const ShardSpec& spec,
+    tt::tt_metal::Layout input_layout,
+    uint32_t element_size_bytes,
+    uint64_t tensor_width,
+    const CoreCoord& compute_grid_size,
+    TensorMemoryLayout memory_layout,
+    RmPageAlignmentMode mode) {
+    return shrink_shard_for_rm_page_alignment_on(
+        spec,
+        input_layout,
+        element_size_bytes,
+        tensor_width,
+        static_cast<uint32_t>(compute_grid_size.x) * static_cast<uint32_t>(compute_grid_size.y),
+        [&](uint32_t num_cores, bool row_wise) {
+            return tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise);
+        },
+        memory_layout,
+        mode);
+}
+
+std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
+    const ShardSpec& spec,
+    tt::tt_metal::Layout input_layout,
+    uint32_t element_size_bytes,
+    uint64_t tensor_width,
+    const CoreRangeSet& cores,
+    TensorMemoryLayout memory_layout,
+    RmPageAlignmentMode mode) {
+    TT_FATAL(!cores.empty(), "shrink_shard_for_rm_page_alignment: no cores to place the output on.");
+    return shrink_shard_for_rm_page_alignment_on(
+        spec,
+        input_layout,
+        element_size_bytes,
+        tensor_width,
+        cores.num_cores(),
+        [&](uint32_t num_cores, bool row_wise) {
+            if (cores.ranges().size() == 1) {
+                const CoreRange& rectangle = cores.ranges().front();
+                return shifted(
+                    tt::tt_metal::num_cores_to_corerangeset(num_cores, size_of(rectangle), row_wise),
+                    rectangle.start_coord);
+            }
+            return tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                cores.ranges().front().start_coord, num_cores, cores, row_wise);
+        },
+        memory_layout,
+        mode);
 }
 
 tt::tt_metal::NdShardSpec rescale_nd_shard_spec_for_output(

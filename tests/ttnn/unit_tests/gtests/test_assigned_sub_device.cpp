@@ -16,6 +16,7 @@
 
 #include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/sub_device_scope.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -57,6 +58,70 @@ TEST(AssignedSubDevice, SplitWorkOverTheWholeGridMatchesSplitWorkOverItsCoreRang
                 EXPECT_EQ(set_units_1, units_1);
                 EXPECT_EQ(set_units_2, units_2);
             }
+        }
+    }
+}
+
+// Spec-less sharded outputs are synthesized over the op's sub-device. Over the whole grid, nothing changes.
+TEST(AssignedSubDevice, SynthesizedShardSpecOverTheWholeGridMatchesTheCoreCoordOverload) {
+    namespace common = ttnn::operations::data_movement::common;
+    const auto synthesize =
+        [](const auto& cores, uint64_t height, uint64_t width, TensorMemoryLayout layout, auto opts) {
+            try {
+                return std::optional(common::synthesize_output_shard_spec(cores, height, width, layout, opts));
+            } catch (const std::exception&) {
+                return std::optional<tt::tt_metal::ShardSpec>();
+            }
+        };
+    for (const CoreCoord grid : {CoreCoord{1, 1}, CoreCoord{8, 8}, CoreCoord{11, 10}, CoreCoord{13, 10}}) {
+        const CoreRangeSet grid_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+        for (const auto layout :
+             {TensorMemoryLayout::HEIGHT_SHARDED,
+              TensorMemoryLayout::WIDTH_SHARDED,
+              TensorMemoryLayout::BLOCK_SHARDED}) {
+            for (const auto orientation :
+                 {tt::tt_metal::ShardOrientation::ROW_MAJOR, tt::tt_metal::ShardOrientation::COL_MAJOR}) {
+                for (const bool is_tile : {true, false}) {
+                    for (const auto [height, width] : std::vector<std::pair<uint64_t, uint64_t>>{
+                             {32, 32}, {64, 2048}, {4096, 64}, {320, 352}, {1000, 96}, {0, 64}, {64, 0}}) {
+                        const common::SynthesizeOutputShardSpecOpts opts{
+                            .is_tile = is_tile, .orientation_hint = orientation};
+                        SCOPED_TRACE(
+                            fmt::format("grid {} layout {} {}x{} tile {}", grid, layout, height, width, is_tile));
+                        const auto expected = synthesize(grid, height, width, layout, opts);
+                        EXPECT_EQ(synthesize(grid_cores, height, width, layout, opts), expected);
+                        if (expected.has_value() && !is_tile && width > 0) {
+                            for (const uint32_t element_size : {1u, 2u, 4u}) {
+                                EXPECT_EQ(
+                                    common::shrink_shard_for_rm_page_alignment(
+                                        *expected,
+                                        tt::tt_metal::Layout::ROW_MAJOR,
+                                        element_size,
+                                        width,
+                                        grid_cores,
+                                        layout),
+                                    common::shrink_shard_for_rm_page_alignment(
+                                        *expected, tt::tt_metal::Layout::ROW_MAJOR, element_size, width, grid, layout));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(AssignedSubDevice, ShardsSynthesizedOverASubDeviceLieInIt) {
+    namespace common = ttnn::operations::data_movement::common;
+    const CoreRangeSet lower_rows(CoreRange({0, 2}, {10, 9}));
+    const CoreRangeSet columns(std::vector<CoreRange>{CoreRange({1, 0}, {3, 9}), CoreRange({5, 0}, {6, 9})});
+    for (const auto& cores : {lower_rows, columns}) {
+        for (const auto layout :
+             {TensorMemoryLayout::HEIGHT_SHARDED,
+              TensorMemoryLayout::WIDTH_SHARDED,
+              TensorMemoryLayout::BLOCK_SHARDED}) {
+            const auto spec = common::synthesize_output_shard_spec(cores, 1024, 1024, layout);
+            EXPECT_TRUE(cores.contains(spec.grid)) << fmt::format("{} not in {}", spec.grid, cores);
         }
     }
 }

@@ -94,7 +94,8 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
 std::optional<AllShardSpecs> get_shard_specs(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& c,
+    const tt::tt_metal::CoreRangeSet& worker_grid) {
     bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
@@ -105,6 +106,14 @@ std::optional<AllShardSpecs> get_shard_specs(
 
     if (!is_native_L1_sharding(a, b, c.memory_config())) {
         return std::nullopt;
+    }
+
+    // The native path runs on the shards' cores, so only where the op runs; elsewhere it reads them over the NoC.
+    for (const auto* spec : {&a, b.has_value() ? &*b : nullptr, &c}) {
+        if (spec != nullptr && get_shard_spec(*spec).has_value() &&
+            !worker_grid.contains(get_shard_spec(*spec)->grid)) {
+            return std::nullopt;
+        }
     }
 
     // If the output is unevenly sharded, only allow when all tensors share the same shard spec
@@ -385,8 +394,9 @@ namespace ttnn::operations::binary_ng {
 std::optional<AllShardVolumes> get_shard_volumes(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c) {
-    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
+    const tt::tt_metal::TensorSpec& c,
+    const tt::tt_metal::CoreRangeSet& worker_grid) {
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c, worker_grid);
 
     if (not shard_specs.has_value()) {
         return std::nullopt;
@@ -495,7 +505,8 @@ void for_each_core_runtime_args(
                                  ? CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
                                        a.tensor_spec(),
                                        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
-                                       c.tensor_spec())
+                                       c.tensor_spec(),
+                                       all_device_cores)
                                  : std::nullopt;
     const bool rt_has_sharding = shard_specs.has_value();
     auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
@@ -934,7 +945,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     const auto shard_volumes = get_shard_volumes(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
+        a.tensor_spec(),
+        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+        c.tensor_spec(),
+        operation_attributes.worker_grid);
     const auto has_sharding = shard_volumes.has_value();
     const auto a_sharded = has_sharding and shard_volumes->a_shard_volume.has_value();
     const auto b_sharded = has_sharding and shard_volumes->b_shard_volume.has_value();

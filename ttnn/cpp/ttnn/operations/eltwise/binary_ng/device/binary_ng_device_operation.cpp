@@ -112,107 +112,33 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     return false;
 }
 
+// Spread over the op's sub-device, or the device's grid when it was assigned none.
 ShardSpec generate_shard_spec_specless(
     const Tensor& input_tensor_a,
     const Shape& padded_out_shape,
     const TensorMemoryLayout& memory_layout,
-    Layout output_layout) {
+    Layout output_layout,
+    const ttnn::AssignedSubDevice& sub_device) {
     // Zero-volume specless-sharded is absorbed by the synthesizer's layout-aware degenerate-spec return.
+    const ttnn::operations::data_movement::common::SynthesizeOutputShardSpecOpts opts{
+        .is_tile = (output_layout == Layout::TILE),
+        .orientation_hint = ShardOrientation::ROW_MAJOR,
+        .caller_tag = "BinaryNg"};
+    if (!sub_device.assigned()) {
+        return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+            input_tensor_a.device()->compute_with_storage_grid_size(), padded_out_shape, memory_layout, opts);
+    }
     return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
-        input_tensor_a.device()->compute_with_storage_grid_size(),
-        padded_out_shape,
-        memory_layout,
-        {.is_tile = (output_layout == Layout::TILE),
-         .orientation_hint = ShardOrientation::ROW_MAJOR,
-         .caller_tag = "BinaryNg"});
+        sub_device.worker_cores, padded_out_shape, memory_layout, opts);
+}
+
+// Whether a spec-less sharded `output` may take `input`'s shards: unless that would put them in L1 outside the op's
+// sub-device. (On DRAM the shards live on banks, which no sub-device holds.)
+bool may_mirror(const ttnn::AssignedSubDevice& sub_device, const Tensor& input, const MemoryConfig& output) {
+    const auto& grid = input.memory_config().shard_spec();
+    return !sub_device.assigned() || !output.is_l1() || !grid.has_value() || sub_device.holds(grid->grid);
 }
 }  // namespace utils
-
-CoreRangeSet get_worker_grid(
-    const Tensor& input_tensor_a,
-    const Tensor* input_tensor_b,
-    const std::optional<Tensor>& output_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const MemoryConfig& memory_config_actual) {
-    // If sub_core_grids is provided, use it directly
-    if (sub_core_grids.has_value()) {
-        log_debug(tt::LogOp, "Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
-        return sub_core_grids.value();
-    }
-
-    auto* device = input_tensor_a.device();
-    // An ND_SHARDED config is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
-    auto get_sub_device_workers = [device](const MemoryConfig& config) -> std::optional<CoreRangeSet> {
-        std::optional<CoreRangeSet> grid;
-        if (config.shard_spec().has_value()) {
-            grid = config.shard_spec()->grid;
-        } else if (config.nd_shard_spec().has_value()) {
-            grid = config.nd_shard_spec()->grid;
-        } else {
-            return std::nullopt;
-        }
-        for (const auto& sub_device_id : device->get_sub_device_ids()) {
-            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(*grid)) {
-                return sub_device_workers;
-            }
-        }
-        return std::nullopt;
-    };
-
-    if (output_tensor.has_value() && output_tensor->is_sharded()) {
-        if (auto workers = get_sub_device_workers(output_tensor->memory_config())) {
-            log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", workers->str());
-            return *workers;
-        }
-    }
-
-    if (memory_config.has_value()) {
-        if (memory_config->is_sharded()) {
-            if (auto workers = get_sub_device_workers(*memory_config)) {
-                log_debug(tt::LogOp, "Using memory config shard grid for worker grid {}", workers->str());
-                return *workers;
-            }
-        } else {
-            log_debug(tt::LogOp, "Memory config not sharded");
-        }
-    } else {
-        log_debug(tt::LogOp, "No memory config provided");
-    }
-    if (output_tensor.has_value() || memory_config.has_value()) {
-        // If output tensor or memory config is provided but not sharded, use all worker cores
-        log_debug(
-            tt::LogOp, "Using all worker cores of the device for worker grid, output or memory config not sharded");
-        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
-    }
-
-    // An output config inferred from ND-sharded inputs has no 2D shard spec, so the native path below declines it.
-    if (memory_config_actual.is_sharded() && !memory_config_actual.shard_spec().has_value()) {
-        if (auto workers = get_sub_device_workers(memory_config_actual)) {
-            log_debug(tt::LogOp, "Using ND shard grid of the output memory config for worker grid {}", workers->str());
-            return *workers;
-        }
-    }
-
-    if (is_native_L1_sharding(
-            input_tensor_a.tensor_spec(),
-            input_tensor_b ? &input_tensor_b->tensor_spec() : nullptr,
-            memory_config_actual)) {
-        for (const Tensor* input : {&input_tensor_a, input_tensor_b}) {
-            if (input && input->is_sharded()) {
-                if (auto workers = get_sub_device_workers(input->memory_config())) {
-                    log_debug(
-                        tt::LogOp, "Native L1 sharding using input tensor grid for worker grid {}", workers->str());
-                    return *workers;
-                }
-            }
-        }
-    }
-    // use all worker cores of the device
-    log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
-    return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
-}
 
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w) {
     if (a_h == b_h && a_w == b_w) {
@@ -563,20 +489,24 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         if (!shard_spec_opt.has_value()) {
             const auto& padded_out_shape =
                 input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            if (input_tensor_a.is_sharded()) {
+            const auto& sub_device = attributes.assigned_sub_device;
+            if (input_tensor_a.is_sharded() &&
+                utils::may_mirror(sub_device, input_tensor_a, attributes.memory_config)) {
                 // Adjust shard spec from input A to match output shape
                 const auto& padded_a_shape = input_tensor_a.padded_shape();
 
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
-            } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
+            } else if (
+                tensor_b.has_value() && tensor_b->is_sharded() &&
+                utils::may_mirror(sub_device, *tensor_b, attributes.memory_config)) {
                 // Adjust shard spec from input B to match output shape
                 const auto& padded_b_shape = tensor_b->padded_shape();
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
             } else {
                 shard_spec_opt = utils::generate_shard_spec_specless(
-                    input_tensor_a, padded_out_shape, memory_layout, attributes.output_layout);
+                    input_tensor_a, padded_out_shape, memory_layout, attributes.output_layout, sub_device);
             }
         }
 
@@ -649,14 +579,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor A is not allocated");
     TT_FATAL(input_tensor_b.is_allocated(), "Input Tensor B is not allocated");
 
-    // Resolve sub_device_id to sub_core_grids if provided (after device validation)
-    auto resolved_sub_core_grids = sub_core_grids;
-    if (sub_device_id.has_value()) {
-        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
-        auto* device = input_tensor_a.device();
-        resolved_sub_core_grids =
-            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-    }
+    TT_FATAL(
+        !(sub_core_grids.has_value() && sub_device_id.has_value()),
+        "Cannot specify both sub_core_grids and sub_device_id");
 
     auto subtile_broadcast_type = ttnn::operations::binary_ng::get_subtile_broadcast_type(
         input_tensor_a.logical_shape()[-2],
@@ -683,6 +608,14 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         input_tensor_b.layout() == Layout::ROW_MAJOR) {
         output_layout = Layout::ROW_MAJOR;
     }
+
+    auto sub_device = ttnn::assign_sub_device(
+        input_tensor_a.device(),
+        {.sub_device = sub_device_id,
+         .cores = sub_core_grids,
+         .data =
+             ttnn::l1_shard_cores(std::forward_as_tuple(input_tensor_a, input_tensor_b, output_tensor), memory_config)},
+        "binary_ng");
 
     MemoryConfig mem_config_actual = input_tensor_a.memory_config();
     if (input_tensor_a.is_sharded()) {
@@ -717,11 +650,14 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         // An ND_SHARDED config has no 2D shard spec either, but already carries its own geometry.
         if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value() &&
             !mem_config_actual.nd_shard_spec().has_value()) {
-            if (input_tensor_a.is_sharded()) {
+            if (input_tensor_a.is_sharded() &&
+                operations::binary_ng::utils::may_mirror(sub_device, input_tensor_a, mem_config_actual)) {
                 mem_config_actual =
                     operations::binary_ng::compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());
                 log_debug(tt::LogOp, "BinaryNgDeviceOperation: Inheriting shard spec from input tensor A");
-            } else if (input_tensor_b.is_sharded()) {
+            } else if (
+                input_tensor_b.is_sharded() &&
+                operations::binary_ng::utils::may_mirror(sub_device, input_tensor_b, mem_config_actual)) {
                 mem_config_actual =
                     operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(tt::LogOp, "BinaryNgDeviceOperation: Inheriting shard spec from input tensor B");
@@ -735,7 +671,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                     memory_layout,
                     mem_config_actual.buffer_type(),
                     operations::binary_ng::utils::generate_shard_spec_specless(
-                        input_tensor_a, padded_out_shape, memory_layout, output_layout));
+                        input_tensor_a, padded_out_shape, memory_layout, output_layout, sub_device));
             }
         } else {
             log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
@@ -755,11 +691,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         is_where_op ? dtype_b : dtype_a,  // TODO: For mixed dtypes we need to set this value to the appropriate
                                           // dtype depending on which LLK is meant to be used.
         output_dtype,
-        ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, &input_tensor_b, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
+        sub_core_grids.value_or(sub_device.worker_cores),
         std::nullopt,
-        resolved_sub_core_grids,
-        sub_device_id,
+        sub_core_grids,
+        sub_device,
         subtile_broadcast_type,
         /*scalar_is_lhs=*/false,
         is_sfpu_op,
@@ -792,7 +727,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
              output_tensor.has_value() ? &output_tensor->memory_config() : nullptr})) {
         const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
         const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
-            input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec);
+            input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec, operation_attributes.worker_grid);
         if (shard_volumes.has_value()) {
             operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
             operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
@@ -834,14 +769,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     // Valid input is allocated
     TT_FATAL(input_tensor_a.is_allocated(), "Input Tensor is not allocated");
 
-    // Resolve sub_device_id to sub_core_grids if provided (after device validation)
-    auto resolved_sub_core_grids = sub_core_grids;
-    if (sub_device_id.has_value()) {
-        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
-        auto* device = input_tensor_a.device();
-        resolved_sub_core_grids =
-            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-    }
+    TT_FATAL(
+        !(sub_core_grids.has_value() && sub_device_id.has_value()),
+        "Cannot specify both sub_core_grids and sub_device_id");
 
     DataType dtype_a = input_tensor_a.dtype();
     ttnn::operations::binary_ng::utils::validate_fast_and_approximate_mode(
@@ -860,6 +790,13 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         output_layout = Layout::ROW_MAJOR;
     }
 
+    auto sub_device = ttnn::assign_sub_device(
+        input_tensor_a.device(),
+        {.sub_device = sub_device_id,
+         .cores = sub_core_grids,
+         .data = ttnn::l1_shard_cores(std::forward_as_tuple(input_tensor_a, output_tensor), memory_config)},
+        "binary_ng");
+
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,
         {lhs_activations.begin(), lhs_activations.end()},
@@ -869,11 +806,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         mem_config_actual,
         input_tensor_a.dtype(),
         output_dtype,
-        ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, nullptr, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
+        sub_core_grids.value_or(sub_device.worker_cores),
         std::nullopt,
-        resolved_sub_core_grids,
-        sub_device_id,
+        sub_core_grids,
+        sub_device,
         ttnn::operations::binary_ng::SubtileBroadcastType::NONE,
         scalar_is_lhs,
         is_sfpu_op,
@@ -903,8 +839,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
              &mem_config_actual,
              output_tensor.has_value() ? &output_tensor->memory_config() : nullptr})) {
         const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
-        const auto shard_volumes =
-            ttnn::operations::binary_ng::get_shard_volumes(input_tensor_a.tensor_spec(), std::nullopt, output_spec);
+        const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
+            input_tensor_a.tensor_spec(), std::nullopt, output_spec, operation_attributes.worker_grid);
         if (shard_volumes.has_value()) {
             // Redundant with the input's shape in pages above (evenness and page count move together),
             // but kept so the two overloads stay symmetric.

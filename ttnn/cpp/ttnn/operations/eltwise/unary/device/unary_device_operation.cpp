@@ -272,7 +272,13 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
 
         if (!shard_spec_opt.has_value()) {
             const auto& padded_out_shape = tensor_args.input.padded_shape();
-            if (tensor_args.input.memory_config().shard_spec().has_value()) {
+            const auto& input_shard_spec = tensor_args.input.memory_config().shard_spec();
+            const auto& sub_device = args.assigned_sub_device;
+            // The output mirrors the input's shards unless that would put them in L1 outside the op's sub-device; then
+            // it is spread over the sub-device. (Mirrored onto DRAM, the shards live on banks, which no sub-device
+            // holds.)
+            if (input_shard_spec.has_value() &&
+                (!sub_device.assigned() || !args.memory_config.is_l1() || sub_device.holds(input_shard_spec->grid))) {
                 shard_spec_opt = adjust_to_shape(
                     *tensor_args.input.memory_config().shard_spec(),
                     tensor_args.input.padded_shape(),
@@ -295,7 +301,11 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                     }
                 }();
                 shard_spec_opt = generate_output_shard_spec(
-                    tensor_args.input, padded_out_shape, memory_layout, output_element_size_bytes);
+                    tensor_args.input,
+                    padded_out_shape,
+                    memory_layout,
+                    output_element_size_bytes,
+                    sub_device.worker_cores);
             }
         }
 
@@ -332,7 +342,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     TT_FATAL(ttnn::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
 
     const auto output_spec = compute_output_specs(attributes, tensor_args);
-    const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
+    const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec, attributes.worker_grid);
     std::optional<uint32_t> src_shard_vol = std::nullopt;
     std::optional<uint32_t> dst_shard_vol = std::nullopt;
     if (shard_specs.has_value()) {
@@ -424,8 +434,18 @@ Tensor unary(
     auto mem_config_actual =
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
+    auto tensor_args = OperationType::tensor_args_t{.input = input, .output_tensor = optional_output_tensor};
+    auto assigned_sub_device = ttnn::assign_sub_device(
+        input.device(),
+        {.cores = sub_core_grids, .data = ttnn::l1_shard_cores(tensor_args, mem_config_actual)},
+        "unary");
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        op_chain, input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
+        op_chain,
+        input,
+        optional_output_tensor,
+        std::optional<MemoryConfig>(output_memory_config),
+        sub_core_grids,
+        assigned_sub_device.worker_cores);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,
@@ -436,9 +456,8 @@ Tensor unary(
         .bfp8_pack_precise = bfp8_pack_precise,
         .worker_grid = worker_grid,
         .sub_core_grids = sub_core_grids,
+        .assigned_sub_device = std::move(assigned_sub_device),
     };
-
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .output_tensor = optional_output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

@@ -8,6 +8,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -44,37 +45,64 @@
             sub_device_id);                                                          \
     }
 
-#define TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(NAME, OP_TYPE)                                                \
-    Tensor NAME(                                                                                              \
-        const Tensor& lhs,                                                                                    \
-        const Tensor& rhs,                                                                                    \
-        const std::optional<const DataType>& output_dtype,                                                    \
-        const std::optional<MemoryConfig>& memory_config,                                                     \
-        const std::optional<Tensor>& output,                                                                  \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                          \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                           \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                           \
-        const std::optional<CoreRangeSet>& sub_core_grids,                                                    \
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                      \
-        const std::optional<Tensor> lhs_cast =                                                                \
-            lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::UINT16) : std::optional<Tensor>{}; \
-        const Tensor& a = lhs_cast.has_value() ? *lhs_cast : lhs;                                             \
-        const std::optional<Tensor> rhs_cast =                                                                \
-            rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : std::optional<Tensor>{}; \
-        const Tensor& b = rhs_cast.has_value() ? *rhs_cast : rhs;                                             \
-        return ttnn::detail::invoke_binary_ng(                                                                \
-            a,                                                                                                \
-            b,                                                                                                \
-            operations::binary::BinaryOpType::OP_TYPE,                                                        \
-            output_dtype,                                                                                     \
-            memory_config,                                                                                    \
-            output,                                                                                           \
-            post_activations,                                                                                 \
-            lhs_activations,                                                                                  \
-            rhs_activations,                                                                                  \
-            /*fast_and_approximate_mode*/ false,                                                              \
-            sub_core_grids,                                                                                   \
-            sub_device_id);                                                                                   \
+namespace ttnn::detail {
+namespace {
+
+// The sub-device a binary operation's inner launches that record one run on: the typecasts that promote an operand and
+// binary_ng itself. Its layout conversions (tilize/untilize) record none: they run where they place themselves, and are
+// refused inside a sub-device scope (see ttnn::CompositeSubDevice).
+ttnn::SubDeviceRequest binary_sub_device_request(
+    const Tensor& lhs,
+    const Tensor* rhs,
+    const std::optional<Tensor>& output,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return {
+        .sub_device = sub_device_id,
+        .cores = sub_core_grids,
+        .data = rhs != nullptr ? ttnn::l1_shard_cores(std::forward_as_tuple(lhs, *rhs, output), memory_config)
+                               : ttnn::l1_shard_cores(std::forward_as_tuple(lhs, output), memory_config)};
+}
+
+}  // namespace
+}  // namespace ttnn::detail
+
+#define TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(NAME, OP_TYPE)                                                        \
+    Tensor NAME(                                                                                                      \
+        const Tensor& lhs,                                                                                            \
+        const Tensor& rhs,                                                                                            \
+        const std::optional<const DataType>& output_dtype,                                                            \
+        const std::optional<MemoryConfig>& memory_config,                                                             \
+        const std::optional<Tensor>& output,                                                                          \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                                  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                                   \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                                   \
+        const std::optional<CoreRangeSet>& sub_core_grids,                                                            \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                              \
+        const ttnn::CompositeSubDevice composite(                                                                     \
+            lhs.device(),                                                                                             \
+            ttnn::detail::binary_sub_device_request(lhs, &rhs, output, memory_config, sub_core_grids, sub_device_id), \
+            #NAME);                                                                                                   \
+        const std::optional<Tensor> lhs_cast =                                                                        \
+            lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::UINT16) : std::optional<Tensor>{};         \
+        const Tensor& a = lhs_cast.has_value() ? *lhs_cast : lhs;                                                     \
+        const std::optional<Tensor> rhs_cast =                                                                        \
+            rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : std::optional<Tensor>{};         \
+        const Tensor& b = rhs_cast.has_value() ? *rhs_cast : rhs;                                                     \
+        return ttnn::detail::invoke_binary_ng(                                                                        \
+            a,                                                                                                        \
+            b,                                                                                                        \
+            operations::binary::BinaryOpType::OP_TYPE,                                                                \
+            output_dtype,                                                                                             \
+            memory_config,                                                                                            \
+            output,                                                                                                   \
+            post_activations,                                                                                         \
+            lhs_activations,                                                                                          \
+            rhs_activations,                                                                                          \
+            /*fast_and_approximate_mode*/ false,                                                                      \
+            sub_core_grids,                                                                                           \
+            sub_device_id);                                                                                           \
     }
 
 #define TTNN_BINARY_OP_TENSOR_SCALAR_UINT8_IMPL(NAME, OP_TYPE)                                                \
@@ -89,6 +117,11 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                           \
         const std::optional<CoreRangeSet>& sub_core_grids,                                                    \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                      \
+        const ttnn::CompositeSubDevice composite(                                                             \
+            lhs.device(),                                                                                     \
+            ttnn::detail::binary_sub_device_request(                                                          \
+                lhs, nullptr, output, memory_config, sub_core_grids, sub_device_id),                          \
+            #NAME);                                                                                           \
         const std::optional<Tensor> lhs_cast =                                                                \
             lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::UINT16) : std::optional<Tensor>{}; \
         const Tensor& a = lhs_cast.has_value() ? *lhs_cast : lhs;                                             \
@@ -107,18 +140,22 @@
             sub_device_id);                                                                                   \
     }
 
-#define TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(NAME, OP_TYPE)                                                 \
-    Tensor NAME(                                                                                              \
-        float lhs,                                                                                            \
-        const Tensor& rhs,                                                                                    \
-        const std::optional<const DataType>& dtype,                                                           \
-        const std::optional<MemoryConfig>& memory_config,                                                     \
-        const std::optional<Tensor>& output) {                                                                \
-        const std::optional<Tensor> rhs_cast =                                                                \
-            rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : std::optional<Tensor>{}; \
-        const Tensor& b = rhs_cast.has_value() ? *rhs_cast : rhs;                                             \
-        return operations::binary::relational_binary<operations::binary::BinaryOpType::OP_TYPE>(              \
-            lhs, b, dtype, memory_config, output);                                                            \
+#define TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(NAME, OP_TYPE)                                                         \
+    Tensor NAME(                                                                                                      \
+        float lhs,                                                                                                    \
+        const Tensor& rhs,                                                                                            \
+        const std::optional<const DataType>& dtype,                                                                   \
+        const std::optional<MemoryConfig>& memory_config,                                                             \
+        const std::optional<Tensor>& output) {                                                                        \
+        const ttnn::CompositeSubDevice composite(                                                                     \
+            rhs.device(),                                                                                             \
+            ttnn::detail::binary_sub_device_request(rhs, nullptr, output, memory_config, std::nullopt, std::nullopt), \
+            #NAME);                                                                                                   \
+        const std::optional<Tensor> rhs_cast =                                                                        \
+            rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : std::optional<Tensor>{};         \
+        const Tensor& b = rhs_cast.has_value() ? *rhs_cast : rhs;                                                     \
+        return operations::binary::relational_binary<operations::binary::BinaryOpType::OP_TYPE>(                      \
+            lhs, b, dtype, memory_config, output);                                                                    \
     }
 
 // scalar OP tensor. Operands are passed to the primitive swapped, because slot a must hold a
@@ -665,6 +702,16 @@ inline auto invoke_binary_ng_impl(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool scalar_is_lhs = false) {
+    const ttnn::CompositeSubDevice composite(
+        lhs.device(),
+        [&] {
+            if constexpr (requires { rhs.dtype(); }) {
+                return binary_sub_device_request(lhs, &rhs, output, memory_config, sub_core_grids, sub_device_id);
+            } else {
+                return binary_sub_device_request(lhs, nullptr, output, memory_config, sub_core_grids, sub_device_id);
+            }
+        }(),
+        "binary");
     const auto a_dtype = lhs.dtype();
     const DataType b_dtype = [&] {
         if constexpr (requires { rhs.dtype(); }) {
@@ -933,6 +980,10 @@ Tensor invoke_binary_ng_isclose(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    const ttnn::CompositeSubDevice composite(
+        lhs.device(),
+        binary_sub_device_request(lhs, &rhs, output, memory_config, sub_core_grids, std::nullopt),
+        "isclose");
     const auto fa = lhs.dtype() == DataType::INT32 ? ttnn::typecast(lhs, DataType::FLOAT32) : lhs;
     const auto fb = rhs.dtype() == DataType::INT32 ? ttnn::typecast(rhs, DataType::FLOAT32) : rhs;
 

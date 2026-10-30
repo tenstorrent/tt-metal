@@ -356,3 +356,33 @@ def test_typecast_sharded_output_stays_sharded(shape, shard_shape, core_grid, sh
     assert tt_input_sharded.is_sharded(), "Input should be sharded"
     tt_output = ttnn.typecast(tt_input_sharded, ttnn.bfloat16)
     assert tt_output.is_sharded(), "Output should remain sharded after typecast"
+
+
+def test_typecast_sharded_into_an_output_sharded_elsewhere(device):
+    """The in-place sharded factory computes each input shard into the output shard on the same core. With the output
+    sharded on other cores it must not be chosen: the output would never be written."""
+
+    def height_sharded_on(cores):
+        return ttnn.create_sharded_memory_config(
+            (32, 64),
+            cores,
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    first_row = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    second_row = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(3, 1))})
+    torch.manual_seed(42)
+    torch_input = torch.randn((1, 1, 128, 64), dtype=torch.float32) * 16
+    x = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=height_sharded_on(first_row),
+    )
+    # float32 to int32 keeps the tile size, which the in-place factory needs.
+    y = ttnn.typecast(x, ttnn.int32, memory_config=height_sharded_on(second_row))
+    assert y.memory_config().shard_spec.grid == second_row
+    assert torch.equal(ttnn.to_torch(y), torch_input.to(torch.int32))
