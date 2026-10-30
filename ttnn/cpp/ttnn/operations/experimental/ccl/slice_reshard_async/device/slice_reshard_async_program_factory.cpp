@@ -55,9 +55,8 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     const ttnn::Tensor& input_tensor = tensor_args;
     const ttnn::Tensor& output_tensor = tensor_return_value;
 
-    tt::tt_metal::Program program{};
-
     auto* mesh_device = input_tensor.device();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
     const auto& mesh_view = mesh_device->get_view();
     // User specified the cluster-axis. Derive the ring based on the current coordinate
     // and the cluster-axis.

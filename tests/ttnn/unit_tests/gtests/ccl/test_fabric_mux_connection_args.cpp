@@ -41,7 +41,7 @@ TEST_F(MeshDeviceFabric1DFixture, FabricMuxClientReusesSuppliedTerminationSemaph
     const CoreCoord client_logical_core{0, 0};
     const CoreCoord client_virtual_core = mesh_device_->worker_core_from_logical_core(client_logical_core);
     constexpr uint32_t supplied_termination_semaphore_id = 7;
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device_);
     std::vector<uint32_t> runtime_args;
 
     fabric_mux_connection_rt_args(
@@ -72,7 +72,7 @@ TEST_F(MeshDeviceFabric1DFixture, FabricMuxClientRejectsOutOfRangeIndexBeforeAll
     const CoreCoord client_logical_core{0, 0};
     const CoreCoord client_virtual_core = mesh_device_->worker_core_from_logical_core(client_logical_core);
     constexpr uint32_t out_of_range_client_index = 256;
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device_);
     tt::tt_metal::ProgramDescriptor descriptor;
     std::vector<uint32_t> program_args;
     std::vector<uint32_t> descriptor_args;

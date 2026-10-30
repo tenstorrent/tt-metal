@@ -47,7 +47,7 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const ttnn::MeshCoordinate& /*mesh_coordinate*/,
     const NpHaloScatterInputs& tensor_args,
     Tensor& tensor_return_value) {
-    Program program{};
+    Program program = CreateProgram(*tensor_return_value.device());
 
     Buffer* compact = tensor_args.compact_buffer.buffer();  // [total_sticks, C] (border source)
     Buffer* dst = tensor_return_value.buffer();          // padded output (allocated) or in-place (border_only)
