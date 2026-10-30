@@ -383,7 +383,7 @@ def test_line_checks_neighbours_degree_and_links():
     source = inspect.getsource(gr_fold.Line.__init__)
     assert "ttnn.get_eth_forwarding_direction(self.nodes[r], self.nodes[r + 1])" in source
     assert "Counter(neighbours.values()) != Counter({1: 2, 2: TP_SIZE - 2})" in source
-    assert "ttnn.get_forwarding_link_indices(self.nodes[a], self.nodes[b])" in source
+    assert "ttnn.get_forwarding_link_indices(mesh, self.nodes[a], self.nodes[b])" in source
     assert "links must be 1..{min(len(t.cores), geometry.links, t.tiles)}" in inspect.getsource(
         gr_fold.transport_mesh_program
     )
