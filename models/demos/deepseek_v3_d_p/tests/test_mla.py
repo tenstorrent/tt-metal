@@ -1419,10 +1419,6 @@ def test_mla_chunked_prefill(
     # Mistral on Wormhole T3K, where it has never been brought up.
     if variant.name == "mistral_small_4" and not is_blackhole():
         pytest.skip("mistral_small_4 is validated on Blackhole only")
-    # Every variant here has a dense MLA cache, whose TP dedup is ring_mla's split-KV path: SP on mesh
-    # axis 0 only. ttMLA.set_tp_shard_kv refuses anything else, and the runner defaults it off there.
-    if tp_shard_kv and sp_axis != 0:
-        pytest.skip("dense tp_shard_kv runs SP on mesh axis 0 only (ring_mla split-KV)")
     # Variant-agnostic, not a name check: mla_trace_defaults is the adapter's own declaration that
     # no golden was ever recorded ("Empty = ..." in adapter.py), which is exactly the condition the
     # assert in _run_chunked_prefill reports. Skipping up front reads as out of scope instead of as
