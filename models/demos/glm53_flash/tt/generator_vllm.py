@@ -1862,6 +1862,11 @@ class GLM53FlashForCausalLM:
                     f"t_pad {call.t_pad}, slot index {call.user}) rows "
                     f"{[(m.row, m.start, m.end) for m in call.members]} in {(time.perf_counter() - t0) * 1000:.0f} ms"
                 )
+                if os.environ.get(MEM_LOG_ENV, "0") == "1":  # the allocator after every wave step (the 1 M wave wall)
+                    logger.info(
+                        f"GLM53 vLLM mem: wave at {max(m.end for m in call.members)} done: "
+                        f"{_dram_line(_mesh_device_of(self.model))}"
+                    )
                 self._apc_alloc_check(f"the wave {[(m.row, m.start, m.end) for m in call.members]}")
         if wants_tokens:
             return out_tokens, None
