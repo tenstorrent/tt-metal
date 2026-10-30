@@ -90,12 +90,12 @@ _WALL_SAMPLES = 30
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _GALAXY = "SP8xTP4"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power). Untraced is host-dispatch
-# bound, with the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Galaxies
-# off the pool can sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power). Traced and untraced share
+# the reference and the band: production prefill runs untraced, and the untraced walk is held to the traced time.
+# Galaxies off the pool can sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
 _GALAXY_REFERENCE_E2E_US = {
-    "traced": {"boundary": 1700.0, "ordinary": 140.0},
-    "untraced": {"boundary": 4140.0, "ordinary": 284.0},
+    "traced": {"boundary": 1656.0, "ordinary": 141.0},
+    "untraced": {"boundary": 1656.0, "ordinary": 141.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
@@ -104,7 +104,7 @@ _PERF_REFERENCE_E2E_US = {
 }
 # LoudBox SP2xTP4 has no CI references yet: it reports but is not gated.
 _REPORT_ONLY_LAYOUTS = ("SP2xTP4",)
-_MARGIN = {"traced": 0.05, "untraced": 0.10}
+_MARGIN = {"traced": 0.05, "untraced": 0.05}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
 
