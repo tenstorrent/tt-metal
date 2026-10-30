@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // SPSC device kernel profiler: each RISC streams markers into its own single-producer/single-consumer ring in
-// L1 and the resident DRISC relay empties it; a full ring blocks the producer, so the stream is lossless. Per
+// L1 and a resident relay empties it; a full ring blocks the producer, so the stream is lossless. Per
 // RISC r: storage profiler_data_buffer[r].data[0..PROFILER_L1_VECTOR_SIZE), tail = control[SPSC_RING_TAIL_0 + r]
 // (producer), head = control[SPSC_RING_HEAD_0 + r] (relay); both are monotonic word counts, index = count %
 // capacity. PP_* wire types and the SpscControlBuffer slots are owned here; ControlBuffer/PacketTypes belong
@@ -28,6 +28,7 @@
     "kernel_profiler_streaming.hpp is selected by kernel_profiler.hpp under PROFILE_STREAMING; do not include it directly."
 #endif
 
+#include <algorithm>
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
@@ -62,23 +63,22 @@ namespace kernel_profiler {
 
 extern uint32_t wIndex;  // producer tail: monotonic word count, lives in FW .bss across launches
 
-// publish_tail() advances the consumer-visible tail only while true; validator RISCs clear it in
-// init_profiler() and resolve it via DeviceValidateProfiler, so an idle launch's markers are rewound, not
-// published.
+// publish_tail() advances the tail consumers see only while this is true. The RISCs that validate launches clear it in
+// init_profiler(), and DeviceValidateProfiler sets it once the launch is known to be real, so an idle launch's markers
+// are rewound instead of published.
 //
-// DEFINED HERE for firmware builds rather than in each hw/firmware/src/*.cc: those files are the DRAM
-// profiler's byte-for-byte text and know nothing about this producer. A kernel build resolves the symbol
-// out of its firmware ELF (--just-symbols), exactly like wIndex. Same FW/kernel split the DRAM header uses
-// for its own per-RISC state (!defined(KERNEL_BUILD)).
+// It is defined here for firmware builds rather than in each hw/firmware/src/*.cc, which only reach this producer
+// through the shared DeviceZone* and DeviceValidateProfiler macros. A kernel build takes the symbol from its firmware
+// ELF (--just-symbols), as it does wIndex.
 #if !defined(KERNEL_BUILD)
 bool zoneValid __attribute__((used)) = true;
 #else
 extern bool zoneValid;
 #endif
 
-// The RISCs whose FW loop resolves per-launch validity; only these defer the first publish.
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
-    defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_DM)
+// The RISCs whose firmware loop decides per-launch validity. Only these defer the first publish. On an active eth core
+// only ERISC0's firmware runs the launch loop.
+#if defined(COMPILE_FOR_BRISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || defined(COMPILE_FOR_DM)
 inline constexpr bool PROFILER_VALIDATES_ZONE = true;
 #else
 inline constexpr bool PROFILER_VALIDATES_ZONE = false;
@@ -156,13 +156,13 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // Blackhole (Tensix and DRISC): the snapshot holds only while the H load follows the L load immediately, so these two
 // loads must stay adjacent. Another RISC's L read landing in that gap across a 2^32 boundary puts a marker ~3.2 s in
 // the future, at ~1e-9 per read, which is cheaper than a retry branch here.
-inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
+FORCE_INLINE void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     lo = p_reg[WALL_CLOCK_LOW_INDEX];
     hi = p_reg[WALL_CLOCK_HIGH_INDEX];
 }
 
-inline __attribute__((always_inline)) void publish_tail() {
+FORCE_INLINE void publish_tail() {
     if constexpr (PROFILER_VALIDATES_ZONE) {
         if (!zoneValid) {
             return;
@@ -175,7 +175,7 @@ inline __attribute__((always_inline)) void publish_tail() {
 
 // A lane-state slot must never show a value the published tail does not cover, so the tail goes first and a fence
 // separates the two stores (see SPSC_STATE_TIMER_0).
-inline __attribute__((always_inline)) void publish_state(uint32_t index, uint32_t value) {
+FORCE_INLINE void publish_state(uint32_t index, uint32_t value) {
     if constexpr (PROFILER_VALIDATES_ZONE) {
         if (!zoneValid) {
             return;
@@ -190,7 +190,7 @@ inline __attribute__((always_inline)) void publish_state(uint32_t index, uint32_
 // the close-side saving; the trigger is wIndex crossing a batch boundary. Visibility lags by at most one
 // batch within a launch; launch boundaries and the stall path publish unconditionally, and blocking is
 // head-vs-wIndex, so losslessness does not depend on the published tail.
-inline __attribute__((always_inline)) void publish_tail_batched(uint32_t words_written) {
+FORCE_INLINE void publish_tail_batched(uint32_t words_written) {
     constexpr uint32_t kBatchShift = __builtin_ctz(SPSC_PUBLISH_BATCH_WORDS);
     static_assert((1u << kBatchShift) == SPSC_PUBLISH_BATCH_WORDS, "batch must be a power of two");
     if (__builtin_expect((wIndex >> kBatchShift) != ((wIndex - words_written) >> kBatchShift), 0)) {
@@ -198,14 +198,14 @@ inline __attribute__((always_inline)) void publish_tail_batched(uint32_t words_w
     }
 }
 
-inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
+FORCE_INLINE void ring_write_word(uint32_t v) {
     profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = v;
     wIndex++;
 }
 
 // The high half moves about once per 3.2 s, so test before storing; every caller's room reservation already
 // covers the sticky word.
-inline __attribute__((always_inline)) void ring_write_sticky_timer(uint32_t hi) {
+FORCE_INLINE void ring_write_sticky_timer(uint32_t hi) {
     if (__builtin_expect(hi != g_prev_timer_hi, 0)) {
         profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
         wIndex++;
@@ -235,8 +235,8 @@ static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry
 #endif
 
 // Written straight into the reserve with no room check: ring_ensure_room() from here would recurse through
-// another stall scope. A stall >= 2^32 cycles saturates its duration rather than taking mark_zone_long, which
-// reserves room; a 3.2 s wait is a wedged relay, not a measurement.
+// another stall scope. A stall of 2^32 cycles or more saturates its duration, because the reserve has no room for a
+// ZONE_L. A 3.2 s wait is a wedged relay, not a measurement.
 PROFILER_INLINE_ATTR void stall_zone_close(uint32_t start_hi, uint32_t start_lo) {
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
@@ -256,8 +256,8 @@ PROFILER_INLINE_ATTR void stall_zone_close(uint32_t start_hi, uint32_t start_lo)
 // Like profileScope, but closes through stall_zone_close(), which writes into the reserve.
 struct profileScopeStall {
     uint32_t start_hi, start_lo;
-    inline __attribute__((always_inline)) profileScopeStall() { read_wall_clock(start_hi, start_lo); }
-    inline __attribute__((always_inline)) ~profileScopeStall() { stall_zone_close(start_hi, start_lo); }
+    FORCE_INLINE profileScopeStall() { read_wall_clock(start_hi, start_lo); }
+    FORCE_INLINE ~profileScopeStall() { stall_zone_close(start_hi, start_lo); }
 };
 
 // Out of line so there is one copy rather than one per zone site. Waits for the caller's words and the zone's
@@ -272,14 +272,14 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_CLOSE_WORDS)) {
         invalidate_l1_cache();  // re-read the relay-updated head (and the arm flag)
         if (!profiler_control_buffer[PROFILER_ARMED]) {
-            return;  // nobody drains this ring (or teardown disarmed it): overwrite rather than wait
+            break;  // nobody drains this ring (or teardown disarmed it): overwrite rather than wait
         }
     }
     g_head_cache = profiler_control_buffer[HEAD_INDEX];
 }
 
 // One local compare against the cached head, bound RING_USABLE (the difference to capacity is the reserve).
-inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
+FORCE_INLINE void ring_ensure_room(uint32_t nwords) {
     if (__builtin_expect((wIndex - g_head_cache) > (RING_USABLE - nwords), 0)) {
         // Invalidate before the refresh: the relay's head write-back arrives over the NoC, which the core's L1 read
         // cache does not observe.
@@ -293,6 +293,7 @@ inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
 
 // ZONE_L packet size: word0 (type|id) + end_lo + end_hi + dur_lo + dur_hi.
 static constexpr uint32_t SPSC_ZONE_L_WORDS = 5;
+constexpr uint32_t ZONE_CLOSE_WORDS = std::max(SPSC_ATOMIC_ZONE_WORDS + 1, SPSC_ZONE_L_WORDS);
 
 // Duration >= 2^32 cycles (~3.2 s), which the 32-bit duration word cannot carry: one ZONE_L packet of two full
 // 64-bit values; no sticky, cursor untouched on both sides. The decoder normalizes it to a START/END pair
@@ -313,9 +314,9 @@ __attribute__((noinline)) void mark_zone_long(
 
 // One 3-word packet per zone with the start the scope object carried. Room is reserved before the end clock
 // is read so a stall elongates the zone it happened inside; otherwise the packet would carry a pre-stall end
-// yet sit after the stall zone. Worst case is a 1-word sticky plus the 3-word packet.
+// yet sit after the stall zone.
 PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
-    ring_ensure_room(SPSC_ATOMIC_ZONE_WORDS + 1);  // worst case (ATOMIC + sticky); an S zone simply uses less
+    ring_ensure_room(ZONE_CLOSE_WORDS);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     const uint32_t lo_d = lo - start_lo;
@@ -332,7 +333,6 @@ PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, 
         return;
     }
     if (__builtin_expect(hi_d != 0, 0)) {
-        // The long fallback leaves the cursor alone, as the decoder's pair path does.
         mark_zone_long(timer_id, start_hi, start_lo, hi, lo);
         return;
     }
@@ -348,7 +348,7 @@ PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, 
 // DeviceZoneSetCounter hook: the runtime host-id goes in band as a STICKY_PROG the host forward-fills onto
 // this lane's following markers. Every RISC emits one at its own launch point; a sweep-granular id
 // misassigns about twice as many zones on back-to-back launches.
-inline __attribute__((always_inline)) void set_host_counter(uint32_t counter_value) {
+FORCE_INLINE void set_host_counter(uint32_t counter_value) {
     if (counter_value >> 27) {
         ring_ensure_room(2);
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_PROG_EXT, 0));
@@ -363,7 +363,7 @@ inline __attribute__((always_inline)) void set_host_counter(uint32_t counter_val
     publish_state(STATE_PROG_INDEX, counter_value);
 }
 
-inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
+FORCE_INLINE void set_profiler_zone_valid(bool condition) {
     zoneValid = condition;
     if (condition) {
         publish_tail();
@@ -404,13 +404,10 @@ __attribute__((noinline)) void init_profiler(
     }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
-    // Lane-granular runtime-id attribution. The host forward-fills a lane's STICKY_PROG onto that lane's
-    // following markers, so EVERY producing RISC must emit one per launch -- attributing by the BRISC's
-    // alone mis-assigned ~2x the zones on back-to-back launches. The firmware only calls
-    // DeviceZoneSetCounter on the launch-validating RISCs (BRISC/ERISC; hw/firmware/src is the DRAM
-    // profiler's text and is not touched for this backend), so NCRISC/TRISC read the launch message
-    // themselves, here, at the point DeviceZoneScopedMainN opens -- the same point the firmware reads
-    // launch_msg_rd_ptr, right after the BRISC/go notification that made the message valid.
+    // Each lane records its own runtime id. The host applies a lane's last STICKY_PROG to the markers that follow it on
+    // that lane, so every producing RISC must emit one per launch. The firmware only calls DeviceZoneSetCounter on
+    // BRISC and the ERISCs, so NCRISC and TRISC read the launch message themselves, where DeviceZoneScopedMainN opens.
+    // The firmware reads launch_msg_rd_ptr at that same point, right after the go signal that made the message valid.
     {
         volatile tt_l1_ptr uint32_t* rd_ptr = GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         volatile tt_l1_ptr launch_msg_t* launch = GET_MAILBOX_ADDRESS_DEV(launch[0]);
@@ -428,8 +425,8 @@ __attribute__((noinline)) void finish_profiler() { publish_tail(); }
 template <uint32_t timer_id>
 struct profileScope {
     uint32_t start_hi, start_lo;
-    inline __attribute__((always_inline)) profileScope() { read_wall_clock(start_hi, start_lo); }
-    inline __attribute__((always_inline)) ~profileScope() { mark_zone_close(timer_id, start_hi, start_lo); }
+    FORCE_INLINE profileScope() { read_wall_clock(start_hi, start_lo); }
+    FORCE_INLINE ~profileScope() { mark_zone_close(timer_id, start_hi, start_lo); }
 };
 
 // profileScope gated on a bool evaluated once at entry; false reads no clock and writes nothing. A constant argument
@@ -438,12 +435,12 @@ template <uint32_t timer_id>
 struct profileScopeIf {
     bool on;
     uint32_t start_hi, start_lo;
-    inline __attribute__((always_inline)) profileScopeIf(bool active) : on(active) {
+    FORCE_INLINE profileScopeIf(bool active) : on(active) {
         if (on) {
             read_wall_clock(start_hi, start_lo);
         }
     }
-    inline __attribute__((always_inline)) ~profileScopeIf() {
+    FORCE_INLINE ~profileScopeIf() {
         if (on) {
             mark_zone_close(timer_id, start_hi, start_lo);
         }
@@ -452,8 +449,8 @@ struct profileScopeIf {
 
 // Lifecycle only, no markers. Every kernel must be wrapped or nothing it records is published.
 struct profileScopeLifecycle {
-    inline __attribute__((always_inline)) profileScopeLifecycle() { init_profiler(); }
-    inline __attribute__((always_inline)) ~profileScopeLifecycle() { finish_profiler(); }
+    FORCE_INLINE profileScopeLifecycle() { init_profiler(); }
+    FORCE_INLINE ~profileScopeLifecycle() { finish_profiler(); }
 };
 
 // Tag, timestamp, payload; the length is self-describing (word2), bounded by the 7-bit length field. Same
@@ -496,8 +493,8 @@ PROFILER_INLINE_ATTR void record_event(uint32_t data_id) {
 TT_ZONE_DEFINE_ID(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW");
 constexpr uint32_t STACK_CANARY_PATTERN = 0xBABABABA;  // == watcher stack_usage_pattern
 struct stackCanaryScope {
-    inline __attribute__((always_inline)) stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
-    inline __attribute__((always_inline)) ~stackCanaryScope() {
+    FORCE_INLINE stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
+    FORCE_INLINE ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
             record_event(STACK_CANARY_DEAD_ID);
         }

@@ -43,10 +43,11 @@ class _TestCase:
 
 _PERFORMANCE_MARGIN = 0.05
 _PRODUCTION_OUTPUT_BF16_MASK = 0x26
-_PRODUCTION_EXPECTED_DURATION_NS = 816_534
+_PRODUCTION_EXPECTED_DURATION_NS = 176_000
 _T_INV_MAX_ABS = 0.01
 _UNIT_TEST_CASE = _TestCase("unit-h2-n4-k32-v64", 2, 4, 32, 64)
-_PRODUCTION_CASE = _TestCase("sp2-tp4-h24-n80-k128-v128", 24, 80, 128, 128)
+# Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
+_PRODUCTION_CASE = _TestCase("h24-n20-k128-v128", 24, 20, 128, 128)
 
 
 def _prepare_chunk_recurrence_ops(

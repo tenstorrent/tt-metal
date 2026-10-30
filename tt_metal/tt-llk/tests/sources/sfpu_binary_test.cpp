@@ -206,6 +206,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             // keeps BROADCAST_TYPE.
                             _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                                 tile, formats.math, formats.math);
+#ifdef ARCH_BLACKHOLE
+                            if constexpr (BROADCAST_TYPE != BroadcastType::NONE)
+                            {
+                                // Blackhole's _llk_unpack_A_ hands math a SrcB bank per broadcast tile; release it.
+                                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+                            }
+#endif
                         }
                     }
                 }

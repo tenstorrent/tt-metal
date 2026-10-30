@@ -9,21 +9,15 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct DeepseekMoEReduceScatterProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t clamped_num_links;
-    uint32_t num_directions_per_link;
-    std::vector<tt::tt_metal::CBHandle> input_cb_handles;
-    std::vector<tt::tt_metal::CBHandle> intermediate_cb_handles;
-};
+// The op is hardcoded for a ring of 8: it takes one input slice per ring position, and create_output_tensors
+// allocates one intermediate slice buffer per ring position ahead of the output, each wired to its own circular
+// buffer by the program factory. validate_on_program_cache_miss, create_output_tensors, compute_output_topologies
+// and the factory all read this one constant so they cannot disagree on the count.
+inline constexpr size_t kNumIntermediateSlices = 8;
 
 struct DeepseekMoEReduceScatterParams {
     tt::tt_metal::MemoryConfig output_memory_config;

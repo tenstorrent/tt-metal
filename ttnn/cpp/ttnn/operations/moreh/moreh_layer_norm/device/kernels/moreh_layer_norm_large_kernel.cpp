@@ -53,12 +53,12 @@ void kernel_main() {
 
     constexpr auto cb_out = tt::CBIndex::c_16;
     DataflowBuffer dfb_out_obj(cb_out);
-    constexpr auto cb_mean = tt::CBIndex::c_17;
+    static constexpr auto cb_mean = tt::CBIndex::c_17;
     DataflowBuffer dfb_mean_obj(cb_mean);
-    constexpr auto cb_rstd = tt::CBIndex::c_18;
+    static constexpr auto cb_rstd = tt::CBIndex::c_18;
     DataflowBuffer dfb_rstd_obj(cb_rstd);
 
-    constexpr auto cb_ex = tt::CBIndex::c_24;
+    static constexpr auto cb_ex = tt::CBIndex::c_24;
     DataflowBuffer dfb_ex_obj(cb_ex);  // E[x]
     constexpr auto cb_xmm = tt::CBIndex::c_25;
     DataflowBuffer dfb_xmm_obj(cb_xmm);
@@ -68,7 +68,7 @@ void kernel_main() {
     DataflowBuffer dfb_xmm2sum_obj(cb_xmm2sum);
     constexpr auto cb_var = tt::CBIndex::c_28;
     DataflowBuffer dfb_var_obj(cb_var);
-    constexpr auto cb_recip_std = tt::CBIndex::c_29;
+    static constexpr auto cb_recip_std = tt::CBIndex::c_29;
     DataflowBuffer dfb_recip_std_obj(cb_recip_std);  // 1.0/(sqrt(Var[x] + eps))
     constexpr auto cb_gamma_beta = tt::CBIndex::c_30;
     DataflowBuffer dfb_gamma_beta_obj(cb_gamma_beta);

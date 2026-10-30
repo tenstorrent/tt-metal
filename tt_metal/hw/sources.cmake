@@ -4,6 +4,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
+    inc/api/tile_constants.h
     inc/api/remote_circular_buffer.h
     inc/api/semaphore.h
     inc/api/socket_api.h
@@ -56,6 +57,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/compute_kernel_api_debug.h
     inc/api/compute/compute_kernel_hw_startup.h
     inc/api/compute/copy_dest_values.h
+    inc/api/compute/cumprod.h
     inc/api/compute/cumsum.h
     inc/api/compute/debug/cb_hash.h
     inc/api/compute/div_int32_floor.h
@@ -185,6 +187,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
+    inc/api/compute/moe_gate_sqrt_softplus.h
     inc/api/compute/mul_int_sfpu.h
     inc/api/compute/nextafter.h
     inc/api/compute/pack.h
@@ -283,10 +286,12 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/fw_debug.h
     inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
+    inc/internal/debug/shared_noc_cmd_buf.h
     inc/internal/debug/stack_usage.h
     inc/internal/debug/watcher_common.h
     inc/internal/ethernet/dataflow_api.h
     inc/internal/ethernet/erisc.h
+    inc/internal/ethernet/eth_ptp.hpp
     inc/internal/ethernet/tt_eth_api.h
     inc/internal/ethernet/tt_eth_ss_regs.h
     inc/internal/ethernet/tunneling.h

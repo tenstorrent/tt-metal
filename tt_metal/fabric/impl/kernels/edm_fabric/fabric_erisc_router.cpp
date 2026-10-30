@@ -21,6 +21,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_link_transport.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_tmp_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
@@ -45,6 +46,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#include "tt_metal/impl/streaming_profiler/kernels/link_sync.hpp"
+#endif
 
 using namespace tt::tt_fabric;
 
@@ -514,10 +519,10 @@ FORCE_INLINE void send_next_data(
     }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        while (SenderLinkTransport::is_busy()) {
         };
     }
-    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+    SenderLinkTransport::send_packet(src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
@@ -531,9 +536,9 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    while (SenderLinkTransport::is_busy()) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+    SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
 }
 
 /////////////////////////////////////////////
@@ -777,7 +782,9 @@ FORCE_INLINE void forward_to_local_destination(
 
 // Packed-slot bitset of eth outputs this ELF actually has. Bit i is fwd_dirs<MY_DIR>()[i].
 // Intramesh E/W also drop N/S (packed bits 1 and 2): Y-before-X forbids those turns, and
-// decode_action for E/W never reads the Y byte. INTERMESH E/W landings keep them.
+// decode_action for E/W never reads the Y byte. On an X-express mesh an intramesh Z router is an X
+// resource for the same reasons: it decodes the X byte only, which never carries N/S, so it drops
+// N/S (packed bits 2 and 3) as dead arms. INTERMESH landings keep them.
 template <size_t DOWNSTREAM_EDM_SIZE>
 constexpr uint8_t live_eth_mask_2d() {
     constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
@@ -799,6 +806,11 @@ constexpr uint8_t live_eth_mask_2d() {
         (my_dir == eth_chan_directions::EAST || my_dir == eth_chan_directions::WEST) && !is_intermesh_router;
     if constexpr (trim_ns_for_intramesh_ew) {
         live = static_cast<uint8_t>(live & ~0b0110);
+    }
+    constexpr bool trim_ns_for_intramesh_z_on_x_express =
+        my_dir == eth_chan_directions::Z && Fabric2DRoutingConfig::express_on(Fabric2DAxis::X) && !is_intermesh_router;
+    if constexpr (trim_ns_for_intramesh_z_on_x_express) {
+        live = static_cast<uint8_t>(live & ~0b1100);
     }
     return live;
 }
@@ -1240,7 +1252,7 @@ FORCE_INLINE
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
+        can_send = can_send && !SenderLinkTransport::is_busy();
     }
     if (can_send) {
         did_something = true;
@@ -1383,7 +1395,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         bool pkts_received = pkts_received_since_last_check > 0;
         bool can_send_ack = pkts_received;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+            can_send_ack = can_send_ack && !ReceiverLinkTransport::is_busy();
         }
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
@@ -1457,7 +1469,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     action = Routing2DCodec::decode_action_y_first(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 } else {
-                    action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                    // A Z-facing router decodes the axis its chord runs along; see Fabric2DRoutingConfig.
+                    action = Fabric2DRoutingConfig::decode_action<static_cast<eth_chan_directions>(my_direction)>(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 }
                 // This chip is the exit when the maps say deliver here but the final mesh is
@@ -1575,7 +1588,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
+            unsent_completions = unsent_completions && !ReceiverLinkTransport::is_busy();
         }
         if (unsent_completions) {
             // completion ptr incremented in callee
@@ -1595,7 +1608,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
+            can_send_completion = can_send_completion && !ReceiverLinkTransport::is_busy();
         }
         if (can_send_completion) {
             uint8_t src_ch_id;
@@ -2282,6 +2295,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+            link_sync::RouterHook::step(fabric_heartbeat_counter);
+#endif
         }
 
         speedy_state_copy_out<super_speedy_mode, 0>(

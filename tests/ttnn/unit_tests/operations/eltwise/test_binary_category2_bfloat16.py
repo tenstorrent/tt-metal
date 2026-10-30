@@ -34,9 +34,9 @@ Accuracy criteria
                            tensor-tensor and tensor-scalar, incl. inplace
   isclose                : exact vs torch.isclose after two documented
                            dest-precision exceptions (see test_isclose)
-  minimum, maximum       : exact on finite values, ±0, and ±inf
-                           (see test_minmax_ops). NaN / signed-zero / inf
-                           edge cases live in test_minmax_special_values.
+  minimum, maximum       : exact on finite nonzero values (see
+                           test_minmax_ops). ±0, ±inf and ±NaN live in
+                           test_minmax_special_values.
 """
 
 
@@ -128,10 +128,9 @@ def test_relational_ops_scalar(device, ttnn_op, scalar):
 def test_minmax_ops(device, ttnn_op):
     """Pairwise coverage of ttnn.minimum / ttnn.maximum over the stratified grid.
 
-    Output is a select of one operand, so finite values, ±0, and ±inf match
-    torch at 0 ULP. NaN pairs are excluded here — SFPSWAP does not propagate
-    NaN the way torch does; that contract is asserted independently in
-    test_minmax_special_values.
+    The grid here is finite and nonzero (no ±0, ±inf or NaN). Output is a
+    select of one operand, so it matches torch at 0 ULP. ±0, ±inf and NaN
+    differ from torch and are asserted in test_minmax_special_values.
     """
     input_a, input_b = pairwise_inputs(include_spl_values=False)
     golden, result = run_binary(device, ttnn_op, input_a, input_b)
@@ -199,40 +198,42 @@ def test_isclose(device, rtol, atol, equal_nan):
 
 
 @pytest.mark.parametrize("ttnn_op, is_max", [(ttnn.minimum, False), (ttnn.maximum, True)])
-@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-def test_minmax_special_values(device, ttnn_op, is_max, dtype):
-    """Cross product of ±0, ±1, ±inf, NaN for ttnn.minimum / ttnn.maximum.
+def test_minmax_special_values(device, ttnn_op, is_max):
+    """Cross product of ±0, ±1, ±inf, +NaN and -NaN for ttnn.minimum /
+    ttnn.maximum.
 
     Both propagate NaN (issue #51470): the kernel returns a NaN wherever either operand is
-    NaN, in both operand orders. A bfloat16 NaN comes back as +inf through the SFPU store on
-    this path, the same as ttnn.identity, so bfloat16 expects +inf there. bfloat16 dest
-    packing also drops the zero sign bit; fp32 dest keeps it, and IEEE min(+0, -0) is -0 and
-    max(-0, -0) is -0, which the SFPU's sign-magnitude order gives as well.
+    NaN, in both operand orders and for either NaN sign. The bfloat16 store packs a NaN as
+    an infinity. On Blackhole the binary kernel emits the canonical +NaN, so -NaN (0xFFC0)
+    comes back as +inf too; on Wormhole the kernel keeps the operand NaN, whose sign the inf
+    follows, so there only the infinity is checked. torch returns NaN for every such row.
+
+    Dest packing also drops the zero sign bit: every zero result is +0, e.g.
+    minimum(1, -0) and min(+0, -0) give +0 where IEEE gives -0.
     """
-    torch_dtype = getattr(torch, dtype)
-    ttnn_dtype = getattr(ttnn, dtype)
+    special_values = [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"), float("nan"), float("nan")]
+    values = torch.tensor(special_values, dtype=torch.bfloat16)
+    values.view(torch.int16)[-1] = torch.tensor(0xFFC0, dtype=torch.int32).to(torch.int16)  # -NaN
+    input_a, input_b = torch.meshgrid(values, values, indexing="ij")
+    input_a, input_b = input_a.flatten(), input_b.flatten()
 
-    special_values = [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"), float("nan")]
-    x_vals = [x for x in special_values for _ in special_values]
-    y_vals = [y for _ in special_values for y in special_values]
-
-    input_a = torch.tensor(x_vals, dtype=torch_dtype)
-    input_b = torch.tensor(y_vals, dtype=torch_dtype)
+    inf = torch.tensor(float("inf"), dtype=torch.bfloat16)
 
     expected = torch.maximum(input_a, input_b) if is_max else torch.minimum(input_a, input_b)
-    if dtype == "bfloat16":
-        inf = torch.tensor(float("inf"), dtype=torch_dtype)
-        expected = torch.where(torch.isnan(expected), inf, expected)
-        expected = torch.where(expected == 0, torch.zeros_like(expected), expected)
+    is_nan = torch.isnan(expected)
+    expected = torch.where(is_nan, inf, expected)
+    expected = torch.where(expected == 0, torch.zeros_like(expected), expected)
 
-    tt_a = ttnn.from_torch(input_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b = ttnn.from_torch(input_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_a = ttnn.from_torch(input_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn_op(tt_a, tt_b))
 
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        assert torch.isinf(result[is_nan]).all()
+        expected, result = expected[~is_nan], result[~is_nan]
     assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
-    if dtype == "bfloat16":
-        zero = result == 0
-        assert not torch.signbit(result[zero]).any()
+    zero = result == 0
+    assert not torch.signbit(result[zero]).any()
 
 
 @pytest.mark.parametrize(

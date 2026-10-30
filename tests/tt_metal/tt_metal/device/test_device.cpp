@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -128,7 +128,6 @@ void expect_properties_match_devices(const std::shared_ptr<distributed::MeshDevi
         EXPECT_EQ(mesh_device->l1_size_per_core(), device->l1_size_per_core());
         EXPECT_EQ(mesh_device->dram_size_per_channel(), device->dram_size_per_channel());
         EXPECT_EQ(mesh_device->ethernet_cores(), device->ethernet_cores());
-        EXPECT_EQ(mesh_device->storage_only_cores(), device->storage_only_cores());
     }
 }
 }  // namespace unit_tests::basic::device

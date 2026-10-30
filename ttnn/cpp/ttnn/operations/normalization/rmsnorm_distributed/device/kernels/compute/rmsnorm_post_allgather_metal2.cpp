@@ -88,7 +88,6 @@ void kernel_main() {
     dfb_eps.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
         /*
