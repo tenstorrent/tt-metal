@@ -54,10 +54,20 @@ def _to_dev(mesh_device, x):
 
 
 def _traced_ms(mesh_device, step, x_tt):
-    """Median per-replay wall time of one captured decode step, in ms."""
-    ttnn.deallocate(step(x_tt))  # compile
+    """Median per-replay wall time of one captured decode step, in ms. Each step gets its own copy of
+    x_tt because the GDN modules may free their input (in the model it is a fresh norm output)."""
+
+    def run():
+        return step(ttnn.clone(x_tt, memory_config=ttnn.L1_MEMORY_CONFIG))
+
+    ttnn.deallocate(run())  # compile
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out = step(x_tt)
+    try:
+        out = run()
+    except Exception:
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.release_trace(mesh_device, tid)
+        raise
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     times = []
@@ -108,14 +118,21 @@ def test_gdn_decode_tp1(mesh_device):
     logger.info(f"layer {li}: single-device vs TP=1 decode PCC per step {[round(p, 5) for p in pccs]}")
 
     x_tt = _to_dev(mesh_device, torch.randn(1, 1, args.dim, dtype=torch.bfloat16))
-    ms = {"single_device": _traced_ms(mesh_device, run_old, x_tt)}
-    ms["tp1_composite"] = _traced_ms(mesh_device, run_tp, x_tt)
-    tp.use_fused_recurrent_decode = True
-    ms["tp1_fused"] = _traced_ms(mesh_device, run_tp, x_tt)
-
-    for name, v in ms.items():
-        logger.info(f"{name:>14}: {v:.4f} ms/layer, x{n_gdn} GDN layers = {v * n_gdn:.2f} ms/token")
-    results = {"layer": li, "gdn_layers": n_gdn, "pcc": pccs, "ms_per_layer": ms, "hf_model": os.environ["HF_MODEL"]}
+    clone_ms = _traced_ms(mesh_device, lambda x: x, x_tt)
+    logger.info(f"input clone alone: {clone_ms:.4f} ms (subtracted below)")
+    ms = {}
+    for name, step in (("single_device", run_old), ("tp1_composite", run_tp), ("tp1_fused", run_tp)):
+        tp.use_fused_recurrent_decode = name == "tp1_fused"
+        ms[name] = _traced_ms(mesh_device, step, x_tt) - clone_ms
+        logger.info(f"{name:>14}: {ms[name]:.4f} ms/layer, x{n_gdn} GDN layers = {ms[name] * n_gdn:.2f} ms/token")
+    results = {
+        "layer": li,
+        "gdn_layers": n_gdn,
+        "pcc": pccs,
+        "ms_per_layer": ms,
+        "clone_ms": clone_ms,
+        "hf_model": os.environ["HF_MODEL"],
+    }
     if os.environ.get("GDN_TP1_RESULTS"):
         with open(os.environ["GDN_TP1_RESULTS"], "w") as f:
             json.dump(results, f, indent=2)
