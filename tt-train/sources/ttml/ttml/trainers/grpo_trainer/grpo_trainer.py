@@ -926,6 +926,24 @@ def layout_microbatch(
     return inputs, targets, mask, Tp
 
 
+def policy_nlog_probs(model: Any, inputs: np.ndarray, targets: np.ndarray, mapper: Any = None) -> ttml.autograd.Tensor:
+    """Teacher-forced forward over the :func:`layout_microbatch` tensors.
+    Returns ``-log pi(target)`` of shape ``[B_local, Tp]``.
+    """
+    B, Tp = inputs.shape
+    x = ttml.autograd.Tensor.from_numpy(
+        inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
+    )
+    # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
+    B_local = int(x.shape()[0])
+    # The composite SDPA has no causal default, so a model built with it needs the mask.
+    mask = build_causal_mask(Tp, device=True) if getattr(model.config, "use_composite_sdpa", False) else None
+    logits = model(x, mask)
+    tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+    nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
+    return ttml.ops.reshape.reshape(nlog, [B_local, Tp])
+
+
 def place_old_nlog_probs(
     prompts: List[List[int]],
     completions: List[List[int]],
@@ -1464,20 +1482,7 @@ class GRPOTrainer:
         """Teacher-forced forward with grad over the :func:`layout_microbatch`
         tensors. Returns ``-log pi(target)`` of shape ``[B_local, Tp]``.
         """
-        B, Tp = inputs.shape
-        x = ttml.autograd.Tensor.from_numpy(
-            inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
-        )
-        # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
-        B_local = int(x.shape()[0])
-        # The composite SDPA has no causal default, so a model built with it needs the mask.
-        mask = build_causal_mask(Tp, device=True) if getattr(self.model.config, "use_composite_sdpa", False) else None
-        logits = self.model(x, mask)
-        tgt = ttml.autograd.Tensor.from_numpy(
-            targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
-        )
-        nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
-        return ttml.ops.reshape.reshape(nlog, [B_local, Tp])
+        return policy_nlog_probs(self.model, inputs, targets, self._batch_layout.mapper)
 
     def _compute_loss_and_backward(
         self,
