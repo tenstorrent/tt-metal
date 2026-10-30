@@ -122,7 +122,7 @@ def _expand_bfp_datums(packed_mantissas, bits_per_datum):
     return datums
 
 
-def _bfp_to_float_block(exponent, datums, magnitude_bits, cache):
+def _bfp_to_float_block(exponent, datums, magnitude_bits, cache, exp_bias=127):
     """Decode one 16-element BFP block to a list of float values.
 
     Each datum is sign-magnitude with ``magnitude_bits`` magnitude bits and the
@@ -132,7 +132,7 @@ def _bfp_to_float_block(exponent, datums, magnitude_bits, cache):
     signed zero (the sign is preserved via the signed product), matching the
     hardware unpacker / blockfloat_common.cpp reference.
     """
-    exp_adj = exponent - 127
+    exp_adj = exponent - exp_bias
     scale = 2.0 ** (exp_adj - (magnitude_bits - 1))
     sign_mask = 1 << magnitude_bits
     mag_mask = sign_mask - 1
@@ -151,7 +151,7 @@ def _bfp_to_float_block(exponent, datums, magnitude_bits, cache):
     return values
 
 
-def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim=16):
+def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim=16, exp_bias=127, dtype=torch.bfloat16):
     """Unpack a BFP8_b / BFP4_b / BFP2_b tile to a bfloat16 tensor.
 
     ``magnitude_bits`` selects the format: 7 (BFP8), 3 (BFP4), or 1 (BFP2).
@@ -178,10 +178,15 @@ def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim
     for i, exponent in enumerate(exponents):
         block_datums = datums[i * 16 : (i + 1) * 16]
         bfloat16_values.extend(
-            _bfp_to_float_block(exponent, block_datums, magnitude_bits, cache)
+            _bfp_to_float_block(exponent, block_datums, magnitude_bits, cache, exp_bias)
         )
 
-    return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
+    return torch.tensor(bfloat16_values, dtype=dtype)
+
+
+def unpack_bfp8(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
+    """BFP8 with the 5 bit exponent (bias 15) to a float16 tensor."""
+    return _unpack_bfp_b(bfp8_block, magnitude_bits=7, sfpu=sfpu, num_faces=num_faces, face_r_dim=face_r_dim, exp_bias=15, dtype=torch.float16)
 
 
 def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
@@ -650,6 +655,7 @@ def unpack_res_tiles(
         )
         bfp_mantissa_bits = {
             DataFormat.Bfp8_b: 8,
+            DataFormat.Bfp8: 8,
             DataFormat.Bfp4_b: 4,
             DataFormat.Bfp2_b: 2,
         }.get(output_format)
@@ -670,7 +676,9 @@ def unpack_res_tiles(
     if total_elements_needed > len(packed_list):
         raise IndexError("Buffer access out of bounds")
 
-    if output_format == DataFormat.Bfp8_b:
+    if output_format == DataFormat.Bfp8:
+        unpack_func = unpack_fp16 if sfpu else unpack_bfp8
+    elif output_format == DataFormat.Bfp8_b:
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp8_b
     elif output_format == DataFormat.Bfp4_b:
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp4_b

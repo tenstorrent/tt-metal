@@ -140,3 +140,24 @@ def bfp2b_to_float16b(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
     is set; otherwise it collapses to 0.
     """
     return _quantize_bfp_b(operand, magnitude_bits=1, dimensions=dimensions)
+
+
+def bfp8a_to_float16(operand: torch.Tensor, dimensions=None) -> torch.Tensor:
+    """Simulate the BFP8 (5 bit exponent) pack/unpack round trip on a Float16 tensor: one shared exponent per 16 datums, 7 bit mantissas, round to nearest ties away from zero."""
+    flat = operand.flatten().to(torch.float16)
+    n = flat.numel()
+    bits = flat.view(torch.int16).to(torch.int32) & 0xFFFF
+    signs = (bits >> 15) & 1
+    exps = (bits >> 10) & 0x1F
+    mants = torch.where(exps == 0, torch.zeros_like(bits), ((bits & 0x3FF) >> 4) | 0x40)
+    sb, eb, mb = signs.view(-1, BFP_BLOCK), exps.view(-1, BFP_BLOCK), mants.view(-1, BFP_BLOCK)
+    shared = eb.max(dim=1, keepdim=True).values
+    deltas = shared - eb
+    guard = torch.where(deltas > 0, (mb >> torch.clamp(deltas - 1, min=0)) & 1, torch.zeros_like(mb))
+    m = ((mb >> deltas) + guard) & 0x7F
+    values = m.float() * torch.exp2((shared - 21).float())
+    values = torch.where(sb.bool() & (m != 0), -values, values)
+    out = values.flatten()[:n].to(torch.float16)
+    if dimensions is not None:
+        out = untilize_block(out, stimuli_format=DataFormat.Float16, dimensions=dimensions).flatten()
+    return out

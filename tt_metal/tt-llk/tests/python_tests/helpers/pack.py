@@ -229,6 +229,34 @@ def float_to_bfp8_block(block):
     return shared_exponent, bfp8_mantissas
 
 
+def float_to_bfp8a_block(block):
+    """Pack a 16 element block to BFP8 with the 5 bit exponent (Float16 family): one shared exponent (the largest), 7 bit sign-magnitude mantissas
+    (hidden one and 6 fraction bits), round-to-nearest ties away from zero as for BFP8_b. Float16 zeros and denormals pack as zero."""
+    import numpy as np
+
+    bits = np.asarray([float(v) for v in block], dtype=np.float32).astype(np.float16).view(np.uint16).astype(np.int64)
+    signs = (bits >> 15) & 1
+    exps = (bits >> 10) & 0x1F
+    mants = np.where(exps == 0, 0, (((bits & 0x3FF) >> 4) | 0x40))
+    shared = int(exps.max())
+    out = []
+    for i in range(len(bits)):
+        delta = shared - int(exps[i])
+        m = int(mants[i])
+        if delta > 0:
+            m = (m >> delta) + ((m >> (delta - 1)) & 1)
+        m &= 0x7F
+        out.append(((int(signs[i]) << 7) | m) if m != 0 else 0)
+    return shared, out
+
+
+def pack_bfp8(tensor, block_size=16, num_faces=4, face_r_dim=16):
+    """Pack tensor into BFP8 (5 bit shared exponent): [exponents...] + [mantissas...], layout as pack_bfp8_b."""
+    flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
+    exponents, mantissas = _bfp_collect_blocks(flattened_tensor, block_size, float_to_bfp8a_block)
+    return exponents + mantissas
+
+
 def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """Pack tensor into BFP8_b format.
 

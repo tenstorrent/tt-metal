@@ -19,6 +19,7 @@ from .logger import logger
 from .pack import (
     pack_bfp2_b,
     pack_bfp4_b,
+    pack_bfp8,
     pack_bfp8_b,
     pack_bfp16,
     pack_fp8_e4m3,
@@ -430,6 +431,7 @@ class StimuliConfig:
             DataFormat.Float16: pack_fp16,
             DataFormat.Float16_b: pack_bfp16,
             DataFormat.Float32: pack_fp32,
+            DataFormat.Bfp8: pack_bfp8,
             DataFormat.Bfp8_b: pack_bfp8_b,
             DataFormat.Bfp4_b: pack_bfp4_b,
             DataFormat.Bfp2_b: pack_bfp2_b,
@@ -544,6 +546,7 @@ class StimuliConfig:
                     use_srcs=use_srcs,
                 )
             if pack_function in (
+                pack_bfp8,
                 pack_bfp8_b,
                 pack_bfp4_b,
                 pack_bfp2_b,
@@ -614,6 +617,7 @@ class StimuliConfig:
                     use_srcs=use_srcs,
                 )
             if pack_function in (
+                pack_bfp8,
                 pack_bfp8_b,
                 pack_bfp4_b,
                 pack_bfp2_b,
