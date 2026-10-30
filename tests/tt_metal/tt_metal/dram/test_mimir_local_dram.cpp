@@ -407,17 +407,20 @@ struct HostCopyModel {
     }
 };
 
-class MimirLocalDram : public ::testing::TestWithParam<uint32_t> {};
+class MimirLocalDram : public ::testing::TestWithParam<uint32_t> {
+protected:
+    void SetUp() override {
+        skip_unless_programmable_dram_package();
+        skip_unless_mimir_local_package();
+        if (const std::string skip_reason = topology_skip_reason(GetParam()); !skip_reason.empty()) {
+            GTEST_SKIP() << skip_reason;
+        }
+    }
+};
 
 // CCE c writes its own TL1 to every local DRAM view, from every hart, at every anchor.
 TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    const std::string skip_reason = topology_skip_reason(cce_index);
-    if (!skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     ScopedDevice session;
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -476,13 +479,7 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
 // Host writes DRAM, CCE copies it into its own TL1 at each hart's guarded block, host reads TL1 back. The blocks of
 // all harts sit back to back in one poll region.
 TEST_P(MimirLocalDram, CceReadsDramToTl1) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    const std::string skip_reason = topology_skip_reason(cce_index);
-    if (!skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     ScopedDevice session;
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -558,13 +555,7 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
 // same anchor. The two copies are separate launches (no kernel mode waits on one copy before issuing the next), so the
 // host orders them and checks the intermediate TL1 in between; the CCE's own ordering is not tested.
 TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    const std::string skip_reason = topology_skip_reason(cce_index);
-    if (!skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     ScopedDevice session;
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -684,13 +675,7 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
 // and then shared: all harts write the same block, each from its own TL1 source. A region above kMaxBytesInPacket is
 // several commands of that size.
 TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    const std::string skip_reason = topology_skip_reason(cce_index);
-    if (!skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     ScopedDevice session;
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -797,13 +782,7 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
 // [R+2 KiB, R+6 KiB) back into TL1 C and D. Each op is one launch of all harts, so the ops run in program order and
 // every op's destination is checked against the host model before the next op.
 TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    const std::string skip_reason = topology_skip_reason(cce_index);
-    if (!skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     ScopedDevice session;
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);

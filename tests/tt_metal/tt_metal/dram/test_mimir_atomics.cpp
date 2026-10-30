@@ -611,13 +611,11 @@ std::string batch_config(const IdmaBatch& batch, uint32_t seed) {
         seed);
 }
 
-class MimirAtomicCceTest : public ::testing::TestWithParam<uint32_t> {
+class MimirAtomicCceTest : public MimirCceTest<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
     }
 };
 
@@ -630,10 +628,7 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
     constexpr uint32_t kCount = 64;
     constexpr uint32_t kValue = 1;
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
 
     const uint64_t target_offset = tl1_data(kCceKernelHart);
     const uint64_t flag_offset = target_offset + kFlagOffsetFromTarget;
@@ -865,10 +860,7 @@ class MimirAtomicLocal : public MimirAtomicCceTest {};
 // increments, each once on its own line from one hart: returned value, final value and the line's other words.
 TEST_P(MimirAtomicLocal, OpMatrix) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     RecordProperty(
         "unsupported",
         "sub-word AMO (amo*.b/.h, Zabha) and amocas.w/.d/.q (Zacas): not in the toolchain (__riscv_zabha / "
@@ -975,10 +967,7 @@ TEST_P(MimirAtomicLocal, OpMatrix) {
 // point starts at a barrier. Cycles and interleaved returns (the contention evidence) are recorded only.
 TEST_P(MimirAtomicLocal, Hotspot) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     std::vector<SweepPoint> points;
     for (uint32_t count = 16; count <= 64; count *= 2) {
         for (uint32_t value = 1; value <= 4; ++value) {
@@ -1003,10 +992,7 @@ TEST_P(MimirAtomicLocal, Hotspot) {
 // Every hart increments its own word: adjacent words of one line, separate doublewords of one line, separate lines.
 TEST_P(MimirAtomicLocal, Distributed) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const std::vector<SweepPoint> points = {{1, 64}, {3, 32}};
     const uint32_t harts = abi::kMaxParticipants;
     run_sweep_leg(
@@ -1045,10 +1031,7 @@ TEST_P(MimirAtomicLocal, Distributed) {
 // hart. SC and compare failures and the most attempts one increment took are recorded.
 TEST_P(MimirAtomicLocal, LrScCas) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     uint32_t tag = 1;
     for (const uint32_t harts : {1u, abi::kMaxParticipants}) {
         for (const uint32_t op : {abi::kOpLrScAddW, abi::kOpLrScAddD, abi::kOpCasAddW, abi::kOpCasAddD}) {
@@ -1074,10 +1057,7 @@ TEST_P(MimirAtomicLocal, LrScCas) {
 // Counters that start just below 2^32 (word) or 2^64 (doubleword) and wrap halfway through the increments.
 TEST_P(MimirAtomicLocal, Wrap) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     uint32_t tag = 1;
     for (const uint32_t harts : {1u, abi::kMaxParticipants}) {
         for (const uint32_t op : {abi::kOpAmoAddW, abi::kOpAmoAddD, abi::kOpLrScAddW, abi::kOpCasAddD}) {
@@ -1101,10 +1081,7 @@ TEST_P(MimirAtomicLocal, Wrap) {
 TEST_P(MimirAtomicLocal, Ordering) {
     constexpr uint32_t kRounds = 64;
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const AmoLayout layout = amo_layout();
     for (const uint32_t leg : {abi::kLegFlushRelease, abi::kLegReleaseOnly}) {
         const std::string leg_name = leg == abi::kLegFlushRelease ? "flush_release" : "release_only";
@@ -1163,10 +1140,7 @@ std::vector<uint32_t> run_line_state(
 TEST_P(MimirAtomicLocal, CleanDirtyLine) {
     constexpr uint32_t kValue = 5;
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const AmoLayout layout = amo_layout();
     const uint32_t line_words = abi::kLineBytes / sizeof(uint32_t);
 
@@ -1258,10 +1232,7 @@ TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
     constexpr uint32_t kValue = 5;
     const uint32_t cce_index = GetParam();
     const uint32_t writer_cce = sibling_cce(cce_index);
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const AmoLayout layout = amo_layout();
     const uint32_t line_words = abi::kLineBytes / sizeof(uint32_t);
     const uint32_t seed = leg_seed(1);
@@ -1535,10 +1506,7 @@ void run_storm_leg(
 TEST_P(MimirAtomicLocal, Storm) {
     constexpr uint32_t kCount = abi::kMaxCount;
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     run_storm_leg(device, cce_index, abi::kModeStorm, abi::kLegShared, abi::kMaxParticipants, kCount, 1, "shared");
     run_storm_leg(device, cce_index, abi::kModeStorm, abi::kLegDisjoint, abi::kMaxParticipants, kCount, 2, "disjoint");
 }
@@ -1549,10 +1517,7 @@ TEST_P(MimirAtomicLocal, NeighbourWriteRace) {
     constexpr uint32_t kCount = abi::kMaxCount;
     constexpr uint32_t kValue = 1;
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const AmoLayout layout = amo_layout();
     const uint32_t harts = abi::kMaxParticipants;
     const uint32_t seed = leg_seed(1);
@@ -1597,10 +1562,7 @@ TEST_P(MimirAtomicLocal, NeighbourWriteRace) {
 // from the seed, and so are the participant count (2-8) and the layout.
 TEST_P(MimirAtomicLocal, Soak) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t seed = leg_seed(1);
     const uint32_t harts = 2 + seed % (abi::kMaxParticipants - 1);
     const uint32_t layout_leg = (seed >> 8) % 2 == 0 ? abi::kLegShared : abi::kLegDisjoint;
@@ -1618,10 +1580,7 @@ TEST_P(MimirAtomicItnControl, Cce0ToCce1PlainWrite) {
     constexpr uint32_t kValue = 7;
     const uint32_t receiver_cce = GetParam();
     const uint32_t writer_cce = sibling_cce(receiver_cce);
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const AmoLayout layout = amo_layout();
     const uint32_t seed = leg_seed(1);
     const uint32_t written = seed ^ 0xC0FFEE00u;
@@ -1737,10 +1696,7 @@ class MimirAccumProbe : public MimirAtomicCceTest {};
 // Own hang-prone row: an unsupported (format, operation) may never ack.
 TEST_P(MimirAccumProbe, FmtOpMatrix) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     struct MatrixPoint {
         uint32_t format = 0;
         uint32_t operation = 0;
@@ -1857,10 +1813,7 @@ bool run_accumulate(IDevice* device, const std::vector<IdmaBatch>& batches, cons
 // Four 256 B accumulates (INT32, op 0x9) from four source blocks onto one destination block, from hart 0.
 TEST_P(MimirAtomicIdmaAccum, SingleHart) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t seed = leg_seed(1);
     IdmaBatch batch = own_accumulate(cce_index, 0);
     batch.len_bytes = 256;
@@ -1886,10 +1839,7 @@ TEST_P(MimirAtomicIdmaAccum, SingleHart) {
 // every hart's contribution, so no hart stores its status while another's accumulate may be in flight (MIM-560).
 TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t harts = abi::kMaxParticipants;
     const uint32_t seed = leg_seed(1);
     std::vector<IdmaBatch> batches;
@@ -1933,10 +1883,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
 TEST_P(MimirAtomicIdmaAccum, AllHartsDisjoint) {
     constexpr uint32_t kBlockBytes = 256;
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t harts = abi::kMaxParticipants;
     const uint32_t seed = leg_seed(1);
     const uint64_t region_offset = tl1_data(kCceKernelHart) + kAccumulateDestinationFromData;
@@ -1983,10 +1930,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsDisjoint) {
 // (MIM-407: own TL1 to own TL1).
 TEST_P(MimirAtomicIdmaAccum, BackToBack) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     uint32_t tag = 1;
     for (const uint32_t command_buffer : {0u, 1u}) {
         for (const uint32_t burst : {1u, 8u, idma_abi::kMaxElements}) {
@@ -2021,10 +1965,7 @@ TEST_P(MimirAtomicIdmaAccum, BackToBack) {
 // seen. Own hang-prone row.
 TEST_P(MimirAtomicIdmaAccum, MaxOutstanding) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t seed = leg_seed(1);
     IdmaBatch batch = own_accumulate(cce_index, 0);
     batch.len_bytes = abi::kLineBytes;
@@ -2061,10 +2002,7 @@ TEST_P(MimirAtomicIdmaAccum, MixedPathControl) {
     constexpr uint32_t kFirstValue = 3;
     constexpr uint32_t kSecondValue = 11;
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const AmoLayout layout = amo_layout();
     const uint32_t line_words = abi::kLineBytes / sizeof(uint32_t);
     const uint32_t seed = leg_seed(1);

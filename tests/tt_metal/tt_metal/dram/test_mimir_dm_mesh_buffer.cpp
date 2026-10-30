@@ -108,9 +108,7 @@ class MimirDmMeshBufferDram : public ::testing::TestWithParam<std::string> {};
 
 TEST_P(MimirDmMeshBufferDram, InterleavedPlacement) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     IDevice* device = mesh->get_devices().front();
@@ -157,9 +155,7 @@ TEST_P(MimirDmMeshBufferDram, InterleavedPlacement) {
 
 TEST_P(MimirDmMeshBufferDram, WriteRead) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     distributed::MeshCommandQueue& command_queue = mesh->mesh_command_queue();
@@ -180,9 +176,7 @@ TEST_P(MimirDmMeshBufferDram, WriteRead) {
 
 TEST_P(MimirDmMeshBufferDram, MultipleWriteReadRounds) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     distributed::MeshCommandQueue& command_queue = mesh->mesh_command_queue();

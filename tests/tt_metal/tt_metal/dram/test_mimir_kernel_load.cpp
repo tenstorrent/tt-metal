@@ -177,10 +177,12 @@ void update_echo_arguments(
     return check_echo_slot(hart, read_echo_slots(device, cce_index), arguments);
 }
 
-class MimirKernelLoad : public ::testing::TestWithParam<uint32_t> {};
+class MimirKernelLoad : public ::testing::TestWithParam<uint32_t> {
+protected:
+    void SetUp() override { skip_unless_programmable_dram_package(); }
+};
 
 TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
-    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
 
     ScopedDevice device_guard;
@@ -210,7 +212,6 @@ TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
 }
 
 TEST_P(MimirKernelLoad, EachHartAlone) {
-    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
     const MimirTopology topology = topology_from(configured_soc_desc());
 
@@ -243,7 +244,6 @@ TEST_P(MimirKernelLoad, EachHartAlone) {
 }
 
 TEST_P(MimirKernelLoad, ArgsReplaceStale) {
-    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
 
     ScopedDevice device_guard;
@@ -287,7 +287,6 @@ TEST_P(MimirKernelLoad, ArgsReplaceStale) {
 // the launch after the reopen runs on the firmware loaded by the first open. Reset and reload on every open is
 // MimirFwReinit (TT_METAL_FORCE_REINIT).
 TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
-    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
 
     constexpr uint32_t hart = kCceKernelHart;
@@ -369,12 +368,14 @@ uint32_t dram_runtime_args_ceiling() {
 
 // MM-8 runtime-arg host validation on a CCE kernel (MM3 analogues of api/test_runtime_args.cpp
 // TensixIllegalTooManyRuntimeArgs and TensixIllegallyModifyRTArgs).
-class MimirDmRuntimeArgs : public ::testing::TestWithParam<uint32_t> {};
+class MimirDmRuntimeArgs : public ::testing::TestWithParam<uint32_t> {
+protected:
+    void SetUp() override { skip_unless_programmable_dram_package(); }
+};
 
 // Unique and common runtime args up to the DRAM-core kernel-config area are accepted; one word more throws from both
 // the unique and the common API. A kernel with args at the ceiling launches and echoes its last unique and common args.
 TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
-    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
@@ -436,7 +437,6 @@ std::vector<uint32_t> words_of(const RuntimeArgsData& args) {
 // After a launch, changing the count of unique runtime args throws, and so does setting common runtime args a second
 // time with the same count. Neither rejected call changes the stored args.
 TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
-    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
