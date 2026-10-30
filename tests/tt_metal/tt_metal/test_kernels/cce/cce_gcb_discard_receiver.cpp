@@ -7,9 +7,11 @@
 // holding credits until the host releases it.
 
 #include "cce_gcb_receiver_abi.h"
+#include "experimental/cce_hart.h"
 #include "experimental/cce_remote_cb.h"
 
 namespace abi = cce_gcb_receiver_abi;
+namespace hart = experimental::cce_hart;
 namespace remote_cb = experimental::cce_remote_cb;
 
 enum class FrontWait : uint32_t { Ready, Stopped, Expired };
@@ -21,7 +23,7 @@ struct DiscardProgress {
 
 FrontWait wait_front_or_stop(
     const remote_cb::Receiver& receiver, uint32_t num_pages, const volatile uint32_t* command, uint64_t budget_cycles) {
-    const remote_cb::WaitDeadline deadline(budget_cycles);
+    const hart::WaitDeadline deadline(budget_cycles);
     while (!remote_cb::front_ready(receiver, num_pages)) {
         if (*command == abi::kCommandStop) {
             return FrontWait::Stopped;
@@ -113,8 +115,8 @@ uint32_t stall_until_released(
     if (wait != FrontWait::Ready) {
         return code_for(wait);
     }
-    *remote_cb::own_tl1_word(block_addr + abi::kHoldingLineOffset) = stall_pages;
-    const remote_cb::WaitDeadline deadline(budget_cycles);
+    *hart::own_tl1_words(block_addr + abi::kHoldingLineOffset) = stall_pages;
+    const hart::WaitDeadline deadline(budget_cycles);
     while (!deadline.expired()) {
         if (*command == abi::kCommandStop) {
             return abi::kCodeReleased;
@@ -124,7 +126,7 @@ uint32_t stall_until_released(
 }
 
 void write_status(uint32_t block_addr, uint32_t code, const DiscardProgress& progress) {
-    volatile uint32_t* status = remote_cb::own_tl1_word(block_addr + abi::kStatusLineOffset);
+    volatile uint32_t* status = hart::own_tl1_words(block_addr + abi::kStatusLineOffset);
     status[abi::kStatusCode] = code;
     status[abi::kStatusRequestsDone] = progress.requests_done;
     status[abi::kStatusPagesDone] = progress.pages_done;
@@ -135,12 +137,11 @@ void write_status(uint32_t block_addr, uint32_t code, const DiscardProgress& pro
 void kernel_main() {
     const uint32_t config_addr = get_arg_val<uint32_t>(abi::kArgGcbAddr);
     const uint32_t block_addr = get_arg_val<uint32_t>(abi::kArgBlockAddr);
-    const uint64_t budget_cycles = (static_cast<uint64_t>(get_arg_val<uint32_t>(abi::kArgBudgetHi)) << 32) |
-                                   get_arg_val<uint32_t>(abi::kArgBudgetLo);
+    const uint64_t budget_cycles = hart::arg_u64(abi::kArgBudgetLo, abi::kArgBudgetHi);
     const uint32_t mode = get_arg_val<uint32_t>(abi::kArgMode);
     const uint32_t stall_pages = get_arg_val<uint32_t>(abi::kArgStallPages);
     const uint32_t num_requests = get_arg_val<uint32_t>(abi::kArgNumRequests);
-    const volatile uint32_t* command = remote_cb::own_tl1_word(block_addr + abi::kCommandLineOffset);
+    const volatile uint32_t* command = hart::own_tl1_words(block_addr + abi::kCommandLineOffset);
 
     remote_cb::Receiver receiver = remote_cb::receiver_init(config_addr);
     DiscardProgress progress;

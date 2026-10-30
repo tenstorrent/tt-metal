@@ -7,9 +7,11 @@
 // The first mismatched word is read again after a delay: if the re-read is right, the credit overtook the data.
 
 #include "cce_gcb_receiver_abi.h"
+#include "experimental/cce_hart.h"
 #include "experimental/cce_remote_cb.h"
 
 namespace abi = cce_gcb_receiver_abi;
+namespace hart = experimental::cce_hart;
 namespace remote_cb = experimental::cce_remote_cb;
 
 constexpr uint64_t kMismatchRecheckDelayCycles = 1u << 16;
@@ -54,7 +56,7 @@ uint32_t validate_schedule(
         }
         const uint32_t page_words = page_bytes / sizeof(uint32_t);
         for (uint32_t page = 0; page < num_pages; ++page) {
-            const remote_cb::WaitDeadline deadline(budget_cycles);
+            const hart::WaitDeadline deadline(budget_cycles);
             while (!remote_cb::front_ready(receiver, 1)) {
                 if (*command == abi::kCommandStop) {
                     return abi::kCodeStopped;
@@ -76,7 +78,7 @@ uint32_t validate_schedule(
                     progress.first_mismatch_word = word;
                     progress.observed = observed;
                     progress.expected = expected;
-                    const remote_cb::WaitDeadline recheck_delay(kMismatchRecheckDelayCycles);
+                    const hart::WaitDeadline recheck_delay(kMismatchRecheckDelayCycles);
                     while (!recheck_delay.expired()) {
                     }
                     progress.rechecked = words[word];
@@ -94,17 +96,16 @@ uint32_t validate_schedule(
 void kernel_main() {
     const uint32_t config_addr = get_arg_val<uint32_t>(abi::kArgGcbAddr);
     const uint32_t block_addr = get_arg_val<uint32_t>(abi::kArgBlockAddr);
-    const uint64_t budget_cycles = (static_cast<uint64_t>(get_arg_val<uint32_t>(abi::kArgBudgetHi)) << 32) |
-                                   get_arg_val<uint32_t>(abi::kArgBudgetLo);
+    const uint64_t budget_cycles = hart::arg_u64(abi::kArgBudgetLo, abi::kArgBudgetHi);
     const uint32_t seed = get_arg_val<uint32_t>(abi::kArgSeed);
-    const volatile uint32_t* command = remote_cb::own_tl1_word(block_addr + abi::kCommandLineOffset);
+    const volatile uint32_t* command = hart::own_tl1_words(block_addr + abi::kCommandLineOffset);
 
     remote_cb::Receiver receiver = remote_cb::receiver_init(config_addr);
     ValidationProgress progress;
     const uint32_t code = validate_schedule(receiver, command, seed, budget_cycles, progress);
     remote_cb::store_receiver_rd_ptr(receiver);
 
-    volatile uint32_t* status = remote_cb::own_tl1_word(block_addr + abi::kStatusLineOffset);
+    volatile uint32_t* status = hart::own_tl1_words(block_addr + abi::kStatusLineOffset);
     status[abi::kStatusCode] = code;
     status[abi::kStatusRequestsDone] = progress.requests_done;
     status[abi::kStatusPagesDone] = progress.pages_done;

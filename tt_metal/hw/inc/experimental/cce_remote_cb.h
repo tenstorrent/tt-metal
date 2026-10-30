@@ -24,7 +24,7 @@
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DRISC)
 
 #include "dev_mem_map.h"
-#include "experimental/cce_gddr.h"
+#include "experimental/cce_hart.h"
 #include "internal/circular_buffer_interface.h"
 #include "tt_metal/impl/buffers/dram_receiver_config_page.hpp"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
@@ -37,34 +37,6 @@ inline constexpr uint32_t kCreditUnitBytes = tt::tt_metal::kDramReceiverCreditUn
 inline constexpr uint32_t kCreditStrideWords = tt::tt_metal::kDramReceiverCreditStrideBytes / sizeof(uint32_t);
 
 enum class WaitResult : uint32_t { Ready = 0, Expired = 1, Stopped = 2 };
-
-FORCE_INLINE uint64_t read_cycle_counter() {
-    uint64_t cycles;
-    asm volatile("rdcycle %0" : "=r"(cycles));
-    return cycles;
-}
-
-// Counts a budget from construction. A budget of 0 never expires.
-class WaitDeadline {
-public:
-    explicit WaitDeadline(uint64_t budget_cycles) :
-        budget_cycles_(budget_cycles), start_cycles_(budget_cycles == 0 ? 0 : read_cycle_counter()) {}
-
-    bool expired() const { return budget_cycles_ != 0 && read_cycle_counter() - start_cycles_ >= budget_cycles_; }
-
-private:
-    uint64_t budget_cycles_;
-    uint64_t start_cycles_;
-};
-
-// A word of this CCE's TL1 that another agent writes or reads.
-FORCE_INLINE volatile uint32_t* own_tl1_word(uint32_t tl1_offset) {
-    return reinterpret_cast<volatile uint32_t*>(static_cast<uint64_t>(tl1_offset) + MEM_L1_UNCACHED_BASE);
-}
-
-FORCE_INLINE volatile uint32_t* peer_tl1_word(uint32_t cce_index, uint32_t tl1_offset) {
-    return reinterpret_cast<volatile uint32_t*>(cce_sram_address(cce_index, tl1_offset));
-}
 
 // Credit units a transfer of `bytes` at `fifo_ptr` covers: it also covers the gap past the page-aligned
 // limit when it reaches that limit.
@@ -124,7 +96,7 @@ struct Receiver {
 // Loads the config page at `config_addr` and this receiver's rd_ptr and acked count. Call
 // resize_receiver_bounded before the first wait.
 FORCE_INLINE Receiver receiver_init(uint32_t config_addr) {
-    volatile uint32_t* config_page = own_tl1_word(config_addr);
+    volatile uint32_t* config_page = cce_hart::own_tl1_words(config_addr);
     Receiver receiver;
     receiver.config_addr = config_addr;
     receiver.fifo_start_addr = config_page[tt::tt_metal::kDramReceiverFifoStartAddrOffset / sizeof(uint32_t)];
@@ -133,9 +105,9 @@ FORCE_INLINE Receiver receiver_init(uint32_t config_addr) {
     receiver.fifo_page_size = kCreditUnitBytes;
     receiver.fifo_rd_ptr = config_page[tt::tt_metal::kDramReceiverFifoRdPtrOffset / sizeof(uint32_t)];
     receiver.pages_acked = config_page[tt::tt_metal::kDramReceiverPagesAckedOffset / sizeof(uint32_t)];
-    receiver.pages_sent = own_tl1_word(config_addr + tt::tt_metal::kDramReceiverCreditLineOffset);
-    receiver.local_pages_acked = own_tl1_word(config_addr + tt::tt_metal::kDramReceiverPagesAckedOffset);
-    receiver.remote_pages_acked = peer_tl1_word(
+    receiver.pages_sent = cce_hart::own_tl1_words(config_addr + tt::tt_metal::kDramReceiverCreditLineOffset);
+    receiver.local_pages_acked = cce_hart::own_tl1_words(config_addr + tt::tt_metal::kDramReceiverPagesAckedOffset);
+    receiver.remote_pages_acked = cce_hart::peer_tl1_word(
         config_page[tt::tt_metal::kDramReceiverSenderIndexOffset / sizeof(uint32_t)],
         config_page[tt::tt_metal::kDramReceiverRemotePagesAckedAddrOffset / sizeof(uint32_t)]);
     return receiver;
@@ -159,7 +131,7 @@ FORCE_INLINE bool front_ready(const Receiver& receiver, uint32_t num_pages) {
 
 // The page at the front, read through the uncached alias.
 FORCE_INLINE const volatile uint32_t* front_words(const Receiver& receiver) {
-    return own_tl1_word(receiver.fifo_rd_ptr);
+    return cce_hart::own_tl1_words(receiver.fifo_rd_ptr);
 }
 
 FORCE_INLINE void publish_acked(Receiver& receiver, uint32_t units) {
@@ -186,7 +158,7 @@ resize_receiver_bounded(Receiver& receiver, uint32_t page_size, uint64_t budget_
     const FifoResize resize =
         fifo_resize(receiver.fifo_rd_ptr, page_size, receiver.fifo_start_addr, receiver.fifo_size);
     if (resize.padding_units != 0) {
-        const WaitDeadline deadline(budget_cycles);
+        const cce_hart::WaitDeadline deadline(budget_cycles);
         while (received_units(receiver) < resize.padding_units) {
             if (stop_requested()) {
                 return WaitResult::Stopped;
@@ -205,7 +177,7 @@ resize_receiver_bounded(Receiver& receiver, uint32_t page_size, uint64_t budget_
 
 // Writes rd_ptr back to the config page, so the next kernel on this GCB resumes there.
 FORCE_INLINE void store_receiver_rd_ptr(const Receiver& receiver) {
-    *own_tl1_word(receiver.config_addr + tt::tt_metal::kDramReceiverFifoRdPtrOffset) = receiver.fifo_rd_ptr;
+    *cce_hart::own_tl1_words(receiver.config_addr + tt::tt_metal::kDramReceiverFifoRdPtrOffset) = receiver.fifo_rd_ptr;
 }
 
 struct Sender {
@@ -229,7 +201,7 @@ struct Sender {
 // Word `field_offset` of a sender state block. Word accesses, not the packed struct's, which the compiler
 // may split into byte accesses.
 FORCE_INLINE volatile uint32_t* state_block_word(uint32_t state_addr, uint32_t field_offset) {
-    return own_tl1_word(state_addr + field_offset);
+    return cce_hart::own_tl1_words(state_addr + field_offset);
 }
 
 // Loads the sender state block the host wrote at `state_addr`. Call resize_sender before the first write.
@@ -246,11 +218,11 @@ FORCE_INLINE Sender sender_init(uint32_t state_addr) {
         *state_block_word(state_addr, offsetof(DramSenderStateBlock, num_receivers_and_remote_pages_sent_ptr)));
     const uint32_t pages_sent_addr =
         *state_block_word(state_addr, offsetof(DramSenderStateBlock, aligned_pages_sent_ptr));
-    sender.pages_sent = own_tl1_word(pages_sent_addr);
-    sender.pages_acked =
-        own_tl1_word(pages_sent_addr + tt::tt_metal::dram_receiver_sender_pages_acked_offset(sender.num_receivers));
+    sender.pages_sent = cce_hart::own_tl1_words(pages_sent_addr);
+    sender.pages_acked = cce_hart::own_tl1_words(
+        pages_sent_addr + tt::tt_metal::dram_receiver_sender_pages_acked_offset(sender.num_receivers));
     sender.receiver_table =
-        own_tl1_word(*state_block_word(state_addr, offsetof(DramSenderStateBlock, receiver_noc_xy_ptr)));
+        cce_hart::own_tl1_words(*state_block_word(state_addr, offsetof(DramSenderStateBlock, receiver_noc_xy_ptr)));
     sender.slowest_receiver = 0;
     return sender;
 }
@@ -261,7 +233,7 @@ FORCE_INLINE uint32_t receiver_cce_index(const Sender& sender, uint32_t receiver
 
 // Receiver `receiver`'s FIFO at wr_ptr, for the data stores.
 FORCE_INLINE volatile uint32_t* receiver_back_words(const Sender& sender, uint32_t receiver) {
-    return peer_tl1_word(receiver_cce_index(sender, receiver), sender.fifo_wr_ptr);
+    return cce_hart::peer_tl1_word(receiver_cce_index(sender, receiver), sender.fifo_wr_ptr);
 }
 
 FORCE_INLINE uint32_t sender_credit_units(const Sender& sender, uint32_t bytes) {
@@ -303,7 +275,7 @@ FORCE_INLINE WaitResult reserve_back_bounded(Sender& sender, uint32_t bytes, uin
     if (min_free(sender) >= units) {
         return WaitResult::Ready;
     }
-    const WaitDeadline deadline(budget_cycles);
+    const cce_hart::WaitDeadline deadline(budget_cycles);
     while (min_free(sender) < units) {
         if (deadline.expired()) {
             return WaitResult::Expired;
@@ -318,7 +290,7 @@ FORCE_INLINE void publish_sent(const Sender& sender, uint32_t units) {
     for (uint32_t receiver = 0; receiver < sender.num_receivers; ++receiver) {
         const uint32_t pages_sent = sender.pages_sent[kCreditStrideWords * receiver] + units;
         sender.pages_sent[kCreditStrideWords * receiver] = pages_sent;
-        *peer_tl1_word(receiver_cce_index(sender, receiver), sender.remote_pages_sent_addr) = pages_sent;
+        *cce_hart::peer_tl1_word(receiver_cce_index(sender, receiver), sender.remote_pages_sent_addr) = pages_sent;
     }
 }
 
@@ -342,7 +314,7 @@ FORCE_INLINE void resize_sender(Sender& sender, uint32_t page_size) {
 
 // Waits until every receiver has acked everything this sender credited.
 FORCE_INLINE WaitResult barrier_bounded(const Sender& sender, uint64_t budget_cycles) {
-    const WaitDeadline deadline(budget_cycles);
+    const cce_hart::WaitDeadline deadline(budget_cycles);
     for (uint32_t receiver = 0; receiver < sender.num_receivers; ++receiver) {
         while (sender.pages_acked[kCreditStrideWords * receiver] != sender.pages_sent[kCreditStrideWords * receiver]) {
             if (deadline.expired()) {
