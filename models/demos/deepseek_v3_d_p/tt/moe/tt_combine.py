@@ -196,7 +196,7 @@ class TtCombine2dModule(LightweightModule):
             num_experts_per_tok: Number of experts each token is routed to (top-k).
             seq_len_per_chip: Number of tokens on each source device (output token dimension size).
             fwd_vc_pages: Pages one of the op's forwarding channels holds, from the model's
-                COMBINE_FWD_VC_PAGES. No depth can deadlock the ring, so this trades DRAM against
+                MOE_FWD_VC_PAGES. No depth can deadlock the ring, so this trades DRAM against
                 throughput and nothing else; where that curve bends is what differs per model, which
                 is why it is passed in rather than fixed in the op. A channel is a pipeline buffer,
                 so this is a page count and does not scale with the sequence length.

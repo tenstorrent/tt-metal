@@ -355,9 +355,9 @@ class TtMoe(LightweightModule):
                 num_experts_per_tok <= DISPATCH_FABRIC2D_MAX_TOPK, and a fabric max payload that fits
                 a whole routed_emb_dim bf16 token padded to 64 B plus a 64 B routing tail: open the
                 mesh with init_helpers.moe_fabric_payload_size for a model that opts in.
-            combine_fwd_vc_pages: combine_fabric2d's fwd_vc_pages, the model's COMBINE_FWD_VC_PAGES.
+            combine_fwd_vc_pages: combine_fabric2d's fwd_vc_pages, the model's MOE_FWD_VC_PAGES.
                 Needed only when the transport resolves to "fabric2d".
-            dispatch_fwd_vc_pages: dispatch_fabric2d's fwd_vc_pages, the model's DISPATCH_FWD_VC_PAGES.
+            dispatch_fwd_vc_pages: dispatch_fabric2d's fwd_vc_pages, the model's MOE_FWD_VC_PAGES.
                 None takes the op's default.
         """
         super().__init__()

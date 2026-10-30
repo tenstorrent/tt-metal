@@ -63,8 +63,7 @@ class KimiK3Config:
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
     # Depth of the MoE forwarding buffers. Any value would make model functional,
     # but larger values make it faster and consume more DRAM, so it's a compromise.
-    COMBINE_FWD_VC_PAGES = 64
-    DISPATCH_FWD_VC_PAGES = 64
+    MOE_FWD_VC_PAGES = 64
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
     # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M

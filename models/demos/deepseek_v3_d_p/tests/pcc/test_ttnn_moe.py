@@ -1116,8 +1116,8 @@ def test_glm_moe_fabric2d(variant, config_only, mesh_device, device_params, num_
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
         moe_transport="fabric2d",
-        dispatch_fwd_vc_pages=GLM53Config.DISPATCH_FWD_VC_PAGES,
-        combine_fwd_vc_pages=GLM53Config.COMBINE_FWD_VC_PAGES,
+        dispatch_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
     )
 
 
@@ -1264,8 +1264,8 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(KimiK27Config),
         moe_transport="fabric2d",
-        dispatch_fwd_vc_pages=KimiK27Config.DISPATCH_FWD_VC_PAGES,
-        combine_fwd_vc_pages=KimiK27Config.COMBINE_FWD_VC_PAGES,
+        dispatch_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
     )
 
 
