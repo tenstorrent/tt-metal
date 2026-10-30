@@ -183,7 +183,9 @@ def test_pack_untilize(
             sfpu=False,
         ),
         "dest_acc": dest_acc,
-        "unpack_to_dest": unpack_to_dest,
+        "unpack_to_dest": (
+            formats.input_format.is_32_bit() if is_perf else unpack_to_dest
+        ),
         "compile_time_formats": compile_time_formats,
     }
 

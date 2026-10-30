@@ -97,7 +97,11 @@ class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
     pack_untilize_benchmark: str
 
     def convert_to_cpp(self) -> str:
-        return f"// pack_untilize benchmark: {self.pack_untilize_benchmark}"
+        is_perf = self.pack_untilize_benchmark != "functional"
+        return (
+            f"// pack_untilize benchmark: {self.pack_untilize_benchmark}\n"
+            f"constexpr bool PACK_UNTILIZE_IS_PERF = {str(is_perf).lower()};"
+        )
 
 
 @dataclass
