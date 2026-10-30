@@ -24,11 +24,11 @@ The base op's buffers keep its sizing (`base_ops/rms_norm/op_design.md` → Circ
 | `cb_gamma_tiles` (γ) | resident `Wp` (implemented: resident only; the streaming fallback is not built, the L1 solve accounts for the window and refuses otherwise) | same as capacity | `{width: spans → Wp (resident), tile_rows: none, wave: none, device_slot: none, link: none, batch: none}` | γ dtype | writer | compute | kernel | none: Row-broadcast operand of every scale_by_gamma call |
 | `cb_x_gamma` (γ) | `R · C` | `R · C` (chunk 0 hoisted for the whole block, then per chunk) | `{tile_rows: spans → R, wave: spans → all (hoisted), width: streams → C, device_slot: none, link: none, batch: folded}` | interm | compute | compute | per (block, chunk) | none: chunk 0's x·γ is held across the exchange wait by design (stall shadow). Packing x·γ back into `cb_x_tiles` in place would round it to the input dtype before the inv_rms multiply. |
 | `cb_partial_col` (R3) | `R` | `Rw` | `{tile_rows: streams → Rw, capacity R, wave: spans → Rw, width: none, device_slot: none, link: none, batch: folded}` | interm | compute | reader | collapse → combine | Capacity `R`: compute may collapse every wave of the block before the reader sends (the reader is busy with publish/collect). Concurrent with `cb_sumsq_partial` within a wave. |
-| `cb_gather` (R3 root) | `G_w · R` | `G_w · Rw` per wave; slots are block-indexed (base slot safety) | `{tile_rows: spans → R, wave: spans → all, width: none (one partial per slice core: G_w), device_slot: none, link: none, batch: folded}` | interm | reader | compute | per block | none. Contributors write wave slots remotely at fixed offsets `index·R + r`, so the whole block's slot range must exist (base Refinement 4 contract). |
-| `cb_rms_root` (root) | `R` | `Rw` | `{tile_rows: streams → Rw, capacity R, wave: spans → Rw, width: none, device_slot: none (already summed), link: none, batch: folded}` | interm | compute | reader | finalize → distribute | Capacity `R` keeps the base's block-wide root CB. Cannot alias `cb_dev_partial`: wave w's inv_rms and wave w+1's device partial are live together. |
+| `cb_gather` (R3 root) | `nwpb · G_w · Rw` (= `G_w · R`) | `G_w · Rw` per wave; slots are block-indexed (base slot safety) | `{tile_rows: spans → R, wave: spans → all, width: none (one partial per slice core: G_w), device_slot: none, link: none, batch: folded}` | interm | reader | compute | per block | none. Contributors write wave slots remotely at fixed offsets `index·R + r`, so the whole block's slot range must exist (base Refinement 4 contract). |
+| `cb_rms_root` (root, R3 only) | `nwpb · Rw` (= `R`) | `Rw` | `{tile_rows: streams → Rw, capacity R, wave: spans → Rw, width: none, device_slot: none (already summed), link: none, batch: folded}` | interm | compute | reader | finalize → distribute | Capacity `R` keeps the base's block-wide root CB. Cannot alias `cb_dev_partial`: wave w's inv_rms and wave w+1's device partial are live together. |
 | `cb_sumsq_last`, `cb_sumsq_acc` (sharded, W % 32 ≠ 0) | base | base | `{width: last tile only, tile_rows: streams → 1, wave: none, device_slot: none, link: none, batch: folded}` | interm | compute | compute | per tile-row | base: concurrent operands of the masked collapse |
 | `cb_output` | `stream_depth · C` (sharded: the output shard) | `C` + one in flight | `{tile_rows: streams → 1 per quantum, wave: streams, width: streams → C, device_slot: none, link: none, batch: folded}` | output dtype | compute | writer | per chunk | none: double-buffered compute→writer stream (`stream_depth = 2` is the overlap decision) |
-| **new** `cb_dev_partial` (root) | `2 · Rw` | `Rw` | `{tile_rows: streams → Rw, wave: spans → Rw (×2 waves in flight), width: none (device-summed), device_slot: none (own slot only), link: none, batch: folded}` | interm | compute | reader | collapse/combine → publish | Capacity `2·Rw`: compute packs wave w+1 while the reader still publishes wave w (`partial_depth`). Cannot reuse `cb_partial_col`: a different consumer protocol on the same core (`cb_partial_col` goes to the root's gather, which on the root is itself), and both are live in the same wave on the root. Cannot be written straight into `cb_stats_gather` slot p either: that is a CB with a different producer (reader). The single-producer rule forbids compute and reader both pushing it. |
+| **new** `cb_dev_partial` (root) | `nwpb · Rw` (= `R`; ≤ `2 · Rw` at `NUM_WAVES = 2`) | `Rw` | `{tile_rows: streams → Rw, wave: spans → Rw (×2 waves in flight), width: none (device-summed), device_slot: none (own slot only), link: none, batch: folded}` | interm | compute | reader | collapse/combine → publish | Capacity `nwpb·Rw`: compute packs wave w+1 while the reader still publishes wave w (`partial_depth = nwpb`, so every per-wave push divides the capacity). Cannot reuse `cb_partial_col`: a different consumer protocol on the same core (`cb_partial_col` goes to the root's gather, which on the root is itself), and both are live in the same wave on the root. Cannot be written straight into `cb_stats_gather` slot p either: that is a CB with a different producer (reader). The single-producer rule forbids compute and reader both pushing it. |
 | **new** `cb_stats_gather` (root) | `G · Rw` | `G · Rw` | `{tile_rows: spans → Rw, wave: spans → Rw, width: none (column 0 only), device_slot: spans → G, link: none, batch: folded}` | interm, `UnpackToDestFp32` under fp32 DEST | reader | compute | collect → finalize | none: it is the only place the G slots of a row meet. Depth 1 wave (`stats_depth = 1`): compute consumes it immediately, since finalize is the only thing waiting on it. Could share with `cb_gather` (both root-side reader→compute)? No: `cb_gather`'s fixed remote-write slot offsets are block-wide and live while waves are collected. |
 | **new** `cb_stats_record` (root) | `(G + 1) · Rw` pages of 128 B | `(G + 1) · Rw` | `{tile_rows: spans → Rw, wave: spans → Rw, width: none, device_slot: spans → G (+1 own staging), link: none, batch: folded}` | uint32 (fp32 words) | reader | reader (scratch, never pushed) | per wave | none: records must be contiguous for one NoC run per slot, but `cb_stats_gather` holds them face-strided (column 0). At most `9 · Rw · 128 B` (G = 8). |
 
@@ -36,7 +36,8 @@ The base op's buffers keep its sizing (`base_ops/rms_norm/op_design.md` → Circ
 
 | Buffer | Capacity | Live set | Axis accounting | Format | Producer | Consumer | Lifetime | Shares with / why not |
 |--------|----------|----------|-----------------|--------|----------|----------|----------|-----------------------|
-| port landing (L1 `HEIGHT_SHARDED` tensor, one shard per port; persistent, cached) | `num_waves · G · seg_stride` B, with `seg_stride = align_up(n_roots_l · Rw · 128, 64)` | the whole capacity: every (wave, slot) is written once per call, read by relays and roots, never reused within a call | `{tile_rows: spans → this link's rows (n_roots_l · Rw per wave), wave: spans → num_waves, width: none, device_slot: spans → G, link: one link per port, batch: folded}` | uint32 (fp32 words) | roots (own slot, NoC write) + fabric router (peer slots) | port (relay source) + roots (collect) | per call (fenced between calls) | none: the reuse-free layout is what removes the credit round trip (`blackhole-ccl-kernels.md` §7). The cross-call fence makes reuse across calls safe. |
+| port landing (L1 `HEIGHT_SHARDED` uint32 tensor over the whole grid, **allocated per call**, freed right after the dispatch; ports use their own shard) | `num_waves · G · seg_stride` B, with `seg_stride = align_up(n_roots_l · Rw · 128, 64)` (bucketed to a power of two of words, ≥ 16 KiB) | the whole capacity: every (wave, slot) is written once per call, read by relays and roots, never reused within a call | `{tile_rows: spans → this link's rows (n_roots_l · Rw per wave), wave: spans → num_waves, width: none, device_slot: spans → G, link: one link per port, batch: folded}` | uint32 (fp32 words) | roots (own slot, NoC write) + fabric router (peer slots) | port (relay source) + roots (collect) | per call | none: the reuse-free layout is what removes the credit round trip (`blackhole-ccl-kernels.md` §7). Per call (not persistent): a persistent one pinned the middle of every bank (verifier). Its address range is reserved in every bank, so it is in every compute core's budget for that call. |
+| global semaphores (ready + G−1 arrival counters) | 16 B each, persistent, one grow-only set per mesh over the whole grid | — | — | uint32 | port / peer ports | port | mesh lifetime (re-armed to 0 each call) | persistent by necessity: a peer increments the ready counter before this chip's program for the call starts |
 | packet headers | `PacketHeaderPool` (static, ≤ 12) | 1 (one destination) | `{all: none}` | header | port | port / router | kernel | n/a (fabric-owned pool) |
 
 ## Symbol table
@@ -44,32 +45,39 @@ The base op's buffers keep its sizing (`base_ops/rms_norm/op_design.md` → Circ
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
 | `R` (`block_rows`) | `1 ≤ R ≤ rows_this_core` | `choose_blocking` closed form (base) with this ledger's extra terms; refusal (c) if `R = 1, x_depth = 1` does not fit |
-| `Rw` (`wave_rows`) | `1 ≤ Rw = ceil(R / min(R, NUM_WAVES)) ≤ R` | `NUM_WAVES = 2` host constant |
+| `Rw` (`wave_rows`), `nwpb` | `Rw = R / nwpb`, `nwpb` = the largest divisor of `R` ≤ `min(NUM_WAVES, MAX_WAVES_PER_BLOCK)`; `1 ≤ Rw ≤ R` | `NUM_WAVES = 2`, `MAX_WAVES_PER_BLOCK = 8` host constants (`wave_split`) |
 | `S`, `WS`, `Wp`, `C` | `C ≤ W_CHUNK_TILES = 32`; `WS ≤ Wp ≤ S + C − 1` | base `compute_geometry`; R3 `S` from `_r3_interleaved_layout`, or the shard width |
 | `G_w` | `1 ≤ G_w ≤ R3_MAX_GROUP_CORES = 24` (interleaved); shard columns (sharded) | base layout rule / shard spec |
 | `G` | `2 ≤ G ≤ mesh axis size` (≤ 8 on a Galaxy axis) | `mesh_shape[cluster_axis]`, validated ≥ 2 |
 | `L` | `1 ≤ L ≤ L_usable` (≤ 4 on Blackhole boxes) | validation |
 | `n_roots_l` | `≤ ceil(roots / L)`, `roots ≤ N_fused` | plan |
-| `num_waves` | `num_blocks_max · min(R, NUM_WAVES)` | plan |
+| `num_waves` | `num_blocks_max · nwpb` | plan |
 | `T_in, T_out, T_g` | ≤ 4096 B | dtype |
 | `T_i` | 4096 (fp32 DEST) / 2048 (16-bit DEST) | `intermediate_format(fp32_dest_acc_en)` |
-| `x_depth`, `stream_depth`, `partial_depth`, `stats_depth` | 2 / 2 / 2 / 1 | host constants (base rule for `x_depth`) |
+| `x_depth`, `stream_depth`, `partial_depth`, `stats_depth` | 1–2 / 2 / `nwpb` / 1 | `x_depth`: 2 only when a core walks > 1 block and it fits (`choose_block_rows`); `STREAM_DEPTH = 2`; `partial_depth = nwpb` |
 
 ## Total per-core footprint
 
 Compute core (worst case: an R3 root with γ):
 
 ```
-F(R, Rw, d) = d·R·WS·T_in                                  # cb_x_tiles          — scales with R, S (x_depth)
-            + R·T_i·(4 + G_w + C·has_gamma)                # sumsq, inv, partial_col, rms_root, gather, x_gamma — scales with R
-            + gamma_bytes(S, C)                            # cb_gamma_row / tiles — scales with S
-            + stream_depth·C·T_out + scaler_pages·2048     # output stream, scaler — fixed in C
-            + (2 + G)·Rw·T_i + (G + 1)·Rw·128               # NEW: dev_partial, stats_gather, stats_record — scale with Rw, G
+F(R, d) = d·R·WS·T_in                                      # cb_x_tiles (interleaved only) — scales with R, S, x_depth
+        + R·T_i·(1 + C·has_gamma)                          # cb_inv_rms, cb_x_gamma — scale with R (and C)
+        + R·T_i·(2 + G_w)·combine                          # cb_partial_col, cb_rms_root, cb_gather (R3) — scale with R, G_w
+        + Wp·T_g·has_gamma                                 # cb_gamma_tiles (resident window) — scales with S
+        + STREAM_DEPTH·C·T_out·(1 − sharded)               # cb_output — fixed in C
+        + scaler_pages·2048                                # cb_reduce_scaler
+        + Rw·T_i·(1 + 2·masked)                            # cb_sumsq_partial (+ cb_sumsq_last / _acc) — scales with Rw
+        + R·T_i + G·Rw·T_i + (G + 1)·Rw·128                # NEW: dev_partial, stats_gather, stats_record — scale with R, Rw, G
 ```
 
-The new terms are bounded by `(2 + G)·Rw·T_i + (G+1)·Rw·128`: at the focus shape (`Rw = 1, G = 4, fp32 DEST`) that is 24.6 KiB, and ≤ 41 KiB at `G = 8`. They enter `choose_blocking`'s fixed term, scaled by `Rw ≤ R`. No buffer is unconditionally op-sized: every capacity is a block extent (`R`, `Rw`, `S`, `C`) times a bounded constant (`G`, `G_w`, depths), or the caller's shard.
+**Single source:** this expression is exactly `footprint()` in `distributed_rms_norm_program_descriptor.py`, which sums
+`cb_inventory()`, the same list the program's CB descriptors are built from (verifier fix: the two used to restate
+every page count independently).
 
-Port core: `num_waves · G · seg_stride` ≤ 128 KiB for every INPUTS shape (refusal above the port L1 budget, op_design Mechanism caps).
+The new terms are bounded by `R·T_i + G·Rw·T_i + (G+1)·Rw·128`: at the focus shape (`Rw = 1, G = 4, fp32 DEST`) that is 24.6 KiB, and ≤ 41 KiB at `G = 8`. They enter `choose_blocking`'s fixed term, scaled by `Rw ≤ R`. No buffer is unconditionally op-sized: every capacity is a block extent (`R`, `Rw`, `S`, `C`) times a bounded constant (`G`, `G_w`, depths), or the caller's shard.
+
+Port core: `num_waves · G · seg_stride` ≤ 128 KiB for every INPUTS shape. Above `PORT_LANDING_MAX_BYTES` (512 KiB, bucketed to a power of two of words) the call is refused before allocation (verifier fix: it used to crash). The landing's L1 is reserved in every core's bank, so the compute plan is solved against `l1_budget − landing bytes` (re-solved when the landing exceeds `LANDING_L1_RESERVE`). One grow-only landing per (mesh, port set): a bigger call replaces it and smaller calls reuse it.
 
 ## Data-movement budget (chosen split; per device, per call)
 

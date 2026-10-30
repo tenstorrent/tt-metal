@@ -93,7 +93,9 @@ SUPPORTED = {
     ],
     "cluster_axis": [0, 1],
     "topology": [Topology.Linear, Topology.Ring],
-    "num_links": [1, 2],
+    # None = every usable link (L_usable). validate() gates the resolved count, but the registry cell of a call records
+    # the literal None (eval axes.classify_call), so it is declared here to keep SUPPORTED honest about that call form.
+    "num_links": [1, 2, None],
 }
 
 
@@ -104,9 +106,8 @@ SUPPORTED = {
 EXCLUSIONS = [
     # Natively rejected precision combination (precision_convention.md).
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
-    # Carried from the base op: the W-pad columns of a Bfp8_b tile cannot be zeroed element-wise (16 datums share
-    # one exponent), so a non-aligned W cannot keep its tile padding out of Σx².
-    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    # (The base op's {bfloat8_b, w_non_aligned} exclusion is NOT carried: this op keeps the Bfp8_b W-pad out of Σx² with
+    # the compute-side partial-scaler mask instead of zeroing it — measured passing by the verifier.)
 ]
 
 
@@ -294,4 +295,8 @@ def distributed_rms_norm(
     )
     io_tensors = [input_tensor] + ([gamma] if gamma is not None else []) + [landing, output_tensor]
     # Output tensor must be last.
-    return ttnn.generic_op(io_tensors, mesh_desc)
+    output = ttnn.generic_op(io_tensors, mesh_desc)
+    # The landing is this call's intermediate: freed once the program is enqueued (in-order queue; the ready fence keeps
+    # every peer write inside this call's program lifetime).
+    ttnn.deallocate(landing)
+    return output

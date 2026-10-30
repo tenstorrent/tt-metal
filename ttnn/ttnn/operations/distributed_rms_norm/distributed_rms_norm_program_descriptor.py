@@ -64,6 +64,10 @@ R3_MIN_GROUP_CORES = 4
 # L1 reserved for the persistent port landing scratch when sizing the compute blocks (the landing is an L1 buffer
 # allocated on the port cores, which the allocator reserves on every core).
 LANDING_L1_RESERVE = 64 * 1024
+# Mechanism cap (op_design.md -> Mechanism caps): the landing holds every (wave, slot) of the call with no reuse, so it
+# grows with T. Above this many bytes per port the call is refused (NotImplementedError) instead of letting the
+# allocator OOM; the landing L1 is reserved on every core's bank, so it also comes out of every compute core's budget.
+PORT_LANDING_MAX_BYTES = 512 * 1024
 
 # ---- Transport constants ----
 RECORD_BYTES = TILE_DIM * 4  # one fp32 word per row of a tile-row
@@ -330,25 +334,45 @@ def wave_split(block_rows: int):
     return block_rows // nwpb, nwpb
 
 
-def footprint(g: Geometry, R: int, x_depth: int) -> int:
-    """Per-compute-core CB bytes (l1_ledger.md). Root-only CBs are declared on every core (uniform layout)."""
+def scaler_pages(g: Geometry) -> int:
+    """cb_reduce_scaler pages: the 1.0 scaler, plus the partial-width scaler of the sharded W-pad mask."""
+    return 2 if g.masked else 1
+
+
+def cb_inventory(g: Geometry, R: int, x_depth: int, input_dtype, output_dtype, gamma_dtype):
+    """THE single source of every allocator-owned compute-core CB (l1_ledger.md): [(index, format, page_size, pages)].
+    The L1 solve (footprint) and the program's CB descriptors are both built from this list, so a knob change lands
+    in exactly one place. Shard-backed CBs (sharded cb_x_tiles / cb_output) are not listed: they live in the caller's
+    shard and cost no CB L1. Root-only CBs are declared on every core (uniform CB layout)."""
     Rw, nwpb = wave_split(R)
-    b = 0
-    b += int(not g.sharded) * x_depth * R * g.WS * g.T_in  # cb_x_tiles
-    b += (2 if g.masked else 1) * ttnn.tile_size(SCALER_FORMAT)  # cb_reduce_scaler
-    b += Rw * g.T_i  # cb_sumsq_partial
-    b += R * g.T_i  # cb_inv_rms
-    b += int(g.has_gamma) * (g.Wp * g.T_g + R * g.C * g.T_i)  # cb_gamma_tiles (resident) + cb_x_gamma
+    T_i, fi = g.T_i, g.interm_format
+    inv = [
+        (CB_REDUCE_SCALER, SCALER_FORMAT, ttnn.tile_size(SCALER_FORMAT), scaler_pages(g)),
+        (CB_SUMSQ_PARTIAL, fi, T_i, Rw),
+        (CB_INV_RMS, fi, T_i, R),
+        (CB_DEV_PARTIAL, fi, T_i, nwpb * Rw),
+        (CB_STATS_GATHER, fi, T_i, g.G * Rw),
+        (CB_STATS_RECORD, ttnn.uint32, RECORD_BYTES, (g.G + 1) * Rw),
+    ]
+    if not g.sharded:
+        inv.append((CB_X_TILES, input_dtype, g.T_in, x_depth * R * g.WS))
+        inv.append((CB_OUTPUT, output_dtype, g.T_out, STREAM_DEPTH * g.C))
+    if g.has_gamma:
+        inv.append((CB_GAMMA_TILES, gamma_dtype, g.T_g, g.Wp))  # resident γ window
+        inv.append((CB_X_GAMMA, fi, T_i, R * g.C))
     if g.combine:
-        b += R * g.T_i  # cb_partial_col
-        b += nwpb * g.G_w * Rw * g.T_i  # cb_gather
-        b += nwpb * Rw * g.T_i  # cb_rms_root
-    b += int(g.masked) * 2 * Rw * g.T_i  # cb_sumsq_last + cb_sumsq_acc
-    b += int(not g.sharded) * STREAM_DEPTH * g.C * g.T_out  # cb_output
-    b += nwpb * Rw * g.T_i  # cb_dev_partial
-    b += g.G * Rw * g.T_i  # cb_stats_gather
-    b += (g.G + 1) * Rw * RECORD_BYTES  # cb_stats_record
-    return b
+        inv.append((CB_PARTIAL_COL, fi, T_i, R))
+        inv.append((CB_GATHER, fi, T_i, nwpb * g.G_w * Rw))
+        inv.append((CB_RMS_ROOT, fi, T_i, nwpb * Rw))
+    if g.masked:
+        inv.append((CB_SUMSQ_LAST, fi, T_i, Rw))
+        inv.append((CB_SUMSQ_ACC, fi, T_i, Rw))
+    return inv
+
+
+def footprint(g: Geometry, R: int, x_depth: int) -> int:
+    """Per-compute-core CB bytes (l1_ledger.md), summed from cb_inventory (formats do not change the bytes)."""
+    return sum(page * pages for _, _, page, pages in cb_inventory(g, R, x_depth, None, None, None))
 
 
 def _max_block_rows(g, x_depth, cap, budget):
@@ -502,7 +526,9 @@ def select_plan(input_tensor, gamma, fp32_acc, available, G, budget) -> Plan:
     def finish(regime, work, S, rows_max, sharded):
         G_w = max(w.index for w in work) + 1
         combine = G_w > 1
-        masked = sharded and (W % TILE_DIM != 0)
+        # Compute-side W-pad mask (partial reduce scaler on the last tile): wherever the W-pad columns cannot be zeroed in
+        # place — a caller's shard (read-only), or a Bfp8_b tile (16 datums share an exponent: no element-wise zero).
+        masked = (W % TILE_DIM != 0) and (sharded or input_tensor.dtype == ttnn.bfloat8_b)
         choice = choose_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G)
         if choice is None:
             return None
@@ -549,7 +575,6 @@ def select_plan(input_tensor, gamma, fp32_acc, available, G, budget) -> Plan:
 # ---------------------------------------------------------------------------
 
 _SEM_CACHE = {}
-_LANDING_CACHE = {}
 
 
 def _landing_words_bucket(words):
@@ -559,36 +584,50 @@ def _landing_words_bucket(words):
     return b
 
 
-def get_resources(mesh, port_cores, G, landing_words):
-    """(ready semaphore, [G-1 arrival semaphores], landing tensor) over the port cores. Created once per key; a one-time
-    synchronize_device at creation so every chip's counters are 0 before any peer's first increment. The Python
-    handles are kept alive here (generic_op keeps only addresses)."""
-    pkey = tuple(sorted((c.x, c.y) for c in port_cores))
-    crs = _crs(port_cores)
-    created = False
-    # MeshDevice.id() is unique per opened mesh (a Python id() can be recycled after a close / reopen).
-    mid = int(mesh.id())
-    skey = (mid, pkey, G)
-    if skey not in _SEM_CACHE:
-        _SEM_CACHE[skey] = [ttnn.create_global_semaphore(mesh, crs, 0) for _ in range(G)]
-        created = True
-    words = _landing_words_bucket(landing_words)
-    lkey = (mid, pkey, words)
-    if lkey not in _LANDING_CACHE or not _LANDING_CACHE[lkey].is_allocated():
-        n_ports = len(port_cores)
-        mc = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(crs, (1, words), ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        _LANDING_CACHE[lkey] = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([n_ports, words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, mc
-        )
-        created = True
-    if created:
+def landing_bytes_for(landing_words: int) -> int:
+    """Bytes per port core the landing actually occupies (its allocation bucket)."""
+    return _landing_words_bucket(landing_words) * 4
+
+
+def _whole_grid(mesh):
+    grid = mesh.compute_with_storage_grid_size()
+    return grid, ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+
+
+def get_semaphores(mesh, G):
+    """(ready semaphore, [G-1 arrival semaphores]): the only PERSISTENT exchange state, one grow-only list per opened
+    mesh laid over the whole compute grid (every port placement reuses it; an L1 buffer's address range is reserved in
+    every bank anyway). Persistent because a peer increments the ready counter before this chip's program for the call
+    has started. A one-time synchronize_device at creation so every chip's counters are 0 before any peer's first
+    increment; every call re-arms them to 0. The Python handles are kept alive here (generic_op keeps only addresses).
+    """
+    mid = int(mesh.id())  # unique per opened mesh (a Python id() can be recycled after a close / reopen)
+    _, crs = _whole_grid(mesh)
+    sems = _SEM_CACHE.setdefault(mid, [])
+    if len(sems) < G:
+        while len(sems) < G:
+            sems.append(ttnn.create_global_semaphore(mesh, crs, 0))
         ttnn.synchronize_device(mesh)
-    sems = _SEM_CACHE[skey]
-    return sems[0], sems[1:], _LANDING_CACHE[lkey]
+    return sems[0], sems[1:G]
+
+
+def allocate_landing(mesh, landing_words):
+    """The exchange landing of ONE call (an L1 HEIGHT_SHARDED uint32 tensor over the whole grid; ports use their own
+    shard). Per call, like an op intermediate: the mesh allocator gives it the same address on every chip, the ready
+    fence keeps every peer write after this chip's program for the call has started, and the roots consume every
+    arrival before the program ends, so it can be freed as soon as the call is enqueued. A persistent landing instead
+    would be (re)allocated mid-call below the caller's L1 tensors and stay pinned in the middle of every bank, shrinking
+    the CB space of every later call (verifier: golden sharded cells refused late in a long run, passing fresh)."""
+    grid, crs = _whole_grid(mesh)
+    words = _landing_words_bucket(landing_words)
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(crs, (1, words), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.allocate_tensor_on_device(
+        ttnn.Shape([grid.x * grid.y, words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, mc
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -665,25 +704,55 @@ def create_mesh_program_descriptor(
     port_set = {(c.x, c.y) for c in ports.values()}
     available = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in port_set]
 
-    # ---- local plan ----
-    budget = l1_budget(mesh) - LANDING_L1_RESERVE
-    plan = select_plan(input_tensor, gamma, fp32_acc, available, G, budget)
+    # ---- local plan + exchange layout (the landing comes out of every core's L1, so plan against it) ----
+    def exchange_layout(plan):
+        R = plan.block_rows
+        Rw, nwpb = wave_split(R)
+        num_blocks_max = max(math.ceil(w.rows / R) for w in plan.work)
+        num_waves = num_blocks_max * nwpb  # waves of the call (every root publishes every wave)
+        n_roots = len(plan.roots)
+        n_roots_l = [sum(1 for gi in range(n_roots) if gi % L == l) for l in range(L)]
+        seg_l = [n * Rw * RECORD_BYTES for n in n_roots_l]
+        seg_stride = _align_up(max(max(seg_l), 4), SEG_ALIGN)
+        return Rw, nwpb, num_waves, n_roots_l, seg_l, seg_stride, num_waves * G * seg_stride // 4
+
+    reserve = LANDING_L1_RESERVE
+    for _ in range(4):
+        try:
+            plan = select_plan(input_tensor, gamma, fp32_acc, available, G, l1_budget(mesh) - reserve)
+        except NotImplementedError as exc:
+            if reserve == LANDING_L1_RESERVE:
+                raise
+            raise NotImplementedError(
+                f"distributed_rms_norm: the local plan does not fit L1 next to a {reserve} B exchange landing "
+                "(long sequence; a landing reused across waves is a deferred regime)"
+            ) from exc
+        Rw, nwpb, num_waves, n_roots_l, seg_l, seg_stride, landing_words = exchange_layout(plan)
+        need = landing_bytes_for(landing_words)
+        if need > PORT_LANDING_MAX_BYTES:
+            raise NotImplementedError(
+                f"distributed_rms_norm: the exchange landing needs {need} B per port core (> {PORT_LANDING_MAX_BYTES}); "
+                "a landing reused across waves (credit protocol) is a deferred regime"
+            )
+        if need <= reserve:
+            break
+        reserve = need  # re-plan against the landing this plan really needs (a smaller R may add waves)
+    else:
+        raise NotImplementedError(
+            "distributed_rms_norm: the local plan and the exchange landing do not fit L1 together"
+        )
     g, R, x_depth = plan.geometry, plan.block_rows, plan.x_depth
-    Rw, nwpb = wave_split(R)
-    num_blocks_max = max(math.ceil(w.rows / R) for w in plan.work)
-    num_waves = num_blocks_max * nwpb  # waves of the call (every root publishes every wave)
     roots = plan.roots
     root_link = {(w.core.x, w.core.y): (gi % L, gi // L) for gi, w in enumerate(roots)}
-    n_roots_l = [sum(1 for gi in range(len(roots)) if gi % L == l) for l in range(L)]
-    seg_l = [n * Rw * RECORD_BYTES for n in n_roots_l]
-    seg_stride = _align_up(max(max(seg_l), 4), SEG_ALIGN)
-    landing_words = num_waves * G * seg_stride // 4
 
-    ready_sem, arrival_sems, landing = get_resources(mesh, list(ports.values()), G, landing_words)
+    ready_sem, arrival_sems = get_semaphores(mesh, G)
     ready_addr = int(ttnn.get_global_semaphore_address(ready_sem))
     arrival_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in arrival_sems]
+    landing = allocate_landing(mesh, landing_words)
     landing_addr = int(landing.buffer_address())
-    assert footprint(g, R, x_depth) <= l1_budget(mesh), "distributed_rms_norm: CBs collide with the landing scratch"
+    if footprint(g, R, x_depth) > l1_budget(mesh):
+        ttnn.deallocate(landing)
+        raise NotImplementedError("distributed_rms_norm: the CBs do not fit next to the exchange landing in L1")
 
     groups = build_groups(mesh_shape, cluster_axis)
     chips = exchange_plan(groups, ring)
@@ -695,32 +764,16 @@ def create_mesh_program_descriptor(
     all_crs = _crs(compute_cores + list(ports.values()))
     virt = lambda c: mesh.worker_core_from_logical_core(c)
 
-    # ---- CBs (identical on every chip) ----
+    # ---- CBs (identical on every chip; the same inventory the L1 solve summed) ----
     T_i, C = g.T_i, g.C
+    gamma_dtype = gamma.dtype if gamma is not None else None
     cbs = [
-        _cb(CB_REDUCE_SCALER, SCALER_FORMAT, ttnn.tile_size(SCALER_FORMAT), 2 if g.masked else 1, compute_crs),
-        _cb(CB_SUMSQ_PARTIAL, g.interm_format, T_i, Rw, compute_crs),
-        _cb(CB_INV_RMS, g.interm_format, T_i, R, compute_crs),
-        _cb(CB_DEV_PARTIAL, g.interm_format, T_i, nwpb * Rw, compute_crs),
-        _cb(CB_STATS_GATHER, g.interm_format, T_i, G * Rw, compute_crs),
-        _cb(CB_STATS_RECORD, ttnn.uint32, RECORD_BYTES, (G + 1) * Rw, compute_crs),
+        _cb(idx, fmt, page, pages, compute_crs)
+        for idx, fmt, page, pages in cb_inventory(g, R, x_depth, input_tensor.dtype, output_tensor.dtype, gamma_dtype)
     ]
     if g.sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor))
-    else:
-        cbs.append(_cb(CB_X_TILES, input_tensor.dtype, g.T_in, x_depth * R * g.WS, compute_crs))
-        cbs.append(_cb(CB_OUTPUT, output_tensor.dtype, g.T_out, STREAM_DEPTH * C, compute_crs))
-    if g.has_gamma:
-        cbs.append(_cb(CB_GAMMA_TILES, gamma.dtype, g.T_g, g.Wp, compute_crs))
-        cbs.append(_cb(CB_X_GAMMA, g.interm_format, T_i, R * C, compute_crs))
-    if g.combine:
-        cbs.append(_cb(CB_PARTIAL_COL, g.interm_format, T_i, R, compute_crs))
-        cbs.append(_cb(CB_GATHER, g.interm_format, T_i, nwpb * g.G_w * Rw, compute_crs))
-        cbs.append(_cb(CB_RMS_ROOT, g.interm_format, T_i, nwpb * Rw, compute_crs))
-    if g.masked:
-        cbs.append(_cb(CB_SUMSQ_LAST, g.interm_format, T_i, Rw, compute_crs))
-        cbs.append(_cb(CB_SUMSQ_ACC, g.interm_format, T_i, Rw, compute_crs))
 
     w_valid_last = g.W % TILE_DIM or TILE_DIM
     es_zero = 0 if input_tensor.dtype == ttnn.bfloat8_b else g.es

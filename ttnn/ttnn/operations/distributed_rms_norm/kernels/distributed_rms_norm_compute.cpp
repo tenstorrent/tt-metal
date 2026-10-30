@@ -330,6 +330,20 @@ FORCE_INLINE void run(
                     }
                 }
             }
+            if constexpr (HAS_GAMMA) {
+                // Ragged block (R_b < R): this chunk pushed / popped only R_b*C of cb_x_gamma's R*C ring. Advance the
+                // ring by the missing (R - R_b)*C pages (nominal push count), so the next chunk's x*gamma window starts
+                // at the ring base again: the chains read it by tile index from the read pointer and never wrap
+                // (verifier: "Indexed tile read exceeds CB boundary" / garbage output at 8192x3584, R = 3, 2-row
+                // cores).
+                if (rows_in_block < R) {
+                    const uint32_t filler = (R - rows_in_block) * C;
+                    cb_reserve_back(cb_x_gamma, filler);
+                    cb_push_back(cb_x_gamma, filler);
+                    cb_wait_front(cb_x_gamma, filler);
+                    cb_pop_front(cb_x_gamma, filler);
+                }
+            }
         }
         if constexpr (SHARDED) {
             cb_push_back(cb_output, rows_in_block * WS);

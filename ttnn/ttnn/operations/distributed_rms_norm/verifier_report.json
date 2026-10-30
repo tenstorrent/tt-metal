@@ -1,0 +1,2721 @@
+{
+ "source": "generated/eval/drms_verify_final3/verifier_report.json (full, 36 MB, not committed)",
+ "command": "eval/eval_test_runner.sh --no-precompile eval/golden_tests/distributed_rms_norm/ <dir>; python3 -m eval.verify_supported <dir> ttnn.operations.distributed_rms_norm",
+ "summary": {
+  "total": 47025,
+  "supported_pass": 10908,
+  "supported_fail": 133,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 2160,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 1,
+  "xfail_other": 0,
+  "invalid_skipped": 33696,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 40,
+  "no_axes_found": 87
+ },
+ "by_category": {
+  "supported_pass": {
+   "count": 10908
+  },
+  "no_axes_found": {
+   "count": 87
+  },
+  "invalid_skipped": {
+   "count": 33696
+  },
+  "xfail_expected": {
+   "count": 2160
+  },
+  "supported_fail": [
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x1x128x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=4-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=0-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[1x32x4096-alignment=tile_aligned-cluster_axis=1-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=3-topology=Linear]",
+    "axes": {
+     "dtype": "FLOAT32",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 3
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "TILE",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=0-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=1-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 1,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_golden.py::test_op[128x8192-alignment=tile_aligned-cluster_axis=1-dtype=BFLOAT8_B-fp32_dest_acc_en=False-gamma_dtype=FLOAT32-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-num_links=2-rank=2-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "fp32_dest_acc_en": false,
+     "layout": "TILE",
+     "gamma_mode": "gamma",
+     "gamma_dtype": "FLOAT32",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "HEIGHT_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": 2,
+     "alignment": "tile_aligned",
+     "rank": 2
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1\nE   NotImplementedError: distributed_rms_norm: the shard does not fit one resident tile-row in L1"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid1-grid_offset1-output_core_grid1-0-1-DataType.BFLOAT16-DataType.BFLOAT8_B-2048-0.9997-0.45-1e-06-0]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":3}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid1-grid_offset1-output_core_grid1-0-1-DataType.BFLOAT16-DataType.BFLOAT8_B-2048-0.9997-0.45-1e-06-1234]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":3}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid1-grid_offset1-output_core_grid1-0-1-DataType.BFLOAT16-DataType.BFLOAT16-2048-0.9997-0.45-1e-06-0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":3}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid1-grid_offset1-output_core_grid1-0-1-DataType.BFLOAT16-DataType.BFLOAT16-2048-0.9997-0.45-1e-06-1234]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":3}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid2-grid_offset2-output_core_grid2-0-1-DataType.BFLOAT16-DataType.BFLOAT8_B-2048-0.9997-0.45-1e-06-0]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":2}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::null"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid2-grid_offset2-output_core_grid2-0-1-DataType.BFLOAT16-DataType.BFLOAT8_B-2048-0.9997-0.45-1e-06-1234]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":2}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::null"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid2-grid_offset2-output_core_grid2-0-1-DataType.BFLOAT16-DataType.BFLOAT16-2048-0.9997-0.45-1e-06-0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":2}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::null"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid2-grid_offset2-output_core_grid2-0-1-DataType.BFLOAT16-DataType.BFLOAT16-2048-0.9997-0.45-1e-06-1234]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":2}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::null"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid3-grid_offset3-output_core_grid3-0-1-DataType.BFLOAT16-DataType.BFLOAT8_B-2048-0.9997-0.45-1e-06-0]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":1}], shape=[32, 256], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid3-grid_offset3-output_core_grid3-0-1-DataType.BFLOAT16-DataType.BFLOAT8_B-2048-0.9997-0.45-1e-06-1234]",
+    "axes": {
+     "dtype": "BFLOAT8_B",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":1}], shape=[32, 256], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid3-grid_offset3-output_core_grid3-0-1-DataType.BFLOAT16-DataType.BFLOAT16-2048-0.9997-0.45-1e-06-0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":1}], shape=[32, 256], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_simulated_distributed_layernorm[core_grid3-grid_offset3-output_core_grid3-0-1-DataType.BFLOAT16-DataType.BFLOAT16-2048-0.9997-0.45-1e-06-1234]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": true,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: output placement MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":3,\"y\":1}], shape=[32, 256], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nul"
+   },
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_ds_distributed_norm[random_weights-prefill-131072-0.98]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "fp32_dest_acc_en": false,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "gamma_layout": "ROW_MAJOR",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "validation",
+    "failure_message": "NotImplementedError: distributed_rms_norm: the exchange landing needs 1048576 B per port core (> 524288); a landing reused across waves (credit protocol) is a deferred regime\nE   NotImplementedError: distributed_rms_norm: the exchange landing needs 1048576 B per port core (> 524288); a landing reuse"
+   }
+  ],
+  "infeasible_skipped": {
+   "count": 40
+  },
+  "xfail_wrong_mode": [
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc",
+    "axes": {
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "fp32_dest_acc_en": false,
+     "gamma_mode": "no_gamma",
+     "gamma_dtype": "none",
+     "gamma_layout": "none",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "failed",
+    "failure_category": "other",
+    "failure_message": "eval.l1_profiling.L1ProfilingError: L1 profiling returned peak_total=0; expected a positive allocation peak from the graded operation\nE   eval.l1_profiling.L1ProfilingError: L1 profiling returned peak_total=0; expected a positive allocation peak from the graded operation"
+   }
+  ]
+ }
+}

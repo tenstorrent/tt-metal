@@ -6,6 +6,11 @@
 1. test_repeat_rows: 640x1792 (R3-i, one 2-row block per core, 2 waves of 1 tile-row): repeated calls must be
    bit-identical; on a mismatch, report which devices / tile-rows / tile-columns differ (wave 0 rows = even tile-rows
    of each row-group's pair, wave 1 rows = odd ones).
+2. test_ragged_block_chunked_gamma (verifier): a ragged block (R_b < R rows on some cores) with more than one W chunk and a
+   gamma. cb_x_gamma is an R*C ring that a ragged chunk only advanced by R_b*C, so the next chunk's indexed x*gamma reads
+   ran past the ring end ("Indexed tile read exceeds CB boundary" under --dev, garbage output otherwise; found on the
+   translated DeepSeek prefill 8192 x 3584). (1,1,7040,1152): T = 220 tile-rows on 106 cores -> 3 / 2 rows (R = 3),
+   Wt = 36 -> 2 chunks of 18.
 """
 
 from __future__ import annotations
@@ -57,3 +62,18 @@ def test_repeat_rows(mesh_shape, fp32, mesh_device):
                     tcs = sorted(set(badtiles.nonzero()[:, 1].tolist()))
                     bad.append(f"call {i} dev ({r},{c}): tile-rows {trs} tile-cols {tcs[:12]}...")
     assert not bad, "\n".join(bad)
+
+
+@pytest.mark.parametrize("mesh_shape", [None])
+@pytest.mark.parametrize("fp32", [True, False], ids=["fp32acc", "bf16acc"])
+@pytest.mark.parametrize("gamma_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "sticks"])
+def test_ragged_block_chunked_gamma(mesh_shape, fp32, gamma_layout, mesh_device):
+    _acc.run_case(
+        mesh_device,
+        (1, 1, 7040, 1152),
+        cluster_axis=_acc.LINEAR_AXES[0],
+        dtype=ttnn.bfloat16,
+        gamma_dtype=ttnn.bfloat16,
+        gamma_layout=gamma_layout,
+        fp32_dest_acc_en=fp32,
+    )
