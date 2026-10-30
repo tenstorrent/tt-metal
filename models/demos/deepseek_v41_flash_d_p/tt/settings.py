@@ -708,6 +708,16 @@ TABLE = {
         "chip's rows), the indexer's weights_proj replicated (no TP sum of the gates); + ~0.3 GiB a chip. off = "
         "attn_norm / q_a / kv / compressor / gates hidden-split with their TP sums (the path before P.10)",
     ),
+    "ROPE_UNIFORM_PROGRAM": Setting(
+        "on",
+        ("on", "off"),
+        "P.5 (galaxy 8x4, perf_proposals ROPE_UNIFORM_PROGRAM; takes effect with ROPE_IMPL=on): on = every RoPE site "
+        "(tt/rope.rope_stock: attention q and inverse o, window kv, compressor ckv / k, indexer q; 136 calls a chunk on "
+        "8x4) through the fork ttnn.bringup.rotary_embedding_indexed(uniform=True): ONE program for the whole mesh "
+        "instead of one per chip (the stock op bakes my_sp_coord per coordinate; with per-chip pre-sliced cos / sin "
+        "and kv_actual_global 0 every chip reads row 0, so the programs are identical). Same kernels, same values. "
+        "off = the stock ttnn.experimental.deepseek_prefill.rotary_embedding_indexed (32 programs a call on 8x4)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

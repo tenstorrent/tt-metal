@@ -1,0 +1,79 @@
+{
+ "used": [
+  {
+   "id": "DS41-15",
+   "how": "rope_stock is the single call site for every RoPE (ROPE_IMPL=on), so the switch goes there and covers all 136 calls",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "per-chip dispatch cost on 32 chips is the lever; one program over the mesh range instead of 32 per call",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "kept the old path selectable and measured on / off alternating in one process (golden prefix reloaded each run) rather than trusting single-run walls",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "measure --task and each gate unit take 550-600 s a process on the Galaxy 8x4, at the 10-minute foreground cap; an agent cannot finish them in one call (P.12 hit the same)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work: the change only builds one program for the mesh instead of 32 identical ones"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "the op touched is a C++ device op (ttnn.bringup.rotary_embedding_indexed, program cache with addresses patched on a hit), not a Python-built generic_op; no non-prepared Python op was added or called"
+  }
+ ],
+ "cited_only": [
+  "DS41-147"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.5",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T00:07:48",
+  "head": "d2dc8639a5f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.5.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_rope_uniform.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/bringup_nanobind.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/CMakeLists.txt",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/README.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/kernels/dataflow/reader_rotary_embedding_indexed_interleaved_start_id.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/kernels/dataflow/writer_rotary_embedding_indexed.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/rotary_embedding_indexed_device_operation.hpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/rotary_embedding_indexed.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/rotary_embedding_indexed.hpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/sources.cmake",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/tests/__init__.py",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/tests/source.yaml",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/tests/source_baseline.json",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/tests/unit/test_uniform.py"
+  ]
+ }
+}
