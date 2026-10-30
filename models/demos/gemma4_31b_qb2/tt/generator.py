@@ -66,6 +66,7 @@ class Gemma4Generator:
         self.traces = {}
         # Speculative verify traces, keyed by id(CacheState); see spec_decode().
         self.spec_traces = {}
+        self.spec_timing = {}
         # Keep explicit decode/sampler IO across conservative trace retirement.
         # The next capture gets a new entry object, so old handles stay invalid.
         self._entry_storage = None
@@ -1433,6 +1434,8 @@ class Gemma4Generator:
         rows [32, V] instead (greedy/host checks only).
         """
         entry = self._spec_entry(state, groups)
+        timing = self.spec_timing
+        t0 = time.perf_counter()
         P = len(entry["update_positions"])
         positions = positions.to(torch.int32)
         candidates = candidates.to(torch.int32)
@@ -1453,18 +1456,28 @@ class Gemma4Generator:
         for j in range(P):
             upd = torch.where(live & (candidates == j), positions, torch.full_like(positions, -1))
             self._refresh(upd, entry["update_positions"][j], "position_refreshes")
+        t1 = time.perf_counter()
         for g, keys in enumerate(groups):
             table = host_tables[keys[0]].to(torch.int32)
             self._refresh(table[rows].contiguous(), entry["group_tables"][g], "page_table_refreshes")
+        t2 = time.perf_counter()
         if sample:
             self.configure_sampling(batch=32, **sampling_params)
+        t3 = time.perf_counter()
         ttnn.execute_trace(self.mesh, entry["model_trace"], cq_id=0, blocking=False)
         self.counters["model_replays"] += 1
         if not sample:
             return self._host_logits(entry["logits"])[0, 0, :32]
         ttnn.execute_trace(self.mesh, entry["sampling_trace"], cq_id=0, blocking=False)
         self.counters["sampling_replays"] += 1
-        return self._read_tokens(entry["tokens"], 32).reshape(-1).to(torch.int64)
+        t4 = time.perf_counter()
+        result = self._read_tokens(entry["tokens"], 32).reshape(-1).to(torch.int64)
+        t5 = time.perf_counter()
+        for name, dt in (("inputs", t1 - t0), ("tables", t2 - t1), ("sampling", t3 - t2), ("enqueue", t4 - t3),
+                         ("wait_read", t5 - t4)):
+            timing[name] = timing.get(name, 0.0) + dt
+        timing["steps"] = timing.get("steps", 0) + 1
+        return result
 
     def close(self):
         self._serving_prefill_prepared_state = None

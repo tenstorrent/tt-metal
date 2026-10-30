@@ -24,6 +24,14 @@ from models.demos.gemma4_31b_qb2.tt.generator import CacheState, build_generator
 PACKED_POOL_PROFILES = {"c32a32_p2_f412672": 5336, "c32a32_p2_f443392": 5576, "c32a32_p2_f458752": 5696, "c32a32_p2_f626688": 7008}
 
 
+def spec_ngram_enabled():
+    """Opt-in speculative decoding with the host n-gram drafter (GEMMA_SPEC_NGRAM=1); default off."""
+    value = os.environ.get("GEMMA_SPEC_NGRAM", "0")
+    if value not in ("0", "1"):
+        raise RuntimeError("GEMMA_SPEC_NGRAM must be 0 or 1")
+    return value == "1"
+
+
 def full_pack_enabled():
     value = os.environ.get("GEMMA_EXPERIMENT_FULL_PACK2", "0")
     if value not in ("0", "1"):
@@ -51,6 +59,19 @@ class Gemma4ForCausalLM:
             "router_config": _router,
         },
     }
+    if spec_ngram_enabled():
+        # Verification returns, for every candidate row, a token sampled with that request's own sampling
+        # parameters and per-position seed (not an argmax). With deterministic n-gram drafts, the runner's
+        # id-equality walk is then exact speculative sampling, so sampled requests may speculate.
+        model_capabilities = dict(
+            model_capabilities,
+            supports_spec_decode=True,
+            spec_requirements=["device_propose"],
+            supports_async_spec_decode=True,
+            spec_sampled_verify=True,
+            spec_token_history=True,
+            spec_stateless_verify=True,
+        )
     supports_explicit_admission_limit = True
     supports_prefill_history_finality = True
     decode_input_update_contract = 1
@@ -69,6 +90,8 @@ class Gemma4ForCausalLM:
         self.cache = None
         self.prefill_slot_keys = {}
         self.next_prefill_key = 0
+        self._spec_dirty = False
+        self.spec_stats = dict(propose_s=0.0, proposals=0, drafted=0, verify_s=0.0, verifies=0, verify_rows=0)
         self._pool_memory_interval = int(os.environ.get("GEMMA_POOL_MEMORY_SAMPLE_INTERVAL", "1"))
         if not 1 <= self._pool_memory_interval <= 65536:
             raise ValueError("GEMMA_POOL_MEMORY_SAMPLE_INTERVAL must be in 1..65536")
@@ -500,6 +523,108 @@ class Gemma4ForCausalLM:
         finally:
             self._allocation_probe_end()
 
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, k):
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
+
+        from models.demos.gemma4_31b_qb2.tt.generator import Gemma4Generator
+
+        if not spec_ngram_enabled():
+            return SpecReject("GEMMA_SPEC_NGRAM=1 is required for speculative decoding")
+        if max_num_seqs > 32:
+            return SpecReject("the verify step holds 32 token rows")
+        limit = Gemma4Generator.SPEC_MAX_CANDIDATES - 1
+        return SpecPlan(
+            effective_k=max(1, min(int(k), limit)),
+            lanes_per_request=1,
+            extra_bytes_per_seq=0,
+            extra_bytes_per_token=0,
+            accept_modes=(ACCEPT_MODE_ARGMAX_IDS,),
+            drafter_state=DRAFTER_STATE_INTERNAL,
+            supports_narrow_decode=True,
+        )
+
+    def propose_draft_tokens(self, num_drafts, committed, positions, accepted_counts, hidden=None,
+                             token_history=None):
+        """Host n-gram drafts from each request's full token history, cost-aware lengths (spec_ngram.py)."""
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        from models.demos.gemma4_31b_qb2.tt import spec_ngram
+
+        rows = int(committed.shape[0])
+        histories = [None] * rows
+        if token_history is not None:
+            for row in range(rows):
+                if int(positions[row, 0]) < 0 or int(accepted_counts[row]) < 1:
+                    continue
+                histories[row] = token_history[row]
+        t = time.perf_counter()
+        drafts, valid = spec_ngram.propose(histories, int(num_drafts))
+        self.spec_stats["propose_s"] += time.perf_counter() - t
+        self.spec_stats["proposals"] += 1
+        self.spec_stats["drafted"] += int(sum(valid))
+        return DraftOutput(draft_token_ids=torch.tensor(drafts, dtype=torch.int32).reshape(rows, int(num_drafts)),
+                           num_valid=torch.tensor(valid, dtype=torch.int32))
+
+    def _verify(self, tokens, start_pos, kv_cache, page_tables_per_layer, num_valid_drafts, sampling_params,
+                slot_remap):
+        """One verify step: the [B, 1+K] candidate block becomes 32 token rows (see generator.spec_decode)."""
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, PLACEHOLDER_TOKEN_ID, VerifyOutput
+
+        t = time.perf_counter()
+        batch, width = tokens.shape
+        first = start_pos[:, 0]
+        tables = self._tables(kv_cache, page_tables_per_layer, audit_ranges=[
+            (max(0, int(pos) - 1023), int(pos) + width) if int(pos) >= 0 else None for pos in first])
+        for row, position in enumerate(first):
+            if int(position) >= 0:
+                self.release_request(row if slot_remap is None else int(slot_remap[row]))
+        if sampling_params is None:
+            raise ValueError("Speculative verify samples on device; host sampling is not supported here")
+        # Per-request seeds follow the plain path: seed + position of the input token (_sampling).
+        params = self._sampling(sampling_params, self.max_batch_size, first.tolist(), reset_seed=True)
+        row_tokens = torch.zeros(32, dtype=torch.int64)
+        row_pos = torch.full((32,), -1, dtype=torch.int32)
+        row_slot = torch.zeros(32, dtype=torch.int32)
+        row_cand = torch.zeros(32, dtype=torch.int32)
+        row_params = {name: [params[name][0]] * 32 for name in ("top_k", "top_p", "temperature")}
+        row_params["seed"] = [0] * 32
+        where = {}
+        r = 0
+        for b in range(batch):
+            if int(first[b]) < 0:
+                continue
+            n = 1 + int(num_valid_drafts[b])
+            n = min(n, 32 - r)
+            for j in range(n):
+                row_tokens[r] = int(tokens[b, j])
+                row_pos[r] = int(start_pos[b, j])
+                row_slot[r] = b
+                row_cand[r] = j
+                for name in ("top_k", "top_p", "temperature"):
+                    row_params[name][r] = params[name][b]
+                row_params["seed"][r] = (int(params["seed"][b]) + j) % (2**31)
+                where[(b, j)] = r
+                r += 1
+            if r >= 32:
+                break
+        groups = {}
+        for index, table in tables.items():
+            groups.setdefault(id(table), []).append(index)
+        groups = sorted(groups.values())
+        sampled = self.generator.spec_decode(kv_cache, tokens=row_tokens, positions=row_pos, slots=row_slot,
+                                             candidates=row_cand, host_tables=tables, groups=groups,
+                                             sampling_params=row_params)
+        ids = torch.full((batch, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        for (b, j), row in where.items():
+            ids[b, j] = int(sampled[row])
+        # The plain trace's resident inputs and sampler state are stale after a verify.
+        self._spec_dirty = True
+        self.spec_stats["verify_s"] += time.perf_counter() - t
+        self.spec_stats["verifies"] += 1
+        self.spec_stats["verify_rows"] += r
+        return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
+
     def decode_forward(
         self,
         tokens,
@@ -518,6 +643,21 @@ class Gemma4ForCausalLM:
         slot_remap=None,
         **kwargs,
     ):
+        spec_mode = kwargs.pop("spec_mode", None)
+        num_valid_drafts = kwargs.pop("num_valid_drafts", None)
+        kwargs.pop("accepted_counts", None)
+        if spec_mode is not None:
+            if kv_cache is not self.cache:
+                raise ValueError("Serving must use the cache allocated by vLLM")
+            return self._verify(tokens, start_pos, kv_cache, page_tables_per_layer, num_valid_drafts,
+                                sampling_params, slot_remap)
+        if self._spec_dirty:
+            # A verify replaced the sampler's per-row parameters/seeds and advanced every request past the plain
+            # trace's resident tokens and positions: reload all of them.
+            reload_inputs = True
+            reset_sampling_state = True
+            reload_sampling_params = True
+            self._spec_dirty = False
         if "reset_batch" in kwargs:
             raise TypeError("decode_input_update_contract=1 requires explicit reload flags")
         if not enable_trace:
