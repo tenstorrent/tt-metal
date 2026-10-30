@@ -7,11 +7,6 @@ on:
         required: false
         default: true
         type: boolean
-      glx_2x_multihost:
-        description: "Run Galaxy 2x multi-host job"
-        required: false
-        default: true
-        type: boolean
       glx_4x_unit_tests:
         description: "Run Galaxy 4x unit tests"
         required: false
