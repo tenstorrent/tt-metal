@@ -154,7 +154,7 @@ def main(argv=None) -> int:
                 report("h_in", taps["h_in"], arr["h_in"])
                 taps["h_block0"] = None
                 for i, block in enumerate(model.blocks):
-                    mods = block.modulation(inputs.silu_temb, inputs.sel_adaln)
+                    mods = block.modulation(block.adaln_table(inputs.silu_temb), inputs.sel_adaln)
                     h = block(h, mods, inputs.mask, inputs.rope_params)
                     if i == 0:
                         taps["h_block0"] = to_host(h).reshape(inputs.S_pad, -1)[:S]

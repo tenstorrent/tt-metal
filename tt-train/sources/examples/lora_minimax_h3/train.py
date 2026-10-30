@@ -40,6 +40,7 @@ from ttml.models.minimax_h3 import (
     load_transformer,
     read_time_embedder,
     sample_timestep,
+    shared_timesteps,
     upload,
 )
 from lora_utils import (
@@ -192,6 +193,8 @@ def main(argv=None) -> int:
     for step in range(1, args.steps + 1):
         optimizer.zero_grad()
         step_loss = 0.0
+        # The step's micro-batches up front, so all their timesteps share one set of AdaLN tables.
+        micro = []
         for _ in range(args.grad_accum):
             if not order:
                 order = cache.keys[:]
@@ -201,21 +204,26 @@ def main(argv=None) -> int:
             if args.caption_dropout and rng.random() < args.caption_dropout:
                 embeds = np.zeros_like(embeds)
             t = sample_timestep(args.timestep_shift, rng)
+            layout = build_packed_sequence(embeds.shape[0], 1, latent_h, latent_w)
+            micro.append((key, x0, embeds, t, layout))
+        timesteps, all_indices = shared_timesteps([build_row_timesteps(m[4], m[3]) for m in micro])
+        tables = None
+        for (key, x0, embeds, t, layout), timestep_indices in zip(micro, all_indices):
             running_t += t / args.grad_accum
             noise = noise_rng.standard_normal(x0.shape, dtype=np.float32)
             audio = noise_rng.standard_normal(
                 (AUDIO_LATENTS * AUDIO_CHANNELS, config.audio_in_channels), dtype=np.float32
             )
             x_t = t * x0 + (1.0 - t) * noise
-            layout = build_packed_sequence(embeds.shape[0], 1, latent_h, latent_w)
-            timesteps, timestep_indices = build_row_timesteps(layout, t)
             inputs = H3Inputs.build(config, time_weights, x_t, audio, embeds, layout, timesteps, timestep_indices)
+            if tables is None:
+                tables = model.time_tables(inputs.silu_temb)
             target = np.zeros((1, 1, inputs.S_pad, config.video_in_channels), dtype=np.float32)
             target[0, 0, layout.video_indices] = x0 - noise
             row_mask = np.zeros_like(target)
             row_mask[0, 0, layout.video_indices] = 1.0
 
-            pred, _ = lora(inputs, with_audio=False)
+            pred, _ = lora(inputs, with_audio=False, tables=tables)
             loss = masked_mse(pred, upload(target), upload(row_mask), inputs) * (1.0 / args.grad_accum)
             loss_value = scalar(loss)
             step_loss += loss_value

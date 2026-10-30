@@ -124,6 +124,13 @@ def build_row_timesteps(layout: Layout, video_t: float, audio_t: float = 0.0) ->
     return timesteps.astype(np.float32), indices.reshape(-1).astype(np.int64)
 
 
+def shared_timesteps(per_sample: list[tuple[np.ndarray, np.ndarray]]) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Several `build_row_timesteps` results merged into one distinct-timestep table, with each sample's per-row
+    indices into it, so the samples share one set of AdaLN tables."""
+    shared = np.unique(np.concatenate([t for t, _ in per_sample]))
+    return shared, [np.searchsorted(shared, t[i]).astype(np.int64) for t, i in per_sample]
+
+
 def adaln_indices(layout: Layout, timestep_indices: np.ndarray) -> np.ndarray:
     return timestep_indices * MODALITY_NUM + layout.token_tags
 

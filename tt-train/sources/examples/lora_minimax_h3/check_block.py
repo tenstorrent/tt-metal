@@ -198,7 +198,7 @@ def main() -> int:
     root = next(iter(block.parameters())).split("/")[0]
     silu_temb = upload(np.pad(0.5 * rng.standard_normal((2, TE), dtype=np.float32), ((0, 30), (0, 0)))[None, None])
     sel = upload(selection_matrix(np.full(VALID, 1), S, 96, fill=1)[None, None]).get_value()
-    mods = block.modulation(silu_temb, sel)
+    mods = block.modulation(block.adaln_table(silu_temb), sel)
     m = [host(t)[0, 0] for t in mods]
     n1, n2 = w(block, f"{root}/norm1/weight").reshape(-1), w(block, f"{root}/norm2/weight").reshape(-1)
     b_attn = NpAttention(block.attn, config, cos.astype(np.float64), sin.astype(np.float64))

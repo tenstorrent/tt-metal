@@ -17,6 +17,7 @@ from .packing import (
     build_row_timesteps,
     patchify_video_latents,
     sample_timestep,
+    shared_timesteps,
     tile_pad,
 )
 from .flops import calculate_flops_per_token, calculate_sequence_flops
@@ -45,6 +46,7 @@ __all__ = [
     "patchify_video_latents",
     "read_time_embedder",
     "sample_timestep",
+    "shared_timesteps",
     "tile_pad",
     "unpermute_qk_rows",
     "upload",

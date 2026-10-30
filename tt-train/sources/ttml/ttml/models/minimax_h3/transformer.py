@@ -344,20 +344,23 @@ class H3Block(AbstractModuleBase):
         else:
             self.adaln = LinearLayer(config.time_embed_dim, out, True, weight_init=w_init, bias_init=b_init)
 
-    def modulation(self, silu_temb, sel_adaln: ttnn.Tensor):
-        """Six (1, 1, S_pad, D) constants, one row per sequence row. Frozen path: raw ttnn.
+    def adaln_table(self, silu_temb) -> ttnn.Tensor:
+        """(1, 1, 3 * T_pad, 6D), frozen and timestep-only. Frozen path: raw ttnn.
 
         `adaln(silu_temb)` is (T_pad, 3 * 6D): per timestep row, the three modality blocks of six chunks. Stacking
-        the modality blocks as rows gives (3 * T_pad, 6D) addressed by `tag * T_pad + timestep_index`, which the
-        one-hot `sel_adaln` gathers in one matmul."""
+        the modality blocks as rows gives (3 * T_pad, 6D) addressed by `tag * T_pad + timestep_index`."""
         table = self.adaln(silu_temb).get_value()
         width = 6 * self.hidden_size
         blocks = [
             ttnn.slice(table, [0, 0, 0, g * width], [1, 1, table.shape[2], (g + 1) * width])
             for g in range(MODALITY_NUM)
         ]
-        stacked = ttnn.concat(blocks, 2)
-        rows = ttnn.matmul(sel_adaln, stacked)
+        return ttnn.concat(blocks, 2)
+
+    def modulation(self, table: ttnn.Tensor, sel_adaln: ttnn.Tensor):
+        """Six (1, 1, S_pad, D) constants, one row per sequence row, gathered from `adaln_table` by the one-hot
+        `sel_adaln` in one matmul."""
+        rows = ttnn.matmul(sel_adaln, table)
         shift1, scale1, gate1, shift2, scale2, gate2 = ttnn.chunk(rows, 6, 3)
         return (
             const(shift1),
@@ -514,25 +517,33 @@ class H3Transformer(AbstractModuleBase):
             packed = ttnn.pad(packed, [(0, 0), (0, 0), (0, inputs.S_pad - inputs.S), (0, 0)], 0.0)
         return const(ttnn.to_layout(packed, ttnn.Layout.TILE))
 
-    def run_blocks(self, h, inputs: H3Inputs):
-        for block in self.blocks:
-            mods = block.modulation(inputs.silu_temb, inputs.sel_adaln)
-            h = block(h, mods, inputs.mask, inputs.rope_params)
+    def time_tables(self, silu_temb) -> tuple[list[ttnn.Tensor], ttnn.Tensor]:
+        """Every block's `adaln_table` and the head's shift | scale table. Frozen and timestep-only: one build
+        serves every sequence whose inputs share the timesteps (`shared_timesteps`), e.g. an optimizer step."""
+        return [block.adaln_table(silu_temb) for block in self.blocks], self.norm_out_linear(silu_temb).get_value()
+
+    def run_blocks(self, h, inputs: H3Inputs, adaln_tables: list[ttnn.Tensor] | None = None):
+        for i, block in enumerate(self.blocks):
+            table = adaln_tables[i] if adaln_tables is not None else block.adaln_table(inputs.silu_temb)
+            h = block(h, block.modulation(table, inputs.sel_adaln), inputs.mask, inputs.rope_params)
         return h
 
-    def head(self, h, inputs: H3Inputs, with_audio: bool = True):
+    def head(self, h, inputs: H3Inputs, with_audio: bool = True, table: ttnn.Tensor | None = None):
         """`norm_out` modulated per row by its timestep; (video_out, audio_out) over all rows, audio optional."""
-        table = self.norm_out_linear(inputs.silu_temb).get_value()  # (1, 1, 32, 2D): shift | scale
+        if table is None:
+            table = self.norm_out_linear(inputs.silu_temb).get_value()  # (1, 1, 32, 2D): shift | scale
         shift_t, scale_t = ttnn.chunk(table, 2, 3)
         shift = const(ttnn.matmul(inputs.sel_t, shift_t))
         scale = const(ttnn.add(ttnn.matmul(inputs.sel_t, scale_t), 1.0))
         o = self.norm_out(h) * scale + shift
         return self.proj_out(o), (self.audio_proj_out(o) if with_audio else None)
 
-    def forward(self, inputs: H3Inputs, with_audio: bool = True):
+    def forward(self, inputs: H3Inputs, with_audio: bool = True, tables=None):
+        """`tables` from `time_tables`; built here when omitted."""
+        adaln_tables, head_table = tables if tables is not None else (None, None)
         text = self.embed_text(inputs)
         video = self.proj_in(inputs.x_t)
         audio = self.audio_proj_in(inputs.audio)
         h = self.pack(text, audio, video, inputs)
-        h = self.run_blocks(h, inputs)
-        return self.head(h, inputs, with_audio)
+        h = self.run_blocks(h, inputs, adaln_tables)
+        return self.head(h, inputs, with_audio, head_table)
