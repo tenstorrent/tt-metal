@@ -11,7 +11,7 @@
 
 #include "core_coord.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
 #include <tt-umd/types/xy_pair.hpp>

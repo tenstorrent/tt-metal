@@ -11,7 +11,7 @@
 
 #include "context/context_descriptor.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"

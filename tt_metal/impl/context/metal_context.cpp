@@ -16,7 +16,7 @@
 #include "context_types.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "context/metal_env_accessor.hpp"
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "distributed/mesh_device_impl.hpp"

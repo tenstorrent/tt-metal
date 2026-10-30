@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <limits>
 #include <stdexcept>
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/system_mesh.hpp>
 

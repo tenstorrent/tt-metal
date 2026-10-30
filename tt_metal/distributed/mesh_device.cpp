@@ -71,7 +71,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
-#include <experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-umd/types/core_coordinates.hpp>

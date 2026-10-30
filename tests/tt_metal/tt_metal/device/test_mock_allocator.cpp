@@ -10,7 +10,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
