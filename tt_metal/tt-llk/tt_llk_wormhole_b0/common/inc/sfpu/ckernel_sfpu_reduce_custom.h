@@ -24,13 +24,6 @@ inline void sfpu_reduce_max_col_subblock_4x2_configure_addrmod()
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
         .dest = {.incr = 64},
     }
         .set(ADDR_MOD_6);

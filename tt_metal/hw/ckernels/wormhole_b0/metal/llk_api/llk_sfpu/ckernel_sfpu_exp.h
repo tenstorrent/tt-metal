@@ -690,14 +690,6 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         // Drain phase handles final 2 SHFT2s.
         // =======================================================================
 
-        // Configure ADDR_MOD_7 for auto-increment (dest += 2 per LOADMACRO).
-        addr_mod_t{
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_7);
-
         // Single replay of 16 instructions = 8 LM + 8 SHFT2 (2 dummy + 6 real).
         lltt::replay(0, 16);
 
@@ -717,14 +709,6 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         // First 2 SHFT2s are dummy (timing placeholders), then 30 real SHFT2s.
         // Drain phase handles final 2 SHFT2s.
         // =======================================================================
-
-        // Configure ADDR_MOD_7 for auto-increment (dest += 2 per LOADMACRO).
-        addr_mod_t{
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 2},
-        }
-            .set(ADDR_MOD_7);
 
         // 2 replays of 32 instructions = 32 LM + 32 SHFT2 (2 dummy + 30 real).
         lltt::replay(0, 32);
@@ -750,11 +734,10 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
 
 template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
-    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
+    // Common SFPU init inlined (SFPU config register + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
-    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
+    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (the approximate replay path also programs ADDR_MOD_6, below).
     sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
@@ -1018,11 +1001,14 @@ void exp_init() {
         // avoiding race conditions from dest bank conflicts or other pipeline hiccups.
         TTI_SFPCONFIG(0xF00, 0x8, 0x1);
 
+        // Each recorded LOADMACRO advances DEST by 2 through ADDR_MOD_6.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
         // ===================================================================
         // Program Replay Buffer
         // ===================================================================
         // Record 32 instructions (16 LM+SHFT2 pairs) into replay buffer.
-        // ADDR_MOD_7/3 will be configured for auto-increment at replay time.
+        // ADDR_MOD_6 (dest += 2, programmed above) advances DEST once per LOADMACRO.
         //
         // Pattern starts with LM(LREG0) so all LOADMACROs can be replayed.
         // The first two SHFT2s are "dummy" (operate on not-yet-loaded LREGs)
@@ -1037,37 +1023,37 @@ void exp_init() {
 
         // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
         // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPLOADMACRO(0, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPLOADMACRO(1, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPLOADMACRO(2, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPLOADMACRO(3, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPLOADMACRO(0, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPLOADMACRO(1, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPLOADMACRO(2, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPLOADMACRO(3, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPLOADMACRO(0, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPLOADMACRO(1, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPLOADMACRO(2, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPLOADMACRO(3, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
+        TTI_SFPLOADMACRO(0, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
+        TTI_SFPLOADMACRO(1, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
+        TTI_SFPLOADMACRO(2, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
+        TTI_SFPLOADMACRO(3, 0, 2, 0);
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
 
         TTI_SFPNOP;

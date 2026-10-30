@@ -16,13 +16,6 @@ namespace ckernel
 
 inline void _llk_math_eltwise_mul_scalar_block_init_()
 {
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_7);
-
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -30,6 +23,13 @@ inline void _llk_math_eltwise_mul_scalar_block_init_()
 inline void _llk_math_eltwise_mul_scalar_block_(const std::uint32_t dst_index, const std::uint32_t block_size)
 {
     constexpr std::uint32_t kOpsPerTile = 8;
+
+    addr_mod_t {
+        .srca = {.incr = 8},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_7);
 
     for (std::uint32_t i = 0; i < block_size; ++i)
     {
@@ -44,6 +44,9 @@ inline void _llk_math_eltwise_mul_scalar_block_(const std::uint32_t dst_index, c
 
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
     math::clear_dst_reg_addr();
+
+    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 } // namespace ckernel

@@ -3840,8 +3840,8 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 
 // Program ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
 // load/store. Used by both `remove_msb_values` and `separate_indices`,
-// which both walk the K-element region 32 datums at a time. Also sets
-// ADDR_MOD_7 (zero advance) for the load part of the sequence.
+// which both walk the K-element region 32 datums at a time. The load part of
+// the sequence uses ADDR_MOD_7 at its zero-advance invariant.
 inline void _topk_xl_remove_msb_values_init_()
 {
     // ADDR_MOD_0, +2 (one group of 32 lanes). Not programmed by
@@ -3853,17 +3853,6 @@ inline void _topk_xl_remove_msb_values_init_()
         .dest = {.incr = 2},
     }
         .set(ADDR_MOD_0);
-
-    if constexpr (!topk_xl_blaze_compat)
-    {
-        // ADDR_MOD_7 with zero advance for the SFPLOAD.
-        addr_mod_t {
-            .srca = {.incr = 0},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 0},
-        }
-            .set(ADDR_MOD_7);
-    }
 }
 
 // Store zero into the hi16 half of every DST word in the K-sized region.
@@ -4257,7 +4246,6 @@ inline void _topk_xl_split_sfpu_init_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024 or 2048");
     _init_sfpu_config_reg();
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_5);
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 48}}.set(ADDR_MOD_1);
