@@ -43,6 +43,9 @@ def torch_masked_bincount(
     "sp_dim, topk, n_routed_experts",
     [
         (4096, 8, 256),
+        # Not tile-aligned: 40 logical rows in 64 padded ones. The split must cover only the logical rows,
+        # or the zero padding is counted as 24 extra picks of expert 0.
+        (40, 8, 256),
     ],
 )
 @pytest.mark.parametrize(
