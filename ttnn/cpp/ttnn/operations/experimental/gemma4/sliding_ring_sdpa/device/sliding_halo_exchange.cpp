@@ -27,7 +27,6 @@
 #include <optional>
 #include <tuple>
 
-
 namespace ttnn::experimental::gemma4 {
 
 namespace {
@@ -151,7 +150,8 @@ void sliding_halo_exchange_helper(
     const uint32_t num_inputs = input_tensors.size();
     KernelDescriptor reader_kernel{};
     reader_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/dataflow/sliding_halo_reader.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/dataflow/"
+        "sliding_halo_reader.cpp";
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = workers;
     reader_kernel.config = WriterConfigDescriptor{};
@@ -182,7 +182,8 @@ void sliding_halo_exchange_helper(
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/dataflow/sliding_halo_writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/dataflow/"
+        "sliding_halo_writer.cpp";
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = workers;
     writer_kernel.config = ReaderConfigDescriptor{};

@@ -45,8 +45,6 @@ struct Gemma4SlidingRingSDPAParams {
     // callers only opt in. false = unbounded cache (byte-identical to the pre-existing behavior).
     // Requires chunked sliding + kv_actual_isl.
     bool circular_kv_cache = false;
-    // Internal structural ratio, derived from Q/KV sequence distributions.
-    uint32_t kv_stripe_split = 1;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     Gemma4SlidingRingSDPAParams(
@@ -70,8 +68,7 @@ struct Gemma4SlidingRingSDPAParams {
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
         std::optional<uint32_t> sliding_window_size = std::nullopt,
-        bool circular_kv_cache = false,
-        uint32_t kv_stripe_split = 1) :
+        bool circular_kv_cache = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -92,8 +89,7 @@ struct Gemma4SlidingRingSDPAParams {
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
         sliding_window_size(sliding_window_size),
-        circular_kv_cache(circular_kv_cache),
-        kv_stripe_split(kv_stripe_split) {}
+        circular_kv_cache(circular_kv_cache) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -109,8 +105,6 @@ struct Gemma4SlidingRingSDPAParams {
     }
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
-
-    uint32_t q_ring_size() const { return static_cast<uint32_t>(ring_size) / kv_stripe_split; }
 
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
 
@@ -131,7 +125,6 @@ struct Gemma4SlidingRingSDPAParams {
         "latent_v_head_dim",
         "sliding_window_size",
         "circular_kv_cache",
-        "kv_stripe_split",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -153,7 +146,6 @@ struct Gemma4SlidingRingSDPAParams {
             std::cref(latent_v_head_dim),
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
-            std::cref(kv_stripe_split),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
@@ -203,15 +195,10 @@ struct Gemma4SlidingRingSDPAInputs {
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 
-    // Split KV is block-cyclic from depth one, even when local K is shorter than Q.
-    bool is_chunked(uint32_t kv_stripe_split = 1) const {
-        return kv_stripe_split > 1 || input_q.logical_shape()[2] < local_kv_seq_len();
-    }
+    bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
 
     // The metadata path derives KV-pad rotation on-device only for chunked prefill.
-    bool kv_pad_from_metadata(uint32_t kv_stripe_split = 1) const {
-        return has_metadata() && is_chunked(kv_stripe_split);
-    }
+    bool kv_pad_from_metadata() const { return has_metadata() && is_chunked(); }
 
     // Circular sliding KV: Q-sized chunk slabs per device in the K/V cache (validation requires
     // whole slabs, and at least two of them, before this is read).
@@ -243,12 +230,14 @@ struct Gemma4SlidingRingSDPAInputs {
 // KV-pad rotation: the host passes kv_actual_isl, or the chunked metadata path derives it on-device. Program hash,
 // compile-time zeroing and validation all go through this rule so they cannot disagree. The all-gather bound
 // (compute_gather_valid_Ht) is the deliberate exception: it needs a host length, so it is host-path only.
-inline bool kv_pad_rotation_active(const Gemma4SlidingRingSDPAParams& args, const Gemma4SlidingRingSDPAInputs& tensor_args) {
-    return args.has_kv_pad_rotation() || tensor_args.kv_pad_from_metadata(args.kv_stripe_split);
+inline bool kv_pad_rotation_active(
+    const Gemma4SlidingRingSDPAParams& args, const Gemma4SlidingRingSDPAInputs& tensor_args) {
+    return args.has_kv_pad_rotation() || tensor_args.kv_pad_from_metadata();
 }
 
 // Single-slot indexed KV cache: the host passes kv_cache_batch_idx, or the metadata path supplies the slot on-device.
-inline bool indexed_kv_cache_active(const Gemma4SlidingRingSDPAParams& args, const Gemma4SlidingRingSDPAInputs& tensor_args) {
+inline bool indexed_kv_cache_active(
+    const Gemma4SlidingRingSDPAParams& args, const Gemma4SlidingRingSDPAInputs& tensor_args) {
     return args.has_indexed_kv_cache() || tensor_args.has_metadata();
 }
 

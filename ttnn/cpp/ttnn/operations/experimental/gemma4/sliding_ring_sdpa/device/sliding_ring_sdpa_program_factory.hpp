@@ -42,8 +42,9 @@ struct Gemma4SlidingRingSDPAProgramFactory {
 };
 
 struct Gemma4SlidingRingSDPAMeshWorkloadFactory {
-    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
-        detail::Gemma4SlidingRingSDPADescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<Gemma4SlidingRingSDPAProgramFactory>;
+    using descriptor_adapter_t =
+        ttnn::device_operation::MeshDeviceOperationAdapter<detail::Gemma4SlidingRingSDPADescriptorAdapterOperation>::
+            DescriptorMeshWorkloadAdapter<Gemma4SlidingRingSDPAProgramFactory>;
     using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
 
     static cached_mesh_workload_t create_mesh_workload(

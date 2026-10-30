@@ -81,6 +81,9 @@ struct SlidingHaloConfig {
 // Halo reader/writer runtime-arg layout (sliding_halo_{reader,writer}.cpp).
 namespace halo_rt {
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 2;
+// The halo GlobalSemaphore's address: not in the program hash, so re-patched on every dispatch.
+constexpr uint32_t kNeighborReaderSemaphoreArg = 0;
+constexpr uint32_t kNeighborWriterSemaphoreArg = 2;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 8;
 constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount = kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;

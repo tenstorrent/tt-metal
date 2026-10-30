@@ -71,14 +71,18 @@ def _call_fork(q, k, v, kwargs):
 
 
 @contextmanager
-def _route_sliding_to_fork(calls):
-    """Route the shared op's sliding calls that the fork supports to the fork; count them in calls["fork"]."""
+def _route_sliding_to_fork(calls, **overrides):
+    """Route the shared op's sliding calls that the fork supports to the fork, with overrides applied to their
+    arguments. calls["fork"] counts them; calls["shared_sliding"] counts sliding calls the fork cannot take, which
+    stay on the shared op."""
 
     def routed(q, k, v, joint_q=None, joint_k=None, joint_v=None, **kwargs):
         if not _fork_supports(kwargs, (joint_q, joint_k, joint_v)):
+            if kwargs.get("sliding_window_size") is not None:
+                calls["shared_sliding"] += 1
             return _shared_op(q, k, v, joint_q, joint_k, joint_v, **kwargs)
         calls["fork"] += 1
-        return _call_fork(q, k, v, kwargs), None, None
+        return _call_fork(q, k, v, {**kwargs, **overrides}), None, None
 
     with mock.patch.object(ttnn.transformer, "ring_joint_scaled_dot_product_attention", routed):
         yield
@@ -100,14 +104,14 @@ def _record_readbacks(readbacks):
 def _run_pass(test_fn, kwargs, *, fork):
     torch.manual_seed(0)
     random.seed(0)
-    readbacks, calls = [], {"fork": 0}
+    readbacks, calls = [], {"fork": 0, "shared_sliding": 0}
     with _record_readbacks(readbacks):
         if fork:
             with _route_sliding_to_fork(calls):
                 test_fn(**kwargs)
         else:
             test_fn(**kwargs)
-    return readbacks, calls["fork"]
+    return readbacks, calls
 
 
 def _matches_shared(test_fn):
@@ -116,8 +120,9 @@ def _matches_shared(test_fn):
     @functools.wraps(test_fn)
     def wrapper(**kwargs):
         shared_readbacks, _ = _run_pass(test_fn, kwargs, fork=False)
-        fork_readbacks, fork_calls = _run_pass(test_fn, kwargs, fork=True)
-        assert fork_calls > 0, "No sliding call reached the fork"
+        fork_readbacks, calls = _run_pass(test_fn, kwargs, fork=True)
+        assert calls["fork"] > 0, "No sliding call reached the fork"
+        assert calls["shared_sliding"] == 0, f"{calls['shared_sliding']} sliding calls stayed on the shared op"
         assert len(fork_readbacks) == len(shared_readbacks)
         for i, (expected, actual) in enumerate(zip(shared_readbacks, fork_readbacks)):
             assert expected.shape == actual.shape, f"readback {i}: {expected.shape} vs {actual.shape}"
@@ -131,10 +136,11 @@ def _through_fork(test_fn):
 
     @functools.wraps(test_fn)
     def wrapper(**kwargs):
-        calls = {"fork": 0}
+        calls = {"fork": 0, "shared_sliding": 0}
         with _route_sliding_to_fork(calls):
             test_fn(**kwargs)
         assert calls["fork"] > 0, "No sliding call reached the fork"
+        assert calls["shared_sliding"] == 0, f"{calls['shared_sliding']} sliding calls stayed on the shared op"
 
     return wrapper
 
@@ -163,5 +169,41 @@ test_metadata_trace_replay_sliding = _matches_shared(
     shared.test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores
 )
 
-# Gemma4's production chunks: the shared perf gate's utilization bands, measured on the fork.
+# Gemma4's production sliding chunks: the shared perf gate's utilization bands, measured on the fork. The shared
+# test's other marks (the power guard) are kept; its parametrization is narrowed to the sliding configs.
 test_gemma4_chunked_perf_check = _through_fork(shared.test_ring_joint_attention_gemma4_chunked_perf_check)
+test_gemma4_chunked_perf_check.pytestmark = [
+    m for m in test_gemma4_chunked_perf_check.pytestmark if m.name != "parametrize"
+]
+test_gemma4_chunked_perf_check = pytest.mark.parametrize(
+    "perf_config",
+    [c for c in shared.GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS if c.model.sliding_window_size is not None],
+    ids=shared.gemma4_built_tuning_id,
+)(test_gemma4_chunked_perf_check)
+
+
+def test_rejects_fp32_dest_acc(expect_error):
+    """The fork has only the streaming compute path; the shared op would silently build its v1 path instead."""
+
+    def fp32_dest_acc(config):
+        return ttnn.init_device_compute_kernel_config(
+            ttnn.device.Arch.BLACKHOLE,
+            math_fidelity=config.math_fidelity,
+            math_approx_mode=config.math_approx_mode,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=config.packer_l1_acc,
+        )
+
+    calls = {"fork": 0, "shared_sliding": 0}
+
+    def routed_with_fp32(q, k, v, joint_q=None, joint_k=None, joint_v=None, **kwargs):
+        if _fork_supports(kwargs, (joint_q, joint_k, joint_v)):
+            kwargs["compute_kernel_config"] = fp32_dest_acc(kwargs["compute_kernel_config"])
+            calls["fork"] += 1
+            return _call_fork(q, k, v, kwargs), None, None
+        return _shared_op(q, k, v, joint_q, joint_k, joint_v, **kwargs)
+
+    with mock.patch.object(ttnn.transformer, "ring_joint_scaled_dot_product_attention", routed_with_fp32):
+        with expect_error(RuntimeError, "requires streaming compute; set fp32_dest_acc_en=false"):
+            shared.test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error=expect_error)
+    assert calls["fork"] == 1

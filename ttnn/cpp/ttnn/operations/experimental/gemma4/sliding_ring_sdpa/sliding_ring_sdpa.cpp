@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/sliding_ring_sdpa.hpp"
 
+#include <array>
 #include <utility>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -37,6 +38,22 @@ ttnn::Tensor sliding_ring_sdpa(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx) {
+    // The ring size comes from mesh_device, but halo routing and dispatch follow Q's mesh: every tensor the op reads
+    // or writes must live on it. The halo exchange writes the two halo buffers (last) while attention reads Q, K and
+    // V, so each halo buffer needs storage of its own; shared with the other, V would land where K should be.
+    const std::array<const Tensor*, 5> tensors = {
+        &input_tensor_q, &input_tensor_k, &input_tensor_v, &persistent_output_buffer_k, &persistent_output_buffer_v};
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        TT_FATAL(
+            tensors[i]->device() == &mesh_device,
+            "sliding_ring_sdpa: Q, K, V and the halo buffers must all be on mesh_device");
+        for (size_t halo = 3; halo < tensors.size(); ++halo) {
+            TT_FATAL(
+                i == halo || &tensors[i]->mesh_buffer() != &tensors[halo]->mesh_buffer(),
+                "sliding_ring_sdpa: each halo buffer must have its own storage, not shared with Q, K, V or the other "
+                "halo buffer");
+        }
+    }
     // The shared op's call with Gemma4's fixed choices: causal, unbalanced, no joint tensors ("rear" is inert
     // without them), no attention sink, no circular cache, host logical lengths.
     auto output_tensors = ttnn::prim::gemma4_sliding_ring_sdpa(

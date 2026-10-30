@@ -25,14 +25,6 @@
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-template <bool kv_pad_rotation_enabled>
-constexpr void assert_kv_pad_rotation_streaming_only() {
-    static_assert(
-        !kv_pad_rotation_enabled,
-        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
-        "fp32_dest_acc_en=true is not supported.");
-}
-
 void kernel_main() {
     constexpr uint32_t NH = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
@@ -80,6 +72,10 @@ void kernel_main() {
     constexpr bool use_attention_sink = get_compile_time_arg_val(37) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(38);
     constexpr bool has_sliding_window = sliding_window_size > 0;
+    // The host builds this op only for sliding attention on the streaming compute path; the shared op's dense
+    // ring loop and its fp32_dest_acc_en (compute_common.hpp) path are not carried here.
+    static_assert(has_sliding_window, "Gemma4 sliding ring SDPA requires a sliding window");
+    static_assert(use_streaming_compute, "Gemma4 sliding ring SDPA requires the streaming compute path");
     // Slot 40: sharded-joint flag (appended after upstream's kv_pad_from_metadata at slot 39, which is
     // declared further down next to cb_arg_offset). When true, one L/P shard arrives per ring iteration
     // and do_joint_kv fires on every iteration rather than only the last active iteration.
@@ -165,20 +161,15 @@ void kernel_main() {
     uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
-    const uint32_t static_mcast_q_count = get_arg_val<uint32_t>(argidx++);
+    // The shared op's static multicast Q count: without multicast padding it is this core's own Q count.
+    ASSERT(get_arg_val<uint32_t>(argidx) == q_per_core);
+    argidx++;
 
-    // Rotated Q split: first runtime arg past the scalars above. Captured here because argidx is
-    // final at this point; the compile-time sizes are derived below, next to the other CT args.
-    const uint32_t rotated_args_base = argidx;
+    // The K split's band index follows the scalars above.
+    const uint32_t ksplit_arg_index = argidx;
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
-
-    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
-    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
-    constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     // Compute fixed slot 39: trace-safe KV-pad derivation flag. Slots 40/41 are the sharded-joint scalars
     // (joint_is_sharded, logical_lt); the rank mapping (42-45), the bounded sliding KV slab count (46), and
@@ -191,8 +182,7 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
-    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: running max
-    constexpr uint32_t cb_lse_in = cb_max_in;                                    // eager norm: LSE
+    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // K-split reducer: sender max
     constexpr uint32_t cb_prev_out = get_compile_time_arg_val(cb_arg_offset + 7);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
     constexpr uint32_t cb_recip_scratch =
@@ -201,8 +191,7 @@ void kernel_main() {
     constexpr uint32_t cb_sum_in = get_compile_time_arg_val(cb_arg_offset + 11);
     constexpr uint32_t cb_signal = get_compile_time_arg_val(cb_arg_offset + 12);
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
-    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: running max
-    constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: LSE
+    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);
     constexpr uint32_t cb_qk_im = get_compile_time_arg_val(cb_arg_offset + 15);
     constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_out_im_B = get_compile_time_arg_val(cb_arg_offset + 17);
@@ -214,42 +203,22 @@ void kernel_main() {
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
 
-    // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling. The factory
-    // appends only the remainder unit's starting flat ID per active ordinal.
-    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
-    // read it from there rather than tracking a per-kernel index into the block above.
+    // The factory keeps the shared op's rotated Q split slot as the final compile-time arg of every kernel.
+    // Sliding never rotates Q, so it is always 0; it also never schedules padded multicast Q slots, a dense
+    // causal K skip, or segmented accumulation.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
-    constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
-    // Set when the factory can schedule padded multicast slots on this program (see static_mcast_q_count there).
-    constexpr bool padded_q_slots_enabled = get_named_compile_time_arg_val("padded_q_slots") == 1;
-    constexpr uint32_t rotated_iter_stride = kRotatedComputeIterWords;
+    static_assert(rotated_max_slots == 0, "Sliding attention has no rotated Q split");
+    static_assert(get_named_compile_time_arg_val("padded_q_slots") == 0, "Sliding attention has no padded Q slots");
+    static_assert(
+        get_named_compile_time_arg_val("dense_causal_skip") == 0, "Sliding attention has no dense causal K skip");
+    static_assert(get_named_compile_time_arg_val("seg_accum") == 0, "Sliding attention has no segmented accumulation");
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
-    constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    // Segmented accumulation: each ring iteration accumulates into a fresh sum and output (its max seeded from the
-    // long-term state), merged into the long-term state (the restore CBs) afterwards, so no bf16 running sum spans
-    // more than one shard's K chunks. A single running sum over a long prefix loses the late chunks' contribution.
-    constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
-    static_assert(!(ksplit_enabled && seg_accum_enabled));
-    static_assert(
-        !(ksplit_enabled || seg_accum_enabled) ||
-        (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));
-    // The K split never runs with the rotated split, so its runtime arg takes the rotated block's slot.
-    [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
+    [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(ksplit_arg_index) : 0;
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
-    const bool seg_active = seg_accum_enabled && q_per_core == 1;
-    bool seg_state_valid = false;
-    // Largest valid K chunk count over the ring iterations: a slice is non-empty on some iteration iff it is non-empty
-    // at the largest count, so the reducer knows which senders have state.
+    // Largest K-chunk count of the unit's sliding work plan: a band is non-empty iff it is non-empty at
+    // that count, so the reducer knows which senders have state.
     [[maybe_unused]] uint32_t ksplit_max_valid = 0;
-    // Only sdpa_ring_v2 decodes the rotated schedule; the sdpa_ring branch below would keep using
-    // global_q_start/global_q_end and silently desync from the reader and writer. The host pairs
-    // latent-V with streaming compute, but only via a chain of implications, so pin it here.
-    static_assert(
-        !rotated_q_split_enabled || use_streaming_compute, "the rotated Q split requires the streaming compute path");
-    static_assert(
-        !rotated_q_split_enabled || rotated_max_slots >= 2,
-        "rotated_max_slots includes a base unit and a remainder unit");
 
     // Placeholder-derived defaults, overwritten from the CB on the tensor path. 0 gates the stamp off.
     uint32_t global_n_partial_col_live = global_n_partial_col;
@@ -272,15 +241,6 @@ void kernel_main() {
         }
         active_ring_iter_mask =
             ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedActiveRingIterMask);
-        if constexpr (has_logical_n_tensor) {
-            global_n_partial_col_live =
-                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedGlobalNPartialCol);
-        }
-        if constexpr (has_logical_l_tensor) {
-            logical_lt = ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedLogicalLt);
-            joint_l_partial_col_live =
-                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedJointLPartialCol);
-        }
         cb_derived.pop_front(1);
     }
 
@@ -308,7 +268,6 @@ void kernel_main() {
     using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
     constexpr bool has_straddle = Straddle::has_straddle;
     constexpr uint32_t straddle_chunk_id = Straddle::straddle_chunk_id;
-    constexpr uint32_t straddle_num_padded_tiles = Straddle::straddle_num_padded_tiles;
 
     RingAccumulatorState acc_state = {
         {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
@@ -316,15 +275,14 @@ void kernel_main() {
     };
 
     // acc_state.prev = exp(prev.max - m) * prev + exp(other.max - m) * other via the K loop's SALAD correction, where
-    // m is the row max of both; consumes both states. The K-split reducer and segmented accumulation merge with it.
+    // m is the row max of both; consumes both states. The K-split reducer merges with it.
     [[maybe_unused]] auto merge_into_prev = [&](const AccumulatorHalf& other) {
         constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
         constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
         constexpr uint32_t qktv_h =
             ttnn::transformer::sdpa::streaming_qktv_h(out_subblock_h, out_subblock_w, dst_size, Sq_chunk_t);
         // kernel_main is not a template, so this is checked even for configs that never merge.
-        static_assert(
-            !(ksplit_enabled || seg_accum_enabled) || Sq_chunk_t % qktv_h == 0, "merges walk whole SALAD row groups");
+        static_assert(!ksplit_enabled || Sq_chunk_t % qktv_h == 0, "merges walk whole SALAD row groups");
         const AccumulatorHalf& a = acc_state.prev;
         const AccumulatorHalf& merged = acc_state.cur;
         max_block_sfpi(a.max, other.max, merged.max, Sq_chunk_t);
@@ -364,23 +322,10 @@ void kernel_main() {
             kv_pad_q_pre_wrap_tile_count,
             kv_pad_q_post_wrap_start_tile,
             kv_pad_q_valid_tile_count}};
-    // The K split's slices count the chunks the K loop keeps, so they follow the causal skip.
-    [[maybe_unused]] const uint32_t ksplit_causal_end_nt =
-        dense_causal_skip ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
-                                logical_nt,
-                                ring_index,
-                                ring_size,
-                                kv_pad_q_pre_wrap_start_tile,
-                                kv_pad_q_pre_wrap_tile_count,
-                                kv_pad_q_post_wrap_start_tile,
-                                kv_pad_q_valid_tile_count)
-                          : logical_nt;
-    // The first active iter starts with fresh accumulators; restoring would read stale staging.
+    // The first active iter starts with fresh accumulators. After the loop it records whether this core
+    // holds state (a K-split band can be empty).
     bool seen_active_iter = false;
     auto arrival_preview = fused_op_indexer.seq;
-    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
-    // binary so it carries none of the packed-source path.
-    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
     const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
@@ -393,89 +338,16 @@ void kernel_main() {
             return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
-    const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
-        const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
-        // Read this iteration's remainder ID and derive its count from the fixed base range.
-        // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rotated_active_ordinal. Compute reads
-        // the same device-derived mask the reader published through cb_kv_pad_derived, so the ordinal
-        // it computes is identical to the reader's and the writer's.
-        //
-        // Unlike the reader and writer, this runs BEFORE the inactive-iteration `continue` below, so
-        // on a skipped iteration it computes an ordinal it will not use and reads rotated_my_count from
-        // that slot. That read is always in bounds: for a skipped iteration the ordinal equals the
-        // number of active iterations at or before it, and since at least one iteration is inactive
-        // that count is at most ring_size - 1 -- within the ring_size entries the host emits. Kept
-        // here rather than moved after the `continue` because rotated_my_count feeds the arg decode that
-        // the ring-id sequencing below is interleaved with.
-        uint32_t rotated_my_count = 0;
-        RotatedQSlots rotated_slots;
-        // Padded multicast slots the reader runs after this core's own Q chunks.
-        uint32_t padded_q_slots = static_mcast_q_count - q_per_core;
-        if constexpr (rotated_q_split_enabled) {
-            // Grouped split-KV runs only with a full active mask, where ordinal == ring_iter.
-            ASSERT(!packed_sources || active_ring_iter_mask == (ring_joint::all_sources_mask(ring_size)));
-            const uint32_t rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
-            const uint32_t rotated_iter_base =
-                ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
-            rotated_slots = {global_q_start, q_per_core, get_arg_val<uint32_t>(rotated_iter_base)};
-            rotated_my_count = rotated_slots.count(use_zigzag_balancing ? 2 : 1);
-            const uint32_t group_q_count =
-                q_per_core + get_arg_val<uint32_t>(rotated_iter_base + 1) * (use_zigzag_balancing ? 2 : 1);
-            padded_q_slots = group_q_count - rotated_my_count;
-        }
-        ASSERT(padded_q_slots_enabled || padded_q_slots == 0);
-        uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
-        if (packed_sources) {
-            for (uint32_t source = 0; source < source_group_size; ++source) {
-                packed_source_ids[source] =
-                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-            }
-        }
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
-        const uint32_t ring_id =
-            packed_sources ? packed_source_ids[0]
-            : has_sliding_window
-                ? ring_index
-                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-        // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
-        // still advances above so compute stays aligned with reader, writer, and all-gather.
-        if (!packed_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
-            continue;
-        }
+        const uint32_t ring_id = ring_index;
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
         // Replicated joint: All data already present process joint when ring_id == ring_size-1
         const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
-        const uint32_t num_kv_chunks =
-            packed_sources ? packed_kv.chunk_count()
-                           : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks);
-        ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
-        if constexpr (ksplit_enabled) {
-            // Idle cores drain their row's padded multicast slots, so they skip the row's K chunks too.
-            if ((ksplit_active || q_per_core == 0) && !has_sliding_window) {
-                const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
-                    kv_pad_rotation_enabled,
-                    chunked_enabled,
-                    kv_local_padded_Nt,
-                    chunk_size_t,
-                    q_local_padded_Nt,
-                    Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
-                ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
-                if (ksplit_active) {
-                    ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
-                }
-            }
-        }
-        // A K-split slice can be empty on some iterations; accumulators start at the first non-empty one.
         const bool is_first_active_iter = !seen_active_iter;
-        if (!ksplit_active || !ksplit_k_range.empty()) {
-            seen_active_iter = true;
-        }
+        seen_active_iter = true;
 
         // Spatial global_n tail mask. Anchor on the LAST REAL tile (within - 1), like the joint_l
         // derivation below, so a chunk-final sub-tile partial column is masked, not just whole trailing
@@ -557,10 +429,9 @@ void kernel_main() {
         lw_mask.global_n_partial_col = global_n_partial_col_live;
         lw_mask.joint_l_partial_col = joint_l_partial_col_live;
         lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
-        // Straddle mask fires only on the rix>rid halved-range iters that would otherwise exclude
-        // the straddle chunk. Must agree with the K-loop extension condition below.
-        const bool ring_iter_needs_straddle_mask = has_straddle && is_causal && is_balanced && (ring_index > ring_id);
-        lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
+        // Straddle mask fires only on the shared op's balanced rix>rid halved-range iters, which sliding
+        // (unbalanced) never runs.
+        lw_mask.straddle_num_padded_tiles = 0;
         if (ring_iter_needs_global_n_mask) {
             // Precomputed with the last-real-tile anchor above (mirrors joint_n_padded_tiles_iter);
             // 0 on a chunk-final partial tile, where only the partial column is stamped.
@@ -570,249 +441,90 @@ void kernel_main() {
             lw_mask.joint_n_padded_tiles = joint_n_padded_tiles_iter;
         }
 
-        // K-split and segmented cores normalize after the merge, not in the ring loop.
-        const bool is_last_ring_iter =
-            !ksplit_active && !seg_active &&
-            (has_sliding_window || (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                                                   : is_last_active_ring_iter(active_ring_iter_mask, ring_iter)));
+        // K-split cores normalize after the merge, not in the ring loop.
+        const bool is_last_ring_iter = !ksplit_active;
 
-        // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
-        // (sdpa_ring_v2) paths.
-        //   rix > rid (Case 3): only sender's L half is sent — halve KV count, or extend to
-        //     include the straddle chunk when it crosses the coarse-half boundary (its
-        //     late-half columns are -inf-masked via lw_mask.straddle_*).
-        //   rix < rid && balanced (Case 2): skip first-half (L) Q-chunks.
-        uint32_t iter_num_kv_chunks = num_kv_chunks;
-        if constexpr (!has_sliding_window) {
-            if (is_causal && is_balanced && ring_index > ring_id) {
-                if constexpr (has_straddle) {
-                    iter_num_kv_chunks = straddle_chunk_id + 1;
-                } else {
-                    iter_num_kv_chunks /= 2;
-                }
+        gemma4_sliding::sdpa_ring_v2<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            0,  // Skt — not used for ring
+            DHt,
+            vDHt,
+            scale_fp32,
+            qk_subblock_h,
+            qk_subblock_w,
+            out_subblock_h,
+            out_subblock_w,
+            cb_q_in,
+            cb_k_in,
+            cb_v_in,
+            cb_qk_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_mask_in,
+            cb_scale_in,
+            cb_max_in,
+            cb_max_out,
+            cb_prev_out,
+            cb_out,
+            cb_out,  // cb_normalized_out — output goes directly to cb_out
+            cb_sum_out,
+            cb_sum_in,
+            cb_signal,
+            needs_lightweight_mask,
+            is_causal,
+            is_balanced,
+            chunked_enabled,
+            kv_local_padded_Nt,
+            q_local_padded_Nt,
+            chunk_size_t,
+            global_n_has_padding,
+            local_n_has_padding,
+            joint_has_padding,
+            has_straddle && is_causal && is_balanced,
+            kv_pad_rotation_enabled,
+            v_cb_physical_width_t,
+            v_shares_k_buffer,
+            kt_inplace_v,
+            sliding_window_size,
+            circular_kv_slab_count,
+            ring_size,
+            use_attention_sink,
+            cb_attention_sink,
+            kv_region_Nt,
+            (GROUPED_KV_SOURCE_COUNT > 1)>(
+            global_q_start,
+            global_q_end,
+            num_q_chunks,
+            num_local_k_chunks,
+            logical_nt,
+            ring_iter_needs_global_n_mask,
+            ring_iter_needs_joint_n_mask,
+            local_n_needs_masking,
+            global_n_mask_chunk_id,
+            local_n_mask_chunk_id,
+            joint_n_mask_chunk_id,
+            acc_state,
+            is_last_ring_iter,
+            q_per_core,
+            lw_mask,
+            use_zigzag_balancing,
+            chunked_context,
+            is_first_active_iter,
+            ksplit_active ? ksplit_idx : 0,
+            ksplit_active ? ksplit_count : 1,
+            nullptr,
+            0,
+            packed_schedule.rows(ring_iter));
+        if constexpr (ksplit_enabled) {
+            // Sliding bands split the unit's work plan, which can be shorter than the band count near the
+            // sequence start: an empty band stages no state.
+            if (ksplit_active) {
+                seen_active_iter = acc_state.last_call_k_chunks > 0;
+                ksplit_max_valid = acc_state.sliding_plan_k_chunks;
             }
-        }
-        const bool skip_first_half_q = !has_sliding_window && (ring_index >= ring_id ? false : is_balanced);
-
-        if constexpr (use_streaming_compute) {
-            gemma4_sliding::sdpa_ring_v2<
-                Sq_chunk_t,
-                Sk_chunk_t,
-                0,  // Skt — not used for ring
-                DHt,
-                vDHt,
-                scale_fp32,
-                qk_subblock_h,
-                qk_subblock_w,
-                out_subblock_h,
-                out_subblock_w,
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_mask_in,
-                cb_scale_in,
-                cb_max_in,
-                cb_max_out,
-                cb_prev_out,
-                cb_out,
-                cb_out,  // cb_normalized_out — output goes directly to cb_out
-                cb_sum_out,
-                cb_sum_in,
-                cb_signal,
-                needs_lightweight_mask,
-                is_causal,
-                is_balanced,
-                chunked_enabled,
-                kv_local_padded_Nt,
-                q_local_padded_Nt,
-                chunk_size_t,
-                global_n_has_padding,
-                local_n_has_padding,
-                joint_has_padding,
-                has_straddle && is_causal && is_balanced,
-                false,  // use_l1_state_fifo — compile-time off: no FIFO branch overhead here
-                kv_pad_rotation_enabled,
-                v_cb_physical_width_t,
-                v_shares_k_buffer,
-                kt_inplace_v,
-                sliding_window_size,
-                circular_kv_slab_count,
-                ring_size,
-                use_attention_sink,
-                cb_attention_sink,
-                has_gathered_joint_k,
-                Lt_local,
-                rotated_q_split_enabled,
-                dense_causal_skip,
-                kv_region_Nt,
-                (GROUPED_KV_SOURCE_COUNT > 1)>(
-                // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
-                // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
-                rotated_q_split_enabled ? 0u : global_q_start,
-                rotated_q_split_enabled ? rotated_my_count : global_q_end,
-                iter_num_kv_chunks,
-                num_q_chunks,
-                ring_iter,
-                ring_id,
-                num_local_k_chunks,
-                logical_nt,
-                ring_iter_needs_global_n_mask,
-                ring_iter_needs_joint_n_mask,
-                local_n_needs_masking,
-                global_n_mask_chunk_id,
-                local_n_mask_chunk_id,
-                joint_n_mask_chunk_id,
-                acc_state,
-                is_last_ring_iter,
-                // Rotated: NOT this iteration's count. q_per_core only selects L1-persistent vs
-                // DRAM-round-trip accumulators, and that choice must be the same on every iteration
-                // and must match the reader and writer. The fixed slot count (base + 1 >= 2) is.
-                rotated_q_split_enabled ? rotated_max_slots : q_per_core,
-                lw_mask,
-                skip_first_half_q,
-                use_zigzag_balancing,
-                chunked_context,
-                seg_active ? !seg_state_valid : is_first_active_iter,
-                logical_lt,
-                /*q_base_tiles=*/0,
-                rotated_slots,
-                ksplit_k_range.begin,
-                ksplit_k_range.end,
-                ksplit_active ? ksplit_idx : 0,
-                ksplit_active ? ksplit_count : 1,
-                packed_sources ? packed_source_ids : nullptr,
-                packed_sources ? source_group_size : 0,
-                packed_schedule.rows(ring_iter),
-                padded_q_slots);
-            if constexpr (has_sliding_window && ksplit_enabled) {
-                // Sliding bands split the unit's work plan, which can be shorter than the band count near the
-                // sequence start: an empty band stages no state.
-                if (ksplit_active) {
-                    seen_active_iter = acc_state.last_call_k_chunks > 0;
-                    ksplit_max_valid = acc_state.sliding_plan_k_chunks;
-                }
-            }
-            if constexpr (seg_accum_enabled) {
-                // Fold this iteration's state (acc_state.prev) into the long-term state held in the restore CBs.
-                if (seg_active && acc_state.last_call_k_chunks > 0) {
-                    // Same as the K-split epilogue: a one-chunk segment leaves the packer at the QKT@V subblock width.
-                    configure_single_tile_pack(cb_max_A);
-                    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-                    const AccumulatorHalf long_term = {cb_sum_in, cb_max_in, cb_prev_out};
-                    if (seg_state_valid) {
-                        merge_into_prev(long_term);
-                    }
-                    copy_block(acc_state.prev.max, long_term.max, Sq_chunk_t);
-                    copy_block(acc_state.prev.sum, long_term.sum, Sq_chunk_t);
-                    copy_block(acc_state.prev.out, long_term.out, out_tiles);
-                    seg_state_valid = true;
-                    // Seed the next segment: long-term max, zero sum and output. Starting from -inf instead would
-                    // make a fully masked segment (e.g. a later shard at chunk 0) poison the merge.
-                    move_block<false>(long_term.max, acc_state.prev.max, Sq_chunk_t);
-                    zero_block(long_term.sum, acc_state.prev.sum, Sq_chunk_t);
-                    zero_block(long_term.out, acc_state.prev.out, out_tiles);
-                }
-            }
-        } else {
-            // kernel_main is not a template, so both branches of the if constexpr are instantiated; fold the
-            // branch condition in so the guard fires only on the path it protects.
-            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled && !use_streaming_compute>();
-            sdpa_ring<
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_scale_in,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                NH,
-                DHt,
-                vDHt,
-                scale_fp32,
-                needs_lightweight_mask,
-                chunked_enabled,
-                q_local_padded_Nt,
-                chunk_size_t,
-                padded_q_slots_enabled>(
-                qk_in0_block_w,
-                qk_subblock_w,
-                qk_subblock_h,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                out_in0_block_w,
-                out_subblock_w,
-                out_subblock_h,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                global_q_start,
-                global_q_end,
-                num_local_q_chunks,
-                0,
-                iter_num_kv_chunks,
-                q_chunk_tiles,
-                k_chunk_tiles,
-                v_chunk_tiles,
-                qk_chunk_tiles,
-                out_chunk_tiles,
-                ring_iter,
-                ring_id,
-                num_local_k_chunks,
-                kv_local_padded_Nt,
-                logical_nt,
-                ring_iter_needs_global_n_mask,
-                ring_iter_needs_joint_n_mask,
-                local_n_needs_masking,
-                global_n_mask_chunk_id,
-                local_n_mask_chunk_id,
-                joint_n_mask_chunk_id,
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_mask_in,
-                cb_col_identity,
-                cb_out_im_A,
-                cb_out_im_B,
-                cb_max_A,
-                cb_max_B,
-                cb_sum_A,
-                cb_sum_B,
-                cb_exp_max_diff,
-                cb_lse_in,
-                cb_lse_out,
-                cb_prev_out,
-                cb_out,
-                lw_mask,
-                lw_mask.is_causal,
-                skip_first_half_q,
-                is_last_ring_iter,
-                use_zigzag_balancing,
-                chunked_context,
-                padded_q_slots);
-        }
-    }
-
-    if constexpr (seg_accum_enabled) {
-        if (seg_active) {
-            // The reader pushes Q with this core's first K chunk; no ring iteration popped it.
-            if (seen_active_iter) {
-                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
-            }
-            ASSERT(seg_state_valid);
-            constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
-            normalize_row_streaming<
-                false,
-                vDHt,
-                dst_size,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_out,
-                scale_fp32,
-                use_attention_sink,
-                cb_attention_sink>(cb_sum_in, cb_prev_out, Sq_chunk_t, cb_max_in);
-            sdpa_cb_pop_front_out_of_line(cb_max_in, Sq_chunk_t);
         }
     }
 
@@ -846,9 +558,7 @@ void kernel_main() {
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
                 const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
                 for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
-                    const auto sender_range = has_sliding_window
-                                                  ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
-                                                  : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count);
+                    const auto sender_range = ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count);
                     if (sender_range.empty()) {
                         for (uint32_t cb : {cb_max_in, ksplit_cb_sum_in}) {
                             CircularBuffer(cb).wait_front(Sq_chunk_t);
