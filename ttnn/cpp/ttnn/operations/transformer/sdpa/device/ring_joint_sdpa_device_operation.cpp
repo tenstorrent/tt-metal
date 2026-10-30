@@ -1412,6 +1412,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     // The caller asks for a full-mesh gather; the proved route decides whether it closes.
     ttnn::ccl::Topology resolved_topology = topology;
     uint32_t resolved_kv_stripe_split = 1;
+    // Split KV numbers its KV stripes SP-major: row-major over the mesh with Q's sequence on axis 0,
+    // column-major with it on axis 1 (the 4x4 prefill stages, SP on the 4-wide ring axis).
+    bool column_major_ranks = false;
     if (full_mesh) {
         TT_FATAL(
             topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
@@ -1438,16 +1441,19 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         if (resolved_kv_stripe_split > 1) {
             const auto& placements = input_tensor_q.tensor_topology().placements();
             const uint32_t dims = input_tensor_q.logical_shape().rank();
+            const auto q_sequence_on = [&](uint32_t axis) {
+                return ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[axis], 2, dims) &&
+                       !ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[1 - axis], 2, dims) &&
+                       q_shards == mesh_shape[axis] && resolved_kv_stripe_split == mesh_shape[1 - axis];
+            };
             TT_FATAL(
-                placements.size() == 2 &&
-                    ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[0], 2, dims) &&
-                    !ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[1], 2, dims) &&
-                    q_shards == mesh_shape[0] && resolved_kv_stripe_split == mesh_shape[1],
-                "Split KV requires Q sequence sharded only on mesh axis 0 and the extra KV stripes on axis 1. Got "
-                "{} Q shards, mesh shape {}, KV/Q shard ratio {}",
+                placements.size() == 2 && (q_sequence_on(0) || q_sequence_on(1)),
+                "Split KV requires Q sequence sharded only on one mesh axis and the extra KV stripes on the other. "
+                "Got {} Q shards, mesh shape {}, KV/Q shard ratio {}",
                 q_shards,
                 mesh_shape,
                 resolved_kv_stripe_split);
+            column_major_ranks = !q_sequence_on(0);
             const uint32_t q_slab = input_tensor_q.logical_shape()[2];
             TT_FATAL(
                 q_slab % (resolved_kv_stripe_split * tt::constants::TILE_HEIGHT) == 0,
@@ -1503,7 +1509,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         snake_orientation,
         mesh_rows,
         mesh_cols,
-        route_plan_hash};
+        route_plan_hash,
+        column_major_ranks};
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<std::optional<Tensor>> all_gather_output_tensors = {persistent_output_buffer_k};
     if (input_tensor_v.has_value()) {

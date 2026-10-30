@@ -1166,6 +1166,9 @@ def init_kvpe_cache(
         # declared distribution rank and rejects an axis gather on a rank-1 topology, which is what broke
         # the indexer's TP leg. Declaring the real distribution also leaves placements[sp_axis] sharded
         # after that gather replicates placements[tp_axis], which is exactly the post-gather layout.
+        # With SP on mesh axis 1 the stripes really run down the columns (chip (t, s) holds stripe
+        # s*tp + t); ring_mla takes that order from Q's sequence placement, and the readers in
+        # prefill_kv_validation / test_utils reorder by sp_axis, so nothing reads this declaration's order.
         kvpe_cache.update_tensor_topology(row_major_seq_topology)
         return kvpe_cache
 

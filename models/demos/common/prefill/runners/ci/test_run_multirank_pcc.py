@@ -427,7 +427,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         # The template's global_env, less the window, which stays the producer's.
         self.assertEqual(runner["PREFILL_FABRIC_MODE"], "2d_torus_x")
         self.assertEqual(runner["PREFILL_SP_AXIS"], "1")
-        self.assertEqual(runner["PREFILL_TP_SHARD_KV"], "0")
+        self.assertEqual(runner["PREFILL_TP_SHARD_KV"], "1")
         self.assertEqual((runner["PREFILL_SP"], runner["PREFILL_TP"]), ("4", "4"))
         self.assertEqual(runner["PREFILL_MAX_SEQ_LEN"], "1049600")
         self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))

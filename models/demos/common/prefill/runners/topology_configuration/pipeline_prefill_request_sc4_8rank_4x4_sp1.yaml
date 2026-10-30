@@ -33,13 +33,15 @@ global_env:
   PREFILL_SP: "4"
   PREFILL_TP: "4"
   PREFILL_SP_AXIS: "1"
-  # Dense TP dedup of the MLA KV cache (ring_mla split-KV) runs SP on mesh axis 0 only. The model
-  # manifests turn it on for the 8x4 stages, and tt-run's global_env wins over a manifest.
-  PREFILL_TP_SHARD_KV: "0"
+  # Dense TP dedup of the MLA KV cache (ring_mla split-KV, SP-major stripes down the mesh columns):
+  # each chip holds 1/16 of a stage's KV, as an 8x4 stage's chip holds 1/32. Pinned, since tt-run's
+  # global_env wins over a manifest. 16 stripes put the window on multiples of 16 x 256 = 4096 rows
+  # (bank alignment) and of the 2560 chunk: multiples of 20480.
+  PREFILL_TP_SHARD_KV: "1"
   # Half the 8x4 stages' 5120-token chunk: at SP=4 that keeps each chip at 640 tokens, the 8x4 per-chip
   # workload its MLA SDPA and KDA configs are tuned for, and keeps per-stage chunk latency near 8x4's.
   PREFILL_CHUNK_SIZE: "2560"
-  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_MAX_SEQ_LEN: "61440"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   # PREFILL_PP_D2D_FIFO_BYTES stays at the runner's 256 B default, as in the 2-rank 4x4 binding: with
   # 5120-token chunks ring_mla's static CBs reached to within ~1.5 KB of the top of L1.

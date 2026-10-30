@@ -298,7 +298,8 @@ void kernel_main() {
     // global start tile is at/after logical_lt are pure padding and are skipped.
     constexpr uint32_t logical_lt_compile = get_compile_time_arg_val(35);
     // Slots 36-39: transport-to-tensor rank mapping.
-    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(36) == 1;
+    constexpr uint32_t full_mesh_rank_mapping =
+        get_compile_time_arg_val(36);  // k{Axis,RowMajor,ColumnMajor}RankMapping
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(37));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(38);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(39);
