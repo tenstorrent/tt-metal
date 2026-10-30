@@ -243,6 +243,14 @@ static ttnn::Tensor bound_matmul(
             parameters.user_fused_activation.value().op_type);
     }
 
+    // The matmul's sub-device decides its program config, so it is assigned before anything is sized from it. The bias
+    // add and the activation launched below record theirs and run on it too; the transposes record none.
+    const ttnn::CompositeSubDevice composite(
+        input_tensor_a.device(),
+        ttnn::prim::matmul_sub_device_request(
+            parameters, ttnn::prim::MatmulInputs{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}),
+        "matmul");
+
     // Check for zero volume tensors
     if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
@@ -254,6 +262,8 @@ static ttnn::Tensor bound_matmul(
             parameters.transpose_b,
             bias);
     }
+
+    parameters.assigned_sub_device = composite.assigned();
 
     //----------------------------------------------------------------------------------------------
     // The following code is replicated from matmul_op.cpp and helps determine the program config

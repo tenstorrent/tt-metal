@@ -228,7 +228,8 @@ Validation, output specs, factory selection and factories then take placement on
 * ``id`` is for what is keyed by the lane: host synchronization and semaphores.
 * A path that reads or writes shards in place (native sharding, borrowed buffers) is taken only when the
   operation's own cores hold the shards; otherwise it reads and writes them over the NoC, or, with no such
-  path, refuses them in validation.
+  path, refuses them in validation (matmul's multicast configs read A, B and the bias, and write the output,
+  in place from the start of their grid).
 
 An operation that launches other operations (a composite) assigns its sub-device once at its entry, before
 it launches anything, with ``ttnn::CompositeSubDevice``, and sizes itself from ``assigned()``. Give the guard

@@ -30,6 +30,10 @@ struct MatmulDeviceOperation {
         MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
         MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>;
 
+    static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& operation_attributes) {
+        return operation_attributes.assigned_sub_device;
+    }
+
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
@@ -62,6 +66,10 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
     const Tensor& input_tensor_b,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config);
+
+// What names a matmul's sub-device (see ttnn::assign_sub_device): its sub_device_id, the cores of a program config the
+// caller wrote, and where its tensors' L1 shards live.
+ttnn::SubDeviceRequest matmul_sub_device_request(const MatmulParams& attributes, const MatmulInputs& tensor_args);
 
 MatmulParams create_matmul_attributes(
     const Tensor& input_tensor_a,

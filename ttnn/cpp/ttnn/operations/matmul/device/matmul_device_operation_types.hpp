@@ -11,6 +11,7 @@
 #include "tt-metalium/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"  // for DEFAULT_OUTPUT_MEMORY_CONFIG
+#include "ttnn/assigned_sub_device.hpp"
 
 namespace ttnn::prim {
 
@@ -39,7 +40,27 @@ struct MatmulParams {
     // Read A's K columns from this tile-aligned column of a wider interleaved A, instead of all of A's columns.
     // Set through ttnn::linear; only the 2D multicast program config (its Metal 2.0 spec factory) supports it.
     std::optional<uint32_t> in0_column_offset = std::nullopt;
+    // The sub-device the matmul runs on (see ttnn::AssignedSubDevice), assigned by its prim, or by a composite before
+    // it sizes the program config; sub_device_id is only the caller's request. Program configs are placed in its cores
+    // (allowed_worker_cores), where the multicast and MultiCore factories anchor their grids. Unassigned when a fused
+    // operation builds MatmulParams itself: its programs then go where sub_device_id (by default the first sub-device)
+    // puts them.
+    ttnn::AssignedSubDevice assigned_sub_device = {};
 };
+
+// Where a matmul's programs go: its assigned sub-device's cores or, unassigned, the cores matmul used before
+// sub-devices were assigned.
+struct MatmulPlacementFrame {
+    // The rectangle an automatic program config fills; a program config's grid is placed at its start.
+    tt::tt_metal::CoreRange rectangle;
+    // The cores a MultiCore config splits its work over.
+    tt::tt_metal::CoreRangeSet multicore_cores;
+    // The cores the gather path's ring may take: the sub-device's.
+    tt::tt_metal::CoreRangeSet gather_cores;
+};
+
+MatmulPlacementFrame matmul_placement_frame(
+    const MatmulParams& attributes, const tt::tt_metal::distributed::MeshDevice& device);
 
 struct MatmulInputs {
     std::vector<Tensor> input_tensors;                                // a,b, weights

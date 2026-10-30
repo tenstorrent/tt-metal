@@ -436,7 +436,8 @@ MatmulProgramConfig create_matmul_program_config(
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const MemoryConfig& mem_config,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    const CoreCoord& available_grid) {
     using namespace tt;
     const auto a_shape = utilities::get_matmul_tensor_logical_shape(input_tensor_a, transpose_a);
     const auto b_shape = utilities::get_matmul_tensor_logical_shape(input_tensor_b, transpose_b);
@@ -463,7 +464,7 @@ MatmulProgramConfig create_matmul_program_config(
         "The last two dimensions of the first tensor and the last dimension "
         "of the second tensor must be a multiple of "
         "tile size");
-    auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto core_coord = available_grid;
     bool has_user_core_coord = user_core_coord.has_value();
     if (has_user_core_coord) {
         auto x = user_core_coord.value().x;
@@ -641,7 +642,8 @@ MatmulProgramConfig get_matmul_program_config(
     const bool matmul,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    const CoreCoord& available_grid) {
     using namespace tt;
     TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded");
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
@@ -909,7 +911,8 @@ MatmulProgramConfig get_matmul_program_config(
         fused_activation,
         compute_kernel_config,
         output_mem_config,
-        output_dtype);
+        output_dtype,
+        available_grid);
 }
 
 inline MatmulProgramConfig generate_matmul_program_config(
@@ -923,7 +926,8 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    const CoreCoord& available_grid) {
     // For sharded A, derive config from the tensor's shard_spec (not user core_grid).
     if (input_tensor_a.is_sharded()) {
         bool bmm = user_run_batched;
@@ -938,7 +942,8 @@ inline MatmulProgramConfig generate_matmul_program_config(
             !bmm,
             user_core_coord,
             compute_kernel_config,
-            output_dtype);
+            output_dtype,
+            available_grid);
     }
     const bool has_user_grid = user_core_coord.has_value();
     if (has_user_grid) {
@@ -952,10 +957,9 @@ inline MatmulProgramConfig generate_matmul_program_config(
             user_fused_activation,
             compute_kernel_config,
             mem_config,
-            output_dtype);
+            output_dtype,
+            available_grid);
     }
-    tt::tt_metal::distributed::MeshDevice* device = input_tensor_a.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     return create_simple_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
@@ -963,7 +967,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
         transpose_b,
         bias_single_tile_size,
         compute_kernel_config,
-        compute_with_storage_grid_size,
+        available_grid,
         mem_config,
         output_dtype);
 }
@@ -1022,6 +1026,10 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
+    // An automatic config spreads over the largest rectangle of the matmul's sub-device, and is placed there when
+    // normalized.
+    const CoreCoord available_grid =
+        ttnn::prim::matmul_placement_frame(attributes, *input_tensor_a.device()).rectangle.grid_size();
     auto config = generate_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
@@ -1033,7 +1041,8 @@ MatmulProgramConfig get_program_config(
         attributes.user_core_coord,
         attributes.user_fused_activation,
         attributes.user_run_batched,
-        attributes.output_dtype.value_or(input_tensor_a.dtype()));
+        attributes.output_dtype.value_or(input_tensor_a.dtype()),
+        available_grid);
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
     // Sanity checks for matmul program configs
@@ -1044,6 +1053,7 @@ MatmulProgramConfig get_program_config(
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> and
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                // Whether the grid lies in the matmul's sub-device is checked where it is placed (validate).
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x <=
                         input_tensor_a.device()->compute_with_storage_grid_size().x,
@@ -1264,7 +1274,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 std::nullopt /* fused_activation */,
                 true /* mcast_in0 */,
                 false /* out_sharded */,
-                std::nullopt /* compute_with_storage_grid_size */,
+                compute_with_storage_grid_size,
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved,
@@ -1290,7 +1300,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 std::nullopt /* fused_activation */,
                 false /* mcast_in0 */,
                 false /* out_sharded */,
-                std::nullopt /* compute_with_storage_grid_size */,
+                compute_with_storage_grid_size,
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved,

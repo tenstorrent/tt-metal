@@ -1117,12 +1117,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         // in0 sender
         if (in0_block_sharded) {
             uint32_t in0_mcast_receiver_grid_same_coord;
+            // The block this core sends, counted from the grid's start like the kernel's block ids and NoC lists.
             uint32_t sender_id;
             uint32_t mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y;
             AdvancedKernelRunArgs::Varargs noc_varargs;
             if (transpose_mcast) {
                 in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).x;
-                sender_id = core.y;
+                sender_id = core.y - start_core_y;
                 mcast_start_x = in0_mcast_receiver_grid_same_coord;
                 mcast_start_y = in0_mcast_receiver_grid_diff_coord_start;
                 mcast_end_x = in0_mcast_receiver_grid_same_coord;
@@ -1132,7 +1133,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 noc_varargs.insert(noc_varargs.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
                 in0_mcast_receiver_grid_same_coord = device.worker_core_from_logical_core(core).y;
-                sender_id = core.x;
+                sender_id = core.x - start_core_x;
                 mcast_start_x = in0_mcast_receiver_grid_diff_coord_start;
                 mcast_start_y = in0_mcast_receiver_grid_same_coord;
                 mcast_end_x = in0_mcast_receiver_grid_diff_coord_end;
@@ -2059,17 +2060,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
-    // When a sub-device is present use its bounding-box start; otherwise fall
-    // back to allowed_worker_cores start so non-(0,0) placements work correctly.
+    // The grid starts where allowed_worker_cores does: in the matmul's sub-device, where its prim placed the config.
     CoreCoord sub_device_start_core = program_config.allowed_worker_cores.has_value()
                                           ? program_config.allowed_worker_cores.value().bounding_box().start_coord
                                           : CoreCoord{0, 0};
-    if (operation_attributes.sub_device_id.has_value()) {
-        auto sub_device_cores = device.worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
-        auto bbox = sub_device_cores.bounding_box();
-        sub_device_start_core = bbox.start_coord;
-    }
 
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1_spec(
         device,

@@ -23,6 +23,30 @@ namespace ttnn::prim {
 
 namespace {
 
+// Places a config the matmul runs in its cores (see matmul_placement_frame); for MatmulParams a fused operation built
+// without a sub-device, at the origin of the device's grid, as before.
+void normalize_on_sub_device(
+    operations::matmul::MatmulProgramConfig& program_config,
+    const MatmulParams& attributes,
+    const tt::tt_metal::distributed::MeshDevice& device) {
+    if (!attributes.assigned_sub_device.assigned()) {
+        operations::matmul::normalize_program_config(program_config, device.compute_with_storage_grid_size());
+        return;
+    }
+    const auto frame = matmul_placement_frame(attributes, device);
+    operations::matmul::normalize_program_config(
+        program_config, frame.rectangle.grid_size(), frame.rectangle.start_coord, frame.multicore_cores);
+}
+
+// Assigns the matmul its sub-device, unless a composite has.
+void assign_matmul_sub_device(
+    MatmulParams& attributes, const MatmulInputs& tensor_args, const tt::tt_metal::distributed::MeshDevice* device) {
+    if (!attributes.assigned_sub_device.assigned()) {
+        attributes.assigned_sub_device =
+            ttnn::assign_sub_device(device, matmul_sub_device_request(attributes, tensor_args), "matmul");
+    }
+}
+
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
@@ -1472,46 +1496,138 @@ void warn_if_allowed_worker_cores_missing(
         */
 }
 
-// Sub-Device Worker Grid: Mcast1D on a sub-device (non-gather). Checks the matmul grid
-// fits on the sub-device's cores.
-void validate_matmul_mcast1d_subdevice_worker_grid(
-    const Tensor& input_tensor_a,
+// Sub-device: every core the matmul runs on lies in its sub-device, which is where its config was placed: a config's
+// grid (allowed_worker_cores) or, for a gather config, the ring of A's shards and the hop cores. A 1D or 2D multicast
+// config reads its L1-sharded operands and writes a sharded output in place, on its grid's cores counted from the
+// grid's start, so their first shards are where the grid starts. (An automatic 2D config is placed at the start of the
+// sub-device's largest rectangle, not at A's shards: for A sharded elsewhere it is refused here rather than run on
+// cores without its data.) Fused operations that build MatmulParams themselves are assigned no sub-device and anchor
+// their grids in their own factories, so they are not checked here.
+void validate_matmul_on_sub_device(
     const MatmulParams& attributes,
+    const MatmulDeviceOperation::tensor_args_t& args,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
-    // matmul_multicore_reuse_mcast_1d (both program- and descriptor-based) targets a single
-    // bounding-box rectangle for the in0/in1 multicast and expects the sub-device's worker
-    // cores to form one contiguous row-major rectangle. Reject non-rectangular sub-device
-    // grids early with a clear message.
-    if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
-            chosen_program_config) &&
-        attributes.sub_device_id.has_value()) {
-        const auto config_name = ttsl::get_active_type_name_in_variant(chosen_program_config);
-        const auto& program_config_1d =
-            std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
-        if (!program_config_1d.gather_in0) {
-            auto* device = input_tensor_a.device();
-            auto sub_device_cores =
-                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, attributes.sub_device_id.value());
-            auto bbox = sub_device_cores.bounding_box();
-            TT_FATAL(
-                sub_device_cores.num_cores() == bbox.size(),
-                "{}: matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
-                "Got sub-device worker cores: {} (bounding box: {})",
-                config_name,
-                sub_device_cores,
-                bbox);
-            auto grid_size_1d = program_config_1d.allowed_worker_cores.value().bounding_box().grid_size();
-            TT_FATAL(
-                bbox.start_coord.x + grid_size_1d.x - 1 <= bbox.end_coord.x &&
-                    bbox.start_coord.y + grid_size_1d.y - 1 <= bbox.end_coord.y,
-                "{}: matmul grid_size {} anchored at sub-device start {} "
-                "extends past the sub-device's worker bounding box {}",
-                config_name,
-                grid_size_1d,
-                bbox.start_coord,
-                bbox);
-        }
+    const auto& sub_device = attributes.assigned_sub_device;
+    if (!sub_device.assigned()) {
+        return;
     }
+    const auto& input_tensor_a = args.input_tensors.at(0);
+    const auto& input_tensor_b = args.input_tensors.at(1);
+    const auto& optional_bias = args.optional_input_tensors.at(0);
+    const auto config_name = ttsl::get_active_type_name_in_variant(chosen_program_config);
+    const auto a_shards = ttnn::l1_shard_grid(input_tensor_a.memory_config());
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            constexpr bool is_1d =
+                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>;
+            constexpr bool is_2d =
+                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>;
+            if constexpr (is_1d) {
+                if (program_config.gather_in0) {
+                    const CoreRangeSet ring =
+                        a_shards.has_value() ? a_shards->merge(program_config.hop_cores) : program_config.hop_cores;
+                    TT_FATAL(
+                        sub_device.holds(ring),
+                        "{}: the gather ring {} (A's shards and the hop cores) lies outside the matmul's sub-device {} "
+                        "({})",
+                        config_name,
+                        ring,
+                        *sub_device.id,
+                        sub_device.worker_cores);
+                    return;
+                }
+            }
+            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                // With a sharded operand or a sharded output, the factory runs on that grid and not the config's.
+                std::optional<CoreRangeSet> factory_grid;
+                if (input_tensor_a.is_sharded()) {
+                    factory_grid = input_tensor_a.shard_spec()->grid;
+                } else if (input_tensor_b.is_sharded()) {
+                    factory_grid = input_tensor_b.shard_spec()->grid;
+                } else if (attributes.output_mem_config.shard_spec().has_value()) {
+                    factory_grid = attributes.output_mem_config.shard_spec()->grid;
+                }
+                if (factory_grid.has_value()) {
+                    TT_FATAL(
+                        sub_device.holds(*factory_grid),
+                        "{}: it runs on its sharded tensor's cores {}, outside the matmul's sub-device {} ({})",
+                        config_name,
+                        *factory_grid,
+                        *sub_device.id,
+                        sub_device.worker_cores);
+                    return;
+                }
+            }
+            if constexpr (requires { program_config.allowed_worker_cores; }) {
+                const auto& allowed = program_config.allowed_worker_cores.value();
+                TT_FATAL(
+                    sub_device.holds(allowed),
+                    "{}: its cores {} lie outside the matmul's sub-device {} ({})",
+                    config_name,
+                    allowed,
+                    *sub_device.id,
+                    sub_device.worker_cores);
+                if constexpr (is_1d || is_2d) {
+                    const CoreCoord grid_start = allowed.bounding_box().start_coord;
+                    // A may reach past the grid (the extra cores only send A), but not past the sub-device.
+                    if (a_shards.has_value()) {
+                        TT_FATAL(
+                            sub_device.holds(*a_shards),
+                            "{}: input A is sharded on {}, beyond the matmul's sub-device {} ({}); this config "
+                            "reads A's shards in place, so its cores holding them would run there too. Shard A within "
+                            "the sub-device, or pass it interleaved",
+                            config_name,
+                            *a_shards,
+                            *sub_device.id,
+                            sub_device.worker_cores);
+                        TT_FATAL(
+                            a_shards->bounding_box().start_coord == grid_start,
+                            "{}: input A is sharded on {}, but the config's grid is {}; this config reads A's shards "
+                            "in place, from the cores at the start of its grid. Shard A there, or pass it interleaved",
+                            config_name,
+                            *a_shards,
+                            allowed);
+                    }
+                    const auto check_read_in_place = [&](std::string_view operand, const Tensor& tensor) {
+                        const auto shards = ttnn::l1_shard_grid(tensor.memory_config());
+                        TT_FATAL(
+                            !shards.has_value() || shards->bounding_box().start_coord == grid_start,
+                            "{}: {} is sharded on {}, but the config's grid is {}; this config reads its shards in "
+                            "place, from the cores at the start of its grid. Shard it there, or pass it interleaved",
+                            config_name,
+                            operand,
+                            *shards,
+                            allowed);
+                    };
+                    // B is read in place by a 2D config, and by a 1D config multicasting A unless a global_cb or
+                    // prefetcher_pipes deliver it; that 1D config reads a sharded bias in place as well.
+                    bool reads_b_in_place = true;
+                    if constexpr (is_1d) {
+                        reads_b_in_place = program_config.mcast_in0 && !attributes.global_cb.has_value() &&
+                                           attributes.prefetcher_pipes.empty();
+                        if (program_config.mcast_in0 && optional_bias.has_value()) {
+                            check_read_in_place("the bias", *optional_bias);
+                        }
+                    }
+                    if (reads_b_in_place) {
+                        check_read_in_place("input B", input_tensor_b);
+                    }
+                    // The output it writes: the caller's, or the one it allocates.
+                    const auto output_shards = ttnn::l1_shard_grid(
+                        MatmulDeviceOperation::compute_output_specs(attributes, args).at(0).memory_config());
+                    TT_FATAL(
+                        !output_shards.has_value() || output_shards->bounding_box().start_coord == grid_start,
+                        "{}: the output is sharded on {}, but the config's grid is {}; this config writes the output's "
+                        "shards in place, on the cores at the start of its grid. Pass a memory_config without a shard "
+                        "spec and let the matmul place the output, or allocate it in DRAM",
+                        config_name,
+                        *output_shards,
+                        allowed);
+                }
+            }
+        },
+        chosen_program_config);
 }
 
 // Helper: input A and output must agree on buffer type + memory layout. Used by
@@ -1572,6 +1688,13 @@ void validate_matmul_multicore_config(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile) {
     constexpr auto config_name = ttsl::get_type_name<operations::matmul::MatmulMultiCoreProgramConfig>();
+    // Its factory reads A and B as they are stored; a caller wanting either transposed transposes it first.
+    TT_FATAL(
+        !attributes.transpose_a && !attributes.transpose_b,
+        "{}: does not transpose its inputs (transpose_a={}, transpose_b={})",
+        config_name,
+        attributes.transpose_a,
+        attributes.transpose_b);
     const bool uses_tiny_outer_tile = (in0_tile.get_height() != TILE_HEIGHT || in1_tile.get_width() != TILE_WIDTH);
     if (uses_tiny_outer_tile) {
         TT_FATAL(
@@ -2654,8 +2777,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.transpose_b,
         bias_single_tile_size,
         attributes);
-    operations::matmul::normalize_program_config(
-        chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
+    normalize_on_sub_device(chosen_program_config, attributes, *input_tensor_a.device());
 
     // ---- universal checks, part 2: need the chosen program config ----
     // First, so pipes on a config that never reads them fail on that rather than on its own checks.
@@ -2682,7 +2804,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     validate_matmul_batch_compatibility(
         attributes, input_tensor_a, input_tensor_b, a_shape, b_shape, chosen_program_config);
-    validate_matmul_mcast1d_subdevice_worker_grid(input_tensor_a, attributes, chosen_program_config);
+    validate_matmul_on_sub_device(attributes, args, chosen_program_config);
     validate_matmul_input_count(attributes, input_tensors, input_tensor_b, chosen_program_config);
     validate_matmul_bias_shape(
         optional_bias, in0_tile, in1_tile, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
@@ -2837,8 +2959,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             attributes);
         // Soft-normalize so downstream variant code can safely read allowed_worker_cores; the warning
         // for missing allowed_worker_cores was emitted at the entry point above.
-        operations::matmul::normalize_program_config(
-            chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
+        normalize_on_sub_device(chosen_program_config, attributes, *input_tensor_a.device());
         return std::visit(
             [&](const auto& program_config) -> MatmulDeviceOperation::spec_return_value_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -2885,15 +3006,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                             uint32_t num_cores = num_blocks_x * num_blocks_y;
                             // Mirror MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts anchor.
                             const auto& worker_bbox = program_config.allowed_worker_cores.value().bounding_box();
-                            CoreCoord start_core = worker_bbox.start_coord;
-                            if (attributes.sub_device_id.has_value()) {
-                                start_core = input_tensor_a.device()
-                                                 ->worker_cores(
-                                                     tt::tt_metal::HalProgrammableCoreType::TENSIX,
-                                                     attributes.sub_device_id.value())
-                                                 .bounding_box()
-                                                 .start_coord;
-                            }
+                            const CoreCoord start_core = worker_bbox.start_coord;
                             const auto cwsg_1d = worker_bbox.grid_size();
                             const CoreRangeSet matmul_core_rect(CoreRange(
                                 start_core, CoreCoord(start_core.x + cwsg_1d.x - 1, start_core.y + cwsg_1d.y - 1)));
@@ -3068,9 +3181,21 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     if (attributes.output_mem_config.shard_spec().has_value()) {
                         all_cores = attributes.output_mem_config.shard_spec()->grid;
                     } else {
-                        auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                        all_cores = num_cores_to_corerangeset(
-                            num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
+                        // The cores the factory splits the work over, from the start of allowed_worker_cores.
+                        const auto worker_bbox = program_config.allowed_worker_cores.value().bounding_box();
+                        const auto origin_cores = num_cores_to_corerangeset(
+                            num_cores, worker_bbox.grid_size(), shard_orientation == ShardOrientation::ROW_MAJOR);
+                        std::vector<CoreRange> ranges;
+                        for (const auto& range : origin_cores.ranges()) {
+                            ranges.emplace_back(
+                                CoreCoord{
+                                    range.start_coord.x + worker_bbox.start_coord.x,
+                                    range.start_coord.y + worker_bbox.start_coord.y},
+                                CoreCoord{
+                                    range.end_coord.x + worker_bbox.start_coord.x,
+                                    range.end_coord.y + worker_bbox.start_coord.y});
+                        }
+                        all_cores = CoreRangeSet(ranges);
                     }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
@@ -3113,6 +3238,25 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             attributes.output_dtype.value(),
             PageConfig(Layout::TILE, attributes.output_tile),
             attributes.output_mem_config))};
+}
+
+MatmulPlacementFrame matmul_placement_frame(
+    const MatmulParams& attributes, const tt::tt_metal::distributed::MeshDevice& device) {
+    const auto& sub_device = attributes.assigned_sub_device;
+    if (sub_device.assigned()) {
+        return {
+            .rectangle = ttnn::rectangle_in(sub_device.worker_cores),
+            .multicore_cores = sub_device.worker_cores,
+            .gather_cores = sub_device.worker_cores};
+    }
+    const auto grid = device.compute_with_storage_grid_size();
+    const CoreRange rectangle({0, 0}, {grid.x - 1, grid.y - 1});
+    return {
+        .rectangle = rectangle,
+        .multicore_cores = CoreRangeSet(rectangle),
+        .gather_cores = device.worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX,
+            attributes.sub_device_id.value_or(device.get_sub_device_ids().at(0)))};
 }
 
 MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_output_tensors(
@@ -3305,7 +3449,36 @@ MatmulParams create_matmul_attributes(
         parameters.global_cb,
         parameters.sub_device_id,
         parameters.prefetcher_pipes,
-        parameters.in0_column_offset};
+        parameters.in0_column_offset,
+        parameters.assigned_sub_device};
+}
+
+// What names the matmul's sub-device: the caller's sub_device_id, the cores of a program config the caller wrote (its
+// allowed_worker_cores, or a gather config's hop cores), and where its tensors' L1 shards live.
+ttnn::SubDeviceRequest matmul_sub_device_request(const MatmulParams& attributes, const MatmulInputs& tensor_args) {
+    std::optional<tt::tt_metal::CoreRangeSet> cores;
+    if (attributes.program_config.has_value()) {
+        std::visit(
+            [&cores](const auto& config) {
+                using T = std::decay_t<decltype(config)>;
+                if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    if (config.gather_in0) {
+                        if (!config.hop_cores.empty()) {
+                            cores = config.hop_cores;
+                        }
+                        return;
+                    }
+                }
+                if constexpr (requires { config.allowed_worker_cores; }) {
+                    cores = config.allowed_worker_cores;
+                }
+            },
+            *attributes.program_config);
+    }
+    return {
+        .sub_device = attributes.sub_device_id,
+        .cores = std::move(cores),
+        .data = ttnn::l1_shard_cores(tensor_args, attributes.output_mem_config)};
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
@@ -3315,6 +3488,8 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
     MatmulParams normalized_attributes = attributes;
+    MatmulInputs tensor_args{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}};
+    assign_matmul_sub_device(normalized_attributes, tensor_args, input_tensor_a.device());
     if (!normalized_attributes.program_config.has_value()) {
         uint32_t bias_single_tile_size = 0;
         if (bias.has_value()) {
@@ -3330,10 +3505,9 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             normalized_attributes);
     }
-    operations::matmul::normalize_program_config(
-        normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
-    return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+    normalize_on_sub_device(
+        normalized_attributes.program_config.value(), normalized_attributes, *input_tensor_a.device());
+    return ttnn::device_operation::launch<MatmulDeviceOperation>(normalized_attributes, tensor_args);
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
@@ -3341,6 +3515,9 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
     MatmulParams normalized_attributes = attributes;
+    // validate requires optional_input_tensors.size() == 1; this path has no bias.
+    MatmulInputs tensor_args{input_tensors, {std::nullopt}, {optional_output_tensor}};
+    assign_matmul_sub_device(normalized_attributes, tensor_args, input_tensors.at(0).device());
     if (!normalized_attributes.program_config.has_value()) {
         uint32_t bias_single_tile_size = 0;
 
@@ -3352,11 +3529,9 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             normalized_attributes);
     }
-    operations::matmul::normalize_program_config(
-        normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
-    // validate requires optional_input_tensors.size() == 1; this path has no bias.
-    return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        normalized_attributes, {input_tensors, {std::nullopt}, {optional_output_tensor}});
+    normalize_on_sub_device(
+        normalized_attributes.program_config.value(), normalized_attributes, *input_tensors.at(0).device());
+    return ttnn::device_operation::launch<MatmulDeviceOperation>(normalized_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

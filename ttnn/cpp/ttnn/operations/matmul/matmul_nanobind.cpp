@@ -335,13 +335,13 @@ void py_module(nb::module_& mod) {
 
         This program config is for use with width and height sharded tensors, or very narrow interleaved tensors.
 
-        When ``gather_in0`` is False and the matmul op is invoked with a ``sub_device_id``,
-        ``compute_with_storage_grid_size`` is anchored at the sub-device's worker bounding-box start
-        instead of ``(0, 0)``. The 1D multicast targets a single bounding-box rectangle and the
-        per-core index math assumes a contiguous row-major rectangle, so the sub-device's worker
-        cores must themselves form a single rectangle. Non-rectangular sub-device worker grids are
-        rejected at validate time. When ``gather_in0`` is True, ``compute_with_storage_grid_size``
-        is ignored and the gather path can run on any sub-device worker layout.
+        When ``gather_in0`` is False, the grid starts where ``allowed_worker_cores`` starts when it is
+        given. Otherwise ``compute_with_storage_grid_size`` is placed at the start of the largest rectangle
+        of the matmul's sub-device (the one ``ttnn.sub_device``, ``sub_device_id``, the config's cores or its
+        L1-sharded tensors name), which is ``(0, 0)`` without a sub-device manager. The sub-device need not be
+        rectangular, but the grid must lie inside it. When ``gather_in0`` is True,
+        ``compute_with_storage_grid_size`` is ignored and the gather path can run on any sub-device worker
+        layout.
     )doc");
 
     matmul_multi_core_reuse_multicast_1d_program_config
@@ -415,9 +415,9 @@ void py_module(nb::module_& mod) {
             this grid is used to determine the communication pattern for broadcasting data
             along one dimension while distributing computation.
 
-            When the matmul op is invoked with a ``sub_device_id`` (and ``gather_in0`` is False),
-            this rectangle is anchored at the sub-device's worker bounding-box start (instead of
-            ``(0, 0)``) and must fit inside that bounding box. Ignored when ``gather_in0`` is True.
+            Unless ``allowed_worker_cores`` is given, this rectangle starts at the start of the largest
+            rectangle of the matmul's sub-device, ``(0, 0)`` without a sub-device manager, and must lie inside
+            the sub-device. Ignored when ``gather_in0`` is True.
 
             **DEPRECATED**: Use ``allowed_worker_cores`` instead for finer control over the compute grid.
         )doc")

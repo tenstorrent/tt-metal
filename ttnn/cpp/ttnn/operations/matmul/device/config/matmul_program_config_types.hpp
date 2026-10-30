@@ -40,12 +40,10 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
 // 1D mcast matmul program config.
 //
 // When `gather_in0 == false`, `compute_with_storage_grid_size` describes the size of the
-// rectangular grid of worker cores that the multicast paths will use, anchored at (0, 0) on
-// the device, or at the bounding-box start of the active sub-device when `sub_device_id` is
-// set on the op. The 1D mcast factory targets a single bounding-box rectangle for multicast
-// and the per-core index math assumes a single contiguous row-major rectangle, so when
-// `sub_device_id` is provided the sub-device's worker cores must themselves form a single
-// rectangle. Non-rectangular sub-device grids are rejected at validate time.
+// rectangular grid of worker cores that the multicast paths will use, anchored at the start of
+// `allowed_worker_cores` (by default the start of the largest rectangle of the matmul's sub-device).
+// The 1D mcast factory targets a single bounding-box rectangle for multicast and the per-core index
+// math assumes a single contiguous row-major rectangle, which must lie in the matmul's sub-device.
 //
 // When `gather_in0 == true`, `compute_with_storage_grid_size` is ignored and the gather path
 // can run on any sub-device worker layout, including non-rectangular ones.
@@ -110,13 +108,18 @@ using MatmulProgramConfig = std::variant<
 
 // Ensures allowed_worker_cores is populated on every config variant that supports it.
 // If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is
-// synthesized from compute_with_storage_grid_size (or from the device grid for
-// MatmulMultiCoreProgramConfig).  After this call, factories can read
-// config.allowed_worker_cores.value() unconditionally.
-inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_metal::CoreCoord& device_grid) {
-    auto make_crs = [](const tt::tt_metal::CoreCoord& grid) {
-        return tt::tt_metal::CoreRangeSet(
-            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
+// synthesized from compute_with_storage_grid_size placed at `start_core`, the corner of the cores
+// the matmul runs on, or for MatmulMultiCoreProgramConfig is `multicore_cores` (`device_grid` at the
+// origin when not given).  After this call, factories can read config.allowed_worker_cores.value()
+// unconditionally.
+inline void normalize_program_config(
+    MatmulProgramConfig& config,
+    const tt::tt_metal::CoreCoord& device_grid,
+    const tt::tt_metal::CoreCoord& start_core = tt::tt_metal::CoreCoord(0, 0),
+    const std::optional<tt::tt_metal::CoreRangeSet>& multicore_cores = std::nullopt) {
+    auto make_crs = [&start_core](const tt::tt_metal::CoreCoord& grid) {
+        return tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(
+            start_core, tt::tt_metal::CoreCoord(start_core.x + grid.x - 1, start_core.y + grid.y - 1)));
     };
     std::visit(
         [&](auto& c) {
@@ -130,7 +133,11 @@ inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_m
                 }
             } else if constexpr (std::is_same_v<T, MatmulMultiCoreProgramConfig>) {
                 if (!c.allowed_worker_cores.has_value()) {
-                    c.allowed_worker_cores = make_crs(device_grid);
+                    c.allowed_worker_cores = multicore_cores.has_value()
+                                                 ? *multicore_cores
+                                                 : tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(
+                                                       tt::tt_metal::CoreCoord(0, 0),
+                                                       tt::tt_metal::CoreCoord(device_grid.x - 1, device_grid.y - 1)));
                 }
             }
             // DRAM-sharded configs have no grid fields to normalize.

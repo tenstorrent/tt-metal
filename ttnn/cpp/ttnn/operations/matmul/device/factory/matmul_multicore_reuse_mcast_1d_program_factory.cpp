@@ -2245,7 +2245,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
     bool stream_in1,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreRangeSet& gather_cores,
     std::optional<CoreRangeSet> restricted_cores,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     const auto& b = b_tensors[0];
@@ -2262,9 +2262,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
     non_idle_cores_vec.reserve(non_idle_cores.ranges().size());
-    auto subdevice_cores = device.worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device.get_sub_device_ids().at(0));
+    auto subdevice_cores = gather_cores;
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
@@ -6512,7 +6510,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
     bool stream_in1,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord& start_core,
+    const CoreRangeSet& gather_cores,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
     const auto& b = b_tensors[0];
@@ -6686,39 +6685,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             global_cb,
             num_global_cb_receivers,
             stream_in1,
-            sub_device_id,
+            gather_cores,
             std::move(restricted_cores),
             fused_op_signaler);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Sub-device start core
-    ////////////////////////////////////////////////////////////////////////////
-    // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
-    // multicast targets a single bounding-box rectangle and the per-core index math assumes a
-    // contiguous row-major rectangle of width `compute_with_storage_grid_size.x`.
-    CoreCoord sub_device_start_core = {0, 0};
-    if (sub_device_id.has_value()) {
-        auto sd_worker_cores =
-            device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
-        auto bbox = sd_worker_cores.bounding_box();
-        TT_FATAL(
-            sd_worker_cores.num_cores() == bbox.size(),
-            "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
-            "Got sub-device worker cores: {} (bounding box: {})",
-            sd_worker_cores,
-            bbox);
-        TT_FATAL(
-            bbox.start_coord.x + compute_with_storage_grid_size.x - 1 <= bbox.end_coord.x &&
-                bbox.start_coord.y + compute_with_storage_grid_size.y - 1 <= bbox.end_coord.y,
-            "matmul_multicore_reuse_mcast_1d compute_with_storage_grid_size {} anchored at sub-device start {} "
-            "extends past the sub-device's worker bounding box {}",
-            compute_with_storage_grid_size,
-            bbox.start_coord,
-            bbox);
-        sub_device_start_core = bbox.start_coord;
-    }
+    // The multicast grid starts at start_core: in the matmul's sub-device, where its config was placed.
+    const CoreCoord sub_device_start_core = start_core;
 
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::process_mcast_in0_program_and_create_override_variables(
@@ -6925,9 +6899,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
-    // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
-    // multicast targets a single bounding-box rectangle and the per-core index math assumes a
-    // contiguous row-major rectangle of width `grid_size.x`.
+    // The in0/in1 multicast targets one bounding-box rectangle and the per-core index math assumes a contiguous
+    // row-major rectangle of width `grid_size.x`; that rectangle lies in the matmul's sub-device, which itself need
+    // not be rectangular.
     if (!program_config.allowed_worker_cores.has_value()) {
         log_warning(
             tt::LogOp,
@@ -6943,29 +6917,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     }
     auto grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
 
-    // When a sub-device is present use its bounding-box start; otherwise fall
-    // back to allowed_worker_cores start so non-(0,0) placements work correctly.
-    CoreCoord sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
-    if (operation_attributes.sub_device_id.has_value()) {
-        auto sd_worker_cores = device.worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
-        auto bbox = sd_worker_cores.bounding_box();
-        TT_FATAL(
-            sd_worker_cores.num_cores() == bbox.size(),
-            "matmul_multicore_reuse_mcast_1d only supports rectangular sub-device worker grids. "
-            "Got sub-device worker cores: {} (bounding box: {})",
-            sd_worker_cores,
-            bbox);
-        TT_FATAL(
-            bbox.start_coord.x + grid_size.x - 1 <= bbox.end_coord.x &&
-                bbox.start_coord.y + grid_size.y - 1 <= bbox.end_coord.y,
-            "matmul_multicore_reuse_mcast_1d grid_size {} anchored at sub-device start {} "
-            "extends past the sub-device's worker bounding box {}",
-            grid_size,
-            bbox.start_coord,
-            bbox);
-        sub_device_start_core = bbox.start_coord;
-    }
+    // The grid starts where allowed_worker_cores does: in the matmul's sub-device, where its prim placed the config.
+    const CoreCoord sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
 
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
 
@@ -7118,7 +7071,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         global_cb,
         config.num_global_cb_receivers,
         config.stream_in1,
-        sub_device_id,
+        // Fused operations name a sub-device by id: the grid starts at its corner and the gather ring takes its cores.
+        sub_device_id.has_value() ? a.device()
+                                        ->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *sub_device_id)
+                                        .bounding_box()
+                                        .start_coord
+                                  : CoreCoord{0, 0},
+        a.device()->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX,
+            sub_device_id.value_or(a.device()->get_sub_device_ids().at(0))),
         start_cb_index,
         std::move(restricted_cores));
 }
@@ -7183,7 +7144,8 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
                 attributes.global_cb,
                 pc.num_global_cb_receivers,
                 pc.stream_in1,
-                attributes.sub_device_id,
+                pc.allowed_worker_cores.value().bounding_box().start_coord,
+                matmul_placement_frame(attributes, *tensor_args.input_tensors.at(0).device()).gather_cores,
                 tt::CBIndex::c_0,
                 std::nullopt);
             shared_variables[mesh_coord_range] = std::move(shared_vars);
