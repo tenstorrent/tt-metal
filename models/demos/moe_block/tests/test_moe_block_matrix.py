@@ -17,6 +17,7 @@ score equal)."""
 import dataclasses
 import os
 import statistics
+import time
 
 import pytest
 import torch
@@ -56,7 +57,7 @@ BASE = {
     "m3": MINIMAX_M3,
     "dsv41_flash": DSV41_FLASH,
 }
-ROUTINGS = ("uniform", "zipf_spread", "zipf_packed", "one_hot", "empty_experts", "zero_chip", "ties")
+ROUTINGS = ("uniform", "zipf_mild", "zipf_spread", "zipf_packed", "one_hot", "empty_experts", "zero_chip", "ties")
 EPC_MAX = 64  # (the flat op's experts a chip)
 GALAXY_EPC = {"k3": 28, "k27": 12}  # (a Galaxy chip's experts: the router folded to them)
 
@@ -83,9 +84,9 @@ def scenario_weights(m: MoEModel, routing: str, chips: int, seed=0) -> MoEWeight
     epc = E // chips
     b = torch.zeros(E)
     g = torch.Generator().manual_seed(seed + 7)
-    if routing in ("zipf_spread", "zipf_packed"):
-        rank = torch.randperm(E, generator=g) if routing == "zipf_spread" else torch.arange(E)
-        b = -0.6 * torch.log1p(rank.float())
+    if routing in ("zipf_mild", "zipf_spread", "zipf_packed"):
+        rank = torch.randperm(E, generator=g) if routing != "zipf_packed" else torch.arange(E)
+        b = (-0.3 if routing == "zipf_mild" else -0.6) * torch.log1p(rank.float())
     elif routing == "one_hot":
         b[0] = 8.0
     elif routing == "empty_experts":
@@ -98,6 +99,146 @@ def scenario_weights(m: MoEModel, routing: str, chips: int, seed=0) -> MoEWeight
         rw = torch.zeros_like(rw)
         rb = torch.where(w.router["bias"] < -1.0e3, w.router["bias"], torch.zeros_like(rb))  # (the fold mask only)
     return dataclasses.replace(w, router={"weight": rw, "bias": rb})
+
+
+def _launch_stats_on():
+    """MOE_LAUNCH_STATS=1: time every program launch of the back-to-back calls (host until the launch returns), by
+    call site, with the launch's payload (prepared programs: runtime-arg words / kernel-cores / common words / CBs /
+    kernels of the first mesh program, and the mesh programs - one a chip when the chips' args differ)."""
+    import sys
+
+    stats, orig = {}, (ttnn.generic_op, ttnn.bringup.run_prepared)
+
+    def site():
+        f = sys._getframe(2)
+        while f.f_back is not None and "prepared_program" in f.f_code.co_filename:
+            f = f.f_back
+        return f"{os.path.basename(f.f_code.co_filename)}:{f.f_lineno} {f.f_code.co_name}"
+
+    def wrap(fn, kind, info):
+        def w(*a, **k):
+            t0 = time.perf_counter_ns()
+            r = fn(*a, **k)
+            dt = (time.perf_counter_ns() - t0) / 1e3
+            e = stats.setdefault((kind, site()), [0, 0.0, None])
+            e[0] += 1
+            e[1] += dt
+            if e[2] is None:
+                try:
+                    e[2] = info(*a)
+                except Exception as ex:  # (stats only)
+                    e[2] = f"? {type(ex).__name__}"
+            return r
+
+        return w
+
+    def prep_info(pp, io):
+        words, cores, common, cbs, kernels, nprog = pp.payload
+        info = f"{nprog} mesh programs; a chip {words} rt words ({words * 4 // 1024} KB) on {cores} kernel-cores, {common} common, {cbs} CBs, {kernels} kernels; {pp.patch_count} patches"
+        if words > 4096:  # (where a big payload goes: per kernel of the first mesh program)
+            runs = pp.invariant_runs
+            rows = [
+                f"      {w:6d} words {w * 4 // 1024:4d} KB  {c:4d} cores  {w // max(c, 1):4d} a core (args {mn}-{mx})  "
+                f"{d:4d} distinct  {same:6d} in all-cores-equal positions ({sum(e - b0 for b0, e in r)} positions)  {src}"
+                for (src, c, w, d, same), (mn, mx, r) in sorted(zip(pp.kernel_stats, runs), key=lambda t: -t[0][2])
+            ]
+            logger.info(f"MOE_LAUNCH_KERNELS ({words} words a chip):\n" + "\n".join(rows))
+        return info
+
+    def gen_info(io, md):
+        try:
+            return f"{sum(1 for _ in md)} mesh programs"
+        except Exception:
+            return ""
+
+    ttnn.generic_op = wrap(orig[0], "generic_op", gen_info)
+    ttnn.bringup.run_prepared = wrap(orig[1], "run_prepared", prep_info)
+    # (the flat experts + combine: a C++ op with its combine program riding along)
+    orig = orig + (ttnn.bringup.flat_routed_expert_with_program,)
+    ttnn.bringup.flat_routed_expert_with_program = wrap(orig[2], "flat_op", lambda *a: "C++ op")
+    return stats, orig
+
+
+def _launch_stats_report(launch, n, tag):
+    stats, orig = launch
+    ttnn.generic_op, ttnn.bringup.run_prepared, ttnn.bringup.flat_routed_expert_with_program = orig
+    tot = sum(e[1] for e in stats.values()) / n
+    lines = [
+        f"  {e[1] / n:7.0f} us a call ({e[1] / e[0]:6.0f} a launch x {e[0] / n:.0f})  {k[0]:12s} {k[1]}  [{e[2]}]"
+        for k, e in sorted(stats.items(), key=lambda kv: -kv[1][1])
+    ]
+    logger.info(f"MOE_LAUNCH {tag}: {tot:.0f} us a call in program launches over {n} calls:\n" + "\n".join(lines))
+
+
+def eager_host(block, mesh_device, x_in, n, tag):
+    """Untraced forwards: wall a call synced after each (host + device + launch), back to back (n calls, one sync at the
+    end: the host's dispatch pipelined with the device), and the host's own time a call (until the call returns, no sync);
+    MOE_EAGER_PROF=1 adds a cProfile of the back-to-back calls (generated/moe_block/eager_host_<tag>.prof, top 30 logged).
+    """
+    keep, block.keep_taps = block.keep_taps, False  # (as a model runs it: no taps)
+    walls, hosts = [], []
+    for _ in range(n):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter_ns()
+        out = block(x_in)
+        t1 = time.perf_counter_ns()
+        ttnn.synchronize_device(mesh_device)
+        walls.append((time.perf_counter_ns() - t0) / 1e3)
+        hosts.append((t1 - t0) / 1e3)
+        ttnn.deallocate(out)
+    prof = None
+    if os.environ.get("MOE_EAGER_PROF") == "1":
+        import cProfile
+
+        prof = cProfile.Profile()
+    spy = None
+    if os.environ.get("MOE_EAGER_PYSPY"):  # (native host profile of the back-to-back calls: py-spy on this process)
+        import ctypes
+        import subprocess
+
+        ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(-1), 0, 0, 0)  # (PR_SET_PTRACER_ANY: ptrace_scope 1)
+        spy = subprocess.Popen(
+            [os.path.expanduser("~/.local/bin/py-spy"), "record", "--native", "--rate", "500", "--format", "raw"]
+            + ["--pid", str(os.getpid()), "-o", os.environ["MOE_EAGER_PYSPY"]]
+        )
+        time.sleep(2.0)
+    launch = _launch_stats_on() if os.environ.get("MOE_LAUNCH_STATS") == "1" else None
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter_ns()
+    if prof:
+        prof.enable()
+    for _ in range(n):
+        ttnn.deallocate(block(x_in))
+    t_issue = time.perf_counter_ns()
+    if prof:
+        prof.disable()
+    ttnn.synchronize_device(mesh_device)
+    b2b = (time.perf_counter_ns() - t0) / 1e3 / n
+    if launch is not None:
+        _launch_stats_report(launch, n, tag)
+    if spy is not None:
+        import signal
+
+        spy.send_signal(signal.SIGINT)
+        spy.wait(timeout=120)
+    logger.info(
+        f"MOE_EAGER {tag}: synced a call median {statistics.median(walls):.0f} us (min {min(walls):.0f}); host until "
+        f"return median {statistics.median(hosts):.0f} us; back to back {b2b:.0f} us a call (host issue "
+        f"{(t_issue - t0) / 1e3 / n:.0f} us a call) over {n}"
+    )
+    if prof:
+        import io
+        import pstats
+
+        os.makedirs("generated/moe_block", exist_ok=True)
+        prof.dump_stats(f"generated/moe_block/eager_host_{tag}.prof")
+        buf = io.StringIO()
+        pstats.Stats(prof, stream=buf).sort_stats("cumulative").print_stats(30)
+        logger.info(f"MOE_EAGER_PROF {tag} (cumulative, {n} calls):\n{buf.getvalue()}")
+        buf = io.StringIO()
+        pstats.Stats(prof, stream=buf).sort_stats("tottime").print_stats(25)
+        logger.info(f"MOE_EAGER_PROF {tag} (tottime, {n} calls):\n{buf.getvalue()}")
+    block.keep_taps = keep
 
 
 @dataclasses.dataclass(frozen=True)
@@ -118,7 +259,7 @@ def _cases():
     for mn in BASE:
         for rows in (128, 256, 512, 640, 768, 1024, 1280, 2048):  # (768 / 1280: the chunked heads, NCH 2 - 5)
             out.append(Case(mn, rows, "uniform", 32, "nightly"))
-    for mn in ("k3", "glm53_flash"):
+    for mn in ("k3", "glm53_flash", "dsv41_flash"):
         for rt in ROUTINGS[1:]:
             out.append(Case(mn, 640, rt, 32, "nightly"))
     for mn, rows in (
@@ -167,6 +308,16 @@ def run_checked(mesh_device, block, m, w, tag, *, eager, replays, nx=16):
             _, ids_r, _ = reference(xs[k], w, m)
             agree = (torch.sort(ids_d, 1)[0] == torch.sort(ids_r, 1)[0]).float().mean().item()
             refs[k] = (rows, y_ref, agree)
+            if (
+                k == 0 and int(ids_d.max()) < m.num_experts
+            ):  # (the routing's skew: tokens an expert / a chip, max over mean)
+                e = torch.bincount(ids_d.flatten(), minlength=m.num_experts).float()
+                c = e.reshape(-1, g.experts_per_chip).sum(1)
+                logger.info(
+                    f"MATRIX_LOAD {tag}: chip max/mean {c.max() / c.mean():.2f} (max {c.max():.0f}, min {c.min():.0f} "
+                    f"token picks a chip); expert max/mean {e.max() / e.mean():.2f} (max {e.max():.0f}); "
+                    f"{int((e == 0).sum())} of {len(e)} experts empty"
+                )
         p = pcc(y, refs[k][1])
         stats["pcc"].append(p)
         stats["agree"].append(refs[k][2])
@@ -179,6 +330,8 @@ def run_checked(mesh_device, block, m, w, tag, *, eager, replays, nx=16):
         ttnn.synchronize_device(mesh_device)
         check(out, k)
         ttnn.deallocate(out)
+    if int(os.environ.get("MOE_EAGER_N", "0")):  # (host side, untraced: N forwards synced each / back to back)
+        eager_host(block, mesh_device, x_in, int(os.environ["MOE_EAGER_N"]), tag)
     if not replays:
         return stats
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -196,6 +349,19 @@ def run_checked(mesh_device, block, m, w, tag, *, eager, replays, nx=16):
         if i % 1000 == 999:
             logger.info(f"MATRIX {tag}: {i + 1} replays, PCC min {min(stats['pcc']):.5f}")
     ttnn.synchronize_device(mesh_device)
+    if int(os.environ.get("MOE_WALL_N", "0")):  # (one synchronous replay at a time, the input copy off the clock)
+        walls = []
+        for i in range(int(os.environ["MOE_WALL_N"])):
+            ttnn.copy_host_to_device_tensor(hx[i % NX], x_in)
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter_ns()
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            walls.append((time.perf_counter_ns() - t0) / 1e3)
+        logger.info(
+            f"MOE_WALL {tag}: first {walls[0]:.0f} us, median {statistics.median(walls):.0f} us, min {min(walls):.0f} "
+            f"us over {len(walls)} single replays"
+        )
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
         replay_device_times(mesh_device, tid, f"matrix {tag}", batches=(10, 40))
     ttnn.release_trace(mesh_device, tid)
@@ -226,7 +392,10 @@ def test_moe_block_matrix(mesh_device, device_params, case: Case):
     m = mesh_model(case.model, chips)
     w = scenario_weights(m, case.routing, chips)
     try:
-        block = MoEBlock(mesh_device, m, case.rows * R, w, WeightCache(path=None, layer=0))
+        from models.demos.moe_block.moe_block import MoEOptions
+
+        opts = MoEOptions(router_split=os.environ.get("MOE_ROUTER_SPLIT") == "1")  # (test-only: the router split A/B)
+        block = MoEBlock(mesh_device, m, case.rows * R, w, WeightCache(path=None, layer=0), options=opts)
     except (AssertionError, ValueError, NotImplementedError, RuntimeError) as e:
         msg = " | ".join(l.strip() for l in str(e).splitlines() if l.strip() and "---" not in l)[:600]
         logger.error(f"MATRIX {case.id}: does not build: {type(e).__name__}: {msg}")

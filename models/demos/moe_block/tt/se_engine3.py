@@ -20,12 +20,15 @@ row tiles a chunk: core row cy owns the chunk's row tiles cy MT .. cy MT + MT - 
   - down: per pass (<= 8 / MT output tiles) all of K in DEST over h all and the streamed W_down blocks, y packed once
     and written (NCRISC) - while the next chunk's x is still arriving."""
 
+import os
+
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.combine_rf.lin2d import column_split, glu_weight  # noqa: F401
 
 import ttnn
 
-NWS = 3  # (W slots)
+NWS = int(__import__("os").environ.get("SE_NWS", "3"))  # (W slots; SE_NWS: A/B, <= 4 - the source words rotate over 4)
 XREADY, WV, WFREE = 0, 1, 1 + NWS  # (hand-written semaphores; the kernel_lib families' come after)
 XLD = 1 + 2 * NWS  # (my own-shard x is loaded: the NCRISC's W load may start)
 HCNT, HFREE = 1 + 2 * NWS, 3 + 2 * NWS  # (unused: the h exchange is the kernel_lib family again)
@@ -48,6 +51,12 @@ ARENA_MAX = (
     1344 * 1024
 )  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less the movers' static CBs (~177 KB
 # end on a port core) - the arena range is carved on them too - and what the head keeps below it)
+
+
+def dest_tiles():
+    """fp32 DEST tiles a block: 8 with full sync, 4 with half sync (SE_HALFSYNC=1, A/B) - the down passes' width and
+    the reduce-scatter plan's pwmax follow it."""
+    return 4 if os.environ.get("SE_HALFSYNC") == "1" else 8
 
 
 def arena_cap(mesh_device, kb):
@@ -96,22 +105,35 @@ constexpr auto brx_args = TensorAccessorArgs<SE_RTR_BCT0>();  // (the router's x
 #endif
 constexpr uint32_t CB_XIN = 0, CB_HOWN = 2, CB_HALL = 3;
 constexpr uint32_t NF = NSG / 2, NOWN0 = NF / S0, NOWN1 = NF / S1;  // (steps a family a pass; per owner)
+#ifdef SE_XPIPE
+// (SE_XPIPE: my owned x slots load under transaction ids 13 .. 15 by slot, and a slot's send waits only on its id - the
+// rounds start as the first steps land, not after the whole load; the W reads keep ids 1 .. 12)
+#define XTRID(m, j) (13 + (((m) * nown + ((j) & 1 ? (i0 < GX ? NOWN0 : 0) + own_slot(j) : own_slot(j))) % 3))
+#endif
 // x position j (the j-th K step this chip processes: its own shard's first, then each shard as it lands): family j % 2,
 // owner = the family's subset[(j / 2) % S] (S divides a shard's steps / 2, so the rotation over (shard, pass, step)
 // rounds keeps every position on one owner), its local index (j / 2) / S
 FORCE_INLINE uint32_t own_slot(uint32_t j) { return (j & 1) ? (j / 2) / S1 : (j / 2) / S0; }
+// (the args equal on every core of the chip go once, as common args [S, NC, those NC values]: arg i is the core's
+// own arg i below S, common below S + NC, the core's arg i - NC past them - every index stays the full list's)
+FORCE_INLINE uint32_t se_ra(uint32_t i) {
+    const uint32_t s = get_common_arg_val<uint32_t>(0), nc = get_common_arg_val<uint32_t>(1);
+    return i < s ? get_arg_val<uint32_t>(i) : i < s + nc ? get_common_arg_val<uint32_t>(2 + i - s) : get_arg_val<uint32_t>(i - nc);
+}
 void kernel_main() {
     size_t a = 0;
-    const uint32_t cx = get_arg_val<uint32_t>(a++), cy = get_arg_val<uint32_t>(a++);
-    const uint32_t x_addr = get_arg_val<uint32_t>(a++), x_ct = get_arg_val<uint32_t>(a++), x_k0 = get_arg_val<uint32_t>(a++);
-    const uint32_t xown = get_arg_val<uint32_t>(a++), xin = get_arg_val<uint32_t>(a++), hown = get_arg_val<uint32_t>(a++);
-    const uint32_t hall = get_arg_val<uint32_t>(a++), po = get_arg_val<uint32_t>(a++), h0 = get_arg_val<uint32_t>(a++);
-    const uint32_t i0 = get_arg_val<uint32_t>(a++), i1 = get_arg_val<uint32_t>(a++);  // my index in family 0 / 1 (or GX)
-    const uint32_t lx = get_arg_val<uint32_t>(a++), rx = get_arg_val<uint32_t>(a++), ry = get_arg_val<uint32_t>(a++);
-    const uint32_t rtr_x = get_arg_val<uint32_t>(a++), rtr_xa = get_arg_val<uint32_t>(a++);  // (the router's x; RX)
-    const uint32_t vx0 = a, sps = get_arg_val<uint32_t>(vx0 + GX), g = get_arg_val<uint32_t>(vx0 + GX + 1);
+    // (mine first - then from x_addr to y's address the chip's: se_ra's common span)
+    const uint32_t cx = se_ra(a++), cy = se_ra(a++);
+    const uint32_t po = se_ra(a++), h0 = se_ra(a++);
+    const uint32_t i0 = se_ra(a++), i1 = se_ra(a++);  // my index in family 0 / 1 (or GX)
+    const uint32_t ry = se_ra(a++);
+    const uint32_t x_addr = se_ra(a++), x_ct = se_ra(a++), x_k0 = se_ra(a++);
+    const uint32_t xown = se_ra(a++), xin = se_ra(a++), hown = se_ra(a++);
+    const uint32_t hall = se_ra(a++), lx = se_ra(a++), rx = se_ra(a++);
+    const uint32_t rtr_x = se_ra(a++), rtr_xa = se_ra(a++);  // (the router's x; RX)
+    const uint32_t vx0 = a, sps = se_ra(vx0 + GX), g = se_ra(vx0 + GX + 1);
     const uint32_t ord0 = vx0 + GX + 2;  // (the row's NoC x; steps a shard, shards; the shard order: own, then arrival)
-    auto step_of = [&](uint32_t j) { return get_arg_val<uint32_t>(ord0 + j / sps) * sps + j % sps; };  // (position j)
+    auto step_of = [&](uint32_t j) { return se_ra(ord0 + j / sps) * sps + j % sps; };  // (position j)
     const uint32_t nown = (i0 < GX ? NOWN0 : 0) + (i1 < GX ? NOWN1 : 0);  // (my steps a chunk)
     auto mine = [&](uint32_t j) { return (j & 1) ? ((j / 2) % S1 == i1) : ((j / 2) % S0 == i0); };
     // my steps' x-own slot: [chunk][family 0 slots, then family 1][MT][KB]
@@ -120,6 +142,7 @@ void kernel_main() {
         return xown + ((m * nown + slot) * MT) * KB * SE_XTB;
     };
 #ifdef SE_RTR
+    auto rtrx = [&]() {  // (SE_XFIRST: after my own-shard x load - the gather's ports wait on every core's)
     if (cx == 0) {  // the router's x: the row's first core reads the row's x (MT row tiles, the chip's K slice) a K chunk
         // a round into RX and multicasts it along the row on NOC0 (the NCRISC's W_r^T goes down the columns on NOC1),
         // then sets the round on the row's RX-ready word (from my own source word RXS: the NCRISC re-arms the ready word)
@@ -147,28 +170,125 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
     }
+    };
+#ifndef SE_XFIRST
+    rtrx();
+#endif
+#endif
+    const auto xg = TensorAccessor(x_args, x_addr, SE_XTB);
+    const uint32_t xports = se_ra(ord0 + g);  // (the gather's ports read my own shard from here)
+#ifdef SE_XN1
+    // (SE_XN1: chunk 0's odd (family 1) steps are loaded by the NCRISC on its NOC1 - both NoCs' read bandwidth for the
+    // first pass, which the x load binds. Table at SE_WS word 512 (count, then NOC1 address lo / hi, L1 destination);
+    // word 10: table ready, 11: the NCRISC issued it all (transaction id 15 on NOC1, polled here read-only))
+    volatile tt_l1_ptr uint32_t* xsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+    if (x_ct && !xports) {
+        uint32_t n = 0;
+        for (uint32_t j = 1; j < NSG; j += 2) {
+            const uint32_t s = step_of(j);
+            if (!(mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)) continue;
+            for (uint32_t r = 0; r < MT; ++r)
+                for (uint32_t kk = 0; kk < KB; ++kk) {
+                    const uint64_t a = xg.get_noc_addr(GROW(0, cy * MT + r) * x_ct + s * KB + kk - x_k0, 0, 1);
+                    xsy[513 + 3 * n] = static_cast<uint32_t>(a), xsy[514 + 3 * n] = static_cast<uint32_t>(a >> 32);
+                    xsy[515 + 3 * n] = own_addr(0, j) + (r * KB + kk) * SE_XTB;
+                    ++n;
+                }
+        }
+        xsy[512] = n;
+        xsy[10] = 1;
+    }
+#endif
+    auto xload_step = [&](uint32_t m, uint32_t j) {  // (one owned step of chunk m from DRAM x [rows, x_ct])
+        const uint32_t s = step_of(j);
+        if (!(mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)) return;
+#ifdef SE_XN1
+        if (m == 0 && (j & 1) && !xports) return;  // (the NCRISC's)
+#endif
+#ifdef SE_XPIPE
+        noc_async_read_set_trid(XTRID(m, j));  // (its slot's transaction id: its send waits only on that)
+#endif
+        for (uint32_t r = 0; r < MT; ++r)
+            for (uint32_t kk = 0; kk < KB; ++kk)
+                noc_async_read(xg.get_noc_addr(GROW(m, cy * MT + r) * x_ct + s * KB + kk - x_k0),
+                               own_addr(m, j) + (r * KB + kk) * SE_XTB, SE_XTB);
+    };
+#ifdef SE_XPIPE
+    // (no ports: chunk 0's steps load in need order, SE_XL positions ahead of the rounds - all at once, every step's
+    // load lands at the end of the whole load; with ports, all of it first as before)
+    uint32_t xj = 0;
+    auto xload_upto = [&](uint32_t jmax) {
+        if (!x_ct) return;
+        for (; xj < NSG && xj <= jmax; ++xj) xload_step(0, xj);
+        noc_async_read_set_trid(0);
+    };
 #endif
     if (x_ct) {  // (alone) my steps of every chunk from DRAM x [rows, x_ct]: columns x_k0 ..
         DeviceZoneScopedN("SE-XLOAD");
-        const auto xg = TensorAccessor(x_args, x_addr, SE_XTB);
+#ifdef SE_XPIPE
+        for (uint32_t m = 1; m < NCH; ++m)
+            for (uint32_t j = 0; j < NSG; ++j) xload_step(m, j);
+        xload_upto(xports ? NSG : SE_XL);
+        if (xports) noc_async_read_barrier();
+#else
         for (uint32_t m = 0; m < NCH; ++m)
-            for (uint32_t j = 0; j < NSG; ++j) {
-                const uint32_t s = step_of(j);
-                if (mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)
-                    for (uint32_t r = 0; r < MT; ++r)
-                        for (uint32_t kk = 0; kk < KB; ++kk)
-                            noc_async_read(xg.get_noc_addr(GROW(m, cy * MT + r) * x_ct + s * KB + kk - x_k0),
-                                           own_addr(m, j) + (r * KB + kk) * SE_XTB, SE_XTB);
-            }
+            for (uint32_t j = 0; j < NSG; ++j) xload_step(m, j);
         noc_async_read_barrier();
+#endif
     }
     {  // (my own-shard x is loaded: count it on the gather's ports - they send it from here - and let my W load start)
-        const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0), xl_addr = get_arg_val<uint32_t>(np0 + 1);
+        const uint32_t np0 = ord0 + g, nports = se_ra(np0), xl_addr = se_ra(np0 + 1);
         for (uint32_t i = 0; i < nports; ++i)
-            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(np0 + 2 + 2 * i), get_arg_val<uint32_t>(np0 + 3 + 2 * i), xl_addr), 1);
+            noc_semaphore_inc(get_noc_addr(se_ra(np0 + 2 + 2 * i), se_ra(np0 + 3 + 2 * i), xl_addr), 1);
         noc_async_atomic_barrier();
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(np0 + 2 + 2 * nports))) = 1;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(se_ra(np0 + 2 + 2 * nports))) = 1;
     }
+#if defined(SE_RTR) && defined(SE_XFIRST)
+    rtrx();
+#endif
+#ifdef SE_BRW
+    volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+    uint32_t wn = 0, wbk = 0, wnext = 0;
+    {  // (SE_BRW: the W DRAM reads on my NOC0, all issued now - the NCRISC (NOC1) wrote a table of its blocks in its
+       // stream order at SE_WS (words: 0 ready | count, 1 issued, 3 bank; from 16: DRAM offset, L1 destination,
+       // bytes); block k under transaction id min(k, 13) + 1, which the NCRISC polls on NOC0's status before sending
+       // it. Nothing here waits on the stream later, so the x / h rounds can block freely)
+#ifdef SE_BRW_BAR
+        {  // (a grid barrier first: no weight burst while any core still loads its x - it starved the x loads.
+           // Words on core SE_BAR: 8 x loaded, 9 done (its end re-arms both); polled with 4-byte NOC0 reads)
+            const uint64_t bar = get_noc_addr(SE_BAR_X, SE_BAR_Y, SE_WS + 32);
+            noc_semaphore_inc(bar, 1);
+            noc_async_atomic_barrier();
+            volatile tt_l1_ptr uint32_t* pr = wsy + 12;
+            do {
+                noc_async_read(bar, reinterpret_cast<uint32_t>(pr), 4);
+                noc_async_read_barrier();
+                invalidate_l1_cache();
+            } while (*pr < SE_BAR_N);
+        }
+#endif
+        uint32_t r;
+        do {
+            invalidate_l1_cache();
+            r = wsy[0];
+        } while (!(r >> 31));
+        wn = r & 0xFFFF, wbk = wsy[3];
+    }
+    // (paced: the block of W round w goes out once my x round reaches w - SE_WPD; every block once my x rounds end.
+    // No wait on anyone: a holder issues up to its own position + SE_WPD and nobody needs rounds past its own)
+    auto wissue = [&](uint32_t lim) {
+        while (wnext < wn && wsy[19 + 4 * wnext] <= lim) {
+            noc_async_read_set_trid((wnext < 11 ? wnext : 11) + 1);
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbk, wsy[16 + 4 * wnext]), wsy[17 + 4 * wnext], wsy[18 + 4 * wnext]);
+            wsy[1] = ++wnext;  // (issued count: the NCRISC polls a block's transaction id only once it was issued)
+        }
+        noc_async_read_set_trid(0);
+    };
+    wissue(SE_WPD);
+#define WISSUE(lim) wissue(lim)
+#else
+#define WISSUE(lim)
+#endif
     constexpr auto mx0 = McastArgs<get_named_compile_time_arg_val("x0_ct_offset"), get_named_compile_time_arg_val("x0_rt_offset")>();
     constexpr auto mx1 = McastArgs<get_named_compile_time_arg_val("x1_ct_offset"), get_named_compile_time_arg_val("x1_rt_offset")>();
 #ifndef SE_NODOWN
@@ -193,11 +313,32 @@ void kernel_main() {
             for (uint32_t st = 0; st < sps; ++st) {
                 const uint32_t j = k * sps + st;  // (position; its family j % 2 = st % 2: a block's rounds are even)
                 const uint32_t round = ((m * g + k) * NPG + pg) * (sps / 2) + st / 2;  // (the family's)
+                WISSUE(m ? 0xFFFFFFFFu : (k * NPG + pg) * sps + st + SE_WPD);
+#ifdef SE_XPIPE
+                if (m == 0 && k == 0 && pg == 0) xload_upto(j + SE_XL);
+#endif
                 cb_reserve_back(CB_XIN, MT * KB);
                 const uint32_t dst = xin + (j & 1) * MT * KB * SE_XTB;
+#ifdef SE_PROBE_NOXR
+                (void)dst, (void)round;  // (probe: no x rounds at all - XIN pushed as if it landed)
+#else
                 if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
 #ifndef SE_PROBE_NOXWAIT
                     if (j >= sps) noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
+#endif
+#ifdef SE_XPIPE
+#ifdef SE_XN1
+                    if (j < sps && x_ct && m == 0 && (j & 1) && !xports) {  // (the NCRISC's NOC1 load of it landed)
+                        do {
+                            invalidate_l1_cache();
+                        } while (xsy[11] == 0);
+                        while (!ncrisc_noc_read_with_transaction_id_flushed(1, 15)) {
+                        }
+                    } else
+#endif
+                    if (j < sps && x_ct)
+                        while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, XTRID(m, j))) {
+                        }  // (my own step's load landed)
 #endif
 #ifdef SE_PROBE_NOX
                     constexpr uint32_t XBYTES = 16;  // (timing probe: no x data)
@@ -208,25 +349,27 @@ void kernel_main() {
                 } else {
                     if (j & 1) r1->receive(round); else r0->receive(round);
                 }
+#endif
                 cb_push_back(CB_XIN, MT * KB);
             }
         }
+        WISSUE(0xFFFFFFFFu);  // (the rest - the down's blocks - before the h rounds, which block)
 #ifdef SE_LAT
         {  // (the latent's all-to-all: once it is packed, +1 on each destination's port word of mine)
             DeviceZoneScopedN("SE-LHAND");
-            const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0), r0 = np0 + 4 + 2 * nports;
-            const uint32_t l0 = r0 + 2 + 2 * get_arg_val<uint32_t>(r0), nl = get_arg_val<uint32_t>(l0);
-            const uint32_t lw = get_arg_val<uint32_t>(l0 + 1);
+            const uint32_t np0 = ord0 + g, nports = se_ra(np0), r0 = np0 + 4 + 2 * nports;
+            const uint32_t l0 = r0 + 2 + 2 * se_ra(r0), nl = se_ra(l0);
+            const uint32_t lw = se_ra(l0 + 1);
             cb_wait_front(SE_LAT, (m + 1) * SE_LATP);  // (chunk m's block; the words count up over the chunks)
             for (uint32_t j = 0; j < nl; ++j)
-                noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(l0 + 2 + 2 * j), get_arg_val<uint32_t>(l0 + 3 + 2 * j), lw), 1);
+                noc_semaphore_inc(get_noc_addr(se_ra(l0 + 2 + 2 * j), se_ra(l0 + 3 + 2 * j), lw), 1);
         }
 #endif
 #ifdef SE_NODOWN
         {  // (no down here: my h block [MT][po] to DRAM h [rows, HT] - the down + reduce-scatter reads it)
         DeviceZoneScopedN("SE-HOUT");
-        const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0);
-        const auto hg = TensorAccessor(h_args, get_arg_val<uint32_t>(np0 + 3 + 2 * nports), SE_HTB);
+        const uint32_t np0 = ord0 + g, nports = se_ra(np0);
+        const auto hg = TensorAccessor(h_args, se_ra(np0 + 3 + 2 * nports), SE_HTB);
         cb_wait_front(CB_HOWN, MT * POMAX);
         for (uint32_t r = 0; r < MT; ++r)
             for (uint32_t t = 0; t < po; ++t)
@@ -246,11 +389,11 @@ void kernel_main() {
         for (uint32_t c = 0; c < GX; ++c) {
             if (c == cx) sh->send(hown, hs + c * MT * POMAX * SE_HTB, MT * POMAX * SE_HTB);
             else rh->receive(m * GX + c);
-#ifdef SE_RS
+#if defined(SE_RS) || defined(SE_HXINC)
             cb_push_back(CB_HALL, MT * POMAX);  // (column c's block: the down's first pass starts on its K tiles)
 #endif
         }
-#ifndef SE_RS
+#if !defined(SE_RS) && !defined(SE_HXINC)
         cb_push_back(CB_HALL, HA);
 #endif
         cb_pop_front(CB_HOWN, MT * POMAX);
@@ -260,16 +403,32 @@ void kernel_main() {
     {  // (down + reduce-scatter) each finished sub-block's hand-off: +1 on its port's mailbox word of mine (the words
        // count up over the chunks: the port's targets do)
         DeviceZoneScopedN("SE-HAND");
-        const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0), r0 = np0 + 4 + 2 * nports;
-        const uint32_t nh = get_arg_val<uint32_t>(r0), mbox = get_arg_val<uint32_t>(r0 + 1);
+        const uint32_t np0 = ord0 + g, nports = se_ra(np0), r0 = np0 + 4 + 2 * nports;
+        const uint32_t nh = se_ra(r0), mbox = se_ra(r0 + 1);
         for (uint32_t j = 0; j < nh; ++j) {
             cb_wait_front(SE_FINC, j + 1);
-            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(r0 + 2 + 2 * j), get_arg_val<uint32_t>(r0 + 3 + 2 * j), mbox), 1);
+            noc_semaphore_inc(get_noc_addr(se_ra(r0 + 2 + 2 * j), se_ra(r0 + 3 + 2 * j), mbox), 1);
         }
         if constexpr (NCH > 1) cb_pop_front(SE_FINC, nh);  // (the next chunk's hand-offs from the front again)
     }
 #endif
     }
+#ifdef SE_BRW
+    noc_async_read_barrier();
+#ifdef SE_BRW_BAR
+    {  // (done; core SE_BAR re-arms the barrier once every core is past it)
+        volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+        noc_semaphore_inc(get_noc_addr(SE_BAR_X, SE_BAR_Y, SE_WS + 36), 1);
+        noc_async_atomic_barrier();
+        if (cx == 0 && cy == 0) {
+            do {
+                invalidate_l1_cache();
+            } while (wsy[9] < SE_BAR_N);
+            wsy[8] = 0, wsy[9] = 0;
+        }
+    }
+#endif
+#endif
     noc_async_atomic_barrier();
 }
 """
@@ -302,30 +461,68 @@ constexpr uint32_t NPD1 = NPD ? NPD : 1, NSD1 = NSD ? NSD : 1;  // (no down: 0, 
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i)); }
 // the column's W stream: block b of a chunk (gate / up pass b / NSG, step b % NSG; then down) held by row b % GY,
 // multicast down the column into W slot (round % NWS); every core pushes what lands and credits the slot's next holder
+// (the args equal on every core of the chip go once, as common args [S, NC, those NC values]: arg i is the core's
+// own arg i below S, common below S + NC, the core's arg i - NC past them - every index stays the full list's)
+FORCE_INLINE uint32_t se_ra(uint32_t i) {
+    const uint32_t s = get_common_arg_val<uint32_t>(0), nc = get_common_arg_val<uint32_t>(1);
+    return i < s ? get_arg_val<uint32_t>(i) : i < s + nc ? get_common_arg_val<uint32_t>(2 + i - s) : get_arg_val<uint32_t>(i - nc);
+}
 void kernel_main() {
+#ifdef SE_XN1
+    {  // (the BRISC's family-1 x steps, on my NOC1, first thing: transaction id 15, then the issued flag)
+        volatile tt_l1_ptr uint32_t* xsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+        {
+            do {
+                invalidate_l1_cache();
+            } while (xsy[10] == 0);
+            const uint32_t n = xsy[512];
+            noc_async_read_set_trid(15);
+            for (uint32_t i = 0; i < n; ++i)
+                noc_async_read((static_cast<uint64_t>(xsy[514 + 3 * i]) << 32) | xsy[513 + 3 * i], xsy[515 + 3 * i], SE_XTB);
+            noc_async_read_set_trid(0);
+            xsy[11] = 1;
+        }
+    }
+#endif
     size_t a = 0;
-    const uint32_t cy = get_arg_val<uint32_t>(a++), cxv = get_arg_val<uint32_t>(a++);
-    const uint32_t ty = get_arg_val<uint32_t>(a++), by = get_arg_val<uint32_t>(a++);
-    const uint32_t w_addr = get_arg_val<uint32_t>(a++), wbase = get_arg_val<uint32_t>(a++), wown = get_arg_val<uint32_t>(a++);
-    const uint32_t win = get_arg_val<uint32_t>(a++), words = get_arg_val<uint32_t>(a++), y_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t n0d = get_arg_val<uint32_t>(a++);
+    // (mine first; from ty to the tail the chip's: se_ra's common span)
+    const uint32_t cy = se_ra(a++), cxv = se_ra(a++);
+    const uint32_t wbase = se_ra(a++), n0d = se_ra(a++);
+    const uint32_t wbank = se_ra(a++);  // (the DRAM bank holding my W-own region)
 #ifdef SE_RTR
     const uint32_t R0 = a;  // (the router logits' args)
     a += 12 + SE_RD * SE_MTR;
 #endif
-    const uint32_t wg0 = a, wd0 = wg0 + NPG, ys0 = wd0 + NPD;  // pass widths (gate / up, down); the column's NoC y
-    const uint32_t wbank = get_arg_val<uint32_t>(ys0 + GY);  // (the DRAM bank holding my W-own region)
-    const uint32_t sps = get_arg_val<uint32_t>(ys0 + GY + 1), ord0 = ys0 + GY + 3;  // (steps a shard; the shard order)
+    const uint32_t wg0 = a, wd0 = wg0 + NPG;  // pass widths (gate / up, down)
+    a = wd0 + NPD;
+    const uint32_t ty = se_ra(a++), by = se_ra(a++);
+    const uint32_t w_addr = se_ra(a++), wown = se_ra(a++), win = se_ra(a++);
+    const uint32_t words = se_ra(a++), y_addr = se_ra(a++);
+    const uint32_t ys0 = a;  // (the column's NoC y)
+    const uint32_t sps = se_ra(ys0 + GY), ord0 = ys0 + GY + 2;  // (steps a shard; the shard order)
     // round w's block (natural index): a gate / up pass's steps in this chip's processing order, then down's
-    auto blk = [&](uint32_t w) {
-        const uint32_t c = w % NB;
-        if (c >= NPG * NSG) return c;
-        const uint32_t k = c / (NPG * sps), rem = c % (NPG * sps), pg = rem / sps, st = rem % sps;
-        return pg * NSG + get_arg_val<uint32_t>(ord0 + k) * sps + st;  // (shard-major: shard, pass, step)
-    };
     auto bsize = [&](uint32_t b) {  // (tiles)
-        return b < NPG * NSG ? KB * get_arg_val<uint32_t>(wg0 + b / NSG) : KBD * get_arg_val<uint32_t>(wd0 + (b - NPG * NSG) / NSD1);
+        return b < NPG * NSG ? KB * se_ra(wg0 + b / NSG) : KBD * se_ra(wd0 + (b - NPG * NSG) / NSD1);
     };
+    // (a chunk's round -> block, and my blocks' offsets in my W-own, tabled once: computed in place, the round's block
+    // (4 runtime divisions - sps is a runtime arg) and the offset's walk over my blocks ran on every pass of the
+    // stream's loop below (the prefetch scan, the send's skip, the credit) - ~340 cycles a pass, a W round ~2.7
+    // passes; tabled ~285 (K3 head handshake-only gate / up 48.8 -> 41.1 us, traced head ~-4 us; GLM-5.3 -5.6 us))
+    static_assert(NB <= 1024, "W rounds a chunk");
+    uint16_t rblk[NB], woffs[NB / GY + 1];
+    for (uint32_t c = 0; c < NB; ++c) {
+        uint32_t b = c;
+        if (c < NPG * NSG) {
+            const uint32_t k = c / (NPG * sps), rem = c % (NPG * sps), pg = rem / sps, st = rem % sps;
+            b = pg * NSG + se_ra(ord0 + k) * sps + st;  // (shard-major: shard, pass, step)
+        }
+        rblk[c] = b;
+    }
+    for (uint32_t kb = 0, o = 0; cy + kb * GY < NB; ++kb) {  // (my blocks: cy, cy + GY, ..)
+        woffs[kb] = o;
+        o += bsize(cy + kb * GY);
+    }
+    auto blk = [&](uint32_t w) -> uint32_t { return rblk[w % NB]; };
     const auto yg = TensorAccessor(y_args, y_addr, 2048);
     // my blocks from DRAM, once: my W-own is one contiguous region in one bank (per-bank layout, wbase its offset),
     // read block by block in large bursts, every read issued now - the k-th block's under transaction id
@@ -336,27 +533,36 @@ void kernel_main() {
     // down the column; then the compute's partial logits go to the router cores' HOLD (the main loop below)
     // (args at R0: x, W, my column's expert tiles (valid count, first), RX / RW addresses, the row's NoC x (far end,
     // first core), my row's NoC y, the router cores' NoC [RB], their HOLD, their counter, my column has experts)
-    const uint32_t etc = get_arg_val<uint32_t>(R0 + 2), re0 = get_arg_val<uint32_t>(R0 + 3);
-    const uint32_t rxa = get_arg_val<uint32_t>(R0 + 4), rwa = get_arg_val<uint32_t>(R0 + 5);
+    const uint32_t etc = se_ra(R0 + 2), re0 = se_ra(R0 + 3);
+    const uint32_t rxa = se_ra(R0 + 4), rwa = se_ra(R0 + 5);
     {
         // K chunks of SE_KC tiles, at most two rounds, a buffer each (no slot reused: no acks): the row's first core's
         // BRISC multicasts the row's x along the row (NOC0), the column's first core multicasts its W_r^T expert tiles
         // down the column (here, NOC1 - same-NoC row and column multicasts stall each other); a lead reads round
         // rd + 1 while round rd's multicast goes; every core pushes a round once its words say it landed
         DeviceZoneScopedN("SE-RTRLD");
+#ifdef SE_RWL
+        // (SE_RWL: the column's W_r^T lead on row NoC x % GY, not row 0: the NOC1 read responses come back along the
+        // lead's row (-y, then -x), and 11 leads on one row shared its links - ~3 us a round's reads vs ~0.6 for the
+        // x leads, who sit on different rows)
+        const uint32_t wly = se_ra(ys0 + cxv % GY);
+        const bool lw = etc && cy == cxv % GY;
+#else
+        const uint32_t wly = ty;
         const bool lw = etc && cy == 0;
-        const bool hw = get_arg_val<uint32_t>(R0 + 9);
-        const auto wg2 = TensorAccessor(rw_args, get_arg_val<uint32_t>(R0 + 1), 2048);
+#endif
+        const bool hw = se_ra(R0 + 9);
+        const auto wg2 = TensorAccessor(rw_args, se_ra(R0 + 1), 2048);
         constexpr uint32_t NRD = SE_KTO / SE_KC, WS = SE_ETC * SE_KC * 2048;
         // (two buffers: past two rounds a buffer is reused - every receiver acks a round once its compute popped it
         // (its next reserve went through): +1 on the row's x lead and the column's W lead, who wait for all of them)
-        const uint32_t xlx = get_arg_val<uint32_t>(R0 + 7), xly = get_arg_val<uint32_t>(R0 + 8);
+        const uint32_t xlx = se_ra(R0 + 7), xly = se_ra(R0 + 8);
         for (uint32_t rd = 0; rd < NRD; ++rd) {
             cb_reserve_back(SE_RX, SE_KC * SE_MTR);
             cb_reserve_back(SE_RW, SE_ETC * SE_KC);
             if (NRD > 2 && rd >= 2) {
                 noc_semaphore_inc(get_noc_addr(xlx, xly, SE_EW + XACK_ID), 1);
-                if (hw) noc_semaphore_inc(get_noc_addr(cxv, ty, SE_EW + WACK_ID), 1);
+                if (hw) noc_semaphore_inc(get_noc_addr(cxv, wly, SE_EW + WACK_ID), 1);
             }
             if (lw) {  // (the column's first core: the chunk of its expert tiles of W_r^T down the column)
                 const uint32_t wa = rwa + (rd & 1) * WS;
@@ -397,18 +603,18 @@ void kernel_main() {
             uint32_t n[2] = {0, 0};
             for (uint32_t e = 0; e < etc; ++e) {
                 const uint32_t g = re0 + e, hh = g >= SE_RTR_SPLIT ? 1 : 0;
-                const uint32_t dw = get_arg_val<uint32_t>(a0 + 3 * hh), base = get_arg_val<uint32_t>(a0 + 3 * hh + 1);
+                const uint32_t dw = se_ra(a0 + 3 * hh), base = se_ra(a0 + 3 * hh + 1);
                 noc_async_write(ro + (e * SE_MTR + r) * 4096, get_noc_addr(dw & 0xFFFF, dw >> 16, base + (g - hh * SE_RTR_SPLIT) * 4096), 4096);
                 ++n[hh];
             }
             noc_async_write_barrier();  // (landed before the counts)
             for (uint32_t hh = 0; hh < 2; ++hh) {
-                const uint32_t dw = get_arg_val<uint32_t>(a0 + 3 * hh), ctr = get_arg_val<uint32_t>(a0 + 3 * hh + 2);
+                const uint32_t dw = se_ra(a0 + 3 * hh), ctr = se_ra(a0 + 3 * hh + 2);
                 if (n[hh]) noc_semaphore_inc(get_noc_addr(dw & 0xFFFF, dw >> 16, ctr), n[hh]);
             }
 #else
-            const uint32_t dw = get_arg_val<uint32_t>(R0 + 10 + 3 * r), dx = dw & 0xFFFF, dy = dw >> 16;
-            const uint32_t base = get_arg_val<uint32_t>(R0 + 11 + 3 * r), ctr = get_arg_val<uint32_t>(R0 + 12 + 3 * r);
+            const uint32_t dw = se_ra(R0 + 10 + 3 * r), dx = dw & 0xFFFF, dy = dw >> 16;
+            const uint32_t base = se_ra(R0 + 11 + 3 * r), ctr = se_ra(R0 + 12 + 3 * r);
             for (uint32_t e = 0; e < etc; ++e)
                 noc_async_write(ro + (e * SE_MTR + r) * 4096, get_noc_addr(dx, dy, base + (re0 + e) * 4096), 4096);
             noc_async_write_barrier();  // (landed before the count)
@@ -418,8 +624,8 @@ void kernel_main() {
         cb_pop_front(SE_RO, SE_ETC * SE_MTR);
 #ifdef SE_RTR_GATE
         {  // (my partials are written: router core 0 counts every engine core's, then opens the W gate)
-            const uint32_t gw = get_arg_val<uint32_t>(R0 + 10 + SE_RD * SE_MTR);
-            noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, get_arg_val<uint32_t>(R0 + 11 + SE_RD * SE_MTR)), 1);
+            const uint32_t gw = se_ra(R0 + 10 + SE_RD * SE_MTR);
+            noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, se_ra(R0 + 11 + SE_RD * SE_MTR)), 1);
         }
 #endif
     }
@@ -436,14 +642,19 @@ void kernel_main() {
 #endif
     {
         {  // (after my core's x load: the DRAM serves the x first - the gather is waiting on it)
-            const uint32_t t0 = ord0 + get_arg_val<uint32_t>(ys0 + GY + 2);  // (past the shard order: the tail)
-            const uint32_t xld = get_arg_val<uint32_t>(t0 + 2 + 2 * get_arg_val<uint32_t>(t0));
+            const uint32_t t0 = ord0 + se_ra(ys0 + GY + 1);  // (past the shard order: the tail)
+            const uint32_t xld = se_ra(t0 + 2 + 2 * se_ra(t0));
             while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(xld)) == 0) invalidate_l1_cache();
         }
     }
     // the weights' DRAM reads go in stream order a window ahead of the sends (WPF of my blocks in flight): spread
     // over gate / up at the rate the stream uses them - a burst of all 35 MB at the start starved the gather
+    constexpr uint8_t WNOC = noc_index;  // (the W DRAM reads: the NCRISC's own NoC)
+#ifdef SE_WPF
+    constexpr uint32_t WPF = SE_WPF;  // (probe: the prefetch window)
+#else
     constexpr uint32_t WPF = 3;
+#endif
     uint8_t trid_of[64];
     uint32_t wi = 0, ni = 0, pending = 0;  // (prefetch cursor over the first chunk's rounds; issued; issued unsent)
 #ifdef SE_WRING
@@ -457,15 +668,28 @@ void kernel_main() {
 #else
     constexpr uint32_t WPN = NB;  // (the first chunk's: resident after it)
 #endif
-    auto offset_of = [&](uint32_t b) {
-        uint32_t o = 0;
-        for (uint32_t b2 = cy; b2 < b; b2 += GY) o += bsize(b2);
-        return o;
-    };
+    auto offset_of = [&](uint32_t b) { return static_cast<uint32_t>(woffs[b / GY]); };  // (b: one of mine)
+    uint32_t dn_go = 0;  // (SE_BRW_DN1: the down's NOC1 reads start once the stream passed round SE_DN1_AT)
+    uint32_t wla = 0;  // (SE_WLA: rounds landed here - the window's base)
     auto prefetch = [&](uint32_t upto) {  // (issue my blocks of rounds < upto, and the window)
+#if defined(SE_BRW) && !defined(SE_BRW_DN1)
+        return;  // (the BRISC reads them on NOC0)
+#endif
+#ifdef SE_WLA
+        // (SE_WLA: the window in the column's rounds, not my blocks - a block only once its round is within SE_WLA of
+        // the stream; 3 of mine in flight on every core put ~30 rounds of the whole grid in the DRAM queues at once,
+        // and the first-needed block landed ~50 us after the burst was issued)
+        while (wi < WPN && (wi < upto || (pending < WPF && wi < wla + SE_WLA))) {
+#else
         while (wi < WPN && (wi < upto || pending < WPF)) {
+#endif
             const uint32_t b = blk(wi);
+#ifdef SE_BRW_DN1
+            if (wi % NB >= NPG * NSG && !dn_go && wi >= upto) break;  // (not yet: the first x loads go first)
+            if (b % GY != cy || wi % NB < NPG * NSG) {  // (SE_BRW_DN1: the gate / up blocks are the BRISC's, on NOC0)
+#else
             if (b % GY != cy) {
+#endif
                 ++wi;
                 continue;
             }
@@ -480,31 +704,73 @@ void kernel_main() {
             const uint32_t lo = o;
 #endif
             trid_of[b / GY] = t;
-            noc_async_read_set_trid(t);
-#ifdef SE_PROBE_NOWL
-            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + lo * WTB, 16);  // (probe)
+            noc_async_read_set_trid(t, WNOC);
+#if defined(SE_PROBE_NOWREAD)
+            (void)lo;  // (probe: no W DRAM read at all - the block "lands" at once)
+#elif defined(SE_PROBE_NOWL)
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC), wown + lo * WTB, 16, WNOC);  // (probe)
 #else
-            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + lo * WTB, bsize(b) * WTB);
+#ifdef SE_WPKT
+            {  // (A/B: the block as single-packet reads of SE_WPKT bytes, one transaction id - no software split)
+                const uint64_t src0 = get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC);
+                const uint32_t nb = bsize(b) * WTB;
+                for (uint32_t q = 0; q < nb; q += SE_WPKT)
+                    noc_async_read(src0 + q, wown + lo * WTB + q, nb - q < SE_WPKT ? nb - q : SE_WPKT, WNOC);
+            }
+#else
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC), wown + lo * WTB, bsize(b) * WTB, WNOC);
+#endif
 #endif
             ++pending;
         }
     };
     const uint32_t NR = NCH * NB;  // (W rounds a call)
     uint32_t ws = 0, woff = 0, wr = 0, wc = NWS, p = 0, pm = 0;  // (send, my offset, pushed, credited; y pass / chunk)
+#ifdef SE_PROBE_NOWR
+    constexpr bool NOWR_ = true;  // (probe: no W rounds - no multicast, no credits; WIN pushed as if every round landed)
+    wc = NR;
+#else
+    constexpr bool NOWR_ = false;
+#endif
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) ++ws;  // (skip rounds I do not hold)
+#ifdef SE_BRW
+    volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+    uint32_t nmy = 0;  // (my blocks sent)
+    {  // (my blocks in stream order for the BRISC's NOC0 reads: DRAM offset, L1 destination, bytes)
+        uint32_t n = 0;
+        for (uint32_t w = 0; w < WPN; ++w) {
+            const uint32_t b = blk(w);
+            if (b % GY != cy) continue;
+#ifdef SE_BRW_DN1
+            if (w % NB >= NPG * NSG) continue;  // (the down's: mine, on NOC1)
+#endif
+            const uint32_t o = offset_of(b);
+            wsy[16 + 4 * n] = w_addr + wbase + o * WTB;
+            wsy[17 + 4 * n] = wown + o * WTB;
+            wsy[18 + 4 * n] = bsize(b) * WTB;
+            // (its issue position in x rounds: a gate / up block its own round; the down's spread over the last SE_WDD
+            // x rounds of the gate / up (they are needed right after it) - the BRISC's pacing)
+            constexpr uint32_t NG = NPG * NSG, ND = NPD * NSD1, DD = SE_WDD < NG ? SE_WDD : NG;
+            wsy[19 + 4 * n] = w < NG ? w : NG - DD + (w - NG) * DD / ND;
+            ++n;
+        }
+        wsy[1] = 0, wsy[3] = wbank;
+        wsy[0] = n | 0x80000000u;
+    }
+#endif
 #ifdef SE_RS
     // (down + reduce-scatter) arrivals per direction in zone-slot order: slot i credited (its pages pushed - the arg's
     // high half: P, or with compact zones my tiles of its block) once my arrival counter reached its threshold (the
     // low half; 0: nothing comes - a block I hold no tile of); the fin sub-block to y
-    const uint32_t t0r = ord0 + get_arg_val<uint32_t>(ys0 + GY + 2);
-    const uint32_t q0 = t0r + 3 + 2 * get_arg_val<uint32_t>(t0r);  // (past the tail)
-    const uint32_t naf = get_arg_val<uint32_t>(q0), af0 = q0 + 1, nab = get_arg_val<uint32_t>(af0 + naf), ab0 = af0 + naf + 1;
+    const uint32_t t0r = ord0 + se_ra(ys0 + GY + 1);
+    const uint32_t q0 = t0r + 3 + 2 * se_ra(t0r);  // (past the tail)
+    const uint32_t naf = se_ra(q0), af0 = q0 + 1, nab = se_ra(af0 + naf), ab0 = af0 + naf + 1;
     const uint32_t f0 = ab0 + nab;
-    const uint32_t fcount = get_arg_val<uint32_t>(f0), fy0 = get_arg_val<uint32_t>(f0 + 1);
-    const uint32_t fstride = get_arg_val<uint32_t>(f0 + 2), fw = get_arg_val<uint32_t>(f0 + 3);
-    volatile tt_l1_ptr uint32_t* arrf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(f0 + 4));
-    volatile tt_l1_ptr uint32_t* arrb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(f0 + 5));
+    const uint32_t fcount = se_ra(f0), fy0 = se_ra(f0 + 1);
+    const uint32_t fstride = se_ra(f0 + 2), fw = se_ra(f0 + 3);
+    volatile tt_l1_ptr uint32_t* arrf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(f0 + 4));
+    volatile tt_l1_ptr uint32_t* arrb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(f0 + 5));
     uint32_t af = 0, ab = 0, fo = 0;
     const uint32_t NPY = 0;  // (no plain y writes: the fin sub-block is the output)
     // (chunks: the counters count up over them - a chunk's thresholds + its index x the arrivals a chunk; args at
@@ -517,28 +783,28 @@ void kernel_main() {
 #endif
     uint32_t nfmax = 0, nbmax = 0, zuf = 0, zub = 0;  // (the thresholds' max; the zone pages my slots take)
     for (uint32_t i = 0; i < naf; ++i) {
-        const uint32_t a = get_arg_val<uint32_t>(af0 + i);
+        const uint32_t a = se_ra(af0 + i);
         nfmax = (a & 0xFFFF) > nfmax ? (a & 0xFFFF) : nfmax;
         zuf += a >> 16;
     }
     for (uint32_t i = 0; i < nab; ++i) {
-        const uint32_t a = get_arg_val<uint32_t>(ab0 + i);
+        const uint32_t a = se_ra(ab0 + i);
         nbmax = (a & 0xFFFF) > nbmax ? (a & 0xFFFF) : nbmax;
         zub += a >> 16;
     }
     uint32_t zsf = 0, zsb = 0, ff = 0;  // (zone-free signals sent a direction; FINB-free credits pushed)
-    const uint32_t zpf = NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH - 1) : 0, zpb = NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH) : 0;
-    const uint32_t zfa = NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH + 1) : 0;
-    volatile tt_l1_ptr uint32_t* ffw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH + 2) : 0);
-    const uint32_t fnr = NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH + 3) : 0;
+    const uint32_t zpf = NCH > 1 ? se_ra(f0 + 6 + NCH - 1) : 0, zpb = NCH > 1 ? se_ra(f0 + 6 + NCH) : 0;
+    const uint32_t zfa = NCH > 1 ? se_ra(f0 + 6 + NCH + 1) : 0;
+    volatile tt_l1_ptr uint32_t* ffw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(NCH > 1 ? se_ra(f0 + 6 + NCH + 2) : 0);
+    const uint32_t fnr = NCH > 1 ? se_ra(f0 + 6 + NCH + 3) : 0;
 #ifdef SE_LAT
     // (the latent: my rows of my own block - mine and every other chip's slice of them - to the owner's latent [RB, G LT])
-    const uint32_t L0 = f0 + 6 + CHX, lnr = get_arg_val<uint32_t>(L0), lr0 = get_arg_val<uint32_t>(L0 + 1);
-    const uint32_t lnsrc = get_arg_val<uint32_t>(L0 + 2), lzone = get_arg_val<uint32_t>(L0 + 4);
-    volatile tt_l1_ptr uint32_t* lctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(L0 + 3));
-    const uint32_t LT = get_arg_val<uint32_t>(L0 + 5), lc0 = get_arg_val<uint32_t>(L0 + 6), llw = get_arg_val<uint32_t>(L0 + 7);
-    const uint32_t lp = get_arg_val<uint32_t>(L0 + 8), lorow = get_arg_val<uint32_t>(L0 + 9);
-    const auto lg = TensorAccessor(l_args, get_arg_val<uint32_t>(L0 + 10), 2048);
+    const uint32_t L0 = f0 + 6 + CHX, lnr = se_ra(L0), lr0 = se_ra(L0 + 1);
+    const uint32_t lnsrc = se_ra(L0 + 2), lzone = se_ra(L0 + 4);
+    volatile tt_l1_ptr uint32_t* lctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(se_ra(L0 + 3));
+    const uint32_t LT = se_ra(L0 + 5), lc0 = se_ra(L0 + 6), llw = se_ra(L0 + 7);
+    const uint32_t lp = se_ra(L0 + 8), lorow = se_ra(L0 + 9);
+    const auto lg = TensorAccessor(l_args, se_ra(L0 + 10), 2048);
     // (chunks done: my own rows written; the arrivals in - chunk m's latent block at LAT + m LATP pages, its zone
     // LATZ + the same; the owner's rows of chunk m at m SE_LRB)
 #ifdef SE_PREP
@@ -561,8 +827,8 @@ void kernel_main() {
 #else
     const uint32_t P0 = f0 + 6 + CHX;
 #endif
-    const uint32_t pnu = get_arg_val<uint32_t>(P0);
-    const auto pg = TensorAccessor(p_args, get_arg_val<uint32_t>(P0 + 1), SE_PREP_ROW);
+    const uint32_t pnu = se_ra(P0);
+    const auto pg = TensorAccessor(p_args, se_ra(P0 + 1), SE_PREP_ROW);
     uint32_t fsrc = 0, frow = 0, fco = 0;  // (the last prep unit: the fence's source / rows - mine: nothing else writes them)
 #else
     constexpr uint32_t pnu = 0;
@@ -571,13 +837,22 @@ void kernel_main() {
 #ifdef SE_HW
     uint32_t hw_it = 0, hw_last[4] = {};
 #endif
+#ifdef SE_PROBE_WLOOP
+    uint32_t wl_it = 0, wl_t0 = 0, wl_t1 = 0;  // (the loop's passes while the first chunk's gate / up W rounds land; cycles)
+#endif
     while (ws < NR || wr < NR || wc < NR || af < NCH * naf || ab < NCH * nab || fo < NCH * fcount || ff < NFF || lo < NLO || li < NLI || pu < pnu || !rout) {
         invalidate_l1_cache();
+#ifdef SE_PROBE_WLOOP
+        if (wr < NPG * NSG) {
+            if (wl_it++ == 0) wl_t0 = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            wl_t1 = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        }
+#endif
 #ifdef SE_HW
         if ((++hw_it & 0x3FF) == 0) {  // (a snapshot every 1024 polls: per-poll stores hid the hang)
         HWW(0, 0xE0000000u | (hw_it & 0xFFFFFF)); HWW(1, ws); HWW(2, wr); HWW(3, wc); HWW(4, af); HWW(5, ab); HWW(6, fo);
         HWW(7, lo | li << 8 | (uint32_t)rout << 16); HWW(8, pu); HWW(9, *arrf); HWW(10, *arrb);
-        HWW(11, af < NCH * naf ? get_arg_val<uint32_t>(af0 + af % naf) : 0xFFFF); HWW(12, ab < NCH * nab ? get_arg_val<uint32_t>(ab0 + ab % nab) : 0xFFFF);
+        HWW(11, af < NCH * naf ? se_ra(af0 + af % naf) : 0xFFFF); HWW(12, ab < NCH * nab ? se_ra(ab0 + ab % nab) : 0xFFFF);
 #ifdef SE_LAT
         HWW(13, *lctr);
 #endif
@@ -614,7 +889,7 @@ void kernel_main() {
 #ifdef SE_PREP
         if (pu < pnu && cb_pages_available_at_front(SE_PO, SE_PREP_FULL)) {  // a prep unit's 32 rows to the buffer
             const uint32_t src = get_read_ptr(SE_PO), q = P0 + 2 + 3 * pu;
-            const uint32_t row = get_arg_val<uint32_t>(q), co = get_arg_val<uint32_t>(q + 1), nb = get_arg_val<uint32_t>(q + 2);
+            const uint32_t row = se_ra(q), co = se_ra(q + 1), nb = se_ra(q + 2);
             // (posted: non-posted DRAM writes on NOC1 - their acks - under the W stream's NOC1 DRAM reads wedged a chip's
             // NOC1, ~1 in 200 calls with the prep in every chunk; landed by the fence at the end: test_posted_fence)
             for (uint32_t i = 0; i < 32; ++i) {
@@ -637,7 +912,7 @@ void kernel_main() {
                     ++zsf;
                 }
             } else {
-                const uint32_t a = get_arg_val<uint32_t>(af0 + sl), thr = a & 0xFFFF, pz = a >> 16;
+                const uint32_t a = se_ra(af0 + sl), thr = a & 0xFFFF, pz = a >> 16;
                 if (thr == 0 || *arrf >= mc * nfmax + thr) {
                     if (pz) {
                         cb_reserve_back(SE_ARRF, pz);
@@ -660,7 +935,7 @@ void kernel_main() {
                     ++zsb;
                 }
             } else {
-                const uint32_t a = get_arg_val<uint32_t>(ab0 + sl), thr = a & 0xFFFF, pz = a >> 16;
+                const uint32_t a = se_ra(ab0 + sl), thr = a & 0xFFFF, pz = a >> 16;
                 if (thr == 0 || *arrb >= mc * nbmax + thr) {
                     if (pz) {
                         cb_reserve_back(SE_ARRB, pz);
@@ -677,9 +952,9 @@ void kernel_main() {
         if (fo < NCH * fcount && cb_pages_available_at_front(SE_OUTF, 1)) {
             const uint32_t mc = fo / fcount, i = fo % fcount;
 #ifdef SE_FIN_ROWS
-            const uint32_t ya = get_arg_val<uint32_t>(f0 + 6 + NCH + 4 + mc * MT + i / fw) + i % fw;
+            const uint32_t ya = se_ra(f0 + 6 + NCH + 4 + mc * MT + i / fw) + i % fw;
 #else
-            const uint32_t y0 = mc == 0 ? fy0 : get_arg_val<uint32_t>(f0 + 6 + mc - 1);  // (chunk mc's rows)
+            const uint32_t y0 = mc == 0 ? fy0 : se_ra(f0 + 6 + mc - 1);  // (chunk mc's rows)
             const uint32_t ya = y0 + (i / fw) * fstride + i % fw;
 #endif
             cb_wait_front(SE_OUTF, 1);
@@ -698,30 +973,56 @@ void kernel_main() {
     while (ws < NR || wr < NR || wc < NR || p < NPY) {
         invalidate_l1_cache();
 #endif
+#ifdef SE_BRW_DN1
+        if (!dn_go && wr >= SE_DN1_AT) dn_go = 1;
+#endif
         if (wi < WPN) prefetch(0);  // (keep the window full)
-        if (ws < NR && (ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
+        if (ws < NR && (NOWR_ || ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
             const uint32_t b = blk(ws), n = bsize(b), kb = b / GY;  // (kb: its index among my blocks)
             woff = 0;  // (its offset in my W-own: my blocks before it)
 #ifdef SE_WRING
             woff = slot_of[kb] * WSLOT;
 #else
-            for (uint32_t b2 = cy; b2 < b; b2 += GY) woff += bsize(b2);
+            woff = offset_of(b);
 #endif
             if (ws < WPN) {  // (first chunk, or every chunk with the ring: its reads issued and landed)
+#ifdef SE_BRW
+#ifdef SE_BRW_DN1
+              if (ws % NB >= NPG * NSG) {  // (a down block: my own NOC1 read)
                 prefetch(ws + 1);
-                noc_async_read_barrier_with_trid(trid_of[kb]);
+                noc_async_read_barrier_with_trid(trid_of[kb], WNOC);
                 --pending;
+              } else {
+#endif
+                do {
+                    invalidate_l1_cache();
+                } while (wsy[1] <= nmy);  // (the BRISC issued it)
+                while (!ncrisc_noc_read_with_transaction_id_flushed(0, (nmy < 11 ? nmy : 11) + 1)) {
+                }  // (and its NOC0 read landed: NOC0's status, read only)
+                ++nmy;
+#ifdef SE_BRW_DN1
+              }
+#endif
+#else
+                prefetch(ws + 1);
+                noc_async_read_barrier_with_trid(trid_of[kb], WNOC);
+                --pending;
+#endif
             }
             const uint32_t dst = win + (ws % NWS) * WSLOT * WTB, vw = words + (ws & 3) * 16;
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(vw) = ws + 1;
-#ifdef SE_PROBE_NOW
+#ifdef SE_PROBE_NOWR
+            (void)dst;
+#elif defined(SE_PROBE_NOW)
             noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), 16, GY);  // (probe)
 #else
             noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), n * WTB, GY);
 #endif
+#ifndef SE_PROBE_NOWR
             noc_async_writes_flushed();
             noc_semaphore_set_multicast_loopback_src(vw, get_noc_multicast_addr(cxv, by, cxv, ty, get_semaphore(WV + ws % NWS)), GY);
             noc_async_writes_flushed();
+#endif
             if (ws >= NWS) ++nf[ws % NWS];
             ++ws;
 #ifdef SE_WRING
@@ -729,21 +1030,21 @@ void kernel_main() {
 #endif
             while (ws < NR && blk(ws) % GY != cy) ++ws;
         }
-        if (wr < NR && *sem(WV + wr % NWS) >= wr + 1) {  // W round wr landed here
+        if (wr < NR && (NOWR_ || *sem(WV + wr % NWS) >= wr + 1)) {  // W round wr landed here
             cb_reserve_back(CB_WIN, WSLOT);
             cb_push_back(CB_WIN, WSLOT);
-            ++wr;
+            wla = ++wr;
         }
-        if (wc < NR && wc < wr + NWS && cb_pages_reservable_at_back(CB_WIN, WSLOT * (wc - wr + 1))) {  // slot of wc free
-            noc_semaphore_inc(get_noc_addr(cxv, get_arg_val<uint32_t>(ys0 + blk(wc) % GY), get_semaphore(WFREE + wc % NWS)), 1);
+        if (!NOWR_ && wc < NR && wc < wr + NWS && cb_pages_reservable_at_back(CB_WIN, WSLOT * (wc - wr + 1))) {  // slot of wc free
+            noc_semaphore_inc(get_noc_addr(cxv, se_ra(ys0 + blk(wc) % GY), get_semaphore(WFREE + wc % NWS)), 1);
             ++wc;
         }
         if (p < NPY && cb_pages_available_at_front(CB_OUT, MT * PWDMAX)) {  // down pass p's y (chunk p / NPD)
             cb_wait_front(CB_OUT, MT * PWDMAX);
             const uint32_t m = p / NPD1, pd = p % NPD1, l1 = get_read_ptr(CB_OUT);
             uint32_t c0 = n0d;
-            for (uint32_t i = 0; i < pd; ++i) c0 += get_arg_val<uint32_t>(wd0 + i);
-            const uint32_t w = get_arg_val<uint32_t>(wd0 + pd);
+            for (uint32_t i = 0; i < pd; ++i) c0 += se_ra(wd0 + i);
+            const uint32_t w = se_ra(wd0 + pd);
             for (uint32_t r = 0; r < MT; ++r)
                 for (uint32_t t = 0; t < w; ++t)
                     noc_async_write(l1 + (r * PWDMAX + t) * 2048, yg.get_noc_addr(GROW(m, cy * MT + r) * NTH + c0 + t), 2048);
@@ -759,6 +1060,20 @@ void kernel_main() {
     }
 #endif
     noc_async_write_barrier();
+#ifdef SE_PROBE_WLOOP
+    DeviceTimestampedData("SE-WLIT", wl_it);
+    DeviceTimestampedData("SE-WLCY", wl_t1 - wl_t0);
+#endif
+#ifdef SE_BRW
+    wsy[0] = 0, wsy[1] = 0;  // (re-arm: every block landed and sent)
+#endif
+#ifdef SE_XN1
+    {
+        volatile tt_l1_ptr uint32_t* xsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+        noc_async_read_barrier();
+        xsy[10] = 0, xsy[11] = 0;  // (re-arm)
+    }
+#endif
 #ifdef SE_RS
     {  // re-arm my arrival counters (every increment of the call landed: each was waited to its final count)
         if (nfmax) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrf)), 0u - NCH * nfmax);
@@ -881,15 +1196,132 @@ void kernel_main() {
         DeviceZoneScopedN("SE-GU");
         if (NCH > 1 && m > 0) reconfig_data_format(WIN, XIN);  // (the last chunk's down / RS left other formats)
         cb_reserve_back(HOWN, MT * POMAX);
-        // shard-major: shard k (own first, then as each lands) through every pass; a pass's fp32 partial over the
-        // shards so far goes to ACC (FIFO: pushed per (shard, pass), popped by the next shard's same pass) and comes
-        // back into DEST; the last shard applies the GLU and packs h
+        // shard-major: shard k (own first, then as each lands) through every pass; a pass's fp32 partial is packed
+        // onto its fixed ACC slot (MT x pw tiles at the pass's offset) with the packer's L1 accumulation - shard 0
+        // writes it, shards 1 .. G - 2 add onto it in L1 - and only the last shard brings the sum back into DEST
+        // (unpacked straight to DEST, fp32) under its own matmuls; then the GLU and h. Shard G - 2 pushes each pass's
+        // slot as it is done (the write pointer then sits at the next pass's slot); the chunk's tail is pushed and
+        // popped as padding, so every chunk starts at the region's start
+#if SE_DT == 4
+        // (half-sync DEST: a pass keeps its width - the same x / W rounds as full sync - but each step's MT x pw block
+        // goes through DEST as sub-blocks of <= 4 tiles (rows), each packed onto the pass's ACC slot with the
+        // packer's L1 accumulation (the first step of shard 0 writes it). The packer, and the last step's GLU, run on
+        // one half while the matmuls fill the other. The last step brings the slot's sum back into DEST first; the
+        // step before it pushes the slot (its sum complete but for the last step's), in pass order)
+        constexpr uint32_t LAST = G * SPS - 1;
+        if (LAST > 0) cb_reserve_back(ACC, SE_ACCP);
+        uint32_t apushed = 0;
         for (uint32_t k = 0; k < G; ++k) {
-            uint32_t hoff = 0, loff = 0;
+            uint32_t hoff = 0, loff = 0, aoff = 0;
+            for (uint32_t pg = 0; pg < NPG; ++pg) {
+                const uint32_t pw = se_arg(pg), n = MT * pw;
+                const uint32_t sbr = n > 4 ? 1 : MT, nsb = MT / sbr, sbn = sbr * pw;  // (rows a sub-block)
+                matmul_block_init(XIN, WIN, 0, pw, sbr, KB);
+                for (uint32_t st = 0; st < SPS; ++st) {
+                    const uint32_t sx = k * SPS + st;
+#ifdef SE_PROBE_GUWAIT
+                    UNPACK(({
+                        const uint32_t t0_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        cb_wait_front(XIN, MT * KB);
+                        const uint32_t t1_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        cb_wait_front(WIN, WSLOT);
+                        const uint32_t t2_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        gu_wx += t1_ - t0_, gu_ww += t2_ - t1_;
+                        gs_x = t1_ - t0_, gs_w = t2_ - t1_;
+                    }));
+#ifdef SE_PROBE_GUSTEP
+                    UNPACK(({  // (GUSTEP: the first 48 steps' x / W waits - the profiler's buffer)
+                        if (gu_ns++ < 48) {
+                            DeviceTimestampedData("SE-GUSX", gs_x);
+                            DeviceTimestampedData("SE-GUSW", gs_w);
+                        }
+                    }));
+#endif
+#endif
+                    cb_wait_front(XIN, MT * KB);
+                    cb_wait_front(WIN, WSLOT);
+                    const bool fin = sx == LAST;
+                    if (fin && LAST > 0) cb_wait_front(ACC, n);
+                    for (uint32_t sb = 0; sb < nsb; ++sb) {
+                        tile_regs_acquire();
+                        if (fin && LAST > 0) {
+                            reconfig_data_format_srca(WIN, ACC);
+                            copy_init(ACC);
+                            for (uint32_t t = 0; t < sbn; ++t) copy_tile(ACC, sb * sbn + t, t);
+                            reconfig_data_format_srca(ACC, WIN);
+                            matmul_block_init(XIN, WIN, 0, pw, sbr, KB);
+                        }
+#ifndef SE_PROBE_NOMATH
+                        for (uint32_t kk = 0; kk < KB; ++kk)
+                            matmul_block(XIN, WIN, sb * sbr * KB + kk, kk * pw, 0, false, pw, sbr, KB);
+#endif
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        if (!fin) {
+                            pack_reconfig_data_format(ACC);
+                            PACK((llk_pack_reconfig_l1_acc(sx > 0 ? 1 : 0)));
+#ifndef SE_PROBE_NOACCPACK
+                            for (uint32_t t = 0; t < sbn; ++t) pack_tile<true>(t, ACC, aoff + sb * sbn + t - apushed);
+#endif
+                            PACK((llk_pack_reconfig_l1_acc(0)));
+                            tile_regs_release();
+                            continue;
+                        }
+#ifdef SE_LAT
+                        if (pg >= SE_NGU) {  // (a latent-down pass: no GLU, the chip's latent columns packed bf16 to LAT)
+                            pack_reconfig_data_format(SE_LAT);
+                            for (uint32_t r = 0; r < sbr; ++r)
+                                for (uint32_t t = 0; t < pw; ++t)
+                                    pack_tile<true>(r * pw + t, SE_LAT, (sb * sbr + r) * SE_LWMAX + loff + t);
+                            tile_regs_release();
+                            continue;
+                        }
+#endif
+                        pack_reconfig_data_format(HOWN);
+#if defined(SE_GLU) && !defined(SE_PROBE_NOGLU)
+                        PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+#if SE_GLU == 2
+                        for (uint32_t t = 0; t < sbn; t += 2)
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
+#elif SE_GLU == 3  // (silu(min(gate, 10)) x clamp(up, +-10): GLM-5.3's swiglu_limit, DeepSeek V4's)
+                        for (uint32_t t = 0; t < sbn; t += 2)
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamped_silu_glu, (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4), t, t + 1, t, VectorMode::RC)));
+#else
+                        for (uint32_t t = 0; t < sbn; t += 2) silu_tile_pack(t);
+                        for (uint32_t t = 0; t < sbn; t += 2)
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_binary_mul, (APPROX, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE), t, t + 1, t, VectorMode::RC)));
+#endif
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
+                        for (uint32_t r = 0; r < sbr; ++r)
+                            for (uint32_t t = 0; t < pw; t += 2)
+                                pack_tile<true>(r * pw + t, HOWN, (sb * sbr + r) * POMAX + hoff + t / 2);
+                        tile_regs_release();
+                    }
+                    if (fin && LAST > 0) cb_pop_front(ACC, n);
+                    cb_pop_front(XIN, MT * KB);
+                    cb_pop_front(WIN, WSLOT);
+                    if (sx + 1 == LAST) {  // (the slot's sum but for the last step: the last step may read it)
+                        cb_push_back(ACC, n);
+                        apushed += n;
+                    }
+                }
+#ifdef SE_LAT
+                if (pg >= SE_NGU) loff += pw; else
+#endif
+                hoff += pw / 2;
+                aoff += n;
+            }
+        }
+#else
+        if (G > 1) cb_reserve_back(ACC, SE_ACCP);
+        uint32_t apushed = 0;  // (ACC pages pushed this chunk - the pack offsets are relative to the write pointer)
+        for (uint32_t k = 0; k < G; ++k) {
+            uint32_t hoff = 0, loff = 0, aoff = 0;
             for (uint32_t pg = 0; pg < NPG; ++pg) {
                 const uint32_t pw = se_arg(pg), n = MT * pw;
                 tile_regs_acquire();
-                if (k > 0) {
+                if (k + 1 == G && k > 0) {
                     cb_wait_front(ACC, n);
                     reconfig_data_format_srca(WIN, ACC);
                     copy_init(ACC);
@@ -928,12 +1360,19 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 if (k + 1 < G) {
-                    cb_reserve_back(ACC, n);
                     tile_regs_wait();
                     pack_reconfig_data_format(ACC);
-                    for (uint32_t t = 0; t < n; ++t) pack_tile(t, ACC);
+                    PACK((llk_pack_reconfig_l1_acc(k > 0 ? 1 : 0)));
+#ifndef SE_PROBE_NOACCPACK
+                    for (uint32_t t = 0; t < n; ++t) pack_tile<true>(t, ACC, aoff + t - apushed);
+#endif
+                    PACK((llk_pack_reconfig_l1_acc(0)));
                     tile_regs_release();
-                    cb_push_back(ACC, n);
+                    aoff += n;
+                    if (k + 2 == G) {  // (its sum is complete but for the last shard's: the last shard may read it)
+                        cb_push_back(ACC, n);
+                        apushed += n;
+                    }
                     continue;
                 }
                 tile_regs_wait();
@@ -948,7 +1387,7 @@ void kernel_main() {
                 }
 #endif
                 pack_reconfig_data_format(HOWN);
-#if defined(SE_GLU)
+#if defined(SE_GLU) && !defined(SE_PROBE_NOGLU)
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 #if SE_GLU == 2
                 for (uint32_t t = 0; t < MT * pw; t += 2)
@@ -969,7 +1408,17 @@ void kernel_main() {
                 hoff += pw / 2;
             }
         }
+#endif
         cb_push_back(HOWN, MT * POMAX);
+#if SE_DT == 4
+        if (G * SPS > 1 && apushed < SE_ACCP) {  // (the region's tail: padding, so the next chunk starts at its start)
+#else
+        if (G > 1 && apushed < SE_ACCP) {  // (the region's tail: padding, so the next chunk starts at its start)
+#endif
+            cb_push_back(ACC, SE_ACCP - apushed);
+            cb_wait_front(ACC, SE_ACCP - apushed);
+            cb_pop_front(ACC, SE_ACCP - apushed);
+        }
 #ifdef SE_PROBE_GUWAIT
         UNPACK((DeviceTimestampedData("SE-GUWX", gu_wx)));
         UNPACK((DeviceTimestampedData("SE-GUWW", gu_ww)));
@@ -1088,7 +1537,7 @@ void kernel_main() {
                 const uint32_t ocb = (mode & 4) ? SE_OUTF : SE_FINB;
                 pack_reconfig_data_format(ocb);
                 for (uint32_t i0 = 0, n = 0; i0 < cnt; i0 += n) {
-                    const uint32_t lim = (mode & 4) ? 8 - opos % 8 : 8;
+                    const uint32_t lim = (mode & 4) ? SE_DT - opos % SE_DT : SE_DT;
                     n = cnt - i0 < lim ? cnt - i0 : lim;
                     if (mode & 4) opos += n;
                     tile_regs_acquire();
@@ -1136,7 +1585,10 @@ void kernel_main() {
 #elif !defined(SE_NODOWN)
         DeviceZoneScopedN("SE-DOWN");
         // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
+#ifndef SE_HXINC
         cb_wait_front(HALL, HA);
+#endif
+        uint32_t hin = 0;  // (SE_HXINC: h-all columns waited for - the first pass follows the exchange's rounds)
         for (uint32_t pd = 0; pd < NPD; ++pd) {
             const uint32_t pw = se_arg(NPG + pd);
             matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);  // (h rows strided POMAX within a column's block)
@@ -1148,6 +1600,12 @@ void kernel_main() {
                     const uint32_t kt = i * KBD + k;
                     while (kt >= se_arg(NPG + NPD + c + 1)) ++c;
                     const uint32_t a0 = c * MT * POMAX + kt - se_arg(NPG + NPD + c);
+#ifdef SE_HXINC
+                    if (c >= hin) {
+                        hin = c + 1;
+                        cb_wait_front(HALL, hin * MT * POMAX);
+                    }
+#endif
 #ifndef SE_PROBE_NOMATH
                     matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
 #endif
@@ -1171,14 +1629,31 @@ void kernel_main() {
 
 
 def _probes():
-    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOMATH: no matmuls; NOWL: no W
-    DRAM reads (16 B a block); NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
+    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOGLU: no gate / up activation (h = the
+    gate tiles); NOXR / NOWR: no x / W rounds at
+    all (no multicast, no handshake / credits: the CB pushed as if the round landed - the bottom-up build's stages); NOMATH: no matmuls;
+    NOACCPACK: gate / up's shard partials not packed (the full-sync pass boundary's pack cost); NOWL: no W
+    DRAM reads (16 B a block); NOWREAD: no W DRAM reads at all; NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
     head: GU_ALONE at the head's shapes) - the results are wrong. GUWAIT (results right): gate / up's unpacker cycles
     waiting for x / W a core, SE-GUWX / SE-GUWW; GUSTEP (with GUWAIT): the first 48 steps' waits, one data marker each
-    (unnamed in the csv: their source lines sit inside a macro argument)."""
+    (unnamed in the csv: their source lines sit inside a macro argument). WLOOP: the NCRISC stream loop's passes and
+    cycles while the first chunk's gate / up W rounds land (SE-WLIT / SE-WLCY, a core)."""
     import os
 
     out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
+    out += "\n" * int(os.environ.get("SE_PAD", "0"))  # (profiling: shift the source lines - a zone hash collision)
+    if os.environ.get(
+        "SE_WPF"
+    ):  # (timing probe: the W prefetch window, blocks in flight a core; <= 13 transaction ids)
+        out += f"#define SE_WPF {int(os.environ['SE_WPF'])}u\n"
+    # (the router on the engine: its W_r^T leads spread over the rows - see SE-RTRLD; K3 head traced 397 -> 389 us,
+    # the logits 46 -> 37. SE_RWL=0: all on row 0)
+    if os.environ.get("SE_RWL", "1") == "1":
+        out += "#define SE_RWL\n"
+    wla = int(os.environ.get("SE_WLA", "6"))  # (the W prefetch window in the column's rounds - see prefetch; 0: off,
+    # 3 of my blocks in flight a core: K3 head traced 440 -> 397 us at 6, flat over 5-8)
+    if wla:
+        out += f"#define SE_WLA {wla}u\n"
     # (HW: hang words - a kernel's state written into a persistent L1 tensor (fused_head sets HW_ADDR) as it waits;
     # tools: moe_block_runs' triage add-on reads them after a hang)
     if HW_ADDR and "HW" in os.environ.get("SE_PROBE", "").split(",") and not os.environ.get("HW_ALLOC_ONLY"):
@@ -1221,6 +1696,18 @@ def _subsets(nf, GX):
     divs = [d for d in range(1, GX + 1) if nf % d == 0]
     best = max(((a, b) for a in divs for b in divs), key=lambda ab: (min(ab[0] + ab[1], GX), -abs(ab[0] - ab[1])))
     return best
+
+
+def _common_span(lists, start, n):
+    """lists {core (x, y): its full arg list} -> (ttnn.RuntimeArgs without args [start, start + n), common args [start,
+    n, those n values]) when every core holds the same span; else (the full lists, [0, 0]) - se_ra reads either."""
+    spans = {tuple(a[start : start + n]) for a in lists.values()}
+    shared = n > 0 and len(spans) == 1 and all(len(a) >= start + n for a in lists.values())
+    shared = shared and os.environ.get("SE_COMMON_SPAN", "1") != "0"  # (A/B: 0 sends every arg per core)
+    rt = ttnn.RuntimeArgs()
+    for (x, y), a in lists.items():
+        rt[x][y] = a[:start] + a[start + n :] if shared else a
+    return rt, ([start, n] + list(next(iter(spans))) if shared else [0, 0])
 
 
 def next_semaphore_id(prog):
@@ -1306,16 +1793,25 @@ class SeEngine3:
         assert min(pairs) >= 1
         self.po, self.h0 = pairs, [sum(pairs[:c]) for c in range(GX)]
         self.POMAX = max(pairs)
-        pwmax = (8 // MT) // 2 * 2
+        # (DEST tiles a pass: 8 fp32 with full sync; SE_HALFSYNC=1 (A/B, engine alone): 4 a half - the GLU and pack of
+        # one pass overlap the next pass's matmuls)
+        self.DT = dest_tiles()
+        # (gate / up / latent passes: up to 8 tiles; with half sync they go through DEST as row sub-blocks of <= 4 -
+        # a row at most 4 wide)
+        self.PGW = min(8 // MT, 4) if self.DT == 4 else 8 // MT
+        pwmax = self.PGW // 2 * 2
         self.NPG = max(-(-2 * p // pwmax) for p in pairs)
         self.wg = [_split_pad(2 * p, self.NPG, 2) for p in pairs]
+        if os.environ.get("SE_PASSREV") == "1":  # (A/B: the narrow gate / up pass first - under the x load, which binds
+            # the first pass anyway - and the full-width passes after it, with only the W stream left)
+            self.wg = [sorted(wg) for wg in self.wg]
         self.NGU, self.LT = self.NPG, latent  # (gate / up passes; then the latent's)
         if latent:
             lw = column_split(latent, GX, 1)
             assert min(lw) >= 1
             self.lw, self.l0 = lw, [sum(lw[:c]) for c in range(GX)]
             self.LWMAX = max(lw)
-            npl = -(-self.LWMAX // (8 // MT))
+            npl = -(-self.LWMAX // self.PGW)
             self.wg = [wg + _split(lw[c], npl, 1) for c, wg in enumerate(self.wg)]
             self.NPG += npl
         # (the latent's pages a chunk: its LAT block - with chunks its LAT + LATZ, chunk m's at m LATP: no zone reused
@@ -1324,7 +1820,7 @@ class SeEngine3:
         # down: the column's output tiles, NPD passes of widths <= 8 / MT, K steps of KBD
         pnd = column_split(self.NTH, GX, 1)
         self.n0d = [sum(pnd[:c]) for c in range(GX)]
-        self.PWDMAX = 8 // MT
+        self.PWDMAX = self.DT // MT
         self.down = down
         self.NPD = max(-(-p // self.PWDMAX) for p in pnd) if down else 0
         self.wd = [_split(p, self.NPD, 1) if down else [] for p in pnd]
@@ -1336,10 +1832,17 @@ class SeEngine3:
             assert all(len(wd) == self.NPD for wd in self.wd)
         # (the down's K step: 8, or the largest divisor of I's tiles under it - DeepSeek-V4.1's 36 a chip: 6)
         KBD = KBD or max(d for d in range(1, 9) if self.HT % d == 0)
+        KBD = int(os.environ.get("SE_KBD", KBD))  # (SE_KBD: A/B the down K step)
         self.KBD = KBD
         assert self.HT % KBD == 0
         self.NSD = self.HT // KBD if down else 0
         self.NB = self.NPG * self.NSG + self.NPD * self.NSD
+        # (the NCRISC's per-block arrays - trid_of / slot_of [64] - index a core's blocks b / GY: ceil(NB / GY) of them)
+        if -(-self.NB // GY) > 64:
+            raise ValueError(
+                f"se_engine3: {self.NB} W blocks a chunk over {GY} rows = {-(-self.NB // GY)} a core > 64 (the "
+                f"NCRISC's trid_of / slot_of): a larger KB ({self.KB}) / KBD ({KBD})"
+            )
         self.WSLOT = max(self.KB * max(sum(self.wg, [])), KBD * max(sum(self.wd, []), default=0))  # (tiles)
         self.fid, self.w_dtype = fidelity, w_dtype
         self.wtb = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.bfloat16: 2048}[w_dtype]
@@ -1366,12 +1869,11 @@ class SeEngine3:
         # dispatch prep: a unit = one row tile's run of x own (a K step: KB tiles) or of a latent block (LWMAX)
         self.prep = prep
         self.PFULL = self.LWMAX if latent else self.KB
-        self.PBCT = max(d for d in range(1, 9) if self.PFULL % d == 0)
-        tries = [(0, 1), (5, 1)] if self.NCH == 1 else [(0, 2), (5, 2), (5, 1)]
+        self.PBCT = max(d for d in range(1, self.DT + 1) if self.PFULL % d == 0)
+        tries = [(0, 1), (5, 1), (4, 1), (3, 1)] if self.NCH == 1 else [(0, 2), (5, 2), (5, 1), (4, 1), (3, 1)]
         for self.WRING, self.HSL in tries:  # (see wown_t)
             al = lambda v: (v + 63) // 64 * 64  # noqa: E731
-            self.acc_pages = MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, [])))
-            self.acc_blocks = [MT * pw for pw in sum(self.wg, [])]
+            self.acc_pages = MT * max(sum(c) for c in self.wg)  # (a fixed slot a pass: the busiest column's)
             off, o = {}, 0
             rsr = self._rs_regions() if rs is not None else []
             # (the reduce-scatter's local buffers - HOLD, FINB: this core's compute and, after its hand-off, its port read
@@ -1392,10 +1894,9 @@ class SeEngine3:
                     ("hown", MT * self.POMAX * self.htb),
                     ("hall", self.HSL * GX * MT * self.POMAX * self.htb if down else 0),
                     ("xin", 2 * MT * self.KB * self.xtb),
-                    # (ACC: a FIFO of fp32 pass partials, MT x pw tiles a block - the pass widths differ (K3's latent-
-                    # down passes): its straddle room (without it the tail overwrote the W stream's ready words: a W
-                    # round taken before it landed, a hang)
-                    ("acc", _ring_pages(self.acc_pages, self.acc_blocks) * 4096),
+                    # (ACC: the passes' fp32 partials, a fixed slot each - the packer accumulates onto them in L1;
+                    # every chunk starts at the region's start, so no block straddles its end)
+                    ("acc", self.acc_pages * 4096),
                     ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
                     ("words", 256),
                 ]
@@ -1420,7 +1921,7 @@ class SeEngine3:
                     for k, v in ovl.items():
                         off[k], o = o, al(o + v)
             if ovh:
-                if ovh["hold"] <= _ring_pages(self.acc_pages, self.acc_blocks) * 4096:
+                if ovh["hold"] <= self.acc_pages * 4096:
                     off["hold"] = off["acc"]
                 else:
                     off["hold"], o = o, al(o + ovh["hold"])
@@ -1432,8 +1933,8 @@ class SeEngine3:
                 self.ETC = -(-router["ET"] // GX)
                 MTR = MT * self.NCH
                 # (DEST: ETC x a row group's tiles <= 8 - every chunk's rows at once, else a chunk's MT at a time)
-                self.RG = MTR if self.ETC * MTR <= 8 else MT
-                assert self.ETC * self.RG <= 8, "the router logits on the engine: ETC x MT rows in DEST"
+                self.RG = MTR if self.ETC * MTR <= self.DT else (MT if self.ETC * MT <= self.DT else 1)
+                assert self.ETC * self.RG <= self.DT, "the router logits on the engine: ETC x its row group in DEST"
                 KTO = router["KTO"]
                 # (K chunk: x / W_r^T rounds, two buffers - two rounds (KTO / 2) where the region fits past the
                 # words, else more, smaller rounds behind the receivers' acks: the largest that fits. The region may
@@ -1474,6 +1975,14 @@ class SeEngine3:
         # (each region's bytes, in arena order - overlays share their host's)
         ends = sorted(set(off.values()) | {o})
         self.sizes = {k: next(e for e in ends if e > v) - v if v < o else 0 for k, v in off.items()}
+        if os.environ.get("SE_LOG") == "1":  # (the resolved layout: KB, W ring, router K chunk, regions)
+            from loguru import logger
+
+            logger.info(
+                f"se_engine3: KB {self.KB} KBD {self.KBD} W ring {self.WRING} HSL {self.HSL} NPG {self.NPG} NPD {self.NPD}"
+                f" router KC {getattr(self, 'KC', None)} arena {o // 1024} / {self.arena_max // 1024} KB: "
+                + " ".join(f"{k} {v // 1024}@{off[k] // 1024}" for k, v in self.sizes.items())
+            )
         if o > self.arena_max:
             sizes = {
                 k: (off[k2] if i + 1 < len(off) else o) - off[k]
@@ -1498,8 +2007,30 @@ class SeEngine3:
                 device=mesh_device,
                 memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
+                    persist_l1.buffer_type(),
                     ttnn.ShardSpec(cores, (1, 64), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        if os.environ.get("SE_BRW") == "1":  # (the W reads on the BRISC's NOC0: its words with the NCRISC, 1 KB a core)
+            nw_ = 1024 if os.environ.get("SE_XN1") == "1" else 256
+            # (the NCRISC's table of a core's W blocks: 4 words each from word 16, below SE_XN1's x table at word 512)
+            ng = self.NPG * self.NSG if os.environ.get("SE_BRW_DN1") == "1" else self.NB
+            nmax, cap = -(-ng // GY), (min(nw_, 512) - 16) // 4
+            if nmax > cap:
+                raise ValueError(
+                    f"se_engine3: SE_BRW's table of a core's W blocks holds {cap}, a core has up to {nmax} ({ng} blocks "
+                    f"over {GY} rows): a larger KB ({self.KB}) / KBD ({self.KBD})"
+                )
+            self.wsync = ttnn.from_torch(
+                torch.zeros(GX * GY, nw_, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(cores, (1, nw_), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
@@ -1550,7 +2081,19 @@ class SeEngine3:
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard),
         )
         self.base = int(self.arena.buffer_address())
+        self.arena_delta = 0  # (its own arena: base is the tensor's address - use_arena: a larger one's)
         return self.arena
+
+    def use_arena(self, arena, nbytes):
+        """Run on a larger L1 tensor of the caller's (nbytes a core, lockstep over the grid) whose range holds this
+        engine's [base, base + arena_bytes): every baked address stays; the CBs bind it at base - its address."""
+        d = self.base - int(arena.buffer_address())
+        assert 0 <= d and d + self.arena_bytes <= nbytes, (
+            f"se_engine3: the arena [{self.base}, +{self.arena_bytes}) is not inside the caller's "
+            f"[{int(arena.buffer_address())}, +{nbytes})"
+        )
+        self.arena, self.arena_delta = arena, d
+        return d
 
     def realloc_arena(self, settle=False):
         """The arena again (a caller that shares the L1 left with another op frees it between calls): it must land where
@@ -1680,7 +2223,7 @@ class SeEngine3:
                     room >= need
                 ), f"se_engine3: CB {key} needs {need} B (blocks {sorted(set(blocks))}), region {room}"
             d = ttnn.cb_descriptor_from_sharded_tensor(
-                i, self.arena, address_offset=off[key], total_size=size, core_ranges=allc
+                i, self.arena, address_offset=off[key] + self.arena_delta, total_size=size, core_ranges=allc
             )
             d.format_descriptors = [ttnn.CBFormatDescriptor(i, dt, page)]
             cbs.append(d)
@@ -1722,19 +2265,21 @@ class SeEngine3:
             cb(RTR_CB["rx"], "rx", 2 * self.KC * MT * self.NCH * 2048, ttnn.bfloat16, 2048)  # (two rounds' buffers)
             cb(RTR_CB["rw"], "rw", 2 * self.ETC * self.KC * 2048, ttnn.bfloat16, 2048)
             cb(RTR_CB["ro"], "ro", self.ETC * MT * self.NCH * 4096, ttnn.float32, 4096)
-        cb(ACC, "acc", self.acc_pages * 4096, ttnn.float32, 4096, self.acc_blocks)
+        cb(ACC, "acc", self.acc_pages * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
-        b_rt, n_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        bl, nl = {}, {}  # (core (x, y) -> its full arg list)
         for c in range(GX):
             i0 = self.fam0.index(c) if c in self.fam0 else GX
             i1 = self.fam1.index(c) if c in self.fam1 else GX
             for cy in range(GY):
-                b_rt[cx0 + c][cy] = (
-                    [
-                        c,
-                        cy,
+                # (the kernels' order: the core's own args first, then the span every core of the chip shares - from
+                # x's address to y's (BRISC), from ty to the tail (NCRISC) - then the core's again; _common_span sends
+                # the span once a chip as common args, se_ra in the kernels reads the full list's indices)
+                bl[(cx0 + c, cy)] = (
+                    [c, cy, self.po[c], self.h0[c], i0, i1, virt(c, cy).y]
+                    + [
                         int(x.buffer_address()),
                         x_ct,
                         x_k0,
@@ -1742,13 +2287,8 @@ class SeEngine3:
                         b + off["xin"],
                         b + off["hown"],
                         b + off["hall"],
-                        self.po[c],
-                        self.h0[c],
-                        i0,
-                        i1,
                         virt(0, cy).x,
                         virt(GX - 1, cy).x,
-                        virt(c, cy).y,
                     ]
                     + ([int(rtr["x"].buffer_address()), b + off["rx"]] if rtr is not None else [0, 0])
                     + [virt(cc, cy).x for cc in range(GX)]
@@ -1758,31 +2298,38 @@ class SeEngine3:
                     + self._rs_brisc(rs_pos, rs_port, rs_mbox, c, cy)
                     + self._la_brisc(rs_pos, rs_port, la, c, cy)
                 )
-                n_rt[cx0 + c][cy] = (
+                rtr_a = self._rtr_args(rtr, c, cy) if rtr is not None else []
+                nl[(cx0 + c, cy)] = (
                     [
                         cy,
                         virt(c, cy).x,
+                        ((c * GY + cy) // self.nbank) * self.wown_t * self.wtb,
+                        self.n0d[c],
+                        (c * GY + cy) % self.nbank,
+                    ]
+                    + rtr_a
+                    + self.wg[c]
+                    + self.wd[c]
+                    + [
                         virt(c, 0).y,
                         virt(c, GY - 1).y,
                         int(w.buffer_address()),
-                        ((c * GY + cy) // self.nbank) * self.wown_t * self.wtb,
                         b + off["wown"],
                         b + off["win"],
                         b + off["words"],
                         int(y.buffer_address()),
-                        self.n0d[c],
                     ]
-                    + (self._rtr_args(rtr, c, cy) if rtr is not None else [])
-                    + self.wg[c]
-                    + self.wd[c]
                     + [virt(c, yy).y for yy in range(GY)]
-                    + [(c * GY + cy) % self.nbank]
                     + sor
                     + tail
                     + self._rs_ncrisc(rs_pos, rs_arr, c, cy, rs_port, rs_chunk)
                     + self._la_ncrisc(rs_pos, la, c, cy)
                     + (self._prep_ncrisc(rs_pos, prep, c, cy) if prep is not None else [])
                 )
+                b_span = (7, 9 + 2 + GX + len(sor) + len(tail) + 1)
+                n_span = (5 + len(rtr_a) + len(self.wg[c]) + len(self.wd[c]), 7 + GY + len(sor) + len(tail))
+        b_rt, b_crt = _common_span(bl, *b_span)
+        n_rt, n_crt = _common_span(nl, *n_span)
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
             processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
@@ -1825,7 +2372,7 @@ class SeEngine3:
             NOUT,
         ]
         nd = "" if self.down else "#define SE_NODOWN\n"
-        nd += f"#define SE_HSL {self.HSL}\n"
+        nd += f"#define SE_HSL {self.HSL}\n#define SE_ACCP {self.acc_pages}u\n#define SE_DT {self.DT}\n"
         nd += f"#define SE_XTB {self.xtb}u\n#define SE_HTB {self.htb}u\n"  # (x / h tile bytes: x_dtype / h_dtype)
         if self.NCH > 1 and self.shards > 1:  # (chunk m = block m of every owner: the owners' rows stay contiguous)
             nd += f"#define GROW(m, lr) (((lr) / {self.CR // self.shards}) * {self.rows // 32 // self.shards} + (m) * {self.CR // self.shards} + (lr) % {self.CR // self.shards})\n"
@@ -1833,6 +2380,26 @@ class SeEngine3:
             nd += "#define GROW(m, lr) ((m) * CR + (lr))\n"
         if self.WRING:
             nd += f"#define SE_WRING {self.WRING}\n"
+        if os.environ.get("SE_XFIRST") == "1":  # (A/B: the row leads load their own x before the router's x)
+            nd += "#define SE_XFIRST\n"
+        if os.environ.get("SE_XPIPE") == "1":  # (A/B: the x owners send a step as soon as its own load landed)
+            nd += f"#define SE_XPIPE\n#define SE_XL {int(os.environ.get('SE_XL', '3'))}u\n"
+        if os.environ.get("SE_HXINC") == "1":  # (A/B, no RS: the down starts on h columns as they land)
+            nd += "#define SE_HXINC\n"
+        if os.environ.get("SE_BRW") == "1":  # (A/B: the W DRAM reads on the BRISC's NOC0, paced)
+            assert not self.WRING, "SE_BRW: resident weights only"
+            nd += f"#define SE_BRW\n#define SE_WS {int(self.wsync.buffer_address())}u\n"
+            nd += f"#define SE_WPD {int(os.environ.get('SE_WPD', '4'))}u\n"
+            if os.environ.get("SE_XN1") == "1":  # (A/B, the engine alone - x from DRAM, no ports: family-1 x on NOC1)
+                assert self.rs is None, "SE_XN1: the engine alone only"
+                nd += "#define SE_XN1\n"
+            if os.environ.get("SE_BRW_DN1") == "1":  # (the down's W blocks on the NCRISC's NOC1, early)
+                nd += f"#define SE_BRW_DN1\n#define SE_DN1_AT {int(os.environ.get('SE_DN1_AT', '14'))}u\n"
+            nd += f"#define SE_WDD {int(os.environ.get('SE_WDD', '24'))}u\n"
+            if os.environ.get("SE_BRW_BAR", "1") == "1":
+                b0 = self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0, 0))
+                nd += f"#define SE_BRW_BAR\n#define SE_BAR_X {b0.x}\n#define SE_BAR_Y {b0.y}\n#define SE_BAR_N {GX * GY}u\n"
+
         if self.NCH > 1:  # (dispatch prep: every chunk's units in the last chunk's prep op - see the worklog)
             nd += "#define SE_PREP_LAST\n"
         if self.rs is not None:
@@ -1885,6 +2452,7 @@ class SeEngine3:
             + ([] if self.down else y_ct)
             + (list(ttnn.TensorAccessorArgs(rtr["x"]).get_compile_time_args()) if rtr is not None else []),
             runtime_args=b_rt,
+            common_runtime_args=b_crt,
             config=dm("RISCV_0", ttnn.NOC.NOC_0),
         )
         kernels = [
@@ -1905,6 +2473,7 @@ class SeEngine3:
                     else []
                 ),
                 runtime_args=n_rt,
+                common_runtime_args=n_crt,
                 config=dm("RISCV_1", ttnn.NOC.NOC_1),
             ),
         ]
@@ -1918,7 +2487,7 @@ class SeEngine3:
             comp = ttnn.ComputeConfigDescriptor()
             comp.math_fidelity = self.fid
             comp.fp32_dest_acc_en = True
-            comp.dst_full_sync_en = True
+            comp.dst_full_sync_en = self.DT == 8
             comp.math_approx_mode = False
             comp.bfp8_pack_precise = self.pack_precise  # (h packed to bfp8 in one rounding: pack_precise)
             modes = [ttnn.UnpackToDestMode.Default] * 64  # (NUM_CIRCULAR_BUFFERS)
@@ -1986,7 +2555,7 @@ class SeEngine3:
         rs = self.rs
         k = rs.k(cx, cy)
         hs = rs.handoffs(p, cx, cy)
-        return [len(hs), mbox + 16 * k] + [v for _, d in hs for v in port(d, rs.link(k))]
+        return [len(hs), mbox + persist_l1.handoff_bytes() * k] + [v for _, d in hs for v in port(d, rs.link(k))]
 
     def la_rows(self, cy, b):
         """(first local row, rows) of core row cy's MT row tiles in owner block b (RB = CR / G row tiles a block)."""
@@ -2009,7 +2578,9 @@ class SeEngine3:
         dst = [b for b in range(self.shards) if b != p and self.la_rows(cy, b)[1]]
         if "NOA2A" in _probes():  # (timing / hang probe: no all-to-all)
             dst = []
-        return [len(dst), la["word"] + 16 * k] + [v for b in dst for v in port(self.la_dir(p, b), k % self.rs.nv)]
+        return [len(dst), la["word"] + persist_l1.handoff_bytes() * k] + [
+            v for b in dst for v in port(self.la_dir(p, b), k % self.rs.nv)
+        ]
 
     def _la_ncrisc(self, p, la, cx, cy):
         if not self.LT:

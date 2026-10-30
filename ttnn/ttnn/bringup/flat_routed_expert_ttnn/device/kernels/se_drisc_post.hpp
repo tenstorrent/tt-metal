@@ -97,6 +97,17 @@ inline void se_drisc_post(
     const uint32_t n_load = dyn.n_load;
     const uint32_t bytes = ((SD_LOADS + n_load) * 4 + 15) / 16 * 16;
     const bool batched = ns * bytes <= scratch_bytes;
+#ifndef SE_DRISC_POST_NOACK
+    // (batched: the job counts move only after EVERY descriptor's write is acked - one barrier for all of them. The
+    // count used to follow its descriptor as soon as the write had left this NIU, on the assumption that the
+    // increment on the same static VC lands after the write; a DRISC that sees the count before its descriptor
+    // landed reads the previous call's - landing address, receivers, GDDR region. SE_DRISC_POST_NOACK: the old way)
+    constexpr uint32_t MAX_POST = 32;
+    uint32_t post_xy[MAX_POST], post_job[MAX_POST];
+    const bool ack_after = batched && ns <= MAX_POST;
+#else
+    constexpr bool ack_after = false;
+#endif
     for (uint32_t s = 0; s < ns; ++s) {
         const uint32_t sa = 13 + SE_DRISC_SLOT_ARGS * s;
         uint32_t dxy = arg(sa), job = arg(sa + 1);
@@ -158,6 +169,11 @@ inline void se_drisc_post(
         if (!batched) {
             noc_async_write_barrier();  // (landed before the job count moves; and the buffer is reused)
             se_drisc_inc(dxy, base + se_drisc_jobs(job), 1);
+        } else if (ack_after) {
+#ifndef SE_DRISC_POST_NOACK
+            post_xy[s] = dxy;
+            post_job[s] = job;
+#endif
         } else {
             // each slot's job count right behind its descriptor: once the write has left this NIU, the increment on
             // the same static VC and route lands after it, so the slot's DRISC starts without waiting for the other
@@ -167,6 +183,14 @@ inline void se_drisc_post(
             se_drisc_inc(dxy, base + se_drisc_jobs(job), 1);
         }
     }
+#ifndef SE_DRISC_POST_NOACK
+    if (ack_after) {  // every descriptor landed (acked), then the job counts
+        noc_async_write_barrier();
+        for (uint32_t s = 0; s < ns; ++s) {
+            se_drisc_inc(post_xy[s], base + se_drisc_jobs(post_job[s]), 1);
+        }
+    }
+#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

@@ -28,6 +28,7 @@ import os
 import torch
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 from .fabric_all_gather_py import NOC0, NOC1, _SEM_CACHE
 from .sparse_all_gather_2d import DIRS, OPP, mesh_plan, place_ports
@@ -548,6 +549,21 @@ void kernel_main() {
 }
 """
 
+
+def acc_compute_config(fidelity=None):
+    """The accumulator kernel's compute: fp32 DEST, and the fp32 sums (CB_ACC) unpacked straight to DEST. The default
+    unpack narrows a Float32 CB to TF32 on its way to DEST (genfiles: fp32 DEST with every CB fp32 / exponent B), so the
+    copy of a sum rounded it twice - to 10 mantissa bits, then to bf16 - a bf16 ulp off at a midpoint."""
+    comp = ttnn.ComputeConfigDescriptor()
+    if fidelity is not None:
+        comp.math_fidelity = fidelity
+    comp.fp32_dest_acc_en = True
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[CB_ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (only copy_tile reads it: the out pass)
+    comp.unpack_to_dest_mode = modes
+    return comp
+
+
 _ACC_COMPUTE = r"""
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -638,10 +654,12 @@ void kernel_main() {
 """
 
 
-def route(src, home, R, C, wrap_x, wrap_y, link):
+def route(src, home, R, C, wrap_x, wrap_y, link, ytie=False):
     """[(chip, direction)] hops from src to home: Y first, then X (lines: forced; rings: shorter way). Ties as the
     fabric's routing tables (routing_table_generator.cpp: the first of (N, S) / (E, W)): Y- (North, row - 1) and X+
-    (East, column + 1) - a multi-hop unicast must leave through its route's first hop."""
+    (East, column + 1) - a multi-hop unicast must leave through its route's first hop. ytie (the combine's SPC_YTIE,
+    its senders re-encode these routes): a Y tie goes Y+ when the source's and home's columns differ in parity - half
+    the opposite row's chips each way."""
     hops = []
     r, c = src
 
@@ -652,7 +670,7 @@ def route(src, home, R, C, wrap_x, wrap_y, link):
             return (1 if plus else -1), (f if plus else n - f)
         return (1 if b > a else -1), abs(b - a)
 
-    s, k = step(R, r, home[0], wrap_y, False)
+    s, k = step(R, r, home[0], wrap_y, ytie and (c + home[1]) % 2 == 1)
     for _ in range(k):
         hops.append(((r, c), "Y+" if s > 0 else "Y-"))
         r = (r + s) % R
@@ -710,7 +728,7 @@ def sparse_combine_l1_prepare(
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_cores])
     key = (id(mesh_device), tuple(all_cores), "combine_l1", area_bytes)
     if key not in _SEM_CACHE:
-        ready = ttnn.create_global_semaphore(mesh_device, core_set, 0)
+        ready = persist_l1.semaphore(mesh_device, core_set, 0)
         words = area_bytes // 4
         shard = ttnn.ShardSpec(core_set, [1, words], ttnn.ShardOrientation.ROW_MAJOR)
         area_t = ttnn.from_torch(
@@ -724,7 +742,7 @@ def sparse_combine_l1_prepare(
         ttnn.synchronize_device(mesh_device)
         _SEM_CACHE[key] = (mesh_device, ready, area_t)
     _, ready, area_t = _SEM_CACHE[key]
-    ready_addr = int(ttnn.get_global_semaphore_address(ready))
+    ready_addr = persist_l1.address(ready)
     area = int(area_t.buffer_address())
 
     # one table tensor per chip: the ports' injection lists then the accumulators' local lists ((y row, header) pairs)
@@ -933,7 +951,7 @@ def sparse_combine_l1_prepare(
                     core_ranges=aset,
                     compile_time_args=[CB_ROW, CB_META, CB_ACC, CB_OUT, NT, MAXT],
                     runtime_args=ac_rt,
-                    config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
+                    config=acc_compute_config(),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=srcs["aw"],

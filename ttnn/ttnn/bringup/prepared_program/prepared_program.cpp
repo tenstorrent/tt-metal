@@ -140,36 +140,68 @@ std::shared_ptr<const Prepared> prepare(
     }
 
     // the program cache key: generic_op's structural hash of every (range, program), salted so a generic_op launch
-    // of the same descriptor keeps its own entry - and every runtime arg value outside the patched slots: a cache hit
-    // re-applies only the patches, so two descriptors of one structure but other frozen values (a caller rebuilding
-    // it after something moved) must not share a cached program
+    // of the same descriptor keeps its own entry - and everything a cache hit does not re-apply: a hit re-applies only
+    // the patches, so two descriptors of one structure but other frozen state (a caller rebuilding it after something
+    // moved) must not share a cached program. Per runtime arg slot: a patched slot by the io tensor it takes (tagged:
+    // never equal to a frozen value), a frozen one by its value; per core its place and arg count (generic_op's hash
+    // has neither); per CB its patch's io tensor or its frozen buffer's address, and its address offset. Equal keys
+    // then mean the same slots patched from the same io tensors - what override_runtime_arguments' first-slot check
+    // relies on (an io tensor's slots were all written together, by a program of the same key)
     ttsl::hash::hash_t h = ttsl::hash::hash_objects_with_default_seed(std::string_view("bringup.prepared_program"));
+    ttsl::hash::hash_combine(h, p->n_io);
+    auto slot = [&h](bool patched, uint32_t io_or_value) {
+        ttsl::hash::hash_combine(h, patched);
+        ttsl::hash::hash_combine(h, io_or_value);
+    };
     for (size_t pi = 0; pi < np; ++pi) {
         const auto& [range, pd] = desc.mesh_programs[pi];
         ttsl::hash::hash_combine(h, range);
         ttsl::hash::hash_combine(h, ttnn::operations::generic::compute_program_descriptor_hash(pd));
         size_t r = 0;  // (p->rt[pi] is in kernel, core, arg order: the walk below meets its slots in turn)
         for (uint32_t k = 0; k < pd.kernels.size(); ++k) {
+            ttsl::hash::hash_combine(h, pd.kernels[k].runtime_args.size());
             for (const auto& [core, args] : pd.kernels[k].runtime_args) {
+                ttsl::hash::hash_combine(h, core.x);
+                ttsl::hash::hash_combine(h, core.y);
+                ttsl::hash::hash_combine(h, args.size());
                 for (uint32_t i = 0; i < args.size(); ++i) {
                     const auto& pr = r < p->rt[pi].size() ? p->rt[pi][r] : RtPatch{.kernel = ~0u};
                     const bool patched = pr.kernel == k && pr.x == core.x && pr.y == core.y && pr.arg == i;
                     const int s = value_slot_of(k, i);
-                    // (a value slot: its marker, never its value; none without the option, as before it)
-                    ttsl::hash::hash_combine(
-                        h, s >= 0 ? (~0u >> 1) - static_cast<uint32_t>(s) : (patched ? ~0u - pr.io : args[i]));
+                    if (s >= 0) {  // (a value slot: its marker, never its value; none without the option)
+                        ttsl::hash::hash_combine(h, 2u);
+                        ttsl::hash::hash_combine(h, static_cast<uint32_t>(s));
+                    } else {
+                        slot(patched, patched ? pr.io : args[i]);
+                    }
                     r += patched;
                 }
             }
+            ttsl::hash::hash_combine(h, pd.kernels[k].common_runtime_args.size());
             for (uint32_t i = 0; i < pd.kernels[k].common_runtime_args.size(); ++i) {
-                bool patched = false;
+                const CommonRtPatch* cp = nullptr;
                 for (const auto& c : p->crt[pi]) {
-                    patched = patched || (c.kernel == k && c.arg == i);
+                    if (c.kernel == k && c.arg == i) {
+                        cp = &c;
+                        break;
+                    }
                 }
-                ttsl::hash::hash_combine(h, patched ? ~0u : pd.kernels[k].common_runtime_args[i]);
+                slot(cp != nullptr, cp != nullptr ? cp->io : pd.kernels[k].common_runtime_args[i]);
             }
         }
         TT_FATAL(r == p->rt[pi].size(), "prepared_program: patch walk out of step ({} of {})", r, p->rt[pi].size());
+        for (uint32_t c = 0; c < pd.cbs.size(); ++c) {
+            const auto& cb = pd.cbs[c];
+            const CbPatch* bp = nullptr;
+            for (const auto& b : p->cbs[pi]) {
+                if (b.cb == c) {
+                    bp = &b;
+                    break;
+                }
+            }
+            slot(bp != nullptr, bp != nullptr ? bp->io : (cb.buffer != nullptr ? cb.buffer->address() : 0u));
+            ttsl::hash::hash_combine(h, cb.address_offset);
+        }
     }
     if (!value_slots.empty()) {
         ttsl::hash::hash_combine(h, p->n_values);

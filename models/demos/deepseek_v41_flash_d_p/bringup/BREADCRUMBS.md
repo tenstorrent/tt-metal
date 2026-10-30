@@ -4527,3 +4527,46 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_fork_out_identity.py -s`; census
   `/scratch/dnijemcevic/p16/census.sh <tag> DS41_FORK_OUT_BUFFERS=on|off`; A/B `python -m
   models.demos.common.bringup.orchestrator measure --task P.16`; old path DS41_FORK_OUT_BUFFERS=off.
+
+## P.17 perf (galaxy 8x4, attempt 1): MOE_DROP, the MoE block drop of model_bringup_lowbit @ 5e86f048ad4
+
+- Applied the 5 commits after 8deddc500ea (6f7fc85f27b, 847723943b1, 26f61977390, a99234c84e0, 5e86f048ad4) with
+  `git merge --squash --no-commit origin/dnijemcevic/model_bringup_lowbit; git reset -q`: no conflicts, 49 files,
+  every file byte-equal to the branch tip (checked with cmp). No DS41 code changed; tt/moe_block_adapter.py needed
+  nothing. `./build_metal.sh` clean; `import ttnn, ttnn.bringup, moe_block, tt.moe_block_adapter` OK.
+- Only deviation from the drop: pre-commit's black rewrapped 3 long lines (formatting only) in moe_block/moe_block.py,
+  combine_rf/sparse_combine_rf.py, deepseek_v3_d_p/tt/moe/tt_k3_token_split_moe.py; kept so the gate's commit is not
+  refused (K-55).
+- No new Setting: the drop is code, not a switch; both A/B sides run DS41_ENGRAM_TABLE=resident as the task names.
+- Shipped configuration runs (MOE_IMPL=block, MOE_HEAD=fused, torus 8x4): `measure --task P.17` quick side
+  (ab/P.17/new/quick, code before black) PASSED every limit; min layer PCC L39 0.578 -> 0.513, err_layer_L39 0.875 ->
+  0.914 (limit 1.533), L00-L38 within +-0.0025 of 'before' (most slightly lower), states unchanged. Not bit-identical
+  to before (the combine's sums / per-chip accumulators change the summation order). Quick wall 320.4 -> 358.7 ms
+  (one sample each, spread 36 / 45 ms; the orchestrator's p51200 / p512000 profiles decide).
+- The measure's p51200 profile was stopped by me during weight load (my shell slot would have cut it mid-run, and the
+  black rewrap changed the code key anyway); the orchestrator measures 'after' itself.
+- New switches the drop adds on the DS41 path (env, read in the drop's code; DS41 sets none, so the defaults run):
+  SPC_ACC_PERCHIP=1 (combine per-chip accumulator roles, on), SPC_PLACE=noc1, SPC_YTIE off, MOE_EXPERTS_DRISC=1,
+  MOE_ONE_ARENA=1, MOE_TAIL_GENERIC off, SE_PORT_NOC0=1, FAG_PORT_NOC0 off, PERSIST_L1 off (not "small"),
+  PERSIST_L1_SEMS=48, se_engine3 tuning SE_NWS=3 / SE_WLA=6 / SE_RWL=1 / SE_COMMON_SPAN=1 / SE_KBD=KBD, SE_WPD=4,
+  SE_XL=3, SE_DN1_AT=14, SE_WDD=24, SE_BRW_BAR=1 (used only with SE_BRW=1), A/B-only off: SE_BRW, SE_BRW_DN1,
+  SE_HALFSYNC, SE_HXINC, SE_PASSREV, SE_XFIRST, SE_XN1, SE_XPIPE, SE_LOG, SE_PAD=0. Removed: TT_CMBF2D_IDLE (C++
+  combine factory).
+- OV-23: no Python-built op added or touched by DS41 code; the drop's own Python programs (se_engine3, combine_rf,
+  flat_gather) were not audited for the prepared path here. OV-25: no fork suites run. OV-3: nothing padded.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.17 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml`; old path = git stash of the drop.
+
+## P.17 perf (galaxy 8x4, attempt 3): MOE_DROP sanity check only (OV-26)
+
+- The drop from attempt 1 is still in the tree: the 49 files of 8deddc500ea..5e86f048ad4 are byte-equal to
+  origin/dnijemcevic/model_bringup_lowbit, except black's rewrapping of 3 long lines (formatting only, not env knobs;
+  K-55). Following OV-26, nothing was converted or marked, and nothing outside the drop changed (no DS41 code, no
+  Setting, no adapter change).
+- `./build_metal.sh` rc 0 (already up to date). `import ttnn, ttnn.bringup, moe_block, tt.moe_block_adapter` OK.
+- Shipped configuration (MOE_IMPL=block, MOE_HEAD=fused, torus 8x4): `measure --task P.17 --part quick` rc 0, every
+  limit passed, min layer PCC L39 0.513, chunk_wall_ms 359.0 (spread 219.7), host_transfers_per_layer 0. No profile
+  run (the orchestrator measures p51200 / p512000 itself).
+- The drop's switches and their defaults are listed in the attempt 1 section above (SPC_ACC_PERCHIP=1 on, etc.).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.17 --part quick --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml`.
