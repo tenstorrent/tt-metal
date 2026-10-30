@@ -112,6 +112,27 @@ int main(void)
 
     llk_perf::read_last_zone();
 
+#if defined(ARCH_WORMHOLE) && defined(LLK_TRISC_PACK)
+    // Wormhole L1 port 3 is a round-robin arbiter over {0: TDMA (packer L1 writes, mover), 1: math TRISC,
+    // 2: pack TRISC}. Its last-grant pointer survives TRISC soft reset and is cleared only by a tile reset, so the
+    // L1 access rhythm of the next kernel (and its perf numbers) depended on which requester this kernel used last.
+    // Make the pack TRISC the last requester every time: wait until the math TRISC has done its last L1 store
+    // (its completion mailbox), let it settle into its end loop (it then runs from the icache), then load one L1
+    // word. The packer is idle here (tensix_sync), and nothing after this on port 3 comes from math or TDMA.
+    {
+        mailbox_t math_mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + sizeof(std::uint32_t));
+        while (ckernel::load_blocking(math_mailbox) != ckernel::KERNEL_COMPLETE)
+        {
+        }
+        constexpr std::uint64_t PORT3_SETTLE_CYCLES = 4096;
+        const std::uint64_t settle_start            = ckernel::read_wall_clock();
+        while (ckernel::read_wall_clock() - settle_start < PORT3_SETTLE_CYCLES)
+        {
+        }
+        (void)ckernel::load_blocking(math_mailbox);
+    }
+#endif
+
     *mailbox = ckernel::KERNEL_COMPLETE;
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
     host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
