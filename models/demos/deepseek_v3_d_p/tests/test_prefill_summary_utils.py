@@ -82,20 +82,46 @@ def test_summary_dir_uses_env(monkeypatch, tmp_path):
     assert d.is_dir()
 
 
+_HOST = {"hostname": "glx-a", "tdp_limit_max": 150, "power_class": "14kw"}
+
+
 def test_emit_perf_metrics_writes_json_and_summary(monkeypatch, tmp_path, capsys):
+    from models.demos.deepseek_v3_d_p.utils import smbus_telemetry
+
     monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    monkeypatch.setattr(smbus_telemetry, "host_power", lambda: _HOST)
     path = psu.emit_perf_metrics("run_a", "Layer perf", {"median_ms": 1.5, "samples_ms": [1.4, 1.6]})
 
     assert path == tmp_path.resolve() / "perf_json" / "run_a.json"
     assert json.loads(path.read_text()) == {
         "name": "run_a",
         "kind": "test_perf",
+        "commit": "abc123",
+        "hosts": [_HOST],
         "median_ms": 1.5,
         "samples_ms": [1.4, 1.6],
     }
     summary = (tmp_path / "perf" / "run_a.md").read_text()
     assert "median_ms" in summary and "samples_ms" not in summary
+    assert "host glx-a" in summary and "TDP_LIMIT_MAX=150 -> 14kw" in summary
     assert "Layer perf" in capsys.readouterr().out
+
+
+def test_emit_perf_metrics_without_tt_smi_records_unknown_power(monkeypatch, tmp_path):
+    # A host whose TDP cannot be read is recorded as unknown, not as a low-power host.
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.setenv("PATH", "")
+    rec = json.loads(psu.emit_perf_metrics("run_a", "Layer perf", {"median_ms": 1.5}).read_text())
+
+    assert rec["hosts"][0]["power_class"] == "unknown"
+    assert rec["hosts"][0]["tdp_limit_max"].startswith("unreadable")
+
+
+def test_commit_sha_falls_back_to_the_checkout(monkeypatch):
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    sha = psu.commit_sha()
+    assert len(sha) == 40 and int(sha, 16) >= 0
 
 
 def test_emit_perf_metrics_record_cannot_override_name_or_kind(monkeypatch, tmp_path):

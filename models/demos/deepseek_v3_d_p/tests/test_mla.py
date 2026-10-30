@@ -1491,6 +1491,9 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
         {
             "prefill_len": 50 * 1024,
             "chunk": 5120,
+            # Eager dispatch; the metric is summed device program time, which dispatch mode does not enter.
+            "traced": False,
+            "num_users": 1,
             "measured_ns": total_ns,
             "measured_ms": total_ns / 1e6,
             "expected_ns": K3_CHUNKED_RT_PERF_NS,

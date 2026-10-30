@@ -14,6 +14,7 @@ $GITHUB_STEP_SUMMARY.
 import getpass
 import json
 import os
+import subprocess
 from pathlib import Path
 
 from loguru import logger
@@ -79,18 +80,41 @@ def emit_summary(kind: str, run_name: str, title: str, lines: list[str]) -> Path
     return path
 
 
+def commit_sha() -> str:
+    """The commit under test: GITHUB_SHA in CI, else this checkout's HEAD, else "unknown"."""
+    sha = os.environ.get("GITHUB_SHA")
+    if sha:
+        return sha
+    try:
+        return subprocess.run(
+            ["git", "-C", str(Path(__file__).parent), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+    except Exception:
+        return "unknown"
+
+
 def emit_perf_metrics(run_name: str, title: str, record: dict) -> Path | None:
     """On rank 0 only: persist a single-test perf record as PREFILL_SUMMARIES/perf_json/<run_name>.json
     (uploaded as the prefill-perf-metrics artifact) and as a key/value table under PREFILL_SUMMARIES/perf
     (published to the job summary). The record is tagged kind="test_perf" so scaling_summary.py, which
     reads the same artifact for disaggregated-prefill model/config records, skips it. Returns the JSON path,
-    or None on non-primary ranks (nothing written)."""
+    or None on non-primary ranks (nothing written). The record is stamped with the commit and this host's TDP and
+    power class, so a number is attributable from the artifact alone."""
     if not is_primary_rank():
         return None
-    record = {**record, "name": run_name, "kind": "test_perf"}
+    from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import host_power
+
+    record = {**record, "commit": commit_sha(), "hosts": [host_power()], "name": run_name, "kind": "test_perf"}
     path = summary_dir("perf_json") / f"{run_name}.json"
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     logger.info(f"perf metrics -> {path}")
     rows = [[k, str(v)] for k, v in sorted(record.items()) if not isinstance(v, (list, dict))]
+    rows += [
+        [f"host {h['hostname']}", f"TDP_LIMIT_MAX={h['tdp_limit_max']} -> {h['power_class']}"] for h in record["hosts"]
+    ]
     emit_summary("perf", run_name, title, render_table(["metric", "value"], rows))
     return path

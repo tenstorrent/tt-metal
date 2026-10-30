@@ -3,6 +3,7 @@
 
 import json
 import os
+import socket
 import subprocess
 
 
@@ -64,6 +65,17 @@ def is_high_power(min_tdp_watts=130):
     except Exception:
         return False
     return tdp is not None and tdp >= min_tdp_watts
+
+
+def host_power(min_tdp_watts=130) -> dict:
+    """This host's name, TDP_LIMIT_MAX and power class: 14kw, 8kw, or unknown when tt-smi cannot report the
+    TDP (missing, failed or timed out). An unreadable TDP is not evidence of a low-power host."""
+    try:
+        tdp = get_tdp_limit_max()
+    except Exception as e:
+        tdp = f"unreadable ({type(e).__name__})"
+    power_class = "unknown" if not isinstance(tdp, int) else "14kw" if tdp >= min_tdp_watts else "8kw"
+    return {"hostname": socket.gethostname(), "tdp_limit_max": tdp, "power_class": power_class}
 
 
 def require_high_power(what, min_tdp_watts=130):

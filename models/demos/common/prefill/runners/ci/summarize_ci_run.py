@@ -10,6 +10,10 @@ _GQA = re.compile(r"layer\s+(\d+):\s+K=([-\d.]+)\s+V=([-\d.]+)")
 _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+index PCC:\s+([-\d.]+)")
 _CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
 _CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
+# prefill_runner's configuration block, one per rank: what the runner actually ran, whatever the manifest says.
+_RUNNER_CONFIG = re.compile(
+    r"^\s*(?:\[[\d,]+\]<\w+>:)?\s*(PREFILL_USE_TRACE|PREFILL_NUM_USERS|PREFILL_NUM_LAYERS)\s+= (\S+)"
+)
 
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
 # so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
@@ -118,12 +122,17 @@ def _end(cell):
     return None if (start is None or ms is None) else start + ms / 1000.0
 
 
-def _select_measured(ranks, real_chunks):
+def _select_measured(ranks, real_chunks, warmup_chunks=0):
     kept = {}
     cs_union = set()
     for rank, cells in ranks.items():
         cs = sorted(cells)
-        sel = cs[-real_chunks:] if real_chunks > 0 else cs
+        # A run that died mid-request has fewer than real_chunks after its warmup; keeping the last real_chunks
+        # would slide the warmup onto the shallow probes, so skip the warmup from the front instead.
+        if real_chunks > 0 and len(cs) < warmup_chunks + real_chunks:
+            sel = cs[warmup_chunks:]
+        else:
+            sel = cs[-real_chunks:] if real_chunks > 0 else cs
         kept[rank] = {c: cells[c] for c in sel}
         cs_union.update(sel)
     cs_sorted = sorted(cs_union)
@@ -179,6 +188,39 @@ def _occupancy(kept):
         f"  global_occupancy      = {rec['global_occupancy']:.4f}",
     ]
     return out, rec
+
+
+def _runner_config(root):
+    """{traced, num_users, num_layers} as the runner ranks printed them; a list where the ranks disagree."""
+    seen = {}
+    for line in _iter_lines(root):
+        m = _RUNNER_CONFIG.match(line)
+        if m:
+            seen.setdefault(m.group(1), set()).add(m.group(2))
+    parse = {"PREFILL_USE_TRACE": ("traced", lambda v: v == "True")}
+    parse.update({k: (k.removeprefix("PREFILL_").lower(), int) for k in ("PREFILL_NUM_USERS", "PREFILL_NUM_LAYERS")})
+    config = {}
+    for key, values in seen.items():
+        field, cast = parse[key]
+        values = sorted(cast(v) for v in values)
+        config[field] = values[0] if len(values) == 1 else values
+    return config
+
+
+def _run_lines(run):
+    """What a perf number belongs to: commit, traced or eager, slots, and every host's power class."""
+    hosts = run.get("hosts") or []
+    lines = [
+        "==================== run ====================",
+        f"commit={run.get('commit', '?')} traced={run.get('traced', '?')} num_users={run.get('num_users', '?')} "
+        f"num_layers={run.get('num_layers', '?')}",
+    ]
+    lines += [
+        f"  host {h.get('host')}: TDP_LIMIT_MAX={h.get('tdp_limit_max')} -> {h.get('power_class')} "
+        f"(hostname {h.get('hostname')})"
+        for h in hosts
+    ] or ["  no host power recorded"]
+    return lines
 
 
 def _publish(lines, name):
@@ -292,7 +334,7 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
     return out, rec
 
 
-def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, probe_chunks=None):
+def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, probe_chunks=None, warmup_chunks=0):
     ranks = _timing_from_csvs(timing_dir)
     if ranks is None:
         ranks = _timing_from_ranklogs(root)
@@ -301,7 +343,7 @@ def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, probe_chunk
     if not ranks:
         print("no timing rows found (set PREFILL_SYNC_PER_CHUNK=1 on the runner; timing CSVs / CHUNK_* logs absent)")
         return [], {}
-    kept, cs_sorted, disp = _select_measured(ranks, real_chunks)
+    kept, cs_sorted, disp = _select_measured(ranks, real_chunks, warmup_chunks)
     all_starts = [c[0] for r in kept.values() for c in r.values() if c[0] is not None]
     if not all_starts:
         print("timing rows present but no compute_start timestamps parsed")
@@ -327,6 +369,7 @@ def main():
     ap.add_argument("--ranklogs", required=True, help="mpirun --output-filename root (runner + producer)")
     ap.add_argument("--timing-dir", default=None, help="per-rank timing CSV dir (preferred timing source)")
     ap.add_argument("--real-chunks", type=int, default=0, help="chunks in the measured request (0 => all)")
+    ap.add_argument("--warmup-chunks", type=int, default=0, help="untimed chunks the producer sends before it")
     ap.add_argument("--chunk-size", type=int, default=0, help="tokens per chunk (0 => skip throughput)")
     ap.add_argument(
         "--probe-chunks",
@@ -336,18 +379,29 @@ def main():
     ap.add_argument(
         "--summary-name", default=None, help="<model>_<config>; names the metrics sidecar the scaling job reads"
     )
+    ap.add_argument("--run-context", default=None, help="JSON from the harness: commit and every host's power")
     args = ap.parse_args()
     if not os.path.isdir(args.ranklogs):
         print(f"ranklogs dir {args.ranklogs} not found; nothing to summarize")
         return
+    run = {}
+    if args.run_context:
+        try:
+            with open(args.run_context) as fh:
+                run = json.load(fh)
+        except (OSError, ValueError) as exc:
+            print(f"run context unreadable ({exc})")
+    run.update(_runner_config(args.ranklogs))
     _pcc_matrix(args.ranklogs)
     probe_chunks = None
     if args.probe_chunks:
         probe_chunks = {int(tok) for tok in args.probe_chunks.split(",") if tok.strip()}
-    lines, rec = _timing_matrix(args.ranklogs, args.real_chunks, args.timing_dir, args.chunk_size, probe_chunks)
-    if lines:
-        _publish(lines, args.summary_name)
-    _publish_json(rec, args.summary_name)
+    lines, rec = _timing_matrix(
+        args.ranklogs, args.real_chunks, args.timing_dir, args.chunk_size, probe_chunks, args.warmup_chunks
+    )
+    # Written even when nothing was timed, so a failed run still says what it was.
+    _publish(_run_lines(run) + lines, args.summary_name)
+    _publish_json({**rec, **run}, args.summary_name)
 
 
 if __name__ == "__main__":

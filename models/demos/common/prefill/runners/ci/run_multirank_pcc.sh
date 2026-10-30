@@ -236,6 +236,8 @@ mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${RUN_NAME}_prefill_ci_mr.XXXXXX")
 GATE_LOG="${MR_DIR}/gates.log"
+RUN_CONTEXT="${MR_DIR}/run_context.json"
+POWER_DIR="${MR_DIR}/host_power"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
@@ -250,8 +252,10 @@ emit_summary() {
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
     --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
     --chunk-size "${CHUNK_SIZE}" \
+    --warmup-chunks "${WARMUP_CHUNKS}" \
     --probe-chunks "${PROBE_CHUNKS}" \
     --summary-name "${RUN_NAME}_${CONFIG}" \
+    --run-context "${RUN_CONTEXT}" \
     || echo "summary generation failed (non-fatal)"
 }
 
@@ -354,6 +358,33 @@ else
   TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
   RUNNER_PLACEMENT=""
 fi
+
+# Every host's TDP and power class, probed before the runner holds the chips so a later crash cannot lose them:
+# SC4 spans four galaxies from a mixed-power pool, and perf_gate.py gates the leg as its slowest host.
+mkdir -p "${POWER_DIR}"
+for host in ${RESOLVED_HOSTS//,/ }; do
+  "${MPIRUN}" -np 1 --host "${host}:1" --bind-to none --allow-run-as-root \
+    bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' python3 ${PERF_GATE} --print-power" \
+    2>/dev/null | tail -n 1 > "${POWER_DIR}/${host}.json" || true
+done
+python3 - "${RUN_CONTEXT}" "${POWER_DIR}" "${GITHUB_SHA:-$(git -C "${TT_METAL_HOME}" rev-parse HEAD 2>/dev/null || echo unknown)}" \
+  ${RESOLVED_HOSTS//,/ } <<'PY'
+import json, sys
+
+out, power_dir, commit, hosts = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+records = []
+for host in hosts:
+    try:
+        with open(f"{power_dir}/{host}.json") as f:
+            probe = json.load(f)
+    except Exception as e:
+        probe = {"hostname": None, "tdp_limit_max": f"probe failed ({type(e).__name__})", "power_class": "unknown"}
+    records.append({"host": host, **probe})
+    print(f"perf host power: {host} TDP_LIMIT_MAX={probe['tdp_limit_max']} -> {probe['power_class']}")
+print(f"perf run commit: {commit}")
+with open(out, "w") as f:
+    json.dump({"commit": commit, "hosts": records}, f)
+PY
 
 cd "${TTRUN_CWD}"
 setsid python3 "${TTRUN_PY}" \
@@ -484,18 +515,10 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
   # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
-  PERF_POWER=""
-  if [ -z "${EXPECTED_TPS}" ] && [ -f "${PERF_BASELINES}" ]; then
-    PERF_POWER=$("${MPIRUN}" -np 1 --host "${RESOLVED_HOSTS%%,*}:1" --bind-to none --allow-run-as-root \
-      bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' python3 ${PERF_GATE} --print-power" | tail -n 1) || true
-    case "${PERF_POWER}" in
-      8kw|14kw) ;;
-      *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
-    esac
-  fi
+  # The power class comes from the hosts recorded in the perf JSON, probed before the runner started.
   python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
-    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
     --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi

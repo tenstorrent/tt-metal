@@ -40,7 +40,7 @@ def record(kind):
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=root / "records", delete=False) as f:
         selected_env = {key: value for key, value in os.environ.items()
                         if key.startswith(("PREFILL_", "TEST_", "TT_MESH_", "TT_METAL_OPERATION_"))}
-        json.dump({"kind": kind, "args": args, "env": selected_env}, f)
+        json.dump({"kind": kind, "seq": time.monotonic_ns(), "args": args, "env": selected_env}, f)
 
 def shell_command():
     index = args.index("bash")
@@ -107,12 +107,22 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
         filename_rank = 4 if rank == 3 and mode == "wrong_rank" else rank
         (verdict_dir / ("rank%d.json" % filename_rank)).write_text(json.dumps(verdict))
     (root / "producer_done").touch()
+elif args and args[0].endswith("perf_gate.py") and "--print-power" in args and os.environ.get("TEST_HOST_POWER"):
+    # tt-smi on the worker named by --host; a host missing from the map has no tt-smi at all.
+    power = json.loads(os.environ["TEST_HOST_POWER"]).get(os.environ["TEST_MPI_HOST"].split(":")[0])
+    if power is None:
+        sys.exit(1)
+    print("tt-smi noise before the record")
+    print(json.dumps(power))
 elif args and args[0].endswith("summarize_ci_run.py"):
     if os.environ.get("TEST_TPS"):
         summary_name = args[args.index("--summary-name") + 1]
         out = Path(os.environ["PREFILL_SUMMARIES"]) / "perf_json"
         out.mkdir(parents=True, exist_ok=True)
+        # The real summary carries the harness's run context into the perf JSON; so does this stub.
+        context = json.loads(Path(args[args.index("--run-context") + 1]).read_text())
         (out / ("%s.json" % summary_name)).write_text(json.dumps({
+            **context,
             "chunk_index": {"@5k": 0, "@55k": 10},
             "throughput_tok_s": {"@5k": 37234.8, "@55k": float(os.environ["TEST_TPS"])},
         }))
@@ -127,7 +137,16 @@ else:
 
 class MultirankPccHarnessTests(unittest.TestCase):
     def run_harness(
-        self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None, extra_env=None
+        self,
+        model,
+        *,
+        verdict="pass",
+        runner_rc=0,
+        missing_cache=False,
+        hosts=None,
+        config=None,
+        extra_env=None,
+        baselines=None,
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -143,9 +162,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         metal.mkdir()
         mgd_dir = metal / "models/demos/common/prefill/runners/topology_configuration/ci"
         mgd_dir.mkdir(parents=True)
-        for model_key in ("kimi27", "glm52"):
-            for system in ("sc1", "sc4"):
-                (mgd_dir / f"{model_key}_{system}_mgd.textproto").touch()
+        # The harness picks the descriptor by config alone (MGD="${MGD_DIR}/${CONFIG}_mgd.textproto").
+        for system in ("sc1", "sc4"):
+            (mgd_dir / f"{system}_mgd.textproto").touch()
         # manifest_env() reads PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS straight off these, so the
         # fake tree needs them or the harness dies before it launches anything. Values mirror the
         # real manifests; only their presence and the sc1 override path are under test here.
@@ -174,6 +193,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         perf_gate = metal / "models/demos/common/prefill/runners/ci/perf_gate.py"
         perf_gate.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.with_name("perf_gate.py"), perf_gate)
+        if baselines is not None:
+            perf_gate.with_name("perf_baselines.json").write_text(json.dumps(baselines))
         ttrun_dir = root / "ttop"
         ttrun_dir.mkdir()
         if hosts is None:
@@ -362,6 +383,64 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires exactly one Galaxy host", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("mpi", "probe", "runner_launch")])
+
+    POWER_TABLE = {
+        "margin": {"throughput_tok_s": 0.015, "ttft_s": 0.015, "chunk_time_ms": 0.1},
+        "baselines": {"kimi27": {"sc4": {"probe": "@55k", "14kw": {"throughput_tok_s": 10000}}}},
+    }
+    HIGH = {"hostname": "h", "tdp_limit_max": 150, "power_class": "14kw"}
+    LOW = {"hostname": "l", "tdp_limit_max": 75, "power_class": "8kw"}
+
+    def run_power(self, power):
+        return self.run_harness(
+            "kimi27",
+            baselines=self.POWER_TABLE,
+            extra_env={"TEST_TPS": "10000", "TEST_HOST_POWER": json.dumps(power), "GITHUB_SHA": "abc123"},
+        )
+
+    def test_every_host_is_probed_and_logged(self):
+        power = {f"worker{i}": self.HIGH for i in range(4)}
+        result, records = self.run_power(power)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        probed = [
+            r["args"][r["args"].index("--host") + 1]
+            for r in records
+            if r["kind"] == "mpi" and "--print-power" in r["args"][-1]
+        ]
+        self.assertEqual(sorted(probed), [f"worker{i}:1" for i in range(4)])
+        for i in range(4):
+            self.assertIn(f"perf host power: worker{i} TDP_LIMIT_MAX=150 -> 14kw", result.stdout)
+        self.assertIn("perf run commit: abc123", result.stdout)
+        self.assertIn("leg power class 14kw from 4 host(s)", result.stdout + result.stderr)
+        self.assertIn("TPS GATE PASS", result.stdout)
+
+    def test_probe_runs_before_the_runner_holds_the_chips(self):
+        _, records = self.run_power({f"worker{i}": self.HIGH for i in range(4)})
+        launch = next(i for i, r in enumerate(sorted(records, key=lambda r: r["seq"])) if r["kind"] == "runner_launch")
+        probes = [
+            i
+            for i, r in enumerate(sorted(records, key=lambda r: r["seq"]))
+            if r["kind"] == "mpi" and "--print-power" in r["args"][-1]
+        ]
+        self.assertTrue(probes and max(probes) < launch, (probes, launch))
+
+    def test_one_low_power_host_gates_the_leg_as_8kw(self):
+        # A pipeline runs at its slowest stage: a 14kw-only baseline must not gate a quad with an 8kw member.
+        power = {"worker0": self.HIGH, "worker1": self.HIGH, "worker2": self.LOW, "worker3": self.HIGH}
+        result, _ = self.run_power(power)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("perf host power: worker2 TDP_LIMIT_MAX=75 -> 8kw", result.stdout)
+        self.assertIn("leg power class 8kw (mixed)", output)
+        self.assertIn("baselined on 14kw only but this host is 8kw", output)
+
+    def test_an_unreadable_host_makes_the_leg_unknown(self):
+        power = {f"worker{i}": self.HIGH for i in range(3)}  # worker3 has no tt-smi
+        result, _ = self.run_power(power)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("perf host power: worker3 TDP_LIMIT_MAX=probe failed (JSONDecodeError) -> unknown", output)
+        self.assertIn("power class could not be determined", output)
 
     def test_runner_failure_after_successful_producer_fails(self):
         result, records = self.run_harness("mistral4", runner_rc=17)

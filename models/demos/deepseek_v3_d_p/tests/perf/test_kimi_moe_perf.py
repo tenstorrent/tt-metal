@@ -225,6 +225,7 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         f"{tag} perf",
         {
             "mesh": mesh_tag,
+            "traced": True,
             "measured_ns": total_ns,
             "measured_ms": total_ns / 1e6,
             "replays_ns": replays_ns,

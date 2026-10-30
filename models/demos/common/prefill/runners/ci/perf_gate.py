@@ -22,17 +22,34 @@ def fail(msg):
         print(f"::error title=Prefill perf gate::{escaped}")
 
 
+def host_power():
+    """This host's {hostname, tdp_limit_max, power_class}; power_class is unknown when the TDP is unreadable."""
+    try:
+        from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import host_power as probe
+
+        return probe()
+    except Exception as e:
+        return {"hostname": None, "tdp_limit_max": f"unreadable ({type(e).__name__})", "power_class": "unknown"}
+
+
 def power_class():
     """This host's power class: 14kw, 8kw, or unknown when tt-smi cannot report the TDP (no tt-smi here,
     or it timed out). An unreadable TDP is not evidence of a low-power host."""
-    try:
-        from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max
+    power = host_power()
+    cls = power["power_class"]
+    print(f"perf baseline: TDP_LIMIT_MAX={power['tdp_limit_max']} -> {cls} (14kw needs >= 130 W)", file=sys.stderr)
+    return cls
 
-        tdp = get_tdp_limit_max()
-    except Exception as e:
-        tdp = f"unreadable ({type(e).__name__})"
-    cls = "unknown" if not isinstance(tdp, int) else "14kw" if tdp >= 130 else "8kw"
-    print(f"perf baseline: TDP_LIMIT_MAX={tdp} -> {cls} (14kw needs >= 130 W)", file=sys.stderr)
+
+def leg_power_class(hosts):
+    """The power class a leg is gated as, from every host it ran on (the harness records them in the perf JSON).
+    A pipeline runs at its slowest stage, so one 8kw host makes the whole leg 8kw, and one host whose TDP could
+    not be read makes it unknown."""
+    classes = [h.get("power_class") for h in hosts]
+    cls = "unknown" if not classes or set(classes) - {"8kw", "14kw"} else "8kw" if "8kw" in classes else "14kw"
+    detail = ", ".join(f"{h.get('host')}={h.get('power_class')} ({h.get('tdp_limit_max')} W)" for h in hosts)
+    mixed = " (mixed)" if len(set(classes)) > 1 else ""
+    print(f"perf baseline: leg power class {cls}{mixed} from {len(hosts)} host(s): {detail}", file=sys.stderr)
     return cls
 
 
@@ -92,6 +109,16 @@ def check(rec, path, label, metric, expected, margin):
     return True, [label, f"{name} ({unit})", f"{value:{fmt}}", band, "PASS"]
 
 
+def recorded_power_class(perf_json):
+    """The leg's power class from the hosts recorded in its perf JSON, or None when it recorded none."""
+    try:
+        with open(perf_json) as f:
+            hosts = json.load(f).get("hosts")
+    except Exception:
+        return None
+    return leg_power_class(hosts) if hosts else None
+
+
 def publish_verdicts(perf_json, rows):
     """Write the gate table to PREFILL_SUMMARIES/perf/<run>_gate.md, which CI adds to the job summary."""
     root = os.environ.get("PREFILL_SUMMARIES")
@@ -112,7 +139,11 @@ def publish_verdicts(perf_json, rows):
 def main():
     parser = argparse.ArgumentParser(description="Gate a prefill run's perf JSON against its baseline.")
     parser.add_argument("perf_json", nargs="?")
-    parser.add_argument("--print-power", action="store_true", help="print this host's power class and exit")
+    parser.add_argument(
+        "--print-power",
+        action="store_true",
+        help="print this host's {hostname, tdp_limit_max, power_class} as JSON and exit",
+    )
     parser.add_argument("--table", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--config", default="")
@@ -124,7 +155,7 @@ def main():
     parser.add_argument("--require", default="0", help="1 fails the run if nothing was measured")
     args = parser.parse_args()
     if args.print_power:
-        print(power_class())
+        print(json.dumps(host_power()))
         return 0
 
     baselines = None
@@ -134,7 +165,7 @@ def main():
         with open(args.table) as f:
             table = json.load(f)
         try:
-            baselines = lookup(table, args.model, args.config, args.power)
+            baselines = lookup(table, args.model, args.config, args.power or recorded_power_class(args.perf_json))
         except GateError as e:
             fail(f"PERF GATE FAIL: {e}")
             publish_verdicts(args.perf_json, [["-", "-", "-", "-", f"FAIL: {e}"]])

@@ -418,7 +418,8 @@ def test_synthetic_kimi_k3_perf(
     emit_perf_metrics(
         f"kimi_k3_kda_layer_{layout}",
         f"Kimi-K3 KDA layer perf ({layout})",
-        {**result, "gated": gated, "within_band": within_band if gated else None},
+        # One traced layer call on one KDA state: no user slots.
+        {**result, "traced": True, "num_users": 1, "gated": gated, "within_band": within_band if gated else None},
     )
     if report_only:
         return
