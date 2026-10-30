@@ -1,102 +1,113 @@
 # Topology pass
 
 The topology pass (`fabric_manifest_topology_pass.cpp`) builds the manifest's `meshes`: every mesh, every chip in it,
-and each local chip's routers. It runs at write time, when the router builders are gone but ControlPlane, the mesh
-graph and the cluster can say how everything connects. Its one entry point is `manifest::describe_meshes`, which
-returns a `std::vector<Mesh>` for `ManifestFacts`.
+and each local chip's routers. Its entry point is `manifest::describe_meshes`.
 
-Its inputs are ControlPlane (the mesh graph, which channels are active fabric routers and their routing planes, which
-channels connect, which links cross hosts), the cluster (Ethernet cores), and the routers each chip published during
-the build ([BUILDER_HOOKS.md](BUILDER_HOOKS.md), [ROUTER_PASS.md](ROUTER_PASS.md)).
+It runs at write time. By then the router builders are gone, but what they published is kept, and ControlPlane, the
+mesh graph and the cluster can say how everything connects. The topology pass joins the two.
 
-## Meshes
+## What it builds on
 
-Meshes are listed by mesh id. For each (`describe_mesh`):
+The router pass describes one router at a time, while its builder exists ([ROUTER_PASS.md](ROUTER_PASS.md)). It knows
+each router by its Ethernet channel, and knows nothing about the rest of the chip or the fabric. Each chip's
+`FabricBuilder` publishes those routers, with a few chip-wide facts, to `PublishedChips`
+([BUILDER_HOOKS.md](BUILDER_HOOKS.md)).
 
-| Key | From |
+The topology pass finishes what the router pass couldn't:
+
+| The router pass leaves | The topology pass adds |
 | --- | --- |
-| `shape` | The mesh graph's shape for the mesh |
-| `torus` | 2D meshes only: whether each axis (`y` for north-south, `x` for east-west) wraps. It uses fabric's own rule, `has_genuine_torus_axis`, with the fabric type from the fabric config, the same one the mesh graph used to connect the chips. An axis too short to form a distinct wrap edge doesn't wrap |
-| `express_routing` | ControlPlane's `express_routing_enabled` for the mesh |
-| `credit_transport` | Meshes on this host only: each VC's credit backing, from the builder context ([DESCRIBE.md](DESCRIBE.md)) |
-| `chips` | Every chip in the mesh graph, in its order |
+| Each router's Ethernet channel | Its key (direction and routing plane, such as `E0`) and its cores |
+| Each link's edge capability, and whether it's a dispatch link | The `peer` router on the other end, `cross_host`, and `wrap` |
+| Each downstream edge's direction and landing channel | The sibling router it lands on (`downstream_channel`), and whether it ends at a tensix mux |
+| Producers for worker and tensix mux channels | Producers for channels a sibling feeds |
+| The local sync master's Ethernet channel | The master router's path |
+| The chip's Z port role, local sync, routers, and the router pairs its builder connected | The chip's place in its mesh, its ids, and whether it's local |
+
+It also lays out what the router pass never sees: every mesh, and every chip, including chips on other hosts.
+
+## Where each fact comes from
+
+The topology pass reads each fact from the object that already knows it, through that object's own accessor. It
+doesn't work out again something fabric has already decided, so it can't drift from what fabric did.
+
+| Fact | Read from |
+| --- | --- |
+| The meshes, in mesh id order | `mesh_graph.get_all_mesh_ids()` |
+| A mesh's `shape` | `mesh_graph.get_mesh_shape()` |
+| A mesh's `torus` (2D only) | `has_genuine_torus_axis()`, fabric's own rule, with the fabric type from `get_fabric_type()`: the same rule and fabric type the mesh graph connected the chips with |
+| A mesh's `express_routing` | `control_plane.express_routing_enabled()` |
+| A mesh's `credit_transport` | The builder context's credit transport plan, for the meshes on this host (`get_local_mesh_id_bindings()`) ([DESCRIBE.md](DESCRIBE.md)) |
+| A mesh's chips, in order | `mesh_graph.get_chip_ids()` |
+| A chip's `mesh_coord` | `mesh_graph.chip_to_coordinate()` |
+| Whether a chip is local, and its `physical_chip_id` | `control_plane.try_get_physical_chip_id_from_fabric_node_id()`: a chip this process opened has one |
+| A chip's `asic_id` | `control_plane.get_asic_id_from_fabric_node_id()` |
+| A chip's routers, and everything the router pass collected about them | What its `FabricBuilder` published (`builder_context.get_manifest_chips()`) |
+| A router's direction and routing plane | `control_plane.get_active_fabric_eth_channels()` and `control_plane.get_routing_plane_id()` |
+| A router's cores | The cluster's SoC descriptor (`get_eth_core_for_channel`) and `cluster.get_virtual_coordinate_from_logical_coordinates()` |
+| A link's peer | `control_plane.try_get_connected_mesh_chip_chan_ids()`, then the active fabric router on that channel |
+| A link's `cross_host` | `control_plane.is_cross_host_eth_link()` |
+| An edge's sibling | The router pairs the builder connected (`FabricBuilder::get_router_connection_pairs()`, published with the chip) |
+| An edge's `through_tensix_mux` | `builder_type_for_vc()`, the builder's rule for which builder owns a VC's senders, on the sibling's `has_tensix_extension` |
+
+Two facts are the topology pass's own, because no object holds them directly. Each is built from the lookups above:
+
+- **`wrap`**: a link closes a torus axis when the mesh is 2D, the peer is in the same mesh, the link's direction lies
+  on an axis that wraps (`has_genuine_torus_axis()`), and the two chips are at opposite ends of that axis.
+- **Sibling producers**: a sender channel's producer is the router whose edge lands on it. This reads the builder's
+  edges backwards, so it adds no rule of its own.
 
 ## Chips
 
 Every chip in the mesh graph is described, local or not, so a reader can draw the whole fabric and see where each
 host's part ends (`describe_chip`).
 
-**Local and remote chips.** A chip is local when this process opened it, which is when ControlPlane maps it to a
-physical chip id. A remote chip belongs to another host rank's process: this rank knows its place in the mesh, but
-can't read its hardware. So a remote chip has only its `mesh_coord`, with `physical_chip_id` and `asic_id` null and
-`is_local` false. The manifest its own rank writes describes it in full.
+- **A local chip** is one this process opened. It starts from what its `FabricBuilder` published, adds its
+  `mesh_coord`, `physical_chip_id` and `asic_id`, and then has its routers resolved (below).
+- **A remote chip** belongs to another host rank. This rank knows only its place in the mesh, so it has its
+  `mesh_coord`, null ids, and `is_local` false. Its own rank's manifest describes it in full.
 
-A local chip starts from what its `FabricBuilder` published: its routers, its Z port role and its local sync. It adds
-its `mesh_coord`, its physical chip id, and its ASIC id from ControlPlane, then resolves its routers (below).
-
-A local chip whose builder published nothing has no routers. That's only valid when ControlPlane lists no active fabric
-channels for it. Otherwise resolving its routers fails, since ControlPlane expects a router on each active channel.
+A local chip whose builder published nothing has no routers. That's only valid when ControlPlane lists no active
+fabric channels for it; otherwise resolving its routers fails.
 
 ## Resolving a chip's routers
 
-The builders know their routers by Ethernet channel. A reader wants routers by what they are: the router facing east on
-routing plane 0, or the router on the other end of this link. Resolving (`resolve_chip_routers`) turns every channel
-the builders recorded into the router it names, in four steps.
+`resolve_chip_routers` turns every Ethernet channel the builders recorded into the router it names, in four steps.
 
-### 1. Identities
+**1. Identities** (`resolve_router_identities`). Each router gets its key and cores, and routers are listed in the
+order ControlPlane lists the chip's active channels.
 
-`resolve_router_identities` gives each router its key and cores:
+**2. Local sync master** (`get_master_router`). The master's channel, from the builder's `KernelCreationContext`,
+becomes the master router.
 
-- **Key**: its direction and routing plane, from ControlPlane's active fabric channels, written as one letter and the
-  plane, such as `E0`. A router's key names it within its chip.
-- **Cores**: its logical and virtual Ethernet core, from the cluster's SoC descriptor.
+**3. Link peers** (`resolve_link_peer`). Each router's link gets its `peer`, `cross_host` and `wrap`. The peer is null
+when the link connects to nothing, or to a channel trimmed from the peer's routing planes. A peer can be on another
+chip, another mesh, or another host.
 
-Routers are listed in the order ControlPlane lists the chip's active channels. The checks:
+**4. Edge siblings** (`resolve_edge_siblings`). The router pass knows only the direction each downstream edge points
+in. The sibling is the router the builder paired with this one that faces that direction. Reading the builder's pairs,
+rather than looking for any router facing that direction, gives the routers the builder actually connected. That
+matters where it pairs routers that don't face opposite ways, such as the corner fold in 1D. Then:
 
-- every active channel has a published router, and every published router is on an active channel;
-- no two published routers share a channel, and no two routers share a key.
+- `through_tensix_mux` comes from `builder_type_for_vc()`: the tensix mux owns VC0 on a router with a tensix
+  extension.
+- An edge that doesn't end at a tensix mux makes this router the producer of the sibling's sender channel it lands
+  on.
 
-### 2. Local sync master
+## Checks
 
-The chip's `local_sync` records the master router's channel, from the builder's `KernelCreationContext`. It's resolved
-to that router, which must exist.
+The topology pass checks only what it puts together itself, where the builders and ControlPlane could disagree:
 
-### 3. Link peers
+- **Published routers match ControlPlane's active channels.** Every active fabric channel has a published router,
+  every published router is on an active channel, and no two share a channel or a key.
+- **The local sync master has a router.**
+- **An edge lands on a channel that exists.** Its landing channel must be one of the sibling's sender channels on the
+  edge's VC, or the `downstream_channel` path would name nothing.
+- **An edge's direction has a paired router.** The builder must have connected this router to one facing that way.
 
-`resolve_link_peer` adds what only ControlPlane knows about each router's link:
-
-- **`peer`**: the router on the other end. ControlPlane gives the chip and channel the link connects to. The peer is the
-  active fabric router there, or null when the link connects to nothing, or to a channel that was trimmed from the
-  peer's routing planes. A peer can be on another chip, another mesh, or another host.
-- **`cross_host`**: whether the link crosses to another host, from ControlPlane.
-- **`wrap`**: whether the link closes a torus axis. It wraps when the mesh is 2D, the peer is in the same mesh, the
-  link's direction lies on an axis that wraps (as `torus` above decides), and the two chips are at opposite ends of
-  that axis.
-
-### 4. Edge siblings
-
-The router pass knows only the direction each downstream edge points in, not which router is there.
-`resolve_edge_siblings` finds that router from the chip's connected router pairs.
-
-The chip's `FabricBuilder` decides which of its routers to connect (`get_router_connection_pairs`), and publishes those
-pairs with the chip. For each edge, the sibling is the router paired with this one that faces the edge's direction.
-
-Reading the pairs, rather than looking for any router facing that direction, gives the routers the builder actually
-connected. That matters where it pairs routers that don't face opposite ways, such as the corner fold in 1D.
-
-For each edge:
-
-- The edge's landing channel must be one of the sibling's sender channels on the edge's VC.
-- **`through_tensix_mux`** comes from the builder's rule for which builder owns a VC's senders,
-  `builder_type_for_vc(vc, has_tensix_extension)` on the sibling's shape: the tensix mux owns VC0 on a router with a
-  tensix extension.
-
-Each edge that doesn't end at a tensix mux makes this router the **producer** of the sibling's sender channel it lands
-on.
-
-The topology pass doesn't check the builder's wiring: that each sender channel has at most one edge, that a
-`static_connection` channel has one, or that the worker channel has none. The edges come from the builder, so checking
-them against each other checks the builder against itself, which is fabric's to test.
+It doesn't check the builder's wiring against itself: that each sender channel has at most one edge, that a
+`static_connection` channel has one, or that the worker channel has none. The edges come from the builder, so that's
+fabric's to test.
 
 ## Router paths
 
@@ -116,8 +127,11 @@ manifest does.
 ## Adding a fact that needs the topology
 
 1. Add the fact to the model (`fabric_manifest_model.hpp`) where it sits.
-2. Compute it here, from ControlPlane, the mesh graph or the cluster. If it's about a router, add it as a resolve step
-   in `resolve_chip_routers`. If it's about a mesh or chip, add it in `describe_mesh` or `describe_chip`.
-3. Write it in the writer (`fabric_manifest.cpp`), and add it to `fabric_manifest_schema.json` and
+2. Find the object that already knows it (ControlPlane, the mesh graph, the cluster, or what the builder published),
+   and read it through that object's accessor. If the builder knows it but doesn't publish it, publish it from the
+   builder ([BUILDER_HOOKS.md](BUILDER_HOOKS.md)) rather than working it out again here.
+3. Read it in the right place: a router fact as a step in `resolve_chip_routers`, a mesh or chip fact in
+   `describe_mesh` or `describe_chip`.
+4. Write it in the writer (`fabric_manifest.cpp`), and add it to `fabric_manifest_schema.json` and
    [FORMAT.md](FORMAT.md).
-4. Describe it in this doc, with any check it brings.
+5. Describe it in this doc, with any check it brings.

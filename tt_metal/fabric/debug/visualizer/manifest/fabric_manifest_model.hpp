@@ -85,15 +85,37 @@ struct Enum {
 
 using Content = std::variant<content::L1, content::StreamReg, content::Number, content::Flag, content::Enum>;
 
-// `num_elements` Ts in L1, `element_size` bytes apart from `address`.
+// Registers an L1 region of `num_elements` Ts, `element_size` bytes apart from `address`, under T's registered name.
 template <typename T>
-constexpr content::L1 describe_l1_region(
+constexpr content::L1 register_l1_region(
     uint32_t address = 0, uint32_t num_elements = 1, uint32_t element_size = sizeof(T)) {
     return {
         .address = address,
         .num_elements = num_elements,
         .element_size = element_size,
         .type = get_manifest_type_name<T>()};
+}
+
+// Which register of its stream a stream field reads. The router pass turns the stream id the kernel is fed and the
+// register into the register's address.
+enum class StreamRegister : uint8_t {
+    // The increment-on-write credit or slot count.
+    BUF_SPACE_AVAILABLE,
+    // A plain read-write register.
+    REMOTE_SRC,
+};
+
+// A stream register before the router pass knows its stream id.
+struct StreamRegField {
+    StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
+    std::string_view type;
+};
+
+// Registers a stream register `reg` whose value is a T.
+template <typename T>
+constexpr StreamRegField register_stream_region(StreamRegister reg) {
+    static_assert(sizeof(T) <= sizeof(uint32_t), "A stream register holds one word, so its value fits in a uint32_t");
+    return {.reg = reg, .type = get_manifest_type_name<T>()};
 }
 
 // One of a router's L1 credit counter arrays (L1CreditCounters).

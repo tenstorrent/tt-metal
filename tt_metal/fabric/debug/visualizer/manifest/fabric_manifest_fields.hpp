@@ -80,28 +80,6 @@ struct BuilderMember {
 // What the kernel is fed that holds a field: the address, the stream id or the value.
 using Source = std::variant<NamedArg, BuilderMember>;
 
-// Which register of its stream a stream field reads. The router pass turns the stream id the kernel is fed and the
-// register into the register's address.
-enum class StreamRegister : uint8_t {
-    // The increment-on-write credit or slot count.
-    BUF_SPACE_AVAILABLE,
-    // A plain read-write register.
-    REMOTE_SRC,
-};
-
-// A stream field as the table gives it, before the router pass reads its stream id: which register, and the registered
-// name of the type its value is read as.
-struct StreamRegField {
-    StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
-    std::string_view type;
-};
-
-template <typename T>
-constexpr StreamRegField stream(StreamRegister reg) {
-    static_assert(sizeof(T) <= sizeof(uint32_t), "A stream register holds one word, so its value fits in a uint32_t");
-    return {.reg = reg, .type = get_manifest_type_name<T>()};
-}
-
 template <typename E>
     requires std::is_enum_v<E>
 constexpr content::Enum enum_of() {
@@ -151,21 +129,21 @@ inline constexpr auto k_router_fields = [] {
             .key = "edm_status",
             .source = "EDM_STATUS_PTR_ADDR",
             .category = LIFECYCLE,
-            .content = describe_l1_region<EDMStatus>(),
+            .content = register_l1_region<EDMStatus>(),
             .description = "How far the router has come through startup and teardown.",
         },
         RouterField{
             .key = "termination_signal",
             .source = "TERMINATION_SIGNAL_ADDR",
             .category = LIFECYCLE,
-            .content = describe_l1_region<TerminationSignal>(),
+            .content = register_l1_region<TerminationSignal>(),
             .description = "Where the router is told to stop.",
         },
         RouterField{
             .key = "local_sync",
             .source = "EDM_LOCAL_SYNC_PTR_ADDR",
             .category = LIFECYCLE,
-            .content = describe_l1_region<uint32_t>(),
+            .content = register_l1_region<uint32_t>(),
             .description = "The count the chip's routers sync through at startup: the others notify the master "
                            "router, which then notifies them all.",
         },
@@ -173,14 +151,14 @@ inline constexpr auto k_router_fields = [] {
             .key = "local_tensix_sync",
             .source = "EDM_LOCAL_TENSIX_SYNC_PTR_ADDR",
             .category = LIFECYCLE,
-            .content = describe_l1_region<uint32_t>(),
+            .content = register_l1_region<uint32_t>(),
             .description = "The count the router waits on until its downstream tensix connections are ready.",
         },
         RouterField{
             .key = "handshake",
             .source = "HANDSHAKE_ADDR",
             .category = LIFECYCLE,
-            .content = describe_l1_region<erisc::datamover::handshake::handshake_info_t>(),
+            .content = register_l1_region<erisc::datamover::handshake::handshake_info_t>(),
             .description = "The Ethernet handshake scratch. Each end of the link writes its scratch into the first "
                            "16 bytes of the other's.",
         },
@@ -197,7 +175,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "erisc_sync",
             .source = "MULTI_RISC_TEARDOWN_SYNC_STREAM_ID",
             .category = LIFECYCLE,
-            .content = stream<uint32_t>(StreamRegister::REMOTE_SRC),
+            .content = register_stream_region<uint32_t>(StreamRegister::REMOTE_SRC),
             .description = "The register the router's ERISCs sync through at startup and teardown, led by ERISC0. "
                            "Unused when the router runs one ERISC.",
         },
@@ -205,7 +183,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "retrain_sync",
             .source = "ETH_RETRAIN_LINK_SYNC_STREAM_ID",
             .category = LIFECYCLE,
-            .content = stream<CoordinatedEriscContextSwitchState>(StreamRegister::REMOTE_SRC),
+            .content = register_stream_region<CoordinatedEriscContextSwitchState>(StreamRegister::REMOTE_SRC),
             .description = "The register the router's ERISCs sync through to retrain the link, led by the ERISC that "
                            "context switches.",
         },
@@ -215,7 +193,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "vc2_receiver_free_slots",
             .source = "VC2_RECEIVER_FREE_SLOTS_STREAM_ID",
             .category = FLOW_CONTROL,
-            .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The register reserved for the VC2 receiver's free slots. Null when the router has no VC2. "
                            "The router kernel declares it but does not read it.",
         },
@@ -223,7 +201,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "notify_worker_src",
             .source = "NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR",
             .category = FLOW_CONTROL,
-            .content = describe_l1_region<uint32_t>(),
+            .content = register_l1_region<uint32_t>(),
             .description = "Where the router stages the source of the inline write that updates a producer's read "
                            "counter. Allocated only on Blackhole.",
         },
@@ -330,7 +308,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "perf_telemetry",
             .source = "PERF_TELEMETRY_BUFFER_ADDR",
             .category = DIAGNOSTICS,
-            .content = describe_l1_region<std::byte>(
+            .content = register_l1_region<std::byte>(
                 0, static_cast<uint32_t>(FabricEriscDatamoverConfig::perf_telemetry_buffer_size), 1),
             .description = "Where the router records its bandwidth telemetry, when bandwidth telemetry is on. "
                            "Allocated only then, except on Blackhole, which always allocates it.",
@@ -339,7 +317,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "code_profiling",
             .source = "CODE_PROFILING_BUFFER_ADDR",
             .category = DIAGNOSTICS,
-            .content = describe_l1_region<CodeProfilingTimerResult>(0, get_max_code_profiling_timer_types()),
+            .content = register_l1_region<CodeProfilingTimerResult>(0, get_max_code_profiling_timer_types()),
             .description = "Where the router accumulates each code profiling timer's cycles and captures, one result "
                            "per timer type. Allocated only with code profiling on.",
         },
@@ -356,7 +334,7 @@ inline constexpr auto k_router_fields = [] {
             .source =
                 NamedArg{"RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS", ArgIndex::NONE, Emitted::CHANNEL_TRIMMING_CAPTURE},
             .category = DIAGNOSTICS,
-            .content = describe_l1_region<ChannelTrimmingOverrides>(),
+            .content = register_l1_region<ChannelTrimmingOverrides>(),
             .description = "Where it records them: the packet sizes each sender channel saw, and which sender and "
                            "receiver channels carried traffic.",
         },
@@ -466,7 +444,7 @@ inline constexpr auto k_sender_channel_fields = [] {
             .key = "free_slots",
             .source = NamedArg{"SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", ArgIndex::FABRIC_POSITION},
             .category = FLOW_CONTROL,
-            .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The channel's slots not holding a packet waiting to be sent: the producer takes one per "
                            "packet it writes, and the router returns it as soon as it sends the packet over Ethernet. "
                            "The producer gets its credit back later, at the ack or the completion.",
@@ -491,7 +469,7 @@ inline constexpr auto k_sender_channel_fields = [] {
                 return static_cast<uint32_t>(builder.sender_channels_connection_semaphore_id[index.compact]);
             }},
             .category = CONTROL_INFO,
-            .content = describe_l1_region<connection_interface::ConnectionValue>(),
+            .content = register_l1_region<connection_interface::ConnectionValue>(),
             .description = "The state of the producer's connection: the producer writes open and close requested, and "
                            "the router writes unused once it has torn the connection down. In the router's runtime "
                            "args.",
@@ -500,7 +478,7 @@ inline constexpr auto k_sender_channel_fields = [] {
             .key = "conn_info",
             .source = NamedArg{"LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", ArgIndex::COMPACT},
             .category = CONTROL_INFO,
-            .content = describe_l1_region<EDMChannelWorkerLocationInfo>(),
+            .content = register_l1_region<EDMChannelWorkerLocationInfo>(),
             .description = "Where the producer writes where it is, and the router its read counter.",
         },
         RouterField{
@@ -513,7 +491,7 @@ inline constexpr auto k_sender_channel_fields = [] {
                            : 0u;
             }},
             .category = CONTROL_INFO,
-            .content = describe_l1_region<SenderChannelProducerCursor>(),
+            .content = register_l1_region<SenderChannelProducerCursor>(),
             .description = "Where the worker channel's producer keeps its write cursor across connections, for the "
                            "next producer to pick up. In the producer's runtime args, from the channel's connection "
                            "spec. Null on the other channels, whose producer keeps none.",
@@ -591,7 +569,7 @@ inline constexpr auto k_receiver_channel_fields = [] {
             .key = "pkts_sent",
             .source = NamedArg{"TO_RECEIVER_{}_PKTS_SENT_ID", ArgIndex::COMPACT},
             .category = FLOW_CONTROL,
-            .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The packets the peer's sender has sent the channel that the receiver has not taken yet: "
                            "the peer adds one per packet it sends over Ethernet, and the receiver takes one when it "
                            "acks the packet with first-level ack, or else once it has forwarded or delivered it.",
@@ -606,7 +584,7 @@ inline constexpr auto k_downstream_edge_fields = [] {
             .key = "free_slots",
             .source = NamedArg{"VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", ArgIndex::VC_AND_EDGE},
             .category = FLOW_CONTROL,
-            .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .content = register_stream_region<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The router's view of the free slots in the sender channel the edge lands on: the router "
                            "takes one per packet it forwards, and the sibling returns it when the packet is acked with "
                            "first-level ack, or else when it completes.",
@@ -619,7 +597,7 @@ inline constexpr auto k_downstream_edge_fields = [] {
                 return static_cast<uint32_t>(index.teardown < ids.size() ? ids[index.teardown].value_or(-1) : -1);
             }},
             .category = CONTROL_INFO,
-            .content = describe_l1_region<uint32_t>(),
+            .content = register_l1_region<uint32_t>(),
             .description = "Where the sibling acks the router closing the edge's connection at teardown. In the "
                            "router's runtime args.",
         },
