@@ -227,7 +227,14 @@ class BlackholeArch(ArchGolden):
     # Measured on a card: Float16_b elwadd and elwsub match on 8192/8192 that
     # way, against 1292 and 876 wrong with ties to even.
     fpu = Fpu(_BLACKHOLE_L1, dest_ties_away=True)
-    pack = Pack(_BLACKHOLE_L1)
+    # The packer truncates these on the card where the stimuli codecs round.
+    # Bfp8_b is known wrong too, off on 460 of 4096, but its lattice is a
+    # shared block exponent rather than a mantissa width, so it needs the
+    # reference block conversion and is not fixed here.
+    pack = Pack(
+        _BLACKHOLE_L1,
+        truncating_outputs=frozenset({DataFormat.Fp8_e4m3, DataFormat.Float16_b}),
+    )
 
 
 __all__ = [

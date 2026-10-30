@@ -170,6 +170,29 @@ DEST_MANTISSA_BITS = {
     DataFormat.Tf32: SRC_MANT_BITS,
 }
 
+#: Explicit mantissa bits an L1 float format holds, for the formats whose
+#: lattice is a plain mantissa width. The block-scaled families are absent on
+#: purpose: their step is set by an exponent shared across the block, so a
+#: per-datum mantissa width does not describe them.
+L1_MANTISSA_BITS = {
+    DataFormat.Float32: FP32_MANTISSA_BITS,
+    DataFormat.Tf32: SRC_MANT_BITS,
+    DataFormat.Float16: SRC_MANT_BITS,
+    DataFormat.Float16_b: BF16_MANT_BITS,
+    DataFormat.Fp8_e4m3: 3,
+}
+
+#: Lowest exponent each of those formats holds as a normal. Below it the
+#: lattice step stops halving and stays fixed, so a relative mantissa width no
+#: longer describes it.
+L1_MIN_NORMAL_EXP = {
+    DataFormat.Float32: -126,
+    DataFormat.Tf32: -126,
+    DataFormat.Float16: -14,
+    DataFormat.Float16_b: -126,
+    DataFormat.Fp8_e4m3: -6,
+}
+
 #: Explicit mantissa bits a src register keeps per format. The ISA documents a
 #: BF16 src datum as overlaid onto Tf32 with the low three mantissa bits
 #: zeroed, which is the 7 below. Quasar overrides it to 10 on the strength of
@@ -211,6 +234,33 @@ def to_src_storage(
     if src_format is DataFormat.Float32:
         return values.to(torch.float32)
     return values.to(format_dict[src_format])
+
+
+def truncate_to_l1_lattice(
+    values: torch.Tensor, l1_format: DataFormat
+) -> Optional[torch.Tensor]:
+    """Quantize toward zero onto `l1_format`'s lattice, or None if unmodelled.
+
+    For a packer that truncates where the codec rounds. Dropping the mantissa
+    bits the format cannot hold lands the value on that format's lattice, so
+    the codec's own conversion afterwards has nothing left to round.
+
+    Returns None for a format whose lattice is not a plain mantissa width,
+    which is every block-scaled one.
+    """
+    keep = L1_MANTISSA_BITS.get(l1_format)
+    if keep is None:
+        return None
+    wide = values.to(torch.float32)
+    out = truncate_mantissa(wide, keep)
+    # Subnormals have a fixed step instead of a relative one, so truncating a
+    # mantissa width keeps more precision than the format can hold there.
+    min_exp = L1_MIN_NORMAL_EXP.get(l1_format)
+    if min_exp is None:
+        return out
+    step = 2.0 ** (min_exp - keep)
+    floored = torch.sign(wide) * torch.floor(wide.abs() / step) * step
+    return torch.where(wide.abs() < 2.0**min_exp, floored, out)
 
 
 def to_dest_storage(
