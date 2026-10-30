@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 name: Cachew checkout
-description: Prefetch Git objects through cachew once, then run standard checkout against upstream.
+description: Cache Git checkout and later dependency fetches, with immediate upstream fallback.
 inputs:
   repository:
     description: Repository in owner/name form.
@@ -72,12 +72,25 @@ outputs:
   commit:
     description: The checked out commit SHA.
     value: ${{ steps.checkout.outputs.commit }}
+  cachew-configured:
+    description: Whether job-global caching is active for later dependency fetches.
+    value: ${{ steps.configure.outputs.configured || 'false' }}
   cachew-prefetched:
     description: Whether cachew supplied a complete object seed before standard checkout.
     value: ${{ steps.prefetch.outputs.prefetched || 'false' }}
 runs:
   using: composite
   steps:
+    - name: Prepare isolated upstream Git configuration
+      id: session
+      if: runner.os != 'Windows'
+      uses: tenstorrent/tt-metal/.github/actions/cachew-checkout/session@57034c7dc2f544e18d1ed80ab97dcdf09d7be739
+      env:
+        CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
+        CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
+        CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
+        CACHEW_REPOSITORY: ${{ inputs.repository }}
     - name: Prefetch from cachew once
       id: prefetch
       if: runner.os != 'Windows'
@@ -133,3 +146,18 @@ runs:
         submodules: ${{ inputs.submodules }}
         set-safe-directory: ${{ inputs.set-safe-directory }}
         github-server-url: ${{ inputs.github-server-url }}
+    - name: Configure job-global cachew Git transport
+      id: configure
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        CACHEW_ACTION_PATH: ${{ github.action_path }}
+        CACHEW_AVAILABLE: ${{ steps.prefetch.outputs.available || 'unknown' }}
+        CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
+        CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
+        CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
+        CACHEW_REPOSITORY: ${{ inputs.repository }}
+        CACHEW_TOKEN: ${{ inputs.token }}
+        CACHEW_PERSIST_CREDENTIALS: ${{ inputs.persist-credentials }}
+      run: '"$CACHEW_NODE" "$CACHEW_CONFIG_HELPER" activate'

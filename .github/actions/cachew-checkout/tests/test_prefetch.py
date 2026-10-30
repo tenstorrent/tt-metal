@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -31,8 +32,11 @@ TOKEN = "cachew-test-token-do-not-persist"
 
 
 def git(path, *arguments, env=None):
+    executable = (env or os.environ).get("CACHEW_REAL_GIT", "git")
     return (
-        subprocess.check_output(["git", "-C", str(path), *arguments], env=env, stderr=subprocess.PIPE).decode().strip()
+        subprocess.check_output([executable, "-C", str(path), *arguments], env=env, stderr=subprocess.PIPE)
+        .decode()
+        .strip()
     )
 
 
@@ -55,8 +59,9 @@ def runner_file(path):
 
 
 class GitServer:
-    def __init__(self, project_root, upstream_host=None):
+    def __init__(self, project_root, upstream_host=None, real_git=None):
         self.root = project_root
+        self.real_git = real_git or os.environ.get("CACHEW_REAL_GIT") or shutil.which("git")
         self.upstream_host = upstream_host
         self.requests = []
         self.health = 200
@@ -67,6 +72,7 @@ class GitServer:
         self.disconnect = False
         self.fetch_delay = 0
         self.block_submodules = False
+        self.required_auth = {}
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -97,6 +103,12 @@ class GitServer:
                         return
                     path = "/" + path[len(prefix) :]
                 repo = path.split("/")[2]
+                if (
+                    repo in owner.required_auth
+                    and self.headers.get("Authorization", "").lower() != owner.required_auth[repo].lower()
+                ):
+                    self.send_error(401)
+                    return
                 if (owner.fail_repo == repo and (not owner.fail_post or self.command == "POST")) or (
                     owner.block_submodules and repo != "main"
                 ):
@@ -122,8 +134,12 @@ class GitServer:
                     CONTENT_LENGTH=str(len(body)),
                     SERVER_PROTOCOL="HTTP/1.1",
                     REMOTE_USER="fixture",
+                    GIT_CONFIG_GLOBAL=os.devnull,
+                    GIT_CONFIG_NOSYSTEM="1",
                 )
-                response = subprocess.check_output(["git", "http-backend"], input=body, env=env, stderr=subprocess.PIPE)
+                response = subprocess.check_output(
+                    [owner.real_git, "http-backend"], input=body, env=env, stderr=subprocess.PIPE
+                )
                 headers, payload = response.split(b"\r\n\r\n", 1)
                 status = 200
                 parsed = []
@@ -159,6 +175,12 @@ class GitServer:
 
 class PrefetchTests(unittest.TestCase):
     def setUp(self):
+        inherited = dict(os.environ)
+        real_git = inherited.get("CACHEW_REAL_GIT") or shutil.which("git")
+        real_git = str(Path(real_git).resolve())
+        for key in list(inherited):
+            if key.startswith("CACHEW_"):
+                del inherited[key]
         self.temp = tempfile.TemporaryDirectory(prefix="cachew-checkout-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -168,15 +190,20 @@ class PrefetchTests(unittest.TestCase):
         self.home.mkdir()
         self.runtime = self.root / "runtime"
         self.runtime.mkdir()
+        binaries = self.root / "bin"
+        binaries.mkdir()
+        (binaries / "git").symlink_to(real_git)
         self.project_root = self.root / "repositories"
         self.project_root.mkdir()
-        self.upstream = GitServer(self.project_root)
+        self.upstream = GitServer(self.project_root, real_git=real_git)
         self.addCleanup(self.upstream.close)
-        self.cache = GitServer(self.project_root, urllib.parse.urlsplit(self.upstream.url).netloc)
+        self.cache = GitServer(self.project_root, urllib.parse.urlsplit(self.upstream.url).netloc, real_git=real_git)
         self.addCleanup(self.cache.close)
         self.env = dict(
-            os.environ,
+            inherited,
             HOME=str(self.home),
+            XDG_CONFIG_HOME=str(self.home / ".config"),
+            PATH=str(binaries) + os.pathsep + inherited.get("PATH", ""),
             GIT_CONFIG_NOSYSTEM="1",
             GITHUB_WORKSPACE=str(self.workspace),
             GITHUB_SERVER_URL=self.upstream.url,
@@ -199,6 +226,7 @@ class PrefetchTests(unittest.TestCase):
             CACHEW_FETCH_TAGS="true",
             CACHEW_SUBMODULES="recursive",
             CACHEW_TOKEN=TOKEN,
+            CACHEW_REAL_GIT=real_git,
         )
         self.env.pop("GIT_CONFIG_GLOBAL", None)
         (self.home / ".gitconfig").write_text("[user]\n\tname = Fixture\n\temail = fixture@example.com\n")
@@ -303,7 +331,49 @@ class PrefetchTests(unittest.TestCase):
         self.assertEqual(git(self.target, "rev-parse", "HEAD"), self.sha)
         self.assertTrue((self.target / ".git/modules/child-name/modules/nested-name/objects").is_dir())
         self.assertEqual(git(self.target, "remote", "get-url", "origin"), self.upstream.url + "/org/main")
+        self.assertEqual(
+            git(self.target, "config", "--get", "remote.origin.fetch"), "+refs/heads/*:refs/remotes/origin/*"
+        )
+        self.assertEqual(
+            git(self.target, "--git-dir=.git/modules/child-name", "config", "--get", "remote.origin.fetch"),
+            "+refs/heads/*:refs/remotes/origin/*",
+        )
         self.assert_no_cache_credentials()
+
+    def test_submodules_auto_follow_tags_independently_of_main_fetch_tags(self):
+        child = self.project_root / "org/child"
+        git(child, "checkout", "-b", "unrelated", env=self.env)
+        (child / "other.txt").write_text("unrelated tagged object")
+        git(child, "add", "other.txt", env=self.env)
+        git(child, "commit", "-m", "unrelated", env=self.env)
+        git(child, "tag", "unrelated-tag", env=self.env)
+        git(child, "branch", "-f", "main", "HEAD", env=self.env)
+        git(child, "checkout", "main", env=self.env)
+        for setting in ("false", "true"):
+            with self.subTest(main_fetch_tags=setting):
+                self.env["CACHEW_FETCH_TAGS"] = setting
+                self.assertTrue(self.attempt())
+                self.assertEqual(git(self.target, "--git-dir=.git/modules/child-name", "tag", "--list"), "v1.0.0")
+                self.assertEqual(git(self.target, "tag", "--list"), "v1.0.0" if setting == "true" else "")
+                self.assert_single_cache_attempts(["main", "child", "grand"])
+                shutil.rmtree(self.target)
+                self.cache.requests.clear()
+
+    def test_depth_zero_seeds_other_branches_and_tags_in_the_one_main_fetch(self):
+        source = self.project_root / "org/main"
+        git(source, "checkout", "-b", "another-branch", env=self.env)
+        (source / "other.txt").write_text("unique branch object")
+        git(source, "add", "other.txt", env=self.env)
+        git(source, "commit", "-m", "other branch", env=self.env)
+        other = git(source, "rev-parse", "HEAD")
+        git(source, "tag", "other-tag", env=self.env)
+        git(source, "checkout", "main", env=self.env)
+        self.env.update(CACHEW_FETCH_DEPTH="0", CACHEW_FETCH_TAGS="false")
+        self.assertTrue(self.attempt())
+        self.assertEqual(git(self.target, "rev-parse", "HEAD"), self.sha)
+        self.assertEqual(git(self.target, "rev-parse", "refs/remotes/origin/another-branch"), other)
+        self.assertEqual(git(self.target, "rev-parse", "refs/tags/other-tag"), other)
+        self.assert_single_cache_attempts(["main", "child", "grand"])
 
     @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
     def test_pinned_checkout_reuses_all_objects_and_cleans_up_auth(self):

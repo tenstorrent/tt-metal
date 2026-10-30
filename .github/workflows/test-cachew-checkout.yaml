@@ -62,7 +62,9 @@ jobs:
       - name: Test cache reuse, immediate fallback and cleanup
         env:
           CHECKOUT_ACTION_JS: ${{ github.workspace }}/checkout-action/dist/index.js
-        run: python3 -m unittest discover -s .github/actions/cachew-checkout/tests -v
+        run: |
+          cmake --version
+          python3 -m unittest discover -s .github/actions/cachew-checkout/tests -v
 
   live-smoke:
     if: github.event_name == 'workflow_dispatch' && inputs.live-smoke
@@ -72,6 +74,7 @@ jobs:
       - name: Bootstrap the action definition
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         with:
+          cachew-url: ${{ inputs.cachew-url }}
           sparse-checkout: .github/actions/cachew-checkout
           persist-credentials: false
       - name: Checkout through cachew with upstream fallback
@@ -88,7 +91,10 @@ jobs:
           EXPECTED_SHA: ${{ github.sha }}
           ACTUAL_SHA: ${{ steps.checkout.outputs.commit }}
           CACHEW_PREFETCHED: ${{ steps.checkout.outputs.cachew-prefetched }}
+          CACHEW_CONFIGURED: ${{ steps.checkout.outputs.cachew-configured }}
         run: |
           test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          test "$CACHEW_PREFETCHED" = "true"
+          test "$CACHEW_CONFIGURED" = "true"
           git -C cachew-smoke submodule status --recursive
           echo "cachew-prefetched=$CACHEW_PREFETCHED"

@@ -53,6 +53,7 @@ def duration(value, maximum):
 
 class Prefetch:
     def __init__(self, environ):
+        self.git_executable = environ.get("CACHEW_REAL_GIT", "git")
         for key in ("SSH_KEY", "LFS", "FILTER", "SPARSE_CHECKOUT"):
             value = environ.get(f"CACHEW_{key}", "")
             if value and value.lower() != "false":
@@ -120,7 +121,7 @@ class Prefetch:
         self.modules = 0
 
     def git(self, gitdir, *arguments):
-        command = ["git", f"--git-dir={gitdir}", *arguments]
+        command = [self.git_executable, f"--git-dir={gitdir}", *arguments]
         with subprocess.Popen(
             command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
         ) as process:
@@ -135,17 +136,27 @@ class Prefetch:
             raise Bypass("cache Git operation failed")
         return output
 
-    def seed(self, gitdir, url, ref):
+    def seed(self, gitdir, url, ref, main=False):
         self.git(gitdir, "init", "--bare", str(gitdir))
-        self.git(gitdir, "config", "remote.origin.url", url)
+        self.git(gitdir, "remote", "add", "origin", url)
         cache_url = f"{self.cache}/git/{urllib.parse.urlsplit(self.upstream).netloc}/{url[len(self.upstream) + 1:]}"
-        options = ["--force", "--no-recurse-submodules", "--tags" if self.tags else "--no-tags"]
+        options = ["--force", "--no-recurse-submodules"]
+        refs = [ref]
+        if main and self.depth == 0:
+            refs.extend(("+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"))
+        elif main:
+            options.append("--tags" if self.tags else "--no-tags")
+        else:
+            # A raw SHA fetch does not auto-follow tags without a destination.
+            refs = [f"{ref}:refs/cachew/gitlink"]
         if self.depth:
             options.append(f"--depth={self.depth}")
         # Explicit URL, never a persisted rewrite. Exactly one fetch invocation.
-        self.git(gitdir, "fetch", *options, "--", cache_url, ref)
+        self.git(gitdir, "fetch", *options, "--", cache_url, *refs)
         commit = self.git(gitdir, "rev-parse", "FETCH_HEAD^{commit}").decode().strip()
         self.git(gitdir, "update-ref", "--no-deref", "HEAD", commit)
+        if not main:
+            self.git(gitdir, "update-ref", "-d", "refs/cachew/gitlink")
         self.git(gitdir, "config", "core.bare", "false")
         return commit
 
@@ -191,7 +202,7 @@ class Prefetch:
             child_commit = self.seed(child_dir, child_url, sha.decode())
             self.seed_children(child_dir, child_url, child_commit, level + 1)
 
-    def run(self):
+    def probe(self):
         # --disable ignores ~/.curlrc, which could otherwise add auth or retries.
         # The process deadline also bounds DNS resolution, unlike a socket timeout.
         health = subprocess.run(
@@ -216,28 +227,41 @@ class Prefetch:
         )
         if health.returncode or health.stdout != b"200":
             raise Bypass("cache liveness failed")
+
+    def run(self):
         self.target.mkdir(parents=True, exist_ok=True)
         # Stage on the target filesystem; publish only a complete object seed.
         with tempfile.TemporaryDirectory(prefix=".cachew-prefetch-", dir=self.target) as stage:
             gitdir = Path(stage) / ".git"
-            commit = self.seed(gitdir, self.url, self.ref)
+            commit = self.seed(gitdir, self.url, self.ref, main=True)
             self.seed_children(gitdir, self.url, commit)
             gitdir.rename(self.target / ".git")
 
 
 def main():
     prefetched = False
+    available = "unknown"
     try:
-        Prefetch(os.environ).run()
+        session = os.environ.get("CACHEW_SESSION_DIR")
+        if session and (Path(session) / "cache-disabled").exists():
+            available = "false"
+            raise Bypass("cache disabled after an earlier failure")
+        attempt = Prefetch(os.environ)
+        available = "false"
+        attempt.probe()
+        attempt.run()
         prefetched = True
+        available = "true"
         print("Cachew object prefetch complete; continuing with upstream checkout.")
     except Bypass as error:
         print(f"Cachew prefetch bypassed: {error}. Continuing with upstream checkout.")
     except Exception:
+        available = "false"
         print("Cachew prefetch unavailable. Continuing immediately with upstream checkout.")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a") as stream:
             stream.write(f"prefetched={str(prefetched).lower()}\n")
+            stream.write(f"available={available}\n")
 
 
 if __name__ == "__main__":
