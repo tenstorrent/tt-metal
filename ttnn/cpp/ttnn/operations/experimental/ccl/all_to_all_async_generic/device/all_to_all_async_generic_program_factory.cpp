@@ -591,9 +591,10 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const CoreRangeSet sender_worker_core_range(sender_worker_core_set);
 
     // Create CB
-    // Three packet slots provide reader/writer overlap without coupling pipeline depth to payload/page geometry.
-    // In particular, a one-page payload still needs multiple slots to avoid fully serializing both kernels.
-    constexpr uint32_t cb_depth = 3;
+    // Four packet slots: the reader fills two at a time (all_to_all_sender_reader.cpp), and the even depth keeps each
+    // pair contiguous, while the writer drains the other two. Depth is counted in packets, independent of payload/page
+    // geometry; a one-page payload still needs multiple slots to avoid fully serializing both kernels.
+    constexpr uint32_t cb_depth = 4;
     const uint32_t cb_size = cb_depth * number_pages_per_packet * page_size;
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
