@@ -14,8 +14,9 @@
 //   o      = e * r_q + c * u             (SFPU)
 //   S_new  = e * S_old + k^T (x) u       (per S tile: exact seed, SFPU decay, FPU rank-1 accumulate)
 // The passes are decode_token<Kt, Vt> in fused_recurrent_gdn_math.hpp; this file is the token loop and the state
-// ring: S_cur is the reader's S at t = 0 and then alternates between s2 and s3, and the state goes to state_out for
-// every token (per_token) or the last one. CB ids and tile dims: ../fused_recurrent_gdn_cb.hpp.
+// ring: S_cur is the reader's S at t = 0 and then alternates between s2 and s3 (each a utd/mm id pair over one
+// allocation), and the state goes to state_out for every token (per_token) or the last one. CB ids and tile dims:
+// ../fused_recurrent_gdn_cb.hpp.
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -53,12 +54,17 @@ void kernel_main() {
         .out16 = cb::out16,
         .state_out = cb::state_out,
     };
+    // Each state lives under two ids over one allocation (utd for the exact copies, mm for the matmul in1).
+    constexpr gdn_decode::StateCbs S0{.utd = cb::S, .mm = cb::S_mm};
+    constexpr gdn_decode::StateCbs S2{.utd = cb::s2, .mm = cb::s2_mm};
+    constexpr gdn_decode::StateCbs S3{.utd = cb::s3, .mm = cb::s3_mm};
+
     for (uint32_t t = 0; t < T; t++) {
-        const uint32_t cur_S_id = (t == 0) ? cb::S : ((t & 1u) ? cb::s2 : cb::s3);
-        const uint32_t nxt_S_id = (t & 1u) ? cb::s3 : cb::s2;
+        const gdn_decode::StateCbs cur_S = (t == 0) ? S0 : ((t & 1u) ? S2 : S3);
+        const gdn_decode::StateCbs nxt_S = (t & 1u) ? S3 : S2;
         const bool last = (t == T - 1);
         // decode_token pops the token's inputs and S_cur (pop_inputs = true); S_next is intentionally left in its
-        // CB: the next iteration reads it as S_cur.
-        gdn_decode::decode_token<Kt, Vt>(tcb, cur_S_id, nxt_S_id, per_token || last);
+        // CBs: the next iteration reads it as S_cur.
+        gdn_decode::decode_token<Kt, Vt>(tcb, cur_S, nxt_S, per_token || last);
     }
 }

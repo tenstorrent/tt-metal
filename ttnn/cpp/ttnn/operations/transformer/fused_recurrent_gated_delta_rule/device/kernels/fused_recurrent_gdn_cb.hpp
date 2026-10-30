@@ -61,8 +61,11 @@ constexpr uint32_t s3 = 15;
 constexpr uint32_t out16 = 16;
 constexpr uint32_t state_out = 17;
 constexpr uint32_t blkidx = 18;
+constexpr uint32_t S_mm = 19;   // matmul-operand id of S (same L1 as c_6)
+constexpr uint32_t s2_mm = 20;  // matmul-operand id of s2 (same L1 as c_14)
+constexpr uint32_t s3_mm = 21;  // matmul-operand id of s3 (same L1 as c_15)
 
-constexpr uint32_t num_cbs = 19;  // c_0 .. c_18 (blkidx is only allocated in ring mode)
+constexpr uint32_t num_cbs = 22;  // c_0 .. c_21 (blkidx is only allocated in ring mode)
 
 // The reader's per-token CBs (qk16, kT16, qcol32, v16, gcol32, bcol16) hold this many tokens, so the reader builds
 // token t+1 while the compute consumes token t (decode_token pops its inputs only at its end). The reader zero-fills
@@ -94,6 +97,9 @@ constexpr std::array<std::array<uint32_t, 2>, num_cbs> tile_dims = {{
     tile_16x32,  // c_16 out16
     tile_32x32,  // c_17 state_out
     tile_32x32,  // c_18 blkidx (placeholder)
+    tile_32x32,  // c_19 S_mm
+    tile_32x32,  // c_20 s2_mm
+    tile_32x32,  // c_21 s3_mm
 }};
 
 // CBs read only by copy_tile into DEST: the factory lists them with UnpackToDestMode::UnpackToDestFp32.
@@ -117,6 +123,9 @@ constexpr std::array<bool, num_cbs> unpack_to_dest_fp32 = {{
     false,  // c_16 out16
     false,  // c_17 state_out
     false,  // c_18 blkidx
+    false,  // c_19 S_mm      (matmul in1)
+    false,  // c_20 s2_mm     (matmul in1)
+    false,  // c_21 s3_mm     (matmul in1)
 }};
 
 // Byte size of an fp32 tile of the given dims.
