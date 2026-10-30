@@ -71,6 +71,8 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         ).lora_path
         self.lora_strength = float(lora_strength)
         self._lora_digest = _file_digest(self.lora_path)
+        # Stays None when the transformer loads from the weight cache, which skips `_read_safetensors`.
+        self.merged_targets: int | None = None
         self._time_embedder_states: dict[str, dict[str, torch.Tensor]] | None = None
         with safe_open(str(self.lora_path), framework="pt", device="cpu") as handle:
             metadata = handle.metadata()
@@ -148,6 +150,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             merged += 1
         if merged == 0:
             raise RuntimeError(f"turbo adapter {self.lora_path} has no LoRA targets to merge")
+        self.merged_targets = merged
         logger.info(f"turbo adapter {self.lora_path.name}: merged {merged} targets, strength {self.lora_strength:g}")
         return state
 

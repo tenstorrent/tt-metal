@@ -64,6 +64,10 @@ NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 # One adapter file serves both; the keyframe is the only difference between the two tasks.
 TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
 
+# 50 transformer blocks and 2 refiner blocks, each with to_q, to_k, to_v, to_out.0, ff.net.0.proj and ff.net.2.
+# The merge runs on the checkpoint's unfused layout, so q/k/v count separately.
+HYPERFLOW_MERGED_TARGETS = 52 * 6
+
 
 def _assert_two_time_temb_matches_host(pipeline, mesh_device) -> None:
     """Device two-time blend vs float32 torch: the adapter's float32 embedder deltas must not round away."""
@@ -158,8 +162,13 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         profiler=benchmark_profiler,
     )
 
+    # A cache hit merged nothing this run; its entry is keyed on this adapter's digest and strength.
+    merged = pipeline.merged_targets
+    logger.info(f"merged adapter targets: {'none, weights from cache' if merged is None else merged}")
     if pipeline.hyperflow is not None:
         assert pipeline.hyperflow.num_forwards == NUM_FORWARDS
+        if merged is not None:
+            assert merged == HYPERFLOW_MERGED_TARGETS, f"merged {merged} targets, expected {HYPERFLOW_MERGED_TARGETS}"
         _assert_two_time_temb_matches_host(pipeline, mesh_device)
 
     log_pipeline_perf(
