@@ -17,7 +17,15 @@ from pathlib import Path
 import numpy as np
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, ModuleList, Parameter, RowParallelLinear
+from ttml.modules import (
+    AbstractModuleBase,
+    ColumnParallelLinear,
+    LinearLayer,
+    ModuleList,
+    Parameter,
+    RowParallelLinear,
+    RunMode,
+)
 
 from .packing import (
     AUDIO_CHANNELS,
@@ -117,17 +125,41 @@ def const(value: ttnn.Tensor) -> ttml.autograd.Tensor:
     return ttml.autograd.create_tensor(value, False)
 
 
+def _slices(value: ttnn.Tensor, sizes, dim: int) -> tuple[ttnn.Tensor, ...]:
+    """Contiguous chunks along `dim` with ttnn.slice; ttnn.split only runs on a few cores."""
+    out, start = [], 0
+    for size in sizes:
+        begin, end = [0, 0, 0, 0], list(value.shape)
+        begin[dim], end[dim] = start, start + size
+        out.append(ttnn.slice(value, begin, end))
+        start += size
+    return tuple(out)
+
+
 class Split(ttml.autograd.Function):
     """Contiguous chunks along a dim; backward is one concat."""
 
     @staticmethod
     def forward(ctx, input, sizes, dim):
         ctx.dim = dim
-        return tuple(ttnn.split(input.get_value(), list(sizes), dim))
+        return _slices(input.get_value(), sizes, dim)
 
     @staticmethod
     def backward(ctx, *grad_outputs):
         return ttnn.concat(list(grad_outputs), ctx.dim)
+
+
+class Concat(ttml.autograd.Function):
+    """Concatenation along a dim; backward slices the gradient back."""
+
+    @staticmethod
+    def forward(ctx, dim, *inputs):
+        ctx.dim, ctx.sizes = dim, [t.shape()[dim] for t in inputs]
+        return ttnn.concat([t.get_value() for t in inputs], dim)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return _slices(grad_output, ctx.sizes, ctx.dim)
 
 
 class RMSNorm(AbstractModuleBase):
@@ -141,14 +173,23 @@ class RMSNorm(AbstractModuleBase):
 
 
 class H3Attention(AbstractModuleBase):
-    """Full bidirectional self-attention, per-head QK RMSNorm, optional rotary on q/k."""
+    """Full bidirectional self-attention, per-head QK RMSNorm, optional rotary on q/k.
+
+    q, k and v come from one matmul against the frozen `[Wq; Wk; Wv]`, fused from the three projections on the
+    first forward; the separate copies are freed then, so read them before. With LoRA on the three projections
+    their A matrices are fused the same way: one `x @ [A_q; A_k; A_v]^T`, then the three B matmuls, so LoRA dropout
+    draws one mask for all three."""
 
     def __init__(self, config: H3Config) -> None:
         super().__init__()
         tp = _tp_size(config)
         if config.num_attention_heads % tp:
             raise ValueError(f"{config.num_attention_heads} heads not divisible by tp {tp}")
+        self.tp = tp
         self.local_heads = config.num_attention_heads // tp
+        self.local_inner = self.local_heads * config.attention_head_dim
+        # Not a registered parameter: it would be listed as trainable.
+        object.__setattr__(self, "_qkv_weight", None)
         dim, inner = config.hidden_size, config.num_attention_heads * config.attention_head_dim
         col_init, row_init = _empty_init(config, 2), _empty_init(config, 3)
         if tp > 1:
@@ -174,11 +215,53 @@ class H3Attention(AbstractModuleBase):
             else ttml.ops.attention.scaled_dot_product_attention_composite
         )
 
+    def _projections(self):
+        return self.to_q, self.to_k, self.to_v
+
+    def _fused_qkv_weight(self) -> ttml.autograd.Tensor:
+        if self._qkv_weight is None:
+            parts = [p.weight.tensor.get_value() for p in self._projections()]
+            fused = ttnn.concat(parts, 2)  # per device: [q | k | v] rows of the local heads
+            for part in parts:
+                ttnn.deallocate(part)
+            object.__setattr__(self, "_qkv_weight", ttml.autograd.create_tensor(fused, False))
+        return self._qkv_weight
+
+    def _sum_over_tp(self, lora_A):
+        """Each device's grad of a replicated lora_A only carries its own lora_B shard; broadcast sums it."""
+        return ttml.ops.distributed.broadcast(lora_A, self.to_q.cluster_axis) if self.tp > 1 else lora_A
+
+    def _lora_updates(self, x):
+        """The three LoRA terms `scaling * (x @ A^T) @ B^T`, or None without adapters."""
+        projs = self._projections()
+        adapted = [hasattr(p, "lora_A") for p in projs]
+        if not any(adapted):
+            return None
+        if not all(adapted):
+            raise ValueError("LoRA must target all of to_q, to_k and to_v, or none of them")
+        lead = projs[0]
+        if lead.get_run_mode() == RunMode.TRAIN and lead.dropout_prob > 0.0:
+            x = ttml.ops.dropout.dropout(x, lead.dropout_prob)
+        rank = lead.lora_A.tensor.shape()[2]
+        if rank % TILE == 0:
+            a = self._sum_over_tp(Concat.apply(2, *(p.lora_A.tensor for p in projs)))
+            hs = Split.apply(ttml.ops.linear.linear(x, a, None), (rank,) * 3, 3)
+        else:  # the split of x @ A^T must fall on tile boundaries
+            hs = [ttml.ops.linear.linear(x, self._sum_over_tp(p.lora_A.tensor), None) for p in projs]
+        return [ttml.ops.linear.linear(h, p.lora_B.tensor, None) * p.scaling for h, p in zip(hs, projs)]
+
     def forward(self, x, mask, rope_params=None):
+        if self.tp > 1:
+            x = ttml.ops.distributed.broadcast(x, self.to_q.cluster_axis)
+        qkv = ttml.ops.linear.linear(x, self._fused_qkv_weight(), None)
+        q, k, v = Split.apply(qkv, (self.local_inner,) * 3, 3)
+        updates = self._lora_updates(x)
+        if updates is not None:
+            q, k, v = (base + update for base, update in zip((q, k, v), updates))
         split_heads = ttml.ops.multi_head_utils.split_heads
-        q = self.norm_q(split_heads(self.to_q(x), self.local_heads))
-        k = self.norm_k(split_heads(self.to_k(x), self.local_heads))
-        v = split_heads(self.to_v(x), self.local_heads)
+        q = self.norm_q(split_heads(q, self.local_heads))
+        k = self.norm_k(split_heads(k, self.local_heads))
+        v = split_heads(v, self.local_heads)
         if rope_params is not None:
             q = ttml.ops.rope.rope(q, rope_params, 0)
             k = ttml.ops.rope.rope(k, rope_params, 0)
