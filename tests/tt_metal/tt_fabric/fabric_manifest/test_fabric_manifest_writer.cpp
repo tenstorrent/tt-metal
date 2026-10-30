@@ -38,7 +38,7 @@ ManifestFacts make_facts() {
             {.senders = {{SenderChannel{
                  .serviced_by = {0},
                  .producer = LocalWorker{},
-                 .credits = {.completed = std::optional<content::Stream>{}},
+                 .credits = {.completed = std::optional<content::StreamReg>{}},
              }}},
              .receivers = {{ReceiverChannel{.serviced_by = {0}, .forwards_on = 0}}}},
         .intra_chip_downstream_edges = {},

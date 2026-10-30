@@ -545,7 +545,7 @@ void expect_fields(const json& fields, std::span<const manifest::RouterField> ta
         if (fields.contains(key) && fields.at(key).is_null()) {
             EXPECT_TRUE(
                 std::holds_alternative<manifest::content::L1>(field.content.value) ||
-                std::holds_alternative<manifest::content::Stream>(field.content.value))
+                std::holds_alternative<manifest::content::StreamReg>(field.content.value))
                 << key;
         }
     }
@@ -789,7 +789,7 @@ TEST(ManifestNames, Spellings) {
 
     // A content type's name in snake case.
     EXPECT_EQ(kind_name<manifest::content::L1>(), "l1");
-    EXPECT_EQ(kind_name<manifest::content::Stream>(), "stream");
+    EXPECT_EQ(kind_name<manifest::content::StreamReg>(), "stream_reg");
 
     namespace element = layout::element;
     EXPECT_EQ(schema_name({element::Uint{}, 4, 0}), "u32");

@@ -26,6 +26,7 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/packet_header_types.hpp"
 
 namespace tt::tt_fabric::manifest {
@@ -93,6 +94,7 @@ using RegisteredTypes = typename detail::concat_type_lists<
         SenderChannelProducerCursor,
         EDMChannelWorkerLocationInfo,
         ChannelTrimmingOverrides,
+        CodeProfilingTimerResult,
         FabricTelemetry,
         routing_l1_info_t>,
     PacketHeaderTypes>::type;
