@@ -6,6 +6,7 @@
 
 #include "core/compute_kernel_config.hpp"
 #include "device/rmsnorm_bw_allcore_device_operation.hpp"
+#include "metal/ops/rmsnorm_bw_rows/rmsnorm_bw_rows.hpp"
 
 namespace ttml::metal {
 
@@ -23,7 +24,22 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
     const uint32_t rows = padded[0] * padded[1] * (padded[2] / tt::constants::TILE_HEIGHT);
     const uint32_t Wt = padded[3] / tt::constants::TILE_WIDTH;
     const auto grid = input_tensor.device()->compute_with_storage_grid_size();
-    const auto split = ops::rmsnorm_bw_allcore::device::choose_work_split(rows, Wt, grid.x * grid.y);
+    const uint32_t num_cores = grid.x * grid.y;
+    // Single-phase variant (iteration 17): every operand read once, the row's partial dot products exchanged over
+    // the NoC; one (row, slice) item per core, so it needs rows * slices <= cores (3 x 54-tile slices for a
+    // [1024, 5120] input on 110 cores) and the frozen-gamma path (no dgamma components).
+    if (!compute_dgamma && rows <= num_cores && input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
+        const uint32_t slices = std::min<uint32_t>(num_cores / rows, 8U);
+        const uint32_t slice_tiles = (Wt + slices - 1U) / slices;
+        const uint32_t slices_eff = (Wt + slice_tiles - 1U) / slice_tiles;
+        if (slice_tiles * 3U * tt::tile_size(tt::DataFormat::Float16_b) <= 512U * 1024U) {  // resident slices in L1
+            return {
+                ttml::metal::rmsnorm_bw_rows(
+                    input_tensor, gamma_tensor, rms_tensor, dL_dout_tensor, slices_eff, slice_tiles, residual_grad),
+                std::nullopt};
+        }
+    }
+    const auto split = ops::rmsnorm_bw_allcore::device::choose_work_split(rows, Wt, num_cores);
 
     auto partials = ttnn::prim::ttml_rmsnorm_bw_allcore_partial(input_tensor, gamma_tensor, dL_dout_tensor, split);
     auto result = ttnn::prim::ttml_rmsnorm_bw_allcore(

@@ -1,0 +1,12 @@
+=== build _ttml 2026-10-30T17:34:22Z
+build rc=0
+=== rmsnorm_bw_rows check 2026-10-30T17:34:25Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+T=1024 C=5120 residual=True: pcc 0.999999 rel 1.66e-03 | wall us 172
+T=1024 C=5120 residual=False: pcc 0.999999 rel 1.67e-03 | wall us 155
+T=512 C=2048 residual=True: pcc 0.999999 rel 1.67e-03 | wall us 42
+=== lora harness tests 2026-10-30T17:34:30Z
+tests rc=0
+====================== 8 passed, 34 deselected in 44.10s =======================
+=== done 2026-10-30T17:35:17Z

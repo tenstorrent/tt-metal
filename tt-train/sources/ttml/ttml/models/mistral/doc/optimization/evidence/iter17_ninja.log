@@ -1,0 +1,7 @@
+[0/2] Re-checking globbed directories...
+[1/6] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/5] Linking CXX shared library ttnn/_ttnncpp.so
+[3/5] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.cpp.o
+[4/5] Linking CXX static library tt-train/sources/ttml/libttml.a
+[5/5] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so

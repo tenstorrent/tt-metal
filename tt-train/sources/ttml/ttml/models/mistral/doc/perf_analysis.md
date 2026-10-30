@@ -40,6 +40,7 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 14 | real weights, warm | 526.1 (521.0) | - | `O/iter14_full_tp4_real.log` |
 | 15 | SDPA forward chain mode: K/V read once per chain of cores, forwarded core to core | **506.0 (502.4)** | **32.06 %** | `O/iter15_tp_mfu_tp4.log` |
 | 16 | SDPA backward chain mode (Q and KV kernels) | 508.4 (502.2) | 31.91 % | `O/iter16_tp_mfu_tp4.log` |
+| 17 | single-phase RMSNorm backward (`rmsnorm_bw_rows`) | **505.6 (499.4)** | **32.09 %** | `O/iter17_tp_mfu_tp4.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -71,7 +72,7 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 | ~206 | math | base matmuls at TP-local shapes | gate_up fwd 6.15 (76 % of peak) / dX 5.52 (85 %), w2 fwd 3.69 (63 %) / dX 2.80 (83 %), qkv 0.76 + 0.59, out 0.48 + 0.59 | library kernels at ttnn's best config (sweeps, iterations 4 and 7) |
 | 40-85 | collectives | 17 reduce-scatter `[1024, 5120]` + 17 all-gather `[1024, 1280]` per 4 layers | chip 0 5.87 + 2.21 (waiting included), chip 3 4.0 | transfer at the library optimum (iteration 12 sweep); overlap not tried |
 | ~40 | math + glue | LoRA adapters (rank 16) | `dB` 0.58 + 0.39 + 0.19, `dA`-side matmuls 0.29 + 0.17 + 0.19, `skinny_matmul` 0.29 + 0.22 + 0.15, `lowrank_update` 0.52 + 0.38 + 0.13 | `dA` / `dB` products on 33-88 cores (K-split like `skinny_matmul`) |
-| ~32 | math | RMSNorm | bwd 1.10 + 0.74 (96 cores), fused fwd 0.59 + 0.58, first-layer plain fwd 0.15 | bandwidth-bound two-phase kernels; gamma re-read ~0.2 |
+| ~32 | math | RMSNorm | bwd 1.10 + 0.74 (96 cores), fused fwd 0.59 + 0.58, first-layer plain fwd 0.15; bwd 1.32 after iteration 17 (~27) | the fused forward's two phases (0.59 + 0.58) the same way: ~0.3 |
 | ~30 | math | SDPA, 8 heads per chip | bwd KV 1.16 + reduce 0.11, fwd 0.91, bwd Q 0.86; fwd 0.56 after 15, bwd Q 0.78 and KV 1.10 after 16 (compute-bound) | one backward pass per (K/V row, head) with dQ partials (QK^T and the softmax are recomputed twice), `matmul_block` over chunks |
 | ~29 | layout | fused-route slices / transposes / concats, heads, LoRA-grad stacking | w2 route 0.33 + 0.33 + 0.32, gate_up route 0.26 + 0.21 + 0.20, RoPE 0.21, heads 0.15, stack 0.3; ~23 after iteration 13 (`TransposeSplit` 0.31 + 0.19 replace 1.07 of slices / transposes) | forward K-concat (0.52) needs wide producer buffers |
 | ~15 | math | SwiGLU | bwd 1.05 + fwd 0.45 | at ~75 % of bandwidth |
@@ -230,13 +231,21 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Verification**: standalone vs the pre-iteration-11 outputs at six shapes unchanged (dQ bit-identical, dK / dV one bf16 ulp); harness 42 passed; TP gradient check PASS.
 - **Evidence**: `O/iter16_build_check.{sh,log}`, `O/iter16_sdpa_check.log`, `O/iter16_attention_tests.log`, `O/iter16.{sh,log}`, `O/iter16_harness.log`, `O/iter16_tp_grad_check_tp4.log`, `O/iter16_tp_{mfu_tp4,analysis,ranked_ops}.*`.
 
+## Iteration 17 (2026-10-30): single-phase RMSNorm backward (kernel boost)
+
+- **Change**: math, kernel rewrite of the data flow (`metal/ops/rmsnorm_bw_rows/`, dispatched from `rmsnorm_bw_allcore` when rows x slices fit the grid and gamma is frozen): one (tile-row, 54-tile slice) item per core with the input, gamma and dL_dout slices resident in L1, the row's three per-slice dot products exchanged over the NoC (each core writes its fp32 partial into the others' CB slot and bumps a semaphore), then the gradient pass from the resident tiles with the residual gradient streamed. Every operand read once (50 MB per call) instead of 60 MB in two launches with a DRAM round trip of the partials. Checklist: `optimization/work_log.md`, "Iteration 17".
+- **Result**: TP=4 505.6 ms / 32.09 % vs 508.4 / 506.0 (iterations 16 / 15) at 1.121-1.178 GHz effective; chips 50-74 C.
+- **Attribution**: chip 0, per 4 layers, cycle-time: `RMSNormBackward` 1.093 + `RMSNormBackwardPartial` 0.740 -> `RMSNormBackwardRows` 1.320 (229 -> 165 us per call; -0.51 ms, ~-5 ms per 40 layers per chip); ops 487 -> 479 per step; other norm rows unchanged. Landed within the expected 130-150 us band plus the exchange and the resident-slice load (the pass-1 and pass-2 work no longer overlap with DRAM reads).
+- **Verification**: standalone PCC 0.999999 / rel 1.7e-3 vs torch fp64 at three shapes (the two-phase op's accuracy; `O/iter17_rmsnorm_check.log`); norm harness tests 8 passed (the 2-batch case exercises the two-phase fallback); harness 42 passed; TP gradient check PASS.
+- **Evidence**: `O/iter17_build_check.{sh,log}`, `O/iter17_rmsnorm_check.{py,log}`, `O/iter17_rmsnorm_tests.log`, `O/iter17.{sh,log}`, `O/iter17_harness.log`, `O/iter17_tp_grad_check_tp4.log`, `O/iter17_tp_{mfu_tp4,analysis,ranked_ops}.*`.
+
 ## Loop exit (2026-10-29, after iteration 3) and resumed state
 
 - Exit condition met: 1339 ms cycle-time (2/4/8/16 fit 1345.8; 16 layers 563.6 ms device / 694.4 wall at 1100 MHz, 24.8 GiB) vs the 1620 ms target, 17 % under; wall 1661-1739 vs 2006-2101 ms at the run's clocks (ratio 0.83); stretch 1259 ms 6 % away. Overhead threshold 1 % = 13 ms.
 - Full-model report at exit: 556.5 ms / 29.15 % random init; 574.8 ms real weights warm, loss 0.4453 -> 0.1406 -> 0.4531 vs the baseline's 0.4453 -> 0.1436 -> 0.4551.
 - Final verification at exit: harness 14; TP gradient check PASS on the composite and the fused paths (first attempt un-interleaved, Ledger); loss match max |diff| 0.026 (composite 0.075); device bf16 loss quantised to 0.0625.
 - Memory peak: 13.79 GiB after the forward at 8 layers (weights + LoRA state 11.61), 279 MiB retained per layer (composite 778); TP=4 40 layers ~11 GiB weights + ~2.3 GiB activations per chip (scaled, not probed).
-- Resumed loop (iterations 4-14): TP=4 556.5 -> 547.5 (6) -> 545.9 (8) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> 512.5 (14) -> 506.0 ms / 32.06 % (15); single-chip projection 1339 -> ~1242 (attribution only, up to iteration 9). Remaining: see the ranked table (matmuls at ttnn's best config, collectives at the library optimum with overlap untried, adapters, norms, SDPA, layout).
+- Resumed loop (iterations 4-14): TP=4 556.5 -> 547.5 (6) -> 545.9 (8) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> 512.5 (14) -> 506.0 (15) -> 508.4 (16) -> 505.6 ms / 32.09 % (17); single-chip projection 1339 -> ~1242 (attribution only, up to iteration 9). Remaining: see the ranked table (matmuls at ttnn's best config, collectives at the library optimum with overlap untried, adapters, norms, SDPA, layout).
 
 Gap decomposition at exit (cycle-time, 40 layers; notes per term in `D`, "Loop exit"):
 

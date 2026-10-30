@@ -146,6 +146,15 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Landed standalone (`O/iter16_build_check.log`): backward 571 -> 533 us at the TP shard (-7 %), 2181 -> 2006 at the single-chip shape, outputs unchanged. Below half the expected gain: both backward kernels are compute-bound at ~5 us per (row, tile) unit (12 / 16 matmul tiles plus the exp, the dS chain and two DEST transposes), so the removed re-reads were mostly hidden. Next structural fix: one backward pass per (K/V row, head) that also accumulates dQ partials (QK^T and the softmax are recomputed twice today, one per kernel), and `matmul_block` over the chunk instead of per-tile matmuls.
 - In the step (`O/iter16_tp_ranked_ops.txt`): bwd Q 0.862 -> 0.783, bwd KV 1.151 -> 1.097 ms per 4 layers; chain `O/iter16.sh` -> `O/iter16.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 508.4 ms / 31.91 % (wall within noise of iteration 15's 506.0).
 
+### Iteration 17: single-phase RMSNorm backward (kernel boost checklist)
+
+- Roofline / bytes: the two-phase all-core backward moves 60 MB per `[1024, 5120]` call (phase A reads input and dL_dout, phase B reads them again plus the residual gradient, gamma and the partials, writes dx): 150 us at 400 GB/s, measured 228 us (92 + 136) = 260 GB/s. The minimum is 50 MB (input, dL_dout, residual gradient, gamma, dx once): 125 us.
+- Where the cores go: 96 (row, slice) items of 54 tiles on 96 cores in both phases; a second launch and a DRAM round trip of the partials in between.
+- Structural fix: one program, one (row, slice) item per core with the input / gamma / dL_dout slices resident in L1 (3 x 54 tiles = 324 KB), the per-slice dot product exchanged between the row's 3 cores by writing it into each other's partials CB slot and bumping a semaphore, then the gradient pass from the resident tiles with the residual gradient streamed; `metal/ops/rmsnorm_bw_rows/`, dispatched from `rmsnorm_bw_allcore` when rows x slices fit the grid and no dgamma is needed.
+- Expected: ~130-150 us per call (bandwidth-bound on 50 MB), -0.6 to -0.8 ms per 4 layers per chip (8 calls).
+- Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
+- In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
+
 ### Stage review round 7 (iterations 11-12)
 
 - `review_round7.md`: more-work-needed (UMD pointer in the iteration-11 commit; ranked table and attribution cells); answered in the same day's commits (pointer restored `415ec0f1d3e`, docs regenerated, runtime-arg guards, router M check); loss match rerun scheduled in the iteration-14 chain.
@@ -205,6 +214,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 13 | `a1fc69ebed8` | `transpose_split` op, fused backward routing, harness cases, iteration-13 evidence |
 | 14 | `8b86016e718` | `vp_cross_entropy_bw` op, loss backward routing, harness cases, loss match, iteration-14 evidence |
 | 15 | `7a21a21258a` | SDPA forward chain mode (`metal/ops/sdpa_fw/`), iteration-15 evidence |
-| 16 | (this commit) | SDPA backward chain mode (`metal/ops/sdpa_bw/`), iteration-16 evidence |
+| 16 | `f045fb8eba8` | SDPA backward chain mode (`metal/ops/sdpa_bw/`), iteration-16 evidence |
+| 17 | (this commit) | `rmsnorm_bw_rows` op and its dispatch from `rmsnorm_bw_allcore`, iteration-17 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.
