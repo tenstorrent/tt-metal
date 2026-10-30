@@ -10,14 +10,16 @@ import os
 import pytest
 import torch
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_quasar
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_quasar
 
 CLONE_KERNELS = "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels"
 READER_SOURCE = f"{CLONE_KERNELS}/read_kernel_sharded.cpp"
 WRITER_SOURCE = f"{CLONE_KERNELS}/write_kernel_sharded.cpp"
 
 
-def make_sharded_copy_program(input_tensor, output_tensor, shard_grid, tiles_per_shard, inline_writer_source):
+def make_sharded_copy_program(
+    input_tensor, output_tensor, shard_grid, tiles_per_shard, inline_writer_source, reader_hw=None, writer_hw=None
+):
     tile_size = input_tensor.tile.get_tile_size(input_tensor.dtype)
     if inline_writer_source:
         with open(os.path.join(os.environ["TT_METAL_HOME"], WRITER_SOURCE)) as f:
@@ -40,7 +42,7 @@ def make_sharded_copy_program(input_tensor, output_tensor, shard_grid, tiles_per
             ttnn.KernelSpec(
                 unique_id="reader",
                 source=READER_SOURCE,
-                hw_config=ttnn.DataMovementHardwareConfig.reader(),
+                hw_config=reader_hw or ttnn.DataMovementHardwareConfig.reader(),
                 dfb_bindings=[
                     ttnn.DFBBinding(
                         dfb_spec_name="src", accessor_name="src", endpoint_type=ttnn.DFBEndpointType.PRODUCER
@@ -52,7 +54,7 @@ def make_sharded_copy_program(input_tensor, output_tensor, shard_grid, tiles_per
             ttnn.KernelSpec(
                 unique_id="writer",
                 **writer_source,
-                hw_config=ttnn.DataMovementHardwareConfig.writer(),
+                hw_config=writer_hw or ttnn.DataMovementHardwareConfig.writer(),
                 # The writer drains the reader's DFB directly: there is no compute stage.
                 dfb_bindings=[
                     ttnn.DFBBinding(
@@ -122,6 +124,42 @@ def test_generic_spec_op_sharded_copy(device, shape, shard_grid, inline_writer_s
         assert torch.equal(ttnn.to_torch(result), torch_input)
         cache_entries.append(device.num_program_cache_entries())
     assert cache_entries[0] == cache_entries[1]
+
+
+# Gen2 (Quasar) DM config: both kernels opt out of implicit sync for the DFB they share, the reader by name and the
+# writer for all its DFBs, so only the clone kernels' explicit reserve/push and wait/pop move credits.
+# Wormhole / Blackhole ignore the option.
+def test_generic_spec_op_sharded_copy_without_implicit_sync(device):
+    shape = [1, 1, 128, 64]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    shard_shape = (shape[-2] // 2, shape[-1])
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    spec, run_args = make_sharded_copy_program(
+        input_tensor,
+        output_tensor,
+        shard_grid,
+        tiles_per_shard=(shard_shape[0] // 32) * (shard_shape[1] // 32),
+        inline_writer_source=False,
+        reader_hw=ttnn.DataMovementHardwareConfig.reader(disable_dfb_implicit_sync_for=["src"]),
+        writer_hw=ttnn.DataMovementHardwareConfig.writer(disable_dfb_implicit_sync_for_all=True),
+    )
+
+    result = ttnn.generic_op([input_tensor, output_tensor], spec, run_args)
+
+    assert torch.equal(ttnn.to_torch(result), torch_input)
 
 
 # tt-blaze's single-core L1 -> L1 Copy (blaze/ops/copy/kernels/metal2/{stage,flush}.cpp), given inline.
@@ -263,6 +301,44 @@ COMPUTE_SOURCE = f"{CLONE_KERNELS}/compute_kernel.cpp"
     ids=["bf16_to_bf16", "bf16_to_fp32", "fp32_unpack_to_src", "fp32_unpack_to_dest"],
 )
 def test_generic_spec_op_compute_copy(device, input_dtype, output_dtype, unpack_mode):
+    fp32_dest = ttnn.float32 in (input_dtype, output_dtype)
+    if unpack_mode is None:
+        compute_hw = ttnn.ComputeHardwareConfig.from_compute_kernel_config(
+            ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest
+            )
+        )
+    else:
+        compute_hw = ttnn.ComputeHardwareConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            enable_32_bit_dest=fp32_dest,
+            unpack_modes={"src": getattr(ttnn.UnpackMode, unpack_mode)},
+        )
+
+    result, expected = run_compute_copy(device, input_dtype, output_dtype, compute_hw)
+
+    if unpack_mode == "UnpackToSrc":
+        # Unpacking to the source registers truncates fp32 to TF32, so the result is close but not exact.
+        assert torch.allclose(result, expected, rtol=2e-3, atol=1e-3)
+        assert not torch.equal(result, expected)
+    else:
+        assert torch.equal(result, expected)
+
+
+# The RISC-V vector extension options compile the compute kernel's Unpack (Quasar) or Pack (Blackhole) binary
+# with vector support; the kernel itself does not use it, so the copy must be unchanged.
+def test_generic_spec_op_compute_copy_rvv(device):
+    if not (is_quasar() or is_blackhole()):
+        pytest.skip("RVV options exist only on Quasar (Unpack) and Blackhole (Pack)")
+    compute_hw = ttnn.ComputeHardwareConfig(enable_unpack_rvv=is_quasar(), enable_pack_rvv=is_blackhole())
+
+    result, expected = run_compute_copy(device, ttnn.bfloat16, ttnn.bfloat16, compute_hw)
+
+    assert torch.equal(result, expected)
+
+
+def run_compute_copy(device, input_dtype, output_dtype, compute_hw):
+    """Runs reader -> src DFB -> compute copy -> dst DFB -> writer on one core; returns (result, expected)."""
     shape = [1, 1, 64, 64]
     num_tiles = (shape[-2] // 32) * (shape[-1] // 32)
     core = ttnn.CoreCoord(0, 0)
@@ -283,20 +359,6 @@ def test_generic_spec_op_compute_copy(device, input_dtype, output_dtype, unpack_
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(shape), output_dtype, ttnn.TILE_LAYOUT, device, memory_config
     )
-
-    fp32_dest = ttnn.float32 in (input_dtype, output_dtype)
-    if unpack_mode is None:
-        compute_hw = ttnn.ComputeHardwareConfig.from_compute_kernel_config(
-            ttnn.init_device_compute_kernel_config(
-                device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest
-            )
-        )
-    else:
-        compute_hw = ttnn.ComputeHardwareConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            enable_32_bit_dest=fp32_dest,
-            unpack_modes={"src": getattr(ttnn.UnpackMode, unpack_mode)},
-        )
 
     def dfb(unique_id, dtype):
         tile_size = input_tensor.tile.get_tile_size(dtype)
@@ -361,14 +423,7 @@ def test_generic_spec_op_compute_copy(device, input_dtype, output_dtype, unpack_
     )
 
     result = ttnn.to_torch(ttnn.generic_op([input_tensor, output_tensor], spec, run_args)).to(torch.float32)
-
-    expected = ttnn.to_torch(input_tensor).to(torch.float32)
-    if unpack_mode == "UnpackToSrc":
-        # Unpacking to the source registers truncates fp32 to TF32, so the result is close but not exact.
-        assert torch.allclose(result, expected, rtol=2e-3, atol=1e-3)
-        assert not torch.equal(result, expected)
-    else:
-        assert torch.equal(result, expected)
+    return result, ttnn.to_torch(input_tensor).to(torch.float32)
 
 
 # Reads this core's input shard into the scratchpad, adds a constant on the RISC-V, and writes the output shard.
@@ -749,6 +804,17 @@ def test_generic_spec_op_rejects_fp32_unpack_to_dest_without_32_bit_dest(device,
                 ttnn.DataflowBufferSpec(unique_id="in", entry_size=4096, num_entries=2, data_format=ttnn.float32)
             ],
         )
+
+
+def test_generic_spec_op_rejects_implicit_sync_opt_out_of_unbound_dfb(device, expect_error):
+    reader = dm_kernel(
+        "reader",
+        [producer("buf")],
+        hw_config=ttnn.DataMovementHardwareConfig.reader(disable_dfb_implicit_sync_for=["typo"]),
+    )
+    writer = dm_kernel("writer", [consumer("buf")], hw_config=ttnn.DataMovementHardwareConfig.writer())
+    with expect_error(RuntimeError, "disable_dfb_implicit_sync_for entry references DFB 'typo'"):
+        run_on_one_core(device, [reader, writer], [small_dfb("buf")])
 
 
 def skip_unless_quasar():
