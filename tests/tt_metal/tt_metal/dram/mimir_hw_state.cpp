@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 
+#include "hostdev/cce_spa_routes.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 
@@ -55,7 +57,8 @@ inline constexpr uint64_t kCceRemapStartOffset = 0x00;
 inline constexpr uint64_t kCceRemapEndOffset = 0x08;
 inline constexpr uint64_t kCceRemapRemapStartOffset = 0x10;
 inline constexpr uint64_t kCceRemapAttrsOffset = 0x18;
-inline constexpr uint64_t kCceRemapEntriesPerCce = 3;
+using CceRemapEntries = decltype(tt::umd::cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, 0));
+inline constexpr uint64_t kCceRemapEntriesPerCce = std::tuple_size_v<CceRemapEntries>;
 inline constexpr uint64_t kGddrIntlvFlagOutStatus0Address = 0x04004058ULL;
 inline constexpr uint64_t kGddrCapFlagOutStatus0Address = 0x04004358ULL;
 inline constexpr uint64_t kGddrIntlvExpected = 1;  // TILE
@@ -68,8 +71,8 @@ inline constexpr uint64_t kDebugMiscErrorBitsMask = 0xE00;  // bits 9-11
 inline constexpr uint64_t kAxiErrorBitsMask = 0x3F0FFF0FFFULL;
 inline constexpr uint32_t kIdentityEndpointEntry = 64;
 inline constexpr uint64_t kIdentityEndpointValue = 0x184;  // (4,6)
-inline constexpr uint64_t kIdentityBase10Base = 0x80000000ULL;
-inline constexpr uint64_t kIdentityBase10Stride = 0x800000ULL;
+inline constexpr uint64_t kSsBarFirstWindowOffset = 0x20;
+inline constexpr uint64_t kSsBarWindowStride = 0x20;
 
 // d2d_index 0/1; D2D1 registers are +0x200000.
 struct D2dTile {
@@ -230,7 +233,11 @@ uint64_t compare_mask_for_name(const std::string& name) {
 }
 
 void add_ss_bar_expected(
-    std::vector<MimirRegister>& registers, const D2dTile& tile, const char* name, uint64_t offset, uint64_t value) {
+    std::vector<MimirRegister>& registers,
+    const D2dTile& tile,
+    const std::string& name,
+    uint64_t offset,
+    uint64_t value) {
     registers.push_back(make_register(
         fmt::format("{}.SS_BAR.{}", tile_prefix(tile), name),
         tile.mimir_index,
@@ -239,32 +246,48 @@ void add_ss_bar_expected(
         false));
 }
 
-// Same values as chippy noc2axi_m2k.py noc2axi_mimir_bar_cfg.
+// One BAR is BASE, LIMIT and OFFSET registers, each a lo word then a hi word.
+void add_ss_bar_window(
+    std::vector<MimirRegister>& registers,
+    const D2dTile& tile,
+    uint32_t bar_index,
+    uint64_t base,
+    uint64_t limit,
+    uint64_t offset) {
+    const uint64_t bar_offset = kSsBarFirstWindowOffset + bar_index * kSsBarWindowStride;
+    const auto add_range_register = [&](const char* name, uint64_t register_offset, uint64_t value) {
+        add_ss_bar_expected(
+            registers,
+            tile,
+            fmt::format("{}_{}0", name, bar_index),
+            bar_offset + register_offset,
+            value & 0xFFFFFFFFULL);
+        add_ss_bar_expected(
+            registers, tile, fmt::format("{}_{}1", name, bar_index), bar_offset + register_offset + 4, value >> 32);
+    };
+    add_range_register("BASE", 0x0, base);
+    add_range_register("LIMIT", 0x8, limit);
+    add_range_register("OFFSET", 0x10, offset);
+}
+
+// Chippy noc2axi_m2k.py noc2axi_mimir_bar_cfg programs BAR0-2 with UMD's DMRISC remap entries 0-2: config space, the
+// Mimir's CCE SRAM, then its GDDR. D2D1 reaches GDDR one D2D lane above D2D0. BAR3 is spare.
 void append_ss_bar_expected(std::vector<MimirRegister>& registers, const D2dTile& tile) {
-    const uint64_t inst = tile.mimir_index;
-    const bool via_d2d1 = tile.d2d_index != 0;
-    // BAR0: SMN config space.
-    add_ss_bar_expected(registers, tile, "BASE_00", 0x20, inst * 0x08000000ULL);
-    add_ss_bar_expected(registers, tile, "BASE_01", 0x24, 0x13);
-    add_ss_bar_expected(registers, tile, "LIMIT_00", 0x28, 0x08000000ULL + inst * 0x08000000ULL);
-    add_ss_bar_expected(registers, tile, "LIMIT_01", 0x2C, 0x13);
-    add_ss_bar_expected(registers, tile, "OFFSET_00", 0x30, 0);
-    add_ss_bar_expected(registers, tile, "OFFSET_01", 0x34, 0);
-    // BAR1: Mimir CCE SRAM.
-    add_ss_bar_expected(registers, tile, "BASE_10", 0x40, kIdentityBase10Base + inst * kIdentityBase10Stride);
-    add_ss_bar_expected(registers, tile, "BASE_11", 0x44, 0x12);
-    add_ss_bar_expected(registers, tile, "LIMIT_10", 0x48, 0x80800000ULL + inst * 0x00800000ULL);
-    add_ss_bar_expected(registers, tile, "LIMIT_11", 0x4C, 0x12);
-    add_ss_bar_expected(registers, tile, "OFFSET_10", 0x50, 0x40000000ULL);
-    add_ss_bar_expected(registers, tile, "OFFSET_11", 0x54, 0);
-    // BAR2: GDDR, density code 2. Only BASE_21 and LIMIT_21 differ between D2D0 and D2D1.
-    add_ss_bar_expected(registers, tile, "BASE_20", 0x60, 0);
-    add_ss_bar_expected(registers, tile, "BASE_21", 0x64, (via_d2d1 ? 0x10020ULL : 0x10000ULL) + 2 * inst);
-    add_ss_bar_expected(registers, tile, "LIMIT_20", 0x68, 0);
-    add_ss_bar_expected(registers, tile, "LIMIT_21", 0x6C, (via_d2d1 ? 0x10022ULL : 0x10002ULL) + 2 * inst);
-    add_ss_bar_expected(registers, tile, "OFFSET_20", 0x70, 0);
-    add_ss_bar_expected(registers, tile, "OFFSET_21", 0x74, 0x8);
-    // BAR3: spare.
+    const tt::umd::GrendelAddressWindows windows;
+    const CceRemapEntries remap_entries = tt::umd::cce_dmrisc_remap_entries(windows, tile.mimir_index);
+    const uint64_t d2d1_gddr_offset = tile.d2d_index != 0 ? CCE_GDDR_D2D_LANE_INSTANCES * windows.dram_stride : 0;
+    for (uint32_t bar_index = 0; bar_index < remap_entries.size(); ++bar_index) {
+        const tt::umd::CceDmriscRemapEntry& entry = remap_entries[bar_index];
+        const bool is_gddr = bar_index == remap_entries.size() - 1;
+        const uint64_t lane_offset = is_gddr ? d2d1_gddr_offset : 0;
+        add_ss_bar_window(
+            registers,
+            tile,
+            bar_index,
+            entry.region_start + lane_offset,
+            entry.region_end + lane_offset,
+            entry.local_base);
+    }
     add_ss_bar_expected(registers, tile, "BASE_30", 0x80, 0);
     add_ss_bar_expected(registers, tile, "BASE_31", 0x84, 0);
     add_ss_bar_expected(registers, tile, "LIMIT_30", 0x88, 0x10000000ULL);
@@ -289,7 +312,7 @@ void append_att_expected(std::vector<MimirRegister>& registers, const D2dTile& t
 void append_cce_remap_expected(
     std::vector<MimirRegister>& registers, const metal_SocDescriptor& soc, uint32_t mimir_index) {
     // Chippy programs the remap; compare it with UMD's package windows.
-    const std::array<tt::umd::CceDmriscRemapEntry, kCceRemapEntriesPerCce> expected_entries =
+    const CceRemapEntries expected_entries =
         tt::umd::cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, mimir_index);
     for (uint32_t location = 0; location < locations_per_channel(soc); ++location) {
         for (uint32_t entry_index = 0; entry_index < kCceRemapEntriesPerCce; ++entry_index) {
@@ -484,7 +507,9 @@ std::string mimir_identity_mismatch(const Cluster& cluster, const metal_SocDescr
         }
         const uint64_t base10_value =
             read_smc_value(cluster, soc, chip, tile.mimir_index, ss_bar_address(tile, kSsBarBase10Offset), false);
-        const uint64_t base10_expected = kIdentityBase10Base + tile.mimir_index * kIdentityBase10Stride;
+        const uint64_t base10_expected =
+            tt::umd::cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, tile.mimir_index)[1].region_start &
+            0xFFFFFFFFULL;
         if (base10_value != base10_expected) {
             mismatches.push_back(
                 fmt::format("{}.SS_BAR.BASE_10 is 0x{:x}, expected 0x{:x}", prefix, base10_value, base10_expected));
@@ -568,7 +593,8 @@ std::vector<CceResetState> read_cce_reset_states(const Cluster& cluster, const m
         state.cce_index = cce_index;
         state.raw_lo = hw_state_impl::read_smc_word(cluster, soc, chip, mimir_index, reset_address);
         state.uncore_released = (state.raw_lo & hw_state_impl::kCceUncoreReleased) != 0;
-        state.core_reset = (state.raw_lo >> 1) & 0xFF;
+        state.core_reset = static_cast<uint32_t>(
+            (state.raw_lo & tt::umd::grendel::cce_hart_release_bits(tt::umd::RiscType::ALL)) >> 1);
         states.push_back(state);
     }
     return states;
