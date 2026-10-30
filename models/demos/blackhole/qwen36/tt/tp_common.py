@@ -221,8 +221,6 @@ MTP_FC_CORES_ENV = "QWEN36_MTP_FC_CORES"
 MTP_SDPA_WINDOW_ENV = "QWEN36_MTP_SDPA_WINDOW"
 MTP_LAYER_BFP4_ENV = "QWEN36_MTP_LAYER_BFP4"
 MTP_EMBED_ROW_ENV = "QWEN36_MTP_EMBED_ROW"
-MTP_RS_LINKS_ENV = "QWEN36_MTP_RS_LINKS"
-MTP_RS_PERSISTENT_ENV = "QWEN36_MTP_RS_PERSISTENT"
 
 
 def _env_int(name, default=0):
@@ -286,120 +284,6 @@ def mtp_embed_row_enabled():
     reshape per draft step, 30 + 20 us for the 32-row reseed). The same bf16 rows reach the same place, so the drafter's
     input, its drafts and the output are byte-identical."""
     return os.environ.get(MTP_EMBED_ROW_ENV, "0") == "1"
-
-
-def mtp_rs_links():
-    """QWEN36_MTP_RS_LINKS (default unset = None = today's auto-detect): N > 0 runs the MTP drafter layer's decode
-    reduce-scatters (attention wo and MLP down on the fractured residual; tt_all_reduce -> reduce_scatter_minimal_async)
-    on N Ethernet links. The decode tt_all_reduce asks for cluster_axis=0, the size-1 axis of the 1x8 TP mesh, so the
-    auto-detect resolves to 1 link (the moe_utils.cpp:122 fallback warning) while the ring row has 2. Decode rows only
-    (<= 32): the drafter's prompt warm-up keeps QWEN36_PREFILL_RS_LINKS. Returns N, or None when unset."""
-    n = _env_int(MTP_RS_LINKS_ENV, 0)
-    return n if n > 0 else None
-
-
-def mtp_rs_persistent_enabled():
-    """QWEN36_MTP_RS_PERSISTENT (default "0"): the same decode reduce-scatters write into caller-owned persistent buffers
-    (one set per call site and row count, allocated by the first, eager call, so before any trace capture), which lets
-    the op skip its start-of-op barrier handshake with the neighbours (use_barrier_sem is off with persistent buffers).
-    Ring topology only. Uses QWEN36_MTP_RS_LINKS links (1 if unset)."""
-    return os.environ.get(MTP_RS_PERSISTENT_ENV, "0") == "1"
-
-
-class MTPDecodeReduceScatter:
-    """The MTP drafter layer's decode reduce-scatter (QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT), attached to the
-    drafter's TPAttention and Qwen36MLP as ``decode_rs`` (base-model layers never get one). Called with the row-parallel
-    partial [1,1,rows,dim] of a decode-width (rows <= 32) forward; returns the fractured [1,1,rows,dim/tp] sum.
-
-    Non-persistent: tt_all_reduce exactly as today, plus num_reduce_scatter_links=links. Persistent: the same op and
-    arguments with persistent_output_buffers = [contiguous staging intermediate, output, penult intermediate] (allocated
-    once per row count with reduce_scatter_minimal_async_create_intermediate_buffer); the returned tensor IS the persistent
-    output, which ``owns`` reports, so Qwen36DecoderLayer consumes it in its residual add and does not free it. One instance
-    per call site (attention, MLP): between two uses of the same buffers every device passes the other site's
-    reduce-scatter and the drafter's all-gathers, so a peer can never write into a buffer a lagging device still reads."""
-
-    def __init__(self, mesh, tt_ccl, topology, links=None, persistent=False):
-        self.mesh = mesh
-        self.tt_ccl = tt_ccl
-        self.topology = topology
-        self.links = links
-        self.persistent = bool(persistent) and topology == ttnn.Topology.Ring
-        if persistent and not self.persistent:
-            logger.warning(f"{MTP_RS_PERSISTENT_ENV}=1 needs the Ring topology (have {topology}): per-call buffers kept")
-        self._bufs = {}  # rows -> (intermediate, output, penult)
-        self._out_addrs = set()
-
-    def owns(self, t):
-        """Whether ``t`` is one of the persistent outputs (the caller must not deallocate it)."""
-        if not self._out_addrs:
-            return False
-        try:
-            return t.buffer_address() in self._out_addrs
-        except Exception:  # pragma: no cover
-            return False
-
-    def _buffers(self, partial):
-        rows = int(partial.shape[-2])
-        bufs = self._bufs.get(rows)
-        if bufs is None:
-            interm, penult = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
-                partial, 3, topology=self.topology
-            )
-            nd = self.mesh.get_num_devices()
-            w = int(partial.shape[-1]) // nd
-            out = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, rows, w]), partial.dtype, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
-            )
-            bufs = (interm, out, penult)
-            self._bufs[rows] = bufs
-            self._out_addrs.add(out.buffer_address())
-        return bufs
-
-    def __call__(self, partial):
-        from models.tt_transformers.tt.ccl import tt_all_reduce
-
-        if not self.persistent:
-            return tt_all_reduce(
-                partial,
-                self.mesh,
-                self.tt_ccl,
-                cluster_axis=0,
-                dim=3,
-                num_reduce_scatter_links=self.links,
-                topology=self.topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        # tt_all_reduce's 1xN branch, verbatim apart from the buffers: interleave a sharded input first.
-        x = partial
-        if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(partial, ttnn.L1_MEMORY_CONFIG)
-            partial.deallocate(True)
-        bufs = self._buffers(x)
-        out = ttnn.experimental.reduce_scatter_minimal_async(
-            x,
-            persistent_output_buffers=list(bufs),
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=self.links or 1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
-        )
-        x.deallocate(True)
-        return out
-
-
-def build_mtp_decode_rs(mesh, tt_ccl, topology):
-    """An MTPDecodeReduceScatter for the drafter layer's call sites, or None when both flags are off (today's
-    tt_all_reduce call, byte for byte)."""
-    links, persistent = mtp_rs_links(), mtp_rs_persistent_enabled()
-    if links is None and not persistent:
-        return None
-    return MTPDecodeReduceScatter(mesh, tt_ccl, topology, links=links, persistent=persistent)
 
 
 def spec_hostfix_enabled():

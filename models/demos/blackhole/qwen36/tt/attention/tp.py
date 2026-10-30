@@ -259,11 +259,9 @@ class TPAttention:
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
         self.decode_sdpa_max_cores = None
-        # Per-instance decode SDPA sliding window (None = whole context) and decode reduce-scatter
-        # (tp_common.MTPDecodeReduceScatter; None = tt_all_reduce as before). Only the MTP drafter sets them
-        # (QWEN36_MTP_SDPA_WINDOW, QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT); see Qwen36MTP.__init__.
+        # Per-instance decode SDPA sliding window (None = whole context). Only the MTP drafter sets it
+        # (QWEN36_MTP_SDPA_WINDOW); see Qwen36MTP.__init__.
         self.decode_sdpa_window = None
-        self.decode_rs = None
         # False: forward_decode keeps the legacy path even where the lean one is eligible (see _decode_lean_eligible).
         self.lean_decode = True
         self.k_caches = None
@@ -1245,9 +1243,6 @@ class TPAttention:
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
-        _rs = getattr(self, "decode_rs", None)  # a TPAttention built without __init__ (host tests) has none
-        if _rs is not None and B <= tpc.TILE_SIZE:
-            return _rs(wo_partial)  # the MTP drafter's QWEN36_MTP_RS_LINKS / _PERSISTENT reduce-scatter
         return tt_all_reduce(
             wo_partial,
             self.mesh,
@@ -1678,9 +1673,6 @@ class TPAttention:
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
-        _rs = getattr(self, "decode_rs", None)  # a TPAttention built without __init__ (host tests) has none
-        if _rs is not None and B <= tpc.TILE_SIZE:
-            return _rs(wo_partial)  # the MTP drafter's QWEN36_MTP_RS_LINKS / _PERSISTENT reduce-scatter
         return tt_all_reduce(
             wo_partial,
             self.mesh,

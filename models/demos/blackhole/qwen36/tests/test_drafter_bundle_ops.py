@@ -11,9 +11,6 @@ MTP drafter's shapes. Each test checks the numbers and logs traced per-call devi
                            bf8 paged KV, 64 cores per head batch) with sliding_window_size W == a torch reference that
                            attends [pos + 1 - W, pos]; users with pos < W are bit-identical to the windowless call;
                            32K timings for W in {1024, 2048, 4096, 8192}.
-  test_mtp_rs              QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT: the drafter's decode reduce-scatter of a
-                           [rows, 5120] bf16 partial on 1 link (today), 2 links, and with persistent buffers: all
-                           bit-identical, == the torch sum (bf16 tolerance).
 
   source /tmp/penv.sh; pytest models/demos/blackhole/qwen36/tests/test_drafter_bundle_ops.py -s
 """
@@ -288,88 +285,3 @@ def test_mtp_sdpa_window(mesh_device, pos_set, reset_seeds):
         )
     for t in (kc, vc, pt_tt, pos_tt, q_tt):
         ttnn.deallocate(t)
-
-
-# ------------------------------------------------------------------------------------------------------------------ #
-# QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT
-# ------------------------------------------------------------------------------------------------------------------ #
-@torch.no_grad()
-@parametrize_mesh_tp(trace_region_size=TRACE_REGION)
-@pytest.mark.parametrize("rows", [8, 32])
-def test_mtp_rs(mesh_device, rows, reset_seeds):
-    from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
-
-    mesh = mesh_device
-    nd = mesh.get_num_devices()
-    if nd < 2:
-        pytest.skip("needs a multi-device mesh")
-    topo = ttnn.Topology.Ring if os.environ.get("QWEN36_FABRIC_RING") == "1" else ttnn.Topology.Linear
-    tt_ccl = TT_CCL(mesh)
-    W = 5120
-    g = torch.Generator().manual_seed(rows)
-    parts = torch.randn(nd, 1, rows, W, generator=g).to(torch.bfloat16)
-    x = ttnn.from_torch(
-        parts,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-    )
-    want = parts.float().sum(0).reshape(rows, W)
-
-    def today(t):
-        return tt_all_reduce(
-            t, mesh, tt_ccl, cluster_axis=0, dim=3, topology=topo, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-
-    class _Alt:
-        """Two persistent instances used alternately, as the drafter layer's two call sites (attention wo, MLP down) are:
-        a device starts the next use of one buffer set only after every device finished the previous one (the other
-        instance's ring reduce-scatter in between needs every device's contribution). Back-to-back uses of ONE set with
-        no collective in between would let a fast device write into a slow device's buffers (no barrier with
-        persistent buffers), which the model never does."""
-
-        def __init__(self, links):
-            mk = lambda: tpc.MTPDecodeReduceScatter(mesh, tt_ccl, topo, links=links, persistent=True)
-            self.fns, self.i = (mk(), mk()), 0
-
-        def __call__(self, t):
-            f = self.fns[self.i]
-            self.i ^= 1
-            return f(t)
-
-        def owns(self, t):
-            return any(f.owns(t) for f in self.fns)
-
-    arms = {
-        "today_1link": (today, None),
-        "links2": (tpc.MTPDecodeReduceScatter(mesh, tt_ccl, topo, links=2), None),
-    }
-    if topo == ttnn.Topology.Ring:
-        arms["links1_persistent"] = (_Alt(1), None)
-        arms["links2_persistent"] = (_Alt(2), None)
-    got, times = {}, {}
-    for name, (fn, _) in arms.items():
-        owns = getattr(fn, "owns", lambda t: False)
-
-        def run(fn=fn, owns=owns):
-            o = fn(ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG))  # the op consumes its input
-            if not owns(o):
-                ttnn.deallocate(o)
-
-        o = fn(ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-        got[name] = ttnn.to_torch(o, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=3)).reshape(rows, W).float()
-        if not owns(o):
-            ttnn.deallocate(o)
-        times[name] = _trace_us(mesh, run)
-    base = got["today_1link"]
-    t_clone = _trace_us(mesh, lambda: ttnn.deallocate(ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)))
-    lines = []
-    for name, o in got.items():
-        same = torch.equal(o, base)
-        pcc = _pcc(o, want)
-        lines.append(f"{name}: {times[name] - t_clone:.1f} us (+clone {t_clone:.1f}), bit-identical={same}, PCC {pcc:.6f}")
-        assert pcc > 0.999, f"{name}: PCC vs torch sum {pcc}"
-        assert same, f"{name}: differs from today's reduce-scatter"
-    logger.info(f"[mtp rs rows={rows} {topo}] " + " | ".join(lines))

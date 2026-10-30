@@ -7,7 +7,6 @@ off leaves the drafter's calls exactly as they were while each flag on changes o
   QWEN36_MTP_SDPA_WINDOW                  sliding window on the drafter's decode SDPA
   QWEN36_MTP_LAYER_BFP4                   bfloat4_b + LoFi drafter layer weights
   QWEN36_MTP_EMBED_ROW                    one-tile-row drafter token embedding
-  QWEN36_MTP_RS_LINKS / _RS_PERSISTENT     drafter decode reduce-scatter links / persistent buffers
 
 Needs ttnn importable (no device: every ttnn op used here is monkeypatched).
 
@@ -23,9 +22,8 @@ from models.demos.blackhole.qwen36.tt import layer as layer_mod
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention import tp as tp_mod
 from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention
-from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer, _rs_owns
+from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTP
-from models.tt_transformers.tt import ccl as ccl_mod
 from models.tt_transformers.tt.common import Mode
 
 _FLAGS = (
@@ -35,8 +33,6 @@ _FLAGS = (
     "QWEN36_MTP_SDPA_WINDOW",
     "QWEN36_MTP_LAYER_BFP4",
     "QWEN36_MTP_EMBED_ROW",
-    "QWEN36_MTP_RS_LINKS",
-    "QWEN36_MTP_RS_PERSISTENT",
 )
 
 
@@ -55,9 +51,6 @@ def test_all_flags_default_off():
     assert tpc.mtp_sdpa_window() == 0
     assert tpc.mtp_layer_bfp4_parts() == frozenset()
     assert tpc.mtp_embed_row_enabled() is False
-    assert tpc.mtp_rs_links() is None
-    assert tpc.mtp_rs_persistent_enabled() is False
-    assert tpc.build_mtp_decode_rs(object(), object(), ttnn.Topology.Ring) is None
 
 
 def test_fc_progcfg_defaults_and_overrides(monkeypatch):
@@ -123,21 +116,8 @@ def test_layer_bfp4_bad(monkeypatch, raw):
         tpc.mtp_layer_bfp4_parts()
 
 
-def test_rs_flags(monkeypatch):
-    monkeypatch.setenv("QWEN36_MTP_RS_LINKS", "2")
-    rs = tpc.build_mtp_decode_rs("mesh", "ccl", ttnn.Topology.Ring)
-    assert rs is not None and rs.links == 2 and rs.persistent is False
-    monkeypatch.setenv("QWEN36_MTP_RS_PERSISTENT", "1")
-    rs = tpc.build_mtp_decode_rs("mesh", "ccl", ttnn.Topology.Ring)
-    assert rs.persistent is True
-    # persistent needs the ring (contiguous staging buffers): Linear keeps per-call buffers
-    assert tpc.build_mtp_decode_rs("mesh", "ccl", ttnn.Topology.Linear).persistent is False
-    monkeypatch.delenv("QWEN36_MTP_RS_LINKS")
-    assert tpc.build_mtp_decode_rs("mesh", "ccl", ttnn.Topology.Ring).links is None
-
-
 # ------------------------------------------------------------------------------------------------------------------ #
-# decode reduce-scatter
+# fake device tensor
 # ------------------------------------------------------------------------------------------------------------------ #
 class _T:
     """Fake device tensor: shape, dtype, a buffer address, sharded flag, deallocate log."""
@@ -160,79 +140,6 @@ class _T:
 
     def deallocate(self, *_):
         self.freed = True
-
-
-class _CCL:
-    def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
-        return ["s0", "s1", "s2"]
-
-    def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
-        return "b"
-
-
-class _Mesh:
-    def get_num_devices(self):
-        return 8
-
-
-def test_rs_non_persistent_is_tt_all_reduce_with_links(monkeypatch):
-    calls = []
-    monkeypatch.setattr(ccl_mod, "tt_all_reduce", lambda *a, **k: calls.append((a, k)) or "OUT")
-    rs = tpc.MTPDecodeReduceScatter("mesh", "ccl", ttnn.Topology.Ring, links=2, persistent=False)
-    p = _T((1, 1, 8, 5120))
-    assert rs(p) == "OUT"
-    (a, k) = calls[0]
-    assert a == (p, "mesh", "ccl")
-    assert k == dict(
-        cluster_axis=0,
-        dim=3,
-        num_reduce_scatter_links=2,
-        topology=ttnn.Topology.Ring,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    assert not rs.owns(p)
-
-
-def test_rs_persistent_buffers_reused_per_rows(monkeypatch):
-    made, ops = [], []
-
-    def create_interm(x, dim, topology=None):
-        made.append(("interm", x.shape[-2], dim, topology))
-        return _T((1, 1, 1, 1), ttnn.uint8), _T((1, 1, 1, 1), ttnn.uint8)
-
-    def alloc(shape, dtype, layout, mesh, mc):
-        t = _T(tuple(shape), dtype)
-        made.append(("out", tuple(shape)))
-        return t
-
-    def rsma(x, **kw):
-        ops.append(kw)
-        return kw["persistent_output_buffers"][1]
-
-    monkeypatch.setattr(ttnn.experimental, "reduce_scatter_minimal_async_create_intermediate_buffer", create_interm)
-    monkeypatch.setattr(ttnn, "allocate_tensor_on_device", alloc)
-    monkeypatch.setattr(ttnn.experimental, "reduce_scatter_minimal_async", rsma)
-    rs = tpc.MTPDecodeReduceScatter(_Mesh(), _CCL(), ttnn.Topology.Ring, links=2, persistent=True)
-    p1, p2, p3 = _T((1, 1, 8, 5120)), _T((1, 1, 8, 5120)), _T((1, 1, 32, 5120))
-    o1 = rs(p1)
-    o2 = rs(p2)
-    o3 = rs(p3)
-    assert o1 is o2 and o1 is not o3  # one buffer set per row count
-    assert [m[0] for m in made] == ["interm", "out", "interm", "out"]
-    assert made[1] == ("out", (1, 1, 8, 640)) and made[3] == ("out", (1, 1, 32, 640))
-    assert len(ops[0]["persistent_output_buffers"]) == 3
-    assert ops[0]["num_links"] == 2 and ops[0]["dim"] == 3 and ops[0]["topology"] == ttnn.Topology.Ring
-    assert p1.freed and p2.freed  # the partial is consumed, as tt_all_reduce does
-    assert rs.owns(o1) and rs.owns(o3) and not rs.owns(p1)
-
-
-def test_rs_owns_in_layer():
-    bare = types.SimpleNamespace()
-    assert _rs_owns(bare, _T((1,))) is False
-    t = _T((1,))
-    mod = types.SimpleNamespace(decode_rs=types.SimpleNamespace(owns=lambda x: x is t))
-    assert _rs_owns(mod, t) is True
-    assert _rs_owns(mod, _T((1,))) is False
 
 
 # ------------------------------------------------------------------------------------------------------------------ #

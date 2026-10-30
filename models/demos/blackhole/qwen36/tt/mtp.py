@@ -150,7 +150,7 @@ class Qwen36MTP:
         #   QWEN36_MTP_FC_PROGCFG -> _fc_decode_pc (explicit 1D decode progcfg for the fc, see _fuse)
         #   QWEN36_MTP_EMBED_ROW  -> _embed_row (one-tile-row token embedding, see _embed_rows)
         #   QWEN36_MTP_LAYER_BFP4 -> bfloat4_b drafter layer weights (attention and/or MLP)
-        #   QWEN36_MTP_SDPA_WINDOW, QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT -> set on the layer's modules below
+        #   QWEN36_MTP_SDPA_WINDOW -> set on the layer's attention below
         self._fc_decode_pc = None
         self._embed_row = False
         _bfp4_parts = frozenset()
@@ -211,18 +211,6 @@ class Qwen36MTP:
             if _win:
                 self.attention.decode_sdpa_window = _win
                 logger.info(f"MTP drafter: decode SDPA sliding window {_win} (QWEN36_MTP_SDPA_WINDOW)")
-            # QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT: the layer's two decode reduce-scatters (attention wo, MLP
-            # down), one instance per call site so each keeps its own persistent buffers.
-            _topo = args.ccl_topology()
-            _rs_attn = tpc.build_mtp_decode_rs(mesh_device, tt_ccl, _topo)
-            if _rs_attn is not None:
-                self.attention.decode_rs = _rs_attn
-                self.decoder.feed_forward.decode_rs = tpc.build_mtp_decode_rs(mesh_device, tt_ccl, _topo)
-                logger.info(
-                    f"MTP drafter: decode reduce-scatters on {_rs_attn.links or 'auto'} link(s), "
-                    f"persistent buffers {'on' if _rs_attn.persistent else 'off'} "
-                    "(QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT)"
-                )
 
         # QWEN36_MTP_KV_ONLY=1 (TP only; default off): a need_logits=False forward (reseed / join warm / catch-up) stops
         # after the drafter layer's paged KV write and returns (None, None). See tp_common.mtp_kv_only_enabled.
