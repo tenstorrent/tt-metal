@@ -64,11 +64,12 @@ void write_word(const Cluster& cluster, ChipId chip, uint32_t cce_index, uint64_
     cluster.write_reg(&word, smc_target(cluster, chip, cce_index), address);
 }
 
-}  // namespace snoop_ctl_impl
-
+// Low word of RegionAttrs of `cce_index`'s DMRISC remap entry 1.
 uint32_t read_sram_remap_attrs(const Cluster& cluster, ChipId chip, uint32_t cce_index) {
-    return snoop_ctl_impl::read_word(cluster, chip, cce_index, snoop_ctl_impl::sram_remap_attrs_address(cce_index));
+    return read_word(cluster, chip, cce_index, sram_remap_attrs_address(cce_index));
 }
+
+}  // namespace snoop_ctl_impl
 
 uint32_t read_snoop_master_config(const Cluster& cluster, ChipId chip, uint32_t cce_index) {
     return snoop_ctl_impl::read_word(cluster, chip, cce_index, snoop_ctl_impl::snoop_master_config_address(cce_index));
@@ -76,10 +77,10 @@ uint32_t read_snoop_master_config(const Cluster& cluster, ChipId chip, uint32_t 
 
 ScopedSramRemapSnoop::ScopedSramRemapSnoop(const Cluster& cluster, ChipId chip, uint32_t cce_index, bool snoop) :
     cluster_(cluster), chip_(chip), cce_index_(cce_index) {
-    original_ = read_sram_remap_attrs(cluster_, chip_, cce_index_);
+    original_ = snoop_ctl_impl::read_sram_remap_attrs(cluster_, chip_, cce_index_);
     const uint32_t word = snoop ? (original_ | kRemapCmdSnoopBit) : (original_ & ~kRemapCmdSnoopBit);
     snoop_ctl_impl::write_word(cluster_, chip_, cce_index_, snoop_ctl_impl::sram_remap_attrs_address(cce_index_), word);
-    applied_ = read_sram_remap_attrs(cluster_, chip_, cce_index_);
+    applied_ = snoop_ctl_impl::read_sram_remap_attrs(cluster_, chip_, cce_index_);
 }
 
 ScopedSramRemapSnoop::~ScopedSramRemapSnoop() {

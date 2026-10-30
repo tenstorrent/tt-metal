@@ -18,9 +18,6 @@ namespace tt::tt_metal::mimir_test {
 // RegionAttrs bit 30 (cmd_snoop, driven onto AxUSER[9]) of DMRISC remap entry 1, the local Mimir's SRAM window.
 inline constexpr uint32_t kRemapCmdSnoopBit = 1u << 30;
 
-// Low word of RegionAttrs of `cce_index`'s DMRISC remap entry 1.
-uint32_t read_sram_remap_attrs(const Cluster& cluster, ChipId chip, uint32_t cce_index);
-
 // NOC_SNOOP_TL_MASTER_CFG of `cce_index` (bit 0 disable_inline_writes, bit 1 invalidate_flush_dirty_en, bit 2
 // clean_putdata_en).
 uint32_t read_snoop_master_config(const Cluster& cluster, ChipId chip, uint32_t cce_index);

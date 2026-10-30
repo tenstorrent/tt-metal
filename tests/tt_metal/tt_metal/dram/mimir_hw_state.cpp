@@ -71,6 +71,12 @@ inline constexpr uint64_t kIdentityEndpointValue = 0x184;  // (4,6)
 inline constexpr uint64_t kIdentityBase10Base = 0x80000000ULL;
 inline constexpr uint64_t kIdentityBase10Stride = 0x800000ULL;
 
+// d2d_index 0/1; D2D1 registers are +0x200000.
+struct D2dTile {
+    uint32_t mimir_index = 0;
+    uint32_t d2d_index = 0;
+};
+
 struct AttEndpointExpected {
     uint32_t entry_index;
     uint64_t value;
@@ -113,6 +119,21 @@ AttEndpointPrediction expected_att_endpoint(uint32_t entry) {
 }
 
 uint32_t mimir_count(const metal_SocDescriptor& soc) { return static_cast<uint32_t>(soc.get_num_dram_channels()); }
+
+// Live D2D tiles: 1x1 -> only M0 D2D0; 2x -> all four. Never read a non-live tile.
+std::vector<D2dTile> live_d2d_tiles(const metal_SocDescriptor& soc) {
+    // A 1x1 package has one Mimir and only its D2D0 tile is live. A 2x package has two Mimirs with two tiles each.
+    const uint32_t num_mimirs = mimir_count(soc);
+    const bool has_two_d2d_tiles = num_mimirs > 1;
+    std::vector<D2dTile> tiles;
+    for (uint32_t mimir_index = 0; mimir_index < num_mimirs; ++mimir_index) {
+        tiles.push_back(D2dTile{mimir_index, 0});
+        if (has_two_d2d_tiles) {
+            tiles.push_back(D2dTile{mimir_index, 1});
+        }
+    }
+    return tiles;
+}
 
 std::string tile_prefix(const D2dTile& tile) { return fmt::format("M{}.D2D{}", tile.mimir_index, tile.d2d_index); }
 
@@ -358,6 +379,120 @@ void append_bit_changes(
     }
 }
 
+std::vector<MimirRegister> expected_d2d_setup_config(const metal_SocDescriptor& soc) {
+    std::vector<MimirRegister> registers;
+    for (const D2dTile& tile : live_d2d_tiles(soc)) {
+        append_ss_bar_expected(registers, tile);
+        append_att_expected(registers, tile);
+    }
+    for (uint32_t mimir_index = 0; mimir_index < mimir_count(soc); ++mimir_index) {
+        append_gddr_interleave_expected(registers, mimir_index);
+    }
+    return registers;
+}
+
+std::vector<MimirRegister> read_d2d_setup_config(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
+    return read_layout(cluster, soc, chip, expected_d2d_setup_config(soc));
+}
+
+std::vector<MimirRegister> expected_cce_remap_config(const metal_SocDescriptor& soc) {
+    std::vector<MimirRegister> registers;
+    for (uint32_t mimir_index = 0; mimir_index < mimir_count(soc); ++mimir_index) {
+        append_cce_remap_expected(registers, soc, mimir_index);
+    }
+    return registers;
+}
+
+// Chippy and UMD program the same remap values, so the host and remote checks share one layout.
+std::vector<MimirRegister> read_cce_remap_config(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
+    return read_layout(cluster, soc, chip, expected_cce_remap_config(soc));
+}
+
+std::vector<MimirRegister> expected_d2d_config(const metal_SocDescriptor& soc) {
+    std::vector<MimirRegister> registers = expected_d2d_setup_config(soc);
+    const std::vector<MimirRegister> remap = expected_cce_remap_config(soc);
+    registers.insert(registers.end(), remap.begin(), remap.end());
+    return registers;
+}
+
+std::vector<MimirRegister> read_d2d_config(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
+    std::vector<MimirRegister> registers = read_d2d_setup_config(cluster, soc, chip);
+    const std::vector<MimirRegister> remap = read_cce_remap_config(cluster, soc, chip);
+    registers.insert(registers.end(), remap.begin(), remap.end());
+    return registers;
+}
+
+std::vector<std::string> diff_d2d_config(
+    const std::vector<MimirRegister>& expected, const std::vector<MimirRegister>& actual) {
+    std::map<std::string, const MimirRegister*> expected_by_name;
+    for (const MimirRegister& expected_reg : expected) {
+        expected_by_name[expected_reg.name] = &expected_reg;
+    }
+    std::map<std::string, const MimirRegister*> actual_by_name;
+    for (const MimirRegister& actual_reg : actual) {
+        actual_by_name[actual_reg.name] = &actual_reg;
+    }
+
+    std::vector<std::string> mismatches;
+    for (const MimirRegister& expected_reg : expected) {
+        std::map<std::string, const MimirRegister*>::const_iterator found = actual_by_name.find(expected_reg.name);
+        if (found == actual_by_name.end()) {
+            mismatches.push_back(fmt::format("{}: missing from readback", expected_reg.name));
+            continue;
+        }
+        const MimirRegister& actual_reg = *found->second;
+        const uint64_t mask = compare_mask_for_name(expected_reg.name);
+        if ((expected_reg.value & mask) != (actual_reg.value & mask)) {
+            mismatches.push_back(fmt::format(
+                "{}: expected 0x{:x}, read 0x{:x}", expected_reg.name, expected_reg.value, actual_reg.value));
+        }
+        if (expected_reg.name.ends_with(".ATTRS") || expected_reg.name.ends_with(".ATT.ENABLE")) {
+            const uint64_t other_bits = ~compare_mask_for_name(expected_reg.name);
+            if ((expected_reg.value & other_bits) != (actual_reg.value & other_bits)) {
+                log_info(
+                    tt::LogTest,
+                    "{}: 0x{:x} differs from expected 0x{:x} outside the compared bits (not a mismatch)",
+                    actual_reg.name,
+                    actual_reg.value,
+                    expected_reg.value);
+            }
+        }
+    }
+    for (const MimirRegister& actual_reg : actual) {
+        if (expected_by_name.find(actual_reg.name) == expected_by_name.end()) {
+            mismatches.push_back(fmt::format("{}: not in expected layout", actual_reg.name));
+        }
+    }
+    return mismatches;
+}
+
+// Identity check: "" when ATT endpoint entry 64 == (4,6) and SS_BAR1 base == 0x8000_0000 + inst*8MiB on every
+// live tile; otherwise the mismatch description.
+std::string mimir_identity_mismatch(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
+    std::vector<std::string> mismatches;
+    for (const D2dTile& tile : live_d2d_tiles(soc)) {
+        const std::string prefix = tile_prefix(tile);
+        const uint64_t endpoint_value = read_smc_value(
+            cluster, soc, chip, tile.mimir_index, att_endpoint_address(tile, kIdentityEndpointEntry), false);
+        if (endpoint_value != kIdentityEndpointValue) {
+            mismatches.push_back(fmt::format(
+                "{}.ATT.ENDPOINT{} is 0x{:x}, expected 0x{:x}",
+                prefix,
+                kIdentityEndpointEntry,
+                endpoint_value,
+                kIdentityEndpointValue));
+        }
+        const uint64_t base10_value =
+            read_smc_value(cluster, soc, chip, tile.mimir_index, ss_bar_address(tile, kSsBarBase10Offset), false);
+        const uint64_t base10_expected = kIdentityBase10Base + tile.mimir_index * kIdentityBase10Stride;
+        if (base10_value != base10_expected) {
+            mismatches.push_back(
+                fmt::format("{}.SS_BAR.BASE_10 is 0x{:x}, expected 0x{:x}", prefix, base10_value, base10_expected));
+        }
+    }
+    return fmt::format("{}", fmt::join(mismatches, "; "));
+}
+
 std::string layout_mismatch_text(
     const std::string& prefix, const std::vector<MimirRegister>& expected, const std::vector<MimirRegister>& actual) {
     const std::vector<std::string> diffs = diff_d2d_config(expected, actual);
@@ -480,137 +615,6 @@ std::string host_only_guard_reason(
     return "";
 }
 
-std::vector<MimirRegister> read_d2d_setup_config(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
-    return hw_state_impl::read_layout(cluster, soc, chip, expected_d2d_setup_config(soc));
-}
-
-std::vector<MimirRegister> read_gddr_config(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
-    std::vector<MimirRegister> registers;
-    for (uint32_t mimir_index = 0; mimir_index < hw_state_impl::mimir_count(soc); ++mimir_index) {
-        hw_state_impl::append_gddr_interleave_expected(registers, mimir_index);
-    }
-    return hw_state_impl::read_layout(cluster, soc, chip, registers);
-}
-
-std::vector<MimirRegister> expected_d2d_setup_config(const metal_SocDescriptor& soc) {
-    std::vector<MimirRegister> registers;
-    for (const D2dTile& tile : live_d2d_tiles(soc)) {
-        hw_state_impl::append_ss_bar_expected(registers, tile);
-        hw_state_impl::append_att_expected(registers, tile);
-    }
-    for (uint32_t mimir_index = 0; mimir_index < hw_state_impl::mimir_count(soc); ++mimir_index) {
-        hw_state_impl::append_gddr_interleave_expected(registers, mimir_index);
-    }
-    return registers;
-}
-
-// Chippy and UMD program the same remap values, so the host and remote checks share one layout.
-std::vector<MimirRegister> read_cce_remap_config(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
-    return hw_state_impl::read_layout(cluster, soc, chip, expected_cce_remap_config(soc));
-}
-
-std::vector<MimirRegister> expected_cce_remap_config(const metal_SocDescriptor& soc) {
-    std::vector<MimirRegister> registers;
-    for (uint32_t mimir_index = 0; mimir_index < hw_state_impl::mimir_count(soc); ++mimir_index) {
-        hw_state_impl::append_cce_remap_expected(registers, soc, mimir_index);
-    }
-    return registers;
-}
-
-std::vector<MimirRegister> read_d2d_config(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
-    std::vector<MimirRegister> registers = read_d2d_setup_config(cluster, soc, chip);
-    const std::vector<MimirRegister> remap = read_cce_remap_config(cluster, soc, chip);
-    registers.insert(registers.end(), remap.begin(), remap.end());
-    return registers;
-}
-
-std::vector<MimirRegister> expected_d2d_config(const metal_SocDescriptor& soc) {
-    std::vector<MimirRegister> registers = expected_d2d_setup_config(soc);
-    const std::vector<MimirRegister> remap = expected_cce_remap_config(soc);
-    registers.insert(registers.end(), remap.begin(), remap.end());
-    return registers;
-}
-
-std::vector<std::string> diff_d2d_config(
-    const std::vector<MimirRegister>& expected, const std::vector<MimirRegister>& actual) {
-    std::map<std::string, const MimirRegister*> expected_by_name;
-    for (const MimirRegister& expected_reg : expected) {
-        expected_by_name[expected_reg.name] = &expected_reg;
-    }
-    std::map<std::string, const MimirRegister*> actual_by_name;
-    for (const MimirRegister& actual_reg : actual) {
-        actual_by_name[actual_reg.name] = &actual_reg;
-    }
-
-    std::vector<std::string> mismatches;
-    for (const MimirRegister& expected_reg : expected) {
-        std::map<std::string, const MimirRegister*>::const_iterator found = actual_by_name.find(expected_reg.name);
-        if (found == actual_by_name.end()) {
-            mismatches.push_back(fmt::format("{}: missing from readback", expected_reg.name));
-            continue;
-        }
-        const MimirRegister& actual_reg = *found->second;
-        const uint64_t mask = hw_state_impl::compare_mask_for_name(expected_reg.name);
-        if ((expected_reg.value & mask) != (actual_reg.value & mask)) {
-            mismatches.push_back(fmt::format(
-                "{}: expected 0x{:x}, read 0x{:x}", expected_reg.name, expected_reg.value, actual_reg.value));
-        }
-        if (expected_reg.name.ends_with(".ATTRS") || expected_reg.name.ends_with(".ATT.ENABLE")) {
-            const uint64_t other_bits = ~hw_state_impl::compare_mask_for_name(expected_reg.name);
-            if ((expected_reg.value & other_bits) != (actual_reg.value & other_bits)) {
-                log_info(
-                    tt::LogTest,
-                    "{}: 0x{:x} differs from expected 0x{:x} outside the compared bits (not a mismatch)",
-                    actual_reg.name,
-                    actual_reg.value,
-                    expected_reg.value);
-            }
-        }
-    }
-    for (const MimirRegister& actual_reg : actual) {
-        if (expected_by_name.find(actual_reg.name) == expected_by_name.end()) {
-            mismatches.push_back(fmt::format("{}: not in expected layout", actual_reg.name));
-        }
-    }
-    return mismatches;
-}
-
-std::string mimir_identity_mismatch(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
-    std::vector<std::string> mismatches;
-    for (const D2dTile& tile : live_d2d_tiles(soc)) {
-        const std::string prefix = hw_state_impl::tile_prefix(tile);
-        const uint64_t endpoint_value = hw_state_impl::read_smc_value(
-            cluster,
-            soc,
-            chip,
-            tile.mimir_index,
-            hw_state_impl::att_endpoint_address(tile, hw_state_impl::kIdentityEndpointEntry),
-            false);
-        if (endpoint_value != hw_state_impl::kIdentityEndpointValue) {
-            mismatches.push_back(fmt::format(
-                "{}.ATT.ENDPOINT{} is 0x{:x}, expected 0x{:x}",
-                prefix,
-                hw_state_impl::kIdentityEndpointEntry,
-                endpoint_value,
-                hw_state_impl::kIdentityEndpointValue));
-        }
-        const uint64_t base10_value = hw_state_impl::read_smc_value(
-            cluster,
-            soc,
-            chip,
-            tile.mimir_index,
-            hw_state_impl::ss_bar_address(tile, hw_state_impl::kSsBarBase10Offset),
-            false);
-        const uint64_t base10_expected =
-            hw_state_impl::kIdentityBase10Base + tile.mimir_index * hw_state_impl::kIdentityBase10Stride;
-        if (base10_value != base10_expected) {
-            mismatches.push_back(
-                fmt::format("{}.SS_BAR.BASE_10 is 0x{:x}, expected 0x{:x}", prefix, base10_value, base10_expected));
-        }
-    }
-    return fmt::format("{}", fmt::join(mismatches, "; "));
-}
-
 AttEndpointPrediction att_endpoint_for_remote_sram(uint32_t dest_cce) {
     return hw_state_impl::expected_att_endpoint(hw_state_impl::kFirstRemoteSramEntry + dest_cce);
 }
@@ -624,23 +628,9 @@ std::optional<AttEndpointPrediction> att_endpoint_for_remote_gddr(uint32_t sourc
     return std::nullopt;
 }
 
-std::vector<D2dTile> live_d2d_tiles(const metal_SocDescriptor& soc) {
-    // A 1x1 package has one Mimir and only its D2D0 tile is live. A 2x package has two Mimirs with two tiles each.
-    const uint32_t num_mimirs = hw_state_impl::mimir_count(soc);
-    const bool has_two_d2d_tiles = num_mimirs > 1;
-    std::vector<D2dTile> tiles;
-    for (uint32_t mimir_index = 0; mimir_index < num_mimirs; ++mimir_index) {
-        tiles.push_back(D2dTile{mimir_index, 0});
-        if (has_two_d2d_tiles) {
-            tiles.push_back(D2dTile{mimir_index, 1});
-        }
-    }
-    return tiles;
-}
-
 D2dErrorSnapshot snapshot_d2d_errors(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
     D2dErrorSnapshot snapshot;
-    for (const D2dTile& tile : live_d2d_tiles(soc)) {
+    for (const hw_state_impl::D2dTile& tile : hw_state_impl::live_d2d_tiles(soc)) {
         // DEBUG_MISC bits 9-11 are sticky until chip reset per the register description, with no software clear.
         snapshot.debug_misc.push_back(hw_state_impl::read_named(
             cluster,
@@ -708,7 +698,7 @@ bool expect_no_new_d2d_error_bits(
 
 std::vector<MimirRegister> read_debug_last(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
     std::vector<MimirRegister> registers;
-    for (const D2dTile& tile : live_d2d_tiles(soc)) {
+    for (const hw_state_impl::D2dTile& tile : hw_state_impl::live_d2d_tiles(soc)) {
         const std::string prefix = hw_state_impl::tile_prefix(tile) + ".ATT.DEBUG_LAST_";
         registers.push_back(hw_state_impl::read_named(
             cluster,
