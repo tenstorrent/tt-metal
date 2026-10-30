@@ -5,6 +5,7 @@
 #
 #   ./dev/run.sh            # = all: the correctness steps (smoke, check, prod, dense)
 #   ./dev/run.sh a b c      # several steps in one call; presets: quick, night (see below)
+#   ./dev/run.sh diag10     # where the 10 s time goes: sum10, sum10_nopairs (pairs off), profile10, profile10_dense
 #   ./dev/run.sh bench_ab   # traced sol at 10 s / 15 s: baseline, pair steps off (10 s), fast_rescale on; logs
 #                           # log_val_bench_ab_{base,nopairs,rescale}.txt
 #   ./dev/run.sh bench      # THE timing to quote: MiniMax-H3 attention module, traced, dense vs sol at tau 1 and
@@ -40,6 +41,7 @@ DENSE=$SD/test_ring_joint_sdpa.py
 #   night = smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15
 case "${1:-all}" in
     quick) set -- smoke perf profile5 ;;
+    diag10) set -- sum10 sum10_nopairs profile10 profile10_dense ;;
     night) set -- bench smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15 ;;
 esac
 if [ $# -gt 1 ]; then
@@ -65,7 +67,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all bench bench5 bench_ab hang_ok hang_2p hang_2p19 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -162,6 +164,20 @@ case "$ONLY" in
         done
         ;;
 esac
+# diag10 (where the 10 s time goes): sum10 vs sum10_nopairs = whole-op step time per core with D4 pair steps on / off
+# (if steps drop much more than the traced op's 2 %, the limit is outside the step); profile10_dense = the same
+# single call followed by the dense ring op, and the summary takes each device's longest run, i.e. the dense op: its
+# hardware counters, next to the sparse ones from profile10.
+if [ "$ONLY" = sum10_nopairs ]; then
+    run sum10_nopairs 1800 env TT_SPARSE_PAIR_STEPS=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_SUM=1 \
+        TT_SPARSE_PROF_STEPS=0 pytest dev/profile_case.py -s -k "${PROFILE_K:-s10 and k256 and d020 and sparse_only and qauto}"
+    summarize_profile sum10_nopairs_summary
+fi
+if [ "$ONLY" = profile10_dense ]; then
+    run profile10_dense 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
+        pytest dev/profile_case.py -s -k "${PROFILE_K:-s10 and k256 and d020 and plus_dense and qauto}"
+    summarize_profile profile10_dense_summary
+fi
 if [ "$ONLY" = profile5_nopairs ]; then  # the 5 s profile with D4 pair steps forced off (the pre-D4 baseline)
     run profile5_nopairs 1800 env TT_SPARSE_PAIR_STEPS=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
         pytest dev/profile_case.py -s -k "${PROFILE_K:-s05 and k256 and d020 and sparse_only and qauto}"
