@@ -2455,3 +2455,18 @@ Selftests: test_perf_ab.py::test_a_merge_pick_measures_before_then_lets_the_agen
 test_a_merge_picks_before_side_is_never_measured_on_the_changed_tree,
 test_a_merge_pick_without_its_before_side_on_a_changed_tree_waits; test_e2e_runtime.py::
 test_a_profile_at_a_position_records_timing_with_its_suffix_and_the_host_profile.
+
+## F231 / F232 / F233: an imported branch's knobs, the settings check over the whole change, a switch-flip pick (DeepSeek-V4.1 P.17 / P.20, 2026-10-30)
+
+- F231: P.17 took a MoE block drop as is; its new environment knobs in the combine_rf fork were charged to the agent
+  (F106 knew only lines already at HEAD), whose only ways out (convert or mark them diagnostic) altered the drop.
+  settings_lint.violations(imports=...) / tasks.yaml `imports: [<ref>]`: a fork line verbatim in an imported ref's
+  version of the file is the import's own. Selftest test_model_settings.py::
+  test_lint_counts_an_imported_branchs_knobs_as_the_forks_own.
+- F232: the check ran on the last attempt's diff only, so P.17's attempt 3 passed because attempt 1 had made the
+  edits. It now checks everything uncommitted under the task's paths (last_changed | changed_under).
+- F233: a perf pick whose agent changes nothing measured nothing; `ab: {flip: true}` measures both sides anyway (a pick
+  that only flips switches the code already has). Selftests test_perf_ab.py::
+  test_a_flip_pick_measures_existing_switches_with_no_code_change, test_without_flip_an_unchanged_tree_is_not_measured.
+- Open: a pause does not stop a task's A/B measurement (P.17's ran after PAUSE was set); only agent attempts and task
+  boundaries honour it.
