@@ -298,17 +298,10 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     // - UNPACK_PACK = unpack->pack
     // - PACK_UNPACK = pack->unpack
-    // - UNPACK_INIT = unpack->math (startup barrier, see llk_sync.h)
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
-    // Startup barrier for the unpack-to-dest handshake. Each semaphore is seeded by the thread that posts it, in front of
-    // its first post: MATH_PACK by math, UNPACK_MATH / UNPACK_PACK by unpack. The unpack thread raises this one right
-    // after its seeds, and math passes it before its first wait on UNPACK_MATH, so no SEMWAIT is ever pending on a
-    // semaphore when its SEMINIT lands. Pack needs no barrier: its first get on UNPACK_PACK follows math's first
-    // MATH_PACK post, which follows the unpacker's first UNPACK_MATH post. Rest state 0.
-    constexpr static std::uint32_t UNPACK_INIT = 0; // unpack -> math: the unpack-posted semaphores are seeded
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
