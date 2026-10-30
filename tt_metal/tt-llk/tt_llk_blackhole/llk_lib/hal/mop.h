@@ -503,9 +503,9 @@ inline constexpr std::uint32_t occurrences = (0u + ... + static_cast<std::uint32
  *
  * @param updates: Distinct words built with @ref outer_count, @ref inner_count, @ref last_outer or @ref last_inner.
  * @note Program a Template 1 configuration with @ref program first. MopCfg is write-only, so
- *       the new words are not checked against it: keep the inner count nonzero when the
- *       programmed one was nonzero (and vice versa, since an empty inner loop leaves its op
- *       words unwritten), and keep the result clear of the count anomaly rejected by @ref loop.
+ *       the new words are not checked against it: keep a programmed inner count of 0 at 0, since
+ *       an empty inner loop leaves its op words unwritten, and keep the result clear of the count
+ *       anomaly rejected by @ref loop.
  */
 template <std::uint32_t... Words>
 inline __attribute__((always_inline)) void update(const Update<Words>... updates)
