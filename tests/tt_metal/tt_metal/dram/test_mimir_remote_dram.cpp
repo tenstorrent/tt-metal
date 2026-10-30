@@ -785,7 +785,7 @@ RunOutcome check_traffic_case(
     const uint64_t chiplet_offset = chiplet_offset_of(run.soc, run.dest_view, view_offset);
     const uint32_t seed = mimir_test_seed() ^ case_index;
     const std::vector<uint32_t> pattern =
-        make_pattern(kAllMimirPatterns[case_index % kAllMimirPatterns.size()], words, chiplet_offset, seed);
+        make_pattern(kReadLegPatterns[case_index % kReadLegPatterns.size()], words, chiplet_offset, seed);
     const uint64_t tl1_offset = tl1_data(hart);
     const MimirTransferRecord record = make_gddr_record(
         run.source_routes,
@@ -957,7 +957,7 @@ std::vector<MixedTransfer> plan_mixed_transfers(
                                                                                               : transfer.chiplet_offset;
             const uint32_t seed = mimir_test_seed() ^ (cce << 8) ^ hart;
             transfer.pattern = make_pattern(
-                kAllMimirPatterns[(cce * cce_hart_count() + hart) % kAllMimirPatterns.size()],
+                kReadLegPatterns[(cce * cce_hart_count() + hart) % kReadLegPatterns.size()],
                 kEveryAnchorWords,
                 pattern_base,
                 seed);

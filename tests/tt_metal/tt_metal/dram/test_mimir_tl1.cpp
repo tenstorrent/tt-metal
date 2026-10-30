@@ -475,7 +475,7 @@ void run_remote_write_read(IDevice* device, const std::vector<RemotePair>& pairs
                 .hart = hart,
                 .destination_cce = pair.destination_cce(),
                 .size_bytes = kWriteReadSizesBytes[hart % kWriteReadSizesBytes.size()],
-                .pattern = kAllMimirPatterns[(pair.source_cce() + hart) % kAllMimirPatterns.size()],
+                .pattern = kReadLegPatterns[(pair.source_cce() + hart) % kReadLegPatterns.size()],
             });
         }
     }
