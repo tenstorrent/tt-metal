@@ -55,7 +55,7 @@ jobs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
@@ -191,7 +191,7 @@ jobs:
     if: ${{ !cancelled() && needs.release-demo-tests.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Merge single-host and multihost expected jobs
         id: merge
@@ -263,7 +263,7 @@ jobs:
     steps:
       # jira_client.py needs .github/actions.
       - name: Checkout
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -389,7 +389,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -557,7 +557,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Push dev docker image to GHCR with release tag
         uses: ./.github/actions/push-latest-image-to-ghcr

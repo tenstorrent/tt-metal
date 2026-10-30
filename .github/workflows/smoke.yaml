@@ -72,7 +72,7 @@ jobs:
                 || './tests/pipeline_reorg/ttnn_validation_merge_gate_tests.yaml') }}
     steps:
       - name: Checkout the repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -84,7 +84,7 @@ jobs:
       # (#57555, #57579). Must stay AFTER the checkout above, whose
       # `git clean -ffdx` would delete this directory.
       - name: Checkout CI actions from main
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           # Explicit: defaults to github.repository, which is the fork when

@@ -89,7 +89,7 @@ jobs:
       bh-qb-ge-image-tag: ${{ steps.set-image-tags.outputs.bh-qb-ge-image-tag }}
       bh-glx-image-tag: ${{ steps.set-image-tags.outputs.bh-glx-image-tag }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -459,7 +459,7 @@ jobs:
     outputs:
       images-to-push: ${{ steps.calculate-images.outputs.images-to-push }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Calculate images to publish
         id: calculate-images
@@ -630,7 +630,7 @@ jobs:
         image-config: ${{ fromJSON(needs.calculate-to-publish.outputs.images-to-push) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Push :latest
         if: ${{ needs.get-image-tags.outputs.is-release != 'true' }}
