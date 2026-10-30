@@ -9,6 +9,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "internal/tensor/transfer_noc_addr.h"
 
 void kernel_main() {
     Noc noc;
@@ -32,7 +33,8 @@ void kernel_main() {
 
     // Base address of the (sharded) input tensor; the remote NoC addresses are assembled by hand below.
     auto in_tensor = TensorAccessor(tensor::input);
-    uint32_t q_start_addr = in_tensor.get_bank_base_address();
+    // Raw: same L1 address on the source cores (no handle form yet).
+    uint32_t q_start_addr = tensor_accessor::detail::TransferAccess::bank_base(in_tensor);
 
     DataflowBuffer dfb_q_out(dfb::q_out);
     UnicastEndpoint src_ep;

@@ -101,16 +101,14 @@ void kernel_main() {
     constexpr uint32_t H = get_arg(args::H);
     constexpr uint32_t C = get_arg(args::C);
     constexpr uint32_t W_size_bytes = get_arg(args::W_size_bytes);
-    constexpr bool row_major = get_arg(args::row_major) == 1;
-    constexpr uint32_t num_cores_x = get_arg(args::num_cores_x);
-    constexpr uint32_t num_cores_y = get_arg(args::num_cores_y);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
 
     uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
     uint32_t start_id = get_arg(args::start_id);
     uint32_t curr_c = get_arg(args::curr_c);
     uint32_t curr_h = get_arg(args::curr_h);
     uint32_t curr_n = get_arg(args::curr_n);
-    // Varargs (per core): [shard_grid_x_map(num_cores_x) | shard_grid_y_map(num_cores_y)].
+    // Varargs (per core): [shard_noc_x(num_cores) | shard_noc_y(num_cores)], indexed by shard id.
 
     constexpr uint32_t CH = C * H;
 
@@ -128,23 +126,8 @@ void kernel_main() {
         uint32_t shard_id = i_stick / num_sticks_per_core;
         uint32_t stick_id_in_shard = i_stick - (shard_id * num_sticks_per_core);
 
-        uint32_t shard_grid_inner_dim;
-        if constexpr (row_major) {
-            shard_grid_inner_dim = num_cores_x;
-        } else {
-            shard_grid_inner_dim = num_cores_y;
-        }
-        uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-        uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-        uint32_t worker_x_physical, worker_y_physical;
-        if constexpr (row_major) {
-            worker_x_physical = get_vararg(shard_grid_inner_dim_id);                // shard_grid_x_map[inner]
-            worker_y_physical = get_vararg(num_cores_x + shard_grid_outer_dim_id);  // shard_grid_y_map[outer]
-        } else {
-            worker_x_physical = get_vararg(shard_grid_outer_dim_id);                // shard_grid_x_map[outer]
-            worker_y_physical = get_vararg(num_cores_x + shard_grid_inner_dim_id);  // shard_grid_y_map[inner]
-        }
+        uint32_t worker_x_physical = get_vararg(shard_id);
+        uint32_t worker_y_physical = get_vararg(num_cores + shard_id);
 
         uint32_t l1_read_addr = cb_in.get_read_ptr() + stick_id_in_shard * stick_size_bytes;
 

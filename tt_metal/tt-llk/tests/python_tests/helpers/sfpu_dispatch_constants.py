@@ -9,7 +9,7 @@ different reasons:
 
   * ``golden_generators.UnarySFPUGolden`` reproduces the value so its result matches what
     the kernel computes.
-  * ``sfpu_domains._OP_EDGE_POINTS`` probes *exactly at* the value, because that is where
+  * ``sfpu_domains._OP_EDGES`` probes *exactly at* the value, because that is where
     the op's behaviour switches — the knee, the threshold, the comparison tie.
 
 Held separately because two independent copies of one number is a silent-drift bug rather
@@ -91,3 +91,8 @@ EMA_ALPHA_BITS = 0x3F19999A  # 0.6f
 EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
 EMA_ALPHA = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
 EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]
+
+# Dropout harness defaults (kDropoutScaleBits / kDropoutSeed); probability is p * INT_MAX.
+DROPOUT_SCALE = 2.0
+DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF
+DROPOUT_SEED = 0xDEADBEEF

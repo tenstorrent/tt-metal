@@ -19,6 +19,10 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
+namespace tt::tt_metal {
+class TensorSpec;
+}
+
 namespace tt::tt_metal::distributed {
 
 // Specifies how a buffer is laid out across Memory Banks within a single device.
@@ -79,6 +83,9 @@ class MeshBuffer;
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
+struct PerNodeMeshDeviceMemorySpan;
+distributed::MeshBuffer create_sram_buffer_view(
+    distributed::MeshDevice&, const TensorSpec&, const PerNodeMeshDeviceMemorySpan&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
@@ -128,6 +135,20 @@ public:
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
+
+    // Page placement chosen by the allocator. It doesn't depend on the device, so all device buffers share it.
+    // Each getter throws if none of the device buffers are local to this host.
+
+    /// Alignment of the buffer's memory type, in bytes.
+    uint32_t alignment() const;
+    /// Page size rounded up to the alignment.
+    DeviceAddr aligned_page_size() const;
+    /// Number of pages on each device, including padding pages of sharded buffers.
+    uint32_t num_dev_pages() const;
+    /// Total size of the pages on each device, aligned.
+    DeviceAddr aligned_size() const;
+    /// Size the allocation takes in each bank.
+    DeviceAddr aligned_size_per_bank() const;
 
     // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
     // The reference buffer allows "casting" the MeshBuffer to a buffer allocated on a
@@ -196,6 +217,12 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    friend tt::tt_metal::distributed::MeshBuffer
+    tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(
+        tt::tt_metal::distributed::MeshDevice&,
+        const tt::tt_metal::TensorSpec&,
+        const tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan&);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,

@@ -3,12 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bitset>
+#include <unordered_set>
+#include <algorithm>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
+
+namespace {
+
+CoreRangeSet to_core_range_set(const std::variant<CoreRange, CoreRangeSet>& spec) {
+    if (const auto* range = std::get_if<CoreRange>(&spec)) {
+        return CoreRangeSet(*range);
+    }
+    return std::get<CoreRangeSet>(spec);
+}
+
+}  // namespace
 
 namespace ttnn::experimental::ccl {
 
@@ -33,6 +47,24 @@ void AllGatherFusedOpSignaler::init_all_gather(
     // Create the sync semaphore for the all gather workers
     if (all_gather_worker_cores.size() > 1) {
         this->all_gather_worker_sync_semaphore = CreateSemaphore(program, all_gather_workers, 0);
+    }
+
+    // Get the noc coords for the all gather workers
+    this->all_gather_worker_cores_noc.clear();
+    for (const auto& core : all_gather_worker_cores) {
+        this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+    }
+    initialized_all_gather = true;
+}
+
+void AllGatherFusedOpSignaler::init_all_gather(
+    ProgramDescriptor& desc,
+    const tt::tt_metal::distributed::MeshDevice* device,
+    const CoreRangeSet& all_gather_workers,
+    std::vector<CoreCoord>& all_gather_worker_cores) {
+    // Create the sync semaphore for the all gather workers
+    if (all_gather_worker_cores.size() > 1) {
+        this->all_gather_worker_sync_semaphore = add_semaphore_descriptor(desc, all_gather_workers);
     }
 
     // Get the noc coords for the all gather workers
@@ -219,6 +251,91 @@ uint32_t add_semaphore_descriptor(
     TT_THROW("No semaphore id is free on every core of {}", cores.str());
 }
 
+size_t add_kernel_descriptor(
+    ProgramDescriptor& desc,
+    const std::string& kernel_source,
+    const CoreRangeSet& cores,
+    const std::variant<DataMovementConfig, ComputeConfig>& config) {
+    const auto sorted_named_args = [](const std::unordered_map<std::string, uint32_t>& named_args) {
+        KernelDescriptor::NamedCompileTimeArgs sorted(named_args.begin(), named_args.end());
+        std::sort(sorted.begin(), sorted.end());
+        return sorted;
+    };
+    KernelDescriptor kernel;
+    kernel.kernel_source = kernel_source;
+    kernel.core_ranges = cores;
+    std::visit(
+        [&](const auto& cfg) {
+            using T = std::decay_t<decltype(cfg)>;
+            kernel.compile_time_args = cfg.compile_args;
+            kernel.defines = {cfg.defines.begin(), cfg.defines.end()};
+            kernel.named_compile_time_args = sorted_named_args(cfg.named_compile_args);
+            kernel.opt_level = cfg.opt_level;
+            kernel.compiler_include_paths = {cfg.compiler_include_paths.begin(), cfg.compiler_include_paths.end()};
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                kernel.config =
+                    DataMovementConfigDescriptor{.processor = cfg.processor, .noc = cfg.noc, .noc_mode = cfg.noc_mode};
+            } else {
+                kernel.config = ComputeConfigDescriptor{
+                    .math_fidelity = cfg.math_fidelity,
+                    .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
+                    .dst_full_sync_en = cfg.dst_full_sync_en,
+                    .unpack_to_dest_mode = cfg.unpack_to_dest_mode,
+                    .bfp8_pack_precise = cfg.bfp8_pack_precise,
+                    .math_approx_mode = cfg.math_approx_mode,
+                    .enable_trisc2_rvv = cfg.enable_trisc2_rvv,
+                };
+            }
+        },
+        config);
+    desc.kernels.push_back(std::move(kernel));
+    return desc.kernels.size() - 1;
+}
+
+CBDescriptor make_cb_descriptor(
+    const CircularBufferConfig& config,
+    const CoreRangeSet& cores,
+    const MeshTensor* tensor,
+    Buffer* buffer,
+    const tt::tt_metal::experimental::GlobalCircularBuffer* global_cb) {
+    const auto format_descriptor = [&](uint8_t index) {
+        CBFormatDescriptor format{
+            .buffer_index = index,
+            .data_format = config.data_formats()[index].value(),
+            .page_size = config.page_sizes()[index].value(),
+        };
+        if (config.tiles()[index].has_value()) {
+            format.tile = TileDescriptor(config.tiles()[index].value());
+        }
+        if (config.unpack_face_geometry()[index].has_value()) {
+            format.face_geometry = config.unpack_face_geometry()[index].value();
+        }
+        return format;
+    };
+    // Sorted by index so the descriptor does not depend on unordered_set iteration order.
+    const auto sorted = [](const std::unordered_set<uint8_t>& indices) {
+        std::vector<uint8_t> v(indices.begin(), indices.end());
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    CBDescriptor cb{.total_size = config.total_size(), .core_ranges = cores};
+    for (const uint8_t index : sorted(config.local_buffer_indices())) {
+        cb.format_descriptors.push_back(format_descriptor(index));
+    }
+    for (const uint8_t index : sorted(config.remote_buffer_indices())) {
+        cb.remote_format_descriptors.push_back(format_descriptor(index));
+    }
+    TT_FATAL(
+        config.globally_allocated_address().has_value() == (tensor != nullptr || buffer != nullptr),
+        "make_cb_descriptor: pass the backing tensor/buffer exactly when the CircularBufferConfig is globally "
+        "allocated");
+    cb.tensor = tensor;
+    cb.buffer = buffer;
+    cb.address_offset = config.address_offset();  // a slice of the backing buffer starts there, not at its base
+    cb.global_circular_buffer = global_cb;
+    return cb;
+}
+
 void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true; }
 
 void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
@@ -254,6 +371,37 @@ void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
         core_range_to_signal);
 
     this->fused_op_receiver_signal_semaphore = CreateSemaphore(program, core_range_to_signal, 0);
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+    this->initialized = true;
+}
+
+void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
+    ProgramDescriptor& program,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+            }
+        },
+        core_range_to_signal);
+
+    this->fused_op_receiver_signal_semaphore =
+        add_semaphore_descriptor(program, to_core_range_set(core_range_to_signal), 0);
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
     this->initialized = true;
 }
@@ -521,6 +669,33 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     this->matmul_semaphore_target = cores.size() - 1;
 }
 
+void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, ProgramDescriptor& desc) {
+    TT_FATAL(
+        this->fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER,
+        "attempted to initialize signaler to llama rs which has a different type");
+    this->initialized_llama_reduce_scatter_part1 = true;
+    this->rs_cores = rs_cores;
+    // On the RS cores themselves, never on their bounding box (see the Program& overload).
+    this->rs_semaphore = add_semaphore_descriptor(desc, rs_cores, INVALID);
+}
+
+void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
+    const CoreRangeSet& matmul_cores,
+    ProgramDescriptor& desc,
+    const tt::tt_metal::distributed::MeshDevice* device,
+    int privilaged_index) {
+    // pick the privileged core, record the number of matmul cores
+    TT_FATAL(initialized_llama_reduce_scatter_part1, "reduce scatter half needs to be initialized first");
+    auto cores = corerange_to_cores(matmul_cores);
+    TT_FATAL(cores.size() > privilaged_index, "Privileged index is out of range of the matmul cores");
+    this->privilaged_core = cores.at(privilaged_index);
+    this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
+    // Also reserved on the RS cores so its id can never alias rs_semaphore (see the Program& overload).
+    this->matmul_privilaged_semaphore =
+        add_semaphore_descriptor(desc, this->rs_cores.merge(CoreRangeSet(CoreRange(this->privilaged_core))), 0);
+    this->matmul_semaphore_target = cores.size() - 1;
+}
+
 void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const {
     out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
 }
@@ -634,6 +809,42 @@ void MinimalMatmulFusedOpSignaler::init_fused_op(
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
 
+    initialized_fused_op = true;
+}
+
+void MinimalMatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& program,
+    const IDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+    this->fused_op_receiver_cores_noc.clear();
+
+    std::visit(
+        [&](auto& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& range : arg.ranges()) {
+                    const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                    for (auto& core : cores) {
+                        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    }
+                }
+            }
+        },
+        core_range_to_signal);
+    const uint32_t num_signal_semaphores = 2 * this->num_ag_workers + 1;
+    for (uint32_t i = 0; i < num_signal_semaphores; i++) {
+        this->fused_op_receiver_signal_semaphores.push_back(
+            add_semaphore_descriptor(program, to_core_range_set(core_range_to_signal), 0));
+    }
+
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
     initialized_fused_op = true;
 }
 

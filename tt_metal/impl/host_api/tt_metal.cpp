@@ -39,8 +39,8 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
+#include <tt-umd-workload/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
@@ -65,7 +65,7 @@
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
 #include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -249,7 +249,6 @@ bool WriteToDeviceL1(
     CoreType core_type) {
     ZoneScoped;
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
@@ -289,7 +288,6 @@ bool ReadFromDeviceL1(
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
@@ -311,7 +309,6 @@ bool ReadFromDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, size, "ReadFromDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(device->id(), address, address + size);
         }
@@ -602,6 +599,10 @@ std::string SerializeClusterDescriptor() {
 void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
 
 Program CreateProgram() { return Program(); }
+
+Program CreateProgram(distributed::MeshDevice& mesh_device) {
+    return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
+}
 
 KernelHandle CreateDataMovementKernel(
     Program& program,

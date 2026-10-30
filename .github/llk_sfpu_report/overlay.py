@@ -18,6 +18,7 @@ Copying whole files from the merge-base instead does not work: the harness C++
 moves on (a kernel removed on main is still called by an old sfpu_operations.h).
 """
 
+import ast
 import os
 import re
 import shutil
@@ -56,6 +57,10 @@ REPORTED_NOT_APPLIED = (
     f"{LLK_RELPATH}/tests/python_tests/",
     f"{LLK_RELPATH}/tests/sfpi-version",
 )
+
+#: The harness's Python: it runs from the tool revision on both sides.
+HARNESS_PYTHON = f"{LLK_RELPATH}/tests/python_tests/"
+GOLDEN = f"{HARNESS_PYTHON}helpers/golden_generators.py"
 
 
 def git(repo, *args, check=True):
@@ -167,6 +172,87 @@ def device_diff(plan):
         check=True,
         capture_output=True,
     ).stdout
+
+
+def harness_changes(plan, ops):
+    """{op: [files]}: the harness Python files in which the PR changes ``ops``.
+
+    The report runs main's copy of them, so its numbers leave that change out, and a
+    change to how the harness asks for an op can leave the PR's device code not running
+    it at all (#54080: logsigmoid moved from the binary to the unary harness). A changed
+    line that names the op (``MathOperation.Tanh``, its ``Tanh = OpSpec(...)`` entry)
+    changes it, and so does a change inside the golden method the op dispatches to.
+    """
+    out = {}
+    for path in plan.not_applied:
+        if not (path.startswith(HARNESS_PYTHON) and path.endswith(".py")):
+            continue
+        diff = git(plan.repo, "diff", "--no-renames", "-U0", plan.base_sha, plan.head_sha, "--", path)
+        changed = "\n".join(
+            line[1:] for line in diff.splitlines() if line[:1] in ("+", "-") and line[:4] not in ("+++ ", "--- ")
+        )
+        # Op names are MathOperation names: identifiers, nothing to escape.
+        touched = {op for op in ops if re.search(rf"MathOperation\.{op}\b|^\s*{op}\s*=\s*OpSpec\b", changed, re.M)}
+        if path == GOLDEN:
+            touched |= _golden_ops_changed(plan, diff)
+        for op in ops:
+            if op in touched:
+                out.setdefault(op, []).append(path)
+    return out
+
+
+def _golden_ops_changed(plan, diff):
+    """The ops whose golden method (``MathOperation.Tanh: self._tanh``) ``diff`` changes.
+
+    The method's lines are read from the base side's golden_generators.py, the side
+    the diff's ``-`` line numbers count in. A method is looked up in the class that
+    dispatches to it, then in its base classes: the unary and the binary golden both
+    have a ``_fmod``.
+    """
+    # Not git(): it strips the output, and a leading blank line would shift every line.
+    source = subprocess.run(
+        ["git", "-C", str(plan.repo), "show", f"{plan.base_sha}:{GOLDEN}"], capture_output=True, text=True
+    )
+    try:
+        tree = ast.parse(source.stdout) if source.returncode == 0 else None
+    except SyntaxError:
+        tree = None
+    if tree is None:
+        return set()
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+
+    def span(cls, method):
+        """The lines of ``cls.method``, or of the base class ``cls`` inherits it from."""
+        for node in classes[cls].body:
+            if isinstance(node, ast.FunctionDef) and node.name == method:
+                return node.lineno, node.end_lineno
+        for base in classes[cls].bases:
+            if isinstance(base, ast.Name) and base.id in classes and (lines := span(base.id, method)):
+                return lines
+        return None
+
+    # The base lines each hunk replaces; a hunk that only adds lines goes between
+    # line ``start`` and the next.
+    changed = []
+    for start, count in re.findall(r"^@@ -(\d+)(?:,(\d+))? ", diff, flags=re.M):
+        start, count = int(start), int(count or 1)
+        changed += list(range(start, start + count)) if count else [start + 0.5]
+    touched = set()
+    for cls, node in classes.items():
+        for d in (n for n in ast.walk(node) if isinstance(n, ast.Dict)):
+            for key, value in zip(d.keys, d.values):
+                if (
+                    isinstance(key, ast.Attribute)
+                    and isinstance(key.value, ast.Name)
+                    and key.value.id == "MathOperation"
+                    and isinstance(value, ast.Attribute)
+                    and isinstance(value.value, ast.Name)
+                    and value.value.id == "self"
+                    and (lines := span(cls, value.attr))
+                    and any(lines[0] <= line <= lines[1] for line in changed)
+                ):
+                    touched.add(key.attr)
+    return touched
 
 
 class PatchConflict(RuntimeError):
