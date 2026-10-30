@@ -221,6 +221,9 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     // NOCs: the writer on NOC0 is 1.13x (line) to 1.42x (ring) faster (BH); the reader takes the other.
     const auto reader_noc = ag_test::env_noc("TT_AG_MC_RD_NOC", tt::tt_metal::NOC::NOC_1);  // TEST ONLY env
     const auto writer_noc = ag_test::env_noc("TT_AG_MC_WR_NOC", tt::tt_metal::NOC::NOC_0);  // TEST ONLY env
+
+    ag_test::check_distinct_nocs(reader_noc, writer_noc, "TT_AG_MC_RD_NOC / TT_AG_MC_WR_NOC");  // TEST ONLY
+
     if (ag_test::log_enabled() && device_idx == 0) {  // TEST ONLY; link 0 has the largest slice
         const uint64_t iter_packets = tt::div_up(
             uint64_t{tt::div_up(num_elements, min_num_links)} * geo.element_units * unit_bytes, uint64_t{packet_cap});

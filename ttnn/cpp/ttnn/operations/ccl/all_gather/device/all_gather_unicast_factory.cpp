@@ -299,6 +299,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         ag_test::env_noc("TT_AG_UC_WR_NOC", is_ring ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1);
     const auto reader_noc =
         ag_test::env_noc("TT_AG_UC_RD_NOC", is_ring ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0);
+    ag_test::check_distinct_nocs(reader_noc, writer_noc, "TT_AG_UC_RD_NOC / TT_AG_UC_WR_NOC");  // TEST ONLY
 
     // Reader
     std::vector<uint32_t> reader_compile_args = {

@@ -8,7 +8,8 @@
 // its built-in value. None of them is in the program-cache hash: keep the environment constant within a process.
 //   TT_AG_FORCE=unicast|multicast   TT_AG_K   TT_AG_READ_BYTES   TT_AG_WORKERS   TT_AG_MUX_BUFS (1-255)
 //   TT_AG_SIG_PER_ITER   TT_AG_SIG_MIN   TT_AG_SIG_MAX   TT_AG_NO_ROW_GROUP=1   TT_AG_LOG=1 (one AGCFG line per build)
-//   TT_AG_UC_RD_NOC   TT_AG_UC_WR_NOC   TT_AG_MC_RD_NOC   TT_AG_MC_WR_NOC   TT_AG_MUX_NOC (0 or 1)
+//   TT_AG_UC_RD_NOC   TT_AG_UC_WR_NOC   TT_AG_MC_RD_NOC   TT_AG_MC_WR_NOC   TT_AG_MUX_NOC (0 or 1; a factory's reader
+//                     and writer must stay on different NOCs)
 //   TT_AG_NO_INIT=1 (writers skip the init handshake: races across back-to-back launches, timing diagnosis only)
 //   TT_AG_ZONES=1 (device-profiler zones around the init wait, main loop and tail of both kernels)
 
@@ -45,6 +46,15 @@ inline tt::tt_metal::NOC env_noc(const char* name, tt::tt_metal::NOC fallback) {
     const auto v = env_u32(name);
     TT_FATAL(!v || *v <= 1, "{} must be 0 or 1", name);
     return v ? static_cast<tt::tt_metal::NOC>(*v) : fallback;
+}
+
+// A reader and a writer on one NOC hang: in DM_DEDICATED_NOC mode the two share that NOC's counters.
+inline void check_distinct_nocs(tt::tt_metal::NOC reader, tt::tt_metal::NOC writer, const char* knobs) {
+    TT_FATAL(
+        reader != writer,
+        "{}: the reader and the writer must use different NOCs (both on NOC{} hangs)",
+        knobs,
+        static_cast<int>(reader));
 }
 
 inline bool log_enabled() { return env_u32("TT_AG_LOG").value_or(0) != 0; }
