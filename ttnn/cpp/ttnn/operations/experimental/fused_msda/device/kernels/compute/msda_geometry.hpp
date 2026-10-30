@@ -248,7 +248,7 @@ inline void mask_corner_weights() {
 #pragma GCC unroll 0
     for (uint32_t d = 0; d < FACE; ++d) {
         const sfpi::vInt bits = sfpi::dst_reg[WORD].mode<sfpi::DataLayout::I32>();
-        const sfpi::vInt flags = (bits >> cw::INDEX_BITS) & 0xF;
+        const sfpi::vInt flags = sfpi::vInt(sfpi::vUInt(bits) >> cw::INDEX_BITS) & 0xF;
         v_if((flags & NW) != NW) { sfpi::dst_reg[DST_NW * TILE] = 0.0f; }
         v_endif;
         v_if((flags & NE) != NE) { sfpi::dst_reg[DST_NE * TILE] = 0.0f; }
