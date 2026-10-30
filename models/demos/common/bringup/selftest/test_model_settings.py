@@ -150,3 +150,30 @@ def test_a_failing_step_is_diagnosed_on_the_cpu_never_by_a_device_rerun(gspec, n
     cpu = Case.inputs[0] * 3.0
     dev = devfmt.step_fn(s, Ref(), 0, "x")[0](Case().rctx(), Case.inputs[0])  # the device-format step's own output
     assert devfmt.diagnose(s, Ref(), 0, "x", Case(), cpu, dev, "t") == "precision"
+
+
+def test_lint_counts_an_imported_branchs_knobs_as_the_forks_own(tmp_path):
+    """F231 (DeepSeek-V4.1 P.17): a task taking another branch as is (tasks.yaml imports) brought new environment
+    knobs in a fork; they are the branch's, not the agent's. A knob in neither HEAD nor the import is still flagged."""
+    import subprocess
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
+
+    rel = "ttnn/ttnn/bringup/op/op.py"
+    f = tmp_path / rel
+    f.parent.mkdir(parents=True)
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    f.write_text("import os\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    git("checkout", "-q", "-b", "drop")
+    f.write_text("import os\nk = os.environ.get('DROP_KNOB')\n")
+    git("commit", "-q", "-am", "drop")
+    git("checkout", "-q", "main")
+    f.write_text("import os\nk = os.environ.get('DROP_KNOB')\nm = os.environ.get('AGENT_KNOB')\n")
+    assert len(violations(tmp_path, MD, [rel])) == 2  # without the import both count
+    got = violations(tmp_path, MD, [rel], imports=["drop"])
+    assert len(got) == 1 and "op.py:3" in got[0], got

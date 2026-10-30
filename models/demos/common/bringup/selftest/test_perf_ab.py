@@ -350,6 +350,24 @@ def test_a_side_killed_before_any_test_is_measured_again_on_rerun(mk):
     assert o.led.state()["P.1"]["ab"]["quick"]["new"]["chunk_wall_ms"] == 250.0
 
 
+def test_a_flip_pick_measures_existing_switches_with_no_code_change(mk, sandbox):
+    """F233: ab.flip: the switch is already in the code and the agent changes nothing; both sides are still measured."""
+    (sandbox.repo / "src/sw.py").write_text("import os\nF = os.environ.get('TOY_FIDELITY', 'hifi2')\n")
+    sandbox.git("add", "src")
+    sandbox.git("commit", "-q", "-m", "switch")
+    ab = {"env": {"TOY_FIDELITY": "hifi4"}, "change": {"TOY_FIDELITY": "hifi2"}, "flip": True}
+    o = mk([pick(ab=ab, ab_mode="quick")], {})
+    assert o.run() == HUMAN, mk.lines
+    rec = o.led.state()["P.1"]["ab"]
+    assert sorted(c["on"] for c in mk.calls) == [False, True], mk.calls
+    assert rec["note"].startswith("no code change") and rec["quick"]["new"]["chunk_wall_ms"] == 250.0
+
+
+def test_without_flip_an_unchanged_tree_is_not_measured(mk):
+    o = mk([pick(ab_mode="quick")], {})
+    assert o.run() == HUMAN and mk.calls == []
+
+
 def before_mode(mk, sandbox, **kw):
     """F230: a pick without a switch (a branch merge): the tree itself is the switch. The fake runner reads the tree
     (src/impl.txt) instead of a variable; positions record their metrics with _p<pos>, as testing/profile.py does."""

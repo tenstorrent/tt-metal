@@ -1623,6 +1623,8 @@ tasks:
       drop. No fork regression or unit suites (task F.1). The orchestrator measured ''before'' already and measures
       ''after'' itself (quick A/B plus one chunk at 51200 and 512000: device per section, warm wall, host cProfile):
       do not profile. Report the drop''s new switches and their defaults as the DS41 run uses them.'
+  imports:
+  - origin/dnijemcevic/model_bringup_lowbit
   ab:
     before: true
     env:
@@ -1640,6 +1642,100 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: P.19
+  title: 'MM_SWEEP_GALAXY: every matmul call swept on the Galaxy 8x4 at the shipped layout (SP=32)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.17
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  brief:
+    details: 'OWNER 2026-10-30: the matmul program configs were swept on the 2x2 (P.23 / P.24, tt/mm_configs.rule)
+      and never on the Galaxy; every matmul the model runs on the 8x4 must be swept there. Do: (1) route every dense
+      matmul through tt/mm_configs (rope.py:234 calls ttnn.matmul directly; grep the model for any other ttnn.linear /
+      ttnn.matmul / minimal_matmul outside mm_configs) so the capture sees them all; (2) on the 8x4 at the shipped
+      settings (SP=32 on, DS41_ENGRAM_TABLE=resident), test_matmul_sweep.py -k capture, then -k sweep with
+      P23_MIN_MS=0 (EVERY distinct call, not only the expensive ones; P23_SITES unset); (3) a new value of the setting
+      MATMUL_CONFIG, galaxy: a per-shape table in tt/mm_configs keyed exactly as program_config caches (shape, weight
+      shape, dtypes, fp32 DEST, grid), holding each call''s best config, and today''s rule for any shape not in it;
+      tuned stays today''s rule. The same acceptance per candidate as P.23: deterministic, fits the L1 the model
+      leaves, output bit-identical to auto or within its last bf16 rounding, error vs float64 not worse than the
+      current config. Do not change dtypes, compute kernel configs, memory configs or the op sequence. (4) Report
+      per site and shape: calls a chunk, current vs galaxy ms a call and a chunk. List, as out of scope, the
+      matmul-like work that has no program config (flat routed experts, the shared expert engine and router in the
+      fused head, sparse_sdpa, the indexer score). Do not profile the model: the orchestrator measures tuned vs galaxy
+      at 51200 and 512000. No fork regression suites (task F.1).'
+  ab:
+    env:
+      MATMUL_CONFIG: tuned
+      ENGRAM_TABLE: resident
+    change:
+      MATMUL_CONFIG: galaxy
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+- id: P.20
+  title: 'SP8_RESWEEP: attention back to SP=8 x TP=4, its matmul shapes swept on the Galaxy in the same pick (vs P.19''s SP=32)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.19
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  brief:
+    details: 'OWNER 2026-10-30: compare SP=8 x TP=4 attention with SP=32 apples to apples, both with matmul configs
+      swept on the Galaxy. The SP=32 switches stay in the code with their old paths: ATTN_SP32 (P.10),
+      ATTN_SP32_PROJ (P.9), INDEXER_TOPK_LOCAL (P.8); off = the SP=8 path. Do: (1) with all three off (and
+      MATMUL_CONFIG=galaxy, DS41_ENGRAM_TABLE=resident), check that the model runs: P.11-P.17 were built with SP=32
+      on, so fix only what breaks on the off paths (P.15 persistent buffers, P.16 fork output buffers, P.11 window
+      packing), changing nothing on the SP=32 path; (2) with the three off, test_matmul_sweep.py -k capture and -k
+      sweep with P23_MIN_MS=0 (every call, as P.19), and add the SP=8 shapes'' winners to P.19''s galaxy table (keyed
+      by shape, so the SP=32 entries stay as P.19 left them; same acceptance per candidate); (3) report per site and
+      shape the SP=8 calls a chunk and ms a call / a chunk, next to P.19''s SP=32 numbers. Do not change the three
+      switches'' defaults (an accept does, F104). Do not profile the model: the orchestrator measures SP=32 vs SP=8,
+      both galaxy-tuned, at 51200 and 512000. No fork regression suites (task F.1).'
+  ab:
+    env:
+      ATTN_SP32: 'on'
+      ATTN_SP32_PROJ: 'on'
+      INDEXER_TOPK_LOCAL: 'on'
+      MATMUL_CONFIG: galaxy
+      ENGRAM_TABLE: resident
+    change:
+      ATTN_SP32: 'off'
+      ATTN_SP32_PROJ: 'off'
+      INDEXER_TOPK_LOCAL: 'off'
+      MATMUL_CONFIG: galaxy
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -1651,6 +1747,8 @@ tasks:
   - P.15
   - P.16
   - P.17
+  - P.19
+  - P.20
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh

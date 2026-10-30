@@ -922,7 +922,13 @@ class Orchestrator:
             for v in settings_lint.violations(
                 self.spec.repo,
                 rel(self.spec, self.spec.model_dir),
-                [p for p in self.last_changed if p.endswith((".py", ".cpp", ".hpp", ".h"))],
+                # F232: everything uncommitted under the task's paths, an earlier attempt's edits included
+                sorted(
+                    p
+                    for p in set(self.last_changed) | set(self.changed_under(task))
+                    if p.endswith((".py", ".cpp", ".hpp", ".h"))
+                ),
+                imports=list(task.get("imports") or []),
             )
         ]
         if f"{rel(self.spec, self.spec.model_dir)}/tt/settings.py" in self.last_changed:  # F137: no emulation default
@@ -1573,7 +1579,11 @@ class Orchestrator:
         sides = ([("old", old)] if old or before else []) + [("new", on)]
         if before:
             rec["before"] = True
-        if not owned:
+        if not owned and (task.get("ab") or {}).get("flip") and old and on:
+            # F233 (DeepSeek-V4.1 P.19, owner 2026-10-30: SP=8 again after the MoE drop): the pick flips switches the
+            # code already has; the agent only checks that both paths still run, so an unchanged tree is measured
+            rec["note"] = "no code change: the A/B flips switches the code already has (ab.flip)"
+        elif not owned:
             rec["note"] = "the agent changed nothing under the task's paths (its summary and BREADCRUMBS say why)"
             sides = []
         elif before:
