@@ -1710,9 +1710,11 @@
 
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad perf tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
@@ -1782,9 +1784,11 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B multihost quad perf tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
