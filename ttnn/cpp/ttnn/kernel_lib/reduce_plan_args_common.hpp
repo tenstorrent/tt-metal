@@ -16,7 +16,7 @@ namespace ttnn::kernel_lib::reduce_plan_args {
 // its runtime tail alternative. Dataflow kernels receive one aggregate auxiliary
 // recipe for the entire planning unit. Both payloads may be appended after
 // kernel-owned compile-time arguments.
-inline constexpr std::uint32_t call_count_word_count = 1;
+inline constexpr std::uint32_t call_count_header_length = 1;
 inline constexpr std::uint32_t auxiliary_header_word_count = 1;
 inline constexpr std::uint32_t no_cb_id = compute_kernel_lib::REDUCE_NO_AUXILIARY_CB;
 inline constexpr std::uint32_t no_runtime_arg = 0xFFFFFFFF;

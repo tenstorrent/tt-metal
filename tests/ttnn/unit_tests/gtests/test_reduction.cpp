@@ -1590,10 +1590,10 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     std::vector<std::uint32_t> serialized{kernel_owned_arg};
     partial_sequence.append_to(serialized);
     namespace plan_args = ttnn::kernel_lib::reduce_plan_args;
-    ASSERT_EQ(serialized.size(), 1 + plan_args::call_count_word_count + 2 * plan_args::call_word_count);
+    ASSERT_EQ(serialized.size(), 1 + plan_args::call_count_header_length + 2 * plan_args::call_word_count);
     EXPECT_EQ(serialized[0], kernel_owned_arg);
     EXPECT_EQ(serialized[1], 2U);
-    const std::uint32_t first_offset = 1 + plan_args::call_count_word_count;
+    const std::uint32_t first_offset = 1 + plan_args::call_count_header_length;
     const auto second_offset = first_offset + plan_args::call_word_count;
     const auto second_configuration =
         serialized[plan_args::call_word_offset(second_offset, plan_args::CallWord::Configuration)];

@@ -28,7 +28,7 @@ T get_arg_val(int arg_idx);
  * @endcode
  *
  * Read call_count at the known unit offset, then address each call
- * with ReduceCallAtT. The count is only a bound for walking the calls. A kernel
+ * with ReduceCallAtT<unit_offset, I>. The count is only a bound for walking the calls. A kernel
  * must not derive accumulation, finalization, partial-tile handling, or any
  * other behavior from the count or call index; each ReduceCallArgs carries
  * those decisions itself.
@@ -37,7 +37,7 @@ T get_arg_val(int arg_idx);
  * variable-width ReduceAuxiliaryArgs per planning unit. It carries the shared
  * auxiliary CB ID and aggregate physical tile recipe. When multiple units are
  * appended, the next compute unit begins at
- * `ReduceCallAtT<first_call_offset, call_count - 1>::next_compile_time_args_offset()`. Use
+ * `ReduceCallAtT<unit_offset, call_count - 1>::next_compile_time_args_offset()`. Use
  * ReduceAuxiliaryArgs::next_compile_time_args_offset() for the next dataflow
  * unit.
  */
@@ -330,8 +330,10 @@ constexpr std::uint32_t reduce_call_offset() {
     }
 }
 
-template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX, std::uint32_t RTA_OFFSET = 0>
-using ReduceCallAtT = ReduceCallArgs<reduce_call_offset<FIRST_CALL_CTA_OFFSET, CALL_INDEX>(), RTA_OFFSET>;
+template <std::uint32_t UNIT_CTA_OFFSET, std::uint32_t CALL_INDEX, std::uint32_t RTA_OFFSET = 0>
+using ReduceCallAtT = ReduceCallArgs<
+    reduce_call_offset<UNIT_CTA_OFFSET + reduce_plan_args::call_count_header_length, CALL_INDEX>(),
+    RTA_OFFSET>;
 
 // Metal 2 assigns physical buffer IDs when resolving ProgramSpec bindings.
 // Such factories serialize dense, kernel-local logical IDs and bind them here

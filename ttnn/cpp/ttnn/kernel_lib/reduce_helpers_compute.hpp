@@ -27,9 +27,8 @@
  * reduce_plan_args.hpp for the device views:
  *
  *   constexpr uint32_t call_count = get_compile_time_arg_val(KERNEL_OWNED_CTA_COUNT);
- *   constexpr uint32_t first_call_offset = KERNEL_OWNED_CTA_COUNT + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
  *   template <uint32_t I>
- *   using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_offset, I>;
+ *   using CallAt = ttnn::kernel_lib::ReduceCallAtT<KERNEL_OWNED_CTA_COUNT, I>;
  *
  *   template <uint32_t I = 0>
  *   ALWI void issue_calls() {

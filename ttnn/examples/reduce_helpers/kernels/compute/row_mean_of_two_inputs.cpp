@@ -10,12 +10,11 @@ namespace {
 
 // The sequence's varargs: [call_count][call 0][call 1].
 static_assert(get_compile_time_arg_val(0) == 2);
-constexpr uint32_t first_call_offset = ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
 
 // The factory's logical DFB IDs, in order: in_a, in_b, auxiliary, accumulator, output.
 template <uint32_t Index>
 using CallAt = ttnn::kernel_lib::BoundReduceCallArgs<
-    ttnn::kernel_lib::ReduceCallAtT<first_call_offset, Index>,
+    ttnn::kernel_lib::ReduceCallAtT<0, Index>,
     dfb::in_a,
     dfb::in_b,
     dfb::auxiliary,

@@ -68,7 +68,7 @@
  *
  * Kernel side
  *   Compute  compute_kernel_hw_startup() once, then reduce<Call>() with Call = ReduceCallArgs<CTA_OFFSET> or, for a
- *            sequence, ReduceCallAtT<first_call_offset, I> (reduce_plan_args.hpp). Other work may run between calls.
+ *            sequence, ReduceCallAtT<CTA_OFFSET, I> (reduce_plan_args.hpp). Other work may run between calls.
  *   Writer   dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<ReduceAuxiliaryArgs<CTA_OFFSET>>() before compute
  *            needs the tiles (reduce_helpers_dataflow.hpp).
  *   Metal 2  Serialize dense logical CB IDs and bind them to dfb::<name> with BoundReduceCallArgs and
