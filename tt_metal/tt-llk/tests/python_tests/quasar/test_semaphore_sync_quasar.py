@@ -18,7 +18,6 @@ from helpers.llk_params import (
     MathOperation,
     ReduceDimension,
     ReducePool,
-    format_dict,
 )
 from helpers.param_config import (
     input_output_formats,
@@ -38,7 +37,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 # Two flows under the semaphore scheme. 16-bit and MX inputs run a reduce through SrcA / SrcB with the math-pack
@@ -147,11 +146,7 @@ def test_semaphore_sync_quasar(
     if zero_tiles:
         return
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

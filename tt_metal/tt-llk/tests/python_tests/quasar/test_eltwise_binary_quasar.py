@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -15,7 +14,6 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     PerfRunType,
-    format_dict,
 )
 from helpers.param_config import (
     generate_reduced_input_dimensions,
@@ -50,7 +48,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def _eltwise_dest_acc_sync(dest_acc_modes, *, is_perf=False):
@@ -362,12 +360,7 @@ def test_eltwise_binary(
     res_from_L1 = configuration.run().result
 
     # Verify results match golden
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

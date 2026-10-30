@@ -22,7 +22,7 @@ from helpers.matmul_sweep import (
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
 )
-from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
+from helpers.param_config import input_output_formats, max_dest_tiles
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -66,12 +66,6 @@ THROTTLE_LEVELS = (0, 5)
 DEST_HANDOFF_NUM_BLOCKS = 4
 
 
-def _dest_capacity(dest_sync, dest_acc) -> int:
-    return DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
-
-
 def _dest_fill_rt_ct_pairs(max_tiles):
     """Power-of-two dest-fill (rt, ct) pairs, dest occupancy blocks, and mid-fill when they fit dest."""
     pairs = []
@@ -89,7 +83,7 @@ def _fits_tiny_perf_tile_shape(cfg) -> bool:
     rt_dim = cfg.tile_dimensions.rt_dim
     ct_dim = cfg.tile_dimensions.ct_dim
     kt_dim = cfg.tile_dimensions.kt_dim
-    max_tiles = _dest_capacity(cfg.dest_sync, cfg.dest_acc)
+    max_tiles = max_dest_tiles(cfg.dest_acc, cfg.dest_sync)
     half = max_tiles // 2
     return (
         cfg.dst_index == 0
@@ -123,7 +117,7 @@ def generate_perf_matmul_combinations():
                 continue
 
             for dest_sync in DEST_SYNC_MODES:
-                max_tiles = _dest_capacity(dest_sync, dest_acc)
+                max_tiles = max_dest_tiles(dest_acc, dest_sync)
                 for stochastic_mode in STOCHASTIC_ROUNDING_MODES:
                     for rt_dim, ct_dim in _dest_fill_rt_ct_pairs(max_tiles):
                         for kt_dim in PERF_KT_DIMS:

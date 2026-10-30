@@ -50,7 +50,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 INPUT_DIMENSIONS = [
     [512, 32],
@@ -390,12 +390,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     res_from_L1 = configuration.run().result
 
     # Verify results match golden
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
