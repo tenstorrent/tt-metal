@@ -7,20 +7,25 @@ from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 from models.demos.gemma4.tt import generator_trace as gt
+from models.demos.gemma4.tt.attention.continuation import continuation_sdpa_table_cols
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Mixin
 from models.demos.gemma4.tt.generator import filter_warmup_sampling_params
 from models.demos.gemma4.tt.warmup_isls import (
     ENV_VAR,
+    continuation_tails,
     parse_warmup_isls,
     run_prefill_ladder,
     run_prefix_continuation_warmup,
+    warmup_page_table_with_real_blocks,
     warmup_prefill_isls,
 )
+from models.tt_transformers.tt.common import get_padded_prefill_len
 
 
 class _View:
@@ -498,9 +503,12 @@ class _FakeGenerator:
         self.data_parallel = data_parallel
         self.paged = paged
         self.calls = []
+        self.tables = []
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
-        return {"tokens": (batch_size, seq_len), "page_table": object() if self.paged else None, "model_id": model_id}
+        # the stock mock table: all zeros (every column the null block 0), 128-token blocks
+        table = torch.zeros(batch_size, -(-seq_len // 128), dtype=torch.int32) if self.paged else None
+        return {"tokens": (batch_size, seq_len), "page_table": table, "model_id": model_id}
 
 
 def _prefill_recorder(gen):
@@ -508,6 +516,7 @@ def _prefill_recorder(gen):
         gen.calls.append(
             (kwargs["model_id_warmup"], kwargs["tokens"][1], kwargs["enable_trace"], kwargs["warmup_prefill"])
         )
+        gen.tables.append(kwargs["page_table"])
 
     return prefill_forward
 
@@ -524,6 +533,11 @@ def test_ladder_runs_once_per_process_and_per_model():
         (1, 4096, False, False),
         (1, 8192, False, False),
     ]
+    # the mock tables hold real block ids (one per column): the 8192 ladder's second chunk is an eager
+    # continuation over them, as a served chunk is, with no "chunk_page_table has no real block ids" warning
+    for table, (_, isl, _, _) in zip(gen.tables, gen.calls):
+        assert tuple(table.shape) == (1, isl // 128) and bool((table > 0).all()), "real block ids"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
     # second (capture) pass: nothing runs again
     assert (
         run_prefill_ladder(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), ladder=[4096, 8192], chunk=4096)
@@ -532,20 +546,58 @@ def test_ladder_runs_once_per_process_and_per_model():
     assert len(gen.calls) == 4
 
 
-def test_prefix_continuation_warmup_prefills_a_tail_past_one_chunk_once_per_process():
+def test_prefix_continuation_warmup_prefills_every_reachable_tail_past_one_chunk_once_per_process():
     calls = []
 
     def prefill_forward(**kwargs):
         calls.append(kwargs)
 
+    # every padded length a remnant past a cached prefix can take (get_padded_prefill_len), each a program set of
+    # its own: the served 12B QB2 paid 4.0 s on its first 2048-token tail, a length the ISL ladder never runs
+    assert continuation_tails(4096, get_padded_prefill_len) == [128, 1024, 2048, 4096]
+    assert continuation_tails(4096, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048]
+    assert continuation_tails(2048, get_padded_prefill_len) == [128, 1024, 2048]
+    assert continuation_tails(8192, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048, 4096]
     gen = _FakeGenerator(data_parallel=2)
-    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
-    assert [c["start_pos"] for c in calls] == [[4096], [4096]], "one continuation per model, past one chunk"
-    assert all(c["tokens"] == (1, 4096 + 128) and c["enable_trace"] is False for c in calls)
-    assert [c["model_id_warmup"] for c in calls] == [0, 1] and all(c["kv_cache"] == "kv" for c in calls)
+    tails = [128, 1024, 2048]
+    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096, tails=tails)
+    assert [c["start_pos"] for c in calls] == [[4096]] * 6, "every tail per model, past one chunk"
+    assert [c["tokens"] for c in calls] == [(1, 4096 + t) for _ in range(2) for t in tails]
+    assert all(c["enable_trace"] is False and c["kv_cache"] == "kv" for c in calls)
+    assert [c["model_id_warmup"] for c in calls] == [0] * 3 + [1] * 3
+    # the mock user holds real block ids: a zero table (the null block) never reads the prior window at boot, so
+    # the served hit compiled the continuation's programs on the first cached request
+    for c, t in zip(calls, tails * 2):
+        table = c["page_table"]
+        assert tuple(table.shape) == (1, (4096 + t) // 128) and bool((table > 0).all()), "non-zero block ids"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
+    # the pool bound: ids wrap inside [1, pool) when the kv pool is known; real tables and fakes pass through
+    assert warmup_page_table_with_real_blocks(torch.zeros(1, 6, dtype=torch.int32), pool_blocks=4).tolist() == [
+        [1, 2, 3, 1, 2, 3]
+    ]
+    real = torch.tensor([[9, 4, 0]], dtype=torch.int32)
+    assert warmup_page_table_with_real_blocks(real) is real and warmup_page_table_with_real_blocks(None) is None
+    # the global layers' SDPA table (attention/continuation.py): one width per model and tail - the context's
+    # blocks plus the tail's, at the stick multiple - for the warmup past one chunk and for a served hit at any
+    # position, so the warmup's tail compiles the program the hit runs
+    assert [continuation_sdpa_table_cols(262144, 4096, t, 64) for t in (128, 1024, 2048, 4096)] == [
+        4104,
+        4112,
+        4128,
+        4160,
+    ]
+    assert all(
+        continuation_sdpa_table_cols(262144, start, t, 64) == continuation_sdpa_table_cols(262144, 4096, t, 64)
+        for start in (128, 2432, 130944, 258048)
+        for t in (128, 1024, 2048, 4096)
+    )
     calls.clear()
     assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
     assert calls == [], "once per process"
+    single = _FakeGenerator(data_parallel=1)
+    assert run_prefix_continuation_warmup(single, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert [c["tokens"] for c in calls] == [(1, 4096 + 128)], "the default tail is the short hit"
+    calls.clear()
     off = _FakeGenerator(data_parallel=1, paged=False)
     assert not run_prefix_continuation_warmup(off, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
     assert calls == [], "no cached prefix to continue from with paged attention off"
