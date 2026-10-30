@@ -607,6 +607,9 @@ _UNFUSED_POST_ROWS = (
     ('LoFi', True, True, 'F32', 'B4', 'F16b', 1, 2, 8, 0, True, 1),
     ('HiFi2', True, True, 'F32', 'B4', 'F32', 3, 1, 1, 0, True, 1),
     ('HiFi2', True, False, 'F32', 'B8', 'F32', 1, 4, 3, 0, True, 1),
+    ('LoFi', True, True, 'B4', 'F32', 'F32', 3, 1, 8, 0, True, 4),
+    ('LoFi', True, True, 'F32', 'B4', 'F32', 1, 3, 8, 0, True, 4),
+    ('LoFi', True, True, 'B4', 'F32', 'B4', 3, 1, 1, 0, True, 2),
 )
 _UNFUSED_POST = frozenset(_UNFUSED_POST_ROWS)
 

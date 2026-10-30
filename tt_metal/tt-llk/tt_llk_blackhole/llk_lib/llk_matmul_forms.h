@@ -645,6 +645,9 @@ inline constexpr matmul_grid_main_cell matmul_unfused_post_cells[] = {
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 8, 0, true, 1},
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 3, 1, 1, 0, true, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 4, 3, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 3, 1, 8, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 1, 3, 8, 0, true, 4},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp4_b, 3, 1, 1, 0, true, 2},
 };
 
 constexpr bool matmul_unfused_post(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
