@@ -359,6 +359,8 @@ def run_demo(args):
 
     summary = {
         "variant": config.variant,
+        "model_config": config.to_dict(),
+        "seed": args.seed,
         **hardware_metadata,
         "tt_metal_commit": _resolve_tt_metal_commit(),
         "checkpoint": args.checkpoint,
