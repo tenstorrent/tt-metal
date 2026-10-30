@@ -15,15 +15,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+from .tt_common import signpost
 from .tt_ms_deformable_attention import TTMSDeformableAttention
-from ..config import DeformableAttentionConfig
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
+from ..model_config import DeformableAttentionConfig
 
 from loguru import logger
 
@@ -96,6 +90,10 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
     # max_len sizes tensors, so it must be a Python int. Mask reduction, index construction and
     # the contributor count stay on the host; every gather runs on device.
     valid_per_cam = ttnn.to_torch(bev_mask).sum(-1) > 0  # [num_cams, B, num_queries]
+    # As upstream, every sample gathers the queries the first sample's cameras see, and divides by
+    # the cameras its own mask counts.
+    seen_by = valid_per_cam
+    valid_per_cam = valid_per_cam[:, :1].expand_as(valid_per_cam)
     max_len = int(valid_per_cam.sum(-1).max().item())
 
     if ENABLE_LOGGING:
@@ -176,7 +174,7 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
         row_mask.to(torch.bfloat16).unsqueeze(-1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
 
-    count = torch.clamp(valid_per_cam.permute(1, 2, 0).sum(-1), min=1.0)
+    count = torch.clamp(seen_by.permute(1, 2, 0).sum(-1), min=1.0)
     count = ttnn.unsqueeze(ttnn.from_torch(count, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), -1)
 
     return SCARebatchPlan(
@@ -247,7 +245,7 @@ class TTSpatialCrossAttention:
         # ``output_proj``, while the one in the SCA namespace belongs to the slots
         # projection in forward. Sharing a namespace applies the SCA's matrix twice.
         self.deformable_attention = TTMSDeformableAttention(
-            deform_config, device, params.deformable_attention, spatial_shapes=spatial_shapes
+            deform_config, device, params.deformable_attention, spatial_shapes=spatial_shapes, residual=False
         )
 
     def forward(
@@ -284,8 +282,7 @@ class TTSpatialCrossAttention:
         Returns:
             Output features [B, num_queries, embed_dims].
         """
-        if use_signpost:
-            signpost(header="TTNN SCA Forward Start")
+        signpost(header="TTNN SCA Forward Start")
 
         assert value is not None, "value is required"
 
@@ -418,8 +415,7 @@ class TTSpatialCrossAttention:
         # Residual connection
         output = ttnn.add(slots, inp_residual)
 
-        if use_signpost:
-            signpost(header="TTNN SCA Forward End")
+        signpost(header="TTNN SCA Forward End")
 
         return output
 

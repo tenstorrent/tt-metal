@@ -16,10 +16,10 @@ std::pair<ttnn::Tensor, ttnn::Tensor> chain_affine_transforms(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis) {
     TT_FATAL(
-        transforms.storage_type() == StorageType::DEVICE && transforms.buffer() != nullptr,
+        transforms.storage_type() == StorageType::DEVICE && transforms.is_allocated(),
         "chain_affine_transforms: transforms must be an allocated device tensor");
     TT_FATAL(
-        initial_state.storage_type() == StorageType::DEVICE && initial_state.buffer() != nullptr,
+        initial_state.storage_type() == StorageType::DEVICE && initial_state.is_allocated(),
         "chain_affine_transforms: initial_state must be an allocated device tensor");
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(

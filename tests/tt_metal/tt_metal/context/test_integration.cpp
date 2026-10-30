@@ -540,6 +540,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
 
+        // Deallocate only after the transfers, since per-device buffer lookups on a deallocated MeshBuffer are fatal.
         buffer->deallocate();
         ASSERT_FALSE(buffer->is_allocated());
 

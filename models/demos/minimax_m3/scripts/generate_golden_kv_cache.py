@@ -13,10 +13,11 @@ is a vision-language package (model_type=minimax_m3_vl) that ships no modeling c
 AutoModelForCausalLM cannot load it. The reference rebuilds just the text tower from the raw
 language_model.* weights, with math composed from the team's PCC-validated unit-test references.
 
-The reference uses the real attention schedule: dense causal attention for layers 0-2 and MSA
-sparse attention for layers 3-59. Pass --dense-only to force full causal attention on every layer
-(identical to the default at <=2048 tokens; above 2048 it will NOT match the real sparse model —
-pipeline testing only, while MSA prefill is not yet device-tested).
+The reference uses the real attention schedule from the checkpoint config (sparse_attention_freq):
+dense causal attention where it is 0 (MiniMax-M3: layers 0-2; MiniMax-M3.1: none) and MSA sparse attention where
+it is 1. Pass --dense-only to force full causal attention on every layer (identical to the default up to the MSA
+top-k window, sparse_topk_blocks * sparse_block_size = 2048 tokens; above it will NOT match the real sparse model —
+pipeline testing only).
 
 Memory-efficient approach for 500GB RAM machines:
 - Streams language_model.* weights per layer via mmap (never fully resident)
@@ -34,8 +35,9 @@ Output format:
             layer_N.safetensors   post-RoPE shared index key); dense layers / --dense-only store K/V only.
 
 Usage:
-    # From tt-metal root
-    export HF_MODEL=/path/to/MiniMax-M3-dequantized
+    # From tt-metal root. The checkpoint is --model-path > $HF_MODEL > the M3_MODEL_VARIANT default dir
+    # (utils/model_variant.py); a golden belongs to the checkpoint it was generated from.
+    export HF_MODEL=/path/to/MiniMax-M3
     python3 models/demos/minimax_m3/scripts/generate_golden_kv_cache.py \\
         --prompt-json prompt.json \\
         --out /mnt/models/minimax-m3-cache/golden/longbook_full \\
@@ -63,6 +65,7 @@ from transformers import AutoTokenizer
 # Make `models.demos.minimax_m3...` importable when run as a script (sys.path[0] is the script dir).
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from models.demos.minimax_m3.reference.model import load_text_model  # noqa: E402
+from models.demos.minimax_m3.utils.model_variant import select_variant  # noqa: E402
 
 
 def _raise_cpu_time_limit():
@@ -118,8 +121,8 @@ def parse_args():
         "--model-path",
         type=str,
         default=None,
-        help="HF model directory (default: $HF_MODEL env var). "
-        "Works with official MiniMaxAI/MiniMax-M3 weights downloaded from HuggingFace.",
+        help="HF model directory (default: $HF_MODEL, else the M3_MODEL_VARIANT default checkpoint dir). "
+        "A MiniMax-M3 or MiniMax-M3.1 checkpoint (bf16 or MXFP8/NVFP4).",
     )
 
     # Processing options
@@ -148,9 +151,8 @@ def parse_args():
         "--dense-only",
         action="store_true",
         help="Force full causal attention on ALL layers, skipping the MSA sparse path. Default is "
-        "the real schedule (dense layers 0-2 + MSA sparse 3-59). At <=2048 tokens dense-only is "
-        "identical to the default; above 2048 it does NOT match the real sparse model — use it "
-        "to exercise the larger-sequence pipeline while MSA prefill is not yet device-tested.",
+        "the real schedule from sparse_attention_freq. Up to the MSA top-k window (2048 tokens) dense-only is "
+        "identical to the default; above it does NOT match the real sparse model (pipeline testing only).",
     )
 
     return ap.parse_args()
@@ -197,10 +199,9 @@ def main():
     _raise_cpu_time_limit()  # fp32 CPU golden burns CPU-time × nthreads; avoid SIGXCPU mid-run (see fn)
 
     # Setup
-    model_path = args.model_path or os.environ.get("HF_MODEL")
-    if not model_path:
-        print("ERROR: Must provide --model-path or set $HF_MODEL", file=sys.stderr)
-        return 1
+    variant = select_variant(args.model_path)
+    model_path = args.model_path or os.environ.get("HF_MODEL") or variant.weights_dir
+    print(f"[load] model variant {variant.name}, checkpoint {model_path}", flush=True)
 
     dtype_map = {
         "bfloat16": torch.bfloat16,
@@ -253,14 +254,15 @@ def main():
     print(f"[forward] Running prefill forward pass for {seq_len} tokens", flush=True)
     if args.dense_only:
         print(f"[forward] --dense-only: full causal attention on ALL layers (MSA path skipped)", flush=True)
-        if seq_len > 2048:
+        if seq_len > model.cfg.dense_equiv_tokens:
             print(
-                f"[forward] WARNING: seq_len={seq_len} > 2048 with --dense-only — output will NOT "
+                f"[forward] WARNING: seq_len={seq_len} > {model.cfg.dense_equiv_tokens} with --dense-only — output will NOT "
                 f"match the real MSA sparse model (pipeline testing only).",
                 flush=True,
             )
     else:
-        print(f"[forward] real schedule: dense attn (layers 0-2) + MSA sparse attn (layers 3-59)", flush=True)
+        msa = [i for i in range(num_layers) if model.cfg.is_sparse_attn_layer(i)]
+        print(f"[forward] real schedule: MSA sparse attn on {len(msa)}/{num_layers} layers {msa}", flush=True)
     print(f"[forward] WARNING: CPU inference is SLOW - can take 10-60+ minutes!", flush=True)
     print(f"{'='*70}\n", flush=True)
 
@@ -307,10 +309,12 @@ def main():
     # Save metadata
     metadata = {
         "model_path": str(model_path),
+        "model_variant": variant.name,
+        "rope_theta": model.cfg.rope_theta,
         "reference": "models.demos.minimax_m3.reference.model (dense+MSA torch golden, fp32 compute)",
         "dense_only": args.dense_only,
-        # default (dense+MSA) matches the real model at any length; dense_only matches only <=2048.
-        "attention_matches_real_model": (not args.dense_only) or seq_len <= 2048,
+        # default (dense+MSA) matches the real model at any length; dense_only only up to the MSA top-k window.
+        "attention_matches_real_model": (not args.dense_only) or seq_len <= model.cfg.dense_equiv_tokens,
         "prompt_source": str(args.prompt_json) if args.prompt_json else "direct",
         "prompt": prompt[:500] + "..." if len(prompt) > 500 else prompt,  # Truncate for readability
         "prompt_length_chars": len(prompt),

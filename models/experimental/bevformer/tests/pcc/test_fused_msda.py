@@ -25,10 +25,9 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.tests.common import PRESETS, assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
 from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import (
@@ -44,13 +43,9 @@ def _build(device, config_name, batch_size, num_queries, seed):
     """Shared setup: reference module, preprocessed TT params, and the inputs."""
     torch.manual_seed(seed)
 
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    model_config = preset_config.model_config
+    model_config = PRESETS[config_name]
     num_levels = model_config.num_levels
-    spatial_shapes = torch.tensor(preset_config.dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
+    spatial_shapes = torch.tensor(model_config.spatial_shapes, dtype=torch.long)
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     config = DeformableAttentionConfig(
@@ -67,9 +62,7 @@ def _build(device, config_name, batch_size, num_queries, seed):
     ref_model = MSDeformableAttention(config)
     ref_model.eval()
 
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model, device=device, config=config, dtype=ttnn.float32
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     torch_inputs = (query, value, reference_points, spatial_shapes)
     return config, ref_model, tt_parameters, torch_inputs
@@ -140,7 +133,7 @@ def test_msda_matches_reference(device, config_name, batch_size, num_queries, se
     assert got.shape == expected.shape, f"{tuple(got.shape)} != {tuple(expected.shape)}"
     logger.info(f"{config_name} q={num_queries} seed={seed}: output {tuple(got.shape)}")
 
-    passed, message = check_with_pcc(expected, got, pcc=0.999)
+    passed, message = assert_pcc(expected, got, pcc=0.999)
     assert passed, f"msda_output[{config_name}, seed={seed}]: {message}"
 
 
@@ -150,9 +143,9 @@ def test_msda_output_is_deterministic(device):
     The op distributes (batch, head, query-block) work units across cores and
     accumulates each unit's `levels * points` reduction locally, so the summation
     order is fixed and the result should not vary run to run. A mismatch points
-    at uninitialized L1 being read: the reader zeroes the input rows whose
-    bilinear corner it did not gather, and that zeroing is what keeps stale CB
-    bytes out of the result.
+    at uninitialized L1 being read: a corner the gathers skip keeps whatever its
+    input slot held, so the one-time zeroing of the input CB and the zero weight
+    compute gives that corner are what keep stale bytes out of the result.
     """
     config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 900, 0)
 
@@ -173,7 +166,7 @@ def test_msda_value_memory_modes_match_reference(device, monkeypatch, value_memo
     got = _run_tt(device, config, tt_parameters, torch_inputs)
 
     assert placements == [buffer_type]
-    passed, message = check_with_pcc(expected, got, pcc=0.999)
+    passed, message = assert_pcc(expected, got, pcc=0.999)
     assert passed, f"msda_output[value_memory={value_memory}]: {message}"
 
 

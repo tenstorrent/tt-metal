@@ -20,7 +20,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(UnitMeshFixture, Datacopy) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 
