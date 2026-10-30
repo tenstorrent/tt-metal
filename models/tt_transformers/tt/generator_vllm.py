@@ -32,7 +32,7 @@ except ImportError:
 
 import ttnn
 from models.common.llama_models import create_vision_mask
-from models.common.utility_functions import is_wormhole_b0, nearest_32
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
@@ -1057,6 +1057,9 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         # gemma-3-4b on wormhole configurations with up to 2 devices per DP shard
         if "gemma-3-4b" in model_name.lower() and devices_per_dp_cache in (1, 2) and is_wormhole:
             return 65_536
+        # gemma-3-12b on a single p150: ~10 GB of weights leaves room for a 32K-token KV cache, not 128K.
+        if "gemma-3-12b" in model_name.lower() and num_devices == 1 and is_blackhole():
+            return 32_768
         return super().get_max_tokens_all_users(
             model_name=model_name,
             num_devices=num_devices,
