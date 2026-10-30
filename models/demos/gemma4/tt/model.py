@@ -231,11 +231,12 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared
 
 def splitfree_layer_specs(hf_config, n_layers: int, tp: int, mode: str):
     """The attention layers ``GEMMA4_SDPA_DECODE_SPLITFREE=mode`` covers ("1": the global layers, "2": the sliding
-    layers too) as a set of layer indices, and their per-chip planner specs ``(kv groups, q heads per group,
-    head_dim, window)`` at ``tp`` (a KV head count below ``tp`` is replicated: one local group), sorted."""
+    layers too, anything else: none) as a set of layer indices, and their per-chip planner specs ``(kv groups,
+    q heads per group, head_dim, window)`` at ``tp`` (a KV head count below ``tp`` is replicated: one local
+    group), sorted."""
     tp = max(1, int(tp))
     covered, specs = set(), set()
-    for i in range(int(n_layers)):
+    for i in range(int(n_layers) if mode in ("1", "2") else 0):
         cfg = Gemma4AttentionConfig(hf_config, i)
         if cfg.is_sliding and mode != "2":
             continue
