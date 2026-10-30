@@ -26,6 +26,10 @@ reasoning at temperature 1, top_p 0.95; 99.9% fit in the tp * K candidates) or l
 otherwise it is the nucleus's tokens among the candidates. top_k beyond tp * K is not supported
 (``max_device_top_k``). A seeded row's stream is keyed by (seed, decode position) (``stream_states``). Requests for
 logprobs stay on host sampling (the plugin routes them).
+
+Grammar (vLLM structured output, ``set_grammar``): a row whose parameters flag it reads its row of the packed mask,
+and the scan reader sets the logits it disallows to a large negative value in L1 before anything reads them, so the
+row samples, greedy or not, from the allowed tokens only, as vLLM's sampler after its bitmask.
 """
 
 import numpy as np
@@ -38,7 +42,11 @@ from .common import TILE
 KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels"
 SCAN_CORES = 32
 CANDIDATES_PER_CHIP = 32  # K: each scan core's and each chip's list per user
-PARAM_WORDS = 8  # per row: log2(e) / T (fp32 bits), top_p (Q24), top_k, greedy, 1 / T (fp32 bits), unused
+MAX_USERS = 8  # decode users of the scan's user slots; more sample on the host
+# Per row: log2(e) / T (fp32 bits), top_p (Q24), top_k, greedy, 1 / T (fp32 bits), grammar (1: apply the row's mask),
+# unused.
+PARAM_WORDS = 8
+MASK_ALIGN = 16  # words: a chip's mask row is padded to 64 bytes (whole DRAM reads)
 # Circular buffers: the scan's logit tiles, its shift and scale tiles, the compute kernel's sum tile, the reader's and
 # writer's scratch, the tiles' address from the reader to the writer.
 CB_X, CB_M, CB_A, CB_S, CB_SCRATCH, CB_OUT, CB_READY = 0, 1, 2, 3, 4, 5, 6
@@ -128,7 +136,7 @@ def _ranges(cores):
 
 class DeviceSampler:
     def __init__(self, plan, vocab_local, users, max_batch, scan_cores=SCAN_CORES):
-        assert vocab_local % TILE == 0 and 1 <= users <= 8 and max_batch * 4 <= 1024
+        assert vocab_local % TILE == 0 and 1 <= users <= MAX_USERS and max_batch * 4 <= 1024
         self.plan, self.vocab_local, self.users, self.max_batch = plan, vocab_local, users, max_batch
         self.slots = 4 if users <= 4 else 8  # user slots of a scan core's partials block
         self.k = CANDIDATES_PER_CHIP
@@ -167,6 +175,18 @@ class DeviceSampler:
             (1, max_batch * PARAM_WORDS), ttnn.uint32, value=self._params(*self._greedy()), **dram_rm
         )
         self.rng = persistent((1, max_batch * 2), ttnn.uint32, **dram_rm)
+        self.rows = self._greedy()  # (temperature, top_k, top_p) of ``params``, for ``check`` and ``set_grammar``
+        # The grammar mask of the users' rows, one row-major row per user on every chip: the words of the chip's vocab
+        # shard (a tile column of 32 tokens per word), padded to MASK_ALIGN; rewritten in place (``set_grammar``).
+        self.mask_words = vocab_local // TILE
+        self.mask_stride = -(-self.mask_words // MASK_ALIGN) * MASK_ALIGN
+        self.mask = ttnn.from_torch(
+            torch.full((users, plan.tp * self.mask_stride), -1, dtype=torch.int32),
+            device=device,
+            dtype=ttnn.uint32,
+            mesh_mapper=plan.shard(-1),
+            **dram_rm,
+        )
         # The tokens of the last step, persistent (the trace writes them; reads and the feedback use them).
         self.next_tokens = persistent((1, max_batch), ttnn.uint32, **dram_rm)
         self.compute_config = ttnn.ComputeConfigDescriptor(
@@ -182,8 +202,9 @@ class DeviceSampler:
         n = self.max_batch
         return torch.zeros(n), torch.zeros(n), torch.ones(n)
 
-    def _params(self, temperature, top_k, top_p):
-        """int32 [1, max_batch * PARAM_WORDS] of per-row temperature, top_k (0: none), top_p (each [max_batch])."""
+    def _params(self, temperature, top_k, top_p, grammar=None):
+        """int32 [1, max_batch * PARAM_WORDS] of per-row temperature, top_k (0: none), top_p (each [max_batch]) and
+        whether the row's grammar mask applies (``grammar``, bool [max_batch]; default none)."""
         greedy = (temperature == 0) | (top_k == 1)
         inv = torch.where(greedy, torch.ones_like(temperature), 1.0 / temperature.double().clamp(min=1e-2).float())
         scale = (inv.double() * 1.4426950408889634).float()
@@ -194,7 +215,7 @@ class DeviceSampler:
             top_k.to(torch.int32),
             greedy.to(torch.int32),
             torch.from_numpy(inv.float().numpy().view(np.int32).copy()),
-            zeros,
+            zeros if grammar is None else grammar.to(torch.int32),
             zeros,
             zeros,
         ]
@@ -225,9 +246,40 @@ class DeviceSampler:
         return hosts, bool((~greedy[:rows]).any())
 
     def set_params(self, hosts):
+        """Uploads ``host_params``' tensors; the rows' grammar flags are off until ``set_grammar``."""
         ttnn.copy_host_to_device_tensor(hosts[0], self.params)
         ttnn.copy_host_to_device_tensor(hosts[1], self.rng)
-        self.rows = self.pending_rows  # (temperature, top_k, top_p) torch [max_batch], for ``check``
+        self.rows = self.pending_rows
+
+    def set_grammar(self, mask=None, rows=None):
+        """Constrains the next draws of the users ``rows`` (bool [n], n <= users) to the tokens ``mask`` allows: int32
+        [n, words] in vLLM's packing (bit j of word w allows token 32 * w + j; the tokens of words past ``words`` are
+        disallowed). The rows keep the parameters and streams ``set_params`` gave them. ``mask`` None lifts every row's
+        constraint. Uploads the parameters again (with each row's flag) and the mask rows of the flagged users."""
+        flags = torch.zeros(self.max_batch, dtype=torch.bool)
+        if mask is not None:
+            n = mask.shape[0]
+            assert n <= self.users and rows.numel() == n
+            flags[:n] = rows
+            words = self.plan.tp * self.mask_words
+            given = min(words, mask.shape[1])
+            full = torch.full((self.users, words), -1, dtype=torch.int32)
+            full[:n] = 0
+            full[:n, :given] = mask[:, :given]
+            padded = torch.full((self.users, self.plan.tp, self.mask_stride), -1, dtype=torch.int32)
+            padded[:, :, : self.mask_words] = full.reshape(self.users, self.plan.tp, self.mask_words)
+            host = ttnn.from_torch(
+                padded.reshape(self.users, -1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.plan.shard(-1),
+            )
+            ttnn.copy_host_to_device_tensor(host, self.mask)
+        params = self._params(*self.rows, grammar=flags)
+        host = ttnn.from_torch(
+            params, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
+        )
+        ttnn.copy_host_to_device_tensor(host, self.params)
 
     def read_rng(self):
         """The rows' stream states (Python ints), blocking."""
@@ -265,15 +317,24 @@ class DeviceSampler:
         cores, crs = self.scan_cores, _ranges(self.scan_cores)
         params_bytes = self.max_batch * PARAM_WORDS * 4
         block_bytes = self.slots * self.k * 8
+        mask_bytes = self.users * self.mask_stride * 4
         reader_args = [
-            [logits.buffer_address(), self.partials.buffer_address(), params.buffer_address(), b, e, i]
+            [
+                logits.buffer_address(),
+                self.partials.buffer_address(),
+                params.buffer_address(),
+                b,
+                e,
+                i,
+                self.mask.buffer_address(),
+            ]
             for i, (b, e) in enumerate(self.ranges)
         ]
         reader = _kernel(
             "sample_scan.cpp",
             cores,
             crs,
-            [self.users, self.k, self.max_batch, CB_X, CB_M, CB_A, CB_SCRATCH, CB_READY, self.slots],
+            [self.users, self.k, self.max_batch, CB_X, CB_M, CB_A, CB_SCRATCH, CB_READY, self.slots, self.mask_stride],
             reader_args,
             ttnn.ReaderConfigDescriptor(),
         )
@@ -302,12 +363,12 @@ class DeviceSampler:
             _cb(CB_M, tile, crs, ttnn.float32),
             _cb(CB_A, tile, crs, ttnn.float32),
             _cb(CB_S, tile, crs, ttnn.float32),
-            _cb(CB_SCRATCH, block_bytes // 2 + params_bytes, crs),
+            _cb(CB_SCRATCH, block_bytes // 2 + params_bytes + mask_bytes, crs),
             _cb(CB_OUT, block_bytes // 2 + self.slots * 8, crs),
             _cb(CB_READY, 16, crs),
         ]
         prog = ttnn.ProgramDescriptor(kernels=[reader, compute, writer], semaphores=[], cbs=cbs)
-        ttnn.generic_op([logits, self.partials, self.sums, params], prog)
+        ttnn.generic_op([logits, self.partials, self.sums, params, self.mask], prog)
 
     def _chip_merge(self, params=None):
         """Step 2, with ``params`` as ``_scan``."""

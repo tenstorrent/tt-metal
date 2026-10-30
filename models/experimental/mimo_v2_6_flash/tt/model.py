@@ -35,7 +35,7 @@ from . import attention as attention_lib
 from .attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split, page_table_width
 from .common import TILE, MeshPlan, as_weight, cache_fill, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
-from .device_sampler import DeviceSampler
+from .device_sampler import MAX_USERS, DeviceSampler
 from .greedy_head import GreedyHead
 from .moe import expert_quant
 from .moe_stream import ReduceExpand, fabric_row_gather, user_rows, zero_output
@@ -485,9 +485,9 @@ class TtMiMoModel:
         # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
         # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        # The device sampler serves up to 8 users (its candidate pages); more decode users sample on the host.
+        # The device sampler serves up to MAX_USERS users (its candidate pages); more decode users sample on the host.
         self.sampler = None
-        if self.decode_users <= 8:
+        if self.decode_users <= MAX_USERS:
             self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         if self.mtp is not None or self.dflash is not None:
             # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
