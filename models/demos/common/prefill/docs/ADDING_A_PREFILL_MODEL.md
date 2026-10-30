@@ -242,7 +242,11 @@ contract, validated on the first rank (`prefill_chunk.validate_chunks`):
 Each layer completion names one chunk, on either path, so a consumer retires each chunk on its own.
 
 The runner refuses F > 1 at startup, before the model loads, together with `PREFILL_MTP_LEVELS > 0`,
-`PREFILL_DFLASH=1` or `PREFILL_USE_TRACE=1`, and `PREFILL_LAYER_ACK_D2H=1` with `prefill_forward`.
+`PREFILL_DFLASH=1` or `PREFILL_USE_TRACE=1`, and `PREFILL_LAYER_ACK_D2H=1` with `prefill_forward`. An adapter
+whose `prefill_forward` handles them lifts the last two: `supports_packed_forward_trace = True` (it stages each
+chunk's inputs before a trace replay) and `supports_packed_forward_d2h_acks = True` (it sends one 12 B
+`(slot_id, actual_start, actual_end)` record per chunk per KV-writing layer through the D2H ack service, each
+chunk's records contiguous, since the decoder treats an identity change mid-chunk as a lost record).
 
 ---
 

@@ -174,8 +174,14 @@ def packed_forward_refusals(
     use_trace: bool = False,
     d2h_acks: bool = False,
     indexer_indices: bool = False,
+    traced_forward: bool = False,
+    forward_d2h_acks: bool = False,
 ) -> list:
-    """Why a configuration cannot run ``forward_chunks`` chunks per forward (empty list: it can)."""
+    """Why a configuration cannot run ``forward_chunks`` chunks per forward (empty list: it can).
+
+    ``traced_forward`` / ``forward_d2h_acks`` are the adapter's supports_packed_forward_trace /
+    supports_packed_forward_d2h_acks: its prefill_forward stages each chunk's inputs before a trace replay, and sends
+    one 12-byte D2H ack record per chunk per KV-writing layer, chunk by chunk."""
     if forward_chunks == 1:
         return []
     reasons = []
@@ -183,9 +189,9 @@ def packed_forward_refusals(
         reasons.append("PREFILL_MTP_LEVELS > 0 (MTP lookahead is per chunk)")
     if dflash:
         reasons.append("PREFILL_DFLASH=1")
-    if use_trace:
+    if use_trace and not (supports_packed_forward and traced_forward):
         reasons.append("PREFILL_USE_TRACE=1 (per-chunk arguments are not trace inputs)")
-    if d2h_acks and supports_packed_forward:
+    if d2h_acks and supports_packed_forward and not forward_d2h_acks:
         reasons.append("PREFILL_LAYER_ACK_D2H=1 with the adapter's prefill_forward")
     if indexer_indices:
         reasons.append(

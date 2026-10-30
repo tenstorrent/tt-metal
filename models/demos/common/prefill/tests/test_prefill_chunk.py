@@ -241,3 +241,11 @@ def test_packed_forward_refusals():
     assert len(reasons) == 5
     for knob in ("MTP", "DFLASH", "USE_TRACE", "LAYER_ACK_D2H", "indexer indices"):
         assert any(knob in r for r in reasons), knob
+    # An adapter's prefill_forward can lift the trace and D2H-ack refusals; MTP and DFlash stay refused.
+    lifted = {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": True}
+    assert packed_forward_refusals(4, use_trace=True, d2h_acks=True, **lifted) == []
+    assert len(packed_forward_refusals(4, use_trace=True, d2h_acks=True, mtp_levels=1, dflash=True, **lifted)) == 2
+    assert len(packed_forward_refusals(4, supports_packed_forward=True, use_trace=True, forward_d2h_acks=True)) == 1
+    assert len(packed_forward_refusals(4, supports_packed_forward=True, d2h_acks=True, traced_forward=True)) == 1
+    # Without prefill_forward the runner runs chunks one by one, which is not traced.
+    assert len(packed_forward_refusals(4, supports_packed_forward=False, use_trace=True, traced_forward=True)) == 1
