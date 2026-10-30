@@ -64,7 +64,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review 5 close | `31b070903d3` | round-5 clean-pass recorded, three wording notes |
 | 9 | `d5ba1a1b877` | residual add fused into an all-core RMSNorm forward/backward, CB full-block discipline in both all-core norm kernels, two-items-per-core tests, iteration-9 evidence |
 | 10 | `53ec655a9f9` | K-split `skinny_matmul` op for the rank-wide LoRA products, routing in `lora.py` / `fused_lora.py`, iteration-10 evidence |
-| review 6 | (this commit) | review round 6 items: iteration-9 attribution restated, loss match after 9 and 10, `skinny_matmul` harness cases, README / work-log corrections |
+| review 6 | `a492accb3a6` | review round 6 items: iteration-9 attribution restated, loss match after 9 and 10, `skinny_matmul` harness cases, README / work-log corrections |
+| review 6 close | (this commit) | round-6 re-check clean-pass recorded, steady-step wording |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run described in `perf_analysis.md`, "Iteration 1".
 - Review round 1 of the loop (`doc/optimization/review_round1.md`): required a TP=4 gradient-level check of the fused/transposed paths (`tp_gradient_check.py`: `O/tp_grad_check_single.{npz,log}`, `O/tp_grad_check_tp4_plain.{npz,log}`, `O/tp_grad_check_tp4_fused.{npz,log}`), the exit restated at the measured clock with the falling-clock anomaly classified, and arithmetic fixes in the gap decomposition; also taken: the 16-layer Tracy point the plan's rule asks for once 16 layers fit (`O/iter3_fused_tracy_16layers*`), the iteration-3 op sequence (`O/iter3_fused_op_sequence_1layer.txt`), the fused-LoRA isolation script and its after-fix log in evidence.

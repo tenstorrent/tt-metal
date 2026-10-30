@@ -63,3 +63,11 @@ claims (77 -> 46, 122 -> 65, 76 -> 45 us), op count 508 -> 524 (one extra launch
 - Finding 5: hash filled, the cmake-log mention dropped, -1.7 ms, transpose wording.
 - Finding 6: recorded in the iteration-10 section as a residual precision note (below bf16 output rounding), not
   changed.
+
+## Re-check of a492accb3a6: clean-pass
+
+Every finding verified fixed by the same reviewer (the restated numbers reproduce from the CSVs on the stated basis;
+deltas -0.86 / -0.68 agree with the reviewer's warm-up-2 basis -0.92 / -0.80; 12 skinny cases PCC 0.999999 incl.
+N = 64). One P4 note taken in the closing commit: the four-step averages (55.73 / 54.87 / 54.19 ms) fold step 1's
+one-off setup ops into the per-step figure; the steady steps 3-4 are 49.84 -> 48.92 -> 48.12 ms per 4-layer step
+per chip excluding collectives, now stated alongside.
