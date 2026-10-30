@@ -5,10 +5,10 @@
 #pragma once
 
 #include "ckernel.h"
-#include "ckernel_defs.h"
-#include "sfpi.h"
-#include "lltt.h"
 #include "ckernel_addrmod.h"
+#include "ckernel_defs.h"
+#include "lltt.h"
+#include "sfpi.h"
 
 namespace ckernel::sfpu
 {
@@ -36,8 +36,11 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPIADD(0, 2, 1, 6);
         TTI_SFPSETCC(0, 1, 0, 6);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        #pragma GCC unroll 0
-        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 5); }
+#pragma GCC unroll 0
+        for (int d = 0; d + 0 < ITERATIONS; d += 1)
+        {
+            lltt::replay(0, 5);
+        }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -60,8 +63,11 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPIADD(0, 2, 1, 6);
         TTI_SFPSETCC(0, 1, 0, 6);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        #pragma GCC unroll 0
-        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
+#pragma GCC unroll 0
+        for (int d = 0; d + 0 < ITERATIONS; d += 1)
+        {
+            lltt::replay(0, 4);
+        }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -84,8 +90,11 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPIADD(0, 2, 1, 6);
         TTI_SFPSETCC(0, 1, 0, 6);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        #pragma GCC unroll 0
-        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
+#pragma GCC unroll 0
+        for (int d = 0; d + 0 < ITERATIONS; d += 1)
+        {
+            lltt::replay(0, 4);
+        }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -108,8 +117,11 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPSETSGN(0, 1, 1, 1);
         TTI_SFPIADD(0, 2, 1, 2);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        #pragma GCC unroll 0
-        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
+#pragma GCC unroll 0
+        for (int d = 0; d + 0 < ITERATIONS; d += 1)
+        {
+            lltt::replay(0, 4);
+        }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -133,8 +145,11 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPSETSGN(0, 1, 1, 1);
         TTI_SFPIADD(0, 2, 1, 10);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        #pragma GCC unroll 0
-        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
+#pragma GCC unroll 0
+        for (int d = 0; d + 0 < ITERATIONS; d += 1)
+        {
+            lltt::replay(0, 4);
+        }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
