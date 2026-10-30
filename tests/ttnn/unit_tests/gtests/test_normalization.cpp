@@ -37,6 +37,7 @@
 #include "ttnn/operations/normalization/batch_norm/device/running_statistics_device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_post_all_gather.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_pre_all_gather.hpp"
 #include "ttnn/operations/normalization/rmsnorm/rmsnorm.hpp"
@@ -865,6 +866,39 @@ TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford) {
     auto out =
         ttnn::layer_norm_post_all_gather(x, stats, 1e-6f, std::nullopt, std::nullopt, std::nullopt, std::nullopt, cfg);
     detail::expect_close(detail::to_float_vector(out), x_data, 0.0f, 0.03f);
+}
+
+TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford2DGridRejected) {
+    // LayerNormPostAllGatherWelfordProgramFactory has no 2D work split, so the prim must reject
+    // use_2d_core_grid with Welford, as the pre-all-gather validator already does. The public
+    // ttnn::layer_norm_post_all_gather never forwards use_2d_core_grid, hence the prim call.
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const auto x_data = detail::norm_alternating(32 * 64, 1.0f, -1.0f);
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+
+    const auto grid = device.compute_with_storage_grid_size();
+    const CoreRangeSet full_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    const auto recip = detail::norm_welford_recip_lut(device, full_grid, 64);
+    const ttnn::prim::LayerNormProgramConfig cfg = ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true};
+    auto stats =
+        ttnn::layer_norm_pre_all_gather(x, DataType::BFLOAT16, std::nullopt, std::nullopt, cfg, std::nullopt, recip);
+    const auto kernel_config = ttnn::init_device_compute_kernel_config(
+        device.arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
+    EXPECT_THROW(
+        ttnn::prim::layer_norm_post_all_gather(
+            x,
+            stats,
+            ttnn::prim::LayerNormDistributedType::LAYERNORM,
+            1e-6f,
+            std::nullopt,
+            std::nullopt,
+            x.memory_config(),
+            kernel_config,
+            std::nullopt,
+            /*use_2d_core_grid=*/true,
+            cfg),
+        std::exception);
 }
 
 // ---------------------------------------------------------------------------
