@@ -4,6 +4,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
+    inc/api/circular_buffer_constants.h
     inc/api/tile_constants.h
     inc/api/remote_circular_buffer.h
     inc/api/semaphore.h

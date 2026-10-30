@@ -82,14 +82,15 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 // SRC_INDEX/DST_INDEX are the DEST_TARGET_REG offsets the matmul consumes;
 // SRC_TILE/DST_TILE are the matching datacopy/pack tile bases (= offset / 64).
 //
-// The DST_TILE=2 (from DST_INDEX=128 -> tile 2) mapping was pinned on ttsim by
-// packing all of DEST and finding the O accumulator at physical tile 2 (a
-// tile-0 preload of P plus a tile-2 O accumulator, non-overlapping). Confirm the
-// 64-datum offset unit on a BH p100a before trusting the exact placement.
-constexpr std::uint32_t SRC_INDEX = 0;      // P DEST_TARGET offset (SrcB source) -> tile 0
-constexpr std::uint32_t SRC_TILE  = 0;      // P tile base for datacopy preload
-constexpr std::uint32_t DST_INDEX = 64 * 2; // O DEST_TARGET offset -> physical tile 2
-constexpr std::uint32_t DST_TILE  = 2;      // O tile base for pack (= DST_INDEX / 64)
+// The DST_INDEX -> DST_TILE (= DST_INDEX / 64) mapping was pinned on ttsim by
+// packing all of DEST and finding the O accumulator at the expected physical tile.
+// The P preload occupies tiles [SRC_TILE, SRC_TILE + ceil(KT_DIM/2)), so the O
+// accumulator must start past it: a P tile left in the accumulator adds P (1.0 for
+// this test's stimulus) to every output lane. DST_TILE = 4 leaves room for KT_DIM <= 8.
+constexpr std::uint32_t SRC_INDEX = 0;             // P DEST_TARGET offset (SrcB source) -> tile 0
+constexpr std::uint32_t SRC_TILE  = 0;             // P tile base for datacopy preload
+constexpr std::uint32_t DST_TILE  = 4;             // O tile base for pack (= DST_INDEX / 64)
+constexpr std::uint32_t DST_INDEX = 64 * DST_TILE; // O DEST_TARGET offset -> physical tile DST_TILE
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -168,6 +169,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<DST_SYNC>();
+
+    static_assert(SRC_TILE + (KT_DIM + 1) / 2 <= DST_TILE, "P preload would overlap the O accumulator at DST_TILE");
 
     // -- P (=B) preload: datacopy the P stimulus into DEST at tile base SRC_TILE.
     // dst_index here is a TILE index (datacopy writes 32x32 tiles), so ceil(KT_DIM/2)

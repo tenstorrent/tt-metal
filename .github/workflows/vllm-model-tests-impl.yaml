@@ -116,7 +116,9 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     # Whole-job guard (per-step timeouts still apply below). Sourced from the SKU's
     # `timeout` in tests/pipeline_reorg/vllm_model_tests.yaml, budget-checked per tier.
-    timeout-minutes: ${{ matrix.test-group.timeout }}
+    # A dispatch with /mnt/MLPerf writable (first use: checkpoint download and cache
+    # build) takes the entry's `first-use-timeout` instead, when it sets one.
+    timeout-minutes: ${{ (!inputs.mlperf-read-only && matrix.test-group.first-use-timeout) || matrix.test-group.timeout }}
     # Per-phase log paths kept job-level so they resolve in both the ${{ env }}
     # expression context (run-with-log log-file inputs) and the container step
     # shells ($FILE_*). container.env is shell-only, not visible to expressions.
@@ -264,6 +266,23 @@ jobs:
           git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
           git -C vllm-source checkout --detach FETCH_HEAD
 
+      - name: ⬇️ Download model checkpoint (first use)
+        # Entries with `hub-download: true` fetch their checkpoint into the shared
+        # HF_HUB_CACHE, but only on a dispatch with /mnt/MLPerf writable: scheduled
+        # and read-only runs stay offline and use what is already cached. A complete
+        # snapshot downloads nothing again, so re-running this is cheap.
+        if: ${{ !inputs.mlperf-read-only && matrix.test-group.hub-download }}
+        timeout-minutes: 240
+        env:
+          HF_HUB_OFFLINE: 0
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: |
+          HF_MODEL="${{ matrix.test-group.model }}"
+          start=$(date +%s)
+          python3 -c 'import sys; from huggingface_hub import snapshot_download; print(snapshot_download(sys.argv[1], max_workers=16))' "$HF_MODEL"
+          echo "Checkpoint ready in $(( $(date +%s) - start )) s"
+          du -sh "$HF_HUB_CACHE/models--${HF_MODEL//\//--}" || true
+
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
@@ -393,6 +412,15 @@ jobs:
                 echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
               ;;
+            XiaomiMiMo/MiMo-V2.6-Flash-*)
+              # MiMo reads its checkpoint from MIMO_MODEL_PATH (vLLM's TT loader does
+              # not load weights) and keeps its converted TTNN weights under
+              # MIMO_TT_CACHE/<checkpoint dir name>/model_bfp4experts. Point the first
+              # at the cached hub snapshot and the second at this model's TT cache.
+              export MIMO_MODEL_PATH="$(python3 -c 'import sys; from huggingface_hub import snapshot_download; print(snapshot_download(sys.argv[1], local_files_only=True))' "$HF_MODEL")"
+              export MIMO_TT_CACHE="$TT_CACHE_PATH"
+              echo "MiMo: MIMO_MODEL_PATH=$MIMO_MODEL_PATH MIMO_TT_CACHE=$MIMO_TT_CACHE"
+              ;;
           esac
 
           # Per-entry environment, space-separated KEY=VALUE pairs, exported after
@@ -426,7 +454,9 @@ jobs:
         run: |
           echo "Waiting for server..."
 
-          timeout_seconds=$(( ${{ matrix.test-group.server-timeout }} * 60 ))
+          # A first-use dispatch (/mnt/MLPerf writable) builds the TT cache during
+          # startup, so it waits `first-use-server-timeout` when the entry sets one.
+          timeout_seconds=$(( ${{ (!inputs.mlperf-read-only && matrix.test-group.first-use-server-timeout) || matrix.test-group.server-timeout }} * 60 ))
           elapsed=0
           interval=20
 

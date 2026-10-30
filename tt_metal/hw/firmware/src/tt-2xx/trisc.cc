@@ -22,7 +22,7 @@
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
-#include "tt-metalium/circular_buffer_constants.h"
+#include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
 #if defined(UCK_CHLKC_MATH)

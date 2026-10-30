@@ -228,7 +228,6 @@ set(TT_METAL_SOURCES
 
 set(JITAPI_FILES
     api/tt-metalium/buffer_types.hpp
-    api/tt-metalium/circular_buffer_constants.h
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     core_descriptors/blackhole_140_arch.yaml

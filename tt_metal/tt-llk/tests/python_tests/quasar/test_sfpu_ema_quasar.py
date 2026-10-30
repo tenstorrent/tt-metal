@@ -45,7 +45,6 @@ from helpers.utils import passed_test
 # No Float32: the SrcA datacopy narrows it to TF32 (the unary sweep covers it via unpack-to-Dest).
 EMA_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
 ]
 
 

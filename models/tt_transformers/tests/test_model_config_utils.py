@@ -16,6 +16,7 @@ from models.tt_transformers.tt.model_config import (
     compute_galaxy_width_shard_cores,
     compute_padded_vocab_size,
     create_galaxy_ff1_out_reduce_scatter_memcfg,
+    determine_device_name,
     disables_batched_prefill,
     should_pad_sampling_logits_to_power_of_2,
 )
@@ -270,6 +271,19 @@ def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_split
 )
 def test_disables_batched_prefill(base_model_name, device_name, expected):
     assert disables_batched_prefill(base_model_name, device_name) is expected
+
+
+@pytest.mark.parametrize(
+    "num_devices, expected",
+    [(1, "P150"), (2, "P300"), (4, "P150x4"), (8, "P150x8"), (32, "BHGLX")],
+)
+def test_quasar_takes_the_blackhole_device_names(num_devices, expected):
+    mesh_device = SimpleNamespace(
+        arch=lambda: ttnn.device.Arch.QUASAR,
+        get_num_devices=lambda: num_devices,
+        dram_grid_size=lambda: SimpleNamespace(x=2),
+    )
+    assert determine_device_name(mesh_device) == expected
 
 
 def _llama_model_args(device_name="P150"):

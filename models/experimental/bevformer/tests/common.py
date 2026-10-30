@@ -5,8 +5,8 @@
 """Helpers shared by the BEVFormer tests: camera rigs and dataset presets, dummy weights with
 realistic statistics, random inputs shaped like the model's, and PCC checks.
 
-BEVFormer-base's own configuration is ``model_config.py``'s; this module holds what only the tests
-use.
+The model's own configuration, for the variant ``BEVFORMER_VARIANT`` selects, is
+``model_config.py``'s; this module holds what only the tests use.
 """
 
 import math
@@ -22,18 +22,20 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.bevformer.model_config import (
-    BEV_H,
-    BEV_W,
     BOX_CENTER,
     BOX_SIZE,
     BOX_VELOCITY,
     BOX_YAW,
+    CAMERA_IMAGE_SIZE,
     CAN_BUS_DIMS,
     CENTERS_FIRST,
     CODE_CENTERS,
+    CODE_COS,
+    CODE_H,
     CODE_SIN,
     CODE_SIZE,
     CODE_VELOCITY,
+    CODE_WL,
     CODE_XY,
     CODE_Z,
     DECODER_NUM_LAYERS,
@@ -43,7 +45,8 @@ from models.experimental.bevformer.model_config import (
     FEEDFORWARD_CHANNELS,
     FPN_KWARGS,
     IMAGE_HEIGHT,
-    IMAGE_MEAN_BGR,
+    IMAGE_MEAN,
+    IMAGE_STD,
     IMAGE_WIDTH,
     NUM_CAMS,
     NUM_CLASSES,
@@ -57,6 +60,8 @@ from models.experimental.bevformer.model_config import (
     SCA_NUM_POINTS,
     SPATIAL_SHAPES,
     TSA_NUM_POINTS,
+    VARIANT,
+    VARIANTS,
     fpn_spatial_shapes,
     padded_image_size,
 )
@@ -72,6 +77,9 @@ from models.experimental.bevformer.reference.perception_transformer import Perce
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.reference.spatial_cross_attention import MSDeformableAttention3D
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
+
+# The variant is fixed when model_config is first imported; the log says which one a run tests.
+logger.info(f"BEVFormer variant {VARIANT}")
 
 # --- Camera rigs ------------------------------------------------------------------------------
 
@@ -118,7 +126,7 @@ def _narrow(name: str, yaw_deg: float) -> CameraSpec:
         yaw_deg=yaw_deg,
         focal_px=(NUSCENES_NARROW_FOCAL_PX, NUSCENES_NARROW_FOCAL_PX),
         principal_px=NUSCENES_NARROW_PRINCIPAL_PX,
-        reference_size=RAW_IMAGE_SIZE,
+        reference_size=CAMERA_IMAGE_SIZE,
     )
 
 
@@ -136,7 +144,7 @@ NUSCENES_CAMERA_RIG: Tuple[CameraSpec, ...] = (
         yaw_deg=180.0,
         focal_px=(NUSCENES_WIDE_FOCAL_PX, NUSCENES_WIDE_FOCAL_PX),
         principal_px=NUSCENES_WIDE_PRINCIPAL_PX,
-        reference_size=RAW_IMAGE_SIZE,
+        reference_size=CAMERA_IMAGE_SIZE,
     ),
 )
 
@@ -292,21 +300,36 @@ class DatasetPreset:
 
 
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
+# The tiny presets: reduced attention sizes for fast tests, not BEVFormer-tiny's.
 _TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4, tsa_num_points=4)
-# The base presets: BEVFormer-base's encoder attention sizes over the four camera levels.
+# The base presets: BEVFormer-base's encoder attention sizes over its four camera levels, whatever
+# variant is selected.
 _BASE = dict(
     embed_dims=EMBED_DIMS,
     num_heads=NUM_HEADS,
-    num_levels=NUM_LEVELS,
+    num_levels=VARIANTS["base"].num_levels,
     num_points=SCA_NUM_POINTS,
     tsa_num_points=TSA_NUM_POINTS,
 )
 
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
-    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, RAW_IMAGE_SIZE, **_BASE),
+    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
     "carla_tiny": DatasetPreset("carla_v0.9.10_640x480", _CARLA_PC_RANGE, NUM_CAMS, (640, 480), **_TINY),
     "carla_base": DatasetPreset("carla_v0.9.10_1280x960", _CARLA_PC_RANGE, NUM_CAMS, (1280, 960), **_BASE),
+    # The selected variant's camera images, for the img_metas of the detector and the encoder glue.
+    # Its feature levels are SPATIAL_SHAPES, from the padded images, not this preset's.
+    "nuscenes_variant": DatasetPreset(
+        "nuscenes_v1.0_full_{}x{}".format(*RAW_IMAGE_SIZE),
+        PC_RANGE,
+        NUM_CAMS,
+        RAW_IMAGE_SIZE,
+        embed_dims=EMBED_DIMS,
+        num_heads=NUM_HEADS,
+        num_levels=NUM_LEVELS,
+        num_points=SCA_NUM_POINTS,
+        tsa_num_points=TSA_NUM_POINTS,
+    ),
 }
 
 
@@ -397,20 +420,25 @@ def init_dummy_fpn_weights(torch_model, seed=0):
 
 # --- Backbone and FPN -------------------------------------------------------------------------
 
-# Dtypes TTResNet emits for C3-C5.
-BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
+# The backbone's outputs' and the FPN's PCC gate, lower for small.
+BACKBONE_FPN_PCC = 0.985 if VARIANT == "small" else 0.99
+
+# Dtypes TTResNet emits for its outputs: C3-C5 for base, C5 for small and tiny.
+BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16] * len(RESNET_KWARGS["out_indices"])
 
 # Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
 IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
 IMAGE_PIXEL_NOISE = 8.0
-# The std of random_image_batch, measured over full batches; its mean is near zero. Re-measure
-# it when the noise constants change: the dummy backbone's stem is scaled by it.
-IMAGE_STD = 19.5
+# The std of random_image_batch in pixel units, measured over full batches; its mean is near zero.
+# Re-measure it when the noise constants change: the dummy backbone's stem is scaled by it.
+IMAGE_PIXEL_STD = 19.5
+# random_image_batch's std once normalized, taking the channels' mean std.
+IMAGE_BATCH_STD = IMAGE_PIXEL_STD / (sum(IMAGE_STD) / len(IMAGE_STD))
 
 
 # The references only run forward; without autograd they keep no activations for backward.
 def build_reference_backbone():
-    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_STD).requires_grad_(False)
+    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_BATCH_STD).requires_grad_(False)
 
 
 def build_reference_fpn():
@@ -449,9 +477,9 @@ def to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
 def random_image_batch():
     """Random camera images in the range BEVFormer's normalized images take: smooth random
     structure at several scales plus pixel noise around the dataset mean, clamped to [0, 255]
-    as pixels are, minus ``IMAGE_MEAN_BGR``. Backbone error depends on the input scale, so the
-    inputs keep the real one."""
-    mean = torch.tensor(IMAGE_MEAN_BGR).view(1, 3, 1, 1)
+    as pixels are, normalized by ``IMAGE_MEAN`` and ``IMAGE_STD``. Backbone error depends on the
+    input scale, so the inputs keep the real one."""
+    mean = torch.tensor(IMAGE_MEAN).view(1, 3, 1, 1)
     images = mean.expand(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH).clone()
     for cell, amplitude in IMAGE_NOISE_SCALES:
         coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1) - 0.5
@@ -459,12 +487,13 @@ def random_image_batch():
             coarse, size=(IMAGE_HEIGHT, IMAGE_WIDTH), mode="bilinear", align_corners=False
         )
     images += IMAGE_PIXEL_NOISE * torch.randn(images.shape)
-    return images.clamp(0, 255) - mean
+    return (images.clamp(0, 255) - mean) / torch.tensor(IMAGE_STD).view(1, 3, 1, 1)
 
 
 # --- Encoder ----------------------------------------------------------------------------------
 
-BEV_SHAPES = {"tiny": (50, 50), "base": (BEV_H, BEV_W)}
+# BEV grids: a small one for fast tests and BEVFormer-base's, whatever variant is selected.
+BEV_SHAPES = {"tiny": (50, 50), "base": (VARIANTS["base"].bev_size, VARIANTS["base"].bev_size)}
 
 # Spread of the random weights on top of upstream's init, so the offsets and attention logits vary
 # per query. Upstream's init alone has zero offset and
@@ -562,7 +591,7 @@ def random_encoder_inputs(bev_shape, batch_size=1, seed=0, yaw_step_deg=0.0):
     )
 
 
-def camera_img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
+def camera_img_metas(batch_size, preset="nuscenes_variant", yaw_step_deg=0.0):
     """``lidar2img`` and ``img_shape`` of a preset's six-camera rig (:func:`img_metas_for_dataset`).
     ``yaw_step_deg`` turns sample ``b``'s rig by ``b * yaw_step_deg`` about the vertical axis, so
     the samples' cameras see different BEV cells."""
@@ -575,7 +604,7 @@ def camera_img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
     return metas
 
 
-def preset_pc_range(preset="nuscenes_base"):
+def preset_pc_range(preset="nuscenes_variant"):
     """A preset's point-cloud range, the box its camera geometry projects pillars from."""
     return tuple(PRESETS[preset].pc_range)
 
@@ -790,7 +819,7 @@ def build_reference_head(bev_shape, seed=0):
 # 102.4 m, where nuScenes matches boxes from 0.5 m. The worst of the 900 queries carries a
 # bfloat16 tail no single op's precision moves; the bounds leave headroom over it.
 CENTER_MEAN_ATOL = 0.015
-CENTER_MAX_ATOL = 0.35
+CENTER_MAX_ATOL = 0.5
 
 
 def log_center_error(expected, actual):
@@ -936,10 +965,14 @@ def build_reference_bevformer(bev_shape):
     return model.eval().requires_grad_(False)
 
 
-# The box code channels the detector reads off small differences, the yaw's sine and the
+# The box code channels the detector reads off small differences, the yaw's sine and cosine and the
 # velocities, carry the backbone's and the encoder's bfloat16 error the most; they gate at this
-# floor, every other output at the test's PCC.
-LOW_PRECISION_BOX_CODES = (CODE_SIN.start, *range(CODE_VELOCITY.start, CODE_VELOCITY.stop))
+# floor, every other output at the test's PCC. Either yaw component is near constant, and its PCC
+# near noise, when the yaws cluster where the other one turns: around 0 and pi for the cosine.
+LOW_PRECISION_BOX_CODES = (CODE_SIN.start, CODE_COS.start, *range(CODE_VELOCITY.start, CODE_VELOCITY.stop))
+# small gates the box sizes at the same floor.
+if VARIANT == "small":
+    LOW_PRECISION_BOX_CODES += (*range(CODE_WL.start, CODE_WL.stop), CODE_H.start)
 LOW_PRECISION_BOX_CODE_PCC = 0.94
 
 

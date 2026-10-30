@@ -4,8 +4,8 @@
 """Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
 3D detections, on device; dropping the invalid boxes on the host after it is timed apart.
 
-Dummy weights over a 100x100 BEV and nuScenes' six-camera rig, three frames. The images stay the
-base 1600x928; only the grid is smaller than ``BEV_SHAPES["base"]``.
+Dummy weights and nuScenes' six-camera rig, three frames, at the selected variant's image size and
+BEV grid (base's 1600x928 and 200x200 by default).
 The first frame, which has no previous BEV, runs eagerly; the second is the warmup and the PCC
 gate, then runs once more between Tracy's ``start`` and ``stop``, so the stage signposts and the
 host dispatch are in the report. The detector runs live, not under a trace: the encoder projects
@@ -21,6 +21,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.experimental.bevformer.model_config import BEV_H, BEV_W
 from models.experimental.bevformer.tests.common import (
     build_reference_bevformer,
     check_detector_outputs,
@@ -32,7 +33,6 @@ from models.experimental.bevformer.tests.common import (
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
 
-BEV_SHAPE = (100, 100)
 PCC_THRESHOLD = 0.99
 
 
@@ -44,12 +44,12 @@ def _check(expected, tt_outputs):
 
 
 @torch.no_grad()
-# The reference runs the backbone on six 928x1600 images on the CPU four times: once to record
-# the conv shapes and once per frame.
+# The reference runs the backbone on six images on the CPU four times, once to record the conv
+# shapes and once per frame: base's 928x1600 take most of this.
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_bevformer_perf(device, reset_seeds):
-    torch_model = build_reference_bevformer(BEV_SHAPE)
+    torch_model = build_reference_bevformer((BEV_H, BEV_W))
     img = random_image_batch()[None]
     frames = frame_metas(1, 3, torch.Generator().manual_seed(0), motion=(1, -2))
 

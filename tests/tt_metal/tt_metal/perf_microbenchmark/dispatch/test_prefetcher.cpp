@@ -2920,7 +2920,7 @@ public:
         }
 
         // Semaphores
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*this->mesh_device_);
 
         // Semaphore slots. On WH/BH prefetch and dispatch are on different cores, so each pair of sems
         // lands at the same per-core slot id (the equality asserts below hold). On Quasar both kernels
