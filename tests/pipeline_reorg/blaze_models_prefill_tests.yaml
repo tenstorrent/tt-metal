@@ -2009,8 +2009,8 @@
 
 
 # Kimi-K3 with RadixArk's DSpark drafter, through the same launcher. Eager at 1M with 34 slots, the ceiling the
-# drafter's K/V leaves on the last rank, as K3's own leg runs eager at its ceiling. Slot 0 is PCC'd on 55k,
-# where the drafter golden stops; the request is timed to 1M.
+# drafter's K/V leaves on the last rank; not yet validated traced at 34 slots. Slot 0 is PCC'd on 55k, where
+# the drafter golden stops; the request is timed to 1M.
 - name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, eager 34 users, 55k@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
@@ -2184,9 +2184,9 @@
 # so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
 # Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
 # no fabric_profile -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it.
-# 83 slots (manifest), so eager: traced K3 holds one KDA slot. The request runs to 1M like GLM-5.3's:
-# only the 55k the golden spans is PCC'd, the tail is timed. Its throughput lands on the run page
-# through the "(Kimi-K3-2.8T) disaggregated prefill SC4 perf" summary job.
+# 83 slots (manifest), traced: the KDA layers select their slot on device (#60496). The request runs
+# to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd, the tail is timed. Its throughput lands
+# on the run page through the "(Kimi-K3-2.8T) disaggregated prefill SC4 perf" summary job.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
 # four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
 # also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
@@ -2226,7 +2226,7 @@
 # Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
 # the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
 # decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
-# sc4's 83 slots, so eager like sc4, and timed to sc4's 1M request; 24 layers are no baseline for 93,
+# sc4's 83 slots, traced like sc4, and timed to sc4's 1M request; 24 layers are no baseline for 93,
 # so its numbers are gated and reported in this job's summary but kept out of the sc4 summary.
 - name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 1M@5k, SC1"
   cmd: |
