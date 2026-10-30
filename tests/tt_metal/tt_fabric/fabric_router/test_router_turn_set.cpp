@@ -52,6 +52,16 @@ std::set<RoutingDirection> non_self_cardinals(RoutingDirection facing) {
     return out;
 }
 
+// The cardinal targets dimension order (Y then X) leaves a same-mesh router: a Y producer (N/S
+// facing) may stay on Y or turn onto X, so every non-self cardinal; an X producer (E/W facing)
+// may only continue on X, so its opposite alone.
+std::set<RoutingDirection> dimension_order_cardinals(RoutingDirection facing) {
+    if (facing == RoutingDirection::N || facing == RoutingDirection::S) {
+        return non_self_cardinals(facing);
+    }
+    return {get_opposite_direction(facing)};
+}
+
 // One chip, named by the only fact that distinguishes the families below: what its Z port is for.
 // Every cardinal is an ordinary same-mesh edge. Deriving both facing capability and Z role from
 // this set prevents inconsistent pairings; validate_facing_role_consistency is tested directly.
@@ -94,12 +104,12 @@ TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
 // Non-express 2D
 // ============================================================================
 
-TEST_F(RouterTurnSetTest, NonExpress2D_WiresEveryNonSelfCardinal) {
+TEST_F(RouterTurnSetTest, NonExpress2D_WiresTheDimensionOrderCardinals) {
     for (auto facing : k_all_cardinals) {
         const auto turn_set =
             turn_set_for_router(Topology::Mesh, facing, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
 
-        EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(facing))
+        EXPECT_EQ(target_directions(turn_set, 0), dimension_order_cardinals(facing))
             << "facing " << enchantum::to_string(facing);
         expect_all_targets_on_vc(turn_set, 0, 0);
         EXPECT_TRUE(turn_set[1].empty());
@@ -108,13 +118,13 @@ TEST_F(RouterTurnSetTest, NonExpress2D_WiresEveryNonSelfCardinal) {
 }
 
 TEST_F(RouterTurnSetTest, NonExpress2D_BoundaryChipAddsBoundaryTargetOnVC0) {
-    // The chip's extra port enters the turn set when it is an intermesh boundary: the three
-    // non-self cardinals plus the boundary turn, which stays on VC0.
+    // The chip's extra port enters the turn set when it is an intermesh boundary: the
+    // dimension-order cardinals plus the boundary turn, which stays on VC0.
     for (auto facing : k_all_cardinals) {
         const auto turn_set = turn_set_for_router(
             Topology::Mesh, facing, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, nullptr);
 
-        auto expected = non_self_cardinals(facing);
+        auto expected = dimension_order_cardinals(facing);
         expected.insert(RoutingDirection::Z);
         EXPECT_EQ(target_directions(turn_set, 0), expected) << "facing " << enchantum::to_string(facing);
         expect_all_targets_on_vc(turn_set, 0, 0);
@@ -144,7 +154,7 @@ TEST_F(RouterTurnSetTest, PassThrough_AddsBoundaryTargetOnVC1) {
         ExpressAxis::NONE,
         &k_full_mesh_pass_through);
 
-    auto expected_vc1 = non_self_cardinals(RoutingDirection::E);
+    auto expected_vc1 = dimension_order_cardinals(RoutingDirection::E);
     expected_vc1.insert(RoutingDirection::Z);
     EXPECT_EQ(target_directions(turn_set, 1), expected_vc1);
     expect_all_targets_on_vc(turn_set, 1, 1);
@@ -157,8 +167,8 @@ TEST_F(RouterTurnSetTest, PassThrough_NoEffectWithoutBoundaryPort) {
     const auto turn_set = turn_set_for_router(
         Topology::Mesh, RoutingDirection::E, chip_with_z(std::nullopt), ExpressAxis::NONE, &k_full_mesh_pass_through);
 
-    EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(RoutingDirection::E));
-    EXPECT_EQ(target_directions(turn_set, 1), non_self_cardinals(RoutingDirection::E));
+    EXPECT_EQ(target_directions(turn_set, 0), dimension_order_cardinals(RoutingDirection::E));
+    EXPECT_EQ(target_directions(turn_set, 1), dimension_order_cardinals(RoutingDirection::E));
 }
 
 // ============================================================================

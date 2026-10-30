@@ -34,9 +34,10 @@ struct IntermeshVCConfig;
  * In express mode, a same-mesh X producer cannot turn into a protected Y egress, while an intermesh
  * landing can begin Y. `express_axis` decides which side of that rule the chord is on: a chord
  * along Y is protected Y, a chord along X is an X resource. Z egress requires a local Z role.
- * Non-express mode (ExpressAxis::NONE) preserves cardinal wiring and targets Z only for an
- * intermesh boundary. Boundary producers wire only on VC1; all other producer roles are
- * VC-independent.
+ * Non-express mode (ExpressAxis::NONE) applies the same dimension-order rule to the cardinals --
+ * 2D routing runs Y before X in every mode, so a same-mesh E/W producer never turns into N/S --
+ * and targets Z only for an intermesh boundary. Boundary producers wire only on VC1; all other
+ * producer roles are VC-independent.
  */
 bool wires_into(
     RoutingDirection producer_direction,
@@ -111,6 +112,20 @@ struct RouterVcShape {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_flat_base{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_counts{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_flat_base{};
+
+    // Which sender slots in [0, sender_counts[vc]) carry a producer (or the local worker). The
+    // counts above keep the family width so the direction<->slot bijection holds; this mask says
+    // which of those slots any producer on this chip actually feeds. A clear bit is a slot the
+    // allocator gives no packet buffering and the kernel does not service.
+    std::array<uint16_t, builder_config::MAX_NUM_VCS> sender_live_mask{};
+
+    bool is_sender_live(uint32_t vc, uint32_t channel) const {
+        return vc < builder_config::MAX_NUM_VCS && ((sender_live_mask[vc] >> channel) & 1U) != 0;
+    }
+
+    uint32_t live_sender_count(uint32_t vc) const {
+        return vc < builder_config::MAX_NUM_VCS ? static_cast<uint32_t>(__builtin_popcount(sender_live_mask[vc])) : 0;
+    }
 
     // Bounds-checked (vc, channel) to flat-index conversion.
     uint32_t flat_sender_id(uint32_t vc, uint32_t channel) const {

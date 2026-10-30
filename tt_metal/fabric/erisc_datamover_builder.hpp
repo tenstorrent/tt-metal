@@ -223,13 +223,16 @@ struct FabricEriscDatamoverConfig {
     std::size_t max_l1_loading_size = 0;
     std::vector<MemoryRegion> available_buffer_memory_regions;
 
+    // `liveness` narrows the packet buffering to the sender slots this router (and its link peer)
+    // actually feed; absent, every allocated slot is buffered as before.
     FabricEriscDatamoverConfig(
         const FabricContext& fabric_context,
         std::size_t channel_buffer_size_bytes,
         Topology topology,
         FabricEriscDatamoverOptions options,
         const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
+        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc,
+        std::optional<RouterChannelLiveness> liveness = std::nullopt);
 
     std::size_t channel_buffer_size_bytes = 0;
 
@@ -542,6 +545,11 @@ public:
     uint32_t num_downstream_tensix_connections = 0;
     bool udm_mode = false;                        // UDM mode: router connects to local tensix relay
     uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
+
+    // Stop servicing the sender slots the liveness mask leaves dead. Those slots were allocated at
+    // the family width (so the direction<->slot bijection holds) but own no packet buffering and
+    // no producer connects to them; servicing one would spin on a parking slot.
+    void apply_sender_liveness(const RouterChannelLiveness& liveness);
 
 private:
     // Per-RISC channel servicing flags [risc_id][channel_id]

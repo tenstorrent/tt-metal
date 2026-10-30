@@ -5,6 +5,7 @@
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 
 #include <algorithm>
@@ -163,10 +164,17 @@ bool wires_into(
         return vc == 1;
     }
 
-    // Non-express is producer-blind: every non-self cardinal wires in, and Z is a target only as
-    // the boundary template's.
+    // Non-express: Z is a target only as the boundary template's. The cardinals follow dimension
+    // order exactly as in express mode: 2D routing decodes the Y action before the X action, and
+    // an intermesh landing re-widens its route in the same order, so a packet arriving over a
+    // same-mesh E/W link has finished its Y phase and never turns into N/S. The one exemption is
+    // an X-side intermesh landing, which turn_role already reads as UNRESTRICTED.
     if (express_axis == ExpressAxis::NONE) {
-        return !egress_is_z || chip_z_role == ZPortRole::INTERMESH_BOUNDARY;
+        if (egress_is_z) {
+            return chip_z_role == ZPortRole::INTERMESH_BOUNDARY;
+        }
+        return producer_role != TurnRole::X_RING_ONLY ||
+               !is_protected_y_egress(egress_direction, resolve_egress_capability(), express_axis);
     }
 
     // Z is a target only when the chip has a Z port, whichever axis it serves and whoever feeds it.
@@ -339,6 +347,55 @@ RouterVcShape router_vc_shape(
     shape.sender_counts = {vc0_senders, vc1_senders, vc2_senders};
     shape.receiver_counts = {vc0_receivers, vc1_receivers, vc2_receivers};
     finalize_vc_shape_bases(shape);
+
+    // Liveness: which of those slots a producer on this chip feeds. 1D and VC2 are fully live
+    // (VC2 is the single worker-type sender). A 2D cardinal-facing or chord router answers per
+    // producer through the same primitive the turn sets use, placed by the direction<->slot
+    // bijection, so a slot is live exactly when some turn set targets it.
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        shape.sender_live_mask[vc] = static_cast<uint16_t>((1U << shape.sender_counts[vc]) - 1U);
+    }
+    if (z_boundary_router) {
+        // The boundary's VC0 slots are its whole fanout. Its VC1 slots are fed only in pass-through
+        // mode: the mesh routers' turn sets emit the boundary target on VC0 alone otherwise, and
+        // the router itself compiles its VC1 sender step out (FABRIC_2D_VC1_SERVICED is set for an
+        // inter-mesh router only with pass-through) -- incoming VC0 traffic crosses over onto the
+        // mesh routers' from-boundary VC1 slots, never through these.
+        const bool enable_mesh_pass_through = vc_config && vc_config->requires_vc1_mesh_pass_through;
+        if (!enable_mesh_pass_through) {
+            shape.sender_live_mask[1] = 0;
+        }
+    } else if (is_2D_topology(topology)) {
+        const auto facing_eth = builder::routing_direction_to_eth_direction(facing);
+        for (uint32_t vc = 0; vc < 2; ++vc) {
+            if (shape.sender_counts[vc] == 0) {
+                continue;
+            }
+            // Sender channel 0 on VC0 is the local worker, always live.
+            uint16_t mask = (vc == 0) ? 1U : 0U;
+            const uint32_t worker_offset = (vc == 0) ? 1U : 0U;
+            for (const auto producer : k_all_directions) {
+                if (producer == facing) {
+                    continue;
+                }
+                const auto& capability = chip_capabilities.at(producer);
+                if (!capability.has_value()) {
+                    continue;  // no port in that direction: no producer to wire
+                }
+                const uint32_t channel =
+                    worker_offset + static_cast<uint32_t>(builder::direction_compact_index(
+                                        builder::routing_direction_to_eth_direction(producer), facing_eth));
+                if (channel >= shape.sender_counts[vc]) {
+                    continue;  // a slot this family does not allocate (e.g. from-Z on a 4-wide VC0)
+                }
+                if (wires_into(
+                        producer, *capability, facing, chip_capabilities.at(facing), chip_z_role, express_axis, vc)) {
+                    mask |= static_cast<uint16_t>(1U << channel);
+                }
+            }
+            shape.sender_live_mask[vc] = mask;
+        }
+    }
     return shape;
 }
 

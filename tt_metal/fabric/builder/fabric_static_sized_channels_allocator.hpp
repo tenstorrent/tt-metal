@@ -10,6 +10,8 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
+#include <array>
+#include <optional>
 #include <vector>
 #include <ostream>
 
@@ -28,6 +30,12 @@ namespace tt::tt_fabric {
  */
 class FabricStaticSizedChannelsAllocator : public FabricChannelAllocator {
 public:
+    /**
+     * `liveness` names the sender slots that carry a producer on this router and the live counts
+     * to fit option rows against (see RouterChannelLiveness). Absent, every allocated slot is live
+     * and rows are fitted against the allocated counts. Dead slots keep their position in the
+     * layout but share one parking slot instead of owning buffering.
+     */
     FabricStaticSizedChannelsAllocator(
         tt::tt_fabric::Topology topology,
         const FabricEriscDatamoverOptions& options,
@@ -35,7 +43,13 @@ public:
         const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
         size_t channel_buffer_size_bytes,
         size_t available_channel_buffering_space,
-        const std::vector<MemoryRegion>& memory_regions);
+        const std::vector<MemoryRegion>& memory_regions,
+        std::optional<RouterChannelLiveness> liveness = std::nullopt);
+
+    const RouterChannelLiveness& get_liveness() const { return liveness_; }
+    bool is_sender_channel_live(size_t vc_id, size_t channel_id) const {
+        return liveness_.is_sender_live(vc_id, channel_id);
+    }
 
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
@@ -166,6 +180,10 @@ private:
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
     size_t buffer_region_start = 0;
+    // Which allocated sender slots are live, and the per-link live counts rows are fitted against.
+    RouterChannelLiveness liveness_{};
+    // The one slot every dead sender channel aliases; meaningful only when some channel is dead.
+    size_t parking_slot_base_address = 0;
 
     // Tensix configuration channel counts
     static constexpr size_t num_sender_channels_with_tensix_config =

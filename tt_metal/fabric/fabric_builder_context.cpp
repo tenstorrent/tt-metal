@@ -225,7 +225,9 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 }
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(
-    FabricTensixConfig fabric_tensix_config, eth_chan_directions direction) const {
+    FabricTensixConfig fabric_tensix_config,
+    eth_chan_directions direction,
+    std::optional<RouterChannelLiveness> liveness) const {
     auto edm_options = FabricEriscDatamoverOptions{
         .fabric_tensix_config = fabric_tensix_config,
         .direction = direction,
@@ -246,7 +248,27 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         fabric_context_.get_fabric_topology(),
         edm_options,
         sender_channels,
-        receiver_channels);
+        receiver_channels,
+        liveness);
+}
+
+FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config_for_liveness(
+    const RouterChannelLiveness& liveness) const {
+    std::lock_guard<std::mutex> lock(liveness_router_configs_mutex_);
+    auto& slot = liveness_router_configs_[liveness.key()];
+    if (slot == nullptr) {
+        slot = create_edm_config(FabricTensixConfig::DISABLED, eth_chan_directions::EAST, liveness);
+        log_debug(
+            tt::LogFabric,
+            "Built fabric router config for liveness vc0=0x{:03X} vc1=0x{:03X} vc2=0x{:03X} link_live=[{}, {}, {}]",
+            liveness.sender_live_mask[0],
+            liveness.sender_live_mask[1],
+            liveness.sender_live_mask[2],
+            liveness.link_live_sender_counts[0],
+            liveness.link_live_sender_counts[1],
+            liveness.link_live_sender_counts[2]);
+    }
+    return *slot;
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(

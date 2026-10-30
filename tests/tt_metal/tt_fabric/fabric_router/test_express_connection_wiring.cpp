@@ -422,13 +422,18 @@ TEST(ExpressConnectionWiringTest, ZEgressIsWiredOnlyWhenTheChipHasThePort) {
     }
 }
 
-TEST(ExpressConnectionWiringTest, NonExpressAdmitsEveryNonSelfCardinal) {
-    // Preserve the existing producer-blind cardinal wiring in non-express mode.
+TEST(ExpressConnectionWiringTest, NonExpressAdmitsTheDimensionOrderCardinals) {
+    // Non-express cardinal wiring follows Y-then-X like express mode: a same-mesh X producer
+    // (E/W) continues on X only, an X-side intermesh landing is a route root and may begin Y, and
+    // every Y producer (N/S, or a non-boundary Z) may stay on Y or turn onto X. The router kernel
+    // compiles the E/W -> N/S arms out in every 2D mode, so wiring them would feed dead slots.
     for (const auto producer : k_all_directions) {
         for (const auto capability : k_all_capabilities) {
             if (is_z_boundary_router(producer, capability)) {
                 continue;
             }
+            const bool x_ring_producer = (producer == RoutingDirection::E || producer == RoutingDirection::W) &&
+                                         capability != EdgeCapability::INTERMESH;
             for (const auto role : k_all_z_roles) {
                 for (const uint32_t vc : {0u, 1u}) {
                     for (const auto egress :
@@ -436,7 +441,10 @@ TEST(ExpressConnectionWiringTest, NonExpressAdmitsEveryNonSelfCardinal) {
                         if (egress == producer) {
                             continue;
                         }
-                        EXPECT_TRUE(wires_into_chip(producer, capability, egress, role, k_no_express, vc))
+                        const bool y_egress = (egress == RoutingDirection::N || egress == RoutingDirection::S);
+                        EXPECT_EQ(
+                            wires_into_chip(producer, capability, egress, role, k_no_express, vc),
+                            !(x_ring_producer && y_egress))
                             << "producer " << enchantum::to_string(producer) << " (" << enchantum::to_string(capability)
                             << ") -> egress " << enchantum::to_string(egress) << ", chip role "
                             << enchantum::to_string(role) << ", vc " << vc;

@@ -14,6 +14,7 @@
 #include <memory>
 #include <array>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 
@@ -131,6 +132,12 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
 
+    // The config for a router with this liveness (no tensix extension): the family-max channel
+    // layout, with packet buffering narrowed to the live sender slots and option rows fitted
+    // against the link's live counts. One config per distinct liveness, built on first use.
+    // Thread-safe: routers build concurrently, one thread per device.
+    FabricEriscDatamoverConfig& get_fabric_router_config_for_liveness(const RouterChannelLiveness& liveness) const;
+
     // ============ Max Channel Counts ============
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_sender_channels_per_vc() const {
         return max_sender_channels_per_vc_;
@@ -234,7 +241,12 @@ private:
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
-        eth_chan_directions direction = eth_chan_directions::EAST) const;
+        eth_chan_directions direction = eth_chan_directions::EAST,
+        std::optional<RouterChannelLiveness> liveness = std::nullopt) const;
+
+    // Per-liveness configs (tensix extension disabled), keyed by RouterChannelLiveness::key().
+    mutable std::mutex liveness_router_configs_mutex_;
+    mutable std::unordered_map<uint64_t, std::unique_ptr<FabricEriscDatamoverConfig>> liveness_router_configs_;
 
     // Helper to compute max channel counts for this fabric instance
     void compute_max_channel_counts();
