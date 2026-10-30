@@ -6,8 +6,10 @@ prefill from a device-profiler CSV (TT_METAL_DEVICE_PROFILER=1; the zones are th
 compute kernels: rd_item, tx_wait_cb, tx_wait_credit, tx_issue, tx_barrier, tx_valid on the producers, rx_reserve,
 rx_wait_valid, scan_wait_in, scan_step on the receivers).
 
-    gdn_handoff_timeline.py profile_log_device.csv CASES WARM MEAS CASE [--bh 12 --nv 2 --np 7 --depth 5]
-                            [--west 4 --west-ep 2] [--head H] [--root <tt-metal root>]
+    python_env/bin/python tools/noc_contention/examples/gdn_handoff_timeline.py profile_log_device.csv \
+        CASES WARM MEAS CASE [--bh 12 --nv 2 --np 7 --depth 5] [--west 4 --west-ep 2] [--head H] [--root .]
+    (the repo's python env: the op's geometry oracle imports ttnn; --root must be a tree whose oracle matches the
+    kernels profiled, or the heads whose cores it mislocates are reported as missing)
 
 Pairs every producer item (ready = tx_wait_cb end, credit seen, issued, VALID sent) with the receivers' side of the
 same chunk (credit sent = rx_reserve end, VALID seen = rx_wait_valid end, the step) through the op's core map
@@ -118,6 +120,9 @@ def main():
     )
     for h in range(a.bh):
         rx = [rcv[h * NV + v] for v in range(NV)]
+        if any(not [1 for (xx, yy, _), _ in kernel[r].items() if (xx, yy) == virt(*c)] for c in rx):
+            print(f"h{h:2d} rcv {rx}: no profiler data at these cores (the oracle's placement does not match the run)")
+            continue
         rx_end = [us(max(e for (xx, yy, rr), (_, e) in kernel[r].items() if (xx, yy) == virt(*c)) - t0) for c in rx]
         rx_wait = [zr(*c, "NCRISC").get("rx_wait_valid", []) for c in rx]
         rx_res = [zr(*c, "NCRISC").get("rx_reserve", []) for c in rx]
