@@ -158,7 +158,7 @@ void FabricConnectionManager::process(
 
             const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
             const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
-            const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            const size_t buffer_size_bytes_full_size_channel = device_info_provider->get_channel_buffer_size_bytes();
             const size_t mux_base_l1_address = device_info_provider->get_l1_unreserved_base();
 
             // Create the mux config
@@ -664,6 +664,7 @@ void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_k
 
 TestDevice::TestDevice(
     const MeshCoordinate& coord,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     std::shared_ptr<IDeviceInfoProvider> device_info_provider,
     std::shared_ptr<IRouteManager> route_manager,
     const SenderMemoryMap* sender_memory_map,
@@ -672,8 +673,8 @@ TestDevice::TestDevice(
     device_info_provider_(std::move(device_info_provider)),
     route_manager_(std::move(route_manager)),
     sender_memory_map_(sender_memory_map),
-    receiver_memory_map_(receiver_memory_map) {
-    program_handle_ = tt::tt_metal::CreateProgram();
+    receiver_memory_map_(receiver_memory_map),
+    program_handle_(tt::tt_metal::CreateProgram(mesh_device)) {
     fabric_node_id_ = device_info_provider_->get_fabric_node_id(coord);
 }
 
@@ -878,7 +879,7 @@ void TestDevice::create_sync_kernel() {
     uint32_t num_muxes_to_terminate = sync_connection_manager.get_num_muxes_to_terminate();
 
     // If the test is using the NeighborExchange topology, synchronization must use unicast packets
-    const auto topology = tt::tt_fabric::get_fabric_topology();
+    const auto topology = this->device_info_provider_->get_fabric_topology();
     bool use_unicast_sync_packets = (topology == tt::tt_fabric::Topology::NeighborExchange);
 
     // Compile-time args

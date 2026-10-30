@@ -9,7 +9,7 @@ different reasons:
 
   * ``golden_generators.UnarySFPUGolden`` reproduces the value so its result matches what
     the kernel computes.
-  * ``sfpu_domains._OP_EDGE_POINTS`` probes *exactly at* the value, because that is where
+  * ``sfpu_domains._OP_EDGES`` probes *exactly at* the value, because that is where
     the op's behaviour switches — the knee, the threshold, the comparison tie.
 
 Held separately because two independent copies of one number is a silent-drift bug rather

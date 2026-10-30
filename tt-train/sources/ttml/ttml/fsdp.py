@@ -69,19 +69,9 @@ def _is_fsdp_wrapped_module(module: Any) -> bool:
     return getattr(module, "_fsdp_state", False) and module._fsdp_state is not None
 
 
-def _get_placements(autograd_tensor: Any) -> Optional[List[Any]]:
-    """Best-effort read of ``tensor_topology().placements()`` from the ttnn tensor.
-
-    Returns ``None`` if the topology is unavailable (e.g. unit mesh, older ttnn
-    builds, or an edge case where ``placements()`` throws). Callers must treat
-    a ``None`` return as "no useful placement info; assume replicated".
-    """
-    try:
-        tensor = autograd_tensor.get_value()
-        topology = tensor.tensor_topology()
-        return list(topology.placements())
-    except Exception:
-        return None
+def _get_placements(autograd_tensor: Any) -> List[Any]:
+    """Return the tensor's placement on each mesh axis; see :attr:`ttml.Sharding.placements`."""
+    return ttml.Sharding.from_tensor(autograd_tensor).placements
 
 
 def _is_shard(placement: Any) -> bool:
@@ -360,21 +350,17 @@ def _pick_shard_dim_from_shape(
 
 
 def _placements_from_mapper(mapper: Any) -> Optional[List[Any]]:
-    """Best-effort read of the placements list backing a ``CppTensorToMesh``.
+    """The placements backing a ``CppTensorToMesh``, or ``None`` for no mapper (replicated).
 
     The mapper is the ``ttnn.CppTensorToMesh`` returned by
     ``ttml.mesh().axis_mapper(...)`` / ``ttnn.create_mesh_mapper(...)``. C++
     binds ``TensorToMesh::config()`` so we can introspect the original
     ``MeshMapperConfig.placements`` without a side channel on
-    :class:`TensorMetadata`. Returns ``None`` if ``mapper`` is ``None`` or the
-    accessor isn't available (older ttnn build before ``config()`` was bound).
+    :class:`TensorMetadata`.
     """
     if mapper is None:
         return None
-    try:
-        return list(mapper.config().placements)
-    except Exception:
-        return None
+    return list(mapper.config().placements)
 
 
 def _param_shape(parameter: Parameter) -> List[int]:

@@ -23,6 +23,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     concat/device/concat_s2s_multi_program_factory.cpp
     concat/device/concat_block_sharded_program_factory.cpp
     concat/device/concat_s2i_program_factory.cpp
+    concat/codegen/concat_codegen_device_operation.cpp
+    concat/codegen/concat_codegen_program_factory.cpp
+    concat/codegen/concat_codegen_supported.cpp
     copy/copy.cpp
     copy/device/copy_device_operation.cpp
     copy/device/copy_same_memory_config_program_factory.cpp
@@ -93,6 +96,12 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     reshape_view/device/reshape_rm_program_factory.cpp
     reshape_view/device/reshape_tiled_program_factory.cpp
     reshape_view/device/reshape_device_operation.cpp
+    reshape_view/codegen/reshape_codegen_device_operation.cpp
+    reshape_view/codegen/reshape_codegen_plan.cpp
+    reshape_view/codegen/reshape_codegen_program_factory.cpp
+    reshape_view/codegen/reshape_codegen_supported.cpp
+    reshape_view/codegen/reshape_codegen_tile_mapped_plan.cpp
+    reshape_view/codegen/reshape_codegen_tile_rows_plan.cpp
     reshape_view/reshape.cpp
     roll/device/roll_device_operation.cpp
     roll/device/roll_program_factory.cpp

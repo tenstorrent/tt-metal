@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     if constexpr (PRESERVE_SRC_ZERO_FLAG)
     {
-        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // Leave the Src zero flag at keep, as a preceding copy_init does. The init must restore the
         // operand-driven value, or the FPU keeps the denormal SrcB operands it should flush.
         math::_configure_preserve_zero_flag_state_();
     }

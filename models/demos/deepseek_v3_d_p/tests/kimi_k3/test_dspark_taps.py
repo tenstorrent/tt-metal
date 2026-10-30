@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
     DEEP_LAYER_PCC,
     PLACEMENTS,
@@ -107,6 +108,7 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
+    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
     kvpe = None
     if model.schedule.num_mla_layers:
         kvpe = allocate_mla_kvpe_cache(
@@ -137,8 +139,8 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
     try:
         model.forward(tokens_tt, kvpe_cache=kvpe, on_layer_hidden=tap)
     finally:
-        if model.kda_states is not None:
-            model.kda_states.deallocate()
+        if slabs is not None:
+            slabs.deallocate()
 
     for t in targets:
         with safe_open(taps_dir / f"tap_layer_{t}.safetensors", framework="pt") as f:

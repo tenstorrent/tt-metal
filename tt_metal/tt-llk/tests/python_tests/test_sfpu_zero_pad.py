@@ -16,22 +16,17 @@ from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import TILE_COUNT, ZERO_PAD_ROWS
+from helpers.utils import result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
 SFPU_ROW_ELEMENTS = 32
 SFPU_ROWS_PER_TILE = ELEMENTS_PER_TILE // SFPU_ROW_ELEMENTS
-
-
-def _valid_dest_acc(formats):
-    if formats.input.is_32_bit():
-        return [DestAccumulation.Yes]
-    return get_valid_dest_accumulation_modes(formats)
 
 
 def _zero_pad_golden(tile, valid_rows: int, total_rows: int):
@@ -102,14 +97,14 @@ def _run(
     )
 
     res_from_L1 = configuration.run().result
-    res = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res = result_tensor(res_from_L1, formats.output_format)
     return res.to(torch.float32), golden
 
 
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    dest_acc=lambda formats: _valid_dest_acc(formats),
+    dest_acc=get_valid_dest_accumulation_modes,
     row_range=ROW_RANGES,
 )
 def test_sfpu_zero_pad(formats, dest_acc, row_range):
