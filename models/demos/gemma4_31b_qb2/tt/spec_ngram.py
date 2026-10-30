@@ -339,6 +339,17 @@ class Gate:
         t, n = self.stats.get((bucket, mode), (0.0, 0.0))
         self.stats[(bucket, mode)] = (t + seconds, n + tokens)
 
+    def peek(self, live):
+        """Mode the next step will run in at this batch, without advancing the block (cheap pre-check)."""
+        if MAX_BUSY and live > MAX_BUSY:
+            return False
+        if not self.ENABLED:
+            return True
+        b = batch_bucket(live)
+        if self.left.get(b, 0) > 0:
+            return self.cur[b]
+        return True
+
     def rate(self, bucket, mode):
         t, n = self.stats.get((bucket, mode), (0.0, 0.0))
         return (n / t if t > 0 else None), t

@@ -724,6 +724,27 @@ class Gemma4ForCausalLM:
                 self.spec_stats["committed"] = self.spec_stats.get("committed", 0) + int(accepted_counts[row])
                 self.spec_stats["request_steps"] = self.spec_stats.get("request_steps", 0) + 1
         t = time.perf_counter()
+        n_live = sum(h is not None for h in histories)
+        if n_live >= spec_ngram.ROW_BUDGET or (n_live and not spec_ngram.GATE.peek(n_live)):
+            # No room for a draft row (or the gate holds drafting off at this batch): skip the history scans so a
+            # full-batch plain step pays no drafting host time.
+            self._spec_prev = {}
+            step = getattr(self, "_gate_step", None)
+            if step is not None and step[3] is None:
+                # The step that just finished ran under the previous plan's mode.
+                step[0] = spec_ngram.batch_bucket(n_live) if step[0] is None else step[0]
+                step[1] = getattr(self, "_gate_mode", True)
+                step[3] = sum(int(accepted_counts[row]) for row, h in enumerate(histories) if h is not None)
+            self._gate_mode = False
+            if n_live < spec_ngram.ROW_BUDGET:
+                spec_ngram.GATE.mode(spec_ngram.batch_bucket(n_live), n_live)  # advance the block counter
+            self.spec_stats["propose_s"] += time.perf_counter() - t
+            self.spec_stats["proposals"] += 1
+            self.spec_stats["skipped"] = self.spec_stats.get("skipped", 0) + 1
+            return DraftOutput(
+                draft_token_ids=torch.zeros((rows, int(num_drafts)), dtype=torch.int32),
+                num_valid=torch.zeros(rows, dtype=torch.int32),
+            )
         # Score each row's previous proposal against what that request committed since (acceptance of a
         # deterministic draft == sampled token equals it, verified or not), then propose with the updated model.
         prev = getattr(self, "_spec_prev", {})
