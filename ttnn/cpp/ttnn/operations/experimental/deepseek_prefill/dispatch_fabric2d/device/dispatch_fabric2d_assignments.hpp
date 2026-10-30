@@ -101,9 +101,7 @@ uint32_t vc_for_own(uint32_t distance, uint32_t ring_extent);
 
 // A stream's fwd_section is its slice of the DRAM forwarding buffer: fwd_pages_per_stream pages starting
 // at page stream * fwd_pages_per_stream, divided into num_vcs channels of fwd_vc_pages each. Each page is
-// one token plus its fwd_meta. The upstream chip's sender writes it and this chip's reader reads it.
-//
-// A channel is a pipeline buffer, so its depth is given rather than computed from a launch's traffic.
+// one token plus its fwd_meta.
 constexpr uint32_t fwd_pages_per_stream(uint32_t ring_extent, uint32_t fwd_vc_pages) {
     return num_vcs(ring_extent) * fwd_vc_pages;
 }
