@@ -133,6 +133,13 @@ replay; the adapter's wall is 0.3 ms, so the remaining 11 ms over the device ste
 -16 % mean, -34 % P99; TTFT 18.54 s. The non-blocking replay wins at both batches; the default flips once the a-e
 gate `nb_gate_32` is green. The harness pair `e2e_8x4_B4_ctx1m` / `ctx256` then says how much of the remaining gap
 is the decode step's own context-size cost (the 48 ms reference ran at `GLM53_MODEL_MAX_SEQ_LEN=256`).
+Measured: the traced step is 48.36 ms at max_seq_len 256 and 54.92 ms at 1 M with the user-partitioned cache
+(`e2e_8x4_B4_ctx256` / `ctx1m_r2`, same first token and chain PCC): +6.6 ms is the step's own context-size cost (a
+metal item: bound the DSA decode's work by the live length), and the served 59.5 ms ITL is 4.6 ms (8 %) over the
+true device step. Served decode parity at 32 users is reached up to the engine's host path; the slot mask costs
+nothing (`ab_slotmask_32_r2`: 59.4 ms); the 128-row wave bucket would cut the burst TTFT 5.5 -> 3.8 s but its trace
+is wrong at 45 layers (`wave128_gate` FAIL: a wrong first token for the dump's prompt), so the default stays 256,512
+until the T=128 wave is fixed (the wave gate now captures 128 and 256).
 
 ## 3. Workstream B: the decode step to the roofline floor
 
