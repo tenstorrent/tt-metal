@@ -61,6 +61,13 @@ def test_module_imports_without_ttnn():
     """The adapter module must be importable on a host without ttnn (every ttnn use is lazy)."""
     assert "models.demos.glm53_flash.tt.generator_vllm" in sys.modules
     assert "ttnn" not in sys.modules, "importing the adapter must not import ttnn"
+    # the env-knob readers only the device path calls (a missing local import in one of them killed the 2026-10-30
+    # served boot at the decode warm-up while every host suite was green): called here with and without an env
+    from models.demos.glm53_flash.tt.packed_inputs import resident_decode_enabled, slot_mask_enabled
+
+    assert slot_mask_enabled({"GLM53_DECODE_SLOT_MASK": "1"}) and not slot_mask_enabled({})
+    assert resident_decode_enabled({"GLM53_RESIDENT_DECODE": "on"}) and not resident_decode_enabled({})
+    assert isinstance(slot_mask_enabled(), bool) and isinstance(resident_decode_enabled(), bool)
     assert GLM53FlashForCausalLM.decode_input_update_contract == 1
     caps = GLM53FlashForCausalLM.model_capabilities
     assert caps["supports_async_decode"] is False and caps["supports_prefix_caching"] is False
