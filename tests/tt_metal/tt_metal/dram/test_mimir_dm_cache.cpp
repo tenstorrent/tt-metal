@@ -28,6 +28,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -670,9 +671,9 @@ StagedRun run_staged(
     if (!wait_for_status_magics(device, waited, done_magics, host_deadline)) {
         return run;
     }
-    detail::WaitProgramDone(device, first_program, /*read_device_profiler_results=*/false);
+    slow_dispatch::WaitProgramDone(*device, first_program);
     if (run.second_launched) {
-        detail::WaitProgramDone(device, second_program, /*read_device_profiler_results=*/false);
+        slow_dispatch::WaitProgramDone(*device, second_program);
     }
     for (const CceKernelLaunch& launch : waited) {
         run.statuses.push_back(
@@ -2347,7 +2348,7 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
         ASSERT_TRUE(wait_for_status_magics(device, writer_launch, {idma_abi::kDoneMagic}, kMm41HostDeadline))
             << label << ": round " << round << " writer has no status after " << kMm41HostDeadline.count() << " s"
             << kFreshSessionNote;
-        detail::WaitProgramDone(device, writer_program, /*read_device_profiler_results=*/false);
+        slow_dispatch::WaitProgramDone(*device, writer_program);
         const std::vector<uint32_t> writer_status =
             read_cce_tl1(device, sibling, tl1_done_block(kReaderHart), kMixedStatusWords * sizeof(uint32_t));
         ASSERT_EQ(writer_status[idma_abi::kStatusCode], idma_success_code(writer))
@@ -2356,7 +2357,7 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
     }
     ASSERT_TRUE(wait_for_status_magics(device, consumer_launch, {abi::kDoneMagic}, kMm41HostDeadline))
         << label << ": consumer has no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
-    detail::WaitProgramDone(device, consumer_program, /*read_device_profiler_results=*/false);
+    slow_dispatch::WaitProgramDone(*device, consumer_program);
     const std::vector<uint32_t> status =
         read_cce_tl1(device, cce_index, tl1_done_block(kReaderHart), kMixedStatusWords * sizeof(uint32_t));
     const std::string result = fmt::format(

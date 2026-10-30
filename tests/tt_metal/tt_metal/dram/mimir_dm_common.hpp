@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
@@ -108,7 +109,7 @@ inline std::optional<std::vector<std::vector<uint32_t>>> launch_and_wait_for_sta
     if (!wait_for_status_magics(device, launches, done_magics, host_deadline)) {
         return std::nullopt;
     }
-    detail::WaitProgramDone(device, program, /*read_device_profiler_results=*/false);
+    slow_dispatch::WaitProgramDone(*device, program);
     std::vector<std::vector<uint32_t>> statuses;
     for (const CceKernelLaunch& launch : launches) {
         statuses.push_back(

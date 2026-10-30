@@ -25,6 +25,7 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -140,7 +141,7 @@ public:
             return;
         }
         try {
-            detail::WaitProgramDone(device_, *program, /*read_device_profiler_results=*/false);
+            slow_dispatch::WaitProgramDone(*device_, *program);
         } catch (const std::exception& error) {
             ADD_FAILURE() << "WaitProgramDone on the receiver Program threw: " << error.what();
         }

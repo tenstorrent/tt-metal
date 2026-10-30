@@ -31,6 +31,7 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -1965,7 +1966,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     const bool stream_done = wait_for_status_magics(device, stream_launch, {abi::kDoneMagic}, kStreamHostDeadline);
     ASSERT_TRUE(stream_done) << label << ": trid stream: no status after " << kStreamHostDeadline.count() << " s"
                              << kFreshSessionNote;
-    detail::WaitProgramDone(device, stream_program, /*read_device_profiler_results=*/false);
+    slow_dispatch::WaitProgramDone(*device, stream_program);
     const std::vector<uint32_t> stream_status =
         read_cce_tl1(device, route.stream_cce, tl1_done_block(kTridHart), abi::kStatusWords * sizeof(uint32_t));
     expect_status(
