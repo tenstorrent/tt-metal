@@ -29,7 +29,6 @@
 
 void kernel_main() {
     const uint32_t src_byte_offset = get_arg(args::src_byte_offset);  // per-core src offset (begins+width-misalign)
-    const uint32_t padded_stick_size = get_arg(args::padded_stick_size);
     const uint32_t unpadded_stick_size = get_arg(args::unpadded_stick_size);
     const uint32_t stick_size_offset = get_arg(args::stick_size_offset);
     const uint32_t num_dims = get_arg(args::num_dims);
@@ -116,7 +115,7 @@ void kernel_main() {
                         noc.async_read<NocOptions::TXN_ID>(
                             s0,
                             scratch_buf,
-                            padded_stick_size + misalignment,
+                            unpadded_stick_size + misalignment,
                             {.page_id = src_stick_id, .offset_bytes = src_off_aligned},
                             {.offset_bytes = scratch_off},
                             NocOptVals{.trid = active_trid});
