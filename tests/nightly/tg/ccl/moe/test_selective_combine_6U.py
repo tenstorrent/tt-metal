@@ -835,7 +835,8 @@ def test_deepseek_perf(
         logger.info(f"Decode iter: {i} success")
 
 
-# Guard test for #56769.
+# Regression test for #56769. With l1_small_size = 0 the carried barrier semaphore is allocated in general L1, and
+# the op must keep its count intact across iterations.
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -884,8 +885,8 @@ def test_deepseek_perf(
 @pytest.mark.parametrize("data_parallel_core_dim", [4])
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
-def test_zero_l1_small_is_fatal(
-    expect_error,
+@pytest.mark.parametrize("num_test_iters", [5])
+def test_zero_l1_small(
     mesh_device,
     mesh_shape,
     batch,
@@ -899,32 +900,27 @@ def test_zero_l1_small_is_fatal(
     data_parallel_core_dim,
     num_links,
     mux_core_range,
+    num_test_iters,
 ):
     experts = experts_per_device * mesh_shape[cluster_axis]
-    mesh_device.disable_and_clear_program_cache()
 
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
     mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
 
-    # expect_error is the house fixture for an intended failure: it logs EXPECTED_ERROR markers so CI log
-    # triaging does not file this deliberate device fatal as a real one (which is how #54864 was filed).
-    # The message argument is load-bearing -- an unrelated RuntimeError would otherwise let this test keep
-    # passing after the guard itself regressed.
-    with expect_error(RuntimeError, "l1_small_size = 0"):
-        _run_test(
-            batch,
-            experts,
-            select_experts_k,
-            hidden_size,
-            seq,
-            cluster_axis,
-            worker_cores,
-            data_parallel_core_dim,
-            token_parallel_core_dim,
-            num_links,
-            mux_cores,
-            mesh_device,
-            1,
-            False,
-            scheme="random",
-        )
+    _run_test(
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq,
+        cluster_axis,
+        worker_cores,
+        data_parallel_core_dim,
+        token_parallel_core_dim,
+        num_links,
+        mux_cores,
+        mesh_device,
+        num_test_iters,
+        False,
+        scheme="random",
+    )
