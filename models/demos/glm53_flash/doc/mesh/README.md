@@ -1587,7 +1587,8 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 59.5 ms mean / 60.0 median / P99 66.2 (16.8 tok/s per user), TTFT 5.54 s, 314 tok/s output, the adapter's wall 0.3 ms
 to the enqueue, against 68.2 / 69.1 ms with the blocking replay: -13 % ITL. The remaining 11 ms over the 48 ms device
 step is the engine's per-step host path (the scheduler, the runner's build, the output thread's read and apply), to
-be attributed by `profile_step_32_r2`. Batch 128 (`nb_128`) and the a-e gate (`nb_gate_32`) decide the default flip.
+be attributed by `profile_step_32_r2`. Batch 128 (`nb_128`: 108.4 / 109.8 ms, P99 115.9, against 129.1 / 127.5 / 174 blocking: -16 %, P99 -34 %) agrees;
+the a-e gate (`nb_gate_32`) decides the default flip.
 Also measured: async ON vs OFF at batch 32 = 68.2 vs 76.3 ms ITL (+10 %); async ON at batch 128 on the 128 K profile
 = 129.1 / 127.5 ms ITL (P99 174), TTFT 18.65 s (16 traced 256-row waves at ~1.1 s).
 

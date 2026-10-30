@@ -128,6 +128,10 @@ bucket (256 rows x 8 rows = 2048 padded tokens at the model's ~2 K tok/s prefill
 carries 1 or 8 prompts); `ab_wave128_32` adds the 128-row bucket. The prefill rate itself is workstream C.
 `ab_async_nb_32` (the non-blocking replay): ITL 59.5 / 60.0 ms (P99 66.2), TTFT 5.54 s = -13 % vs the blocking
 replay; the adapter's wall is 0.3 ms, so the remaining 11 ms over the device step is the engine's host path per step.
+`ab_async_nb_128` (batch 128, 192 slots): ITL 108.4 / 109.8 ms (P99 115.9) vs 129.1 / 127.5 (P99 174) blocking:
+-16 % mean, -34 % P99; TTFT 18.54 s. The non-blocking replay wins at both batches; the default flips once the a-e
+gate `nb_gate_32` is green. The harness pair `e2e_8x4_B4_ctx1m` / `ctx256` then says how much of the remaining gap
+is the decode step's own context-size cost (the 48 ms reference ran at `GLM53_MODEL_MAX_SEQ_LEN=256`).
 
 ## 3. Workstream B: the decode step to the roofline floor
 
