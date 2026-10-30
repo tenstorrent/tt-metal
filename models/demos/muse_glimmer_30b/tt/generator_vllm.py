@@ -79,6 +79,8 @@ class MuseGlimmerForConditionalGeneration:
         "supports_sample_on_device": True,
         "supports_async_decode": CONTRACT_V1,
         "max_device_top_k": 32,
+        # _device_params passes temperature / top_k / top_p only, so penalized requests sample on host.
+        "supports_device_penalties": False,
     }
 
     # vLLM's registry checks that __init__ takes vllm_config / prefix; the plugin builds the adapter through
