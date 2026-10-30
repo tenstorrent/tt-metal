@@ -21,7 +21,7 @@ ALWI void binary_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_de
     static_assert(llk_2_0::is_supported_format(FA) && llk_2_0::is_supported_format(FB), "binary init: Float16_b / Float16 only.");
     static_assert(is_legal_tile_shape(SA), "binary init: illegal tile shape for operand A.");
     static_assert(same_tile_shape(SA, SB), "binary init: operands A and B must have the same tile shape.");
-    detail::dest_leave<dest_dvalid_client::UNPACK>();
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "binary init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     detail::dest_join<dest_dvalid_client::FPU>();
     UNPACK((llk_2_0::unpack_AB_init<LLKOperand<FA, SA>::descriptor, LLKOperand<FB, SB>::descriptor>(
         a.l1_address, b.l1_address)));
@@ -33,13 +33,20 @@ ALWI void binary_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_de
           MATH_FIDELITY>(acc_to_dest)));
 }
 
+// One tile of a binary op, Dest already taken.
 template <EltwiseBinaryType type, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
-ALWI void binary_tile(
+ALWI void binary_one(
     LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
-    detail::dest_take<dest_dvalid_client::FPU>();
     UNPACK((llk_2_0::unpack_AB<LLKOperand<FA, SA>::descriptor>(
         a.l1_address, b.l1_address, a.tile(itile0), b.tile(itile1))));
     MATH((llk_2_0::math_binary<type, LLKOperand<FA, SA>::descriptor>(idst)));
+}
+
+template <EltwiseBinaryType type, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void binary_tile(
+    LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    dest_take<dest_dvalid_client::FPU>();
+    binary_one<type>(a, b, itile0, itile1, idst);
 }
 
 template <EltwiseBinaryType type, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
@@ -51,8 +58,9 @@ ALWI void binary_block(
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
     check_block_tiles<dest_dvalid_client::FPU>(ntiles);
+    dest_take<dest_dvalid_client::FPU>();
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        binary_tile<type>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+        binary_one<type>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 

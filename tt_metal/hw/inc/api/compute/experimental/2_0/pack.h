@@ -35,6 +35,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorSh
 ALWI void pack_init(LLKOperand<Format, Shape> out) {
     static_assert(llk_2_0::is_supported_format(Format), "pack_init (Quasar 2.0): only Float16_b / Float16.");
     static_assert(is_legal_tile_shape(Shape), "pack_init: illegal output tile shape.");
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "pack_init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     detail::dest_join<dest_dvalid_client::PACK>();
     PACK((llk_2_0::pack_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>(out.l1_address)));
 }
@@ -61,8 +62,9 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uin
 
 // clang-format off
 /**
- * Id-free block pack, Quasar: pack_tile over a ct_dim x rt_dim block, Dest tiles start_idst + i -> output tiles
- * start_itile + i, i < ct_dim * rt_dim. The block must fit one Dest section (static_assert).
+ * Id-free block pack, Quasar: one Dest take, then a pack of each tile of a ct_dim x rt_dim block, Dest tiles
+ * start_idst + i -> output tiles start_itile + i, i < ct_dim * rt_dim. The block must fit one Dest section
+ * (static_assert).
  * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
  * re-init, then run the shorter block.
  *
@@ -89,8 +91,8 @@ ALWI void pack_block(LLKOperand<Format, Shape> out, std::uint32_t start_itile, s
 
 // clang-format off
 /**
- * Id-free block pack with a runtime tile count, Quasar: pack_tile over `ntiles` tiles, Dest tiles
- * start_idst + i -> output tiles start_itile + i.
+ * Id-free block pack with a runtime tile count, Quasar: one Dest take, then a pack of each of `ntiles` tiles,
+ * Dest tiles start_idst + i -> output tiles start_itile + i.
  * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
  * re-init, then run the shorter block.
  *
@@ -109,8 +111,10 @@ ALWI void pack_block(
     LLK_ASSERT(
         start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
     detail::check_block_tiles<dest_dvalid_client::PACK>(ntiles);
+    detail::dest_take<dest_dvalid_client::PACK>();
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        pack_tile(out, start_itile + i, start_idst + i);
+        PACK((llk_2_0::pack<LLKOperand<Format, Shape>::descriptor>(
+            out.l1_address, start_idst + i, out.tile(start_itile + i))));
     }
 }
 

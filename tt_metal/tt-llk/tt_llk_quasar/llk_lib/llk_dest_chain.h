@@ -7,8 +7,22 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "ckernel_trisc_id.h"
 #include "llk_assert.h"
-#include "llk_dest_dvalid.h"
+#include "llk_sync.h"
+
+// Dest handoffs between the units that use Dest, on Tensix semaphores (the SyncExu ones, private to this Tensix).
+// Units: UNPACK (unpack-to-dest), FPU, SFPU (on the SFPU thread), PACK.
+//   * Every thread runs every chain call in the same program order and keeps the same state; a thread issues
+//     instructions only for its own unit.
+//   * A section (first take .. release) uses one slot: Dest bank 0 / 1 alternately in SyncHalf, all of Dest in SyncFull.
+//   * A take by a unit that does not hold the slot hands it over: the holder drains its engine and posts GO[taker][slot],
+//     the taker waits for the post and takes it (SEMWAIT + SEMGET).
+//   * Release hands the slot back to the section's first taker (its head) and parks the post there, so the next section
+//     on the slot starts as soon as the last unit is done. At kernel start MATH owns every slot without a post.
+//   * _llk_dest_chain_end_ takes the parked posts, so every chain semaphore is 0 between kernels.
+//   * A wait on a semaphore that was never SEMINIT'ed is a hardware fault, so firmware boot initializes them once
+//     (_llk_dest_chain_boot_); kernels never re-initialize them, as that could erase another thread's post.
 
 namespace ckernel
 {
@@ -16,256 +30,260 @@ namespace ckernel
 namespace dest_chain
 {
 
-using dest_dvalid::NONE;
-using dest_dvalid::THIS_UNIT;
+constexpr dest_dvalid_client NONE = static_cast<dest_dvalid_client>(4);
 
-// Each thread only acts for its own unit, so the copies agree on the holder and the use, and on the turns of the
-// units a thread tracks.
-// No member initializers: in metal the state is per-thread zero-init storage (.tbss), given initial_state() by
-// _llk_dest_chain_reset_.
-struct State
+#if defined(LLK_TRISC_UNPACK) || defined(TRISC_UNPACK)
+constexpr dest_dvalid_client THIS_UNIT = dest_dvalid_client::UNPACK;
+#elif defined(LLK_TRISC_MATH) || defined(TRISC_MATH)
+constexpr dest_dvalid_client THIS_UNIT = dest_dvalid_client::FPU;
+#elif defined(LLK_TRISC_ISOLATE_SFPU) || defined(TRISC_ISOLATE_SFPU)
+constexpr dest_dvalid_client THIS_UNIT = dest_dvalid_client::SFPU;
+#elif defined(LLK_TRISC_PACK) || defined(TRISC_PACK)
+constexpr dest_dvalid_client THIS_UNIT = dest_dvalid_client::PACK;
+#else
+constexpr dest_dvalid_client THIS_UNIT = NONE;
+#endif
+
+// GO[unit][slot] = Tensix semaphore 12 + 4 * slot + unit (ids 12..19; 0..7 are legacy, 8..11 the tt-llk perf barrier).
+constexpr std::uint32_t GO_BASE = 12;
+
+inline std::uint32_t go(const std::uint32_t unit, const std::uint32_t slot)
 {
-    dest_dvalid_client holder;
-    bool holder_has_bit;     // on the holder's thread, false while it was admitted on an empty bank
-    bool gated;              // this thread's unit has a wait word, false at boot and after a leave
-    std::uint8_t members;
-    std::uint8_t turned;     // tracked units with a turn in the current bank use
-    std::uint8_t ordered[2]; // per bank, tracked units with a turn in its last use (boot orders everyone)
-    std::uint8_t use;        // bank of the current use in SyncHalf
-    std::uint8_t bank;       // bank of this thread's unit
+    return GO_BASE + 4 * slot + unit;
+}
+
+struct UnitInfo
+{
+    std::uint32_t wait_class; // SEMWAIT stall class: the engine that must not touch Dest before the post
+    std::uint32_t drain0;     // engines to drain before posting
+    std::uint32_t drain1;
 };
 
-constexpr State initial_state()
+constexpr UnitInfo UNITS[] = {
+    {p_stall::STALL_UNPACK, p_stall::UNPACK0, p_stall::NOTHING},
+    {p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU},
+    {p_stall::STALL_SFPU | p_stall::STALL_MATH, p_stall::WAIT_SFPU, p_stall::NOTHING},
+    {p_stall::STALL_PACK, p_stall::PACK0, p_stall::NOTHING},
+};
+
+// Units are stored as unit + 1; 0 means none.
+constexpr std::uint8_t code(const dest_dvalid_client unit)
 {
-    return State {NONE, false, false, 0, 0, {0xF, 0xF}, 0, 0};
+    return static_cast<std::uint8_t>(unit) + 1;
 }
+
+// No member initializers: in metal the state is per-thread zero-init storage (.tbss); _llk_dest_chain_end_ zeroes it.
+struct State
+{
+    std::uint8_t holder;    // unit holding the open section's slot, 0 between sections
+    std::uint8_t head;      // first taker of the open section
+    std::uint8_t bank;      // slot of the open (or next) section: its Dest bank in SyncHalf, 0 in SyncFull
+    std::uint8_t parked[2]; // per slot, the unit whose GO holds the slot's post; 0: MATH owns it, nothing posted
+    std::uint8_t members;   // joined units, one bit each
+};
 
 // One instance per hardware TRISC thread, like trisc::bfd_state (llk_bfd_alloc.h): ENV_LLK_INFRA uses a plain
 // global; the metal build declares it extern thread_local, defined zero-init in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
-// (a non-zero .tdata image breaks Quasar device init), and _llk_dest_chain_reset_ gives it its initial value.
+// (a non-zero .tdata image breaks Quasar device init).
 #ifdef ENV_LLK_INFRA
-inline State state = initial_state();
+inline State state = {};
 #else
 extern thread_local State state;
 #endif
 
+inline void post(const std::uint32_t id)
+{
+    TT_SEMPOST(id >> 3, 1u << (id & 7));
+}
+
 /**
- * @brief Select a bank on its owner's thread, preserving the bank's ownership bits.
+ * @brief Waits for UNIT's engines to finish their Dest accesses.
  */
 template <dest_dvalid_client UNIT>
-inline void select_bank(const std::uint32_t target)
+inline void drain()
 {
-    if constexpr (UNIT == THIS_UNIT)
-    {
-        if (state.bank == target)
-        {
-            return;
-        }
-        if (target == 0)
-        {
-            TTI_CLEARDVALID(0, 0, 0, dest_dvalid::bit_of(UNIT), 0, 0);
-        }
-        else
-        {
-            _llk_dest_dvalid_bank_flip_<UNIT>();
-            state.gated = false;
-        }
-        state.bank = target;
-    }
-}
-
-template <dest_dvalid_client FROM, dest_dvalid_client TO, DstSync DST>
-inline void signal()
-{
-    if constexpr (FROM != TO)
-    {
-        constexpr bool FULL = DST == DstSync::SyncFull;
-        if constexpr (FROM == THIS_UNIT)
-        {
-            if (state.holder_has_bit)
-            {
-                _llk_dest_dvalid_signal_<FROM, TO, true /*HAS_BIT*/, FULL>();
-            }
-            else
-            {
-                _llk_dest_dvalid_signal_<FROM, TO, false /*HAS_BIT*/, FULL>();
-            }
-            if constexpr (!FULL)
-            {
-                state.bank ^= 1;
-            }
-        }
-    }
+    constexpr UnitInfo INFO = UNITS[static_cast<int>(UNIT)];
+    TTI_STALLWAIT(p_stall::STALL_SYNC, INFO.drain1, p_stall::NOTHING, INFO.drain0);
 }
 
 /**
- * @brief The holder hands dest to TO. Only the holder's own thread issues anything.
+ * @brief Waits for a post to UNIT on `slot` and takes it. UNIT's engine is held until then; the SEMGET always follows
+ *        its SEMWAIT, so no thread ends a kernel on a pending wait.
  */
-template <dest_dvalid_client TO, DstSync DST>
-inline void pass_from_holder()
+template <dest_dvalid_client UNIT>
+inline void wait(const std::uint32_t slot)
 {
-    if constexpr (THIS_UNIT != NONE && TO != THIS_UNIT)
-    {
-        if (state.holder == THIS_UNIT)
-        {
-            signal<THIS_UNIT, TO, DST>();
-        }
-    }
+    const std::uint32_t id = go(static_cast<std::uint32_t>(UNIT), slot);
+    TT_SEMWAIT(UNITS[static_cast<int>(UNIT)].wait_class | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO, id >> 3, 1u << (id & 7));
+    TT_SEMGET(id >> 3, 1u << (id & 7));
 }
 
 /**
- * @brief PACK's turn ended the use of a bank and NEXT opens the other one.
- *
- * NEXT waits for the bank to be empty when it had a turn in the last use of that bank. Otherwise an empty bank
- * could be the state before that use, so PACK hands NEXT its bit once PACK's reads are done.
- * @return true when NEXT was handed a bit, known on the threads that track NEXT
+ * @brief Points UNIT at the other Dest bank (SyncHalf), once UNIT's engine is done with the current one.
  */
-template <dest_dvalid_client NEXT, DstSync DST>
-inline bool end_use()
+template <dest_dvalid_client UNIT, bool EN_32BIT_DEST>
+inline void flip_bank()
 {
-    constexpr bool KNOWN     = NEXT == THIS_UNIT || THIS_UNIT == dest_dvalid_client::PACK;
-    const std::uint32_t bank = state.use;
-    const std::uint32_t next = bank ^ 1;
-    const bool granted       = KNOWN && !(state.ordered[next] & dest_dvalid::bit_of(NEXT));
-    if constexpr (THIS_UNIT == dest_dvalid_client::PACK)
+    if constexpr (UNIT == dest_dvalid_client::UNPACK)
     {
-        _llk_dest_dvalid_end_use_();
-        state.bank ^= 1;
-        if (granted)
-        {
-            // PACK is now on the bank NEXT opens and has nothing in flight, so this pulse sets NEXT's bit at once.
-            _llk_dest_dvalid_write_release_<dest_dvalid_client::PACK, dest_dvalid::bit_of(NEXT), true /*HOLD_BANK*/>();
-            _llk_dest_dvalid_pulse_<dest_dvalid_client::PACK>();
-        }
+        // Folded into each unpack Dest tile index. The UNP_DEST tile counter finds bank 1 at the 16-bit stride in
+        // 32-bit mode too (emulator, 2026-10-30: the 32-bit stride lands bank-1 tiles where pack reads zeros).
+        _update_dest_register_offset_<false>();
     }
-    state.ordered[bank] = state.turned;
-    state.turned        = 0;
-    state.holder        = NONE;
-    state.use           = next;
-    return granted;
+    else if constexpr (UNIT == dest_dvalid_client::FPU)
+    {
+        _llk_sync_advance_dest_section_<TRISC_ID, EN_32BIT_DEST, p_stall::MATH>();
+    }
+    else if constexpr (UNIT == dest_dvalid_client::SFPU)
+    {
+        _llk_sync_advance_dest_section_<TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU>();
+    }
+    else
+    {
+        _update_dest_register_offset_<EN_32BIT_DEST>();
+        _llk_stall_cfg_on_<p_stall::PACK0>();
+        _set_packer_dest_registers_<p_pacr::PACK0, DstSync::SyncHalf>();
+    }
 }
 
 } // namespace dest_chain
 
 /**
- * @brief Kernel-start reset of the dest chain. Call on every thread (UNPACK, MATH, PACK, ISOLATE_SFPU) before any join.
- *
- * Resets this thread's chain bookkeeping. The UNPACK thread then does what the tt-llk test boot does: zeroes Dest,
- * clears every dvalid bit and bank id and the four dvalid control words a previous kernel left programmed, then raises
- * DEST_CHAIN_INIT to 3. Each other thread spins until it is raised and takes one count, so no thread joins or hands
- * dest to another unit before the reset has landed, and the semaphore is back at 0 once all three passed.
+ * @brief Firmware boot, one thread, before any kernel: initialize every chain semaphore to 0 (max 15).
  */
-inline void _llk_dest_chain_reset_()
+inline void _llk_dest_chain_boot_()
 {
-    dest_chain::state = dest_chain::initial_state();
-    if constexpr (dest_chain::THIS_UNIT == dest_dvalid_client::UNPACK)
+    for (std::uint32_t id = dest_chain::GO_BASE; id < dest_chain::GO_BASE + 8; ++id)
     {
-        TTI_ZEROACC(p_zeroacc::CLR_ALL, 0 /*16-bit*/, 0, 1, 0);
-        TTI_ZEROACC(p_zeroacc::CLR_ALL, 1 /*32-bit*/, 0, 1, 0);
-        _llk_dest_dvalid_boot_reset_();
-        _llk_dest_dvalid_write_wait_<dest_dvalid_client::UNPACK, 0, 0>(false /*stall*/);
-        _llk_dest_dvalid_write_wait_<dest_dvalid_client::FPU, 0, 0>(false /*stall*/);
-        _llk_dest_dvalid_write_wait_<dest_dvalid_client::SFPU, 0, 0>(false /*stall*/);
-        _llk_dest_dvalid_write_wait_<dest_dvalid_client::PACK, 0, 0>(false /*stall*/);
-        _llk_dest_dvalid_write_release_<dest_dvalid_client::UNPACK, 0, false /*HOLD_BANK*/>();
-        _llk_dest_dvalid_write_release_<dest_dvalid_client::FPU, 0, false /*HOLD_BANK*/>();
-        _llk_dest_dvalid_write_release_<dest_dvalid_client::SFPU, 0, false /*HOLD_BANK*/>();
-        _llk_dest_dvalid_write_release_<dest_dvalid_client::PACK, 0, false /*HOLD_BANK*/>();
-        TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::MATH, p_stall::CFGEXU);
-        TTI_SEMINIT(3 /*max*/, 3 /*init*/, 0, trisc::semaphore::t6_sem(trisc::semaphore::DEST_CHAIN_INIT));
-    }
-    else if constexpr (dest_chain::THIS_UNIT != dest_chain::NONE)
-    {
-        while (semaphore_read(trisc::semaphore::DEST_CHAIN_INIT) == 0)
-        {
-        }
-        trisc::t6_semaphore_get(trisc::semaphore::DEST_CHAIN_INIT);
+        TT_SEMINIT(15, 0, id >> 3, 1u << (id & 7));
     }
 }
 
 /**
  * @brief Add UNIT to the dest chain.
- * @note Call on every thread from op init and pair with @ref _llk_dest_chain_leave_.
+ * @note Call on every thread from op init.
  */
 template <dest_dvalid_client UNIT>
 inline void _llk_dest_chain_join_()
 {
-    constexpr std::uint32_t BIT = dest_dvalid::bit_of(UNIT);
-    dest_chain::state.members |= BIT;
+    dest_chain::state.members |= 1u << static_cast<int>(UNIT);
 }
 
 /**
- * @brief Remove UNIT from the dest chain.
- * @note Call on every thread outside a turn, paired with @ref _llk_dest_chain_join_. The thread keeps running the
- *       chain for the other units, so a handoff still owed by UNIT is issued.
- */
-template <dest_dvalid_client UNIT>
-inline void _llk_dest_chain_leave_()
-{
-    constexpr std::uint32_t BIT = dest_dvalid::bit_of(UNIT);
-    if (!(dest_chain::state.members & BIT))
-    {
-        return;
-    }
-    if constexpr (UNIT == dest_dvalid::THIS_UNIT)
-    {
-        _llk_dest_dvalid_leave_<UNIT>();
-        dest_chain::state.gated = false;
-    }
-    dest_chain::state.members &= ~BIT;
-}
-
-/**
- * @brief Take dest from the current holder.
+ * @brief Take dest for UNIT. Nothing happens when UNIT already holds it. Otherwise the current holder hands it over: the
+ *        holder of the open section, or, for a section's first take, the unit the last release parked it with (MATH at
+ *        kernel start).
  *
- * A take after PACK's turn in SyncHalf ends the use of PACK's bank and opens the other bank for the taker.
- * In SyncFull dest is one handoff list, every unit on bank 0, and any unit, PACK included, hands to the next taker;
- * each handoff pulses both banks so the upper half of Dest is handed over too.
- *
- * @note Call on every thread before UNIT's dest accesses, after @ref _llk_dest_chain_join_.
- * @note Issue at least one gated dest access in each turn before handing off to another unit.
+ * @note Call on every thread before UNIT's dest accesses, after @ref _llk_dest_chain_join_. Take per block of tiles,
+ *       not per tile: every handoff drains an engine.
  */
 template <dest_dvalid_client UNIT, DstSync DST, bool EN_32BIT_DEST = false>
 inline void _llk_dest_chain_take_()
 {
-    dest_chain::State& s = dest_chain::state;
-    LLK_ASSERT(s.members & dest_dvalid::bit_of(UNIT), "a unit must join before taking dest");
-    if (s.holder == UNIT)
+    using namespace dest_chain;
+    State& s                  = state;
+    constexpr std::uint8_t ME = code(UNIT);
+    LLK_ASSERT(s.members & (1u << static_cast<int>(UNIT)), "a unit must join before taking dest");
+    if (s.holder == ME)
     {
         return;
     }
-    bool has_bit = false;
-    if (DST == DstSync::SyncHalf && s.holder == dest_dvalid_client::PACK)
+    const std::uint32_t slot = s.bank;
+    std::uint8_t from        = s.holder;
+    bool queued              = false; // from's post is still in its GO
+    if (from == 0)
     {
-        has_bit = dest_chain::end_use<UNIT, DST>();
-    }
-    if (s.holder != dest_chain::NONE)
-    {
-        dest_chain::pass_from_holder<UNIT, DST>();
-        has_bit = true;
-    }
-    LLK_ASSERT(has_bit || UNIT != dest_dvalid_client::PACK, "PACK only reads dest, so it cannot open a bank use");
-    dest_chain::select_bank<UNIT>(DST == DstSync::SyncFull ? 0 : s.use);
-    if constexpr (UNIT == dest_dvalid::THIS_UNIT)
-    {
-        // A unit handed a bit waits for its own bit. A unit that opens a bank use waits for the bank to be empty.
-        const bool stall = !s.gated || (has_bit && !s.holder_has_bit);
-        if (has_bit)
+        s.head = ME;
+        from   = s.parked[slot];
+        queued = from != 0;
+        if (!queued)
         {
-            _llk_dest_dvalid_write_wait_<UNIT, dest_dvalid::bit_of(UNIT), dest_dvalid::bit_of(UNIT)>(stall);
+            from = code(dest_dvalid_client::FPU);
         }
-        else
-        {
-            _llk_dest_dvalid_write_wait_<UNIT, dest_dvalid::ALL_BITS, 0 /*POLARITY*/>(stall);
-        }
-        s.holder_has_bit = has_bit;
-        s.gated          = true;
     }
-    if constexpr (UNIT == dest_dvalid::THIS_UNIT || dest_dvalid::THIS_UNIT == dest_dvalid_client::PACK)
+    if constexpr (THIS_UNIT != NONE)
     {
-        s.turned |= dest_dvalid::bit_of(UNIT);
+        if (from != ME && from == code(THIS_UNIT))
+        {
+            if (queued)
+            {
+                wait<THIS_UNIT>(slot);
+            }
+            else
+            {
+                drain<THIS_UNIT>();
+            }
+            post(go(static_cast<std::uint32_t>(UNIT), slot));
+        }
     }
-    s.holder = UNIT;
+    if constexpr (UNIT == THIS_UNIT)
+    {
+        if (from != ME || queued)
+        {
+            wait<UNIT>(slot);
+        }
+        if constexpr (DST == DstSync::SyncHalf)
+        {
+            if ((_get_dest_buffer_base_() != 0) != (slot != 0))
+            {
+                dest_chain::flip_bank<UNIT, EN_32BIT_DEST>();
+            }
+        }
+    }
+    s.holder = ME;
+}
+
+/**
+ * @brief End the open section: the holder drains and parks the slot with the section's head. In SyncHalf the next
+ *        section uses the other bank. Nothing happens for an empty section.
+ * @note Call on every thread.
+ */
+template <DstSync DST>
+inline void _llk_dest_chain_release_()
+{
+    using namespace dest_chain;
+    State& s = state;
+    if (s.holder == 0)
+    {
+        return;
+    }
+    if constexpr (THIS_UNIT != NONE)
+    {
+        if (s.holder == code(THIS_UNIT))
+        {
+            drain<THIS_UNIT>();
+            post(go(s.head - 1u, s.bank));
+        }
+    }
+    s.parked[s.bank] = s.head;
+    s.holder         = 0;
+    if constexpr (DST == DstSync::SyncHalf)
+    {
+        s.bank ^= 1;
+    }
+}
+
+/**
+ * @brief Kernel end: take the posts parked with this thread's unit, so every chain semaphore is back at 0, and zero
+ *        the state for the next kernel.
+ * @note Call on every thread after the kernel, before the firmware reports it done.
+ */
+inline void _llk_dest_chain_end_()
+{
+    using namespace dest_chain;
+    State& s = state;
+    LLK_ASSERT(s.holder == 0, "dest_acquire without dest_release at kernel end");
+    if constexpr (THIS_UNIT != NONE)
+    {
+        for (std::uint32_t slot = 0; slot < 2; ++slot)
+        {
+            if (s.parked[slot] == code(THIS_UNIT))
+            {
+                wait<THIS_UNIT>(slot);
+            }
+        }
+    }
+    s = {};
 }
 
 } // namespace ckernel

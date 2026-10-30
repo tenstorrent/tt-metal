@@ -125,8 +125,8 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
 namespace dest_chain {
-// Dest-chain bookkeeping (llk_dest_chain.h); thread_local per TRISC like bfd_state, zero-init (.tbss), given its
-// initial value by _llk_dest_chain_reset_ in the 2.0 compute_kernel_hw_startup.
+// Dest-chain bookkeeping (llk_dest_chain.h); thread_local per TRISC like bfd_state, zero-init (.tbss), zeroed again by
+// _llk_dest_chain_end_ after each 2.0 kernel.
 thread_local State state __attribute__((used));
 }  // namespace dest_chain
 namespace pack {
@@ -297,6 +297,10 @@ extern "C" std::uint32_t _start1() {
     }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    if constexpr (ckernel::TRISC_ID == 0) {
+        _llk_dest_chain_boot_();  // this Tensix's 2.0 Dest chain semaphores, before any kernel uses them
+        tensix_sync();
+    }
     *trisc_run = RUN_SYNC_MSG_DONE;
     setup_isr_csrs();
     enable_cc_stack();

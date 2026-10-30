@@ -16,9 +16,8 @@ namespace ckernel {
 // clang-format off
 /**
  * Id-free (2.0) two-input hardware startup, Quasar. Call exactly once, at the top of the kernel, on every thread.
- * Resets the Dest dvalid chain (every dvalid bit, bank id and control word a previous kernel left, then a barrier so
- * no thread joins before the reset lands), programs the kernel-wide state (Dest 16/32-bit mode, ALU formats,
- * packer input format, Dest bank 0 on every thread) and the SrcA/SrcB formats. Buffer descriptors are not
+ * Programs the kernel-wide state (Dest 16/32-bit mode, ALU formats, packer input format, Dest bank 0 on every
+ * thread, the SFPU thread included) and the SrcA/SrcB formats. Buffer descriptors are not
  * programmed here: every op init programs its own, so each op's init must still run before the op. The operands'
  * runtime addresses are unused.
  *
@@ -51,8 +50,12 @@ ALWI void compute_kernel_hw_startup(
         experimental::is_legal_tile_shape(SA) && experimental::is_legal_tile_shape(SB) &&
             experimental::is_legal_tile_shape(SO),
         "compute_kernel_hw_startup: illegal tile shape.");
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "compute_kernel_hw_startup: Dest mode is DST_ACCUM_MODE");
     LLK_COMPUTE_API_CLAIM(2_0, legacy);
-    _llk_dest_chain_reset_();
+#ifdef TRISC_ISOLATE_SFPU
+    _reset_dest_register_offset_();
+    _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
+#endif
     UNPACK((llk_2_0::unpack_hw_configure<
             experimental::LLKOperand<FA, SA>::descriptor,
             experimental::LLKOperand<FB, SB>::descriptor>()));

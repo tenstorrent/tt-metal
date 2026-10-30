@@ -4,21 +4,22 @@
 
 #pragma once
 
-// Quasar 2.0 Dest synchronization on the take-driven dvalid chain (tt-llk llk_dest_chain.h).
+// Quasar 2.0 Dest synchronization on Tensix semaphores (tt-llk llk_dest_chain.h).
 //
-// The ops hand Dest from unit to unit themselves: each op init joins its unit to the chain (no uninit; an op init whose
-// unpacker does not write Dest takes UNPACK out of the chain) and each op execute takes Dest for its unit. A section
-// ends with PACK's turn: in SyncHalf the next take ends that bank's use and opens the other bank; SyncFull is one
-// handoff list on bank 0. dest_acquire/dest_release mark a section in the kernel source (2.0 API / Blackhole parity)
-// and emit nothing on Quasar. Rules for kernel authors:
+// The ops hand Dest from unit to unit themselves: each op init joins its unit (UNPACK for unpack-to-dest, FPU, PACK)
+// and each op takes Dest for its unit, once per block. A take by a unit that does not hold Dest hands it over: the
+// holder drains its engine and posts a semaphore, the taker waits for it. dest_acquire / dest_release delimit a
+// section: release hands Dest back to the section's first unit, and in SyncHalf the next section uses the other bank.
+// Rules for kernel authors:
 //   * Every thread runs the same program: inits, ops, dest_acquire/release are thread-common code (never inside
 //     UNPACK((..)) / MATH((..)) / PACK((..))), so every thread sees every take in the same order.
-//   * Ops run in client order inside a section (e.g. copy then pack); every section ends with a pack.
+//   * Every op runs inside a section; ops run in unit order inside it (e.g. copy then pack). Hand Dest over per block
+//     of tiles, not per tile: every handoff drains an engine.
 //   * At most get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>() Dest tiles per section (8/4 SyncHalf fp16/fp32,
 //     16/8 SyncFull).
 //   * Nothing zeroes Dest between sections: an op that accumulates onto Dest (matmul) zeroes its bank when its turn
 //     starts.
-// compute_kernel_hw_startup resets the chain at kernel start.
+// After kernel_main, run_kernel (chlkc_list.h) calls _llk_dest_chain_end_, which returns the semaphores to 0.
 
 #ifdef ARCH_QUASAR
 
@@ -27,6 +28,8 @@
 #include "api/compute/common_globals.h"
 #include "llk_compute_api_claim.h"
 #include "llk_dest_chain.h"
+
+#define LLK_2_0_DEST_CHAIN 1  // run_kernel (chlkc_list.h) ends the chain after kernel_main
 
 #ifdef ENABLE_LLK_ASSERT
 namespace llk_2_0 {
@@ -51,14 +54,11 @@ __attribute__((noinline)) void dest_join() {
 }
 
 template <dest_dvalid_client UNIT>
-__attribute__((noinline)) void dest_leave() {
-    _llk_dest_chain_leave_<UNIT>();
-}
-
-template <dest_dvalid_client UNIT>
 __attribute__((noinline)) void dest_take() {
     _llk_dest_chain_take_<UNIT, DST_SYNC_MODE, DST_ACCUM_MODE>();
 }
+
+__attribute__((noinline)) inline void dest_release() { _llk_dest_chain_release_<DST_SYNC_MODE>(); }
 
 // clang-format off
 /**
@@ -94,9 +94,9 @@ constexpr std::uint32_t dest_section_tiles() {
 
 // clang-format off
 /**
- * Marks the start of a Dest section (Quasar 2.0). Emits nothing: the section's first op takes Dest, and in SyncHalf
- * that take also ends the previous section's bank use. Kept for the 2.0 API surface (Blackhole parity). Call on every
- * thread (thread-common code), paired with dest_release.
+ * Opens a Dest section (Quasar 2.0). Emits nothing: the section's first op takes Dest from the unit the previous
+ * section on this bank ended with (MATH at kernel start). Call on every thread (thread-common code), paired with
+ * dest_release.
  *
  * | Param Type | Name | Description | Type | Valid Range | Required |
  * |------------|------|-------------|------|-------------|----------|
@@ -107,16 +107,16 @@ ALWI void dest_acquire() {}
 
 // clang-format off
 /**
- * Marks the end of the Dest section opened by dest_acquire (Quasar 2.0). Emits nothing: PACK, the section's last
- * unit, keeps Dest until the next section's first take, which hands it on (SyncHalf: to the other bank). Kept for the
- * 2.0 API surface (Blackhole parity). Call on every thread (thread-common code).
+ * Closes the Dest section opened by dest_acquire (Quasar 2.0): the unit holding Dest drains and hands it back to the
+ * section's first unit, so the next section on this bank starts as soon as it is done. In SyncHalf the next section
+ * uses the other bank. An empty section emits nothing. Call on every thread (thread-common code).
  *
  * | Param Type | Name | Description | Type | Valid Range | Required |
  * |------------|------|-------------|------|-------------|----------|
  * | (none)     |      |             |      |             |          |
  */
 // clang-format on
-ALWI void dest_release() {}
+ALWI void dest_release() { detail::dest_release(); }
 
 }  // namespace experimental
 }  // namespace ckernel

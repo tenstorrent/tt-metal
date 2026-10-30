@@ -14,6 +14,24 @@
 
 namespace ckernel {
 namespace experimental {
+namespace detail {
+
+template <bool unpack_to_dest>
+constexpr dest_dvalid_client copy_unit = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
+
+// One tile of copy_tile / copy_block, Dest already taken.
+template <bool unpack_to_dest, DataFormat Format, TensorShape Shape>
+ALWI void copy_one(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
+    constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
+    if constexpr (unpack_to_dest) {
+        UNPACK((llk_2_0::unpack_to_dest(src.l1_address, src.tile(itile), idst)));
+    } else {
+        UNPACK((llk_2_0::unpack_A<D>(src.l1_address, src.tile(itile))));
+        MATH((llk_2_0::math_datacopy(idst)));
+    }
+}
+
+}  // namespace detail
 
 // clang-format off
 /**
@@ -37,12 +55,12 @@ template <bool unpack_to_dest = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE
 ALWI void copy_init(LLKOperand<Format, Shape> src) {
     static_assert(llk_2_0::is_supported_format(Format), "copy_init (Quasar 2.0): only Float16_b / Float16.");
     static_assert(is_legal_tile_shape(Shape), "copy_init: illegal tile shape.");
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "copy_init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
     if constexpr (unpack_to_dest) {
         detail::dest_join<dest_dvalid_client::UNPACK>();
         UNPACK((llk_2_0::unpack_to_dest_init<D>(src.l1_address)));
     } else {
-        detail::dest_leave<dest_dvalid_client::UNPACK>();
         detail::dest_join<dest_dvalid_client::FPU>();
         UNPACK((llk_2_0::unpack_A_init<D, is_fp32_dest_acc_en>(src.l1_address)));
         MATH((llk_2_0::math_datacopy_init<D, is_fp32_dest_acc_en>()));
@@ -66,23 +84,16 @@ ALWI void copy_init(LLKOperand<Format, Shape> src) {
 // clang-format on
 template <bool unpack_to_dest = false, DataFormat Format, TensorShape Shape>
 ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
-    constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
-    if constexpr (unpack_to_dest) {
-        detail::dest_take<dest_dvalid_client::UNPACK>();
-        UNPACK((llk_2_0::unpack_to_dest(src.l1_address, src.tile(itile), idst)));
-    } else {
-        detail::dest_take<dest_dvalid_client::FPU>();
-        UNPACK((llk_2_0::unpack_A<D>(src.l1_address, src.tile(itile))));
-        MATH((llk_2_0::math_datacopy(idst)));
-    }
+    detail::dest_take<detail::copy_unit<unpack_to_dest>>();
+    detail::copy_one<unpack_to_dest>(src, itile, idst);
 }
 
 // clang-format off
 /**
- * Id-free block copy, Quasar: copy_tile over a ct_dim x rt_dim block, source tiles start_itile + i -> Dest tiles
- * start_idst + i, i < ct_dim * rt_dim. The block must fit one Dest section (static_assert).
- * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
- * re-init, then run the shorter block.
+ * Id-free block copy, Quasar: one Dest take, then a copy of each tile of a ct_dim x rt_dim block, source tiles
+ * start_itile + i -> Dest tiles start_idst + i, i < ct_dim * rt_dim. The block must fit one Dest section
+ * (static_assert). No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for
+ * leftover tiles re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                               | Type       | Valid Range                     | Required |
  * |------------|---------------------|-------------------------------------------|------------|---------------------------------|----------|
@@ -110,8 +121,8 @@ ALWI void copy_block(LLKOperand<Format, Shape> src, std::uint32_t start_itile, s
 
 // clang-format off
 /**
- * Id-free block copy with a runtime tile count, Quasar: copy_tile over `ntiles` tiles, source tiles
- * start_itile + i -> Dest tiles start_idst + i.
+ * Id-free block copy with a runtime tile count, Quasar: one Dest take, then a copy of each of `ntiles` tiles,
+ * source tiles start_itile + i -> Dest tiles start_idst + i.
  * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
  * re-init, then run the shorter block.
  *
@@ -130,9 +141,10 @@ ALWI void copy_block(
     LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
     LLK_ASSERT(
         start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "copy_block: block exceeds Dest");
-    detail::check_block_tiles<unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU>(ntiles);
+    detail::check_block_tiles<detail::copy_unit<unpack_to_dest>>(ntiles);
+    detail::dest_take<detail::copy_unit<unpack_to_dest>>();
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        copy_tile<unpack_to_dest>(src, start_itile + i, start_idst + i);
+        detail::copy_one<unpack_to_dest>(src, start_itile + i, start_idst + i);
     }
 }
 

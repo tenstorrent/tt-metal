@@ -19,7 +19,7 @@ namespace detail {
 // Takes Dest for FPU; when this starts FPU's turn, MATH zeroes the bank first (matmul accumulates onto Dest and the
 // chain never clears it).
 __attribute__((noinline)) inline void matmul_dest_take() {
-    [[maybe_unused]] const bool new_turn = dest_chain::state.holder != dest_dvalid_client::FPU;
+    [[maybe_unused]] const bool new_turn = dest_chain::state.holder != dest_chain::code(dest_dvalid_client::FPU);
     _llk_dest_chain_take_<dest_dvalid_client::FPU, DST_SYNC_MODE, DST_ACCUM_MODE>();
 #ifdef TRISC_MATH
     if (new_turn) {
@@ -51,8 +51,8 @@ ALWI void matmul_init(
     LLKOperand<F0, S0> in0, LLKOperand<F1, S1> in1, std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t kt_dim) {
     static_assert(llk_2_0::is_supported_format(F0) && llk_2_0::is_supported_format(F1), "matmul_init: Float16_b / Float16 only.");
     static_assert(is_legal_tile_shape(S0) && is_legal_tile_shape(S1), "matmul_init: illegal tile shape.");
+    static_assert(is_fp32_dest_acc_en == DST_ACCUM_MODE, "matmul_init: Dest mode is kernel-wide (DST_ACCUM_MODE)");
     LLK_ASSERT(ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "matmul_init: block exceeds Dest");
-    detail::dest_leave<dest_dvalid_client::UNPACK>();
     detail::dest_join<dest_dvalid_client::FPU>();
     UNPACK((llk_2_0::unpack_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));

@@ -40,6 +40,9 @@ std::uint32_t run_kernel() {
 #endif
 
     kernel_main();
+#ifdef LLK_2_0_DEST_CHAIN  // the kernel uses the 2.0 compute API (experimental/2_0/dest_sync.h)
+    ckernel::_llk_dest_chain_end_();
+#endif
 
     return 0;
 }

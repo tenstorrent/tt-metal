@@ -195,8 +195,8 @@ inline void unpack_matmul(
 
 #ifdef TRISC_MATH
 /**
- * @brief Kernel-wide math setup: Dest mode (16/32-bit), ALU formats, Dest section base at bank 0 (the dvalid chain
- * moves banks in hardware).
+ * @brief Kernel-wide math setup: Dest mode (16/32-bit), ALU formats, Dest section base at bank 0 (the dest chain
+ * moves it on take).
  * @tparam A, B: Descriptors of the SrcA / SrcB operands.
  * @tparam EN_32BIT_DEST: 32-bit Dest mode.
  */
@@ -267,7 +267,7 @@ constexpr DataFormat pack_src_format() {
 }
 
 /**
- * @brief Kernel-wide pack setup: packer input format and Dest bank 0 (the dvalid chain moves banks in hardware).
+ * @brief Kernel-wide pack setup: packer input format and Dest bank 0 (the dest chain moves it on take).
  */
 template <LLKMemDescriptor D, bool EN_32BIT_DEST>
 LLK_2_0_NOINLINE void pack_hw_configure() {

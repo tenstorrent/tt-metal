@@ -4,8 +4,9 @@
 
 #pragma once
 
-// Quasar: the 2.0 (id-free) and legacy (DFB-id) compute APIs must never be mixed in one kernel. 2.0 syncs Dest with
-// the dvalid chain, legacy with semaphores, and the two schemes cannot share Dest.
+// Quasar: the 2.0 (id-free) and legacy (DFB-id) compute APIs must never be mixed in one kernel. 2.0 hands Dest over on
+// the dest chain (llk_dest_chain.h), legacy on its own semaphores with a fixed MATH -> PACK order and PACK-side Dest
+// clears, and the two cannot share Dest: their bank offsets and clears would disagree.
 //
 // Each API's chokepoints claim the kernel with an assembler symbol and stop the build if the other API claimed it
 // already, so a kernel that uses both fails to build whichever API comes first. Only functions the kernel actually
