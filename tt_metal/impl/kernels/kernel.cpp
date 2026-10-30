@@ -29,7 +29,6 @@
 #include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
