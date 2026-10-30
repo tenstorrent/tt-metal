@@ -10,22 +10,29 @@ Vocabulary (tokens are KV positions of one row's paged cache):
   ``CHUNK_LADDER`` at or below ``GEMMA4_SDPA_SPLITFREE_CHUNK`` (default 256) whose circular buffers fit the
   per-core L1 of the arch (``grid.sdpa_decode_cb_budget_bytes``). It depends on the head dim, the cache format
   and the arch only, never on the batch or the grid, so every decode graph of one build chunks alike.
-* ``unit`` (``U = nsub * C``): the work unit. On a layer without a window it is derived from the grid
-  (``derive_unit``): the smallest multiple of the chunk whose unit count at ``max_context`` is at most the grid's
-  cores, at most ``DEFAULT_UNIT`` (4096) -- so a lone row at the full context puts one unit on (nearly) every core:
-  2048 tokens on the 13x10 Blackhole grid (128 units of a 256K context on 130 cores), 2304 on a harvested 12x10,
-  4096 on the Wormhole 8x8 (64 units); ``GEMMA4_SDPA_SPLITFREE_UNIT`` pins it. The grid is a build constant of a
-  chip, so every decode graph of one build units alike; a row's bits follow the unit (and the chunk), never the
-  core mapping. One chunk on a windowed (sliding) layer, whose live range is at most ``window`` tokens. A unit's chunks
+* ``unit`` (``U = nsub * C``): the work unit, ``DEFAULT_UNIT`` (4096 tokens) on a layer without a window;
+  ``GEMMA4_SDPA_SPLITFREE_UNIT=<tokens>`` pins another, ``=grid`` derives it from the grid (``derive_unit``: the
+  smallest chunk multiple whose unit count at ``max_context`` is at most the grid's cores -- 2048 on 13x10, 2304
+  on 12x10, 4096 on 8x8 -- one unit per core for a lone row at the full context). Measured on a 12x10 P150 at
+  256K, one live row, the derived 2304-token unit (114 units) ran 1.58 ms against 1.31 ms at 4096 (64 units), and
+  1.11 vs 1.05 ms at 128K: the combine merges a row's partials serially (~13 us each), so more units cost more
+  than the shorter per-core walk saves; 4096 stays the default until the combine is a tree. The unit is a build
+  constant (grid, chunk, context), so every decode graph of one build units alike and a row's bits follow the
+  unit and the chunk, never the core mapping. One chunk on a windowed (sliding) layer, whose live range is at
+  most ``window`` tokens. A unit's chunks
   are walked in ascending order on ONE core with the stock online-softmax recurrence; its partial (running max
   ``m``, denominator ``l``, unnormalised numerator ``O``) is written to the scratch. Unit ``u`` of row ``b`` covers
   tokens ``[u*U, (u+1)*U)``; the chunk holding ``cur_pos`` is masked, chunks past it (and before the window
   start) are skipped.
-* pair space: ``p = (u mod M) * (B*G) + b*G + g`` for the padded row ``b``, KV group ``g`` and unit ``u``, with
-  ``M = min(n_cores, max_units)``; the core of a pair is ``p mod n_cores``. Unit-major, so a lone row's units
-  spread round-robin over the grid and the rows of one unit sit on consecutive cores; a core walks its pairs in
-  ascending ``p`` and, per pair, ascending ``u`` (``u = u' + k*M``) -- the one order its three kernels share.
-  The mapping never reads ``cur_pos``: liveness (which units of a row exist) is decided on device, per row.
+* pair space: ``(u' = u mod M, bg = b*G + g)`` for the padded row ``b``, KV group ``g`` and unit ``u``, with
+  ``M = min(n_cores, max_units)``; the core of a pair is ``(u' * stride + bg) mod n_cores`` with ``stride`` the
+  smallest integer >= B*G coprime with ``n_cores``: a row's M unit classes land on M distinct cores whatever the
+  padded batch (a lone row spreads over ``min(M, n_cores)`` cores inside a B=32 graph as inside a B=1 graph; the
+  earlier ``p = u'*BG + bg, core = p mod n`` put a lone row of a B=32 graph on ``n / gcd(32, n)`` cores: 15 of
+  120, 65 of 130, 2 of 64), and the B*G rows of one unit class fill a window of consecutive cores, the windows
+  tiling the grid. A core walks its pairs in ascending ``bg`` (``u' = (core - bg) * stride^-1 mod n_cores`` when
+  below M) and, per pair, ascending ``u`` (``u = u' + k*M``) -- the one order its three kernels share. The
+  mapping never reads ``cur_pos``: liveness (which units of a row exist) is decided on device, per row.
 * slot: ``(b*G + g) * n_slots + (u mod n_slots)`` of the scratch, ``n_slots`` the most units one row can have
   live at once (all of them without a window; ``ceil((window-1)/U) + 1`` with one). A slot is ``2 + DHt`` fp32
   tiles: ``m``, ``l``, then ``O``'s ``DHt`` tiles.
@@ -35,6 +42,7 @@ Vocabulary (tokens are KV positions of one row's paged cache):
 """
 
 import dataclasses
+import math
 import os
 
 from models.demos.gemma4.custom_ops.grid import grid_cores, sdpa_decode_cb_budget_bytes, sdpa_tile_bytes
@@ -66,6 +74,19 @@ def _env_int(env, name, default, multiple=1):
 
 def ceil_div(a, b):
     return -(-int(a) // int(b))
+
+
+def unit_stride(bg_n, n_cores):
+    """``(stride, stride^-1 mod n_cores)`` of the pair -> core mapping: the smallest integer >= ``bg_n``
+    (rows x groups) coprime with ``n_cores``, so ``u' -> u' * stride mod n_cores`` is a bijection (a row's unit
+    classes on distinct cores) and the ``bg_n`` pairs of one unit class fill consecutive cores."""
+    n_cores, bg_n = int(n_cores), max(1, int(bg_n))
+    if n_cores == 1:
+        return 1, 0
+    stride = bg_n
+    while math.gcd(stride, n_cores) != 1:
+        stride += 1
+    return stride, pow(stride, -1, n_cores)
 
 
 def derive_unit(chunk, max_context, n_cores, cap=DEFAULT_UNIT):
@@ -116,6 +137,7 @@ def combine_cb_bytes(dht, pos_stick):
 
 @dataclasses.dataclass(frozen=True)
 class SplitfreePlan:
+    grid_unit: bool  # the unit follows the grid (GEMMA4_SDPA_SPLITFREE_UNIT=grid), else a fixed token count
     grid: tuple
     n_cores: int
     batch: int  # padded rows B
@@ -129,6 +151,8 @@ class SplitfreePlan:
     max_units: int
     n_slots: int
     modulus: int
+    stride: int  # the unit-class stride over the cores (>= batch * groups, coprime with n_cores)
+    stride_inv: int  # stride^-1 mod n_cores (0 on a one-core grid)
     kv_tile_bytes: int
     qk_tile_bytes: int  # the scores CB: 4096 (fp32) or 2048 (bf16)
     reads_in_flight: int
@@ -167,11 +191,12 @@ class SplitfreePlan:
 
     @property
     def scratch_tiles_bound(self):
-        """The slots any context needs on this grid: ``derive_unit`` keeps ``max_units <= n_cores`` on a layer
-        without a window (a narrower page table than the model's maximum shrinks the unit, never the bound), so a
-        scratch sized for ``n_cores`` slots serves every call; a windowed layer's slot count is fixed by the
-        window."""
-        slots = self.n_slots if self.window else max(self.n_slots, self.n_cores)
+        """The slots any context needs on this grid. With a fixed unit a narrower page table than the model's
+        maximum has fewer units (``n_slots`` is the bound). With the grid-derived unit (``grid_unit``)
+        ``derive_unit`` keeps ``max_units <= n_cores`` whatever the page table's reach (a narrower table shrinks
+        the unit, never the bound), so ``n_cores`` slots serve every call. A windowed layer's slot count is fixed
+        by the window."""
+        slots = max(self.n_slots, self.n_cores) if (self.grid_unit and not self.window) else self.n_slots
         return self.batch * self.groups * slots * self.tiles_per_slot
 
     @property
@@ -203,16 +228,17 @@ class SplitfreePlan:
         return range(max(u * self.nsub, r[0]), min((u + 1) * self.nsub - 1, r[1]) + 1)
 
     def core_of(self, b, g, u):
-        p = (u % self.modulus) * (self.batch * self.groups) + b * self.groups + g
-        return p % self.n_cores
+        return ((u % self.modulus) * self.stride + b * self.groups + g) % self.n_cores
 
     def pairs_of_core(self, core):
-        """The ``(u', b, g)`` pairs of a core in walking order (``u'`` the unit class ``u mod M``)."""
-        bg_n = self.batch * self.groups
+        """The ``(u', b, g)`` pairs of a core in walking order: ascending ``bg``, the unit class
+        ``u' = (core - bg) * stride^-1 mod n_cores`` when it is below the modulus (``M <= n_cores``: at most one
+        per bg)."""
         out = []
-        for p in range(core, self.pair_space, self.n_cores):
-            up, bg = divmod(p, bg_n)
-            out.append((up, bg // self.groups, bg % self.groups))
+        for bg in range(self.batch * self.groups):
+            up = ((core - bg) % self.n_cores) * self.stride_inv % self.n_cores
+            if up < self.modulus:
+                out.append((up, bg // self.groups, bg % self.groups))
         return out
 
     def units_of_core(self, core, cur_pos):
@@ -293,7 +319,9 @@ def plan_splitfree(
     kv_tile = sdpa_tile_bytes(kv_dtype)
     budget = sdpa_decode_cb_budget_bytes(arch) if budget_bytes is None else int(budget_bytes)
     chunk_cap = _env_int(env, CHUNK_ENV, DEFAULT_CHUNK, TILE)
-    unit_cfg = _env_int(env, UNIT_ENV, 0, TILE)  # 0: derive the unit from the grid (derive_unit)
+    unit_raw = str(env.get(UNIT_ENV, "") or "").strip().lower()
+    grid_unit = unit_raw == "grid"
+    unit_cfg = 0 if grid_unit else _env_int(env, UNIT_ENV, DEFAULT_UNIT, TILE)
     reads = _env_int(env, READS_ENV, DEFAULT_READS)
     qk_tile = BF16_TILE_BYTES if str(env.get(QK_FP32_ENV, "") or "").strip() == "0" else F32_TILE_BYTES
     dht = head_dim // TILE
@@ -310,14 +338,18 @@ def plan_splitfree(
     chunk, pcb = chosen
     if window:
         unit = chunk
-    elif unit_cfg:
-        unit = max(chunk, (unit_cfg // chunk) * chunk)  # pinned by the env
-    else:
+    elif grid_unit:
         unit = derive_unit(chunk, max_context, n_cores)
+    else:
+        unit = max(chunk, (unit_cfg // chunk) * chunk)  # the default 4096, or the env's pin
     max_units = ceil_div(max_context, unit)
     n_slots = max_units if not window else min(max_units, ceil_div(window - 1, unit) + 1)
     modulus = min(n_cores, max_units)
+    stride, stride_inv = unit_stride(batch * groups, n_cores)
     return SplitfreePlan(
+        grid_unit=grid_unit,
+        stride=stride,
+        stride_inv=stride_inv,
         grid=(gx, gy),
         n_cores=n_cores,
         batch=batch,

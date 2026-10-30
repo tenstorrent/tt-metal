@@ -81,8 +81,8 @@ def splitfree_sdpa_enabled(config) -> bool:
     """GEMMA4_SDPA_DECODE_SPLITFREE (``decode_flag``: the env when set, else the build profile, default off):
     "1" = the split-independent paged decode SDPA (custom_ops/sdpa_decode_splitfree) on the global layers,
     "2" = on the sliding layers as well. Its output for a row is bitwise identical across the decode graphs of
-    a build (the unit is derived from the chip's grid, a build constant), so the graphs can use the cores they
-    have; the pin above stays as it is for the stock op."""
+    a build (unit and chunk are build constants), so the graphs can use the cores they have; the pin above
+    stays as it is for the stock op."""
     mode = decode_flag(SPLITFREE_ENV)
     if mode == "2":
         return True
@@ -472,9 +472,9 @@ def decode_forward(
     if page_table is not None and sdpa_scratch is not None and splitfree_sdpa_enabled(config):
         # GEMMA4_SDPA_DECODE_SPLITFREE: the custom op (custom_ops/sdpa_decode_splitfree): fixed KV units per
         # (row, group) on a static core mapping, fp32 partials in the model's scratch, a fixed-order combine --
-        # the row's bits do not depend on the padded batch or the cores (tt-metal#59300), and a lone row at the
-        # full context puts one unit on (nearly) every core (the unit is derived from the grid, a build
-        # constant). Out of contract (the wrapper says why), the stock op serves.
+        # the row's bits do not depend on the padded batch or the cores (tt-metal#59300), and a lone row's units
+        # sit on consecutive cores whatever the padded batch (64 cores at 256K). Out of contract (the wrapper
+        # says why), the stock op serves.
         from models.demos.gemma4.custom_ops.sdpa_decode_splitfree import SdpaDecodeSplitfree
 
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
