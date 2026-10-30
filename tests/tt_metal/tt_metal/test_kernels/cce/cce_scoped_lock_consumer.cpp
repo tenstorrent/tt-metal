@@ -9,25 +9,21 @@
 // kModeNonSnoopingProducer) are described in cce_scoped_lock_abi.h.
 
 #include "cce_scoped_lock_abi.h"
+#include "cce_scoped_lock_common.h"
 #include "cce_test_common.h"
-#include "dev_mem_map.h"
 #include "internal/scoped_lock_cache_ops.h"
 #include "risc_common.h"
 
 namespace abi = cce_scoped_lock_abi;
+using cce_scoped_lock::lock_lines_valid;
+using cce_scoped_lock::ring_wrap_valid;
+using cce_scoped_lock::Status;
+using cce_scoped_lock::write_status;
 using cce_test::arg_u64;
 using cce_test::DataCheck;
 using cce_test::own_tl1_words;
 using cce_test::poll_bounded;
-
-// A status line the host can find: 64 B aligned, between the end of the harts' kernel text and the end of the
-// hart-cacheable port. Otherwise the kernel writes nothing and the host deadline reports it.
-static bool status_line_valid(uint32_t status_offset) {
-    constexpr uint64_t kTestAreaBegin =
-        MEM_CCE_KERNEL_BASE + static_cast<uint64_t>(MEM_CCE_KERNEL_SIZE) * MEM_CCE_LOCAL_HARTS;
-    return status_offset % abi::kLineBytes == 0 && status_offset >= kTestAreaBegin &&
-           status_offset + static_cast<uint64_t>(abi::kLineBytes) <= MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE;
-}
+using cce_test::status_line_valid;
 
 // One value per probe line, as read.
 struct ProbeRead {
@@ -79,7 +75,7 @@ void kernel_main() {
                                warmed_flag_offset % abi::kLineBytes == 0 &&
                                published_flag_offset % abi::kLineBytes == 0 && result_offset % abi::kLineBytes == 0 &&
                                status_offset % abi::kLineBytes == 0;
-    const bool lock_valid = lock_num_lines != 0 && lock_first_line + lock_num_lines <= abi::kNumLines;
+    const bool lock_valid = lock_lines_valid(lock_first_line, lock_num_lines);
     bool args_valid = false;
     switch (mode) {
         case abi::kModeInvalidateOnAcquire:
@@ -89,55 +85,44 @@ void kernel_main() {
             args_valid =
                 offsets_valid && lock_valid && consumer_count <= abi::kMaxConsumers && consumer_index < consumer_count;
             break;
-        case abi::kModeRingWrap:
-            args_valid = offsets_valid && ring_slots != 0 && slot_lines != 0 &&
-                         ring_slots * slot_lines <= abi::kNumLines && rounds != 0 && rounds <= 0xFF;
-            break;
+        case abi::kModeRingWrap: args_valid = offsets_valid && ring_wrap_valid(ring_slots, slot_lines, rounds); break;
         default: break;
     }
 
-    uint32_t code = abi::kCodeDone;
-    uint32_t flags = 0;
-    uint32_t wait_cycles = 0;
-    uint32_t poll_cycles = 0;
-    uint32_t last_poll = abi::kPollNone;
-    bool last_poll_ready = false;
-    uint32_t flag_observed = 0;
-    uint32_t rounds_done = 0;
-    DataCheck check;
+    Status status;
     if (!args_valid) {
-        code = abi::kCodeBadArgs;
+        status.code = abi::kCodeBadArgs;
     } else if (mode == abi::kModeRingWrap) {
         volatile uint32_t* read_pointer = own_tl1_words(warmed_flag_offset);
         const volatile uint32_t* write_pointer = own_tl1_words(published_flag_offset);
         const uint32_t slot_bytes = slot_lines * abi::kLineBytes;
         for (uint32_t round = 0; round < rounds; ++round) {
             uint32_t round_wait_cycles = 0;
-            last_poll = abi::kPollPeer;
-            last_poll_ready = poll_bounded(
-                [write_pointer, round, &flag_observed] {
-                    flag_observed = *write_pointer;
-                    return flag_observed > round;
+            status.last_poll = abi::kPollPeer;
+            status.last_poll_ready = poll_bounded(
+                [write_pointer, round, &status] {
+                    status.flag_observed = *write_pointer;
+                    return status.flag_observed > round;
                 },
                 budget_cycles,
                 round_wait_cycles);
-            wait_cycles += round_wait_cycles;
-            if (!last_poll_ready) {
-                code = abi::kCodePeerTimeout;
+            status.wait_cycles += round_wait_cycles;
+            if (!status.last_poll_ready) {
+                status.code = abi::kCodePeerTimeout;
                 break;
             }
-            flags |= abi::kFlagPeerSignalled;
+            status.flags |= abi::kFlagPeerSignalled;
             asm volatile("fence r, r" ::: "memory");
             const uintptr_t slot_address = region_offset + (round % ring_slots) * slot_bytes;
             const volatile uint32_t* slot_words = reinterpret_cast<const volatile uint32_t*>(slot_address);
             scoped_lock_acquire_cache_ops(slot_address, slot_bytes);
             for (uint32_t word = 0; word < slot_bytes / sizeof(uint32_t); ++word) {
-                check.record((round << 8) | word, slot_words[word], abi::ring_word(round, word));
+                status.check.record((round << 8) | word, slot_words[word], abi::ring_word(round, word));
             }
             scoped_lock_release_cache_ops(slot_address, slot_bytes);
             asm volatile("fence r, w" ::: "memory");
             *read_pointer = round + 1;
-            rounds_done = round + 1;
+            status.rounds_done = round + 1;
         }
     } else {
         const volatile uint32_t* cached_probe =
@@ -156,32 +141,32 @@ void kernel_main() {
         }
 
         const volatile uint32_t* published = own_tl1_words(published_flag_offset);
-        last_poll = abi::kPollPeer;
-        last_poll_ready = poll_bounded(
-            [published, &flag_observed] {
-                flag_observed = *published;
-                return flag_observed != 0;
+        status.last_poll = abi::kPollPeer;
+        status.last_poll_ready = poll_bounded(
+            [published, &status] {
+                status.flag_observed = *published;
+                return status.flag_observed != 0;
             },
             budget_cycles,
-            wait_cycles);
-        if (!last_poll_ready) {
-            code = abi::kCodePeerTimeout;
+            status.wait_cycles);
+        if (!status.last_poll_ready) {
+            status.code = abi::kCodePeerTimeout;
         } else {
-            flags |= abi::kFlagPeerSignalled;
+            status.flags |= abi::kFlagPeerSignalled;
         }
-        if (code == abi::kCodeDone && mode == abi::kModeNonSnoopingProducer) {
-            last_poll = abi::kPollData;
-            last_poll_ready = poll_bounded(
-                [uncached_probe, &check] { return all_probe_words_new(uncached_probe, check); },
+        if (status.code == abi::kCodeDone && mode == abi::kModeNonSnoopingProducer) {
+            status.last_poll = abi::kPollData;
+            status.last_poll_ready = poll_bounded(
+                [uncached_probe, &status] { return all_probe_words_new(uncached_probe, status.check); },
                 budget_cycles,
-                poll_cycles);
-            if (last_poll_ready) {
-                flags |= abi::kFlagLanded;
+                status.poll_cycles);
+            if (status.last_poll_ready) {
+                status.flags |= abi::kFlagLanded;
             } else {
-                code = abi::kCodeDataTimeout;
+                status.code = abi::kCodeDataTimeout;
             }
         }
-        if (code == abi::kCodeDone) {
+        if (status.code == abi::kCodeDone) {
             asm volatile("fence r, r" ::: "memory");
             ProbeRead cached_after;
             if (invalidate_mode) {
@@ -201,19 +186,5 @@ void kernel_main() {
         }
     }
 
-    volatile uint32_t* status = own_tl1_words(status_offset);
-    status[abi::kStatusCode] = code;
-    status[abi::kStatusFlags] = flags;
-    status[abi::kStatusWaitCycles] = wait_cycles;
-    status[abi::kStatusPollCycles] = poll_cycles;
-    status[abi::kStatusLastPoll] = last_poll;
-    status[abi::kStatusLastPollReady] = last_poll_ready ? 1 : 0;
-    status[abi::kStatusFlagObserved] = flag_observed;
-    status[abi::kStatusMismatchedWords] = check.mismatched_words;
-    status[abi::kStatusFirstMismatchWord] = check.first_mismatch_word;
-    status[abi::kStatusObserved] = check.observed;
-    status[abi::kStatusExpected] = check.expected;
-    status[abi::kStatusRounds] = rounds_done;
-    asm volatile("fence w, w" ::: "memory");
-    status[abi::kStatusMagic] = abi::kConsumerDoneMagic;
+    write_status(status_offset, status, abi::kConsumerDoneMagic);
 }
