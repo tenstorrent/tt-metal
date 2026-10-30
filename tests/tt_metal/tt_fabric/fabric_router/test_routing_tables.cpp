@@ -50,7 +50,12 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-        cluster, rtoptions, hal, distributed_context, graph_desc.string(), fabric_config, reliability_mode);
+        cluster,
+        rtoptions,
+        hal,
+        distributed_context,
+        graph_desc.string(),
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(fabric_config, reliability_mode));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
@@ -70,8 +75,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
         distributed_context,
         graph_desc.string(),
         logical_mesh_chip_id_to_physical_chip_id_mapping,
-        kFabricConfig,
-        kReliabilityMode);
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(kFabricConfig, kReliabilityMode));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
@@ -104,12 +108,11 @@ struct RoutingTableGeneratorTestHelper {
             *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
         physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
-        tt::tt_fabric::LocalMeshBinding local_mesh_binding;
-        local_mesh_binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
-        local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+        const tt::tt_fabric::MeshId bound_mesh_id = tt::tt_fabric::MeshId{0};
+        const tt::tt_fabric::MeshHostRankId bound_host_rank = tt::tt_fabric::MeshHostRankId{0};
 
         topology_mapper = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            cluster, *distributed_context, *mesh_graph, *physical_system_descriptor, local_mesh_binding);
+            cluster, *distributed_context, *mesh_graph, *physical_system_descriptor, bound_mesh_id, bound_host_rank);
 
         routing_table_generator = std::make_unique<tt::tt_fabric::RoutingTableGenerator>(*topology_mapper);
     }
@@ -127,7 +130,12 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d_ring(const st
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-        cluster, rtoptions, hal, distributed_context, graph_desc.string(), kFabricConfig1D, kReliabilityMode);
+        cluster,
+        rtoptions,
+        hal,
+        distributed_context,
+        graph_desc.string(),
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(kFabricConfig1D, kReliabilityMode));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
@@ -140,7 +148,12 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::fi
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-        cluster, rtoptions, hal, distributed_context, graph_desc.string(), kFabricConfig1D, kReliabilityMode);
+        cluster,
+        rtoptions,
+        hal,
+        distributed_context,
+        graph_desc.string(),
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(kFabricConfig1D, kReliabilityMode));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
@@ -285,6 +298,119 @@ TEST_F(ControlPlaneFixture, TestDisconnectedQuadsZeroIntermeshResolved) {
         << "The quads come from different captures with no shared links; nothing may resolve 1 -> 0";
 }
 
+// Each mesh in the llama line MGD resolves to its own declared config: 4x8 RING,LINE -> FABRIC_2D_TORUS_Y,
+// 4x2 LINE,LINE -> FABRIC_2D.
+TEST_F(ControlPlaneFixture, TestLlamaLinePerMeshFabricConfig) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    EXPECT_EQ(mesh_ids.size(), 4u);
+    for (const auto mesh_id : mesh_ids) {
+        // 4x8 meshes have 32 chips and default to TORUS_Y; 4x2 meshes have 8 chips and default to FABRIC_2D.
+        const auto num_chips = mesh_graph.get_chip_ids(mesh_id).size();
+        const auto expected =
+            num_chips == 32 ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y : tt::tt_fabric::FabricConfig::FABRIC_2D;
+        EXPECT_EQ(mesh_graph.get_mesh_graph_descriptor().default_fabric_config_from_dim_types(mesh_id), expected)
+            << "mesh " << *mesh_id << " (" << num_chips << " chips)";
+    }
+}
+
+// A different concrete config per mesh must still build a control plane consistent on every rank. Mesh 1 keeps
+// FABRIC_2D_TORUS_Y, every other mesh -> FABRIC_2D, so the two 32-chip meshes (0 and 1) run different configs and
+// mesh 0 deviates from its dim_types default. init_control_plane gathers these configs before building the
+// MeshGraph; without that gather a rank would apply its own mesh's config to every mesh and throw.
+TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigDiffersPerRank) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    // Set this rank's own mesh inline: mesh 1 stays FABRIC_2D_TORUS_Y, every other mesh -> FABRIC_2D.
+    const auto owned_mesh_id = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_mesh_id();
+    const auto rank_fabric_config =
+        (*owned_mesh_id == 1) ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y : tt::tt_fabric::FabricConfig::FABRIC_2D;
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        rank_fabric_config, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Building the control plane without a cross-rank throw is the regression. Also confirm every rank agrees on
+    // the mesh set and that this rank resolved to the config assigned to its own mesh.
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    EXPECT_EQ(mesh_graph.get_mesh_ids().size(), 4u);
+    EXPECT_EQ(control_plane.get_fabric_config(), rank_fabric_config) << "owned mesh " << *owned_mesh_id;
+}
+
+// MGD_DEFAULT ("FROM MGD"): each mesh takes its own dim_types config, resolved identically on every rank (4x8 ->
+// FABRIC_2D_TORUS_Y, 4x2 -> FABRIC_2D). Companion to TestPerMeshHeterogeneousConfigDiffersPerRank.
+TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigFromMgd) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::MGD_DEFAULT,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    EXPECT_EQ(mesh_ids.size(), 4u);
+    for (const auto mesh_id : mesh_ids) {
+        const auto num_chips = mesh_graph.get_chip_ids(mesh_id).size();
+        const auto expected =
+            num_chips == 32 ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y : tt::tt_fabric::FabricConfig::FABRIC_2D;
+        EXPECT_EQ(mesh_graph.get_mesh_graph_descriptor().default_fabric_config_from_dim_types(mesh_id), expected)
+            << "mesh " << *mesh_id << " (" << num_chips << " chips)";
+    }
+}
+
+// Negative: the gather must reject a split where ranks of the SAME mesh ask for different configs. Here mesh 0's
+// host_rank 0 asks for FABRIC_2D_TORUS_Y while its other ranks ask for FABRIC_2D;
+// validate_fabric_config_compatibility() fatals identically on every rank ("FabricConfig must match...").
+TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentConfigWithinMesh) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto mesh_id = rtoptions.get_fabric_mesh_id();
+    const auto host_rank = rtoptions.get_fabric_mesh_host_rank();
+    // Break mesh 0's agreement: host_rank 0 asks for TORUS_Y, every other rank asks for FABRIC_2D.
+    const auto bad_config = (*mesh_id == 0 && *host_rank == 0) ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y
+                                                               : tt::tt_fabric::FabricConfig::FABRIC_2D;
+    // set_fabric_config() may itself rebuild the control plane and throw there, so wrap it and
+    // initialize_fabric_config() together.
+    EXPECT_ANY_THROW({
+        tt::tt_metal::MetalContext::instance().set_fabric_config(
+            bad_config, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+    });
+}
+
+// Negative: every FabricConfigDescriptor field other than fabric_config, mesh_id and host_rank must be identical on
+// every rank. Here all ranks agree on fabric_config (FABRIC_2D) but one rank uses a different reliability_mode, and
+// validate_fabric_config_compatibility() must reject it. reliability_mode stands in for all such uniform fields.
+TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentReliabilityMode) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto mesh_id = rtoptions.get_fabric_mesh_id();
+    const auto host_rank = rtoptions.get_fabric_mesh_host_rank();
+    // One rank uses STRICT reliability while every other rank uses RELAXED, with the per-mesh fabric_config kept
+    // uniform (FABRIC_2D) so only the non-fabric_config field diverges.
+    const auto reliability = (*mesh_id == 0 && *host_rank == 0)
+                                 ? tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE
+                                 : tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+    // set_fabric_config() rebuilds the control plane (and thus runs the cross-rank validation), so the fatal can
+    // fire there rather than in initialize_fabric_config(); wrap both.
+    EXPECT_ANY_THROW({
+        tt::tt_metal::MetalContext::instance().set_fabric_config(tt::tt_fabric::FabricConfig::FABRIC_2D, reliability);
+        tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+    });
+}
+
 // Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.
 TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
@@ -326,6 +452,36 @@ TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
     EXPECT_EQ(edge_ports.count({RoutingDirection::N, 0}), 0u);
     EXPECT_EQ(edge_ports.count({RoutingDirection::S, 0}), 0u);
     EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
+}
+
+// The MGD's dim_types default builds the same graph as no override, and differs from an explicit FABRIC_2D, which
+// restricts the galaxy's declared E/W torus to a mesh and frees its edge ports.
+TEST(MeshGraphValidation, TestMgdDefaultMatchesDimTypes) {
+    const std::filesystem::path torus_x_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto";
+    const auto default_config = tt::tt_fabric::MeshGraphDescriptor(torus_x_mgd_path, /*backwards_compatible=*/true)
+                                    .default_fabric_config_from_dim_types(MeshId{0});
+    EXPECT_EQ(default_config, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
+
+    auto from_dim_types = make_mesh_graph(torus_x_mgd_path);
+    auto mgd_default = make_mesh_graph(torus_x_mgd_path, default_config);
+    auto mesh_2d = make_mesh_graph(torus_x_mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D);
+
+    EXPECT_EQ(
+        mgd_default.get_mesh_edge_ports_to_chip_id().at(0), from_dim_types.get_mesh_edge_ports_to_chip_id().at(0));
+    EXPECT_NE(mgd_default.get_mesh_edge_ports_to_chip_id().at(0), mesh_2d.get_mesh_edge_ports_to_chip_id().at(0));
+
+    const auto& expected = from_dim_types.get_intra_mesh_connectivity().at(0);
+    const auto& actual = mgd_default.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(actual.size(), expected.size());
+    for (size_t chip = 0; chip < expected.size(); ++chip) {
+        ASSERT_EQ(actual[chip].size(), expected[chip].size()) << "chip " << chip;
+        for (const auto& [neighbor, edge] : expected[chip]) {
+            ASSERT_TRUE(actual[chip].contains(neighbor)) << "chip " << chip << " neighbor " << neighbor;
+            EXPECT_EQ(actual[chip].at(neighbor).port_direction, edge.port_direction);
+        }
+    }
 }
 
 // Torus edge-port reservation is decided per axis by who declared the torus (issue #54650), pinned
@@ -633,6 +789,29 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
+// A ControlPlane built with MGD_DEFAULT reports the owned mesh's dim_types default, not MGD_DEFAULT.
+TEST_F(ControlPlaneFixture, TestMgdDefaultResolvesToDimTypes) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        GTEST_SKIP() << "Needs a (mock) WH galaxy";
+    }
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        tt::tt_metal::MetalContext::instance().rtoptions(),
+        tt::tt_metal::MetalContext::instance().hal(),
+        tt::tt_metal::MetalContext::instance().full_world_distributed_context(),
+        mgd_path.string(),
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(
+            tt::tt_fabric::FabricConfig::MGD_DEFAULT, kReliabilityMode));
+    EXPECT_EQ(
+        control_plane->get_fabric_config(),
+        control_plane->get_mesh_graph().get_mesh_graph_descriptor().default_fabric_config_from_dim_types(MeshId{0}));
+    EXPECT_NE(control_plane->get_fabric_config(), tt::tt_fabric::FabricConfig::MGD_DEFAULT);
+    EXPECT_EQ(control_plane->get_mesh_graph().get_mesh_graph_descriptor_path(), mgd_path);
+}
+
 TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -714,7 +893,12 @@ TEST_F(ControlPlaneFixture, ProbeWormholeSingleGalaxyAutoDiscoveryFullCoverage) 
         SCOPED_TRACE(label);
         std::unique_ptr<tt::tt_fabric::ControlPlane> cp;
         ASSERT_NO_THROW(
-            cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode));
+            cp = std::make_unique<tt::tt_fabric::ControlPlane>(
+                cluster,
+                rtoptions,
+                hal,
+                dctx,
+                tt::tt_fabric::fabric_router_tests::make_control_plane_config(cfg, kReliabilityMode)));
 
         const auto mesh_ids = cp->get_user_physical_mesh_ids();
         ASSERT_EQ(mesh_ids.size(), 1u) << "Auto-discovery should produce a single mesh on a single galaxy";
@@ -1439,12 +1623,11 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
         *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
     auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
-    tt::tt_fabric::LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {mesh_id};
-    local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+    const tt::tt_fabric::MeshId bound_mesh_id = mesh_id;
+    const tt::tt_fabric::MeshHostRankId bound_host_rank = tt::tt_fabric::MeshHostRankId{0};
 
     auto topology_mapper = std::make_unique<tt::tt_fabric::TopologyMapper>(
-        cluster, *distributed_context, mesh_graph, *physical_system_descriptor, local_mesh_binding);
+        cluster, *distributed_context, mesh_graph, *physical_system_descriptor, bound_mesh_id, bound_host_rank);
 
     // Create a temporary directory for the output file
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "test_eth_coords";
@@ -2572,10 +2755,9 @@ std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>> build_exp
     const auto& dctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto psd = tt::tt_metal::run_physical_system_discovery(
         *cluster.get_cluster_desc(), dctx, metal.rtoptions().get_target_device());
-    tt::tt_fabric::LocalMeshBinding binding;
-    binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
-    binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
-    tt::tt_fabric::TopologyMapper topology_mapper(cluster, *dctx, *mesh_graph_out, psd, binding);
+    const tt::tt_fabric::MeshId bound_mesh_id = tt::tt_fabric::MeshId{0};
+    const tt::tt_fabric::MeshHostRankId bound_host_rank = tt::tt_fabric::MeshHostRankId{0};
+    tt::tt_fabric::TopologyMapper topology_mapper(cluster, *dctx, *mesh_graph_out, psd, bound_mesh_id, bound_host_rank);
     tt::tt_fabric::RoutingTableGenerator rtg(topology_mapper);
     return rtg.get_intra_mesh_table();
 }

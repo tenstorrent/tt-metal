@@ -30,9 +30,9 @@
   cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_nightly.yaml
   skus:
     wh_galaxy:
-      timeout: 45
+      timeout: 39
     bh_galaxy:
-      timeout: 45
+      timeout: 37
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
@@ -91,6 +91,87 @@
       timeout: 10
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto
   owner_id: U0BRTUH9VE0 # Amogh Rajagopal
+  team: scaleout
+  budget_type: e2e
+
+# Per-mesh heterogeneous fabric config: each mesh's dim_types imply its own 2D config. Four MGDs run in one job
+# (shared compile cache), each selecting the HeterogeneousFabric* groups from test_fabric_per_mesh_heterogeneous.yaml:
+#   1. torus_yx      -- TORUS_Y + TORUS_X + TORUS_Y (3 meshes)
+#   2. split_2x4     -- 2x4 TORUS_X split across 2 processes + 2x2 TORUS_Y
+#   3. config_combo  -- TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D, ring-connected
+#   4. bigmesh_combo -- 4x4 TORUS_X split across 2 processes + 2x2 TORUS_Y + 2x2 FABRIC_2D
+- id: galaxy-fabric-per-mesh-torus-yx
+  name: Galaxy Fabric per-mesh heterogeneous-config sanity + multicast (4 MGDs)
+  cmd: |
+    set -e
+    YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_heterogeneous.yaml
+    MGDDIR=tests/tt_metal/tt_fabric/custom_mesh_descriptors
+    LOGDIR=$(mktemp -d)
+    # tt-run does NOT propagate the test binary's exit code: an mpirun SIGABRT from a
+    # TT_THROW still returns 0 to the shell, so `set -e` alone reports a crashed
+    # scenario as success (false green). Assert the test's own authoritative markers
+    # instead -- test_tt_fabric prints "All tests completed successfully" per rank only
+    # on full success, and a failure summary / abort signature otherwise.
+    assert_fabric_ok() {
+      local log="$1" mgd="$2"
+      if grep -qiE "Boundary exceeded|exited on signal|caught signal|signal 6|Aborted|terminate called|what\(\):|\bFATAL\b" "$log"; then
+        echo "::error::per-mesh scenario crashed/aborted: $mgd"; return 1
+      fi
+      if grep -qE "Tests: [0-9]+ executed, [1-9][0-9]* failed|Result: FAILED" "$log"; then
+        echo "::error::per-mesh scenario reported test failures: $mgd"; return 1
+      fi
+      if ! grep -q "All tests completed successfully" "$log"; then
+        echo "::error::per-mesh scenario did not reach the success marker (incomplete/crashed): $mgd"; return 1
+      fi
+    }
+    for MGD in \
+      $MGDDIR/single_galaxy_per_mesh_torus_yx_mesh_graph_descriptor.textproto \
+      $MGDDIR/single_galaxy_split_2x4_per_mesh_mesh_graph_descriptor.textproto \
+      $MGDDIR/single_galaxy_per_mesh_config_combo_mesh_graph_descriptor.textproto \
+      $MGDDIR/single_galaxy_bigmesh_multirank_combo_mesh_graph_descriptor.textproto; do
+      echo "=== per-mesh scenario: $MGD ==="
+      LOG="$LOGDIR/$(basename $MGD).log"
+      TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML --filter 'name.HeterogeneousFabric*' 2>&1 | tee "$LOG"
+      assert_fabric_ok "$LOG" "$MGD"
+    done
+  skus:
+    bh_galaxy:
+      timeout: 8
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  budget_type: e2e
+
+# EXPERIMENTAL Wormhole counterpart of galaxy-fabric-per-mesh-torus-yx. Runs ONE WH MGD
+# (wh_galaxy_per_mesh_config_combo) whose dim_types imply all four 2D per-mesh fabric configs together
+# (TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D), running every HeterogeneousFabric* group of
+# test_fabric_per_mesh_heterogeneous.yaml (unicast intra & inter mesh plus intra-mesh multicast).
+# Probes whether WH galaxy routes heterogeneous per-mesh 2D-torus multi-mesh;
+# unlike Blackhole the inter-mesh path uses VC1 rather than VC2, so this is a feasibility check.
+- id: galaxy-fabric-per-mesh-wh-combo
+  name: Galaxy Fabric per-mesh heterogeneous-config sanity + multicast (WH config-combo, experimental)
+  cmd: |
+    set -e
+    YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_heterogeneous.yaml
+    MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_per_mesh_config_combo_mesh_graph_descriptor.textproto
+    LOG=$(mktemp)
+    # tt-run does NOT propagate the test binary's exit code (an mpirun SIGABRT from a
+    # TT_THROW returns 0 to the shell), so assert test_tt_fabric's own success marker
+    # instead of relying on `set -e`.
+    echo "=== WH per-mesh config-combo scenario: $MGD ==="
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML --filter 'name.HeterogeneousFabric*' 2>&1 | tee "$LOG"
+    if grep -qiE "Boundary exceeded|exited on signal|caught signal|signal 6|Aborted|terminate called|what\(\):|\bFATAL\b" "$LOG"; then
+      echo "::error::WH per-mesh scenario crashed/aborted: $MGD"; exit 1
+    fi
+    if grep -qE "Tests: [0-9]+ executed, [1-9][0-9]* failed|Result: FAILED" "$LOG"; then
+      echo "::error::WH per-mesh scenario reported test failures: $MGD"; exit 1
+    fi
+    if ! grep -q "All tests completed successfully" "$LOG"; then
+      echo "::error::WH per-mesh scenario did not reach the success marker (incomplete/crashed): $MGD"; exit 1
+    fi
+  skus:
+    wh_galaxy:
+      timeout: 6
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
 

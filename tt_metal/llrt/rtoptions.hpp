@@ -200,6 +200,9 @@ class RunTimeOptions {
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
+    tt::tt_fabric::MeshId fabric_mesh_id{0};
+    tt::tt_fabric::MeshHostRankId fabric_mesh_host_rank{tt::tt_fabric::MESH_HOST_RANK_UNSET};
+
     // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
     // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the
     // running hardware. Users supply it via `tt-run --factory-system-descriptor <path>`, which is
@@ -892,6 +895,11 @@ public:
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // TT_MESH_ID / TT_MESH_HOST_RANK. Mesh 0 / MESH_HOST_RANK_UNSET (resolved by the topology mapper) unless the
+    // launcher assigned this process a binding.
+    tt::tt_fabric::MeshId get_fabric_mesh_id() const { return fabric_mesh_id; }
+    tt::tt_fabric::MeshHostRankId get_fabric_mesh_host_rank() const { return fabric_mesh_host_rank; }
 
     // Factory System Descriptor (FSD) path. Empty when unset.
     bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
