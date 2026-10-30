@@ -153,16 +153,6 @@ std::string_view describe_packet_header(const FabricContext& fabric_context, Fab
     return header_name;
 }
 
-// Whether the builder's credit transport plan moves `vc`'s sender credits to L1 counters.
-bool does_vc_use_counters(const CreditTransportPlan& plan, uint32_t vc) {
-    switch (vc) {
-        case 0: return plan.vc0_uses_counters;
-        case 1: return plan.vc1_uses_counters;
-        case 2: return plan.vc2_uses_counters;
-        default: TT_THROW("Fabric manifest: the credit transport plan has no VC {}", vc);
-    }
-}
-
 }  // namespace
 
 RunInfo describe_run(const ControlPlane& control_plane) {
@@ -205,6 +195,9 @@ FabricInfo describe_fabric(const ControlPlane& control_plane) {
 
 std::vector<VcCreditTransport> describe_credit_transport(const FabricBuilderContext& builder_context, MeshId mesh_id) {
     const auto& plan = builder_context.get_stream_assignment(mesh_id).plan();
+    static_assert(builder_config::MAX_NUM_VCS == 3, "CreditTransportPlan has one bool per VC");
+    const std::array<bool, builder_config::MAX_NUM_VCS> vc_uses_counters = {
+        plan.vc0_uses_counters, plan.vc1_uses_counters, plan.vc2_uses_counters};
     std::vector<VcCreditTransport> transport;
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         if (builder_context.get_max_sender_channels_per_vc()[vc] == 0) {
@@ -212,7 +205,7 @@ std::vector<VcCreditTransport> describe_credit_transport(const FabricBuilderCont
         }
         transport.push_back(VcCreditTransport{
             .vc = vc,
-            .backing = does_vc_use_counters(plan, vc) ? CreditBacking::L1_COUNTER : CreditBacking::STREAM_REGISTER,
+            .backing = vc_uses_counters[vc] ? CreditBacking::L1_COUNTER : CreditBacking::STREAM_REGISTER,
         });
     }
     return transport;
