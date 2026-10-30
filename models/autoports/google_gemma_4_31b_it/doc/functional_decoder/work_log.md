@@ -149,3 +149,11 @@ in six harness files. The decoder and every non-import AST node are unchanged.
 formatting_provenance.json maps the measured source hashes to formatted hashes;
 evidence_manifest.json retains both. Original collection manifests remain intact.
 Independent review rechecks this cosmetic delta before the commit retry.
+
+Local stage checkpoint: repository `/home/mvasiljevic/tt-metal-gemma4-31b-pipeline`,
+branch `mvasiljevic/gemma4-31b-fresh-pipeline-v0811`, commit `802858ebfe12eda34e85e76c0d333ff90172c40c`.
+All commit hooks passed on retry (`checkpoint.log`). The independent reviewer
+preserved clean-pass after verifying the import-only formatting delta; see the
+post-hook addendum in stage_review.md. This follow-up log commit's SHA is recorded
+in the exact attempt telemetry packet alongside the implementation checkpoint.
+No remote exists and nothing was pushed.
