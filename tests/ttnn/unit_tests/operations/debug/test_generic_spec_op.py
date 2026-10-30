@@ -368,3 +368,93 @@ def test_generic_spec_op_compute_copy(device, input_dtype, output_dtype, unpack_
         assert not torch.equal(result, expected)
     else:
         assert torch.equal(result, expected)
+
+
+# Reads this core's input shard into the scratchpad, adds a constant on the RISC-V, and writes the output shard.
+SCRATCHPAD_ADD_SOURCE = """
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/scratchpad.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    constexpr uint32_t addend = get_arg(args::addend);
+
+    Noc noc;
+    Scratchpad<uint32_t> pad(scratch::pad);
+    const LocalTensorAccessor<uint32_t> src(tensor::src);
+    const LocalTensorAccessor<uint32_t> dst(tensor::dst);
+
+    noc.async_read(src, pad, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    {
+        // On Quasar the RISC-V reaches L1 through write-back caches: the lock invalidates them on entry, so the
+        // loads see what the NoC wrote, and flushes them on exit, so the NoC write below sends the new values.
+        // It is a no-op on Wormhole / Blackhole.
+        auto lock = pad.scoped_lock(0, pad.size());
+        for (uint32_t i = 0; i < pad.size(); ++i) {
+            pad[i] += addend;
+        }
+    }
+    noc.async_write(pad, dst, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_write_barrier();
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "shard_grid",
+    [
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+    ],
+    ids=["1_core", "2_cores"],
+)
+def test_generic_spec_op_scratchpad(device, shard_grid):
+    shape = [1, 1, 64, 64]
+    addend = 7
+    shard_shape = (shape[-2] // shard_grid.num_cores(), shape[-1])
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_input = torch.randint(0, 1 << 20, shape, dtype=torch.int32)
+    src = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    dst = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.uint32, ttnn.TILE_LAYOUT, device, memory_config)
+
+    spec = ttnn.ProgramSpec(
+        name="scratchpad_add",
+        # No data_format: only compute kernels need one, and Quasar rejects UInt32 there.
+        scratchpads=[ttnn.ScratchpadSpec(unique_id="pad", size_per_node=shard_shape[0] * shard_shape[1] * 4)],
+        tensor_parameters=[
+            ttnn.TensorParameter(unique_id="src", spec=src.spec),
+            ttnn.TensorParameter(unique_id="dst", spec=dst.spec),
+        ],
+        kernels=[
+            ttnn.KernelSpec(
+                unique_id="add",
+                source_code=SCRATCHPAD_ADD_SOURCE,
+                hw_config=ttnn.DataMovementHardwareConfig.reader(),
+                scratchpad_bindings=[ttnn.ScratchpadBinding(scratchpad_spec_name="pad", accessor_name="pad")],
+                tensor_bindings=[
+                    ttnn.TensorBinding(tensor_parameter_name="src", accessor_name="src"),
+                    ttnn.TensorBinding(tensor_parameter_name="dst", accessor_name="dst"),
+                ],
+                compile_time_args={"addend": addend},
+            )
+        ],
+        work_units=[ttnn.WorkUnitSpec(name="main", kernels=["add"], target_nodes=shard_grid)],
+    )
+    run_args = ttnn.ProgramSpecRunArgs(tensor_args={"src": src, "dst": dst})
+
+    result = ttnn.to_torch(ttnn.generic_op([src, dst], spec, run_args)).to(torch.int32)
+
+    assert torch.equal(result, torch_input + addend)

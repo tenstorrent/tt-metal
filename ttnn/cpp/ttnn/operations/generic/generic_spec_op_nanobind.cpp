@@ -231,6 +231,42 @@ void bind_resources(nb::module_& mod) {
             nb::arg("spec"))
         .def_prop_ro("unique_id", [](const exp::TensorParameter& self) { return *self.unique_id; })
         .def_ro("spec", &exp::TensorParameter::spec);
+
+    nb::class_<exp::ScratchpadSpec>(mod, "ScratchpadSpec", R"doc(
+        Per-node L1 memory a kernel reads and writes freely for the life of the program.
+
+        Args:
+            unique_id (str): Name the kernels' ScratchpadBindings refer to.
+            size_per_node (int): Bytes reserved on each node of the binding kernels.
+            data_format (ttnn.DataType, optional): Format of the contents, needed when a compute kernel uses it.
+            tile (ttnn.Tile, optional): Tile shape of the contents.
+
+        Each node's scratchpad may be bound by only one kernel (multi-binding is not exposed).
+    )doc")
+        .def(
+            "__init__",
+            [](exp::ScratchpadSpec* self,
+               const std::string& unique_id,
+               uint32_t size_per_node,
+               std::optional<tt::tt_metal::DataType> data_format,
+               std::optional<tt::tt_metal::Tile> tile) {
+                new (self) exp::ScratchpadSpec{
+                    .unique_id = exp::ScratchpadSpecName{unique_id},
+                    .size_per_node = size_per_node,
+                    .data_format_metadata =
+                        data_format.has_value()
+                            ? std::optional(tt::tt_metal::datatype_to_dataformat_converter(*data_format))
+                            : std::nullopt,
+                    .tile_format_metadata = tile,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("unique_id"),
+            nb::arg("size_per_node"),
+            nb::arg("data_format") = nb::none(),
+            nb::arg("tile") = nb::none())
+        .def_prop_ro("unique_id", [](const exp::ScratchpadSpec& self) { return *self.unique_id; })
+        .def_rw("size_per_node", &exp::ScratchpadSpec::size_per_node);
 }
 
 void bind_kernel_spec(nb::module_& mod) {
@@ -278,6 +314,23 @@ void bind_kernel_spec(nb::module_& mod) {
             nb::arg("tensor_parameter_name"),
             nb::arg("accessor_name"));
 
+    nb::class_<exp::ScratchpadBinding>(mod, "ScratchpadBinding", R"doc(
+        Binds a ScratchpadSpec to a kernel. The kernel reaches it as ``scratch::<accessor_name>``.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::ScratchpadBinding* self,
+               const std::string& scratchpad_spec_name,
+               const std::string& accessor_name) {
+                new (self) exp::ScratchpadBinding{
+                    .scratchpad_spec_name = exp::ScratchpadSpecName{scratchpad_spec_name},
+                    .accessor_name = accessor_name,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("scratchpad_spec_name"),
+            nb::arg("accessor_name"));
+
     nb::class_<exp::KernelSpec>(mod, "KernelSpec", R"doc(
         A Metal 2.0 kernel.
 
@@ -288,6 +341,7 @@ void bind_kernel_spec(nb::module_& mod) {
             hw_config (DataMovementHardwareConfig or ComputeHardwareConfig): Picks the kernel type.
             num_threads (int): Threads per node (Quasar runs several data movement or compute threads).
             dfb_bindings (List[DFBBinding]): Dataflow buffers the kernel uses (``dfb::<name>``).
+            scratchpad_bindings (List[ScratchpadBinding]): Scratchpads the kernel uses (``scratch::<name>``).
             tensor_bindings (List[TensorBinding]): Tensors the kernel uses (``tensor::<name>``).
             compile_time_args (Dict[str, int]): Named compile-time args.
             runtime_arg_names (List[str]): Names of the per-node runtime args (``args::<name>``).
@@ -305,6 +359,7 @@ void bind_kernel_spec(nb::module_& mod) {
                const HwConfig& hw_config,
                uint32_t num_threads,
                const std::vector<exp::DFBBinding>& dfb_bindings,
+               const std::vector<exp::ScratchpadBinding>& scratchpad_bindings,
                const std::vector<exp::TensorBinding>& tensor_bindings,
                const ArgMap& compile_time_args,
                const std::vector<std::string>& runtime_arg_names,
@@ -320,6 +375,7 @@ void bind_kernel_spec(nb::module_& mod) {
                     .unique_id = exp::KernelSpecName{unique_id},
                     .num_threads = num_threads,
                     .dfb_bindings = dfb_bindings,
+                    .scratchpad_bindings = scratchpad_bindings,
                     .tensor_bindings = tensor_bindings,
                     .runtime_arg_schema =
                         {.runtime_arg_names = runtime_arg_names, .common_runtime_arg_names = common_runtime_arg_names},
@@ -348,6 +404,7 @@ void bind_kernel_spec(nb::module_& mod) {
             nb::arg("hw_config"),
             nb::arg("num_threads") = 1,
             nb::arg("dfb_bindings") = std::vector<exp::DFBBinding>{},
+            nb::arg("scratchpad_bindings") = std::vector<exp::ScratchpadBinding>{},
             nb::arg("tensor_bindings") = std::vector<exp::TensorBinding>{},
             nb::arg("compile_time_args") = ArgMap{},
             nb::arg("runtime_arg_names") = std::vector<std::string>{},
@@ -392,6 +449,7 @@ void bind_program_spec(nb::module_& mod) {
             name (str): Name of the program.
             kernels (List[KernelSpec]): The kernels.
             dataflow_buffers (List[DataflowBufferSpec]): The dataflow buffers.
+            scratchpads (List[ScratchpadSpec]): The scratchpads.
             tensor_parameters (List[TensorParameter]): The tensors the kernels bind.
             work_units (List[WorkUnitSpec]): Which kernels run on which nodes.
     )doc")
@@ -401,12 +459,14 @@ void bind_program_spec(nb::module_& mod) {
                const std::string& name,
                const std::vector<exp::KernelSpec>& kernels,
                const std::vector<exp::DataflowBufferSpec>& dataflow_buffers,
+               const std::vector<exp::ScratchpadSpec>& scratchpads,
                const std::vector<exp::TensorParameter>& tensor_parameters,
                const std::vector<exp::WorkUnitSpec>& work_units) {
                 new (self) exp::ProgramSpec{
                     .name = name,
                     .kernels = kernels,
                     .dataflow_buffers = dataflow_buffers,
+                    .scratchpads = scratchpads,
                     .tensor_parameters = tensor_parameters,
                     .work_units = work_units,
                 };
@@ -415,6 +475,7 @@ void bind_program_spec(nb::module_& mod) {
             nb::arg("name"),
             nb::arg("kernels"),
             nb::arg("dataflow_buffers") = std::vector<exp::DataflowBufferSpec>{},
+            nb::arg("scratchpads") = std::vector<exp::ScratchpadSpec>{},
             nb::arg("tensor_parameters") = std::vector<exp::TensorParameter>{},
             nb::arg("work_units"))
         .def_ro("name", &exp::ProgramSpec::name);

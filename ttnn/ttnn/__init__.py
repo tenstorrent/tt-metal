@@ -317,6 +317,8 @@ from ttnn.types import (
     Precision,
     UnpackMode,
     KernelBuildOptLevel,
+    ScratchpadSpec,
+    ScratchpadBinding,
     merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
     get_cb_address,
