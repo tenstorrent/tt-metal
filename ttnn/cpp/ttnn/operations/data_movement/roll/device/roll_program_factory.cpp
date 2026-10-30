@@ -350,7 +350,18 @@ RollPlan compute_roll_plan(
     // --- DRAM shard address helpers ---
     const uint32_t num_dram_banks = device->num_dram_channels();
     const uint32_t dram_shard_size = shard_cells_h * row_pitch_bytes;
-    auto dram_bank_id = [&](uint32_t shard_idx) { return shard_idx % num_dram_banks; };
+    // A DRAM shard grid is a single row whose x-coordinate is the bank id, and shard i sits on the
+    // grid's i-th core in either orientation, so shard i lives in bank grid_start_x + i. The input and
+    // output may sit on different grids, so each tensor's bank comes from its own grid.
+    auto dram_first_bank = [](const tt::tt_metal::ShardSpec& ss) {
+        TT_FATAL(
+            ss.grid.ranges().size() == 1, "Native sharded roll requires a single contiguous rectangular CoreRange");
+        return static_cast<uint32_t>(ss.grid.ranges().begin()->start_coord.x);
+    };
+    const uint32_t src_first_bank = is_dram ? dram_first_bank(in_ss) : 0;
+    const uint32_t dst_first_bank = is_dram ? dram_first_bank(out_ss) : 0;
+    auto src_bank_id = [&](uint32_t shard_idx) { return src_first_bank + shard_idx; };
+    auto dst_bank_id = [&](uint32_t shard_idx) { return dst_first_bank + shard_idx; };
     auto dram_bank_base = [&](const Buffer* buf, uint32_t shard_idx) {
         return static_cast<uint32_t>(buf->address()) + (shard_idx / num_dram_banks) * dram_shard_size;
     };
@@ -424,14 +435,14 @@ RollPlan compute_roll_plan(
     auto build_runtime_args_dram = [&](uint32_t dst_shard_idx, const std::vector<RollTransferDesc>& descs) {
         KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(3 + descs.size() * 7);
-        args.push_back(dram_bank_id(dst_shard_idx));
+        args.push_back(dst_bank_id(dst_shard_idx));
         // dst bank base = output buffer address + shard offset, from the current buffer.
         args.push_back(dram_bank_base(plan.output_buffer, dst_shard_idx));
         args.push_back(static_cast<uint32_t>(descs.size()));
         for (const auto& td : descs) {
             // src_bank_id, src_bank_addr (= bank_base + intra_shard_offset), dst_offset,
             // copy_size, src_stride, dst_stride, num_rows
-            args.push_back(dram_bank_id(td.src_dram_shard_idx));
+            args.push_back(src_bank_id(td.src_dram_shard_idx));
             args.push_back(dram_bank_base(plan.input_buffer, td.src_dram_shard_idx) + td.src_l1_offset);
             args.push_back(td.dst_offset);
             args.push_back(td.copy_size);
@@ -466,12 +477,12 @@ RollPlan compute_roll_plan(
             dst_shard_idx,
             src_shards.size());
         KernelDescriptor::CoreRuntimeArgs args;
-        args.push_back(dram_bank_id(dst_shard_idx));
+        args.push_back(dst_bank_id(dst_shard_idx));
         // dst bank base = output buffer address + shard offset, from the current buffer.
         args.push_back(dram_bank_base(plan.output_buffer, dst_shard_idx));
         args.push_back(static_cast<uint32_t>(src_shards.size()));
         for (uint32_t s : src_shards) {
-            args.push_back(dram_bank_id(s));
+            args.push_back(src_bank_id(s));
             args.push_back(dram_bank_base(plan.input_buffer, s));
         }
         args.push_back(static_cast<uint32_t>(descs.size()));
