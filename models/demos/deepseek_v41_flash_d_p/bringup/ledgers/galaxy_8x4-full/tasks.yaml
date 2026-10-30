@@ -1489,7 +1489,7 @@ tasks:
       a call (cProfile of warm chunks) and whether it already goes through ttnn.bringup.prepare_program /
       run_prepared. Then move every one that does not onto the prepared path (as ckv_bfp4 / bfp_round prepared=True,
       P.7, P.12): built once per shape and memory config, addresses patched per call, outputs reused where possible,
-      bit-identical results. One setting PREPARED_ALL (default on, ''off'' = today''s per-op paths). Report the census
+      bit-identical results. Include models/demos/moe_block/tt/tail_a2a.py: its 16-entry program cache shared by all 40 layers is keyed on tensor ADDRESSES, so any allocation change mid-forward makes it rebuild programs (P.4 / DS41-146: 22 -> 188 ms a chunk); key it on shape and patch addresses per call (prepared). With that fixed, persistent CCL outputs (P.4''s rejected change, ~13 ms host a chunk) can be retried. One setting PREPARED_ALL (default on, ''off'' = today''s per-op paths). Report the census
       table and host_overhead_ms, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on vs off.'
   ab:
     env:

@@ -4172,3 +4172,84 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   models/demos/deepseek_v41_flash_d_p/tt/perf_lowbit_host.py -s` (host a call + byte checks, 1 min);
   `... tt/perf_lowbit_identity.py -s` (on / off / on, 6 min); `... ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit`;
   old path DS41_LOWBIT_HOST=off.
+
+## P.4 (perf, galaxy 8x4, attempt 3): CCL_PERSISTENT_OUT, persistent outputs for the in-step fabric all_gathers
+
+- Re-check (owner): after P.8-P.10 (SP=32 attention) and the block MoE's fused head / tail, the Python CCL path has
+  NO reduce-scatter left in a chunk (sum_cols / sum_rows / q_a tp_sum gone; the MoE's collectives are inside the fused
+  head / tail programs). All_gathers: 294 a chunk on the profile rung's last chunk, 212 of them in-step sites: mHC row
+  exchange (`tt/mhc.py fused`, 80), window KV over TP and SP (`tt/attention.py _window_rows`, 80), split norm stats
+  (`tt/norm.py _fork`, 40), compressor TP rows (4) and SP gathers (8). The other 82 (kept out: tp_sum's _gather_add,
+  results that leave the step) allocate as before.
+- What: setting CCL_PERSISTENT_OUT (tt/settings.py, default on; off = the path before). `ccl.all_gather(site=...)`
+  writes `_site_out(mesh, site, shape, dtype, layout)` (allocated at the site's first call, kept) and returns that very
+  object; `ccl.dealloc` returns on `id(t) in _KEEP` (one set lookup), so the step code is unchanged. Only for a gather
+  over > 1 chip (K-1: a 1-chip axis would let full-range views share the buffer). Reuse is safe: each site's value is
+  used and freed inside its step, each chip runs its programs in order, and fabric_all_gather's ready fence keeps a
+  chip from writing a neighbour's output before that neighbour started the same call. 10 buffers a mesh (~7 MiB a chip).
+- Gotcha (DS41-146): allocated lazily mid-forward, the persistent buffers left holes in the transient region; the block
+  MoE's fused tail (moe_block/tt/tail_a2a.py TailA2A, ONE instance for all 40 layers) keys its prepared programs by the
+  (y, se, out) addresses in a 16-entry FIFO, so the shifted layout made it rebuild: in-process A/B 612 ms on vs 426 off,
+  tail _program 188 vs 22 ms a chunk. Fix here: `ccl.settle(mesh)` in `TtDS41Model.begin_chunk` (also the serving
+  adapter's path) frees and re-allocates a mesh's site outputs once after the chunk that created them (steady-state
+  tail misses 0-2 a chunk, as off). Still fragile: in tt/perf_ccl_persistent.py, which reloads the golden prefix every
+  run, "on" falls into 19-23 tail misses every other run (672 / 676 ms runs), "off" does not. The real fix is outside
+  this step's paths: TailA2A keyed on shape with its addresses patched (OV-23's prepared rule).
+- Measured (8x4, profile rung's last chunk [51200, 56320)):
+  - Bit-identical and deterministic: final hidden on == off (max |diff| 0), every run of a side equal, PCC vs golden
+    0.608661 both (tt/perf_ccl_persistent.py).
+  - Host (cProfile, one run a side after a warm block): ccl.all_gather 58.4 -> 48.1 ms (294 calls), ccl.dealloc 41.1 ->
+    38.1 ms (2338 calls): ~13 ms a chunk less under cProfile (the proposal's estimate for 474 sites was 22; 212 remain).
+    model.layer cum 493.8 -> 467.3 ms (that run of "on" had 2 tail misses, off 1).
+  - Wall: quick measure (on, orchestrator, 10 clean runs) 414.8 ms, spread 44.7, loadavg 15.8; P.12's quick on (= this
+    task's off code) 379.6 ms at loadavg 26.2, its off 392.8. In-process blocks: off median 437.5, on 471.9 (the two
+    tail-miss runs), on without them ~420-443. The saving (~10 ms) is under the wall's run-to-run noise; the
+    orchestrator's A/B decides. Device time: same programs and op count (no device change expected; not profiled here).
+  - Accuracy (measure --task P.4, on): every one of 102 limited metrics within its limit, host_transfers_per_layer 0.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.4 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml`; A/B + identity:
+  `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_ccl_persistent.py -s` (7 min); old path `DS41_CCL_PERSISTENT_OUT=off`.
+
+## P.5 (perf, galaxy 8x4): ROPE_UNIFORM_PROGRAM, one RoPE program for the mesh instead of 32
+
+- Re-check (owner): after P.8-P.10 the target still exists unchanged in count. P.12's op table (the profile rung's last
+  chunk, 40 layers): 136 rotary_embedding_indexed a chunk, every one 32 programs: attention q with nope prefix
+  [64, 160, 64] (40), attention o inverse [64, 160, 512] (40), kv [160, 512] (40), compressor ckv / k on 320 / 640 rows
+  (8), indexer q [32, 160, 64] (8). The shapes are now the chip's 160 rows (SP=32), and every call still passes
+  per-chip pre-sliced cos / sin with kv_actual_global 0. The reader's update_idxt
+  (`reader_rotary_embedding_indexed_interleaved_start_id.cpp`) is then 0 for any my_sp_coord, so the 32 programs are
+  identical. That is verified both in the code and on the device (below).
+- What: forked the op (fork_op.py) to `ttnn.bringup.rotary_embedding_indexed`, adding the option `uniform` (scalar form,
+  default False = the stock per-coordinate programs). True builds ONE program per mesh coordinate range in
+  create_mesh_workload. It is hashed, and refused (miss and hit) with metadata, kv_actual_global != 0, or
+  seq_subshard_axis. Setting ROPE_UNIFORM_PROGRAM (tt/settings.py, default on; off = the stock op): `tt/rope.rope_stock`
+  calls the fork with uniform=True, so all 136 sites change. Kernels unchanged; no device change expected.
+- OV-23: this is a C++ device op (program cache, addresses patched on a hit), not a Python-built program; nothing
+  non-prepared was added. OV-3: no padding.
+- Fork tests: tests/unit/test_uniform.py on 8x4: 8 passed. Uniform output is byte-identical to the stock op on every
+  chip for the 6 model shapes, on a miss and on a hit, and uniform=False matches the stock op too. A torch Meta-rotation
+  check and the refusals pass. A corrupted chip-5 output fails the test, checked once by hand. Source tests
+  (tests/source.yaml): the 8x4 cases (multi-iteration prefill 8, metadata-vs-scalar torus-xy 8x4) plus 9
+  single-device cases, 18/18 on original and fork. The 2x2 / 2x4 upstream cases were not carried from the Galaxy.
+- Host a call (test_uniform_host_time, warm, 8x4): stock 101.0 us -> uniform 52.0 us (DS41-147). That is ~6.7 ms a
+  chunk for 136 calls in isolation.
+- In the model (tt/perf_rope_uniform.py: one process, the profile rung's last chunk [51200, 56320), golden prefix
+  reloaded each run, 6 alternating on / off pairs after a warm pair, wall = begin_chunk .. sync): **on median 399.7 ms
+  (392.4-417.1), off 438.6 ms (409.8-514.6)**. On was faster in every pair, by 10.7-97.5 ms. The final hidden state
+  was bit-identical across all 14 runs, on and off (determinism and on == off), PCC vs golden 0.608661 both (= P.4 /
+  P.12). The saving is larger than the 6.7 ms isolated estimate. A likely cause is that 32 distinct programs a call
+  also cost dispatch-side work in a full queue (not measured separately).
+- measure --task P.5 (quick, on, final code, stamp f846e68ba484dac3). The first try was killed by the 10-minute
+  foreground cap at 595 s (cold kernel cache). The second try finished: all 102 limited metrics within their limits;
+  the tightest are err_state_window_kv_L28 0.907 of its limit, topk_idx_L08 0.902 and window_kv_L27 0.889 (the same
+  as P.12 / P.4, since the bytes are identical). pcc_chunk_out 0.608661, host_transfers_per_layer 0, chunk_wall_ms
+  408.6 (spread 24.5, loadavg 17.3; P.4's quick on 414.8 at 15.8, P.12's 379.6 at 26.2). Quick walls across tasks
+  are not paired; the in-process A/B above is.
+- Not measured here: device time (the gate's plain profile is two ~550 s processes). It should be unchanged: the same
+  kernels and the same per-chip work. The orchestrator's A/B and gate measure it.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_rope_uniform.py -s` (9 min); fork: `... --mesh
+  ttnn/ttnn/bringup/rotary_embedding_indexed/tests/unit/test_uniform.py -k 8x4 -s`; `python -m
+  models.demos.common.bringup.testing.fork_source --fork rotary_embedding_indexed`; old path
+  `DS41_ROPE_UNIFORM_PROGRAM=off`.

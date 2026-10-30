@@ -90,8 +90,25 @@ def rope_stock(
     columns (concat_prefix) -> [B, H, rows, P + W]. ``trans``: ``rot_mats``' forward or inverse matrix. The rows are
     pre-sliced per chip, so kv_actual_global is 0 (every chip reads its cos / sin from row 0; any start). The op's
     default compute config (HiFi4, fp32 DEST: the trans-mat's 0 / +-1 product is exact on bf16, DS41-83). Output dtype
-    = x's. Does not consume its inputs."""
+    = x's. Does not consume its inputs. ROPE_UNIFORM_PROGRAM=on (P.5): the same op through the fork
+    ttnn.bringup.rotary_embedding_indexed(uniform=True), one program for the mesh instead of one per chip."""
     rd = cos.shape[-1]
+    if settings.get("ROPE_UNIFORM_PROGRAM") == "on":
+        # P.5: the fork's uniform program (one program for the mesh; valid because kv_actual_global is 0 on
+        # pre-sliced rows, checked by the op on every call)
+        return ttnn.bringup.rotary_embedding_indexed(
+            x,
+            cos,
+            sin,
+            trans,
+            0,
+            SP_AXIS,
+            memory_config=DRAM,
+            rotary_dim=rd,
+            rotary_offset=x.shape[-1] - rd,
+            concat_prefix=prefix,
+            uniform=True,
+        )
     return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
         x,
         cos,
