@@ -12,8 +12,10 @@
 namespace {
 
 // Writes row 0 of each of block_w_tiles tiles: face-0 row 0 at page offset 0, face-1 row 0 at face_bytes.
-// TILE source: the same two face rows of page j. ROW_MAJOR source: 2 x half_row_bytes contiguous bytes
-// starting at element 32*j of the flattened vector.
+// TILE source: one read of page j from offset 0 spanning face 0 and face-1 row 0 (read_bytes = face_bytes
+// + one NoC granule); one request instead of two, since the grid-wide fetch is bound by request count on
+// the few source banks. ROW_MAJOR source: two half_row_bytes reads at element 32*j of the flattened vector.
+// Each core starts at its own column (first_col) so simultaneous fetches spread over the source banks.
 template <
     bool is_tile,
     uint32_t stick_elems,
@@ -23,24 +25,20 @@ template <
     uint32_t block_w_tiles,
     uint32_t tile_bytes,
     typename Accessor>
-FORCE_INLINE void issue_affine_reads(const Accessor& accessor, uint32_t dst_addr) {
-    for (uint32_t col = 0; col < block_w_tiles; ++col) {
-        uint32_t page;
-        uint32_t src_offset;
-        uint32_t half_stride;
+FORCE_INLINE void issue_affine_reads(const Accessor& accessor, uint32_t dst_base, uint32_t first_col) {
+    for (uint32_t step = 0; step < block_w_tiles; ++step) {
+        const uint32_t col = (first_col + step) % block_w_tiles;
+        const uint32_t dst_addr = dst_base + col * tile_bytes;
         if constexpr (is_tile) {
-            page = col;
-            src_offset = 0;
-            half_stride = face_bytes;
+            static_assert(read_bytes > face_bytes && read_bytes <= tile_bytes);
+            noc_async_read(accessor.get_noc_addr(col), dst_addr, read_bytes);
         } else {
             constexpr uint32_t elem_bytes = half_row_bytes / 16;
-            page = (32 * col) / stick_elems;
-            src_offset = ((32 * col) % stick_elems) * elem_bytes;
-            half_stride = half_row_bytes;
+            const uint32_t page = (32 * col) / stick_elems;
+            const uint32_t src_offset = ((32 * col) % stick_elems) * elem_bytes;
+            noc_async_read(accessor.get_noc_addr(page, src_offset), dst_addr, read_bytes);
+            noc_async_read(accessor.get_noc_addr(page, src_offset + half_row_bytes), dst_addr + face_bytes, read_bytes);
         }
-        noc_async_read(accessor.get_noc_addr(page, src_offset), dst_addr, read_bytes);
-        noc_async_read(accessor.get_noc_addr(page, src_offset + half_stride), dst_addr + face_bytes, read_bytes);
-        dst_addr += tile_bytes;
     }
 }
 
@@ -73,6 +71,7 @@ void kernel_main() {
     const uint32_t start_row_tile = get_arg_val<uint32_t>(3);
     const uint32_t core_rows = get_arg_val<uint32_t>(4);
     const uint32_t num_blocks = get_arg_val<uint32_t>(5);
+    const uint32_t affine_first_col = get_arg_val<uint32_t>(6);
 
     const auto input_accessor = TensorAccessor(input_args, input_addr, input_tile_bytes);
     const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
@@ -89,7 +88,7 @@ void kernel_main() {
             affine_face_bytes,
             affine_half_row_bytes,
             block_w_tiles,
-            affine_tile_bytes>(gamma_accessor, get_write_ptr(cb_gamma_rows));
+            affine_tile_bytes>(gamma_accessor, get_write_ptr(cb_gamma_rows), affine_first_col);
         issue_affine_reads<
             beta_is_tile,
             beta_stick_elems,
@@ -97,7 +96,7 @@ void kernel_main() {
             affine_face_bytes,
             affine_half_row_bytes,
             block_w_tiles,
-            affine_tile_bytes>(beta_accessor, get_write_ptr(cb_beta_rows));
+            affine_tile_bytes>(beta_accessor, get_write_ptr(cb_beta_rows), affine_first_col);
         noc_async_read_barrier();
         cb_push_back(cb_gamma_rows, block_w_tiles);
         cb_push_back(cb_beta_rows, block_w_tiles);
@@ -120,6 +119,7 @@ void kernel_main() {
             }
             cb_push_back(cb_input_tiles, block_w_tiles);
         }
+        // Issued after block 0's reads so the fetch overlaps block-0 compute (needed at P6).
         if (block == 0) {
             load_affine();
         }

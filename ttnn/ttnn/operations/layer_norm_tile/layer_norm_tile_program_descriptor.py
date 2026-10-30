@@ -18,7 +18,7 @@ TILE = 32
 FACE = 16
 
 # Blocking-model host knobs (op_design.md, Blocking Model).
-BLOCK_ROWS_MAX = 2
+BLOCK_ROWS_MAX = 1
 INPUT_DEPTH_BLOCKS_MAX = 2
 OUTPUT_DEPTH_ROWS = 2
 W_TILES_RESIDENT_MAX = 32
@@ -110,9 +110,10 @@ def _affine_reader_args(affine):
             if affine.memory_config().buffer_type == ttnn.BufferType.DRAM
             else ttnn.get_l1_alignment()
         )
-        # One read per face row; a wider NoC granule drags in the following face rows, which are ignored.
-        read_bytes = max(half_row, alignment)
-        assert read_bytes <= FACE * FACE * affine.element_size()
+        # One read from offset 0 through face-1 row 0 (rounded to the NoC granule); rows other than row 0 of
+        # faces 0/1 are never read by the row broadcast.
+        face_bytes = FACE * FACE * affine.element_size()
+        read_bytes = face_bytes + max(half_row, alignment)
         return [1, 0, read_bytes, affine.buffer_aligned_page_size()]
     return [0, list(affine.shape)[-1], half_row, affine.buffer_aligned_page_size()]
 
@@ -188,8 +189,17 @@ def create_program_descriptor(input_tensor, gamma, beta, output_tensor, blocking
     gamma_addr = gamma.buffer_address()
     beta_addr = beta.buffer_address()
     eps_bits = _float_bits(epsilon)
-    for core, start_row_tile, core_rows, num_blocks in blocking.assignment:
-        reader_rt[core.x][core.y] = [in_addr, gamma_addr, beta_addr, start_row_tile, core_rows, num_blocks]
+    for core_idx, (core, start_row_tile, core_rows, num_blocks) in enumerate(blocking.assignment):
+        affine_first_col = core_idx % block_w_tiles
+        reader_rt[core.x][core.y] = [
+            in_addr,
+            gamma_addr,
+            beta_addr,
+            start_row_tile,
+            core_rows,
+            num_blocks,
+            affine_first_col,
+        ]
         writer_rt[core.x][core.y] = [out_addr, start_row_tile, core_rows, num_blocks]
         compute_rt[core.x][core.y] = [num_blocks, eps_bits]
 

@@ -4,7 +4,7 @@
 // layer_norm compute. Per block of block_rows tile-rows (whole row resident):
 //   P1 mean_block   : mean[r] = rowsum(x) / W                      -> cb_row_stat
 //   P2 center_block : xc = x - mean (col bcast)                     -> cb_centered
-//   P3 sqsum_block  : S[r] = sum_t xc[r,t]^2 (packer L1 accumulate)   -> cb_row_stat
+//   P3 sqsum_block  : S[r] = sum_t xc[r,t]^2 (DEST accumulate)        -> cb_row_stat
 //   P4 rstd_block   : rstd[r] = rsqrt(rowsum(S[r]) / W + eps)        -> cb_rstd
 //   P5 scale_block  : xc *= rstd (col bcast, in place)
 //   P6 gamma_block  : xc *= gamma (row bcast, in place)
@@ -53,22 +53,23 @@ void kernel_main() {
 
     constexpr auto block_shape = IterationShape::grid(block_rows, block_w_tiles);
 
-    constexpr InputSpec centered_row = input(
+    // P3 reads the resident cb_centered block in place (caller-owned wait; Strided needs (None, None)).
+    constexpr InputSpec centered_strided = input(
         cb_centered,
-        WaitPolicy::Upfront,
+        WaitPolicy::None,
         PopPolicy::None,
         InputTileMapping::Block,
         DataFormatReconfig::Enabled,
-        TileAddressing::Offset);
-    using SquareRow = BinaryFpu<BinaryFpuOp::Mul, centered_row, centered_row>;
+        TileAddressing::Strided);
+    using SquareAccumulate =
+        BinaryFpu<BinaryFpuOp::Mul, centered_strided, centered_strided, Dst::D0, DestAccumulation::PerRow>;
     using SumsqPack = PackTile<output(
         cb_row_stat,
-        ReservePolicy::OneUpfront,
-        PushPolicy::OneAtEnd,
+        ReservePolicy::PerOuter,
+        PushPolicy::PerOuter,
         DataFormatReconfig::Enabled,
         TileAddressing::Direct,
-        DestAccumulation::Disabled,
-        L1Accumulation::Enabled)>;
+        DestAccumulation::PerRow)>;
 
     auto finalize_rstd = [eps_bits](uint32_t dst_idx) {
         binop_with_scalar_tile_init();
@@ -95,14 +96,13 @@ void kernel_main() {
             input(cb_row_stat, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
             output(cb_centered)>(block_shape, input_tiles, row_stat, centered);
 
-        // P3 sqsum_block: one L1-accumulated tile per tile-row; cb_centered stays resident.
-        for (uint32_t row = 0; row < block_rows; ++row) {
-            const uint32_t row_base = row * block_w_tiles;
-            eltwise_chain(
-                IterationShape::tiles(block_w_tiles),
-                SquareRow{centered, centered, row_base, row_base},
-                SumsqPack{row_stat});
-        }
+        // P3 sqsum_block: S[r] accumulated in DEST over the row's tiles, one packed tile per tile-row.
+        centered.wait_front(block_rows * block_w_tiles);
+        eltwise_chain(
+            block_shape,
+            SquareAccumulate{
+                centered, centered, StridedTileRange{0, block_w_tiles}, StridedTileRange{0, block_w_tiles}},
+            SumsqPack{row_stat});
 
         // P4 rstd_block
         reduce<
