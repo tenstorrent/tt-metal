@@ -392,7 +392,7 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k"
+- name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k + AttnRes layer perf 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -402,13 +402,15 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
+      # Last, so a regression here cannot hide the two gates above. Traced and untraced, ~20 s of test.
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py -vvv --tb=short
     '
   test_type: k3_mla_perf
   test_tags: [kimi_k3, kda, mla, k3_kda_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 10
+      timeout: 12
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
