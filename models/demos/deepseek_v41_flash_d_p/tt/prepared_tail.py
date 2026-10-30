@@ -24,6 +24,8 @@ from __future__ import annotations
 import ttnn
 from models.demos.moe_block.tt.tail_a2a import TailA2A
 
+from . import host_alloc
+
 
 def _spec(t):
     return None if t is None else (tuple(t.shape), t.dtype, t.layout, str(t.memory_config()))
@@ -37,6 +39,10 @@ class ShapeKeyedTailA2A(TailA2A):
         return sum(len(self.workers) * (4 + has_se) + 3 * len(ch["ports"]) for ch in self.chips.values())
 
     def run(self, y_rm, se, out=None):
+        if out is None:  # HOST_ALLOC=on (P.15): the load-time output (tt/host_alloc.reserve_tail_out), when it fits
+            kept = host_alloc.tail_out(self.mesh, self.rows * self.mesh.shape[0])
+            if kept is not None and tuple(kept.shape) == (1, 1, self.rows, self.H // self.G):
+                out = kept
         if out is None:
             out = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, self.rows, self.H // self.G]),

@@ -85,9 +85,13 @@ class CacheSlab:
     def width(self) -> int:
         return int(self.tensor.shape[-1])
 
-    def slice_rows(self, lo: int, hi: int) -> ttnn.Tensor:
-        """Local rows [lo, hi) of this slab -> [1, 1, hi - lo, width] ROW_MAJOR, DRAM interleaved (a new tensor)."""
+    def slice_rows(self, lo: int, hi: int, out: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """Local rows [lo, hi) of this slab -> [1, 1, hi - lo, width] ROW_MAJOR, DRAM interleaved (a new tensor;
+        ``out``: written into that tensor and returned, HOST_ALLOC=on, P.15)."""
         b = self.batch
+        if out is not None:
+            ttnn.slice(self.tensor, [b, 0, lo, 0], [b + 1, 1, hi, self.width], memory_config=DRAM, output_tensor=out)
+            return out
         return ttnn.slice(self.tensor, [b, 0, lo, 0], [b + 1, 1, hi, self.width], memory_config=DRAM)
 
     def host_rows(self) -> list[torch.Tensor]:

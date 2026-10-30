@@ -19,12 +19,18 @@ SP_AXIS = 0  # mesh rows: sequence
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
-def cast(x: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+def cast(x: ttnn.Tensor, dtype=ttnn.bfloat16, out: ttnn.Tensor | None = None) -> ttnn.Tensor:
     """x in ``dtype``: a typecast, or x itself when it already is ``dtype``. What a matmul input (or a cache row) gets
     where the released code quantize-dequantizes to fp8 / fp4: the device keeps bf16 / fp32 there, so it computes in
     that format and adds no rounding to another (agent rule 17; FIX.8 deleted the parity-only quantizers of
-    tt/quant.py). Does not consume x; the caller frees the result only when it is not x."""
-    return x if x.dtype == dtype else ttnn.typecast(x, dtype, memory_config=DRAM)
+    tt/quant.py). Does not consume x; the caller frees the result only when it is not x. ``out`` (HOST_ALLOC=on,
+    P.15): a load-time output of x's shape in ``dtype`` the typecast writes."""
+    if x.dtype == dtype:
+        return x
+    if out is not None:  # (the object itself, not the op's new wrapper of its buffer: ccl.dealloc keeps it)
+        ttnn.typecast(x, dtype, output_tensor=out)
+        return out
+    return ttnn.typecast(x, dtype, memory_config=DRAM)
 
 
 def gemm_dtype() -> ttnn.DataType:
@@ -34,10 +40,10 @@ def gemm_dtype() -> ttnn.DataType:
     return ttnn.bfloat8_b if settings.get("GEMM_INPUTS") == "bfp8" else ttnn.bfloat16
 
 
-def gemm_input(x: ttnn.Tensor) -> ttnn.Tensor:
+def gemm_input(x: ttnn.Tensor, out: ttnn.Tensor | None = None) -> ttnn.Tensor:
     """x as an fp8-quantized GEMM's input (``gemm_dtype``): one typecast, or x itself when it already is that dtype.
-    Does not consume x; the caller frees the result only when it is not x."""
-    return cast(x, gemm_dtype())
+    Does not consume x; the caller frees the result only when it is not x. ``out``: as ``cast``."""
+    return cast(x, gemm_dtype(), out)
 
 
 def bf16_activations() -> bool:

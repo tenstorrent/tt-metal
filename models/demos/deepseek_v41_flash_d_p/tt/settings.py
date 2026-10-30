@@ -753,6 +753,19 @@ TABLE = {
         "unwritten gap bytes aside, DS41-144). off = the bf16 rows gathered over SP, then every chip packs all of them "
         "(the path before P.11)",
     ),
+    "HOST_ALLOC": Setting(
+        "on",
+        ("on", "off"),
+        "P.15 (galaxy 8x4, owner 2026-10-30; DS41-171: the chunk is host-bound, 372 buffer allocations a warm chunk). "
+        "on = fewer per-chunk allocations, outputs bit-identical: (1) the in-step fabric all_gathers (mHC row exchange, "
+        "split-norm stats, the attention window kv over TP: 160 a chunk on 8x4) write persistent outputs allocated AT "
+        "LOAD TIME (tt/ccl.py reserve / site=; never mid-forward, DS41-146), ccl.dealloc skipping them; (2) the block "
+        "MoE: the exchange's arena probe (arena_fits) is the arena its call then uses (one L1 allocation a layer "
+        "instead of two), and the fused tail writes a load-time output; (3) the attention's fixed-shape intermediates "
+        "(q_a's bfloat8_b input and projection, wq_b's input and output, wo_a's input and output) and the window "
+        "carry's two slices write load-time outputs (output_tensor / optional_output_tensor), one per site for every "
+        "layer (tt/host_alloc.py). off = today's path",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

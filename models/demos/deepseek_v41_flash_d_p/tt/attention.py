@@ -70,7 +70,7 @@ import torch
 
 import ttnn
 
-from . import ccl
+from . import ccl, host_alloc
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import (
@@ -742,7 +742,7 @@ class TtWindowAttention:
         prepared = settings.get("CKV_BFP4_PREPARED") == "on"
         full = kv
         if g.tp > 1 and kv.shape[-2] == g.q_rows:  # ATTN_SP32=on (P.10): the chip's own rows -> the SP row's block
-            full = ccl.all_gather(kv, 2, TP_AXIS)  # [1, 1, W, 512] bf16
+            full = ccl.all_gather(kv, 2, TP_AXIS, site="attn.kv_tp")  # [1, 1, W, 512] bf16
         masked = tables.mask_local(full, end - start)
         if masked is not full and full is not kv:
             dealloc(full)
@@ -773,7 +773,12 @@ class TtWindowAttention:
             # the carry from the served cache, packed before its gather: every chip packs the same local rows (the
             # owner's are the carry), the 4 blocks gathered over the mesh, the owner's kept (``carry``'s bf16 path)
             q, loc = owner
-            sl = cache.slab.slice_rows(loc, loc + WINDOW)
+            rm16 = ttnn.ROW_MAJOR_LAYOUT
+            sl = cache.slab.slice_rows(  # (HOST_ALLOC=on, P.15: into a load-time output)
+                loc,
+                loc + WINDOW,
+                host_alloc.out(self.mesh, "attn.carry_rows", [1, 1, WINDOW, 512], ttnn.bfloat16, rm16),
+            )
             tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
             dealloc(sl)
             ttnn.bringup.ckv_bfp4(
@@ -788,7 +793,13 @@ class TtWindowAttention:
             )
             dealloc(tl)
             every = tables.gather_carry()
-            mine = ttnn.slice(every, [0, 0, q * c, 0], [1, 1, (q + 1) * c, WINDOW_BLOCK_BYTES], memory_config=DRAM)
+            mo = host_alloc.out(self.mesh, "attn.carry_mine", [1, 1, c, WINDOW_BLOCK_BYTES], ttnn.uint8, rm16)
+            lo, hi = [0, 0, q * c, 0], [1, 1, (q + 1) * c, WINDOW_BLOCK_BYTES]
+            if mo is None:
+                mine = ttnn.slice(every, lo, hi, memory_config=DRAM)
+            else:  # (HOST_ALLOC=on, P.15: the owner's 4 blocks into a load-time output)
+                ttnn.slice(every, lo, hi, memory_config=DRAM, output_tensor=mo)
+                mine = mo
             ttnn.experimental.slice_write(mine, blocks, [0, 0, 0, 0], [1, 1, c, WINDOW_BLOCK_BYTES], [1, 1, 1, 1])
             dealloc(mine)
         else:
@@ -902,9 +913,21 @@ class TtWindowAttention:
         cast was), wq_b writing bf16, the heads split by nlp_create_q_heads_split, ONE stock rotary op on the [.., 64]
         tails with the nope prepended (tt/rope.rope_stock)."""
         # GEMM_INPUTS (FIX.7): the scale's multiply writes wq_b's input in bfloat8_b (the reference's fp8 act quant)
-        xq = ttnn.multiply(q_resid, self.scale, dtype=gemm_dtype(), memory_config=DRAM)
+        # HOST_ALLOC=on (P.15): xq and qb written into load-time outputs (tt/host_alloc.py), when their spec has one
+        xo = host_alloc.out(self.mesh, "attn.xq", q_resid.shape, gemm_dtype())
+        if xo is None:
+            xq = ttnn.multiply(q_resid, self.scale, dtype=gemm_dtype(), memory_config=DRAM)
+        else:  # (the object itself: the op hands back a new wrapper of its buffer, DS41-149)
+            ttnn.multiply(q_resid, self.scale, dtype=gemm_dtype(), memory_config=DRAM, output_tensor=xo)
+            xq = xo
         qb = mm.linear(
-            xq, self.wq_b, site="attn.wq_b", dtype=ttnn.bfloat16, compute_kernel_config=self.ckc, memory_config=DRAM
+            xq,
+            self.wq_b,
+            site="attn.wq_b",
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.ckc,
+            memory_config=DRAM,
+            out=host_alloc.mm_out(self.mesh, "attn.qb", xq, self.wq_b, ttnn.bfloat16),
         )
         dealloc(xq)
         qn, qr = ttnn.experimental.nlp_create_q_heads_split(
@@ -1052,13 +1075,21 @@ class TtWindowAttention:
         dealloc(oq)
         og = ttnn.reshape(og, [1, self.g_l, rows, self.hpg * self.d])
         # GEMM_INPUTS (FIX.7): wo_a reads bfloat8_b, the reference's fp8 q-dq of the attention output before wo_a
-        oa = gemm_input(og)
+        oa = gemm_input(og, host_alloc.out(self.mesh, "attn.oa", og.shape, gemm_dtype()))  # (HOST_ALLOC, P.15)
         if oa is not og:
             dealloc(og)
         # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it; GEMM_INPUTS=bfp8
         # (FIX.7): it writes wo_b's input as bfloat8_b (the reference's fp8 act quant of wo_b's input) directly
         ydt = gemm_dtype() if (self.glue and bf16_activations()) else ttnn.float32
-        y = mm.matmul(oa, self.wo_a, site="attn.wo_a", dtype=ydt, compute_kernel_config=self.ckc, memory_config=DRAM)
+        y = mm.matmul(
+            oa,
+            self.wo_a,
+            site="attn.wo_a",
+            dtype=ydt,
+            compute_kernel_config=self.ckc,
+            memory_config=DRAM,
+            out=host_alloc.mm_out(self.mesh, "attn.wo_a", oa, self.wo_a, ydt),
+        )
         dealloc(oa)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
         if self.glue:

@@ -34,10 +34,20 @@ import torch
 
 import ttnn
 
-from . import ccl
+from . import ccl, host_alloc
 from . import mm_configs as mm
 from .ccl import dealloc
-from .common import DRAM, TP_AXIS, act_dtype, attn_compute_config, bf16_activations, dense_dtype, gemm_input, tp_sum
+from .common import (
+    DRAM,
+    TP_AXIS,
+    act_dtype,
+    attn_compute_config,
+    bf16_activations,
+    dense_dtype,
+    gemm_dtype,
+    gemm_input,
+    tp_sum,
+)
 from .norm import TtDistributedRmsNorm
 from .settings import settings
 
@@ -88,7 +98,13 @@ class TtAttnInProj:
             # ATTN_SP32=on (P.10): the whole sum over the hidden in fp32 DEST, written in the activation dtype (bf16
             # under BF16_ACTIVATIONS=on: the GPU code's fp8 GEMM writes bf16), the chip's rows only
             return mm.linear(
-                xq, self.weight, site="q_a", dtype=act_dtype(), compute_kernel_config=self.attn_ckc, memory_config=DRAM
+                xq,
+                self.weight,
+                site="q_a",
+                dtype=act_dtype(),
+                compute_kernel_config=self.attn_ckc,
+                memory_config=DRAM,
+                out=host_alloc.mm_out(self.mesh, "q_a.p", xq, self.weight, act_dtype()),  # (HOST_ALLOC, P.15)
             )
         # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
@@ -117,7 +133,8 @@ class TtQa:
         """(q_resid, the fused projection's output p [1, 1, S/SP, proj.width] fp32): the assembled model's q_a step
         keeps p for the kv step (tt/kv.py:TtWindowKv.from_proj), one matmul and one exchange for both. The caller
         frees p."""
-        xq = gemm_input(x)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant
+        # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant (HOST_ALLOC=on, P.15: into a load-time output)
+        xq = gemm_input(x, host_alloc.out(self.mesh, "q_a.xq", x.shape, gemm_dtype()) if self.proj.full_rows else None)
         p = self.proj(xq)
         if xq is not x:
             dealloc(xq)
