@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.22...4.2)
+project(metal_example_streaming_profiler_telemetry)
+
+if(NOT TARGET TT::Metalium)
+    find_package(TT-Metalium REQUIRED)
+endif()
+
+foreach(name telemetry_external_process telemetry_metal_process)
+    add_executable(metal_example_${name})
+    target_sources(metal_example_${name} PRIVATE ${name}.cpp)
+    target_link_libraries(metal_example_${name} PUBLIC TT::Metalium)
+    if(TARGET TT::CommonPCH)
+        tt_reuse_precompile_headers(metal_example_${name} TT::CommonPCH)
+    endif()
+endforeach()
