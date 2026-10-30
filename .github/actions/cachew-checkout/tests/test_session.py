@@ -588,27 +588,60 @@ class SessionTests(unittest.TestCase):
         # Composite run steps do not get the runner's bundled Node on PATH.
         env = dict(self.env, PATH=self.node_free_path())
         result = self.run_prepare_expecting_fallback(env)
-        self.assertIn("Node.js 18+ unavailable", result.stdout)
+        self.assertIn("Node.js 22+ unavailable", result.stdout)
         # action.yml skips the cachew and configure steps when the session is not ready.
         self.plain_checkout_without_cache(self.env, cachew=False)
 
-    def test_runner_externals_node_is_used_when_node_is_not_on_path(self):
-        # tt CI VMs: runner in /opt/runner, RUNNER_TEMP=/opt/runner/_work/_temp,
-        # Node only in /opt/runner/externals/node24.
+    def runner_externals(self, version):
+        """A runner root whose externals/<version> Node records that it ran."""
         root = self.fixture.root / "runner-root"
         temp = root / "_work" / "_temp"
         temp.mkdir(parents=True)
-        externals = root / "externals" / "node24" / "bin"
+        externals = root / "externals" / version / "bin"
         externals.mkdir(parents=True)
         marker = self.fixture.root / "externals-node-used"
         (externals / "node").write_text(f'#!/bin/sh\ntouch "{marker}"\nexec "{shutil.which("node")}" "$@"\n')
         (externals / "node").chmod(0o755)
+        return temp, marker
+
+    def end_of_life_node_dir(self):
+        """A directory whose `node` reports Node.js 20."""
+        directory = self.fixture.root / "node20-bin"
+        directory.mkdir()
+        preload = directory / "v20.cjs"
+        preload.write_text('Object.defineProperty(process.versions, "node", {value: "20.19.0"});\n')
+        (directory / "node").write_text(f'#!/bin/sh\nexec "{shutil.which("node")}" --require "{preload}" "$@"\n')
+        (directory / "node").chmod(0o755)
+        return directory
+
+    def test_runner_externals_node_is_used_when_node_is_not_on_path(self):
+        # tt CI VMs: runner in /opt/runner, RUNNER_TEMP=/opt/runner/_work/_temp,
+        # Node only in /opt/runner/externals/node24.
+        temp, marker = self.runner_externals("node24")
         self.fixture.runtime = temp
         self.env.update(RUNNER_TEMP=str(temp), PATH=self.node_free_path())
         self.assertEqual(self.flow(), (True, True))
         self.assertTrue(marker.exists())
         self.assertTrue(Path(self.env["CACHEW_SESSION_DIR"]).is_relative_to(temp))
         self.finish()
+
+    def test_end_of_life_node_on_path_is_skipped_for_runner_node24(self):
+        temp, marker = self.runner_externals("node24")
+        self.fixture.runtime = temp
+        path = os.pathsep.join([str(self.end_of_life_node_dir()), self.node_free_path()])
+        self.env.update(RUNNER_TEMP=str(temp), PATH=path)
+        self.assertEqual(self.flow(), (True, True))
+        self.assertTrue(marker.exists())
+        self.finish()
+
+    def test_end_of_life_node_is_never_used(self):
+        # Neither an old `node` on PATH nor the runner's externals/node20.
+        temp, marker = self.runner_externals("node20")
+        self.fixture.runtime = temp
+        path = os.pathsep.join([str(self.end_of_life_node_dir()), self.node_free_path()])
+        result = self.run_prepare_expecting_fallback(dict(self.env, RUNNER_TEMP=str(temp), PATH=path))
+        self.assertIn("Node.js 22+ unavailable", result.stdout)
+        self.assertFalse(marker.exists())
 
     def test_prepare_errors_fall_back_to_plain_checkout(self):
         # H3: whatever prevents cachew must never fail a checkout that plain
