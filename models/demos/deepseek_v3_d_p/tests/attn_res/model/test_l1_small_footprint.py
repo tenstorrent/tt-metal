@@ -73,6 +73,18 @@ class TtAttnResImplicitSemaphores(TtAttnRes):
             topology=self.topology[self.tp_axis],
         )
 
+    def _all_gather(self, tensor):
+        # The fused scoring path crosses the axis with an all-gather; left to allocate, it
+        # takes its semaphores from L1_SMALL the way the all-reduce fallback's leg does.
+        return ttnn.all_gather(
+            tensor,
+            dim=3,
+            cluster_axis=self.tp_axis,
+            num_links=self.num_links,
+            topology=self.topology[self.tp_axis],
+            use_l1_small_for_semaphores=True,
+        )
+
 
 def _l1_small_per_bank(mesh_device):
     return ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_allocated_per_bank

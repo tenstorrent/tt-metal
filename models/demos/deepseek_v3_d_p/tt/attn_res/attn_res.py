@@ -221,6 +221,7 @@ class TtAttnRes(LightweightModule):
         # its queries so an address cannot be recycled under the key.
         self._column_by_query_id = {}
         self._stack_by_query_ids = {}
+        self._score_stack_by_query_ids = {}
         self.weights = weights
         if weights is not None:
             assert weights.tensor_parallel_axis == tp_axis, (
@@ -344,6 +345,23 @@ class TtAttnRes(LightweightModule):
             topology=self.topology[self.tp_axis],
         )
 
+    def _all_gather(self, tensor):
+        """Every TP rank's `tensor` side by side on the last dim. Does not consume it.
+
+        One collective where `_all_reduce` is two — a reduce-scatter and an all-gather,
+        each a program per chip — for a consumer that sums the partials itself.
+        """
+        barriers, _, gather = self._tp_semaphores()
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            dim=3,
+            cluster_axis=self.tp_axis,
+            multi_device_global_semaphore=gather,
+            barrier_semaphore=barriers[1],
+            num_links=self.num_links,
+            topology=self.topology[self.tp_axis],
+        )
+
     def _collective(self, wide):
         """One all-reduce over the TP axis. Does not consume `wide`.
 
@@ -462,6 +480,84 @@ class TtAttnRes(LightweightModule):
             stack = columns[0] if len(columns) == 1 else ttnn.concat(columns, dim=3)
             self._stack_by_query_ids[key] = (list(queries), stack)
         return self._stack_by_query_ids[key][1]
+
+    def _score_columns(self, queries):
+        """R folded queries -> one `[1, 1, d/tp, 32]` operand whose column 1 + r is query r.
+
+        Column 0 and the columns past the last site are zero, so the matmul against it
+        lands each site's dot in the column `attn_res_scores` reads it from and leaves
+        column 0 free for the sum of squares — which `rms_norm_pre_all_gather` writes to
+        column 0 of an otherwise zero tile, so one `add` packs both statistics into a
+        single tile column and one collective carries them.
+
+        Built on first use and held, like `_query_columns`, so it never lands in a trace.
+        """
+        key = tuple(id(q) for q in queries)
+        if key not in self._score_stack_by_query_ids:
+            columns = [self._query_column(q) for q in queries]
+            # Zeros allocated outright and one concat. `zeros_like` of a column and a
+            # `ttnn.pad` up to the tile both left garbage in the stack on a mesh.
+            zeros = lambda width: ttnn.zeros(
+                [1, 1, self.shard_width, width],
+                dtype=columns[0].dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+            blocks = [zeros(1), *columns]
+            if len(blocks) < ttnn.TILE_SIZE:
+                blocks.append(zeros(ttnn.TILE_SIZE - len(blocks)))
+            stack = ttnn.concat(blocks, dim=3)
+            ttnn.deallocate(blocks[0])
+            if len(blocks) > 1 + len(columns):
+                ttnn.deallocate(blocks[-1])
+            self._score_stack_by_query_ids[key] = (list(queries), stack)
+        return self._score_stack_by_query_ids[key][1]
+
+    def _fuses_scores(self, queries):
+        """Whether `inter_block` can take the fused scoring path for this many sites.
+
+        The op reads both statistics out of one fp32 tile column, so it needs the one-pass
+        sum of squares, fp32 statistics, and no more sites than the column has room for
+        beside the sum of squares.
+        """
+        return self.one_pass_squares and self.stats_dtype == ttnn.float32 and len(queries) < ttnn.TILE_SIZE
+
+    def _inter_block_fused(self, block_residual, queries):
+        """`inter_block` as six dispatches: the two statistics, packed into one tile column,
+        one collective, one scoring op, and the mixture.
+
+        The composed chain is a dozen more — typecasts around the collective, a second
+        collective, the folds, the composite max and sum, the site-major permutes — and
+        every one of them is billed to the host when the walk runs untraced, which is how
+        prefill runs. The scores are also kept in fp32 the whole way here, where the
+        composed chain narrowed the reduced statistics to bf16.
+        """
+        sum_squares = ttnn.rms_norm_pre_all_gather(
+            block_residual, dtype=ttnn.float32, compute_kernel_config=STATS_FIDELITY
+        )
+        dots = ttnn.matmul(
+            block_residual,
+            self._score_columns(queries),
+            dtype=ttnn.float32,
+            compute_kernel_config=STATS_FIDELITY,
+        )
+        local = ttnn.add(sum_squares, dots)
+        ttnn.deallocate(sum_squares)
+        ttnn.deallocate(dots)
+
+        # Gathered rather than reduced: the scoring op sums the ranks' partials in fp32
+        # dest, so the collective only has to move them.
+        stats = self._all_gather(local)
+        ttnn.deallocate(local)
+
+        exponentials, site_shifts, site_masses = ttnn.experimental.deepseek_prefill.attn_res_scores(
+            stats, num_sites=len(queries), inv_hidden_size=1.0 / self.hidden_size, eps=self.eps
+        )
+        ttnn.deallocate(stats)
+
+        partials = self._mix(block_residual, exponentials)
+        ttnn.deallocate(exponentials)
+        return partials, site_shifts, site_masses
 
     def _dots_by_site(self, v, queries):
         """[1, C, N, d/tp] against R queries -> [1, C, N, R], globally summed.
@@ -595,6 +691,9 @@ class TtAttnRes(LightweightModule):
             batches whole and names the site; keep them alive until the block's last
             read.
         """
+        if self._fuses_scores(queries):
+            return self._inter_block_fused(block_residual, queries)
+
         reciprocal_rms = self._reciprocal_rms(block_residual)
         dots = self._dots_by_site(block_residual, queries)
         scores = ttnn.mul(dots, reciprocal_rms)
