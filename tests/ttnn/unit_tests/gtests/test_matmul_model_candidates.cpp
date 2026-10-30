@@ -7,7 +7,9 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "ttnn/operations/matmul/device/config/model/matmul_candidates.hpp"
@@ -161,6 +163,145 @@ TEST(MatmulModelCandidates, NarrowerGridFollowsTheDeviceGrid) {  // #62076: 2048
         EXPECT_EQ(both[i].grid_x, i < full.size() ? 11u : 10u) << "candidate " << i;
         EXPECT_EQ(both[i].grid_y, 10u) << "candidate " << i;
     }
+}
+
+// The device op's checks (matmul_device_operation.cpp) of a 2D, 1D or Reuse config on interleaved tensors with 32x32
+// tiles: the first one `c` fails, or empty
+std::string device_op_rule_error(const MatmulDesc& p, std::uint32_t grid_x, std::uint32_t grid_y, const Candidate& c) {
+    const Blocking& b = c.blocking;
+    if (b.in0_block_w == 0 || b.per_core_M == 0 || b.per_core_N == 0 || b.out_subblock_h == 0 ||
+        b.out_subblock_w == 0) {
+        return "a zero block dimension";
+    }
+    if (c.grid_x == 0 || c.grid_y == 0 || c.grid_x > grid_x || c.grid_y > grid_y) {
+        return "grid outside the device grid";
+    }
+    if (p.Kt % b.in0_block_w != 0) {
+        return "Kt not divisible by in0_block_w";
+    }
+    // Half-sync DST even with dst_full_sync (these factories): 8 tiles, 4 with fp32 accumulation
+    if (b.out_subblock_h * b.out_subblock_w > (p.fp32_dest_acc ? 4u : 8u)) {
+        return "subblock over the DST tiles";
+    }
+    if (c.family == Family::kReuse) {
+        if (b.per_core_M % b.out_subblock_h != 0 || b.per_core_N % b.out_subblock_w != 0) {
+            return "per-core block not divisible by the subblock";
+        }
+        // validate_matmul_reuse_config and validate_matmul_reuse_work_split
+        if (b.per_core_M > p.Mt ? (b.per_core_M % p.Mt != 0 || (p.batch_a * p.Mt) % b.per_core_M != 0)
+                                : p.Mt % b.per_core_M != 0) {
+            return "Reuse per_core_M neither divides M nor is a multiple of it dividing the total M";
+        }
+        if (b.per_core_N != p.Nt) {
+            return "Reuse per_core_N not N";
+        }
+        if (p.bias_rows > 0) {
+            return "Reuse with a fused row bias (the hook drops these)";
+        }
+        return "";
+    }
+    if (b.out_block_h == 0 || b.out_block_w == 0 || b.out_block_h % b.out_subblock_h != 0 ||
+        b.out_block_w % b.out_subblock_w != 0 || b.per_core_M % b.out_block_h != 0 ||
+        b.per_core_N % b.out_block_w != 0) {
+        return "block, output block and subblock not nested";
+    }
+    const std::uint32_t Mt = c.fuse_batch ? p.batch_a * p.Mt : p.Mt;
+    const std::uint32_t blocks_y = (Mt - 1) / b.per_core_M + 1;
+    const std::uint32_t blocks_x = (p.Nt - 1) / b.per_core_N + 1;
+    if (c.family == Family::k2D) {
+        if (b.per_core_M > Mt || blocks_x > c.grid_x || blocks_y > c.grid_y) {
+            return "2D output blocks outside the grid";
+        }
+        return "";
+    }
+    if (blocks_x * blocks_y > c.grid_x * c.grid_y) {
+        return "1D output blocks over the cores";
+    }
+    if (c.family == Family::k1DMcastIn0) {
+        return blocks_y == 1 ? "" : "mcast_in0 with more than one M block";
+    }
+    if (blocks_x != 1 || b.per_core_M > Mt) {
+        return "mcast_in1 with more than one N block, or per_core_M over Mt";
+    }
+    if ((p.Nt - 1) / b.out_block_w + 1 != b.per_core_N / b.out_block_w) {
+        return "mcast_in1 N tail not in the last output block";
+    }
+    if (blocks_y == 1) {
+        const std::uint32_t physical_h = b.per_core_M / b.out_block_h;
+        if ((Mt - 1) / b.out_block_h + 1 != physical_h || (Mt % b.out_block_h != 0 && physical_h != 1)) {
+            return "single-row mcast_in1 M tail not in the last output block";
+        }
+    }
+    return "";
+}
+
+// The selector validates only its top candidate with the device op (a rejection is a TT_FATAL, matmul_model_hook.cpp),
+// so every candidate must pass the device op's checks. Shapes with prime, odd and tail-heavy tile counts on the p150
+// and Galaxy grids (each with the narrower grid the selector also scores), under each call attribute the enumerator
+// reads: batches (matched and broadcast B), dtypes, accumulation, full-sync DST, fused bias, transposed A, L1
+// placement and a tight L1 budget.
+TEST(MatmulModelCandidates, AllPassTheDeviceOpRules) {
+    struct Variant {
+        const char* name;
+        void (*apply)(MatmulDesc&);
+    };
+    const std::vector<Variant> variants = {
+        {"bf16 x bfp8", [](MatmulDesc& p) { p.in1 = DataType::kBfloat8B; }},
+        {"fp32 acc", [](MatmulDesc& p) { p.fp32_dest_acc = true; }},
+        {"full-sync DST", [](MatmulDesc& p) { p.dst_full_sync = true; }},
+        {"full-sync DST, fp32 acc", [](MatmulDesc& p) { p.dst_full_sync = p.fp32_dest_acc = true; }},
+        {"bias",
+         [](MatmulDesc& p) {
+             p.bias_tile_bytes = 2048;
+             p.bias_rows = 1;
+         }},
+        {"batch 4", [](MatmulDesc& p) { p.batch_a = p.batch_b = 4; }},
+        {"batch 4, B broadcast", [](MatmulDesc& p) { p.batch_a = 4; }},
+        {"transposed A", [](MatmulDesc& p) { p.transpose_a = true; }},
+        {"bfp8 out, no packer L1 acc",
+         [](MatmulDesc& p) {
+             p.out = DataType::kBfloat8B;
+             p.packer_l1_acc = false;
+         }},
+        {"bfp4 B, fp32 inputs",
+         [](MatmulDesc& p) {
+             p.in0 = p.out = DataType::kFloat32;
+             p.in1 = DataType::kBfloat4B;
+         }},
+        {"L1 A, B and output", [](MatmulDesc& p) { p.a.in_l1 = p.b.in_l1 = p.out_place.in_l1 = true; }},
+    };
+    std::size_t checked = 0;
+    for (const auto& [grid_x, grid_y] : {std::pair{11u, 10u}, std::pair{12u, 10u}}) {
+        for (const std::uint32_t budget : {kBudget, 300u * 1024}) {
+            const auto hw = HardwareDesc::blackhole(grid_x, grid_y, budget);
+            for (std::uint32_t Mt : {1u, 3u, 7u, 13u, 32u, 41u, 100u, 401u, 4008u}) {
+                for (std::uint32_t Kt : {1u, 6u, 64u, 128u}) {
+                    for (std::uint32_t Nt : {1u, 5u, 11u, 41u, 128u, 448u}) {
+                        for (const auto& v : variants) {
+                            MatmulDesc p = desc(Mt, Kt, Nt);
+                            v.apply(p);
+                            for (const auto& c : enumerate_candidates_with_narrower_grid(p, hw)) {
+                                if (p.bias_rows > 0 && c.family == Family::kReuse) {
+                                    continue;  // the hook drops Reuse with a fused bias
+                                }
+                                ++checked;
+                                const auto& b = c.blocking;
+                                EXPECT_EQ(device_op_rule_error(p, grid_x, grid_y, c), "")
+                                    << Mt << "x" << Kt << "x" << Nt << " tiles, " << v.name << ", budget " << budget
+                                    << ", device grid " << grid_x << "x" << grid_y << ": family "
+                                    << static_cast<int>(c.family) << " grid " << c.grid_x << "x" << c.grid_y
+                                    << " in0_block_w " << b.in0_block_w << " per core " << b.per_core_M << "x"
+                                    << b.per_core_N << " block " << b.out_block_h << "x" << b.out_block_w
+                                    << " subblock " << b.out_subblock_h << "x" << b.out_subblock_w << " fuse_batch "
+                                    << c.fuse_batch;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    EXPECT_GT(checked, 50000u);
 }
 
 TEST(MatmulModelCandidates, Unsupported) {

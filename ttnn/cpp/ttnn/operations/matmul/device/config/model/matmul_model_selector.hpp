@@ -55,6 +55,8 @@ std::vector<std::size_t> rank_by_prediction(std::span<const double> predicted_ns
 struct Pick {
     std::optional<Candidate> candidate;
     std::uint32_t cb_bytes = 0;
+    // get_max_l1_space when the pick was made: the default's K blocking, which a pick keeps, depends on it
+    std::uint32_t max_l1_space = 0;
     std::string description;
     // No candidate, for lack of L1: the per-core budget it had (the pick is made again when more is free)
     std::optional<std::uint32_t> failed_budget;

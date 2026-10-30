@@ -9,6 +9,7 @@ ttnn.CONFIG.matmul_model_path), or TT_MATMUL_MODEL_BLOB when set; a missing blob
 """
 
 import os
+import shutil
 
 import pytest
 import torch
@@ -16,6 +17,7 @@ import ttnn
 
 from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.comparison import comp_pcc
 
 last_pick = ttnn.operations.matmul.matmul_model_last_pick
 MODEL_BLOB = os.environ.get("TT_MATMUL_MODEL_BLOB") or str(ttnn.CONFIG.matmul_model_path)
@@ -93,15 +95,42 @@ CASES = [
         False,
         True,
     ),
+    # Squares with packer L1 accumulation, where other K blocking than the default's changes PCC (README, "Precision")
+    (
+        (1, 1, 1024, 1024),
+        (1, 1, 1024, 1024),
+        ttnn.bfloat16,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        False,
+        False,
+    ),
+    (
+        (1, 1, 2048, 2048),
+        (1, 1, 2048, 2048),
+        ttnn.bfloat8_b,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        False,
+        False,
+    ),
 ]
 
 
 @pytest.mark.parametrize("a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b", CASES)
 def test_model_config_pcc(device, model_on, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b):
+    with ttnn.manage_config("matmul_model_config", False):
+        _, default = run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b)
     expected, got = run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b)
     pick = last_pick()
     assert pick.startswith("model: "), f"the model should choose for this interleaved matmul: {pick}"
     assert_with_pcc(expected, got, 0.99 if dtype_b == ttnn.bfloat8_b else 0.999)
+    # The model keeps the default config's K blocking, the one part of a config that changes rounding (README,
+    # "Precision"), so its result is the default's bit for bit; a PCC margin would let a precision change through
+    assert torch.equal(got, default), (
+        f"the result differs from the default's: PCC {comp_pcc(expected, got)[1]:.6f} with the model, "
+        f"{comp_pcc(expected, default)[1]:.6f} without ({pick})"
+    )
 
 
 def test_model_picks_for_a_plain_matmul(device, model_on):
@@ -115,6 +144,32 @@ def test_model_picks_for_a_plain_matmul(device, model_on):
         device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
     )
     assert last_pick() == first, f"cache hit changed the pick: {last_pick()}"
+
+
+def test_model_reloads_when_the_path_changes(device, model_on, tmp_path):
+    """A C++ program that turns the flag on before setting matmul_model_path gets the default configs until it sets
+    the path, and the model from then on: the path is read on every eligible matmul, not only on the first. A blob
+    that appears at a path whose load failed is loaded too."""
+    args = (
+        device,
+        (1, 1, 1024, 4096),
+        (1, 1, 4096, 4096),
+        ttnn.bfloat8_b,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    late = tmp_path / "matmul_model.blob"
+    with ttnn.manage_config("matmul_model_path", str(late)):
+        run_matmul(*args)
+        assert last_pick() == "default: model not loaded", last_pick()
+        shutil.copyfile(MODEL_BLOB, late)
+        run_matmul(*args)
+        assert last_pick().startswith("model: "), last_pick()
+    with ttnn.manage_config("matmul_model_path", "/nonexistent/matmul_model.blob"):
+        run_matmul(*args)
+        assert last_pick() == "default: model not loaded", last_pick()
+    run_matmul(*args)
+    assert last_pick().startswith("model: "), last_pick()
 
 
 def test_model_keeps_default_for_sharded(device, model_on):

@@ -2,7 +2,7 @@
 
 An experimental, default-off way for `ttnn.matmul` / `ttnn.linear` / `ttnn.addmm` to choose their program config
 when the caller passes none (#57884). A learned performance model scores a list of candidate configs and the
-lowest predicted time is used. Anything the model doesn't cover keeps today's default selection unchanged.
+lowest predicted time is used. Anything the model doesn't cover keeps the default selection unchanged.
 
 ## Turning it on
 
@@ -16,19 +16,23 @@ or from Python, before the first matmul:
 ttnn.CONFIG.matmul_model_config = True
 ```
 
-The build fetches the model blob (see "The model blob" below) and `ttnn.CONFIG.matmul_model_path` points at it by
-default. Set `matmul_model_path` to use another blob. The default is filled in by `import ttnn`; a C++ program that
-does not import ttnn's Python package sets `matmul_model_path` itself (the blob is under the runtime root at
-`runtime/matmul_model/matmul_model.blob`).
+The model is the blob that `ttnn.CONFIG.matmul_model_path` names. The build fetches it (see "The model blob" below)
+to `runtime/matmul_model/matmul_model.blob` under the runtime root, and `import ttnn` sets `matmul_model_path` to it
+unless the path is already set. A C++ program that does not import ttnn's Python package must set `matmul_model_path`
+itself: while it is unset, a matmul with the flag on logs that the model can't be loaded and uses the default configs.
 
-When the flag is off nothing here runs and nothing is loaded. When it is on, the blob is loaded once, lazily, on
-the first matmul the model is eligible for. If it can't be loaded, a warning is logged once and matmul behaves as
-with the flag off. `ttnn.operations.matmul.matmul_model_last_pick()` returns, for this thread's last matmul,
-`"model: <program config>"` or `"default: <reason>"` (for tests and benchmarks).
+When the flag is off nothing here runs and nothing is loaded. When it is on, the blob at `matmul_model_path` is
+loaded on the first matmul the model is eligible for, and loaded again on the first eligible matmul after
+`matmul_model_path` changes; picks are kept per model, so a new model makes its own. If the blob can't be loaded, a
+warning is logged and matmul behaves as with the flag off until a model loads: the load is tried again when the path
+changes or the file at it appears or changes. Like the rest of `ttnn.CONFIG`, `matmul_model_path` is not synchronized:
+set it while no other thread runs a matmul.
+`ttnn.operations.matmul.matmul_model_last_pick()` returns, for this thread's last matmul, `"model: <program config>"`
+or `"default: <reason>"` (for tests and benchmarks).
 
 ## When the model chooses
 
-The model chooses only when all of the following hold. Otherwise today's default selection runs.
+The model chooses only when all of the following hold. Otherwise the default selection runs.
 
 - The arch is Blackhole, which is the only device the model was trained on.
 - No `program_config` and no `core_grid` were given.
@@ -63,25 +67,30 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
      output and 16 KiB.
 2. **Scores.** `matmul_model_features.{hpp,cpp}` computes an analytic base latency and 57 features per candidate.
    `gbdt_model.{hpp,cpp}` evaluates the LightGBM residual. The prediction is `base_ns * exp(gbdt(features))`.
-3. **Precision.** With a bfp8_b or bfp4_b output and neither packer L1 nor fp32 accumulation, the factories keep
-   partial sums in the output format, so every K block after the first re-quantizes them. Only candidates with no
-   more K blocks than the default selection's config are kept, so the model never rounds more often than matmul does
-   without it. The default's K blocking depends on live L1, so a cached pick is checked against it again on every
-   call. Otherwise the model changes only the program config: output dtype, math fidelity and accumulation stay
-   what the caller asked for.
-4. **Pick.** Candidates are tried in order of prediction; ties keep candidate order. The first one that passes the
-   device op's own validation (`validate_on_program_cache_miss`) and the live L1 budget is used. If none passes, or
-   none can be scored, the default selection runs.
-5. **Cache.** Picks are cached process-wide, keyed on the call's full signature (the model is loaded once per
-   process). On every hit the cached pick is re-checked against the current L1 budget (and the precision bound), and
+3. **Precision.** The model changes only the program config: output dtype, math fidelity and accumulation stay what
+   the caller asked for, and the K blocking (`in0_block_w`) stays the default selection's. The K blocking is the one
+   part of a config that changes how partial sums are rounded: between K blocks they leave DST and are summed in L1
+   (packer L1 accumulation) or kept in the output format, in 16 bits or fewer without fp32 accumulation. Neither more
+   nor fewer K blocks is reliably more accurate (1024^3 bf16, HiFi2: PCC 0.99996 at the default's 32 K blocks, 0.99984
+   at 2; gpt-oss LM heads, bfp8, LoFi: 0.99985 with the default's K blocking, 0.999824 with 90 K blocks and 0.999857 with 30). So only
+   candidates with the default config's `in0_block_w` are scored, and a matmul's result with the flag on is the same,
+   bit for bit, as with it off. When the default config has no K blocking, the default runs. The default's K blocking
+   depends on live L1, so a cached pick is checked against it again when that changes.
+4. **Pick.** The best-predicted candidate that fits the live L1 budget is used; ties keep candidate order. It is
+   checked once with the device op's own validation (`validate_on_program_cache_miss`) before it is used. If no
+   candidate fits, none can be scored, or validation rejects the pick, the default selection runs.
+5. **Cache.** Picks are cached process-wide for the loaded model, keyed on the call's full signature. On every hit the cached pick is re-checked against the current L1 budget (and the precision bound), and
    a pick that found no candidate for lack of L1 is made again once more L1 is free.
 
 The pick can depend on live L1, like the default selection's. With trace capture, warm up each matmul shape once, in
 the same allocation state as the capture, before capturing: the first call of a shape also does the selection's host
 work (model load, candidate enumeration, validation).
 
-A candidate that the device op rejects costs a caught exception and the critical-level log line that every
-`TT_FATAL` writes. Candidates are checked best first, so this happens only when the best-ranked ones are invalid.
+Validation is a backstop, not a filter. The enumerator emits only configs that pass the device op's checks (the
+`MatmulModelCandidates.AllPassTheDeviceOpRules` gtest), so a rejection is a selector bug: it is logged as a warning and
+the default runs for that call signature. Validation fails through `TT_FATAL`, which writes a critical log line and a
+backtrace, and calls `abort()` when `TT_ASSERT_ABORT` is set, so a pick runs it once and never moves on to the next
+candidate.
 
 ## The model blob
 
@@ -97,7 +106,7 @@ produced from the model repository `tt-matmul-predictor`:
 
 ```
 mmodel export ...                                                    # the repository's export entry point
-python -m bench.export.export_gbdt <lightgbm_model.txt> model.blob --format blob   # what it runs today
+python -m bench.export.export_gbdt <lightgbm_model.txt> model.blob --format blob   # the command it runs
 ```
 
 The blob carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on

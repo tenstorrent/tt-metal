@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -39,40 +40,51 @@ constexpr std::uint32_t kL1HeadroomBytes = 16 * 1024;
 
 thread_local std::string last;
 
-// ---- the model, loaded once on the first eligible matmul ----
+// ---- the model at matmul_model_path, loaded on the first eligible matmul and again when the path or file changes ----
 
+// A model and the picks made with it (a pick holds only for the model that made it)
 struct LoadedModel {
-    std::once_flag once;
-    std::unique_ptr<const ConfigModel> model;
+    std::filesystem::path path;
+    std::unique_ptr<const ConfigModel> model;  // null when the blob at `path` can't be loaded
+    // The file's modification time when a load failed (nullopt: there was no file), to try again once it changes
+    std::optional<std::filesystem::file_time_type> failed_mtime;
+    PickCache picks;
 };
 
-LoadedModel& loaded_model() {
-    static ttsl::Indestructible<LoadedModel> loaded;
-    return loaded.get();
+std::optional<std::filesystem::file_time_type> modification_time(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto time = std::filesystem::last_write_time(path, error);
+    return error ? std::nullopt : std::optional(time);
 }
 
-const ConfigModel* model() {
-    auto& loaded = loaded_model();
-    std::call_once(loaded.once, [&] {
-        const std::string path = ttnn::CONFIG.get<"matmul_model_path">().string();
-        std::string error;
-        loaded.model = ConfigModel::load_file(path, error);
-        if (loaded.model) {
-            log_info(tt::LogOp, "matmul_model_config: loaded {} (model {})", path, loaded.model->sha256());
-        } else {
-            log_warning(
-                tt::LogOp,
-                "matmul_model_config is on but the matmul config model could not be loaded ({}); matmul keeps its "
-                "default program configs",
-                error);
-        }
-    });
-    return loaded.model.get();
-}
-
-PickCache& pick_cache() {
-    static ttsl::Indestructible<PickCache> cache;
-    return cache.get();
+// The model at `path`: loaded once per path, and after a failed load again once the file appears or changes (a failure
+// is logged once per state of the file, not once per call)
+std::shared_ptr<LoadedModel> loaded_model(const std::filesystem::path& path) {
+    static ttsl::Indestructible<std::mutex> mutex;
+    static ttsl::Indestructible<std::shared_ptr<LoadedModel>> current;
+    std::lock_guard lock(mutex.get());
+    auto& loaded = current.get();
+    if (loaded != nullptr && loaded->path == path &&
+        (loaded->model != nullptr || loaded->failed_mtime == modification_time(path))) {
+        return loaded;
+    }
+    auto next = std::make_shared<LoadedModel>();
+    next->path = path;
+    const auto mtime = modification_time(path);
+    std::string error;
+    next->model = ConfigModel::load_file(path.string(), error);
+    if (next->model) {
+        log_info(tt::LogOp, "matmul_model_config: loaded {} (model {})", path.string(), next->model->sha256());
+    } else {
+        next->failed_mtime = mtime;
+        log_warning(
+            tt::LogOp,
+            "matmul_model_config is on but the matmul config model could not be loaded ({}); matmul keeps its default "
+            "program configs until a model loads from matmul_model_path",
+            error);
+    }
+    loaded = std::move(next);
+    return loaded;
 }
 
 std::optional<DataType> model_dtype(tt::tt_metal::DataType t) {
@@ -288,10 +300,10 @@ std::optional<Call> describe(
     return call;
 }
 
-// Live per-core L1 for this op's circular buffers: free L1 above the lowest L1 buffer (the default selection's
-// get_max_l1_space), less this op's interleaved L1 output and the headroom
-std::uint32_t l1_cb_budget(const Tensor& a, const MatmulDesc& p, bool out_in_l1) {
-    std::uint64_t budget = utilities::get_max_l1_space(a);
+// Live per-core L1 for this op's circular buffers: `max_l1_space` (free L1 above the lowest L1 buffer, the default
+// selection's get_max_l1_space), less this op's interleaved L1 output and the headroom
+std::uint32_t l1_cb_budget(const Tensor& a, const MatmulDesc& p, bool out_in_l1, std::uint32_t max_l1_space) {
+    std::uint64_t budget = max_l1_space;
     if (out_in_l1) {
         const std::uint64_t out_tiles = static_cast<std::uint64_t>(std::max(p.batch_a, p.batch_b)) * p.Mt * p.Nt;
         const std::uint64_t banks = a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
@@ -323,26 +335,21 @@ std::optional<std::uint32_t> default_in0_block_w(
         config);
 }
 
-std::uint32_t k_blocks(const MatmulDesc& p, std::uint32_t in0_block_w) {
-    return (p.Kt + in0_block_w - 1) / in0_block_w;
-}
-
-// Without packer L1 accumulation or fp32 dest accumulation the factories keep partial sums in the output format
-// between K blocks, so with a block-float output every K block after the first re-quantizes them (the model scores
-// time, not accuracy). The most K blocks a pick may use, so the model never rounds the partial sums more often than
-// the default selection's config does: nullopt when no bound applies, 0 when the default has no K blocking to compare
-// with (no pick allowed). The default's K blocking depends on live L1, so a cached pick is checked again on every call.
-std::optional<std::uint32_t> max_k_blocks(
-    const MatmulDesc& p,
+// The K blocking a pick must use: the default selection's config's in0_block_w (README, "Precision"; the model scores
+// time, not accuracy). The K blocking is the one part of a config that changes how partial sums are rounded: between K
+// blocks they leave DST and are summed in L1 (packer L1 accumulation) or kept in the output format, in 16 bits or fewer
+// without fp32 accumulation. Neither more nor fewer K blocks is reliably more accurate (1024^3 bf16, HiFi2: PCC 0.99996
+// with the default's 32 K blocks, 0.99984 with 2; gpt-oss LM heads, 32x2880 @ 2880x32768 and x65536, bfp8, LoFi:
+// 0.99985 with the default's, 0.999824 with 90 and 0.999857 with 30), so a pick keeps the default's and its result is
+// the default's, bit for bit. nullopt when the default config has no K blocking (no pick). It depends on live L1
+// (get_max_l1_space), so a cached pick is checked again when that changes.
+std::optional<std::uint32_t> required_in0_block_w(
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
     const ttnn::prim::MatmulParams& attributes) {
-    if (p.packer_l1_acc || p.fp32_dest_acc || (p.out != DataType::kBfloat8B && p.out != DataType::kBfloat4B)) {
-        return std::nullopt;
-    }
-    const auto default_k_block = default_in0_block_w(a, b, bias, attributes);
-    return default_k_block && *default_k_block > 0 ? k_blocks(p, *default_k_block) : 0;
+    const auto in0_block_w = default_in0_block_w(a, b, bias, attributes);
+    return in0_block_w && *in0_block_w > 0 ? in0_block_w : std::nullopt;
 }
 
 MatmulProgramConfig to_program_config(const Candidate& c) {
@@ -432,15 +439,21 @@ std::optional<MatmulProgramConfig> choose(
         last = "default: " + why;
         return std::nullopt;
     }
-    const ConfigModel* m = model();
+    // Held for the whole call, so a reload for another thread's call doesn't unload the model in use. Like the rest of
+    // ttnn.CONFIG, matmul_model_path is unsynchronized: it must not be set while another thread runs a matmul.
+    const auto loaded = loaded_model(ttnn::CONFIG.get<"matmul_model_path">());
+    const ConfigModel* m = loaded->model.get();
     if (m == nullptr) {
         last = "default: model not loaded";
         return std::nullopt;
     }
-    // The model is loaded once per process, so the call signature alone identifies a pick
+    // Picks are kept per model, so the call signature alone identifies a pick
+    PickCache& picks = loaded->picks;
     const std::string& key = call->key;
     // A preallocated output is already outside the free L1 the budget starts from
-    const std::uint32_t budget = l1_cb_budget(a, call->desc, call->desc.out_place.in_l1 && !output.has_value());
+    const std::uint32_t max_l1_space = utilities::get_max_l1_space(a);
+    const std::uint32_t budget =
+        l1_cb_budget(a, call->desc, call->desc.out_place.in_l1 && !output.has_value(), max_l1_space);
     call->hw.l1_cb_budget = budget;
 
     auto use = [&](const Pick& pick) -> std::optional<MatmulProgramConfig> {
@@ -455,13 +468,16 @@ std::optional<MatmulProgramConfig> choose(
         last = "model: " + pick.description;
         return to_program_config(*pick.candidate);
     };
-    const auto cached = pick_cache().find(key);
+    const auto cached = picks.find(key);
     // A pick that failed for lack of L1 is made again once more L1 is free
     if (cached && !(cached->failed_budget && budget > *cached->failed_budget)) {
-        if (cached->candidate) {
-            const auto limit = max_k_blocks(call->desc, a, b, bias, attributes);
-            if (limit && k_blocks(call->desc, cached->candidate->blocking.in0_block_w) > *limit) {
-                last = fmt::format("default: cached pick has more K blocks than the default's {} now", *limit);
+        // The pick kept to the default's K blocking in the L1 it was made in; with other L1 the default's may differ
+        if (cached->candidate && cached->max_l1_space != max_l1_space) {
+            const auto required = required_in0_block_w(a, b, bias, attributes);
+            if (required != cached->candidate->blocking.in0_block_w) {
+                last = fmt::format(
+                    "default: cached pick's in0_block_w {} is not the default config's now",
+                    cached->candidate->blocking.in0_block_w);
                 return std::nullopt;
             }
         }
@@ -474,60 +490,63 @@ std::optional<MatmulProgramConfig> choose(
         // The reuse factory doesn't fuse a row bias (matmul post-processes it for an explicit Reuse config)
         std::erase_if(candidates, [](const Candidate& c) { return c.family == Family::kReuse; });
     }
-    // Keep only the candidates within the precision bound (max_k_blocks)
-    std::optional<std::uint32_t> limit;
+    // Keep only the candidates with the default's K blocking (required_in0_block_w)
     if (!candidates.empty()) {
-        limit = max_k_blocks(call->desc, a, b, bias, attributes);
-    }
-    if (limit && *limit > 0) {
-        std::erase_if(
-            candidates, [&](const Candidate& c) { return k_blocks(call->desc, c.blocking.in0_block_w) > *limit; });
-        none_left = fmt::format("no candidate fits L1 with at most the default's {} K blocks", *limit);
-    } else if (limit) {
-        candidates.clear();
-        none_left = "block-float output and the default config has no K blocking to compare with";
+        if (const auto required = required_in0_block_w(a, b, bias, attributes)) {
+            std::erase_if(candidates, [&](const Candidate& c) { return c.blocking.in0_block_w != *required; });
+            none_left = fmt::format("no candidate fits L1 with the default config's in0_block_w {}", *required);
+        } else {
+            candidates.clear();
+            none_left = "the default config has no K blocking to keep";
+        }
     }
     const std::vector<double> predicted = m->predict_ns(call->problem, candidates, call->arch);
     Pick pick;
     pick.description = candidates.empty() ? none_left : "the model can't score any candidate";
-    std::size_t rejected = 0;
     std::size_t rejected_for_l1 = 0;
+    bool rejected_by_validation = false;
     for (std::size_t i : rank_by_prediction(predicted)) {
         const Candidate& c = candidates[i];
         const std::uint32_t bytes = circular_buffer_bytes(call->desc, call->hw, c);
         if (bytes > budget) {
-            ++rejected;
             ++rejected_for_l1;
             continue;
         }
+        // The enumerator emits only configs the device op accepts (MatmulModelCandidates.AllPassTheDeviceOpRules), so
+        // this check is a backstop and a rejection is a selector bug: the default runs rather than the next candidate.
+        // A rejection is a TT_FATAL (a critical log line, a backtrace, abort() under TT_ASSERT_ABORT), so a pick makes
+        // at most one.
         const MatmulProgramConfig config = to_program_config(c);
         if (auto error = validation_error(a, b, bias, output, attributes, config); !error.empty()) {
-            log_debug(tt::LogOp, "matmul_model_config: candidate {} rejected by validation: {}", config, error);
-            ++rejected;
-            continue;
+            pick.description = fmt::format("the device op rejects the model's pick {}: {}", config, error);
+            log_warning(
+                tt::LogOp, "matmul_model_config: {}; matmul keeps its default program config", pick.description);
+            rejected_by_validation = true;
+            break;
         }
         pick.candidate = c;
         pick.cb_bytes = bytes;
+        pick.max_l1_space = max_l1_space;
         pick.description = fmt::format(
             "{} (predicted {:.0f} ns, rank {} of {} candidates)",
             config,
             predicted[i],
-            rejected + 1,
+            rejected_for_l1 + 1,
             candidates.size());
         break;
     }
-    if (!pick.candidate && rejected > 0) {
-        pick.description = fmt::format("all {} scored candidates rejected", rejected);
+    if (!pick.candidate && !rejected_by_validation && rejected_for_l1 > 0) {
+        pick.description = fmt::format("all {} scored candidates need more L1 than is free", rejected_for_l1);
     }
     // Retried once more L1 is free: with more L1 there are more candidates, including ones within the precision bound
-    if (!pick.candidate && (candidates.empty() || rejected_for_l1 > 0)) {
+    if (!pick.candidate && !rejected_by_validation && (candidates.empty() || rejected_for_l1 > 0)) {
         pick.failed_budget = budget;
     }
     // Time of this selection; later calls reuse the pick and its description
     pick.description += fmt::format(
         " (selected in {} us)",
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
-    return use(cached ? pick_cache().replace(key, std::move(pick)) : pick_cache().insert(key, pick));
+    return use(cached ? picks.replace(key, std::move(pick)) : picks.insert(key, pick));
 }
 
 }  // namespace

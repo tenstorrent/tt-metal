@@ -85,14 +85,21 @@ TEST(MatmulModelSelector, LoadFailuresAreReportedNotThrown) {
     EXPECT_NE(error, "");
 }
 
-// The real model: TT_MATMUL_MODEL_BLOB, else the blob the build fetched into runtime/ (under TT_METAL_HOME, or relative
-// to the repo root the tests run from)
+// The real model: TT_MATMUL_MODEL_BLOB, else the blob the build fetched into runtime/ under the runtime root, which is
+// TT_METAL_RUNTIME_ROOT (as for ttnn's default matmul_model_path), else TT_METAL_HOME, else the repo root the tests run
+// from. Read from the environment, as RunTimeOptions does, since these tests need no device.
 std::filesystem::path model_blob_path() {
     if (const char* path = std::getenv("TT_MATMUL_MODEL_BLOB")) {
         return path;
     }
-    const char* home = std::getenv("TT_METAL_HOME");
-    return std::filesystem::path(home != nullptr ? home : ".") / "runtime/matmul_model/matmul_model.blob";
+    std::filesystem::path root = ".";
+    for (const char* var : {"TT_METAL_RUNTIME_ROOT", "TT_METAL_HOME"}) {
+        if (const char* dir = std::getenv(var)) {
+            root = dir;
+            break;
+        }
+    }
+    return root / "runtime/matmul_model/matmul_model.blob";
 }
 
 TEST(MatmulModelSelector, ScoresCandidatesWithTheModel) {

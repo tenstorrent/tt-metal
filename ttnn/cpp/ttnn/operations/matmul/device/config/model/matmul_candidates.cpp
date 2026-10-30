@@ -81,9 +81,10 @@ std::vector<std::uint32_t> divisors_desc(std::uint32_t n) {
     return large;
 }
 
-// Tiles held in DST for one subblock
+// Tiles held in DST for one subblock. Half-sync even with dst_full_sync: the 2D, 1D and Reuse factories compute wrong
+// values above the half-sync count, and the device op's validation holds them to it (#59689).
 std::uint32_t max_subblock_area(const MatmulDesc& p, Family family) {
-    std::uint32_t area = p.dst_full_sync ? 16 : 8;
+    std::uint32_t area = 8;
     if (p.fp32_dest_acc) {
         area /= 2;
         if (family == Family::kReuse) {
