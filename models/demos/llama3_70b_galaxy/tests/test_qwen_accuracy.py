@@ -16,7 +16,7 @@ from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
     IS_BLACKHOLE as _IS_BLACKHOLE,
     DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
@@ -175,7 +175,7 @@ def test_qwen_model_acc(
 
     if use_reference_file:
         # Reference file loading logic (if needed for Qwen)
-        reference_data_file = "models/tt_transformers/tests/reference_outputs/Qwen3-32B.refpt"
+        reference_data_file = "models/ttt_compat/tests/reference_outputs/Qwen3-32B.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         if os.path.exists(reference_data_file):
             reference_data = torch.load(reference_data_file)

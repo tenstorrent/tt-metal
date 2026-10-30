@@ -22,7 +22,7 @@
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
-#include "tt-metalium/circular_buffer_constants.h"
+#include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
 #if defined(UCK_CHLKC_MATH)
@@ -116,6 +116,8 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 // do_thread_crt1 clears this per-thread state before first use; bfd_alloc then sets next to the
 // partition base and current[] to BFD_ID_INVALID on the first allocation.
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
+// Scaler DFB of an in-flight 2x column reduce, as operand id + 1 (0 = none); see llk_unpack_common_api.h.
+thread_local std::uint32_t reduce_2x_scaler_operand_plus_one __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
@@ -132,6 +134,8 @@ using namespace ckernel;
 #if defined(UCK_CHLKC_MATH)
 thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
     ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+// Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
+thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
 void init_sync_registers() {
