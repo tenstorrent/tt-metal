@@ -10,12 +10,10 @@ changes the manifest format, so it goes with a change to `fabric_manifest_schema
 `write_fabric_manifest` (`fabric_manifest.hpp`) is what fabric init calls ([BUILDER_HOOKS.md](BUILDER_HOOKS.md)). It:
 
 1. **Builds the facts.** `ManifestFacts` gets `run`, `fabric` and `arch` from the describe file
-
    ([DESCRIBE.md](DESCRIBE.md)), and `meshes` from the topology pass ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)). The fabric
-    routers must already be compiled, so the builder context exists.
+   routers must already be compiled, so the builder context exists.
 2. **Makes the JSON** with `make_manifest_json`.
 3. **Writes the file** to this rank's path (`fabric_manifest_path`) under a temporary name, `<path>.tmp.<pid>`, then
-
    renames it into place, so a reader never sees a partial file. On a failure it removes the temporary file.
 
 Any failure is rethrown as `Failed to write fabric manifest <path> (unset TT_METAL_FABRIC_GENERATE_MANIFEST to skip)`, followed by the message starting with `Fabric manifest:` that says what went wrong.
@@ -34,12 +32,10 @@ generation is on, so a manifest on disk always belongs to the run that wrote it.
 | `run`              | `make_run_json`           | `ManifestFacts::run`                                                                |
 | `fabric`           | `make_fabric_json`        | `ManifestFacts::fabric`                                                             |
 | `arch`             | `make_arch_json`          | `ManifestFacts::arch`                                                               |
-| `types`            | `make_types_json`         | The type collector (below)                                                          |
 | `vocabulary`       | `make_vocabulary_json`    | `k_vocabulary_lists` (below)                                                        |
 | `meshes`           | `make_mesh_json` per mesh | `ManifestFacts::meshes`                                                             |
 
-The JSON keeps keys in the order the writer adds them. `types` comes before `meshes` in the file, but it's written last:
-it's built from the schemas the other blocks write, so `arch` and `meshes` are made first.
+The JSON keeps keys in the order the writer adds them.
 
 Each model struct has a `make_<name>_json` that writes it, such as `make_router_json` and `make_sender_channel_json`.
 They follow a few conventions:
@@ -54,38 +50,26 @@ value with no enumerator name, such as a bitmask combination, is written as its 
 didn't allocate. Keys are left out only where they don't apply, such as `torus` on a 1D mesh or a field the builder
 doesn't emit on this run.
 - **Two entries with one key** fail the writer, such as two fields keyed alike.
+- **Regions and registers are written as they are.** The writer copies what the passes worked out and computes nothing
+of its own (below).
 
-## Schemas and the type collector
+## Types
 
-Every L1 region, stream register and enum field is written with a **schema**, `schema_name` in
-`fabric_manifest_names.hpp`, which names how to read the value:
+The manifest names the type each region or register holds; it doesn't describe the type's members. Decode, built from
+the same commit, gets the type back from its name ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)).
 
-| Element | Schema |
-| --- | --- |
-| Unsigned or signed integer | `u8` to `u32`, `i8` to `i32`, as wide as one element |
-| Enum | `enum:<Name>` |
-| Struct | `struct:<Name>` |
-| Tagged union | `union:<Name>` |
-| Raw bytes | `bytes` |
-| Padding | `pad` |
+Each name is already on the model when the writer gets it: a region can only be made for a registered type, so the
+writer has nothing to look up or check. It writes the name as a string, next to where the bytes are:
 
-A schema names a type, and `types` describes every type a schema names. The writer keeps those two in step with a
-`TypeCollector` (`fabric_manifest_type_collector.hpp`):
+| What | Written by | Keys |
+| --- | --- | --- |
+| An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type`, `cleared_by_host` |
+| A stream register | `make_stream_reg_json` | `stream_id`, `address`, `value_bits`, `type` |
+| A core register | `make_core_registers_json` | `name`, `address`, `type` |
+| The run's packet header | `make_fabric_json` | `fabric.packet_header`, the header type's name |
 
-- **Every schema outside** `types` **goes through** `make_schema_json`, which writes the schema and hands its type to the
-collector. Nothing else writes a schema there, so none can be missed.
-- **The collector follows each type to what it names.** A struct's description lists its members, and a tagged union's
-its tag enum and cases ([STRUCT_LAYOUTS.md](STRUCT_LAYOUTS.md)). The collector adds each struct, enum and tagged union
-once, by name, and then the types its members and cases name. It fails when two different types have one name, which
-would make their schema ambiguous.
-- `types` **is written from the collector**, each kind sorted by name: a struct's size and its members in order, each
-with its name, offset, size and schema; an enum's values by their lower-case names; and a tagged union's size, the
-enum its tag holds, and its cases, each with the tag value that picks it. A member holding a tagged union also names
-the struct member that holds its tag (`tag_member`). A member's schema needs no collecting, since the collector already
-followed it.
-
-So `types` holds exactly what the manifest's schemas reach, and every schema resolves. A type no schema reaches isn't
-written: a struct only named by a field the builder didn't allocate, for example.
+A configuration enum field is different: no captured bytes hold it, so its type isn't registered. The writer writes its
+`value` and its enumerator's name in lower case (`value_name`), and leaves out the enum's own name.
 
 ## Vocabulary
 
@@ -93,10 +77,10 @@ Some keys hold one of a fixed set of names, such as a channel's `status` or a fi
 every name each can hold, so a reader knows them all without the C++ enums.
 
 The lists are `k_vocabulary_lists` in `fabric_manifest_model.hpp`. Each entry names the list and the type whose names it holds. For an enum, the list is every enumerator in lower case. For the field kinds, it's every alternative of the
-`Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream`).
+`Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream_reg`).
 
-These are names the manifest writes as strings, so nothing appears both here and in `types.enums`, which describes enums
-whose integer values are read from the device.
+An enum field isn't a label key: it writes its enumerator's name next to its value (`value_name`), so its enum has no
+list here.
 
 ## Changing the format
 
