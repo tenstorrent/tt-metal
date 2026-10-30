@@ -497,12 +497,12 @@ def test_block_random_runs_per_layer_type_random_rows():
     }
     assert ids == {
         "block-random:kimi_k2_7": [
-            "test_kimi_prefill_block_chunked_random[blackhole-kimi_k2_7-torus-xy-8x4-dense_L0-chunks2-iter2]",
-            "test_kimi_prefill_block_chunked_random[blackhole-kimi_k2_7-torus-xy-8x4-moe_L1-chunks2-iter2]",
+            "test_kimi_prefill_block_chunked_random[blackhole-kimi_k2_7-torus-xy-8x4-dense_L0-chunks2-iter100]",
+            "test_kimi_prefill_block_chunked_random[blackhole-kimi_k2_7-torus-xy-8x4-moe_L1-chunks2-iter100]",
         ],
         "block-random:glm53": [
-            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-dense_L0-chunks2-iter2]",
-            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-moe_full_L6-chunks2-iter2]",
-            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-moe_shared_L3-chunks2-iter2]",
+            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-dense_L0-chunks2-iter100]",
+            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-moe_full_L6-chunks2-iter100]",
+            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-moe_shared_L3-chunks2-iter100]",
         ],
     }
