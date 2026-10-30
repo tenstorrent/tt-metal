@@ -75,7 +75,7 @@ uint32_t input_row_offset_page_rows(
 // Those per-request values reach the writer one of two ways (chosen by whether the slot_idx /
 // kv_actual_global tensors are supplied; both keep them out of the program hash so one cached program
 // per layer is reused):
-//   - metadata path: read on-device from two 1-element uint32 DRAM tensors (bound to common runtime
+//   - metadata path: read on-device from 1-element uint32 tensors (bound to common runtime
 //     args, so the framework refreshes their addresses on cache hits) — off the host dispatch path, so
 //     the op is traceable.
 //   - scalar path: passed as common runtime args 8/9 and patched on cache hits by
@@ -554,9 +554,10 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     // every cache hit (#59915). Logical shapes are left out: the descriptor works only from padded shapes,
     // and the logical-shape checks run in validate_runtime_args, on hits too. So a caller whose true
     // sequence length varies under a fixed padded size still reuses one program.
-    // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
-    // compile-time args, so the bank table it selects cannot be refreshed on a cache hit; only the
-    // metadata tensors' layouts and shapes are keyed, never their values.
+    // On the metadata path the writer bakes one TensorAccessorArgs per metadata tensor (slot_idx,
+    // kv_actual_global, valid_global) and the reader one for kv_actual_global into their compile-time
+    // args, so the bank tables they select cannot be refreshed on a cache hit; each metadata tensor's
+    // layout and padded shape is keyed, never its values.
     // has_valid is a writer compile arg, so it is hashed; the VALUE stays out (patched runtime arg).
     return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
         tensor_args.valid_global.has_value() || args.valid_global.has_value(),
