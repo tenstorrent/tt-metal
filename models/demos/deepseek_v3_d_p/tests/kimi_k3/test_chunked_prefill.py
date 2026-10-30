@@ -44,9 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, TRACE_100K, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
-    PLACEMENTS,
-    SP_AXIS,
-    TP_AXIS,
+    PLACEMENTS_8X4,
     _compose,
     _model_state_dict,
 )
@@ -98,7 +96,7 @@ CARRY_PCC = 0.99
 KV_CACHE_PCC = 0.96
 
 
-def _compose_carry(mesh_device, state):
+def _compose_carry(mesh_device, state, sp_axis, tp_axis):
     """The global `[heads, k_dim, v_dim]` carry from its TP shards.
 
     The carry is TP-sharded on heads and SP-replicated, so one SP row holds the whole thing and the
@@ -106,10 +104,10 @@ def _compose_carry(mesh_device, state):
     """
     shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(state)]
     rows, columns = tuple(mesh_device.shape)
-    tp_size = (rows, columns)[TP_AXIS]
+    tp_size = (rows, columns)[tp_axis]
     head_shards = []
     for tp_rank in range(tp_size):
-        row, column = (0, tp_rank) if SP_AXIS == 0 else (tp_rank, 0)
+        row, column = (0, tp_rank) if sp_axis == 0 else (tp_rank, 0)
         head_shards.append(
             shards[row * columns + column].reshape(-1, KimiK3Config.KDA_HEAD_DIM, KimiK3Config.KDA_HEAD_DIM)
         )
@@ -123,9 +121,11 @@ def _dram_bytes(mesh_device):
 
 # Same weight-loading floor as the depth ladder, then eleven chunks of real work on top of it.
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, tp_axis", PLACEMENTS_8X4, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
-def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
+def test_chunked_prefill_carries_kda_state(mesh_device, device_params, sp_axis, tp_axis, num_layers):
     tp_shard_kv = True
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
@@ -135,19 +135,19 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     checkpoint = Path(checkpoint)
     root = resolve_model_root(checkpoint)
     config = kimi_k3_hf_config(max_seq=TOTAL_LEN)
-    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
+    cache = cache_root(checkpoint, tuple(mesh_device.shape), tp_axis)
 
     attn_res = TtAttnRes(
         mesh_device,
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
-        tp_axis=TP_AXIS,
+        tp_axis=tp_axis,
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),
             None,
             num_layers=num_layers,
-            tensor_parallel_axis=TP_AXIS,
+            tensor_parallel_axis=tp_axis,
             prefix=root,
         ),
     )
@@ -175,8 +175,8 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         num_layers=num_layers,
         seq_len=CHUNK,
         residual_factory=residual_factory,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         max_seq_len=TOTAL_LEN,
         is_chunked=True,
         weight_cache_path=cache,
@@ -192,16 +192,16 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             hf_config=config,
             max_seq_len=TOTAL_LEN,
             mesh_shape=tuple(mesh_device.shape),
-            sp_axis=SP_AXIS,
+            sp_axis=sp_axis,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
-            tp_axis=TP_AXIS if tp_shard_kv else None,
+            tp_axis=tp_axis if tp_shard_kv else None,
         )
 
     # The carries' only store is the engine-owned slabs, which the runner hands over at compile(); this
     # test allocates them the same way, so what a migration reader sees after every chunk is exactly the
     # carry the next chunk continues from.
-    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+    slabs = attach_kda_states(mesh_device, model, sp_axis=sp_axis, tp_axis=tp_axis)
 
     # Only the 100k trace snapshots the carry; at depth 24 the oracle is the per-layer output and the
     # cumulative KV instead, and the carry is covered by the depth-5 case.
@@ -229,10 +229,10 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         tokens_tt = prepare_prefill_input_tensor(
             trace.token_ids(CHUNK, start)[0].tolist(),
             mesh_device,
-            tuple(mesh_device.shape)[SP_AXIS],
+            tuple(mesh_device.shape)[sp_axis],
             False,
             tuple(mesh_device.shape),
-            SP_AXIS,
+            sp_axis,
         )
         # The comparison is against the LIVE running sum, which is what `decoder_output_layer_i`
         # records — not `forward`'s return, which has passed through the final norm. `layer_tap` is
@@ -273,12 +273,12 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             shards = [ttnn.to_torch(sh) for sh in ttnn.get_device_tensors(carry.convolution)]
             deallocate_state(carry)
             columns = tuple(mesh_device.shape)[1]
-            tp_size = tuple(mesh_device.shape)[TP_AXIS]
+            tp_size = tuple(mesh_device.shape)[tp_axis]
             history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
             per_chip = KimiK3Config.KDA_NUM_HEADS * KimiK3Config.KDA_HEAD_DIM // tp_size
             tp_shards = []
             for t in range(tp_size):
-                row, column = (0, t) if SP_AXIS == 0 else (t, 0)
+                row, column = (0, t) if sp_axis == 0 else (t, 0)
                 tp_shards.append(shards[row * columns + column].reshape(history, -1))
             got_conv = torch.cat(
                 [
@@ -295,7 +295,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             row = (start + CHUNK) // SNAPSHOT_STRIDE - 1
             want_carry = golden_carry[row].transpose(-1, -2)
             carry = read_slab_layer(mesh_device, slabs, 0, 0)
-            got_carry = _compose_carry(mesh_device, carry.recurrent)
+            got_carry = _compose_carry(mesh_device, carry.recurrent, sp_axis, tp_axis)
             deallocate_state(carry)
             carry_pcc = float(str(comp_pcc(want_carry, got_carry, CARRY_PCC)[1]).split()[-1])
 

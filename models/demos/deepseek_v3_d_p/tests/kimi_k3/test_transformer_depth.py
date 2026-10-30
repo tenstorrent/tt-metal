@@ -125,6 +125,8 @@ PLACEMENTS = [
         id="4x4-sp1",
     ),
 ]
+# The full-Galaxy row alone, for the tests that reuse this file's helpers on 8x4 only.
+PLACEMENTS_8X4 = [p for p in PLACEMENTS if p.id == "fabric2d-8x4"]
 
 
 def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path | None = None) -> dict:

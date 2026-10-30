@@ -25,11 +25,9 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
     DEEP_LAYER_PCC,
-    PLACEMENTS,
+    PLACEMENTS_8X4,
     SEQ_LEN,
     SHALLOW_LAYER_PCC,
-    SP_AXIS,
-    TP_AXIS,
     _compose,
     _model_state_dict,
 )
@@ -48,9 +46,11 @@ GOLDEN_TAPS_ENV = "PREFILL_DFLASH_GOLDEN_TAPS_DIR"
 
 
 @pytest.mark.timeout(4800)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, tp_axis", PLACEMENTS_8X4, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.parametrize("num_layers", [9, 25], ids=["L9", "L25"])
-def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
+def test_dspark_taps_match_golden(mesh_device, device_params, sp_axis, tp_axis, num_layers):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M)
     taps_dir = os.environ.get(GOLDEN_TAPS_ENV)
@@ -65,21 +65,21 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
     checkpoint = Path(checkpoint)
     root = resolve_model_root(checkpoint)
     config = kimi_k3_hf_config(max_seq=SEQ_LEN)
-    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
+    cache = cache_root(checkpoint, tuple(mesh_device.shape), tp_axis)
     state_dict = _model_state_dict(checkpoint, num_layers, root, cache)
 
     attn_res = TtAttnRes(
         mesh_device,
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
-        tp_axis=TP_AXIS,
+        tp_axis=tp_axis,
         tt_ccl=get_tt_ccl(mesh_device),
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),
             None,
             num_layers=num_layers,
-            tensor_parallel_axis=TP_AXIS,
+            tensor_parallel_axis=tp_axis,
             prefix=root,
         ),
     )
@@ -103,8 +103,8 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
         num_layers=num_layers,
         seq_len=SEQ_LEN,
         residual_factory=residual_factory,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
@@ -116,17 +116,17 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
             hf_config=config,
             max_seq_len=SEQ_LEN,
             mesh_shape=tuple(mesh_device.shape),
-            sp_axis=SP_AXIS,
+            sp_axis=sp_axis,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
         )
     tokens_tt = prepare_prefill_input_tensor(
         trace.token_ids(SEQ_LEN)[0].tolist(),
         mesh_device,
-        tuple(mesh_device.shape)[SP_AXIS],
+        tuple(mesh_device.shape)[sp_axis],
         False,
         tuple(mesh_device.shape),
-        SP_AXIS,
+        sp_axis,
     )
 
     got = {}
