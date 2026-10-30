@@ -348,3 +348,19 @@ def plan_packed_sdpa(
         if plan.fits:
             return plan
     return plan
+
+
+# ── Packed-verify KV write: one (record row, KV head) unit per core ─────────────────────────────────────────
+def plan_paged_update_rows(grid, batch, num_heads):
+    """Work split of ``paged_update_rows`` (the packed verify's loop-free K / V write): ``(n_cores, per)`` --
+    the ``batch * num_heads`` (row, KV head) units dealt contiguously over ``min(units, grid)`` cores (unit
+    ``b * num_heads + h``; ``per[i]`` units on core ``i``, the counts differing by at most one). A unit owns every
+    cache tile row its row's P positions touch for its head, so two cores never read-modify-write one tile: units
+    differ in the head (another tile) or in the row (another page-table row, i.e. other physical blocks)."""
+    gx, gy = grid
+    n_units = int(batch) * int(num_heads)
+    if n_units < 1:
+        raise ValueError(f"no units: batch {batch} x heads {num_heads}")
+    n_cores = min(n_units, gx * gy)
+    per = [(n_units // n_cores) + (1 if i < n_units % n_cores else 0) for i in range(n_cores)]
+    return n_cores, per

@@ -33,6 +33,20 @@ def test_qkv_heads_plan(grid, batch):
         assert g.plan_qkv_heads_units(grid, b) == want
 
 
+@pytest.mark.parametrize("grid", GRIDS, ids=["wh_8x8", "bh_13x10"])
+@pytest.mark.parametrize("batch, heads", [(1, 1), (1, 2), (5, 8), (8, 2), (16, 1), (16, 2), (32, 2), (32, 8)])
+def test_paged_update_rows_plan(grid, batch, heads):
+    n_cores, per = g.plan_paged_update_rows(grid, batch, heads)
+    assert n_cores == min(batch * heads, g.grid_cores(grid)) and len(per) == n_cores
+    assert sum(per) == batch * heads and max(per) - min(per) <= 1 and min(per) >= 1
+    assert len(g.row_major_cores(grid, n_cores)) == n_cores
+    # the serving records on the 26B at TP4 (1 global / 2 sliding KV heads): one (row, head) unit per core on
+    # both grids; only the 256-unit form folds (4 per core on 8x8, 1-2 on 13x10)
+    served = {(1, 1): 1, (1, 2): 2, (8, 2): 16, (16, 1): 16, (16, 2): 32, (32, 2): 64}
+    assert {k: g.plan_paged_update_rows(grid, *k)[0] for k in served} == served
+    assert max(g.plan_paged_update_rows(grid, 32, 8)[1]) == (4 if grid == (8, 8) else 2)
+
+
 def test_qkv_heads_plan_falls_back_to_one_user_per_core():
     # a 4-core grid: 3 users need 9 (user, tensor) cores -> 3 cores with the three tensors in sequence
     assert g.plan_qkv_heads_units((2, 2), 3) == (3, 3)

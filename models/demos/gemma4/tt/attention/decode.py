@@ -21,6 +21,9 @@ from models.demos.gemma4.custom_ops.grid import (
     sdpa_decode_page_table_bytes,
     sdpa_tile_bytes,
 )
+from models.demos.gemma4.custom_ops.paged_update_rows import PagedUpdateRows
+from models.demos.gemma4.custom_ops.paged_update_rows.op import ENV as PACKED_KV_WRITE_OP_ENV
+from models.demos.gemma4.custom_ops.paged_update_rows.op import enabled as packed_kv_write_op_enabled
 from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
@@ -106,6 +109,128 @@ def packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared):
     be skipped on the presence of staging alone (serving records hit that case).
     """
     return (not is_kv_shared) and (kv_staging is None or embed_idx is None)
+
+
+_ROWS_OP_WARNED = set()
+
+
+def packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, batch, packed_p, nkv_local, head_dim, config):
+    """Why the packed verify's KV write takes the per-position loop instead of ``custom_ops/paged_update_rows``:
+    ``"off"`` unless ``GEMMA4_PACKED_KV_WRITE_OP=1`` (the served default: the loop, until the device A/B passes),
+    else the op's ``unsupported_reason`` (warned once per reason), else ``None`` (the op serves)."""
+    if not packed_kv_write_op_enabled():
+        return "off"
+    k_cache_w, _ = kv_cache
+    reason = PagedUpdateRows.unsupported_reason(
+        k_cache_w,
+        kv_write_idxs,
+        page_table,
+        batch=batch,
+        packed_p=packed_p,
+        num_kv_heads=nkv_local,
+        head_dim=head_dim,
+        block_size=effective_block_size(k_cache_w, head_dim, nkv_local),
+        modulo=config.cache_position_modulo,
+    )
+    if reason is not None and reason not in _ROWS_OP_WARNED:
+        _ROWS_OP_WARNED.add(reason)
+        logger.warning(f"{PACKED_KV_WRITE_OP_ENV}: the per-position paged_update_cache loop serves this call: {reason}")
+    return reason
+
+
+def packed_kv_write_rows(k_cache_w, v_cache_w, tt_k, tt_v, kv_write_idxs, page_table, batch, nkv_local, eff_bs, modulo):
+    """The packed verify's K / V rows written by ``PagedUpdateRows``: one program per tensor (2 per layer) in
+    place of the loop below (6 P per layer), the same bytes. ``tt_k / tt_v [1, nkv, S_pad, head_dim]`` bf16 TILE
+    (the prefill-style split after the norm and RoPE; consumed)."""
+    for cache, src in ((k_cache_w, tt_k), (v_cache_w, tt_v)):
+        PagedUpdateRows.op(
+            cache,
+            src,
+            kv_write_idxs,
+            page_table,
+            batch=batch,
+            num_kv_heads=nkv_local,
+            block_size=eff_bs,
+            cache_position_modulo=modulo,
+        )
+    ttnn.deallocate(tt_k)
+    ttnn.deallocate(tt_v)
+
+
+def packed_kv_write_loop(
+    k_cache_w,
+    v_cache_w,
+    tt_k,
+    tt_v,
+    kv_write_idxs,
+    page_table,
+    B,
+    P,
+    nkv_local,
+    head_dim,
+    eff_bs,
+    q_sharded_mem,
+    modulo,
+):
+    """The per-position ``paged_update_cache`` loop of the packed verify (the served default): per packed position
+    p the K and V rows of every record row are sliced out, resharded one user per core and written by the stock
+    op, which serializes the read-modify-write of a tile row that several positions share (one batched call over
+    the P positions would race on it). ``tt_k / tt_v [1, nkv, S_pad, head_dim]`` bf16 TILE (consumed)."""
+    # Convert the prefill-style [1, nkv, B*P, hd] to decode layout
+    # [1, B*P, nkv, hd] (DRAM — the full tensors stay resident across the
+    # loop; only the per-p reshard occupies L1).
+    tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tt_k)
+    ttnn.deallocate(tt_v)
+    # The prefill-style split may leave the B*P sequence rows tile-padded to a
+    # multiple of 32 (ttnn-version dependent — same guard as the Q pack at ⑥).
+    # Slice back to the logical B*P rows so the (1,B,P,nkv,hd) reshape is
+    # volume-exact (padding is always at the tail). The slice can alias the
+    # parent's DRAM storage, so keep tt_k_bp/tt_v_bp alive until the end-of-loop
+    # cleanup rather than freeing them here.
+    k_src, v_src = tt_k_bp, tt_v_bp
+    if tt_k_bp.shape[1] != B * P:
+        k_src = ttnn.slice(tt_k_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
+        v_src = ttnn.slice(tt_v_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
+    tt_k_view = ttnn.reshape(k_src, (1, B, P, nkv_local, head_dim))
+    tt_v_view = ttnn.reshape(v_src, (1, B, P, nkv_local, head_dim))
+    for p in range(P):
+        k_p = ttnn.slice(tt_k_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
+        k_p = ttnn.reshape(k_p, (1, B, nkv_local, head_dim))
+        v_p = ttnn.slice(tt_v_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
+        v_p = ttnn.reshape(v_p, (1, B, nkv_local, head_dim))
+        k_p = ttnn.to_memory_config(k_p, q_sharded_mem)
+        v_p = ttnn.to_memory_config(v_p, q_sharded_mem)
+        if page_table is not None:
+            # Bounded ring: wrap absolute write positions into the ring
+            # (same contract as decode_forward's paged_modulo_kwargs).
+            _mod = {"cache_position_modulo": modulo} if modulo is not None else {}
+            ttnn.experimental.paged_update_cache(
+                k_cache_w,
+                k_p,
+                update_idxs_tensor=kv_write_idxs[p],
+                page_table=page_table,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+                **_mod,
+            )
+            ttnn.experimental.paged_update_cache(
+                v_cache_w,
+                v_p,
+                update_idxs_tensor=kv_write_idxs[p],
+                page_table=page_table,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+                **_mod,
+            )
+        else:
+            ttnn.experimental.paged_update_cache(k_cache_w, k_p, update_idxs_tensor=kv_write_idxs[p])
+            ttnn.experimental.paged_update_cache(v_cache_w, v_p, update_idxs_tensor=kv_write_idxs[p])
+        ttnn.deallocate(k_p)
+        ttnn.deallocate(v_p)
+    ttnn.deallocate(tt_k_bp)
+    ttnn.deallocate(tt_v_bp)
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
@@ -892,7 +1017,18 @@ def packed_decode_forward(
     # emits; the spec depends only on shape constants, so probe once and cache.
     cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
-    if q_sharded_mem is None and packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared):
+    # The loop-free custom op (GEMMA4_PACKED_KV_WRITE_OP=1) needs no sharded layout: the probe runs only when the
+    # loop serves the write.
+    rows_op_reason = (
+        packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, B, P, nkv_local, head_dim, config)
+        if packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared)
+        else "staging"
+    )
+    if (
+        q_sharded_mem is None
+        and rows_op_reason is not None
+        and packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared)
+    ):
         probe = ttnn.slice(xqkv, [0, 0, 0, 0], [1, 1, B, qkv_dim])
         q_probe, k_probe, v_probe = split_qkv_heads_decode(
             probe, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
@@ -959,70 +1095,41 @@ def packed_decode_forward(
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
 
-    # ── ⑤ FALLBACK per-p paged_update_cache loop ────────────────────────────
+    # ── ⑤ FALLBACK: the per-position paged_update_cache loop (packed_kv_write_loop, 6 P programs per layer),
+    # or with GEMMA4_PACKED_KV_WRITE_OP=1 the loop-free custom op writing the same bytes (2 per layer) ─────
     elif not is_kv_shared:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         k_cache_w, v_cache_w = kv_cache
         eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
-        # Convert the prefill-style [1, nkv, B*P, hd] to decode layout
-        # [1, B*P, nkv, hd] (DRAM — the full tensors stay resident across the
-        # loop; only the per-p reshard occupies L1).
-        tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(tt_k)
-        ttnn.deallocate(tt_v)
-        # The prefill-style split may leave the B*P sequence rows tile-padded to a
-        # multiple of 32 (ttnn-version dependent — same guard as the Q pack at ⑥).
-        # Slice back to the logical B*P rows so the (1,B,P,nkv,hd) reshape is
-        # volume-exact (padding is always at the tail). The slice can alias the
-        # parent's DRAM storage, so keep tt_k_bp/tt_v_bp alive until the end-of-loop
-        # cleanup rather than freeing them here.
-        k_src, v_src = tt_k_bp, tt_v_bp
-        if tt_k_bp.shape[1] != B * P:
-            k_src = ttnn.slice(tt_k_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
-            v_src = ttnn.slice(tt_v_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
-        tt_k_view = ttnn.reshape(k_src, (1, B, P, nkv_local, head_dim))
-        tt_v_view = ttnn.reshape(v_src, (1, B, P, nkv_local, head_dim))
-        for p in range(P):
-            k_p = ttnn.slice(tt_k_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
-            k_p = ttnn.reshape(k_p, (1, B, nkv_local, head_dim))
-            v_p = ttnn.slice(tt_v_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
-            v_p = ttnn.reshape(v_p, (1, B, nkv_local, head_dim))
-            k_p = ttnn.to_memory_config(k_p, q_sharded_mem)
-            v_p = ttnn.to_memory_config(v_p, q_sharded_mem)
-            if page_table is not None:
-                # Bounded ring: wrap absolute write positions into the ring
-                # (same contract as decode_forward's paged_modulo_kwargs).
-                _mod = (
-                    {"cache_position_modulo": config.cache_position_modulo}
-                    if config.cache_position_modulo is not None
-                    else {}
-                )
-                ttnn.experimental.paged_update_cache(
-                    k_cache_w,
-                    k_p,
-                    update_idxs_tensor=kv_write_idxs[p],
-                    page_table=page_table,
-                    block_size=eff_bs,
-                    num_kv_heads=nkv_local,
-                    **_mod,
-                )
-                ttnn.experimental.paged_update_cache(
-                    v_cache_w,
-                    v_p,
-                    update_idxs_tensor=kv_write_idxs[p],
-                    page_table=page_table,
-                    block_size=eff_bs,
-                    num_kv_heads=nkv_local,
-                    **_mod,
-                )
-            else:
-                ttnn.experimental.paged_update_cache(k_cache_w, k_p, update_idxs_tensor=kv_write_idxs[p])
-                ttnn.experimental.paged_update_cache(v_cache_w, v_p, update_idxs_tensor=kv_write_idxs[p])
-            ttnn.deallocate(k_p)
-            ttnn.deallocate(v_p)
-        ttnn.deallocate(tt_k_bp)
-        ttnn.deallocate(tt_v_bp)
+        if rows_op_reason is None:
+            packed_kv_write_rows(
+                k_cache_w,
+                v_cache_w,
+                tt_k,
+                tt_v,
+                kv_write_idxs,
+                page_table,
+                B,
+                nkv_local,
+                eff_bs,
+                config.cache_position_modulo,
+            )
+        else:
+            packed_kv_write_loop(
+                k_cache_w,
+                v_cache_w,
+                tt_k,
+                tt_v,
+                kv_write_idxs,
+                page_table,
+                B,
+                P,
+                nkv_local,
+                head_dim,
+                eff_bs,
+                q_sharded_mem,
+                config.cache_position_modulo,
+            )
 
     k_cache_use, v_cache_use = kv_cache
 
