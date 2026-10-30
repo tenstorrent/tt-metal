@@ -150,11 +150,11 @@ size; the loader rescales them with the images and pads normalized images at the
 `can_bus` is the absolute 18-value vector for the frame. The runner makes translation and heading
 relative to the preceding frame.
 
-Camera calibration is fixed for the lifetime of an initialized model. The encoder creates the
-3D-to-2D projection setup from camera intrinsics and extrinsics during initialization, and the
-first sequence frame is an unmeasured preparation frame. Every selected frame must use the same
-calibration. Split data with changing camera intrinsics or extrinsics into separate demo runs so
-each run initializes its projection setup from the correct calibration.
+The synthetic smoke runs above reuse one calibrated `lidar2img` matrix per camera for every frame.
+Real datasets may provide frame-dependent matrices, which change the visibility mask, spatial
+cross-attention rebatching, and `max_len`. The recorded synthetic timings therefore may not
+represent real-sequence performance. Deterministic synthetic sequences with variable, valid
+projection geometry are tracked in [#55190](https://github.com/tenstorrent/tt-metal/issues/55190).
 
 The following schema fragment shows one representative frame. Identity `lidar2img` matrices are
 used only to keep the structure readable; real inference requires calibrated projection matrices.
