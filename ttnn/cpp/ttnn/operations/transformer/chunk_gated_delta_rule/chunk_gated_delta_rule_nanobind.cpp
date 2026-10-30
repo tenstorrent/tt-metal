@@ -534,8 +534,19 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         den = 0 or num > den).)doc");
     mod.def(
         "chunk_gdn_fused_placement",
-        [](uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
-            const auto pl = ttnn::prim::fused_placement(grid_x, grid_y, BH, NV, NP, placement);
+        [](uint32_t grid_x,
+           uint32_t grid_y,
+           uint32_t BH,
+           uint32_t NV,
+           uint32_t NP,
+           uint32_t placement,
+           const std::vector<uint32_t>& noc0_port_rows) {
+            std::vector<bool> port_rows(grid_y, false);
+            for (const uint32_t row : noc0_port_rows) {
+                TT_FATAL(row < grid_y, "chunk_gdn_fused_placement: port row {} outside the {}-row grid", row, grid_y);
+                port_rows[row] = true;
+            }
+            const auto pl = ttnn::prim::fused_placement(grid_x, grid_y, BH, NV, NP, placement, port_rows);
             auto to_xy = [](const std::vector<CoreCoord>& cores) {
                 std::vector<std::tuple<uint32_t, uint32_t>> xy;
                 xy.reserve(cores.size());
@@ -552,9 +563,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("NV"),
         nb::arg("NP"),
         nb::arg("placement"),
+        nb::arg("noc0_port_rows") = std::vector<uint32_t>{},
         R"doc(The fused program's core map for (grid_x, grid_y, BH, NV, NP, placement), computed by the
         same function the program factory calls: (receivers, producers), lists of logical (x, y);
-        receivers[h*NV + v], producers[h*NP + j]. Raises when the layout does not fit.)doc");
+        receivers[h*NV + v], producers[h*NP + j]. noc0_port_rows lists the logical rows a DRAM port west of
+        the grid serves on NOC_0 (the factory takes them from the device); placement 1 puts fewer producers
+        west of the receivers there. Raises when the layout does not fit.)doc");
 
     const auto* doc =
         R"doc(

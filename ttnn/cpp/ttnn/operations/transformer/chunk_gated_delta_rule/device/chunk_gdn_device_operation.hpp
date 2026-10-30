@@ -266,17 +266,36 @@ std::vector<uint32_t> fused_even_waves(uint32_t BH, uint32_t n);
 // and producers in one row segment, leftover heads as column blocks); 2 = producer pool (NP is the
 // pool size: the row-local map of home_per_head producers per head, then the extras row-major on
 // the remaining cores). FATALs when the layout does not fit, exactly as the factory would.
+// Placement 1's row heads split their producers around the receivers: fused_west_producers(NP, port_row) of them
+// WEST (they hand off on NOC_0, +x, a second link into the receivers; fused_flip_noc) and the rest east on NOC_1.
+// noc0_port_rows (fused_noc0_port_rows) marks the rows whose NOC_0 +x links carry a DRAM port's read responses,
+// where fewer go west. Measured on p150 at BH 12 (NV 2, NP 7, 4 / 2 west): 151 -> 142.5 us, every head's compute
+// at its step; with one link the receivers idled 0.3-0.5 us per 1.75 us step and the four port rows ~8 us more.
+// Pools keep every home producer east (one west producer per head at NPH 3 measured slower).
 struct FusedPlacement {
     std::vector<tt::tt_metal::CoreCoord> receivers;  // index h*NV + v (logical coordinates)
     std::vector<tt::tt_metal::CoreCoord> producers;  // index h*home_per_head + j, then the extras
     uint32_t home_per_head = 0;                      // NP in placements 0/1
 };
 FusedPlacement fused_placement(
-    uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t BH,
+    uint32_t NV,
+    uint32_t NP,
+    uint32_t placement,
+    const std::vector<bool>& noc0_port_rows = {});
+// Producers of a placement-1 row head placed west of its receivers: floor(4 NP / 7), floor(2 NP / 7) in a port row.
+constexpr uint32_t fused_west_producers(uint32_t np, bool port_row) { return (np * (port_row ? 2u : 4u)) / 7u; }
+// Per logical row: whether a DRAM port west of the worker grid serves it on NOC_0 (the port's assigned worker sits
+// in logical column 0): the row's +x links carry that bank's read responses to every column. Device-dependent
+// (the SoC's DRAM views and the firmware's endpoint relocation), hence outside fused_placement.
+std::vector<bool> fused_noc0_port_rows(const tt::tt_metal::IDevice* device, uint32_t grid_y);
 
-// Per producer p of `layout.producers`: whether its hand-off runs on the other NoC. The pool extras that sit in a
-// row holding receivers do (see the fused factory: on the writer's NoC their writes would run west over the home
-// producers' row links and wrap the torus column); home producers and extras in receiver-free rows do not. The
+// Per producer p of `layout.producers`: whether its hand-off runs on the other NoC (NOC_0, +x then +y, with the
+// reader on NOC_1): a home producer placed west of its receivers in their row (placement 1's split), and a pool
+// extra that sits in a row holding receivers (see the fused factory: on the writer's NoC their writes would run
+// west over the home producers' row links and wrap the torus column). Everything else keeps the writer's NoC. The
 // factory selects those producers' reader / writer kernels by this, and get_dynamic_runtime_args addresses the
 // flipped reader (fused_rt::kPrepReaderFlipKernel) by it, so the two must agree.
 std::vector<bool> fused_flip_noc(const FusedPlacement& layout, uint32_t grid_y, uint32_t BH);

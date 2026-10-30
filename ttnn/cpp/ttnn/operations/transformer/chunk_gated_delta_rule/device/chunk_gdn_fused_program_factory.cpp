@@ -20,8 +20,9 @@
 //              receiver rows first), the first BH*NP of them; producer p serves head p / NP as its
 //              j = p % NP -th producer and owns that head's chunks c = j, j+NP, ...
 // Placement 1 (row-local, the default whenever it fits): each head's NV receivers and NP producers
-// share one row segment, producers east of receivers, so NOC_1's -x-then-y routes of different heads
-// never share a link; heads that do not fit the rows go to the leftover columns as vertical blocks.
+// share one row segment, fused_west_producers of them west of the receivers (handing off on NOC_0, +x) and the
+// rest east (NOC_1, -x), so the hand-off enters the receivers over two links and no two heads share one; heads
+// that do not fit the rows go to the leftover columns as vertical blocks.
 // Placement 2 (producer pool, attrs.np = the pool size P): the row-local map of NPH home producers per
 // head for the largest NPH with BH*NPH <= P, plus P - BH*NPH EXTRA producers on the remaining cores.
 // Which producer computes chunk c of head h, and each producer's item list, is the one formula of
@@ -79,16 +80,21 @@ namespace ttnn::prim {
 // Kickoff staggering (cycles at the 1.35 GHz core clock). Chunk 0's producers read first: a producer whose first
 // chunk is c > 0 waits kProducerKickoffLeadCycles plus (c - 1) * kProducerKickoffStaggerCycles. The lead is shorter
 // than chunk 0's own read (~3.6 us): chunk 0's producers publish q/k/v right after their read barrier and finish the
-// constants behind them, while a staggered producer builds its constants inside the wait, so a ~1 us lead puts
-// chunk 1's VALID about one scan step behind chunk 0's. Chunk c is needed c receiver steps after chunk 0, so the
-// stagger stays below the fastest scan step (~2.1 us): a stagger longer than the step delays the first NP chunks (the
-// chain waits on each one) and, in a production-bound pool, idles the late producers for up to c_first * stagger.
+// constants behind them, while a staggered producer builds its constants inside the wait. Chunk c is needed c
+// receiver steps after chunk 0, so the stagger stays below the scan step (~1.8 us): a stagger longer than the step
+// delays the first NP chunks (the chain waits on each one) and, in a production-bound pool, idles the late producers
+// for up to c_first * stagger. With the two-link hand-off (placement 1's west producers) the first items' writes
+// serialize on their link at kickoff whatever the stagger, so a short one just has every first item ready early:
+// measured at BH 12 (p150, medians of 5), lead / stagger 0.5 / 1.0 us 143.3 us, 1.0 / 1.5 145.2, 1.5 / 1.85 152.0
+// (the chain of most heads starts 6 us earlier, the top rows' 7 us later), 0 / 0.5 154.3, 0 / 0 154.7 (all 84 first
+// reads at once); BH 16 / 24 / 32 unchanged within noise. The receivers' initial-state hold (4 us, 0 or 10 tried)
+// makes no difference.
 // Producers carrying the program's maximum item count are never staggered: in a production-bound run (the pool) they
 // bound the op one-for-one and do not wait on credits, so a kickoff wait delays the op by its full length. Every other
 // producer has at least one item (~14 us) of slack, more than its stagger.
 // Receivers issue their first credits, then hold the initial-state read back by kReceiverKickoffWaitCycles.
-constexpr uint32_t kProducerKickoffLeadCycles = 1350;     // ~1 us
-constexpr uint32_t kProducerKickoffStaggerCycles = 2025;  // ~1.5 us
+constexpr uint32_t kProducerKickoffLeadCycles = 675;      // ~0.5 us
+constexpr uint32_t kProducerKickoffStaggerCycles = 1350;  // ~1 us
 constexpr uint32_t kReceiverKickoffWaitCycles = 5400;     // ~4 us
 constexpr uint32_t producer_kickoff_wait_cycles(uint32_t c_first, bool busiest) {
     return (c_first == 0 || busiest) ? 0u : kProducerKickoffLeadCycles + (c_first - 1) * kProducerKickoffStaggerCycles;
@@ -167,9 +173,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    // Placement is a pure function of (grid, BH, NV, np, placement), shared with the
-    // nanobind geometry oracle so the host-side tests assert the core map this factory uses.
-    const FusedPlacement layout = fused_placement(grid.x, grid.y, BH, NV, attrs.np, attrs.placement);
+    // Placement is a pure function of (grid, BH, NV, np, placement, the device's NOC_0 DRAM-port rows), shared with
+    // the nanobind geometry oracle so the host-side tests assert the core map this factory uses.
+    const FusedPlacement layout =
+        fused_placement(grid.x, grid.y, BH, NV, attrs.np, attrs.placement, fused_noc0_port_rows(device, grid.y));
     const std::vector<CoreCoord>& rcv_cores = layout.receivers;
     const std::vector<CoreCoord>& prod_cores = layout.producers;
     const uint32_t R = BH * NV;                                   // receiver cores
@@ -184,13 +191,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const CoreRangeSet union_set = rcv_set.merge(prod_set);
 
     // Hand-off NoC per producer. The writer's NoC (NOC_1 on Blackhole) moves only -x / -y, and the row-local
-    // layout keeps every HOME producer's writes on its own head's row segment. A pool EXTRA that sits in a row
-    // holding receivers (the leftover column east of the row segments) serves every head: on NOC_1 its writes run
-    // west over that row's home links, and to a receiver in a lower row they wrap the torus column. Those extras
-    // hand off on the other NoC instead (their writer and reader swap NoCs, a static per-core choice, no dynamic
-    // mode): its +x / +y routes leave the row on the links the home producers' writes never use. Extras in rows
-    // without receivers keep the writer's NoC (their -x legs stay in the extras' own rows). The predicate is
-    // fused_flip_noc (chunk_gdn_device_operation.cpp): get_dynamic_runtime_args addresses the flipped reader by it.
+    // layout keeps every HOME producer's writes on its own head's row segment: the producers east of the receivers
+    // write -x on it, the producers placement 1 puts WEST of the receivers hand off on the other NoC (+x, the
+    // second link into the receivers). A pool EXTRA that sits in a row holding receivers (the leftover column east
+    // of the row segments) serves every head: on NOC_1 its writes run west over that row's home links, and to a
+    // receiver in a lower row they wrap the torus column, so it hands off on the other NoC too (its +x / +y routes
+    // leave the row on the links the home producers' writes never use). Flipping is a static per-core choice (the
+    // writer and reader swap NoCs), no dynamic mode. Extras in rows without receivers keep the writer's NoC (their
+    // -x legs stay in the extras' own rows). The predicate is fused_flip_noc (chunk_gdn_device_operation.cpp):
+    // get_dynamic_runtime_args addresses the flipped reader by it.
     const std::vector<bool> flip_noc = fused_flip_noc(layout, grid.y, BH);
     std::vector<CoreCoord> prod_main_cores, prod_flip_cores;
     for (uint32_t p = 0; p < P; p++) {
