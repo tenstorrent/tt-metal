@@ -46,6 +46,7 @@ inline constexpr uint64_t kLongBudgetCycles = 4 * kPollBudgetCycles;
 inline constexpr uint64_t kFlagOffsetFromTarget = 0x1000;
 // The later cce_amo_ops modes, in hart 0's data area: target lines, then flag lines, results and the host table.
 inline constexpr uint64_t kModeFlagsFromTarget = 0x4000, kResultsFromTarget = 0x5000, kTableFromTarget = 0x6000;
+static_assert(kTableFromTarget + abi::kMaxOpEntries * abi::kOpEntryWords * sizeof(uint32_t) <= kTl1HartDataBytes);
 // Accumulate operands in a hart's data area: sources at its start, destinations 64 KiB in.
 inline constexpr uint64_t kAccumulateDestinationFromData = 0x10000;
 // Source and destination words of the functional accumulate rows stay below 2^20, so 512 accumulates of INT32 stay

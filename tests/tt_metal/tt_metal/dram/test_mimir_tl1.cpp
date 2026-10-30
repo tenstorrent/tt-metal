@@ -38,6 +38,7 @@ inline constexpr uint64_t kControlSourceOffset = 0x4000;
 inline constexpr uint64_t kSiblingSourceOffset = 0x2000;
 inline constexpr uint64_t kSiblingReadOffset = 0xC000;
 inline constexpr uint32_t kLocalBytesPerHart = 256;
+static_assert(kSiblingReadOffset + kLocalBytesPerHart <= kTl1HartDataBytes);
 // Per-hart sizes for the write and read-back pass. Every size is at most 4 KiB, so the hart's data area and its
 // 16 KiB landing slot both hold it with room for guards.
 inline constexpr std::array<uint32_t, 8> kWriteReadSizesBytes = {64, 128, 256, 512, 1024, 2048, 3072, 4096};
@@ -45,6 +46,8 @@ inline constexpr std::array<uint32_t, 8> kWriteReadSizesBytes = {64, 128, 256, 5
 // capped at 4 KiB to fit a landing slot.
 inline constexpr std::array<uint32_t, 7> kSizeAlignmentSizesBytes = {4, 16, 60, 64, 128, 1024, 4096};
 inline constexpr std::array<uint32_t, 5> kSizeAlignmentOffsetsBytes = {0, 4, 12, 60, 124};
+static_assert(
+    kReadbackOffset + kSizeAlignmentOffsetsBytes.back() + kSizeAlignmentSizesBytes.back() <= kTl1HartDataBytes);
 
 struct LocalPair {
     uint32_t source_cce = 0;

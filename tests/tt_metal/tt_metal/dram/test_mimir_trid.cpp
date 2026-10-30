@@ -82,6 +82,9 @@ inline constexpr uint64_t kStopOffsetFromData = 0x23100;
 inline constexpr uint64_t kProgressOffsetFromData = 0x23140;
 inline constexpr uint64_t kOwnSourceOffsetFromData = 0x24000;
 inline constexpr uint32_t kOwnRegionCapacity = 0x10000 - 2 * kGuardBytes;
+static_assert(
+    kOwnSourceOffsetFromData + kOwnRegionCapacity + 2 * kGuardBytes <= kTl1HartDataBytes,
+    "the own source region and its guards must fit the hart data area");
 // Sibling and remote TL1 regions sit in the issuing CCE's and hart's remote landing slot of the target CCE.
 inline constexpr uint32_t kLandingRegionCapacity = static_cast<uint32_t>(kTl1RemoteLandingSlotBytes) - 2 * kGuardBytes;
 // GDDR regions above DRAM UNRESERVED, one per issuing CCE and hart.

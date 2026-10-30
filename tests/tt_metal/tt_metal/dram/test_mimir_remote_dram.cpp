@@ -41,6 +41,7 @@ inline constexpr uint64_t kRemoteGuardDistance = 4 * kGiB;
 inline constexpr uint32_t kMixedSlotBytes = 32 * 1024;
 inline constexpr uint32_t kMixedRemoteSlotBytes = 8 * 1024;
 inline constexpr uint32_t kTrafficReadBackTl1Offset = 64 * 1024;
+static_assert(kTrafficReadBackTl1Offset + kLargeTransferBytes <= kTl1HartDataBytes);
 // Address bits 7-8 pick the GDDR channel slice.
 inline constexpr uint32_t kChannelSliceBytes = 128;
 inline constexpr uint32_t kChannelSliceCount = 4;

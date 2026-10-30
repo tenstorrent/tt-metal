@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -49,6 +50,7 @@ constexpr std::chrono::seconds kHostDeadline{300};
 // Own-TL1 destinations of a launch in which every hart copies into TL1 sit back to back from here, in hart 0's data
 // area above every hart's sources. Status lines (tl1_done_block) sit below every data area.
 constexpr uint64_t kSharedDestinationOffsetFromData = 64 * kKiB;
+static_assert(kSharedDestinationOffsetFromData + MEM_CCE_LOCAL_HARTS * kSlotStrideBytes <= kTl1HartDataBytes);
 
 std::string topology_skip_reason(uint32_t cce_index) {
     const MimirTopology topology = topology_from(configured_soc_desc());
