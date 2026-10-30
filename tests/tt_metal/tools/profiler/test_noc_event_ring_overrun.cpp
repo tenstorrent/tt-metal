@@ -53,7 +53,8 @@ std::string device_csv_path() {
 // DeviceRecordEvent(0)).
 // Columns: PCIe slot, core_x, core_y, RISC processor type, timer_id, time, data, run host ID, trace id, trace id
 // counter, zone name, type, ...
-void scan_device_csv(const std::string& path, std::map<std::string, uint32_t>& rows_per_risc, std::vector<std::string>& id0) {
+void scan_device_csv(
+    const std::string& path, std::map<std::string, uint32_t>& rows_per_risc, std::vector<std::string>& id0) {
     std::ifstream csv(path);
     if (!csv) {
         throw std::runtime_error("device profiler CSV not found: " + path);
@@ -106,7 +107,8 @@ int main(int argc, char** argv) {
         const distributed::MeshCoordinateRange device_range(mesh_device->shape());
         const CoreCoord core{0, 0};
 
-        const distributed::DeviceLocalBufferConfig local_config{.page_size = PAGE_SIZE, .buffer_type = BufferType::DRAM};
+        const distributed::DeviceLocalBufferConfig local_config{
+            .page_size = PAGE_SIZE, .buffer_type = BufferType::DRAM};
         const distributed::ReplicatedBufferConfig replicated_config{.size = PAGE_SIZE};
         auto dram_buffer = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
 
@@ -156,10 +158,14 @@ int main(int argc, char** argv) {
         std::map<std::string, uint32_t> rows_per_risc;
         std::vector<std::string> id0;
         scan_device_csv(csv, rows_per_risc, id0);
-        fmt::print("device CSV {}: BRISC rows {}, NCRISC rows {}\n", csv, rows_per_risc["BRISC"], rows_per_risc["NCRISC"]);
+        fmt::print(
+            "device CSV {}: BRISC rows {}, NCRISC rows {}\n", csv, rows_per_risc["BRISC"], rows_per_risc["NCRISC"]);
         if (rows_per_risc["NCRISC"] == 0) {
             pass = false;
-            fmt::print(stderr, "no NCRISC rows in the device CSV: the NCRISC lane was dropped (its chunk header lost the run-start sentinel)\n");
+            fmt::print(
+                stderr,
+                "no NCRISC rows in the device CSV: the NCRISC lane was dropped (its chunk header lost the run-start "
+                "sentinel)\n");
         }
         if (!id0.empty()) {
             pass = false;

@@ -1225,6 +1225,9 @@ def test_noc_event_ring_overrun(brisc_ring_index, tail_zone):
     # must not overrun into the NCRISC ring that follows in L1: that overwrites the NCRISC chunk header, which aborts
     # the host at mesh close or drops the whole NCRISC lane. The binary fails on a missing NCRISC lane or a zone
     # marker with timer id 0.
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    if ENV_VAR_ARCH_NAME not in ["wormhole_b0", "blackhole"]:
+        pytest.skip(f"The test fills the BRISC ring and checks the NCRISC lane, which {ENV_VAR_ARCH_NAME} does not have")
     run_device_profiler_test(
         testName=f"build/test/tt_metal/tools/profiler/test_noc_event_ring_overrun {brisc_ring_index} {tail_zone}",
         enable_noc_tracing=True,
