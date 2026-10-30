@@ -640,6 +640,40 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     }
 }
 
+void FDMeshCommandQueue::enqueue_write_to_core_ranges(
+    const CoreRangeSet& logical_worker_cores,
+    DeviceAddr address,
+    std::span<const std::byte> data,
+    bool blocking,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    TTZoneScopedD(DISPATCH);
+
+    auto lock = lock_api_function_();
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    // ranges() returns a view, so the merged set must stay alive for the loop.
+    const CoreRangeSet merged = logical_worker_cores.merge_ranges();
+    for (auto* device : mesh_device_->get_devices()) {
+        for (const CoreRange& range : merged.ranges()) {
+            device_dispatch::write_to_core_range(
+                device,
+                range,
+                data.data(),
+                address,
+                static_cast<uint32_t>(data.size()),
+                id_,
+                expected_num_workers_completed_,
+                sub_device_ids);
+        }
+    }
+
+    if (blocking) {
+        this->finish_nolock(sub_device_ids);
+    }
+}
+
 void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     ttsl::Span<const DeviceMemoryAddress> targets,
     uint32_t value,

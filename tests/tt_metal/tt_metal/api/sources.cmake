@@ -54,6 +54,7 @@ set(UNIT_TESTS_API_SOURCES
     test_prefetcher_pipe.cpp
     test_prefetcher_pipe_dram_sender.cpp
     test_global_semaphores.cpp
+    test_global_semaphore_pool.cpp
     test_host_buffer.cpp
     test_host_write_dma.cpp
     test_kernel_compile_cache.cpp

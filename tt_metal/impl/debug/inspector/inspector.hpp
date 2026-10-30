@@ -18,6 +18,7 @@ namespace tt::tt_metal {
 
 namespace distributed {
 class MeshBuffer;
+class MeshDevice;
 class MeshDeviceImpl;
 class MeshWorkloadImpl;
 class MeshSocket;
@@ -62,8 +63,11 @@ public:
 
     static void mesh_socket_created(const distributed::MeshSocket* socket) noexcept;
 
-    static void global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept;
-    static void global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept;
+    // `key` identifies the semaphore: its MeshBuffer, or its pool slot lease.
+    static void global_semaphore_created(
+        const void* key, uint64_t address, const CoreRangeSet& cores, const distributed::MeshDevice& device) noexcept;
+    static void global_semaphore_reset(const void* key, uint32_t value) noexcept;
+    static void global_semaphore_destroyed(const void* key) noexcept;
 
     static void emit_debug_entry(
         const distributed::MeshWorkloadImpl* mesh_workload,

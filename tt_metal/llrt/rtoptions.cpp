@@ -74,8 +74,9 @@ enum class EnvVarID {
     // ========================================
     // MEMORY INITIALIZATION
     // ========================================
-    TT_METAL_CLEAR_L1,    // Clear L1 memory on device init
-    TT_METAL_CLEAR_DRAM,  // Clear DRAM on device init
+    TT_METAL_CLEAR_L1,                     // Clear L1 memory on device init
+    TT_METAL_CLEAR_DRAM,                   // Clear DRAM on device init
+    TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS,  // Override the GlobalSemaphore pool size (internal)
 
     // ========================================
     // HOST MEMORY
@@ -645,6 +646,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_DRAM=1
         case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = is_env_enabled(value); break;
+
+        // TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS
+        // Number of slots in the GlobalSemaphore pool, replacing the size passed to
+        // experimental::ReserveGlobalSemaphorePool. Internal, for sizing experiments. 0 disables the pool.
+        // Usage: export TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS=128
+        case EnvVarID::TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS: {
+            const std::string slots = trim_copy(value);
+            try {
+                size_t parse_pos = 0;
+                const unsigned long parsed = std::stoul(slots, &parse_pos, 0);
+                if (slots.empty() || slots.front() == '-' || parse_pos != slots.size() ||
+                    parsed > std::numeric_limits<uint32_t>::max()) {
+                    TT_THROW("TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS must be a non-negative slot count: {}", value);
+                }
+                this->global_semaphore_pool_slots = static_cast<uint32_t>(parsed);
+            } catch (const std::logic_error&) {
+                TT_THROW("TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS must be a non-negative slot count: {}", value);
+            }
+            break;
+        }
 
         // ========================================
         // HOST MEMORY
