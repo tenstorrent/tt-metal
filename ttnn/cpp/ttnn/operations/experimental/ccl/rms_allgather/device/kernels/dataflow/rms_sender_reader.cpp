@@ -153,20 +153,18 @@ void kernel_main() {
     const auto& post_global_reduce_sender = [&](CircularBuffer& cb_ex, CircularBuffer& cb_ex_global_arg)
                                                 __attribute__((always_inline)) {
                                                     uint32_t l1_read_addr_ex = cb_ex.get_read_ptr();
-                                                    uint32_t l1_read_addr_ex_global = cb_ex_global_arg.get_read_ptr();
                                                     // num_dests counts the multicast bounding-box cells
                                                     // (loopback includes self), not the worker count.
                                                     noc_obj.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                                         CoreLocalMem<uint8_t>(l1_read_addr_ex),
-                                                        MulticastEndpoint{},
+                                                        use<CircularBuffer::AddrSelector::READ_PTR>(cb_ex_global_arg),
                                                         single_tile_size_bytes,
                                                         num_mcast_dests,
                                                         {},
                                                         {.noc_x_start = mcast_dest_noc_start_x,
                                                          .noc_y_start = mcast_dest_noc_start_y,
                                                          .noc_x_end = mcast_dest_noc_end_x,
-                                                         .noc_y_end = mcast_dest_noc_end_y,
-                                                         .addr = l1_read_addr_ex_global},
+                                                         .noc_y_end = mcast_dest_noc_end_y},
                                                         false);
                                                     noc_obj.async_write_barrier();
                                                 };
