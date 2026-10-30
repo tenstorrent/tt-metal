@@ -31,6 +31,7 @@
 #include "metal/common/const_utils.hpp"
 #include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
@@ -386,11 +387,10 @@ ttnn::Tensor group_shared_matmul(
     auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
     auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
-        throw std::invalid_argument(
-            fmt::format(
-                "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
-                query_tensor.logical_shape(),
-                kv_tensor.logical_shape()));
+        throw std::invalid_argument(fmt::format(
+            "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
+            query_tensor.logical_shape(),
+            kv_tensor.logical_shape()));
     }
     if (heads == groups) {
         // no broadcasting needed
@@ -680,7 +680,8 @@ void run_sdpa_test(
             .k_chunk_size = picked.Sk_chunk_t * 32U,
             .heads_per_item = picked.heads_per_item,
             .max_pieces = config.program_config.max_pieces,  // same schedule too: the merge order is part of
-            .num_cores = config.program_config.num_cores};   // the numerics the two runs must share
+            .num_cores = config.program_config.num_cores,    // the numerics the two runs must share
+            .causal_pairs = config.program_config.causal_pairs};
         auto ungated = ttml::metal::sdpa_fw(
             query,
             key,
@@ -2481,6 +2482,130 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     check_schedule(many_items, sq1sk8, paired, kDefaultMaxPieces);
 }
 
+// Ring SDPA must run the program it ran before the chunk knobs and the scheduler (its only device test is
+// the Galaxy ring test). Its config pins main's chunking and asks for main's placement; here the schedule
+// the factory builds for it is compared with main's work split, written out from main's program factory:
+// causal, an even number of tile-rows and at least as many heavy/light pairs as cores -> core c gets a
+// contiguous block of pairs (the first total % cores cores one more), pair p of sequence s being rows p
+// and St - 1 - p; otherwise split_work_to_cores over the rows. Items are rows here, so the sets match.
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_RingRunsMainProgram) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    using ttml::metal::ops::ring_sdpa_fw::ring_program_config;
+    constexpr uint64_t kAnyBudget = 1ULL << 40U;
+    uint32_t checked = 0;
+    uint32_t paired_cases = 0;
+    for (const uint32_t cores : {120U, 130U}) {
+        for (const uint32_t St : {1U, 2U, 3U, 4U, 6U, 8U, 16U, 64U, 128U}) {
+            for (const auto [batch, heads] :
+                 std::vector<std::pair<uint32_t, uint32_t>>{{1U, 1U}, {1U, 8U}, {2U, 32U}, {4U, 32U}}) {
+                const SDPAForwardShape shape = causal_shape(batch, heads, heads, St, 2U);
+                const auto config = ring_program_config(St);
+                // main's pick_sk_chunk_t: the largest of 4, 2, 1 that divides St; one row per item.
+                const uint32_t main_sk = St % 4U == 0U ? 4U : (St % 2U == 0U ? 2U : 1U);
+                const SDPAForwardChunks chunks = resolve_chunks(config, shape, kAnyBudget, cores);
+                EXPECT_EQ(chunks.Sq_chunk_t, 1U);
+                EXPECT_EQ(chunks.Sk_chunk_t, main_sk);
+                EXPECT_EQ(chunks.heads_per_item, 1U);
+                EXPECT_FALSE(may_split(config, shape));
+
+                const SDPAForwardSchedule schedule = schedule_for(config, shape, chunks, cores);
+                EXPECT_EQ(schedule.num_slots, 0U);
+                EXPECT_EQ(count_role(schedule, UnitRole::Sender), 0U);
+                EXPECT_EQ(count_role(schedule, UnitRole::Merger), 0U);
+                check_schedule(shape, chunks, schedule, 1U);
+
+                const uint32_t NC = batch * heads;
+                const uint32_t total_rows = NC * St;
+                const uint32_t total_pairs = NC * (St / 2U);
+                const bool balanced = St % 2U == 0U && total_pairs >= cores;
+                std::vector<std::vector<uint32_t>> expected;
+                if (balanced) {
+                    ++paired_cases;
+                    expected.resize(cores);
+                    uint32_t pair = 0;
+                    for (uint32_t core = 0; core < cores; ++core) {
+                        const uint32_t n = total_pairs / cores + (core < total_pairs % cores ? 1U : 0U);
+                        for (uint32_t p = pair; p < pair + n; ++p) {
+                            const uint32_t seq = p / (St / 2U);
+                            const uint32_t row = p % (St / 2U);
+                            expected[core].push_back(seq * St + row);
+                            expected[core].push_back(seq * St + St - 1U - row);
+                        }
+                        pair += n;
+                    }
+                } else {
+                    const uint32_t used = std::min(cores, total_rows);
+                    expected.resize(used);
+                    uint32_t row = 0;
+                    for (uint32_t core = 0; core < used; ++core) {
+                        const uint32_t n = total_rows / used + (core < total_rows % used ? 1U : 0U);
+                        for (uint32_t r = row; r < row + n; ++r) {
+                            expected[core].push_back(r);
+                        }
+                        row += n;
+                    }
+                }
+                ASSERT_EQ(schedule.per_core.size(), expected.size())
+                    << "St=" << St << " batch=" << batch << " heads=" << heads << " cores=" << cores;
+                for (uint32_t core = 0; core < expected.size(); ++core) {
+                    std::vector<uint32_t> got;
+                    for (const WorkUnit& unit : schedule.per_core[core]) {
+                        for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                            got.push_back(item);
+                        }
+                    }
+                    std::sort(got.begin(), got.end());
+                    std::sort(expected[core].begin(), expected[core].end());
+                    EXPECT_EQ(got, expected[core]) << "St=" << St << " batch=" << batch << " heads=" << heads
+                                                   << " cores=" << cores << " core=" << core;
+                }
+                ++checked;
+            }
+        }
+    }
+    EXPECT_EQ(checked, 2U * 9U * 4U);
+    EXPECT_GE(paired_cases, 20U) << "the ring shards here must reach main's paired mode";
+}
+
+// main's program on device, through the single-chip op: a shard that reaches the paired placement (144
+// pairs over the grid) and one that falls back to blocks of rows (4 pairs on 8 cores).
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_RingProgramOnDevice) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    using ttml::metal::ops::ring_sdpa_fw::ring_program_config;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t cores = static_cast<uint32_t>(grid.x * grid.y);
+    struct Shard {
+        uint32_t batch;
+        uint32_t heads;
+        uint32_t S;
+        bool paired;
+    };
+    for (const Shard shard : {Shard{1U, 18U, 512U, true}, Shard{1U, 1U, 256U, false}}) {
+        const uint32_t St = shard.S / 32U;
+        const auto config = ring_program_config(St);
+        const SDPAForwardShape shape = causal_shape(shard.batch, shard.heads, shard.heads, St, 1U);
+        const auto chunks = resolve_chunks(config, shape, ttml::metal::available_l1_bytes(*device), cores);
+        const SDPAForwardSchedule schedule = schedule_for(config, shape, chunks, cores);
+        ASSERT_EQ(schedule.num_slots, 0U);
+        const uint32_t pairs = shard.batch * shard.heads * (St / 2U);
+        ASSERT_EQ(pairs >= cores, shard.paired) << "the shard must land in the intended placement";
+        ASSERT_EQ(schedule.per_core.size(), shard.paired ? cores : std::min(cores, shard.batch * shard.heads * St));
+        run_sdpa_test(SDPATestConfig{
+            .batch_size = shard.batch,
+            .sequence_length = shard.S,
+            .query_dim = shard.heads * 32U,
+            .key_value_dim = shard.heads * 32U,
+            .num_query_heads = shard.heads,
+            .num_key_heads = shard.heads,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .program_config = config,
+            .test_name =
+                shard.paired ? "ChunkKnobs_RingProgramOnDevice_Paired" : "ChunkKnobs_RingProgramOnDevice_Rows"});
+    }
+}
+
 // The production pick (four-row chunks, eight K/V tiles) only lands on device when the items keep the
 // cores busy; every other blocking shape is too small for that and resolves to one-row chunks. B is sized
 // from the grid: S=512 gives four chunks per sequence, so B*H = cores/2 + 2 sequences give about two items
@@ -2610,6 +2735,11 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
             [&] { check_chunks({.q_chunk_size = S}, wide, budget, kGridCores); },
             ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")));
         EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget, kGridCores));
+        // main's placement never cuts, so it refuses a max_pieces above one.
+        EXPECT_THAT(
+            [&] { check_chunks({.max_pieces = 2U, .causal_pairs = true}, wide, budget, kGridCores); },
+            ThrowsMessage<std::exception>(HasSubstr("causal_pairs never cuts")));
+        EXPECT_NO_THROW(check_chunks({.causal_pairs = true}, wide, budget, kGridCores));
         // The work list numbers items in a 20-bit field: one tile-row of one head is the most items.
         SDPAForwardShape too_many = wide;
         too_many.batch = 1U;
@@ -2753,6 +2883,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
     Params p_changed = base;
     p_changed.program_config.max_pieces = 2U;
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(p_changed));
+    Params pairs_changed = base;
+    pairs_changed.program_config.causal_pairs = true;
+    EXPECT_NE(
+        ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(pairs_changed));
     Params c_changed = base;
     c_changed.program_config.num_cores = 8U;
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(c_changed));

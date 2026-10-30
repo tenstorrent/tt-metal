@@ -127,9 +127,16 @@ struct SDPAForwardSchedule {
 // faster than the same items uncut (with items at one to two per core the mergers land on cores the whole
 // items already fill, and cutting loses). Everything else: contiguous blocks. When the lists would not fit
 // the runtime args, tries one piece per item, then heavy/light chunk pairs, then contiguous blocks.
+// causal_pairs skips longest first: causal items go straight to the heavy/light chunk pairs (main's
+// placement), or to contiguous blocks when the pairs do not apply; max_pieces is then 1.
 SDPAForwardSchedule make_schedule(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces);
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    uint32_t num_cores,
+    uint32_t max_pieces,
+    bool causal_pairs = false);
 
+// 1 with causal_pairs, else the knob (0 = kDefaultMaxPieces).
 uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config);
 bool may_split(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape);
 uint32_t effective_num_cores(const SDPAForwardProgramConfig& config, uint32_t grid_cores);

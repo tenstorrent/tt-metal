@@ -254,6 +254,9 @@ uint32_t partial_tiles_per_row(const SDPAForwardShape& shape) {
 }
 
 uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config) {
+    if (config.causal_pairs) {
+        return 1U;
+    }
     return config.max_pieces == 0U ? kDefaultMaxPieces : config.max_pieces;
 }
 
@@ -495,11 +498,16 @@ double makespan_us(
 }  // namespace
 
 SDPAForwardSchedule make_schedule(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces) {
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    uint32_t num_cores,
+    uint32_t max_pieces,
+    bool causal_pairs) {
     const uint32_t total_items = num_work_items(shape, chunks);
     TT_FATAL(num_cores > 0, "make_schedule: num_cores must be > 0");
+    TT_FATAL(!causal_pairs || max_pieces == 1U, "make_schedule: causal_pairs never cuts, max_pieces must be 1");
     SDPAForwardSchedule schedule;
-    if (shape.mask_type == AttentionMaskType::Causal) {
+    if (shape.mask_type == AttentionMaskType::Causal && !causal_pairs) {
         // The cut schedule is kept only when the model rates it faster than the items uncut: the cut test
         // alone (an item heavier than the fair share) says nothing about where the mergers land. Both are
         // modelled on the same core count, which is how the model's DRAM share was calibrated; uncut items
@@ -549,7 +557,7 @@ SDPAForwardSchedule schedule_for(
     const uint32_t max_pieces = effective_max_pieces(config);
     const uint32_t num_cores =
         std::min(effective_num_cores(config, grid_cores), num_work_items(shape, chunks) * max_pieces);
-    return make_schedule(shape, chunks, num_cores, max_pieces);
+    return make_schedule(shape, chunks, num_cores, max_pieces, config.causal_pairs);
 }
 
 namespace {
@@ -596,6 +604,10 @@ void check_chunks(
     uint64_t l1_budget_bytes,
     uint32_t grid_cores) {
     TT_FATAL(config.max_pieces <= kMaxPieces, "max_pieces ({}) must be at most {}", config.max_pieces, kMaxPieces);
+    TT_FATAL(
+        !config.causal_pairs || config.max_pieces <= 1U,
+        "causal_pairs never cuts the items: max_pieces ({}) must be 0 or 1",
+        config.max_pieces);
     TT_FATAL(
         config.num_cores <= grid_cores,
         "num_cores ({}) must be at most the compute grid ({})",

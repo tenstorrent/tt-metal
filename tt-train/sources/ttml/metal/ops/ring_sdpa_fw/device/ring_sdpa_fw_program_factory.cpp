@@ -15,6 +15,27 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
+SDPAForwardProgramConfig ring_program_config(uint32_t St) {
+    uint32_t Sk_chunk_t = 4U;
+    while (Sk_chunk_t > 1U && St % Sk_chunk_t != 0U) {
+        Sk_chunk_t /= 2U;
+    }
+    return SDPAForwardProgramConfig{
+        .q_chunk_size = tt::constants::TILE_HEIGHT,
+        .k_chunk_size = Sk_chunk_t * tt::constants::TILE_HEIGHT,
+        .heads_per_item = 1U,
+        .max_pieces = 1U,
+        .causal_pairs = true};
+}
+
+namespace {
+
+SDPAForwardProgramConfig ring_program_config_of(const ttnn::Tensor& query) {
+    return ring_program_config(query.padded_shape()[-2] / tt::constants::TILE_HEIGHT);
+}
+
+}  // namespace
+
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -57,13 +78,13 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
 
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
-        // No cuts: a split schedule would allocate its partials scratch through the mesh device, once per
-        // coordinate and replicated on every device.
+        // Main's program (see ring_program_config): no cuts either way, and a split schedule would allocate
+        // its partials scratch through the mesh device, once per coordinate and replicated on every device.
         sdpa_fw::device::operation_attributes_t sdpa_attrs{
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .program_config = {.max_pieces = 1U}};
+            .program_config = ring_program_config_of(query)};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -130,7 +151,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .program_config = {.max_pieces = 1U}};
+            .program_config = ring_program_config_of(query)};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,
