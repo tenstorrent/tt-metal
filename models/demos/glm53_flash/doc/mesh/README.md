@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 08:45: the budget measured, the interleave measured, the capstone r2 queued
+
+`needle64k_8_bt128k` (8 concurrent 65 396-token prompts, `max_num_batched_tokens` 131072): 8/8 needles, every
+TTFT 332 s = 1.58 K tok/s aggregate with waves of 4-5 members (plus the first chunks on the sequence-parallel
+path), against ~570 tok/s with waves of 2 at the 32 K budget. The planner's SP-first placement still takes slot
+indices for the first prompts' chunks, so bursts do not yet reach pure waves of 8 (~2.3 K tok/s): wave-affine
+placement for bursts (`GLM53_VLLM_SP_FIRST=0`) is the later A/B. With the smoke's override rendered into the
+launcher's `additional_config`, `ab_interleave_32_r2` ran the interleave for real ("Decode interleave enabled: at
+most 1 consecutive prefill step before 1 decode-only step"): ITL 60.3 / 59.7 / P99 76.3 ms, TTFT 5.47 s mean, no
+regression at batch 32. The 128-row wave trace on the block (`wave_gate_128_block_r5`) is bit-identical to the SP
+prefill; the eager 128-row wave is the odd one (0.999887 to both), the 256-row trace equals its eager wave: all
+ulp-level KDA scan-grouping variants. The capstone r2 (`served_8x4_needle1m_32_r2`) is queued with the 128 K
+budget, the interleave on and the slot mask; the 45-layer 8x4 wave gate runs first.
+
 ### 2026-10-30 08:00: the 32 x 1 M capstone starved its waves; the prefill budget is the lever
 
 `served_8x4_needle1m_32_r1` (32 prompts of 1 038 673 tokens at once) prefilled its first four prompts on the
