@@ -176,26 +176,51 @@ def make_scheduler(max_num_seqs, max_model_len, pool_blocks, tt):
     )
 
 
-def simulate(isl, osl, conc, n, tt, max_num_seqs=16, max_model_len=262144, pool_blocks=24064, client_ms=5.0):
+def simulate(
+    isl,
+    osl,
+    conc,
+    n,
+    tt,
+    max_num_seqs=16,
+    max_model_len=262144,
+    pool_blocks=24064,
+    client_ms=5.0,
+    rate=None,
+    seed=0,
+    jitter_ms=0.0,
+):
+    """ttis' closed loop (rate None: a new request as soon as one finishes), or vllm bench --request-rate: Poisson
+    arrivals at `rate` req/s, still at most `conc` in flight. isl / osl: a length, or a (lo, hi) range drawn uniformly
+    per request. jitter_ms: each request reaches the engine up to this much later (uniform), e.g. a burst's
+    tokenization in the API server."""
     from vllm.sampling_params import SamplingParams
     from vllm.utils.hashing import sha256
     from vllm.v1.core.kv_cache_utils import get_request_block_hasher, init_none_hash
     from vllm.v1.outputs import ModelRunnerOutput
     from vllm.v1.request import Request
 
+    rng = np.random.default_rng(seed)
+    draw = lambda v: int(rng.integers(v[0], v[1] + 1)) if isinstance(v, tuple) else int(v)
+    spec = [(draw(isl), draw(osl)) for _ in range(n)]
+    planned = np.cumsum(rng.exponential(1000.0 / rate, n)) if rate else None
     sched = make_scheduler(max_num_seqs, max_model_len, pool_blocks, tt)
     model = Model(-(-max_num_seqs // ROWS) * ROWS)
     init_none_hash(sha256)
     now = 0.0
     arrivals = []  # (time, rid)
-    sent, first, toks, done = {}, {}, {}, {}
+    sent, first, toks, done, lens = {}, {}, {}, {}, {}
     issued = 0
+    in_flight = 0
 
     def issue(t):
-        nonlocal issued
+        nonlocal issued, in_flight
         rid = f"r{issued}"
+        t = max(t, planned[issued]) if planned is not None else t
+        lens[rid] = spec[issued]
         issued += 1
-        arrivals.append((t + client_ms, rid))
+        in_flight += 1
+        arrivals.append((t + client_ms + float(rng.uniform(0, jitter_ms)), rid))
         sent[rid] = t
 
     for _ in range(min(conc, n)):
@@ -205,12 +230,12 @@ def simulate(isl, osl, conc, n, tt, max_num_seqs=16, max_model_len=262144, pool_
         arrivals.sort()
         while arrivals and arrivals[0][0] <= now + 1e-9:
             _, rid = arrivals.pop(0)
-            p = SamplingParams(max_tokens=osl, ignore_eos=True)
+            p = SamplingParams(max_tokens=lens[rid][1], ignore_eos=True)
             p.update_from_generation_config({}, eos_token_id=2)
             sched.add_request(
                 Request(
                     request_id=rid,
-                    prompt_token_ids=[7] * isl,
+                    prompt_token_ids=[7] * lens[rid][0],
                     sampling_params=p,
                     pooling_params=None,
                     block_hasher=get_request_block_hasher(64, sha256),
@@ -259,6 +284,7 @@ def simulate(isl, osl, conc, n, tt, max_num_seqs=16, max_model_len=262144, pool_
                 if o.finish_reason is not None and o.request_id not in done:
                     done[o.request_id] = now
                     model.release(o.request_id)
+                    in_flight -= 1
                     if issued < n:
                         issue(now)
     dur = max(done.values())
@@ -271,14 +297,16 @@ def simulate(isl, osl, conc, n, tt, max_num_seqs=16, max_model_len=262144, pool_
         osl=osl,
         conc=conc,
         n=n,
+        rate=rate,
         tt=tt,
         ttft_mean_s=float(ttft.mean()),
         ttft_med_s=float(np.median(ttft)),
+        ttft_p99_s=float(np.percentile(ttft, 99)),
         tpot_ms=float(tpot.mean()),
         itl_p50_ms=float(np.percentile(itl, 50)),
         itl_p99_ms=float(np.percentile(itl, 99)),
         itl_max_ms=float(itl.max()),
-        tok_s=float(n * osl / (dur / 1000)),
+        tok_s=float(sum(o for _, o in spec) / (dur / 1000)),
         prefill_frac=pf / dur,
         decode_steps=sum(k == "decode" for k, _, _ in steps),
         mean_decode_rows=float(np.mean([r for k, _, r in steps if k == "decode"])),
@@ -306,22 +334,36 @@ def main():
     ap.add_argument("--shapes", default=",".join(f"{i}/{o}" for i, o in SHAPES))
     ap.add_argument("--conc", type=int, default=16)
     ap.add_argument("--waves", type=int, default=4, help="prompts = waves x conc (ttis: 4 at <= 4K/128, 2 above)")
+    ap.add_argument("--rate", type=float, default=None, help="Poisson arrivals (req/s) instead of the closed loop")
+    ap.add_argument("--seeds", type=int, default=1)
+    ap.add_argument("--jitter-ms", type=float, default=0.0)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     import logging
 
     logging.disable(logging.INFO)
     rows = []
+    rng_of = lambda v: tuple(int(x) for x in v.split("-")) if "-" in v else int(v)
     for shape in a.shapes.split(","):
-        isl, osl = (int(x) for x in shape.split("/"))
+        isl, osl = (rng_of(x) for x in shape.split("/"))
         for name in a.policies.split(","):
-            r = simulate(isl, osl, a.conc, a.waves * a.conc, POLICIES[name])
+            runs = [
+                simulate(
+                    isl, osl, a.conc, a.waves * a.conc, POLICIES[name], rate=a.rate, seed=sd, jitter_ms=a.jitter_ms
+                )
+                for sd in range(a.seeds)
+            ]
+            r = {
+                k: (float(np.mean([x[k] for x in runs])) if isinstance(runs[0][k], float) else runs[0][k])
+                for k in runs[0]
+            }
             r["policy"] = name
             rows.append(r)
             print(
-                f"{isl:>6}/{osl:<5} {name:>9}: TPOT {r['tpot_ms']:6.1f} ms  ITL p50 {r['itl_p50_ms']:6.1f} "
+                f"{shape:>12} {name:>9}: TPOT {r['tpot_ms']:6.1f} ms  ITL p50 {r['itl_p50_ms']:6.1f} "
                 f"p99 {r['itl_p99_ms']:6.1f} max {r['itl_max_ms']:6.0f}  TTFT mean {r['ttft_mean_s']:5.2f} s "
-                f"med {r['ttft_med_s']:5.2f}  {r['tok_s']:6.1f} tok/s  prefill {r['prefill_frac']:.2f}  "
+                f"med {r['ttft_med_s']:5.2f} p99 {r['ttft_p99_s']:5.2f}  {r['tok_s']:6.1f} tok/s  "
+                f"prefill {r['prefill_frac']:.2f}  "
                 f"rows/decode {r['mean_decode_rows']:.1f}",
                 flush=True,
             )
