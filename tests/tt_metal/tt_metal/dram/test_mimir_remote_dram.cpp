@@ -209,6 +209,7 @@ MimirTransferRecord make_gddr_record(
     record.source = std::move(source);
     record.destination = std::move(destination);
     record.requested_address = mimir_contract::cce_gddr_address(source_routes, dest_mimir, chiplet_offset);
+    // The address inside the destination Mimir after the DMRISC remap, so chiplet-local windows.
     record.destination_local_address = tt::umd::mimir_local_address_windows(soc).dram_base + chiplet_offset;
     record.predicted_stages.emplace_back("issued SPA", record.requested_address);
     if (endpoint.has_value()) {

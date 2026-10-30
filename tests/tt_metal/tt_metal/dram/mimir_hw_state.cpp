@@ -143,6 +143,7 @@ std::string tile_prefix(const D2dTile& tile) { return fmt::format("M{}.D2D{}", t
 uint64_t d2d_tile_offset(const D2dTile& tile) { return static_cast<uint64_t>(tile.d2d_index) * kD2dTileStride; }
 
 uint64_t cce_register_address(const metal_SocDescriptor& soc, uint32_t location, uint64_t register_address) {
+    // Channel 0: the SMC core already selects the Mimir, so chiplet-local windows.
     return tt::umd::mimir_local_address_windows(soc).cce_control_address(0, location, register_address);
 }
 
