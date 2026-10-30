@@ -177,6 +177,58 @@ def prefill_rs_kwargs(rows):
     return {} if w is None else {"num_workers_per_link": w}
 
 
+_R6_FLAGS = {}
+
+
+def _r6_flag(name):
+    """Round-6 prefill / join flags: "1" turns the lever on; default "0" = the r5 code path, byte for byte. Read once."""
+    v = _R6_FLAGS.get(name)
+    if v is None:
+        v = _R6_FLAGS[name] = os.environ.get(name, "0") == "1"
+    return v
+
+
+def prefill_host_tolist_enabled():
+    """QWEN36_PREFILL_HOST_TOLIST: the spec engine's prefill (MTPSpecEngine._prefill_row) converts the whole prompt
+    prefix to Python ints with ONE tolist() instead of a 0-d tensor per token (~1 us/token: 32 ms at 32K, 130 ms at
+    128K, paid by every vLLM chunk call of a long prompt while the device idles), builds the int32 prompt row from the
+    tensor and hashes the chunk-resume digests from its bytes. Same ints, same row, same digests."""
+    return _r6_flag("QWEN36_PREFILL_HOST_TOLIST")
+
+
+def join_logits_one_copy_enabled():
+    """QWEN36_JOIN_LOGITS_ONE_COPY: the replicated final prefill logits (all-gathered: every device holds the same
+    [1, 1, vocab] tile row) are read from ONE device instead of concatenating all of them (the engine kept only the
+    first copy anyway): 1/8 of the D2H. The chunk-trace / masked-bucket ends of a prompt (2K-aligned prompts, the
+    eager path) read them."""
+    return _r6_flag("QWEN36_JOIN_LOGITS_ONE_COPY")
+
+
+def join_topp_candidates_enabled():
+    """QWEN36_JOIN_TOPP_CANDIDATES: the vLLM TT plugin's host sampler (a join's first token) gets candidate paths for
+    requests with top-k disabled, instead of vLLM's full 248K-logit sort (21-30 ms per join on the pod CPU; the
+    candidate path 1.9 ms): exact for top_p >= 1, the top-M candidates with an exact-or-full-path check for top_p < 1.
+    Installed into the plugin's sampler class at model init (see host_topp.py)."""
+    return _r6_flag("QWEN36_JOIN_TOPP_CANDIDATES")
+
+
+def prefill_gdn_glue_enabled():
+    """QWEN36_PREFILL_GDN_GLUE: GDN-layer prefill glue cuts, same values everywhere.
+
+    * KDA conv input: the projection's TILE qkv goes straight into qkv_causal_conv1d_silu (the op reads TILE in place).
+      Today it is untilized to a ROW_MAJOR copy that the op tilizes right back (UntilizeCodegen + Tilize, ~0.22 ms per
+      layer per 8K chunk at the profiler clock). The carried conv state (the chunk's last K-1 input rows) is cut from
+      the last tile row of qkv instead of the ROW_MAJOR copy.
+    * beta: b = qkvzab columns [Nv, 2 Nv) starts mid-tile, so ttnn.slice untilizes, slices and re-tilizes it (~83 us
+      per layer). It is taken with an exact one-hot column-select matmul of the one-tile-wide [a | b] block instead
+      (HiFi4, fp32 accumulation: one nonzero term per output element, the bf16 value reproduced exactly; only a -0.0
+      can become +0.0, and sigmoid(+-0) is the same 0.5).
+
+    ttsim-perf, one chip = one TP8 shard (gdn/tp.py ops around the KDA conv): 8192-row chunk (DRAM qkvzab) 468 -> 136 us
+    per GDN layer, 2048-row chunk (L1) 172 -> 67 us, with q / k / v / conv carry / a / b bit-identical."""
+    return _r6_flag("QWEN36_PREFILL_GDN_GLUE")
+
+
 _PREFILL_MTP_LEAN = None
 
 

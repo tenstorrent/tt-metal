@@ -81,7 +81,9 @@ from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
 )
 from models.demos.blackhole.qwen36.tt.tp_common import (
     engine_spec_buckets,
+    join_logits_one_copy_enabled,
     pack_u32_rows,
+    prefill_host_tolist_enabled,
     prefill_mtp_lean_enabled,
     rope_row_index,
     spec_bucket_hold,
@@ -534,6 +536,16 @@ def draft_rows_fit(anchor_pos, K, capacity):
     """Per row: may it draft? Its K drafter writes (p..p+K-1) and next verify window (p+1..p+1+K)
     must stay in capacity."""
     return [int(p) + 1 + K < capacity for p in anchor_pos]
+
+
+def _prompt_ids_fast(prompt_ids):
+    """QWEN36_PREFILL_HOST_TOLIST: (the prompt ids as Python ints, an int32 [1, Tp] row of them) with ONE tolist() and one
+    dtype copy, equal to today's [int(t) for t in ...] and torch.tensor([ids], dtype=torch.int32); (None, None) for a
+    floating / complex / bool input, which keeps the per-token path (int() truncation, bool -> 0/1)."""
+    t = torch.as_tensor(prompt_ids).reshape(-1)
+    if t.is_floating_point() or t.is_complex() or t.dtype == torch.bool:
+        return None, None
+    return t.tolist(), t.to(torch.int32, copy=True).reshape(1, -1)
 
 
 def mtp_prefill_inputs(prompt_ids, chunk_start, bucket, page_table_row, block_size, scratch_block, buf_blocks):
@@ -2478,7 +2490,12 @@ class MTPSpecEngine:
         model = self.model
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
-        prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
+        prompt_row = None
+        if prefill_host_tolist_enabled():
+            # QWEN36_PREFILL_HOST_TOLIST: one tolist() and an int32 copy of the same ids (see _prompt_ids_fast)
+            prompt_list, prompt_row = _prompt_ids_fast(prompt_ids)
+        if prompt_row is None:
+            prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
         Tp = len(prompt_list)
         if final:
             self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
@@ -2504,7 +2521,9 @@ class MTPSpecEngine:
         pt_row = model._fit_spec_page_table(page_table_row, self.nb)
         assert pt_row.shape[0] == 1, "prefill takes ONE page-table row"
         self._check_scratch(pt_row)
-        prompt = torch.tensor([prompt_list], dtype=torch.int32)
+        prompt = torch.tensor([prompt_list], dtype=torch.int32) if prompt_row is None else prompt_row
+        # the ids the chunk-resume digests hash: the list (today), or the int32 row's bytes (QWEN36_PREFILL_HOST_TOLIST)
+        digest_ids = prompt_list if prompt_row is None else prompt_row[0]
         captured_row = [False]
         # Prefix cache (B > 1, start_pos given, cache built): (s, (cache, slot) | None, save points) or None.
         # A multimodal request bypasses the prefix cache (mirrors Qwen36Model.prefill_paged_slots): no lookup, no saves.
@@ -2524,7 +2543,7 @@ class MTPSpecEngine:
                 logger.info(
                     f"[spec_engine] chunked prefill: chunk [{start_pos}, {Tp}) is <= 128 tokens: no e-128 snapshot"
                 )
-        exact = self._chunk_exact_resume(prog, prompt_list, start_pos, Tp, pt_row, vision_tokens, exact_mode)
+        exact = self._chunk_exact_resume(prog, digest_ids, start_pos, Tp, pt_row, vision_tokens, exact_mode)
         plan_kw = {}
         if force:
             plan_kw["force_points"] = force
@@ -2594,7 +2613,7 @@ class MTPSpecEngine:
             # Option B: the next chunk resumes at e from the snapshot at e and the row captured into _last_hidden[slot].
             if save_end:
                 assert captured_row[0], f"non-final chunk never delivered the chunk holding slot {Tp - 1}"
-                _chunk_prog_of(self)[slot] = (Tp, self._chunk_digest(prompt_list, Tp), self._chunk_pt_sig(pt_row, Tp))
+                _chunk_prog_of(self)[slot] = (Tp, self._chunk_digest(digest_ids, Tp), self._chunk_pt_sig(pt_row, Tp))
                 c = self._chunk_cache()
                 if c is not None and hasattr(c, "pin"):
                     c.max_pinned = self.B  # one live chunk per engine row
@@ -2607,7 +2626,7 @@ class MTPSpecEngine:
         if isinstance(logits_dev, torch.Tensor):
             lt = logits_dev
         else:
-            lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+            lt = self._replicated_to_torch(logits_dev)
             ttnn.deallocate(logits_dev)
         self._fresh[slot] = Tp
         self._active.add(slot)
@@ -2931,9 +2950,17 @@ class MTPSpecEngine:
         if getattr(self, "_skip_logits_read", False):  # non-final prefill chunk: no logits use
             ttnn.deallocate(logits_dev)
             return torch.zeros(0)
-        lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+        lt = self._replicated_to_torch(logits_dev)
         ttnn.deallocate(logits_dev)
         return lt.reshape(-1)[: self.vocab].float()
+
+    def _replicated_to_torch(self, logits_dev):
+        """Host copy of replicated device logits. Today: every device's copy concatenated on dim 0 (the callers keep the
+        first ``vocab`` values = device 0's copy). QWEN36_JOIN_LOGITS_ONE_COPY: device 0's copy alone (the same values;
+        1/num_devices of the D2H)."""
+        if join_logits_one_copy_enabled():
+            return ttnn.to_torch(ttnn.get_device_tensors(logits_dev)[0])
+        return ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
 
     def _note_resume_fallback(self, prompt_list, start_pos, Tp, plan, final):
         """Count (and log) a prefill with start_pos > 0 that resumes from a GDN snapshot below spec_resume_cap (the
@@ -2970,6 +2997,9 @@ class MTPSpecEngine:
 
         import numpy as np
 
+        if isinstance(prompt_list, torch.Tensor):
+            # QWEN36_PREFILL_HOST_TOLIST: the contiguous int32 prompt row: its bytes are np.asarray(ids, int32)'s
+            return hashlib.blake2b(prompt_list.reshape(-1)[:e].contiguous().numpy().tobytes(), digest_size=16).digest()
         return hashlib.blake2b(np.asarray(prompt_list[:e], dtype=np.int32).tobytes(), digest_size=16).digest()
 
     def _chunk_pt_sig(self, pt_row, e):
