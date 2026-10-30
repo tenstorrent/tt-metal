@@ -146,6 +146,10 @@ class GitServer:
                     REMOTE_USER="fixture",
                     GIT_CONFIG_GLOBAL=os.devnull,
                     GIT_CONFIG_NOSYSTEM="1",
+                    # GitHub and cachew both serve partial-clone filters.
+                    GIT_CONFIG_COUNT="1",
+                    GIT_CONFIG_KEY_0="uploadpack.allowFilter",
+                    GIT_CONFIG_VALUE_0="true",
                 )
                 response = subprocess.check_output(
                     [owner.real_git, "http-backend"], input=body, env=env, stderr=subprocess.PIPE
@@ -515,7 +519,7 @@ class PrefetchTests(unittest.TestCase):
         for name, value in [
             ("SSH_KEY", "private key"),
             ("LFS", "true"),
-            ("FILTER", "blob:none"),
+            ("FILTER", "blob:none --upload-pack=touch"),
             ("SPARSE_CHECKOUT", ".github"),
         ]:
             with self.subTest(name=name):
@@ -555,6 +559,69 @@ class PrefetchTests(unittest.TestCase):
         self.checkout(**{"persist-credentials": "false"})
         self.assertEqual((self.target / "deps/child/content.txt").read_text(), "child")
         self.assertFalse((self.target / "deps/child/deep/grand/content.txt").exists())
+
+    def update_main(self):
+        source = self.project_root / "org/main"
+        (source / "content.txt").write_text("updated main")
+        git(source, "add", "content.txt", env=self.env)
+        git(source, "commit", "-m", "update", env=self.env)
+        self.sha = git(source, "rev-parse", "HEAD")
+        self.env.update(GITHUB_SHA=self.sha, CACHEW_REF=self.sha, CACHEW_FETCH_DEPTH="500")
+
+    def missing(self, *revisions, gitdir=".git"):
+        listed = git(self.target, f"--git-dir={gitdir}", "rev-list", "--objects", "--missing=print", *revisions)
+        return [line[1:] for line in listed.splitlines() if line.startswith("?")]
+
+    def test_filtered_seed_has_complete_tip_and_filtered_history(self):
+        self.update_main()
+        old_blob = git(self.project_root / "org/main", "rev-parse", "HEAD~1:content.txt")
+        old_tree = git(self.project_root / "org/main", "rev-parse", "HEAD~1^{tree}")
+        for spec, missing in (("blob:none", [old_blob]), ("tree:0", [old_tree])):
+            with self.subTest(filter=spec):
+                self.env["CACHEW_FILTER"] = spec
+                self.assertTrue(self.attempt())
+                self.assert_single_cache_attempts(["main", "main", "child", "grand"])
+                self.assertEqual(git(self.target, "rev-parse", "HEAD"), self.sha)
+                self.assertEqual(self.missing("-n1", "HEAD"), [])
+                self.assertIn(missing[0], self.missing("HEAD"))
+                self.assertEqual(git(self.target, "config", "remote.origin.promisor"), "true")
+                self.assertEqual(git(self.target, "config", "remote.origin.partialclonefilter"), spec)
+                self.assertEqual(self.missing("HEAD", gitdir=".git/modules/child-name"), [])
+                self.assert_no_cache_credentials()
+                self.assertEqual(self.upstream.requests, [])
+                shutil.rmtree(self.target)
+                self.cache.requests.clear()
+
+    def test_filtered_full_history_is_not_shallow(self):
+        self.update_main()
+        self.env.update(CACHEW_FILTER="tree:0", CACHEW_FETCH_DEPTH="0", CACHEW_REF="main")
+        self.assertTrue(self.attempt())
+        self.assertEqual(git(self.target, "rev-parse", "--is-shallow-repository"), "false")
+        self.assertEqual(self.missing("-n1", "HEAD"), [])
+        self.assertEqual(
+            git(self.target, "rev-parse", "refs/tags/v1.0.0^{commit}"), git(self.target, "rev-parse", "HEAD~1")
+        )
+
+    @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
+    def test_pinned_filtered_checkout_reuses_seed_without_lazy_upstream_fetches(self):
+        self.update_main()
+        self.env["CACHEW_FILTER"] = "tree:0"
+        self.assertTrue(self.attempt())
+
+        def objects():
+            listed = git(self.target, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)")
+            return dict(line.split() for line in listed.splitlines())
+
+        seeded = objects()
+        self.upstream.block_submodules = True
+        self.checkout(filter="tree:0")
+        self.assertEqual((self.target / "content.txt").read_text(), "updated main")
+        self.assertEqual(git(self.target, "config", "remote.origin.partialclonefilter"), "tree:0")
+        # A lazy fetch would open its own upstream connection.
+        self.assertEqual(self.upstream.discoveries(), ["/org/main/info/refs"])
+        # Negotiation may re-send the shallow tip commit; every tree and blob comes from the seed.
+        added = objects().items() - seeded.items()
+        self.assertLessEqual({kind for _, kind in added}, {"commit", "tag"})
 
     @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
     def test_pull_request_merge_ref_keeps_official_semantics(self):

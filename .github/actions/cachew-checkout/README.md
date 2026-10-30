@@ -67,8 +67,15 @@ back to the plain checkout and leaves the job environment unchanged.
 The cache phase fetches main repository objects once, then each requested
 submodule at its exact gitlink SHA, including nested submodules. Cachew serves
 commit SHAs and `refs/pull/*` from its mirror and forwards anything missing
-upstream. Full-history checkouts seed all branches and tags. Sparse, filtered,
-LFS, SSH and non-empty targets skip object seeding.
+upstream. Full-history checkouts seed all branches and tags. Sparse, LFS, SSH
+and non-empty targets skip object seeding.
+
+With `filter`, the main repository is seeded in two cache fetches: the complete
+tip commit, then the filtered history at the requested depth. The worktree
+therefore needs no lazy fetches. The seed records `origin` as the promisor
+remote with the same filter, as standard checkout does, so objects missing
+later are fetched lazily from upstream. Submodules are seeded unfiltered, as
+standard checkout fetches them.
 
 The pinned official checkout then runs against upstream using the cached objects,
 with its own throwaway global file, so its temporary global settings never leak

@@ -30,7 +30,7 @@ inputs:
     description: Clean and reset an existing checkout before fetching.
     default: 'true'
   filter:
-    description: Partial-clone filter. A nonempty value bypasses cachew.
+    description: Partial-clone filter for the main repository, as in standard checkout. Cachew seeds the complete tip and the filtered history.
   sparse-checkout:
     description: Newline-separated sparse checkout patterns. A nonempty value bypasses cachew.
   sparse-checkout-cone-mode:

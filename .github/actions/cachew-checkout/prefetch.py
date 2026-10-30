@@ -117,10 +117,13 @@ def remove_stale_stages(target):
 class Prefetch:
     def __init__(self, environ):
         self.git_executable = environ.get("CACHEW_REAL_GIT", "git")
-        for key in ("SSH_KEY", "SSH_KEY_SET", "LFS", "FILTER", "SPARSE_CHECKOUT"):
+        for key in ("SSH_KEY", "SSH_KEY_SET", "LFS", "SPARSE_CHECKOUT"):
             value = environ.get(f"CACHEW_{key}", "")
             if value and value.lower() != "false":
                 raise Bypass("checkout mode uses upstream directly")
+        self.filter = environ.get("CACHEW_FILTER", "").strip()
+        if self.filter and not re.fullmatch(r"[\w:=+.%-]+", self.filter, re.ASCII):
+            raise Bypass("unsupported partial-clone filter")
         # GIT_CONFIG_COUNT (2.31) carries the transport settings below; older Git
         # would silently ignore them and use inherited helpers and rewrites.
         if not git_version_at_least(self.git_executable, (2, 31)):
@@ -226,8 +229,30 @@ class Prefetch:
             refs = [f"{ref}:refs/cachew/gitlink"]
         if self.depth:
             options.append(f"--depth={self.depth}")
-        # Explicit URL, never a persisted rewrite. Exactly one fetch invocation.
+        # Explicit URL, never a persisted rewrite.
+        if main and self.filter:
+            # Standard checkout passes the filter to the main repository only. Without
+            # the tip's trees and blobs, its worktree checkout would lazily fetch all of
+            # them from upstream, so seed the complete tip first; the filtered fetch then
+            # adds only history.
+            self.git(
+                gitdir, "fetch", "--force", "--no-recurse-submodules", "--no-tags", "--depth=1", "--", cache_url, ref
+            )
+            # Lazy fetches belong to upstream, exactly as standard checkout configures them.
+            self.git(gitdir, "config", "remote.origin.promisor", "true")
+            self.git(gitdir, "config", "remote.origin.partialclonefilter", self.filter)
+            options.append(f"--filter={self.filter}")
+            if not self.depth:
+                options.append("--unshallow")
         self.git(gitdir, "fetch", *options, "--", cache_url, *refs)
+        if main and self.filter:
+            # A filtered fetch from a URL registers that URL as a promisor remote.
+            section = f"remote.{cache_url}."
+            if any(
+                line.startswith(section)
+                for line in self.git(gitdir, "config", "--local", "--list").decode().splitlines()
+            ):
+                self.git(gitdir, "config", "--remove-section", section[:-1])
         commit = self.git(gitdir, "rev-parse", "FETCH_HEAD^{commit}").decode().strip()
         self.git(gitdir, "update-ref", "--no-deref", "HEAD", commit)
         if not main:
