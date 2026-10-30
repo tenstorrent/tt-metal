@@ -17,6 +17,7 @@ is temperature-independent and acts as the control for whether the two paths agr
 """
 import copy
 import gc
+import os
 import math
 
 import pytest
@@ -474,22 +475,29 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
     )
     ids = torch.randint(0, config.vocab_size, (CHUNK,), generator=torch.Generator().manual_seed(896)).tolist()
     try:
-        runtime.compile(caches)
-        runtime.capture_trace(caches)
+        # GLM_DEBUG_SORT_TOPK sorts the top-k indices on the host, which a capture cannot hold: run the two
+        # eager forms only (eager-metadata already matches traced bit for bit).
+        sort_topk = bool(os.environ.get("GLM_DEBUG_SORT_TOPK"))
+        if not sort_topk:
+            runtime.compile(caches)
+            runtime.capture_trace(caches)
         for case, end in enumerate(GLM_CHUNK_ENDS):
             traced_slot, eager_slot, meta_slot = _glm_slots(case)
             tokens = ids[:end] + [0] * (CHUNK - end)
-            msg = _packed_metadata_msg(mesh_device, traced_slot, 0, end)
-            runtime.prefill_chunk(
-                runtime.make_chunk_input(tokens),
-                caches,
-                slot_id=traced_slot,
-                actual_start=0,
-                actual_end=end,
-                metadata_msg=msg,
-            )
-            ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(msg)
+            if sort_topk:
+                traced_slot = meta_slot
+            else:
+                msg = _packed_metadata_msg(mesh_device, traced_slot, 0, end)
+                runtime.prefill_chunk(
+                    runtime.make_chunk_input(tokens),
+                    caches,
+                    slot_id=traced_slot,
+                    actual_start=0,
+                    actual_end=end,
+                    metadata_msg=msg,
+                )
+                ttnn.synchronize_device(mesh_device)
+                ttnn.deallocate(msg)
             inp = runtime.make_chunk_input(tokens)
             runtime.model.forward(
                 inp,
@@ -522,7 +530,8 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
         kvpe_rows, _ = gather_cache_natural(caches.kvpe, mesh_device, tp_shard_kv=True)
         index_rows, _ = gather_cache_natural(caches.index, mesh_device, tp_shard_kv=True)
     finally:
-        runtime.release_trace()
+        if not os.environ.get("GLM_DEBUG_SORT_TOPK"):
+            runtime.release_trace()
         runtime.model.release_sub_device_managers()
         del runtime
         gc.collect()
@@ -534,6 +543,8 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
     for name, rows, layers in (("kvpe", kvpe_rows, GLM_LAYERS), ("indexer_k", index_rows, index_layers)):
         for case, end in enumerate(GLM_CHUNK_ENDS):
             traced_slot, eager_slot, meta_slot = _glm_slots(case)
+            if os.environ.get("GLM_DEBUG_SORT_TOPK"):
+                traced_slot = meta_slot
             traced = _glm_natural_slot_rows(rows[traced_slot * layers : (traced_slot + 1) * layers], sp * tp, CHUNK)
             eager = _glm_natural_slot_rows(rows[eager_slot * layers : (eager_slot + 1) * layers], sp * tp, CHUNK)
             meta = _glm_natural_slot_rows(rows[meta_slot * layers : (meta_slot + 1) * layers], sp * tp, CHUNK)

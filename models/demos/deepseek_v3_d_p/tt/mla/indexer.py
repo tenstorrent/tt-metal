@@ -1023,6 +1023,20 @@ class TtIndexerBase:
             ttnn.deallocate(idx_local)
             # high_bw_all_gather returns a fresh wrapper around model-owned scratch; do not
             # deallocate its backing buffer on the hot path.
+        if os.environ.get("GLM_DEBUG_SORT_TOPK"):
+            # DEBUG (#63408): canonical index order per row, sentinels (0xFFFFFFFF) stay a tail. Host round
+            # trip, so eager only.
+            mesh = idx.device()
+            host = ttnn.to_torch(idx, dtype=torch.uint32, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+            host = host.to(torch.int64).sort(dim=-1).values.to(torch.uint32)
+            idx = ttnn.from_torch(
+                host,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
         return idx
 
     def forward(
