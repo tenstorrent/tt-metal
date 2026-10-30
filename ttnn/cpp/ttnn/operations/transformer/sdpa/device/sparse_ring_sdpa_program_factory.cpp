@@ -470,10 +470,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
         mask_nb);
     // Group delivery: one producer per head group multicasts each piece (see group_mcast in the reader). The K/V CB
-    // depth (pieces) is chosen with the pass split below: 3 with group delivery, so the producer can send the next
-    // piece while every member computes on the previous ones, unless 2 needs fewer Q passes; without it (B > 1, or
-    // no head chain) the K/V CBs are double-buffered. The kernels learn the depth only from the CB sizes (the
-    // reader's credits allow any depth >= 2).
+    // depth (pieces) is 3 with group delivery, so the producer can send the next piece while every member computes on
+    // the previous ones; without it (B > 1, or no head chain) the K/V CBs are double-buffered. The kernels learn the
+    // depth only from the CB sizes.
     const bool group_mcast = build_kv_chains && use_head_chain;
     const uint32_t k_piece_tiles = Sk_chunk_t * DHt;
     const uint32_t v_piece_tiles = Sk_chunk_t * vDHt;
@@ -959,9 +958,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // exactly this; in the pipeline, global semaphores and persistent buffers occupy the top of L1). P passes split
     // every core's blocks evenly, so each working core needs at least P blocks: then no core has an empty pass, and
     // every head-group member streams its group's pieces in every pass (pointer lockstep).
-    // K/V depth: with group delivery, 3 pages unless 2 pages fit enough more slots to need fewer passes (2 pages
-    // free 2 K/V pieces, e.g. 15 -> 17 slots at k_chunk 256). The choice, like S, depends on the live L1 top, which
-    // is not in the program hash: a cached program keeps the S and page count of the call that built it.
+    // S depends on the live L1 top, which is not in the program hash: a cached program keeps the S of the call that
+    // built it.
     const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
     const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
                                                                : mesh_device->l1_size_per_core();
@@ -981,15 +979,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    uint32_t kv_cb_pages = group_mcast ? 3u : 2u;
-    uint32_t fit_slots = fit_slots_for(kv_cb_pages);
-    if (kv_cb_pages > 2) {
-        const uint32_t fit_slots_2 = fit_slots_for(2);
-        if (passes_for(fit_slots_2) < passes_for(fit_slots)) {
-            kv_cb_pages = 2;
-            fit_slots = fit_slots_2;
-        }
-    }
+    // Group delivery uses 3 K/V pages: 2 pages with group delivery hung on device (MiniMax-H3 10 s, 19 slots in one
+    // pass, 2026-10-30), so it is not offered even when it would save a Q pass.
+    const uint32_t kv_cb_pages = group_mcast ? 3u : 2u;
+    const uint32_t fit_slots = fit_slots_for(kv_cb_pages);
     TT_FATAL(
         fit_slots > 0,
         "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
