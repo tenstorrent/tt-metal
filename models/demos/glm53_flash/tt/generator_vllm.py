@@ -1669,8 +1669,12 @@ class GLM53FlashForCausalLM:
                 media[i] = (row_items, prefix)
             if start == 0:
                 # a multimodal prompt takes the sequence-parallel path (the wave path has no vision scatter): under
-                # per-row ownership it needs its slot index free on every row, which the SP-first placement provides
-                state = self._allocate_slot(logical, end, sp_required=bool(row_items))
+                # per-row ownership it needs its slot index free on every row, which the SP-first placement provides.
+                # With the prefix cache a repeated prompt goes back to the free slot retaining it (the same mesh row:
+                # its greedy text repeats bit-exactly) whether or not vLLM reported a hit: with the confirmer active a
+                # short repeat has no aligned snapshot to confirm and arrives as a plain prefill (async_r3's stage b)
+                at = apc.slot_holding(tokens[i], spans, self.slots) if apc is not None else None
+                state = self._allocate_slot(logical, end, sp_required=bool(row_items), at=at)
             elif state is not None and state.phase == "prefill" and state.prefilled_to == start:
                 pass  # a chunked continuation of this slot's own prompt
             elif state is None and apc is not None:

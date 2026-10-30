@@ -1581,6 +1581,18 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 01:05: the target configuration works end to end (async_r3)
+
+`served_8x4_async_r3` on the catalogued 1 M profile with async scheduling on, the cache on the host store with two
+entries per slot, resident decode and the confirmer active (plugin 350dac6): stages a, c, d, e PASS. The second
+needle round is served from the snapshots: 4/4 hits restored at 49152 and prefilled [49152, 65514), TTFT 30-39 s
+against 69-122 s in round 1; the repeated image is answered correctly (the confirmer refuses the hit it cannot serve,
+so vLLM keeps the pixels); the bench 128 x 128 at 32 users 14.3 tok/s per user (the synchronous chain 14.0: async
+scheduling adds little at this step cost, and the chain's rows lag the plugin by one step as expected, 4498 rows over
+640 steps); 64 K x 4 TTFT 100 s. Stage b still differs for two prompts across rounds: with the confirmer active a
+short repeat is a plain prefill (no aligned snapshot to confirm), and the plain path allocated a fresh slot under the
+rank-aware rule instead of the slot retaining the prompt; the affinity now applies on the plain path too.
+
 ### 2026-10-30 00:35: the confirmer runs, and dies on vLLM 0.30's block size; the placement evicted every prefix
 
 `needle1m_r5` (a 256-token answer): the 1 M prompt served again (TTFT 497 s, 66 ms per token) and answered with a
