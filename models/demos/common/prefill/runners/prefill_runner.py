@@ -197,7 +197,7 @@ check_packed_forward_support(
 # PREFILL_USE_TRACE=1; this catches a run that overrides it back to 0 rather than letting it start and
 # diverge silently. To re-measure traced-vs-eager equivalence, drop this assert in a scratch tree --
 # deliberately not an env escape hatch, so a production run cannot reach the eager path by accident.
-assert not (DFLASH_ENABLED and not USE_TRACE and not ADAPTER.dflash_allows_eager), (
+assert not (DFLASH_ENABLED and not USE_TRACE), (
     "PREFILL_DFLASH=1 requires PREFILL_USE_TRACE=1: the DFlash drafter is only supported on the "
     "traced path. Unset PREFILL_USE_TRACE (the dflash manifest pins it to 1) or drop PREFILL_DFLASH."
 )
