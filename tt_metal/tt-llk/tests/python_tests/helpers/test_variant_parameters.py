@@ -735,6 +735,83 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
+class DBG_SRCA_DUMP(TemplateParameter):
+    """Compile-time knobs for ``dbg_get_array_row_srca_test.cpp``.
+
+    ``SRCA_ROW_CHECK``   unpack a tile into SrcA and datacopy it into dest before the
+                         dump, so the host can check the dumped row against the copied
+                         one. False keeps the kernel to the dest save/restore check.
+    ``DUMP_DST_INDEX``   the dest tile the datacopy lands in, which is where the math
+                         thread's dest offset is left when the dump runs.
+    ``DUMP_UPPER_HALF``  run the datacopy in the upper dest half (``dest_section_flip``)
+                         instead of the lower one.
+    ``DUMP_ROW_OFFSET``  move the dest offset this many rows into the datacopied tile
+                         before the dump (a sub-tile offset).
+    ``DUMP_REMAP``       Blackhole: run with the DEST remap (and the 32-bit swizzle)
+                         enabled; it is disabled otherwise.
+    ``PRESET_SRCA_OVERRIDE``  leave a non-default SrcA format selection active across the
+                         dump, which must hand it back unchanged.
+
+    The result layout the kernel writes is shared with the test through the class
+    constants: ``WORDS_PER_ROW`` debug-bus words of the SrcA dump at the start of result
+    tile 0; the thread's dest offset before the dump, after it, and the value the datacopy
+    set it to at ``DEST_OFFSET_BEFORE_WORD`` / ``DEST_OFFSET_AFTER_WORD`` /
+    ``DEST_OFFSET_SET_WORD``; the ``BORROWED_ROW_COUNT`` DEST rows the dump borrows (the
+    aligned group of four rows holding the staged row, plus the rows 8 further on)
+    read before and after it at ``BORROWED_ROWS_BEFORE_WORD`` / ``BORROWED_ROWS_AFTER_WORD``;
+    the SrcA format selection read before and after it at ``SRCA_FMT_BEFORE_WORD`` /
+    ``SRCA_FMT_AFTER_WORD``; and the DEST tile handed
+    back in result tile ``RESULT_TILE_DEST`` of the ``RESULT_TILE_COUNT`` result tiles: the
+    planted tile read through the RISC-V window (restore check, Blackhole) or tile 0 of the
+    lower dest half packed by the packer (SrcA check).
+    """
+
+    WORDS_PER_ROW = 8
+    DEST_OFFSET_BEFORE_WORD = WORDS_PER_ROW
+    DEST_OFFSET_AFTER_WORD = DEST_OFFSET_BEFORE_WORD + 1
+    DEST_OFFSET_SET_WORD = DEST_OFFSET_BEFORE_WORD + 2
+    BORROWED_ROW_COUNT = 8
+    BORROWED_ROWS_BEFORE_WORD = 2 * WORDS_PER_ROW
+    BORROWED_ROWS_AFTER_WORD = (
+        BORROWED_ROWS_BEFORE_WORD + BORROWED_ROW_COUNT * WORDS_PER_ROW
+    )
+    SRCA_FMT_BEFORE_WORD = BORROWED_ROWS_AFTER_WORD + BORROWED_ROW_COUNT * WORDS_PER_ROW
+    SRCA_FMT_AFTER_WORD = SRCA_FMT_BEFORE_WORD + 1
+    RESULT_TILE_DEST = 1
+    RESULT_TILE_COUNT = 2
+
+    srca_row_check: bool = False
+    dump_dst_index: int = 0
+    dump_upper_half: bool = False
+    dump_row_offset: int = 0
+    dump_remap: bool = False
+    preset_srca_override: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool SRCA_ROW_CHECK = {str(self.srca_row_check).lower()};",
+                f"constexpr std::uint32_t DUMP_DST_INDEX = {self.dump_dst_index}u;",
+                f"constexpr bool DUMP_UPPER_HALF = {str(self.dump_upper_half).lower()};",
+                f"constexpr std::uint32_t DUMP_ROW_OFFSET = {self.dump_row_offset}u;",
+                f"constexpr bool DUMP_REMAP = {str(self.dump_remap).lower()};",
+                f"constexpr bool PRESET_SRCA_OVERRIDE = {str(self.preset_srca_override).lower()};",
+                f"constexpr std::uint32_t WORDS_PER_ROW = {self.WORDS_PER_ROW}u;",
+                f"constexpr std::uint32_t DEST_OFFSET_BEFORE_WORD = {self.DEST_OFFSET_BEFORE_WORD}u;",
+                f"constexpr std::uint32_t DEST_OFFSET_AFTER_WORD = {self.DEST_OFFSET_AFTER_WORD}u;",
+                f"constexpr std::uint32_t DEST_OFFSET_SET_WORD = {self.DEST_OFFSET_SET_WORD}u;",
+                f"constexpr std::uint32_t BORROWED_ROW_COUNT = {self.BORROWED_ROW_COUNT}u;",
+                f"constexpr std::uint32_t BORROWED_ROWS_BEFORE_WORD = {self.BORROWED_ROWS_BEFORE_WORD}u;",
+                f"constexpr std::uint32_t BORROWED_ROWS_AFTER_WORD = {self.BORROWED_ROWS_AFTER_WORD}u;",
+                f"constexpr std::uint32_t SRCA_FMT_BEFORE_WORD = {self.SRCA_FMT_BEFORE_WORD}u;",
+                f"constexpr std::uint32_t SRCA_FMT_AFTER_WORD = {self.SRCA_FMT_AFTER_WORD}u;",
+                f"constexpr std::uint32_t RESULT_TILE_DEST = {self.RESULT_TILE_DEST}u;",
+                f"constexpr std::uint32_t RESULT_TILE_COUNT = {self.RESULT_TILE_COUNT}u;",
+            ]
+        )
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
