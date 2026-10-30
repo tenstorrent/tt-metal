@@ -1,0 +1,14 @@
+{
+  "stage": "03-optimized-decoder",
+  "status": "complete",
+  "review": "clean-pass",
+  "implementation_and_evidence_commit": "faf25da5a1d30ef0540bbc3c4cc65f102c9a6d92",
+  "reviewed_base": "b16d01158eb873deaa5a2bd8b4ee08b8fea947bb",
+  "fused_baseline": "b5284798",
+  "branch": "mvasiljevic/gemma4-31b-fresh-pipeline-v0811",
+  "runtime_sha256": "5267f1ee57d0f077e71357445e96e15b3851b022c5846eeb10b77566eb4b6ff6",
+  "stage_review_sha256": "deca72fc0bed718ff93edbb68e34f9f967ed3a5a9dfeb3ef66d5e38cafd53bc5",
+  "repository_hooks": "passed",
+  "publication": "local only; no push",
+  "final_bookkeeping_commit_location": "Exact final HEAD is logged in the requested telemetry packet and final response."
+}
