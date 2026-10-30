@@ -27,12 +27,12 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
         tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
     uint32_t n_routed_experts = operation_attributes.n_routed_experts;
 
-    // Input is TILE + interleaved (no shard spec). Derive the work split from the shape: keep the
-    // fixed 8x8 (64-core) grid and the binary-tree reduction, giving each core a contiguous range of
-    // token rows. Each core reads the TILE pages covering its rows from interleaved memory and untiles
-    // in-kernel. tile_h (32) is the tile height; the token count is tile-aligned by construction.
+    // Input is TILE + interleaved (no shard spec). Each core gets a contiguous range of the LOGICAL token rows; it
+    // reads the TILE pages covering them from interleaved memory and untiles in-kernel (a range may start mid-tile).
+    // The split must use the logical count: the padded rows of the last tile hold no picks, and counting them would
+    // add phantom tokens to whichever expert the padding value (0) names.
     const uint32_t tile_h = input.tensor_spec().page_config().get_tile().get_height();
-    const uint32_t tokens = input.padded_shape()[0];
+    const uint32_t tokens = input.logical_shape()[0];
 
     // 8 cores (one row): 5120 picks are ~320 per RISC, counted locally; the collector then gathers the 7 other
     // histograms at once. (The previous 64-core binomial tree put 21 sequential merges on the critical path.)
