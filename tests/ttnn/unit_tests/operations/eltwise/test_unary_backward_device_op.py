@@ -338,8 +338,24 @@ def test_sigmoid_bw_rejects_mismatched_shapes(device, expect_error):
         ttnn.sigmoid_bw(tile_b, tile_a)
 
 
+def test_sigmoid_bw_rejects_mismatched_shapes_on_warm_cache(device, expect_error):
+    """A wrongly shaped grad_output is rejected even after a valid call has warmed the cache."""
+    torch.manual_seed(0)
+
+    def tiles(hw):
+        return ttnn.from_torch(torch.randn((1, 1, hw, hw)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = tiles(96)
+    ttnn.sigmoid_bw(tiles(96), input_tensor)
+    assert device.num_program_cache_entries() > 0, "the cache is not warm, so this would only test a cold miss"
+
+    with expect_error(RuntimeError, "same logical shape"):
+        ttnn.sigmoid_bw(tiles(32), input_tensor)
+
+
 def test_sigmoid_bw_program_cache_same_padded_shape(device):
-    """Two inputs with the same padded shape but different logical shapes must get separate cache entries. Their TensorSpecs differ, and the Metal 2.0 TensorParameter match would reject one on the other's entry."""
+    """Two inputs with the same padded shape but different logical shapes must get separate cache entries.
+    Their TensorSpecs differ and the Metal 2.0 TensorParameter match would reject one on the other's entry."""
     torch.manual_seed(0)
     padded_shape = [1, 1, 96, 96]
 
@@ -373,3 +389,43 @@ def test_sigmoid_bw_program_cache_same_padded_shape(device):
 
     added = device.num_program_cache_entries() - start
     assert added == 2, f"expected 2 program cache entries (one per TensorSpec, third call a hit), got {added}"
+
+
+def test_unary_backward_program_cache_keys_each_tensor(device):
+    """With the input fixed, changing only grad_output or only the preallocated output should add a cache entry."""
+    torch.manual_seed(0)
+    shape = (1, 1, 96, 96)
+
+    def on_device(torch_tensor, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    # Build every operand before counting
+    input_tensor = on_device(torch.randn(shape), ttnn.bfloat16)
+    torch_grad = torch.randn(shape)
+    grads = [on_device(torch_grad, ttnn.bfloat16), on_device(torch_grad, ttnn.float32)]
+    outputs = [
+        on_device(torch.zeros(shape), ttnn.bfloat16, memory_config)
+        for memory_config in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG)
+    ]
+    torch_input = ttnn.to_torch(input_tensor).float()
+
+    # Only grad_output changes: first bfloat16 gradient, then float32 gradient.
+    start = device.num_program_cache_entries()
+    for grad_tensor in grads:
+        output = ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]
+        expected = _torch_sigmoid_bw(ttnn.to_torch(grad_tensor).float(), torch_input)
+        torch.testing.assert_close(ttnn.to_torch(output).float(), expected, rtol=8e-3, atol=1e-4)
+    added = device.num_program_cache_entries() - start
+    assert added == 2, f"expected 2 cache entries when only grad_output's dtype changes, got {added}"
+
+    # Only the preallocated output changes: first DRAM, then L1
+    grad_tensor = grads[0]
+    start = device.num_program_cache_entries()
+    for output_tensor in outputs:
+        ttnn.tanh_bw(grad_tensor, input_tensor, input_grad=output_tensor)
+        expected = ttnn.to_torch(grad_tensor).float() * (1 - torch.tanh(torch_input) ** 2)
+        torch.testing.assert_close(ttnn.to_torch(output_tensor).float(), expected, rtol=8e-3, atol=1e-4)
+    added = device.num_program_cache_entries() - start
+    assert added == 2, f"expected 2 cache entries when only the output's memory config changes, got {added}"
