@@ -157,20 +157,6 @@ FORCE_INLINE bool front_ready(const Receiver& receiver, uint32_t num_pages) {
     return received_units(receiver) >= receiver_credit_units(receiver, num_pages);
 }
 
-FORCE_INLINE WaitResult wait_front_bounded(const Receiver& receiver, uint32_t num_pages, uint64_t budget_cycles) {
-    const uint32_t units = receiver_credit_units(receiver, num_pages);
-    if (received_units(receiver) >= units) {
-        return WaitResult::Ready;
-    }
-    const WaitDeadline deadline(budget_cycles);
-    while (received_units(receiver) < units) {
-        if (deadline.expired()) {
-            return WaitResult::Expired;
-        }
-    }
-    return WaitResult::Ready;
-}
-
 // The page at the front, read through the uncached alias.
 FORCE_INLINE const volatile uint32_t* front_words(const Receiver& receiver) {
     return own_tl1_word(receiver.fifo_rd_ptr);
@@ -227,7 +213,6 @@ struct Sender {
     uint32_t fifo_start_addr;
     uint32_t fifo_size;
     uint32_t fifo_limit_page_aligned;
-    uint32_t fifo_page_size;
     uint32_t fifo_wr_ptr;
     uint32_t num_receivers;
     // Offset of the credit line, the same on every receiver.
@@ -255,7 +240,6 @@ FORCE_INLINE Sender sender_init(uint32_t state_addr) {
     sender.fifo_start_addr = *state_block_word(state_addr, offsetof(DramSenderStateBlock, fifo_start_addr));
     sender.fifo_size = *state_block_word(state_addr, offsetof(DramSenderStateBlock, fifo_size_per_receiver));
     sender.fifo_limit_page_aligned = sender.fifo_start_addr + sender.fifo_size;
-    sender.fifo_page_size = kCreditUnitBytes;
     sender.fifo_wr_ptr = *state_block_word(state_addr, offsetof(DramSenderStateBlock, fifo_wr_ptr));
     sender.num_receivers = *state_block_word(state_addr, offsetof(DramSenderStateBlock, num_receivers));
     sender.remote_pages_sent_addr = remote_cb_remote_pages_sent_ptr(
@@ -354,7 +338,6 @@ FORCE_INLINE void resize_sender(Sender& sender, uint32_t page_size) {
     }
     sender.fifo_wr_ptr = resize.fifo_ptr;
     sender.fifo_limit_page_aligned = resize.fifo_limit_page_aligned;
-    sender.fifo_page_size = page_size;
 }
 
 // Waits until every receiver has acked everything this sender credited.

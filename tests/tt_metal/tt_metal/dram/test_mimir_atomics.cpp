@@ -78,7 +78,7 @@ std::string code_name(uint32_t code) {
 std::string status_detail(const std::vector<uint32_t>& status) {
     return fmt::format(
         "kernel code {}, amo final 0x{:08x}, lr/sc final 0x{:08x}, amo return sum 0x{:08x}, lr/sc return sum "
-        "0x{:08x}, sc failures {}, max attempts {}, peers seen {}, {} cycles, returned 0x{:08x}{:08x}, observed "
+        "0x{:08x}, sc failures {}, max attempts {}, peers seen {}, {} cycles, returned 0x{:08x}, observed "
         "0x{:08x} / 0x{:08x}, mismatches {} (first {})",
         code_name(status[abi::kStatusCode]),
         status[abi::kStatusAmoFinal],
@@ -89,7 +89,6 @@ std::string status_detail(const std::vector<uint32_t>& status) {
         status[abi::kStatusMaxRetries],
         status[abi::kStatusPeersSeen],
         status[abi::kStatusCycles],
-        status[abi::kStatusReturnedHi],
         status[abi::kStatusReturnedLo],
         status[abi::kStatusObservedFirst],
         status[abi::kStatusObservedSecond],

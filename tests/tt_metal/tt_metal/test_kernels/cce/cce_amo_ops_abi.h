@@ -212,13 +212,13 @@ static_assert(kStormResultWords * 4 <= kLineBytes);
 
 // Status line, written once at exit: every field, `fence w, w`, then the magic. kStatusScFailures counts failed sc.w
 // attempts, kStatusMaxRetries is the most attempts one LR/SC increment took. kStatusPeersSeen counts the flags the
-// last wait saw set. kStatusCycles is the rdcycle count of the operations. kStatusReturned* to kStatusFirstMismatch
+// last wait saw set. kStatusCycles is the rdcycle count of the operations. kStatusReturnedLo to kStatusFirstMismatch
 // are described with the modes that set them.
 inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusAmoFinal = 2, kStatusLrScFinal = 3,
                           kStatusAmoReturnSum = 4, kStatusLrScReturnSum = 5, kStatusScFailures = 6,
                           kStatusMaxRetries = 7, kStatusCycles = 8, kStatusPeersSeen = 9, kStatusReturnedLo = 10,
-                          kStatusReturnedHi = 11, kStatusObservedFirst = 12, kStatusObservedSecond = 13,
-                          kStatusMismatches = 14, kStatusFirstMismatch = 15, kStatusWords = 16;
+                          kStatusObservedFirst = 12, kStatusObservedSecond = 13, kStatusMismatches = 14,
+                          kStatusFirstMismatch = 15, kStatusWords = 16;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
 inline constexpr uint32_t kDoneMagic = 0xA70D0DE0u, kStatusPoison = 0xBADD0E00u;
 

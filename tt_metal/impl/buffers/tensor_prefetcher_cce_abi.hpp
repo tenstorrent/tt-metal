@@ -76,9 +76,6 @@ enum class CceSenderStatusCode : uint32_t {
     BadCmd = 4,
     // A PREFETCH layout this sender cannot deliver.
     BadLayout = 5,
-    // Unused: the sender checks no address, and Queue rejects a request that reads past its tensor or the sender's
-    // DRAM view.
-    AddrRange = 6,
 };
 
 // Written by the kernel at every state change; state is stored last, behind a fence.
