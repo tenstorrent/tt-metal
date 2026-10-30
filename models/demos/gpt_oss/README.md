@@ -34,6 +34,17 @@ export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b"
 export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b"
 ```
 
+### GPTQ experts (gpt-oss-20b)
+The experts run in bfloat4_b. For gpt-oss-20b the model loads experts already rounded onto that grid by GPTQ from
+[jerrywangTT/gpt-oss-20b-p150-gptq-experts](https://huggingface.co/jerrywangTT/gpt-oss-20b-p150-gptq-experts)
+(downloaded once into the Hugging Face cache, 36 GB): less rounding error than converting the checkpoint's MXFP4
+experts, same bytes and speed. Other weights (gpt-oss-120b, random test weights) are used as given.
+```bash
+export GPT_OSS_EXPERTS_GPTQ_DIR=none                # use the checkpoint's experts instead
+export GPT_OSS_EXPERTS_GPTQ_DIR=/path/to/layer_files # use a local directory of layer_<L>.pt files
+```
+A weight cache built before this change holds no GPTQ experts; run once with `GPT_OSS_FORCE_MODEL_LOAD=1` to add them.
+
 ## Testing
 
 ```bash

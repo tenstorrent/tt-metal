@@ -4,9 +4,11 @@
 """
 MoE MLP: Router + Experts with minimal abstraction
 """
+import functools
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
@@ -21,6 +23,79 @@ from .experts_throughput import (
     create_fused_moe_gpt_config,
 )
 from .topk import TopKRouter
+
+# gpt-oss-20b's experts rounded offline onto the bfloat4_b grid by GPTQ: one layer_<L>.pt per layer holding
+# gate_up_proj [E, H, 2I] (gate/up interleaved), gate_up_proj_bias, down_proj [E, I, H], down_proj_bias, with the
+# intermediate channels reordered so each 16-wide bfloat4_b block holds similar-scale channels (an exact rewrite: gate,
+# up, their bias and the down rows move together). bfloat4_b keeps these values exactly, so prefill and decode run the
+# same bytes at the same speed with less rounding error than converting the checkpoint's MXFP4 experts. The repo's
+# down_proj_bias.pt holds the checkpoint's expert down biases (bf16), which the GPTQ files carry unchanged: experts
+# whose biases match them are the gpt-oss-20b checkpoint's. The revision is pinned, so a later upload cannot change
+# what this code loads.
+GPTQ_EXPERTS_REPO = "jerrywangTT/gpt-oss-20b-p150-gptq-experts"
+GPTQ_EXPERTS_REVISION = "de25c21b074ca7bf7f55b1ec887579a350704fcf"
+GPTQ_EXPERTS_CACHE_NAME = "experts_gptq_" + GPTQ_EXPERTS_REVISION[:12]
+
+
+def _gptq_hub_file(name):
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(GPTQ_EXPERTS_REPO, name, revision=GPTQ_EXPERTS_REVISION)
+
+
+@functools.lru_cache(maxsize=1)
+def _checkpoint_down_biases():
+    """{layer: [E, H] bf16} from the Hub, or {} once when it cannot be reached (every layer then keeps its experts)."""
+    try:
+        return torch.load(_gptq_hub_file("down_proj_bias.pt"))
+    except Exception as e:  # no network or no access to the Hub: run with the checkpoint's experts
+        logger.warning(f"GPTQ experts unavailable ({e}); using the checkpoint's experts")
+        return {}
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_cache_without_gptq_experts():
+    logger.warning(
+        "The weight cache holds no GPTQ experts, using the checkpoint's experts; "
+        "run once with GPT_OSS_FORCE_MODEL_LOAD=1 to add them"
+    )
+
+
+def gptq_experts(experts_state_dict, layer_idx, tensor_cache_path):
+    """The experts this layer loads: (cache name, state dict).
+
+    GPT_OSS_EXPERTS_GPTQ_DIR unset (the default): the GPTQ experts from GPTQ_EXPERTS_REPO when this layer's experts are
+    the gpt-oss-20b checkpoint's (their down biases match); any other weights (another model, random test weights) are
+    kept as given. With no weights on host (a warm weight cache) the GPTQ experts' cache is used if a previous run built
+    it. GPT_OSS_EXPERTS_GPTQ_DIR=<directory of layer_<L>.pt>: those files. GPT_OSS_EXPERTS_GPTQ_DIR=none: the
+    checkpoint's experts. The GPTQ experts get their own cache names, so an original-weight cache is never read for them.
+    """
+    gptq_dir = os.environ.get("GPT_OSS_EXPERTS_GPTQ_DIR")
+    if gptq_dir is not None:
+        gptq_dir = gptq_dir.strip()
+        if gptq_dir.lower() in ("", "0", "none", "off"):
+            return "experts", experts_state_dict
+        assert layer_idx is not None, "GPT_OSS_EXPERTS_GPTQ_DIR needs the layer index"
+        if experts_state_dict:
+            rounded = torch.load(os.path.join(gptq_dir, f"layer_{int(layer_idx)}.pt"))
+            experts_state_dict = {k: v.float() for k, v in rounded.items()}
+        return "experts_gptq_" + os.path.basename(gptq_dir.rstrip("/")), experts_state_dict
+
+    if layer_idx is None:
+        return "experts", experts_state_dict
+    if not experts_state_dict:
+        built = tensor_cache_path is not None and os.path.isdir(f"{tensor_cache_path}/{GPTQ_EXPERTS_CACHE_NAME}")
+        if not built:
+            _warn_cache_without_gptq_experts()
+        return (GPTQ_EXPERTS_CACHE_NAME if built else "experts"), experts_state_dict
+    bias = experts_state_dict.get("down_proj_bias")
+    reference = _checkpoint_down_biases().get(int(layer_idx))
+    if bias is None or reference is None or bias.shape != reference.shape:
+        return "experts", experts_state_dict
+    if not torch.equal(bias.float(), reference.float()):
+        return "experts", experts_state_dict
+    rounded = torch.load(_gptq_hub_file(f"layer_{int(layer_idx)}.pt"))
+    return GPTQ_EXPERTS_CACHE_NAME, {k: v.float() for k, v in rounded.items()}
 
 
 class MLP:
@@ -42,20 +117,7 @@ class MLP:
         # Split state dict
         router_state_dict = substate(state_dict, "router")
         experts_state_dict = substate(state_dict, "experts")
-        # GPT_OSS_EXPERTS_GPTQ_DIR: a directory of layer_<L>.pt holding this layer's experts already rounded onto the
-        # bfloat4_b grid by GPTQ: gate_up_proj [E, H, 2I] (gate/up interleaved), gate_up_proj_bias, down_proj
-        # [E, I, H], down_proj_bias, with the intermediate channels reordered so each 16-wide bfloat4_b block holds
-        # similar-scale channels (an exact rewrite: gate, up, their bias and the down rows move together). bfloat4_b
-        # keeps these values exactly, so prefill and decode run the same bytes at the same speed with less rounding
-        # error. The experts get their own cache names, so an original-weight cache is never read for them.
-        experts_cache_name = "experts"
-        gptq_dir = os.environ.get("GPT_OSS_EXPERTS_GPTQ_DIR", "").strip()
-        if gptq_dir:
-            assert layer_idx is not None, "GPT_OSS_EXPERTS_GPTQ_DIR needs the layer index"
-            experts_cache_name = "experts_gptq_" + os.path.basename(gptq_dir.rstrip("/"))
-            if experts_state_dict:
-                rounded = torch.load(os.path.join(gptq_dir, f"layer_{int(layer_idx)}.pt"))
-                experts_state_dict = {k: v.float() for k, v in rounded.items()}
+        experts_cache_name, experts_state_dict = gptq_experts(experts_state_dict, layer_idx, tensor_cache_path)
 
         # Initialize components with mesh_config
         self.router = TopKRouter(
