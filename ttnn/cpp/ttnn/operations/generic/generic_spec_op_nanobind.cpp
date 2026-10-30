@@ -24,6 +24,7 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 
 #include "generic_spec_op.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 
 namespace ttnn::operations::generic {
@@ -107,28 +108,69 @@ void bind_hardware_configs(nb::module_& mod) {
             },
             nb::arg("disable_dfb_implicit_sync_for_all") = false);
 
+    export_enum<tt::tt_metal::Precision>(mod, "Precision");
+    export_enum<tt::tt_metal::UnpackMode>(mod, "UnpackMode");
+
     nb::class_<exp::ComputeHardwareConfig>(mod, "ComputeHardwareConfig", R"doc(
         Hardware config of a Metal 2.0 compute kernel.
+
+        Args:
+            math_fidelity (ttnn.MathFidelity): FPU math fidelity.
+            sfpu_precision_mode (ttnn.Precision): SFPU precision (the legacy math_approx_mode).
+            enable_32_bit_dest (bool): 32-bit dest register (the legacy fp32_dest_acc_en).
+            double_buffer_dest (bool): Double-buffered dest register (the inverse of the legacy dst_full_sync_en).
+            unpack_modes (Dict[str, ttnn.UnpackMode]): Unpack mode per consumed DataflowBufferSpec unique_id. On
+                Wormhole / Blackhole, a Float32 dataflow buffer read with a 32-bit dest needs an entry.
+            bfp_pack_precision_mode (ttnn.Precision): Packer precision for block-float outputs; Wormhole /
+                Blackhole only.
+
+        ``from_compute_kernel_config`` converts a ttnn compute kernel config (e.g. ttnn.WormholeComputeKernelConfig).
     )doc")
         .def(
             "__init__",
             [](exp::ComputeHardwareConfig* self,
                tt::tt_metal::MathFidelity math_fidelity,
+               tt::tt_metal::Precision sfpu_precision_mode,
                bool enable_32_bit_dest,
-               bool double_buffer_dest) {
+               bool double_buffer_dest,
+               const std::map<std::string, tt::tt_metal::UnpackMode>& unpack_modes,
+               tt::tt_metal::Precision bfp_pack_precision_mode) {
                 new (self) exp::ComputeHardwareConfig{
                     .fpu_math_fidelity = math_fidelity,
+                    .sfpu_precision_mode = sfpu_precision_mode,
                     .enable_32_bit_dest = enable_32_bit_dest,
                     .double_buffer_dest = double_buffer_dest,
+                    .config_1xx =
+                        exp::ComputeHardwareConfig::Compute1XXConfig{
+                            .bfp_pack_precision_mode = bfp_pack_precision_mode},
                 };
+                for (const auto& [dfb_spec_name, mode] : unpack_modes) {
+                    self->unpack_modes.emplace(exp::DFBSpecName{dfb_spec_name}, mode);
+                }
             },
             nb::kw_only(),
             nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::HiFi4,
+            nb::arg("sfpu_precision_mode") = tt::tt_metal::Precision::Precise,
             nb::arg("enable_32_bit_dest") = false,
-            nb::arg("double_buffer_dest") = true)
+            nb::arg("double_buffer_dest") = true,
+            nb::arg("unpack_modes") = std::map<std::string, tt::tt_metal::UnpackMode>{},
+            nb::arg("bfp_pack_precision_mode") = tt::tt_metal::Precision::Approximate)
+        .def_static(
+            "from_compute_kernel_config",
+            [](const ttnn::DeviceComputeKernelConfig& config) { return ttnn::to_compute_hardware_config(config); },
+            nb::arg("compute_kernel_config"))
         .def_rw("math_fidelity", &exp::ComputeHardwareConfig::fpu_math_fidelity)
+        .def_rw("sfpu_precision_mode", &exp::ComputeHardwareConfig::sfpu_precision_mode)
         .def_rw("enable_32_bit_dest", &exp::ComputeHardwareConfig::enable_32_bit_dest)
-        .def_rw("double_buffer_dest", &exp::ComputeHardwareConfig::double_buffer_dest);
+        .def_rw("double_buffer_dest", &exp::ComputeHardwareConfig::double_buffer_dest)
+        .def(
+            "set_unpack_mode",
+            [](exp::ComputeHardwareConfig& self, const std::string& dfb_spec_name, tt::tt_metal::UnpackMode mode) {
+                self.unpack_modes[exp::DFBSpecName{dfb_spec_name}] = mode;
+            },
+            nb::arg("dfb_spec_name"),
+            nb::arg("mode"),
+            "Set the unpack mode of one consumed DataflowBufferSpec.");
 }
 
 void bind_resources(nb::module_& mod) {
