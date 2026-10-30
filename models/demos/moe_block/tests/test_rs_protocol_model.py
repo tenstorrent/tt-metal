@@ -44,6 +44,7 @@ def _run(plan, seed):
     ctr = {(p, c, d): 0 for p in range(G) for c in cores for d in DIRS}
     fin = {}
     mbox = {(p, d, l, c): 0 for p in range(G) for d in DIRS for l in range(plan.nv) for c in cores}
+    mlog = {k: [] for k in mbox}  # (the entries handed, in order: a port reading a count must expect that entry)
     prog = {(p, c): plan.ops(p, *c) for p in range(G) for c in cores}
     pc = {k: 0 for k in prog}
     hand_q = {(p, c): [] for p in range(G) for c in cores}  # finished hand-offs not yet signalled (BRISC)
@@ -55,7 +56,7 @@ def _run(plan, seed):
         for d in DIRS:
             units = plan.port_units(p, d) if plan.down(p, d) is not None else []
             for l in range(plan.nv):
-                ports[(p, d, l)] = dict(units=units, u=0, i=0, seen={c: 0 for c in cores})
+                ports[(p, d, l)] = dict(units=units, u=0, ip=0, i=0, seen={c: 0 for c in cores})
 
     def compute_step(p, c):
         ops = prog[(p, c)]
@@ -107,6 +108,7 @@ def _run(plan, seed):
         b = plan.entries(p, h)[e]
         d, _ = plan.role(p, b, h)
         mbox[(p, d, plan.link(k), c)] += 1
+        mlog[(p, d, plan.link(k), c)].append(e)
         return True
 
     def ncrisc_step(p, c):
@@ -126,7 +128,8 @@ def _run(plan, seed):
         units = st["units"]
         pcs = plan.port_cores(l)
         while st["u"] < len(units):
-            e, b, mask, s0, s1 = units[st["u"]]
+            e, b, mask, s0, s1, pcw = units[st["u"]]
+            npc = plan.npass if pcw else 1  # (pieces: pass-major over the cores, a hand-off each)
             while st["i"] < len(pcs):
                 c = pcs[st["i"]]
                 k = plan.k(*c)
@@ -136,18 +139,25 @@ def _run(plan, seed):
                     continue
                 if mbox[(p, d, l, c)] < st["seen"][c] + 1:
                     return False  # blocked on this core's hand-off
+                assert mlog[(p, d, l, c)][st["seen"][c]] == e, ("a hand-off count of another entry", p, d, l, c, e)
                 st["seen"][c] += 1
-                q = plan.down(p, d)
-                slot = s1 if h else s0
-                key = (q, c[0], c[1], d, slot)
-                assert key not in zone, ("zone slot written twice", key)
-                _zone_write(plan, q, c, d, h, slot, b, zlive.setdefault((q, c, d), []))
-                zone[key] = part[(p, c[0], c[1], e)]
-                ctr[(q, c, d)] += 1
+                if st["ip"] + 1 == npc:  # (the core's last piece: the sub-block and its increment)
+                    q = plan.down(p, d)
+                    slot = s1 if h else s0
+                    key = (q, c[0], c[1], d, slot)
+                    assert key not in zone, ("zone slot written twice", key)
+                    _zone_write(plan, q, c, d, h, slot, b, zlive.setdefault((q, c, d), []))
+                    zone[key] = part[(p, c[0], c[1], e)]
+                    ctr[(q, c, d)] += 1
                 st["i"] += 1
                 return True
+            if st["ip"] + 1 < npc:
+                st["ip"] += 1
+                st["i"] = 0
+                continue
             st["u"] += 1
             st["i"] = 0
+            st["ip"] = 0
         return False
 
     actors = (
@@ -251,6 +261,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True, router=Fals
     ctr = {(p, c, d): 0 for p in range(G) for c in cores for d in DIRS}
     fin = {}
     mbox = {(p, d, l, c): 0 for p in range(G) for d in DIRS for l in range(plan.nv) for c in cores}
+    mlog = {k: [] for k in mbox}
     ch = {k: 0 for k in prog}  # (the compute's chunk)
     pc = {k: 0 for k in prog}
     hand_q = {k: [] for k in prog}
@@ -275,7 +286,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True, router=Fals
         for d in DIRS:
             units = plan.port_units(p, d) if plan.down(p, d) is not None else []
             for l in range(plan.nv):
-                ports[(p, d, l)] = dict(units=units, m=0, u=0, i=0, seen={c: 0 for c in cores}, read=set())
+                ports[(p, d, l)] = dict(units=units, m=0, u=0, ip=0, i=0, seen={c: 0 for c in cores}, read=set())
 
     def compute_step(p, c):
         k_ = (p, c)
@@ -335,6 +346,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True, router=Fals
         b = plan.entries(p, plan.half(k))[e]
         d, _ = plan.role(p, b, plan.half(k))
         mbox[(p, d, plan.link(k), c)] += 1
+        mlog[(p, d, plan.link(k), c)].append((m, e))
         return True
 
     def ncrisc_step(p, c):
@@ -380,11 +392,12 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True, router=Fals
             if st["u"] >= len(units):  # (chunk m sent: my reads of it done - FINB-free to each core read)
                 for c in st["read"]:
                     ffree[(p, c)] += 1 if m + 1 < nch else 0
-                st.update(m=m + 1, u=0, i=0, read=set())
+                st.update(m=m + 1, u=0, ip=0, i=0, read=set())
                 return True
             if m + z0 > 0 and zone_credit and zcred[(p, d, l)] < m + z0:
                 return moved
-            e, b, mask, s0, s1 = units[st["u"]]
+            e, b, mask, s0, s1, pcw = units[st["u"]]
+            npc = plan.npass if pcw else 1
             while st["i"] < len(pcs):
                 c = pcs[st["i"]]
                 h = plan.half(plan.k(*c))
@@ -393,8 +406,19 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True, router=Fals
                     continue
                 if mbox[(p, d, l, c)] < st["seen"][c] + 1:
                     return moved
+                assert mlog[(p, d, l, c)][st["seen"][c]] == (m, e), ("a hand-off count of another entry", p, d, l, c)
                 st["seen"][c] += 1
                 st["read"].add(c)
+                if st["ip"] + 1 < npc:  # (a piece before the core's last: its tiles land, no increment yet)
+                    assert finb[(p, c, e)][0] == m, ("FINB of another chunk read", p, c, e)
+                    assert rtr[(q, c)], (
+                        "a zone write into a core's router buffers (its router phase not over)",
+                        q,
+                        c,
+                        d,
+                    )
+                    st["i"] += 1
+                    return True
                 v = finb[(p, c, e)]
                 assert v[0] == m, ("FINB of another chunk read", p, c, e, v[0], m)
                 key = (q, c, d, s1 if h else s0)
@@ -406,8 +430,13 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True, router=Fals
                 ctr[(q, c, d)] += 1
                 st["i"] += 1
                 return True
+            if st["ip"] + 1 < npc:
+                st["ip"] += 1
+                st["i"] = 0
+                continue
             st["u"] += 1
             st["i"] = 0
+            st["ip"] = 0
         return moved
 
     def router_step(p, c):

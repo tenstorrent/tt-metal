@@ -70,6 +70,10 @@ class RsPlan:
         # the core rows holds whole blocks (0, 1 of 4), so every chip sent 1 block one way and 2 the other (GLM-5.3
         # ring of 4: 82 vs 165 packets a port, the RS 83 us vs 62.5). There the halves are column bands - every block
         # split by its output columns, the bands' tiles as even as the columns allow)
+        # (the rows scatter: a core's sub-block of a block pass-major - each down pass's [rows][pw] contiguous - so a
+        # start's pieces go to the port pass by pass: the port's first unit, all starts, leaves after the first pass,
+        # not after all of them - piece_entry)
+        self.pm = scatter == -2
         self.hcol = None
         if scatter == -2 and self.kind == "ring_balanced" and GX > 1:
             pre = [sum(self.pn[:c]) for c in range(1, GX)]
@@ -207,10 +211,30 @@ class RsPlan:
                 bases = []
                 for r in range(self.MT):
                     b = (cy * self.MT + r) // self.RB
-                    r0, _ = self.rows_in(cy, b)
-                    bases.append(at(ents.index(b), (r - r0) * self.pn[cx] + c0 - self.n0[cx]))
+                    r0, nr = self.rows_in(cy, b)
+                    # (pass-major: the passes before this one hold nr x their widths)
+                    if getattr(self, "pm", False):
+                        bases.append(at(ents.index(b), nr * (c0 - self.n0[cx]) + (r - r0) * pw))
+                    else:
+                        bases.append(at(ents.index(b), (r - r0) * self.pn[cx] + c0 - self.n0[cx]))
                 out.append((pw, bases))
         return out
+
+    def piece_entry(self, p, h, d):
+        """The entry whose sub-blocks a half-h core of chip p hands to its direction-d port pass by pass (pieces), or None:
+        the port's first unit, when it is a start for every half it carries (the rows scatter's pass-major layout). Only
+        the first: a port walks its units in entry order and a core's pieces of it come before every other hand-off to
+        that port."""
+        if not getattr(self, "pm", False) or self.down(p, d) is None:
+            return None
+        units = self.port_units(p, d)
+        if not units or not units[0][5] or not (units[0][2] >> h) & 1:
+            return None
+        return units[0][0]
+
+    def pass_widths(self, cx):
+        """Column cx's down pass widths (every chip's)."""
+        return [pw for _, pw, _ in self.column_passes(0, cx)]
 
     def compute_args(self, p, cx, cy):
         """The RS compute tables: [nops] + ops (kind | idx << 8; kind 0 pass, 1 hand, 2 fin) + per pass [width, bases]
@@ -266,16 +290,19 @@ class RsPlan:
             es = [e] if e is not None else [ents.index((cy * self.MT + r) // self.RB) for r in range(self.MT)]
             for e2 in es:
                 last[e2] = i
+        # (pieces: the entries this core hands pass by pass - a hand after every pass, before any other hand-off)
+        pcs = [e for e in (self.piece_entry(p, h, d) for d in DIRS) if e is not None and self.count(cx, cy, ents[e])]
         ops, pending = [], []
         for i in range(npass):
             ops.append(("pass", i))
+            ops += [("hand", e) for e in pcs]
             done = sorted(e for e, li in last.items() if li == i)
             if pending and done:
                 ops += [("fin", e) for e in pending]
                 pending = []
             for e in done:
                 b = ents[e]
-                if self.count(cx, cy, b) == 0:
+                if self.count(cx, cy, b) == 0 or e in pcs:
                     continue
                 d, start = self.role(p, b, h)
                 if d != "fin" and start:
@@ -322,7 +349,9 @@ class RsPlan:
         return q if 0 <= q < self.G else None
 
     def port_units(self, p, d):
-        """Port (d, *) of chip p: [(entry, block, half mask, downstream slot half 0, slot half 1)] in entry order."""
+        """Port (d, *) of chip p: [(entry, block, half mask, downstream slot half 0, slot half 1, pieces)] in entry
+        order; pieces: the cores hand it pass by pass (piece_entry) - the first unit, a start in every half it carries,
+        with the pass-major layout."""
         sc = self.chips[p]
         q = self.down(p, d)
         out = []
@@ -337,7 +366,10 @@ class RsPlan:
             if not mask:
                 continue
             slots = [self.chips[q]["arrivals"][(h, d)].index(b) if (mask >> h) & 1 else 0 for h in (0, 1)]
-            out.append((e, b, mask, slots[0], slots[1]))
+            pieces = (
+                getattr(self, "pm", False) and not out and all(self.role(p, b, h)[1] for h in (0, 1) if (mask >> h) & 1)
+            )
+            out.append((e, b, mask, slots[0], slots[1], bool(pieces)))
         return out
 
     def finb_readers(self, p, cx, cy):
@@ -348,7 +380,7 @@ class RsPlan:
             d
             for d in DIRS
             if self.down(p, d) is not None
-            and any((m >> h) & 1 and self.count(cx, cy, b) > 0 for _, b, m, _, _ in self.port_units(p, d))
+            and any((m >> h) & 1 and self.count(cx, cy, b) > 0 for _, b, m, _, _, _ in self.port_units(p, d))
         ]
 
     def port_cores(self, l):

@@ -2630,3 +2630,24 @@ passes of a start entry) | RS ~63 us (floor) | fins + y writes ~10-15 (the cores
 - Measured: GLM-5.3 ring 640 197.8 -> 190.8 (the tail after the last RS packet ~11 -> 5-8 us), GLM-5.3 2x4 1280
   323.4 -> 317.1, DSv4.1 ring 640 190.8 -> 190.1, K3 ring 640 388.3 -> 388.5 (its fins are hidden); PCC unchanged, 0
   of 20 replays differ.
+
+### The reduce-scatter's first unit pass by pass (kept: GLM-5.3 ring 640 190.8 -> 182.9 us)
+- Why (RSSTAT): the first RS packet left ~14 us after the h exchange ended - a start entry's sub-block was handed to its
+  port only after the core's last down pass (5 passes of ~3 us, HiFi2-bound: 2 rows x ~18 output tiles x K 16 a core).
+  The SE tail cut (2026-10-27) had tried pass-by-pass hand-offs on the row-major sub-block: pieces were row runs (small
+  packets, the reader flushing before each) and the end links slowed.
+- Now (rows scatter): a core's sub-block of a block is pass-major (each down pass's [rows][pw] contiguous - RsPlan
+  .pass_bases; HOLD, FINB, the arrival zones and the fin's OUTF all follow it; the NCRISC maps OUTF tiles to y by the
+  pass widths, SE_RS_PM). A port's FIRST unit, when it is a start in every half it carries (RsPlan.port_units' pieces
+  flag), goes piece by piece: the cores hand it after every pass (RsPlan.ops: a hand after each pass, before any other
+  hand-off - so a core's hand-offs to that port stay in the port's walk order), the port walks it pass-major over its
+  cores (piece = nr x pw tiles at nr x the earlier passes' widths; the column's widths from its pn in the core word,
+  bits 27+), the core's arrival increment on its last piece; every other unit as before. The receivers see the same
+  zone layout and one increment a core.
+- Protocol model: the hand-off log checked against each port's expected entry, pieces before a core's last carry no
+  increment and must not land in a router overlay (the router-overlay negative case now trips on pieces too): 226 pass.
+- Measured: first RS packet ~113 -> ~100-105 us (right after the h exchange); unit 0 at link rate, unit 1 (1 block) ~45
+  us; RS ~70 us from the first packet. GLM-5.3 ring 640 190.8 -> 182.9, GLM-5.3 2x4 1280 317.1 -> 310.2, DSv4.1 ring 640
+  neutral (A/B interleaved 191.4 / 191.7 vs 191.9 / 191.2); PCC unchanged, 0 of 20 replays differ.
+- Tried, not kept: the h exchange family without the receivers' readiness round (kernel_lib handshake=False, a
+  counter): HX 17 us (15.7) - the per-round cost is the multicast + signal + fence, not the handshake.

@@ -1014,6 +1014,19 @@ void kernel_main() {
             const uint32_t mc = fo / fcount, i = fo % fcount;
 #ifdef SE_FIN_ROWS
             const uint32_t ya = se_ra(f0 + 6 + NCH + 4 + mc * MT + i / fw) + i % fw;
+#elif defined(SE_RS_PM)
+            // (the rows scatter's pass-major sub-block: pass q's nr x pw tiles after the earlier passes' - widths
+            // _split(fw, SE_RS_PM))
+            const uint32_t y0 = mc == 0 ? fy0 : se_ra(f0 + 6 + mc - 1);  // (chunk mc's rows)
+            const uint32_t nr = fcount / fw, bw = fw / SE_RS_PM, rm = fw % SE_RS_PM;
+            uint32_t q = 0, j = i, c0 = 0;
+            while (j >= nr * (bw + (q < rm ? 1 : 0))) {
+                j -= nr * (bw + (q < rm ? 1 : 0));
+                c0 += bw + (q < rm ? 1 : 0);
+                ++q;
+            }
+            const uint32_t pw = bw + (q < rm ? 1 : 0);
+            const uint32_t ya = y0 + (j / pw) * fstride + c0 + j % pw;
 #else
             const uint32_t y0 = mc == 0 ? fy0 : se_ra(f0 + 6 + mc - 1);  // (chunk mc's rows)
             const uint32_t ya = y0 + (i / fw) * fstride + i % fw;
@@ -2179,7 +2192,7 @@ class SeEngine3:
             arrf=rs.zone_tiles("fwd") * 2048,
             arrb=rs.zone_tiles("bwd") * 2048,
             outf=8 * 2048,
-            finc=16 * 8,
+            finc=16 * max(8, max(len(rs.handoffs(p, cx, cy)) for p in range(G) for cx, cy in cores)),
             psync=16 * max(8, self.NPD),
         )
         if self.NCH > 1:  # (the ports' FINB-free credits, a page a chunk: a core no port reads (fnr 0) credits every
@@ -2549,6 +2562,8 @@ class SeEngine3:
             if self._fin_rows():
                 nd += "#define SE_FIN_ROWS\n"
             nd += f"#define SE_P {self.rs.P}\n#define SE_ZF {self.rs.zone_tiles('fwd')}\n#define SE_ZB {self.rs.zone_tiles('bwd')}\n"
+            if self.rs.pm:  # (the rows scatter: sub-blocks pass-major, its passes)
+                nd += f"#define SE_RS_PM {self.rs.npass}u\n"
         if self.LT:
             assert self.rs is not None, "the latent's all-to-all rides the reduce-scatter's ports and args"
             nd += f"#define SE_LAT {LAT_CB}\n#define SE_NGU {self.NGU}\n#define SE_LWMAX {self.LWMAX}\n"

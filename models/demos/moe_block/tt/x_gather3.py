@@ -14,10 +14,10 @@ every engine core per shard in the engine's order (own shard first - the engine 
 XREADY = m (G - 1) + k once chunk m's shard of rank k is in, so gate / up starts on the own K steps at once. x-own is
 never reused within a call, so no credits: the call fence only."""
 
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, NOC0, NOC1, plan
 
 import ttnn
-from ttnn.bringup.combine_rf import persist_l1
 from models.demos.moe_block.tt.router_stream import LSTREAM
 
 # (the port cores' roles: the sender (Ethernet writes) on the NCRISC / NOC0, the reader on the BRISC / NOC1. The ports
@@ -119,16 +119,25 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
     };
     for (uint32_t un = 0; un < nu; ++un) {
         const uint32_t w0 = get_arg_val<uint32_t>(u0 + 2 * un), e = w0 & 0xFF, b = (w0 >> 8) & 0xFF, mask = (w0 >> 16) & 3;
+        // (pieces (w0 bit 28): the cores hand it pass by pass - walk pass-major over my cores, each core's pass piece
+        // its nr x pw tiles at nr x (the earlier passes' widths) in its pass-major sub-block; else core by core whole)
+        const uint32_t np_ = (w0 >> 28) & 1 ? RS_NPASS : 1;
+        for (uint32_t ip = 0; ip < np_; ++ip)
         for (uint32_t i = 0; i < nc; ++i) {
             const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), cnts = get_arg_val<uint32_t>(c0 + 2 * i + 1);
-            const uint32_t cnt = cnt_of(cnts, b);
+            uint32_t cnt = cnt_of(cnts, b);
             if (!((mask >> ((cw >> 16) & 1)) & 1) || cnt == 0) continue;
             uint32_t fo = 0;  // (the sub-block's FINB offset: the core's tiles of the entries before e)
             for (uint32_t e2 = 0; e2 < e; ++e2) fo += cnt_of(cnts, get_arg_val<uint32_t>(en0 + e2));
-            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + XG_HS * (cw >> 20));
+            if (np_ > 1) {  // (pass ip's piece: the column's widths are _split(pn, RS_NPASS))
+                const uint32_t pn = cw >> 27, nr = cnt / pn, bw = pn / RS_NPASS, rm = pn % RS_NPASS;
+                fo += nr * (ip * bw + (ip < rm ? ip : rm));
+                cnt = nr * (bw + (ip < rm ? 1 : 0));
+            }
+            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + XG_HS * ((cw >> 20) & 0x7F));
             const uint32_t target = ++seen[i];
             invalidate_l1_cache();
-            HWW(16, 0xA1000000u | un << 8 | i); HWW(17, target); HWW(18, *mb); HWW(19, mbox + XG_HS * (cw >> 20));
+            HWW(16, 0xA1000000u | un << 8 | i); HWW(17, target); HWW(18, *mb); HWW(19, mbox + XG_HS * ((cw >> 20) & 0x7F));
             if (*mb < target && c > 0) flush();  // (never hold reads while blocked on a producer)
 #ifdef SE_PROBE_RSSTAT
             if (*mb < target) {
@@ -175,7 +184,7 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
         return;
     }
     for (uint32_t i = 0; i < nc; ++i)  // (re-arm: every hand-off of the call was waited for)
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + XG_HS * (get_arg_val<uint32_t>(c0 + 2 * i) >> 20)) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + XG_HS * ((get_arg_val<uint32_t>(c0 + 2 * i) >> 20) & 0x7F)) = 0;
 }
 """
 
@@ -328,10 +337,20 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
     for (uint32_t un = 0; un < nu; ++un) {
         const uint32_t w0 = get_arg_val<uint32_t>(u0 + 2 * un), w1 = get_arg_val<uint32_t>(u0 + 2 * un + 1);
         const uint32_t b = (w0 >> 8) & 0xFF, mask = (w0 >> 16) & 3;
+        const uint32_t np_ = (w0 >> 28) & 1 ? RS_NPASS : 1;  // (pieces: the reader's walk - pass-major over my cores)
+        for (uint32_t ip = 0; ip < np_; ++ip)
         for (uint32_t i = 0; i < nc; ++i) {
             const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), cnts = get_arg_val<uint32_t>(c0 + 2 * i + 1);
-            const uint32_t cnt = cnt_of(cnts, b), hf = (cw >> 16) & 1;
+            uint32_t cnt = cnt_of(cnts, b);
+            const uint32_t hf = (cw >> 16) & 1;
             if (!((mask >> hf) & 1) || cnt == 0) continue;
+            uint32_t po = 0;  // (the piece's tile offset in the sub-block)
+            if (np_ > 1) {
+                const uint32_t pn = cw >> 27, nr = cnt / pn, bw = pn / RS_NPASS, rm = pn % RS_NPASS;
+                po = nr * (ip * bw + (ip < rm ? ip : rm));
+                cnt = nr * (bw + (ip < rm ? 1 : 0));
+            }
+            const bool last = ip + 1 == np_;  // (the core's last piece carries its arrival increment)
             const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
             uint32_t zo;
             if (P) {
@@ -343,7 +362,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
                     if ((pm >> j) & 1) zo += (cnts >> (8 * j)) & 0xFF;
                 }
             }
-            const uint32_t dst0 = zb + zo * 2048;
+            const uint32_t dst0 = zb + (zo + po) * 2048;
             const uint64_t ctr = get_noc_addr(x, y, actr);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
                 HWW(24, 0xC1000000u | un << 8 | i); HWW(25, t0); HWW(26, u); HWW(27, rpos);
@@ -362,7 +381,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
                 const uint64_t dst = get_noc_addr(x, y, dst0 + t0 * 2048);
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
                 h = h + 1 == GROUP ? 0 : h + 1;
-                if (t0 + RP >= cnt) {
+                if (last && t0 + RP >= cnt) {
                     hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, ctr, 1, true}, n * 2048);
                 } else {
                     hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, n * 2048);
@@ -937,13 +956,15 @@ class XGather3:
         pm = lambda b, h, s_: plan.prefix_mask(q, h, d, s_) if plan.compact else 0  # noqa: E731
         out = [len(units)] + [
             w
-            for eu, b, m, s0, s1 in units
-            for w in (eu | b << 8 | m << 16 | pm(b, 0, s0) << 20 | pm(b, 1, s1) << 24, s0 | s1 << 16)
+            for eu, b, m, s0, s1, pc in units
+            for w in (eu | b << 8 | m << 16 | pm(b, 0, s0) << 20 | pm(b, 1, s1) << 24 | int(pc) << 28, s0 | s1 << 16)
         ]
         out += [len(cores)]
         for cx, cy in cores:
             c, k = virt(cx, cy), plan.k(cx, cy)
-            out += [c.x | c.y << 8 | plan.half(k) << 16 | k << 20, plan.counts_word(cx, cy)]
+            pn = sum(plan.pass_widths(cx)) if plan.pm else 0  # (pieces: the column's output tiles a row)
+            assert k < 128 and pn < 32, f"x_gather3: a core word's k {k} < 128, pn {pn} < 32"
+            out += [c.x | c.y << 8 | plan.half(k) << 16 | k << 20 | pn << 27, plan.counts_word(cx, cy)]
         i = DIRS_I[d]
         # (chunks: zone credits - my chip's cores taking arrivals from the peer this port faces (opposite direction)
         # signal here a chunk; the peer's port facing me (direction opposite) sends me its cores' signals)
@@ -1122,9 +1143,11 @@ class XGather3:
             self.G,
         ]
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
+        npass = rs["plan"].npass if rs and getattr(rs["plan"], "pm", False) else 1  # (a piece unit's passes)
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=f"#define XG_HS {persist_l1.handoff_bytes()}u\n#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
+                + f"#define RS_NPASS {npass}u\n"
                 + _probes()
                 + _READER,
                 source_type=st,
@@ -1135,7 +1158,7 @@ class XGather3:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=f"#define XG_HS {persist_l1.handoff_bytes()}u\n#define LS_FIRST {int(bool(router and router.prio_first))}\n"
-                + f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
+                + f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n#define RS_NPASS {npass}u\n"
                 + (routing.defines(coord) if routing is not None else "")
                 + _probes()
                 + _SENDER,
