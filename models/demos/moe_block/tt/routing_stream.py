@@ -124,7 +124,11 @@ def _plan_fn(subs):
     # (zones: the packet wait, the counting / exchange before it)
     body = body.replace(
         "    // (5) every packet of the call: core 0 waits, then wakes the others\n    if (q == 0) {",
-        '    // (5) every packet of the call: core 0 waits, then wakes the others\n    {\n    DeviceZoneScopedN("SE-RPWAIT");\n    if (q == 0) {',
+        # (two lines before the zone: at its old line its 16-bit source-location hash met SE-GU's (one line down too) -
+        # the device profiler throws on a collision, tt_metal/impl/profiler/profiler.cpp populateZoneSrcLocations)
+        "    // (5) every packet of the call: core 0 waits, then wakes the others\n    {\n"
+        "    // (zone:\n    // the packet wait)\n"
+        '    DeviceZoneScopedN("SE-RPWAIT");\n    if (q == 0) {',
     )
     body = body.replace("    ts[4] = get_timestamp_32b();", "    }\n    ts[4] = get_timestamp_32b();")
     body = body.replace(
