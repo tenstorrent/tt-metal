@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -28,10 +29,16 @@ public:
     // will choose a thread based on a round robin distribution strategy.
     virtual void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
     virtual void wait() = 0;
+    // What idle workers do after a parallel_for: poll through the pool's spin window, so the next one starts sooner, or
+    // park as soon as their calls are done, leaving the CPUs to whatever the caller does next.
+    enum class AfterFanOut : uint8_t { Spin, Park };
     // Calls fn(i) for each i in [0, device_ids.size()) and returns once all calls have finished. Calls may run
     // concurrently, on the workers or on the calling thread, but calls for the same device run one at a time, in index
     // order. Rethrows the first exception thrown by fn. Independent of enqueue() and wait().
-    virtual void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) = 0;
+    virtual void parallel_for(
+        ttsl::Span<const uint32_t> device_ids,
+        const std::function<void(size_t)>& fn,
+        AfterFanOut after = AfterFanOut::Spin) = 0;
 };
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
@@ -42,6 +49,12 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices);
+// As above, with a spin window: after its last task or parallel_for call, each worker keeps polling for
+// `spin_window` before it parks, so that back-to-back fan-outs reach it without a wake.
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
+    ContextId context_id,
+    const std::vector<tt::tt_metal::Device*>& physical_devices,
+    std::chrono::microseconds spin_window);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
 // Call before the pages are faulted.

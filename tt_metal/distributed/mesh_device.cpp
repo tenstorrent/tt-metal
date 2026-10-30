@@ -101,13 +101,20 @@ int generate_unique_mesh_id() {
 
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
-    ContextId context_id, const std::vector<Device*>& physical_devices) {
+    ContextId context_id,
+    const std::vector<Device*>& physical_devices,
+    std::chrono::microseconds spin_window = std::chrono::microseconds(0)) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices);
+    return create_device_bound_thread_pool(context_id, physical_devices, spin_window);
 }
+
+// Covers the p90 host gap between fan-outs in GLM-5.2 and Kimi K2.7 prefill (144 us), so workers are still polling
+// when the next fan-out comes instead of paying a wake (~14 us for 32 workers). Past that, the wake is a small share
+// of the gap, and a longer window only costs every worker more idle CPU time.
+constexpr auto DISPATCH_POOL_SPIN = std::chrono::microseconds(250);
 
 // Helper function to verify all devices in the MeshDevice have the same value
 template <typename F>
@@ -376,7 +383,8 @@ MeshDeviceImpl::MeshDeviceImpl(
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
+    dispatch_thread_pool_(
+        create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()), DISPATCH_POOL_SPIN)),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     local_devices_ = view_->impl().get_devices();
