@@ -250,7 +250,7 @@
     bh_quietbox_2:
       # CI startup can exceed 12 minutes per server; allow both starts and evaluation.
       # Each server has a 20-minute readiness deadline within this total allowance.
-      # GPQA starts about 23 minutes in and needs more than the 17 minutes left at 40.
+      # Three weekly runs hit 40 minutes during GPQA; a full passing run took 36 minutes.
       timeout: 60
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
