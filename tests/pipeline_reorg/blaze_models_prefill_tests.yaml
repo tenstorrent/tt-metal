@@ -395,6 +395,8 @@
 - name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k"
   fabric_profile: torus_xy
   cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
