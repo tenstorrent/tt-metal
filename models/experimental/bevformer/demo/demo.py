@@ -121,6 +121,8 @@ def _load_manifest_image(frame):
         RAW_IMAGE_SIZE,
     )
 
+    import cv2
+
     tensors, matrices = [], []
     raw_width, raw_height = RAW_IMAGE_SIZE
     mean = torch.tensor(IMAGE_MEAN, dtype=torch.float32).view(3, 1, 1)
@@ -129,12 +131,15 @@ def _load_manifest_image(frame):
         with Image.open(path) as image:
             image = image.convert("RGB")
             source_width, source_height = image.size
-            image = image.resize((raw_width, raw_height), Image.Resampling.BILINEAR)
             array = np.asarray(image, dtype=np.float32).copy()
         tensor = torch.from_numpy(array).permute(2, 0, 1)
         if IMAGE_COLOR_ORDER == "BGR":
             tensor = tensor.flip(0)
         tensor = (tensor - mean) / std
+        resized = cv2.resize(
+            tensor.permute(1, 2, 0).numpy(), (raw_width, raw_height), interpolation=cv2.INTER_LINEAR
+        )
+        tensor = torch.from_numpy(resized).permute(2, 0, 1)
         padded = torch.zeros(3, IMAGE_HEIGHT, IMAGE_WIDTH, dtype=torch.float32)
         padded[:, :raw_height, :raw_width] = tensor
         tensors.append(padded)
