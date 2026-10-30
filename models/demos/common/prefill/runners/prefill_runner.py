@@ -189,6 +189,8 @@ check_packed_forward_support(
     dflash=DFLASH_ENABLED,
     use_trace=USE_TRACE,
     d2h_acks=os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1",
+    traced_forward=ADAPTER.supports_packed_forward_trace,
+    forward_d2h_acks=ADAPTER.supports_packed_forward_d2h_acks,
 )
 
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
