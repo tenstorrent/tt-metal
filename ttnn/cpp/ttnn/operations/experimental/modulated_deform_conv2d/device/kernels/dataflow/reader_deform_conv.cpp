@@ -658,5 +658,7 @@ void kernel_main() {
     if (BLOCK_PARITY < num_blocks) {
         write_output(start_block + BLOCK_PARITY + (num_blocks - 1 - BLOCK_PARITY) / 2 * 2);
     }
-    noc.async_write_barrier();
+    // A multicast receiver's semaphore increments are atomics, which a write barrier does not wait
+    // for; the kernel exits with none of this NoC's transactions outstanding.
+    noc.async_full_barrier();
 }
