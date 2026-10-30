@@ -7,6 +7,7 @@
 // Quasar emulator models that back less DRAM than their soc descriptor declares, with the DRAM they
 // really have per channel. tt-metal clamps the descriptor's DRAM size to this when the TT_METAL_SIMULATOR
 // directory has one of these names. Models that are not listed keep their descriptor's value.
+// TT_METAL_SIMULATOR_DRAM_UNCAPPED=1 makes Cluster::get_metal_desc_from_tt_desc skip the clamp.
 
 #include <cstdint>
 #include <string_view>
