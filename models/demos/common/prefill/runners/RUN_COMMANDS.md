@@ -127,9 +127,7 @@ environment silently wins over both. Leave them unset. In particular,
 `2d_torus_xy` and `1`, which is what CI runs; the `2d` fabric, and the torus
 with overlap off, are not.
 
-Set only what is specific to the deployment, in the binding's `global_env`.
-`ttrun` does not forward `PREFILL_*` variables from the launching shell, so an
-export there reaches rank 0 only.
+Set only what is specific to the deployment:
 
 - `PREFILL_NUM_USERS`, when the decode side caps slots below the variant's count.
 - `PREFILL_H2D_SERVICE_ID`, matching the producer.
@@ -138,6 +136,47 @@ export there reaches rank 0 only.
   `PREFILL_MIGRATION_DEVICE_MAP_PATH` on host-local storage.
 - `PREFILL_HF_MODEL` / `PREFILL_TTNN_CACHE`, when the weights are not at the
   adapter defaults.
+
+### Launching through `ttrun`
+
+Copy `glm53_4rank.yaml` and add the variables to its `global_env`:
+
+```yaml
+global_env:
+  PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/${GLM53_VARIANT}.json"
+  TT_METAL_SHM_TRACKING_DISABLED: "1"
+  LOGURU_LEVEL: "ERROR"
+  PREFILL_H2D_SERVICE_ID: "glm53-prefill"
+  PREFILL_ENABLE_MIGRATION: "1"
+  PREFILL_MIGRATION_EXPORT_TO_FILE: "1"
+  PREFILL_MIGRATION_TABLE_PATH: "/shared/glm53/migration_table"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/glm53_device_map"
+```
+
+`global_env` is the only route that reaches every rank. `ttrun` forwards only
+`TT_*`, `TTNN_*` and a few other prefixes from the launching shell
+(`ENV_PASSTHROUGH_PREFIXES` in `ttrun.py`), so a `PREFILL_*` export reaches
+rank 0 only, and so does `--mpi-args "-x ..."`. Do not write
+`"${PREFILL_ENABLE_MIGRATION}"` into `global_env` either: an unset variable
+expands to an empty string, which then shadows the manifest and the runner
+default.
+
+Keep the copy's `rank_bindings` and `mesh_graph_desc_path` identical to the
+checked-in file.
+
+### Launching one container per rank (Helm)
+
+Set the same variables in each rank's container environment, plus
+`PREFILL_MANIFEST` pointing at the variant's file. Every rank needs an identical
+set; a rank that differs fails later with a D2D chunk plan mismatch.
+
+Remove any variable the manifest or the runner already decides, since the
+container environment wins over both. `PREFILL_FABRIC_MODE=2d`,
+`PREFILL_OVERLAP_SHARED_EXPERT=0`, `PREFILL_USE_TRACE=0` and a D2D FIFO size
+override all move the deployment off the configuration CI validates.
+
+Use `ci/sc4_mgd.textproto` (4×[8,4] `RING,RING`) as the mesh-graph descriptor,
+not a `LINE,RING` copy.
 
 ## Teardown
 
