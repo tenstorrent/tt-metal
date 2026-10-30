@@ -514,7 +514,7 @@ public:
         auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
         if constexpr (noc_sanitize_dst_mcast_v<Dst>) {
             noc_traits_t<Dst>::sanitize_dst_mcast(
-                dst, *this, dst_args, dst_noc_addr, has_flag(opts, NocOptions::MCAST_INCL_SRC));
+                dst, *this, dst_args, dst_noc_addr, src_addr, size_bytes, has_flag(opts, NocOptions::MCAST_INCL_SRC));
         }
         if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
             noc_async_write_multicast_loopback_src_impl(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
