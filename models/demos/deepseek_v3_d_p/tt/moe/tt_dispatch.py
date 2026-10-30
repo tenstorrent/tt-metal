@@ -37,6 +37,8 @@ original token ordering after expert processing.
 TtDispatch2dModule, below, does the same job with the dispatch_fabric2d op.
 """
 
+from typing import Optional
+
 import torch
 from loguru import logger
 
@@ -339,6 +341,8 @@ class TtDispatch2dModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         subdevice_id=None,
+        buffers=None,
+        fwd_vc_pages: Optional[int] = None,
     ):
         """
         Initialize the fabric2d dispatch module.
@@ -362,6 +366,11 @@ class TtDispatch2dModule(LightweightModule):
             subdevice_id: Sub-device whose cores the op may use. None means the first sub-device.
                 It must hold the worker core nearest each ethernet core the op sends on. For a TILE
                 x it must also hold the core row under those cores, where the op untilizes x.
+            buffers: (forwarding, staging) DRAM buffers the op stages tokens in, from
+                TT_CCL.get_dispatch_fabric2d_buffers for these arguments. None leaves them to the op,
+                which allocates them at its first cache miss and keeps one pair per cached program.
+            fwd_vc_pages: Pages one forwarding channel holds, the model's DISPATCH_FWD_VC_PAGES. None
+                takes the op's default. `buffers` must be sized for the same value.
 
         Note there is no dispatch_group_size (the op takes the ring from cluster_axis and the mesh
         shape), no metadata_len (always 3) and no topology (always Ring).
@@ -377,6 +386,9 @@ class TtDispatch2dModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.subdevice_id = subdevice_id
+        self.forwarding_buffer, self.staging_buffer = buffers if buffers is not None else (None, None)
+        # Passed only when set, so the op's default stays the one place the depth defaults.
+        self.fwd_vc_pages_kwargs = {} if fwd_vc_pages is None else {"fwd_vc_pages": fwd_vc_pages}
 
     def forward(
         self,
@@ -462,5 +474,8 @@ class TtDispatch2dModule(LightweightModule):
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=self.subdevice_id,
+            forwarding_buffer=self.forwarding_buffer,
+            staging_buffer=self.staging_buffer,
+            **self.fwd_vc_pages_kwargs,
         )
         return (dispatched_buffer, metadata)

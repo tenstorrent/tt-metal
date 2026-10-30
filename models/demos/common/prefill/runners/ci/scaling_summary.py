@@ -37,7 +37,8 @@ def _load(root):
             print(f"::warning::unreadable metrics sidecar {path}: {exc}")
             continue
         model, config = rec.get("model"), rec.get("config")
-        if not model or not config:
+        # Single-test perf records (prefill_summary_utils.emit_perf_metrics) share the artifact; skip them.
+        if not model or not config or rec.get("kind") == "test_perf":
             continue
         by_model.setdefault(model, {})[config] = rec
     return by_model

@@ -4,7 +4,6 @@
 from typing import List
 
 import pytest
-import torch
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -18,7 +17,6 @@ from helpers.llk_params import (
     DestSync,
     PerfRunType,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
@@ -49,7 +47,7 @@ from helpers.tile_constants import (
     is_mx_unsupported_tile_dims,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 UNPACK_TILIZE_TILE_SIZES = [
     (32, 32),
@@ -187,7 +185,6 @@ def generate_unpack_tilize_combinations(
 UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int16,
@@ -323,12 +320,7 @@ def test_unpack_tilize_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

@@ -8,14 +8,19 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "adamw_test_utils.hpp"
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
@@ -24,8 +29,11 @@
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
+
+using ttml::test_utils::adamw::error_metrics;
 
 struct AdamWCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
@@ -103,6 +111,11 @@ public:
         }
     }
 
+    // Bias-correct the next step with these beta powers, as the kernel takes them, instead of beta^t.
+    void set_beta_powers(float beta1_pow, float beta2_pow) {
+        m_beta_powers = {beta1_pow, beta2_pow};
+    }
+
     void step(xt::xarray<float>& params, const xt::xarray<float>& grads) {
         if (m_steps == 0 && m_first_moment.size() == 0) {
             m_first_moment = xt::zeros_like(params);
@@ -119,11 +132,13 @@ public:
         // v_t = beta2 * v_{t-1} + (1 - beta2) * grad^2
         m_second_moment = m_beta2 * m_second_moment + (1.0f - m_beta2) * (grads * grads);
 
-        float bias_correction1 = 1.0f - std::pow(m_beta1, static_cast<float>(m_steps));
+        float bias_correction1 =
+            1.0f - (m_beta_powers ? m_beta_powers->first : std::pow(m_beta1, static_cast<float>(m_steps)));
         // m_hat = m_t / (1 - beta1^t)
         xt::xarray<float> first_moment_hat = m_first_moment / bias_correction1;
 
-        float bias_correction2 = 1.0f - std::pow(m_beta2, static_cast<float>(m_steps));
+        float bias_correction2 =
+            1.0f - (m_beta_powers ? m_beta_powers->second : std::pow(m_beta2, static_cast<float>(m_steps)));
         // v_hat = v_t / (1 - beta2^t)
         xt::xarray<float> second_moment_hat = m_second_moment / bias_correction2;
 
@@ -140,6 +155,16 @@ public:
         params = params - m_lr * first_moment_hat / denom - m_lr * m_weight_decay * params;
     }
 
+    const xt::xarray<float>& first_moment() const {
+        return m_first_moment;
+    }
+    const xt::xarray<float>& second_moment() const {
+        return m_second_moment;
+    }
+    const xt::xarray<float>& max_second_moment() const {
+        return m_max_second_moment;
+    }
+
 private:
     float m_lr;
     float m_beta1;
@@ -148,32 +173,11 @@ private:
     float m_weight_decay;
     bool m_amsgrad;
     size_t m_steps;
+    std::optional<std::pair<float, float>> m_beta_powers;
     xt::xarray<float> m_first_moment;
     xt::xarray<float> m_second_moment;
     xt::xarray<float> m_max_second_moment;
 };
-
-struct ErrorMetrics {
-    float mean_error;
-    float max_error;
-    std::string name;
-};
-
-static ErrorMetrics compute_error_metrics(
-    const xt::xarray<float>& reference, const xt::xarray<float>& actual, const std::string& name) {
-    float sum_error = 0.0f;
-    float max_error = 0.0f;
-    size_t count = reference.size();
-
-    for (size_t i = 0; i < count; ++i) {
-        float error = std::abs(reference(i) - actual(i));
-        sum_error += error;
-        max_error = std::max(max_error, error);
-    }
-
-    float mean_error = sum_error / static_cast<float>(count);
-    return {mean_error, max_error, name};
-}
 
 static void run_step_and_compare(const AdamWCase& pc) {
     using namespace ttml;
@@ -242,7 +246,7 @@ static void run_step_and_compare(const AdamWCase& pc) {
     auto result_fused = theta_fused->get_value();
     auto result_fused_cpu = core::to_xtensor(result_fused);
 
-    auto fused_metrics = compute_error_metrics(w_cpu, result_fused_cpu, "AdamW");
+    auto fused_metrics = error_metrics(w_cpu, result_fused_cpu);
 
     const float mean_error_tolerance = 1e-3f;
     const float max_error_tolerance = 1e-2f;
@@ -425,18 +429,18 @@ TEST_F(AdamWParamGroupsTest, ZeroWeightDecayGroupSkipsDecay) {
     const float max_error_tolerance = 1e-2f;
 
     // 1-D param must match the NO-weight-decay reference.
-    auto gain_metrics = compute_error_metrics(w1_no_wd, gain_result, "gain_1d");
+    auto gain_metrics = error_metrics(w1_no_wd, gain_result);
     EXPECT_LE(gain_metrics.mean_error, mean_error_tolerance) << "1-D param should not be weight-decayed";
     EXPECT_LE(gain_metrics.max_error, max_error_tolerance) << "1-D param should not be weight-decayed";
 
     // 2-D param must match the weight-decayed reference.
-    auto weight_metrics = compute_error_metrics(w2_with_wd, weight_result, "weight_2d");
+    auto weight_metrics = error_metrics(w2_with_wd, weight_result);
     EXPECT_LE(weight_metrics.mean_error, mean_error_tolerance) << "2-D param should be weight-decayed";
     EXPECT_LE(weight_metrics.max_error, max_error_tolerance) << "2-D param should be weight-decayed";
 
     // Guard against a vacuous pass: the undecayed 1-D result must be clearly distinct from the
     // would-be-decayed reference, i.e. the weight decay is actually large enough to observe.
-    auto skip_vs_decay = compute_error_metrics(w1_with_wd, gain_result, "gain_skip_vs_decay");
+    auto skip_vs_decay = error_metrics(w1_with_wd, gain_result);
     EXPECT_GT(skip_vs_decay.mean_error, mean_error_tolerance)
         << "weight decay too small to distinguish skipping from applying it; test is not meaningful";
 }
@@ -665,7 +669,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
     opt.step();
 
     auto result = core::to_xtensor(theta->get_value());
-    auto metrics = compute_error_metrics(w_cpu, result, "effective_betas");
+    auto metrics = error_metrics(w_cpu, result);
 
     const float mean_error_tolerance = 1e-3f;
     const float max_error_tolerance = 1e-2f;
@@ -683,7 +687,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
         1.0f - std::pow(constructor_beta2, static_cast<float>(initial_steps)) * effective_beta2;
     xt::xarray<float> w_stale =
         w0 - lr * (m1 / stale_bias_correction1) / (xt::sqrt(v1 / stale_bias_correction2) + epsilon);
-    auto stale_metrics = compute_error_metrics(w_cpu, w_stale, "stale_bias_correction");
+    auto stale_metrics = error_metrics(w_cpu, w_stale);
     EXPECT_GT(stale_metrics.mean_error, mean_error_tolerance)
         << "constructor and effective betas too close to distinguish; test is not meaningful";
 }
@@ -935,8 +939,8 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     auto result_stoch = core::to_xtensor(theta_stoch->get_value());
     auto result_det = core::to_xtensor(theta_det->get_value());
 
-    auto stoch_metrics = compute_error_metrics(w_cpu, result_stoch, "Stochastic");
-    auto det_metrics = compute_error_metrics(w_cpu, result_det, "Deterministic");
+    auto stoch_metrics = error_metrics(w_cpu, result_stoch);
+    auto det_metrics = error_metrics(w_cpu, result_det);
 
     EXPECT_LT(stoch_metrics.mean_error, det_metrics.mean_error);
     EXPECT_LT(stoch_metrics.max_error, det_metrics.max_error);
@@ -990,4 +994,278 @@ TEST(ParamGroupDefaultsTest, FloatFieldsArePerGroupOptions) {
     const auto defaults = param_group_defaults(config);
     EXPECT_FLOAT_EQ(defaults.at("lr"), 0.123F);
     EXPECT_FLOAT_EQ(defaults.at("weight_decay"), 0.5F);
+}
+
+// ====================================================================
+// Program-cache hits
+// lr, the betas, the beta powers, epsilon, weight decay and the stochastic-rounding seed are not part of the program
+// hash, so a hit must re-apply them with the new buffer addresses. Each test starts from an empty program cache and
+// keeps the tensors of its earlier launches alive, so a hit cannot land on a freed address.
+// ====================================================================
+
+class AdamWCacheHitTest : public ttml::test_utils::ProgramCacheSuiteTest {};
+
+namespace {
+
+using ttml::test_utils::CacheExpectation;
+using ttml::test_utils::count_bit_mismatches;
+using ttml::test_utils::expect_cache;
+using ttml::test_utils::same_bits;
+using namespace ttml::test_utils::adamw;
+
+// Without weight decay the kernel skips the decay multiply. Launch B changes every scalar of launch A, each by enough
+// that a hit keeping launch A's value of it alone misses the bf16 tolerance; hence the large lr, epsilon and decay, and
+// a beta2 far enough from launch A's to show through AMSGrad's max with max_exp_avg_sq.
+const AdamWStepScalars kScalarsA = step_scalars(1e-3F, 0.9F, 0.999F, 10U, 1e-8F, 0.0F);
+const AdamWStepScalars kScalarsB = step_scalars(0.1F, 0.5F, 0.5F, 3U, 0.1F, 0.2F);
+// AMSGrad keeps weight decay at 0, as kAMSGradCases does (#46121).
+const AdamWStepScalars kAmsgradScalarsB = step_scalars(0.1F, 0.5F, 0.5F, 3U, 0.1F, 0.0F);
+
+// run_step_and_compare's tolerances.
+constexpr float kMeanErrorTolerance = 1e-3f;
+constexpr float kMaxErrorTolerance = 1e-2f;
+
+constexpr size_t kTileElements = 32U * 32U;
+
+// The kernels read the host values rounded to bf16.
+StoredTensor store_bf16(const xt::xarray<float>& values) {
+    return store(to_tt_bf16(values));
+}
+
+// The tensors of one launch, drawn as run_step_and_compare draws them.
+AdamWLaunchTensors make_adamw_launch_tensors(const std::vector<uint32_t>& shape, bool amsgrad, uint32_t seed) {
+    using ttml::test_utils::make_uniform_xarray;
+    AdamWLaunchTensors tensors{
+        store_bf16(make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed)),
+        store_bf16(make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 1U)),
+        store_bf16(make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 2U)),
+        store_bf16(make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed + 3U)),
+        std::nullopt};
+    if (amsgrad) {
+        tensors.max_exp_avg_sq = store_bf16(make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed + 4U));
+    }
+    return tensors;
+}
+
+// CPUAdamW's step from the values the launch read.
+AdamWValues adamw_reference(const AdamWLaunchTensors& tensors, const AdamWStepScalars& scalars) {
+    const bool amsgrad = tensors.max_exp_avg_sq.has_value();
+    CPUAdamW cpu_opt(scalars.lr, scalars.beta1, scalars.beta2, scalars.epsilon, scalars.weight_decay, amsgrad);
+    // The step count only feeds the bias corrections, which take the launch's beta powers instead.
+    if (amsgrad) {
+        cpu_opt.set_state(tensors.exp_avg.before, tensors.exp_avg_sq.before, 0U, tensors.max_exp_avg_sq->before);
+    } else {
+        cpu_opt.set_state(tensors.exp_avg.before, tensors.exp_avg_sq.before, 0U);
+    }
+    cpu_opt.set_beta_powers(scalars.beta1_pow, scalars.beta2_pow);
+    xt::xarray<float> param = tensors.param.before;
+    cpu_opt.step(param, tensors.grad.before);
+    AdamWValues values{
+        std::move(param), tensors.grad.before, cpu_opt.first_moment(), cpu_opt.second_moment(), std::nullopt};
+    if (amsgrad) {
+        values.max_exp_avg_sq = cpu_opt.max_second_moment();
+    }
+    return values;
+}
+
+// Elements of two bf16 tensors that are neither equal nor neighbouring bf16 values.
+size_t count_non_neighbouring_bf16(const xt::xarray<float>& a, const xt::xarray<float>& b) {
+    size_t count = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const auto a_bf16 = static_cast<int32_t>(std::bit_cast<uint32_t>(a.flat(i)) >> 16U);
+        const auto b_bf16 = static_cast<int32_t>(std::bit_cast<uint32_t>(b.flat(i)) >> 16U);
+        count += static_cast<size_t>(std::abs(a_bf16 - b_bf16) > 1);
+    }
+    return count;
+}
+
+// Each core updates a run of consecutive tiles, in the order of the core walk: one tile more on each of the first
+// `tiles % cores` cores (core group 1) than on the others (core group 2). In a parameter one tile wide, tile t holds
+// elements [1024 t, 1024 t + 1024).
+void expect_every_core_differs(const xt::xarray<float>& a, const xt::xarray<float>& b, const std::string& label) {
+    ASSERT_EQ(a.shape(), b.shape()) << label;
+    ASSERT_EQ(a.shape().back(), 32U) << label << ": the parameter must be one tile wide";
+    const size_t tiles = a.size() / kTileElements;
+    ASSERT_GT(tiles, 0U) << label;
+    const size_t cores = std::min<size_t>(tiles, ttml::test_utils::num_worker_cores());
+    const size_t group_1_cores = tiles % cores;
+    size_t tile = 0;
+    for (size_t core = 0; core < cores; ++core) {
+        const size_t core_tiles = tiles / cores + (core < group_1_cores ? 1U : 0U);
+        size_t mismatches = 0;
+        for (size_t i = tile * kTileElements; i < (tile + core_tiles) * kTileElements; ++i) {
+            mismatches += static_cast<size_t>(!same_bits(a.flat(i), b.flat(i)));
+        }
+        EXPECT_GT(mismatches, 0U) << label << ": core " << core << " (core group "
+                                  << (group_1_cores == 0U || core < group_1_cores ? 1 : 2) << ")";
+        tile += core_tiles;
+    }
+}
+
+// The tolerances of run_step_and_compare, for every tensor the launch updates.
+void expect_close_to_reference(const AdamWValues& expected, const AdamWValues& actual, const std::string& label) {
+    auto expect_close = [&](const xt::xarray<float>& reference, const xt::xarray<float>& result, const char* name) {
+        ASSERT_EQ(reference.shape(), result.shape()) << label << ": " << name;
+        const auto metrics = error_metrics(reference, result);
+        EXPECT_LE(metrics.mean_error, kMeanErrorTolerance) << label << ": " << name;
+        EXPECT_LE(metrics.max_error, kMaxErrorTolerance) << label << ": " << name;
+    };
+    expect_close(expected.param, actual.param, "param");
+    expect_close(expected.exp_avg, actual.exp_avg, "exp_avg");
+    expect_close(expected.exp_avg_sq, actual.exp_avg_sq, "exp_avg_sq");
+    ASSERT_EQ(expected.max_exp_avg_sq.has_value(), actual.max_exp_avg_sq.has_value()) << label;
+    if (expected.max_exp_avg_sq.has_value()) {
+        expect_close(*expected.max_exp_avg_sq, *actual.max_exp_avg_sq, "max_exp_avg_sq");
+    }
+    EXPECT_EQ(count_bit_mismatches(expected.grad, actual.grad), 0U) << label << ": the gradient must not change";
+}
+
+// Guards against a vacuous pass: a hit that kept any one of the cached program's scalars must miss the reference by
+// more than the mean tolerance.
+void expect_each_stale_scalar_detectable(
+    const AdamWLaunchTensors& tensors, const AdamWStepScalars& scalars, const AdamWStepScalars& cached) {
+    const auto expected = adamw_reference(tensors, scalars);
+    for (const auto& [name, stale] : stale_scalar_variants(scalars, cached)) {
+        const auto metrics = error_metrics(expected.param, adamw_reference(tensors, stale).param);
+        EXPECT_GT(metrics.mean_error, kMeanErrorTolerance) << "a stale " << name << " is too close to tell apart";
+    }
+}
+
+}  // namespace
+
+// Launch A compiles the program. Launch B updates fresh states with every hash-excluded scalar changed. Launch C
+// updates fresh copies of launch A's states with launch A's scalars and must reproduce launch A bit for bit.
+TEST_F(AdamWCacheHitTest, NewScalarsOnFreshStates_TwoCoreGroups) {
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto shape = ttml::test_utils::two_core_group_rows_shape(32U);
+    constexpr uint32_t kSeedA = 1000U;
+
+    const auto a = make_adamw_launch_tensors(shape, /*amsgrad=*/false, kSeedA);
+    const auto entries_before_a = device.num_program_cache_entries();
+    const auto a_out = launch_adamw(a, kScalarsA);
+    ASSERT_GT(device.num_program_cache_entries(), entries_before_a) << "launch A must compile a program";
+    EXPECT_EQ(a_out.buffer()->address(), a.param.tensor.buffer()->address()) << "AdamW updates the parameter in place";
+    const auto a_after = read_back(a);
+    expect_close_to_reference(adamw_reference(a, kScalarsA), a_after, "launch A");
+
+    const auto b = make_adamw_launch_tensors(shape, /*amsgrad=*/false, 2000U);
+    const auto entries_before_b = device.num_program_cache_entries();
+    launch_adamw(b, kScalarsB);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_b) << "launch B must reuse launch A's program";
+    expect_distinct_buffers(a, b);
+    const auto b_after = read_back(b);
+    expect_close_to_reference(adamw_reference(b, kScalarsB), b_after, "launch B (cache hit, new scalars)");
+    expect_each_stale_scalar_detectable(b, kScalarsB, kScalarsA);
+
+    const auto c = make_adamw_launch_tensors(shape, /*amsgrad=*/false, kSeedA);
+    const auto entries_before_c = device.num_program_cache_entries();
+    launch_adamw(c, kScalarsA);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_c) << "launch C must reuse launch A's program";
+    expect_distinct_buffers(a, c);
+    expect_distinct_buffers(b, c);
+    expect_bitwise_equal(a_after, read_back(c), "launch C (launch A again, cache hit)");
+
+    expect_bitwise_equal(a_after, read_back(a), "launch A's buffers after the later launches");
+    expect_bitwise_equal(b_after, read_back(b), "launch B's buffers after launch C");
+}
+
+// AMSGrad reads and writes a fifth tensor, max_exp_avg_sq, and has a program of its own. The launches alternate
+// between the two cached programs on fresh states, with new scalars on every hit.
+TEST_F(AdamWCacheHitTest, AmsgradAndPlainProgramsAlternate_TwoCoreGroups) {
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto shape = ttml::test_utils::two_core_group_rows_shape(32U);
+
+    struct Launch {
+        bool amsgrad;
+        AdamWStepScalars scalars;
+        bool cache_hit;
+        const char* name;
+    };
+    const std::array<Launch, 4> launches = {{
+        {false, kScalarsA, false, "launch A (plain, miss)"},
+        {true, kScalarsA, false, "launch B (AMSGrad, miss)"},
+        {false, kScalarsB, true, "launch C (plain, cache hit)"},
+        {true, kAmsgradScalarsB, true, "launch D (AMSGrad, cache hit)"},
+    }};
+
+    std::vector<AdamWLaunchTensors> tensors;
+    std::vector<AdamWValues> after;
+    tensors.reserve(launches.size());
+    after.reserve(launches.size());
+    for (uint32_t i = 0; i < launches.size(); ++i) {
+        const auto& launch = launches[i];
+        auto launch_tensors = make_adamw_launch_tensors(shape, launch.amsgrad, 3000U + 10U * i);
+        for (const auto& earlier : tensors) {
+            expect_distinct_buffers(earlier, launch_tensors);
+        }
+        const auto entries_before = device.num_program_cache_entries();
+        launch_adamw(launch_tensors, launch.scalars);
+        expect_cache(entries_before, launch.cache_hit ? CacheExpectation::Hit : CacheExpectation::Miss, launch.name);
+        after.push_back(read_back(launch_tensors));
+        expect_close_to_reference(adamw_reference(launch_tensors, launch.scalars), after.back(), launch.name);
+        if (launch.cache_hit) {
+            // Both programs were compiled with kScalarsA.
+            expect_each_stale_scalar_detectable(launch_tensors, launch.scalars, kScalarsA);
+        }
+        tensors.push_back(std::move(launch_tensors));
+    }
+    for (uint32_t i = 0; i < launches.size(); ++i) {
+        expect_bitwise_equal(
+            after[i], read_back(tensors[i]), std::string(launches[i].name) + ": buffers after the later launches");
+    }
+}
+
+// Every core seeds its stochastic rounding from the call's seed. Launches A, C and D update fresh copies of the same
+// states with the same scalars and seeds kSrSeed, kSrSeed + 1 and kSrSeed. The moments do not depend on the seed and a
+// seed can only round the parameter to one of the two bf16 neighbours of the fp32 update, so launch C must differ from
+// launch A only in that choice, on the tiles of every core, and launch D must reproduce launch A bit for bit. Launch B
+// runs without stochastic rounding, which the program hash keys, so it must compile a program of its own.
+TEST_F(AdamWCacheHitTest, StochasticRoundingSeedOnCacheHit_TwoCoreGroups) {
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto shape = ttml::test_utils::two_core_group_rows_shape(32U);
+    constexpr uint32_t kDataSeed = 5000U;
+    constexpr auto kEnabled = ttml::metal::StochasticRounding::Enabled;
+
+    const auto a = make_adamw_launch_tensors(shape, /*amsgrad=*/false, kDataSeed);
+    const auto entries_before_a = device.num_program_cache_entries();
+    launch_adamw(a, kScalarsA, kEnabled, kSrSeed);
+    ASSERT_GT(device.num_program_cache_entries(), entries_before_a) << "launch A must compile a program";
+    const auto a_after = read_back(a);
+    expect_close_to_reference(adamw_reference(a, kScalarsA), a_after, "launch A (stochastic rounding)");
+
+    const auto b = make_adamw_launch_tensors(shape, /*amsgrad=*/false, kDataSeed);
+    const auto entries_before_b = device.num_program_cache_entries();
+    launch_adamw(b, kScalarsA);
+    EXPECT_GT(device.num_program_cache_entries(), entries_before_b)
+        << "launch B (no stochastic rounding) must compile a program of its own";
+    expect_distinct_buffers(a, b);
+    const auto b_after = read_back(b);
+    expect_close_to_reference(adamw_reference(b, kScalarsA), b_after, "launch B (round to nearest)");
+
+    const auto c = make_adamw_launch_tensors(shape, /*amsgrad=*/false, kDataSeed);
+    const auto entries_before_c = device.num_program_cache_entries();
+    launch_adamw(c, kScalarsA, kEnabled, kSrSeed + 1U);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_c) << "launch C must reuse launch A's program";
+    expect_distinct_buffers(a, c);
+    expect_distinct_buffers(b, c);
+    const auto c_after = read_back(c);
+    expect_close_to_reference(adamw_reference(c, kScalarsA), c_after, "launch C (stochastic rounding, cache hit)");
+    EXPECT_EQ(count_bit_mismatches(a_after.exp_avg, c_after.exp_avg), 0U) << "launch C: exp_avg";
+    EXPECT_EQ(count_bit_mismatches(a_after.exp_avg_sq, c_after.exp_avg_sq), 0U) << "launch C: exp_avg_sq";
+    expect_every_core_differs(a_after.param, c_after.param, "launch C: a new seed must change the rounding on a hit");
+    EXPECT_EQ(count_non_neighbouring_bf16(a_after.param, c_after.param), 0U)
+        << "launch C: both seeds must round the same fp32 update";
+
+    const auto d = make_adamw_launch_tensors(shape, /*amsgrad=*/false, kDataSeed);
+    const auto entries_before_d = device.num_program_cache_entries();
+    launch_adamw(d, kScalarsA, kEnabled, kSrSeed);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_d) << "launch D must reuse launch A's program";
+    expect_distinct_buffers(a, d);
+    expect_distinct_buffers(b, d);
+    expect_distinct_buffers(c, d);
+    expect_bitwise_equal(a_after, read_back(d), "launch D (seed of launch A, cache hit)");
+
+    expect_bitwise_equal(a_after, read_back(a), "launch A's buffers after the later launches");
+    expect_bitwise_equal(b_after, read_back(b), "launch B's buffers after the later launches");
+    expect_bitwise_equal(c_after, read_back(c), "launch C's buffers after launch D");
 }

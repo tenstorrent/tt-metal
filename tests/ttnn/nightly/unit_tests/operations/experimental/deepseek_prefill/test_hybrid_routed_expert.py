@@ -48,9 +48,16 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _SITU_BETA_UP,
     _TORCH_ACTIVATION,
     _isl_params,
+    expert_golden,
+    expert_weights,
 )
 
-pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
+pytestmark = [
+    pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart),
+    # Every test here takes the function-scoped `device` fixture without parametrizing
+    # device_params, so the device is opened once per module rather than once per test.
+    pytest.mark.use_module_device,
+]
 
 # Which half serves an expert. Fixed rather than read from each model's own
 # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD, because the models that carry one all carry 320 and the
@@ -116,27 +123,13 @@ def run_hybrid_routed_expert(
     if torch_activation is None:
         raise ValueError(f"no torch reference for {activation}; supported: {list(_TORCH_ACTIVATION)}")
 
-    torch.manual_seed(42)
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
+    torch_active, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
 
-    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)
     torch_input[:active_tokens] = torch_active
 
-    torch_expert = TorchExpert(
-        emb_dim,
-        hidden_dim,
-        weights,
-        activation=torch_activation,
-        situ_beta=_SITU_BETA_GATE,
-        situ_linear_beta=_SITU_BETA_UP,
-    )
     with torch.no_grad():
-        torch_output_active = torch_expert(torch_active)
         if min_cap_frac is not None:
             # Same guard as the reference: without it a change to weight_scale, the dims or the
             # seed would quietly drop a saturation case back into the near-linear middle of both
@@ -211,8 +204,8 @@ def run_hybrid_routed_expert(
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 def test_hybrid_routed_expert_functional(
     device,
@@ -233,12 +226,12 @@ def test_hybrid_routed_expert_functional(
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_hybrid_routed_expert_isl_sweep(
     device,
@@ -261,8 +254,8 @@ def test_hybrid_routed_expert_isl_sweep(
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_hybrid_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
     """Fully-packed buffer at each token count, as in the reference's K3 sweep."""

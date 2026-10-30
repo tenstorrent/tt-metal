@@ -60,7 +60,7 @@ from helpers.tile_constants import (
     get_tile_params,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class CT_DIM(TemplateParameter):
 
 @dataclass
 class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_tile_init does."""
+    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_init does."""
 
     bcast_preserve: bool = False
 
@@ -345,12 +345,7 @@ def test_eltwise_bcast_col_custom(
         face_r_dim=face_r_dim,
     ).flatten()
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Spot-check: log a few elements per tile to verify srcA <op> bcast(srcB)
     tile_elems = tile_rows * 32

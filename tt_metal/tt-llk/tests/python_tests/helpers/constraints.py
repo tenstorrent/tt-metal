@@ -433,6 +433,24 @@ def is_valid_quasar_packer_conversion(
     return hardware_output in _QUASAR_PACK_OUTPUTS.get(hardware_input, set())
 
 
+def is_valid_quasar_dest_mode_conversion(
+    in_fmt: DataFormat, out_fmt: DataFormat, dest_acc: DestAccumulation
+) -> bool:
+    """Check Quasar Dest-mode packing. A 16-bit Dest rejects non-32-bit inputs packed
+    to 32-bit outputs and source-register Int8/UInt8 format conversions."""
+    if dest_acc != DestAccumulation.No:
+        return True
+    if out_fmt.is_32_bit() and not in_fmt.is_32_bit():
+        return False
+    src_reg_fmt = {
+        DataFormat.Int4: DataFormat.Int8,
+        DataFormat.UInt4: DataFormat.UInt8,
+    }.get(in_fmt, in_fmt)
+    return not (
+        src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8) and src_reg_fmt != out_fmt
+    )
+
+
 def skip_reason_32bit_input_without_dest_acc(formats, dest_acc):
     """Why :func:`skip_if_32bit_input_without_dest_acc` skips this variant, or ``None``.
     The exact-op guard in hardware_free/accuracy/test_sfpu_accuracy_budget.py asks it
