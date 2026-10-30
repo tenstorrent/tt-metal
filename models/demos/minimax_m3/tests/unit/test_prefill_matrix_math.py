@@ -138,3 +138,22 @@ def test_percentile_labels_exact_for_new_and_nearest_within_tolerance_for_cached
     assert mt._lbl(312320, mt.CACHED_PCT, mt.CACHED_TOLERANCE) == "312320 (p75)"
     assert mt._lbl(0, mt.CACHED_PCT, mt.CACHED_TOLERANCE) == "0"
     assert mt._lbl(100000, mt.CACHED_PCT, mt.CACHED_TOLERANCE) == "100000"
+
+
+def test_markdown_table_matches_the_57827_layout(capsys):
+    # Row labels in thousands with the cached percentile (311296 keeps p75), tok/s in k, a missing cell is x.
+    cells = {(0, 640): 18512.0, (0, 51200): 49400.0, (311296, 640): 13700.0}
+    mt.md_table("Useful (new) tok/s, loaded pipeline, steady state", cells, [0, 311296], [640, 51200], mt.MD_TOKS)
+    assert capsys.readouterr().out.splitlines() == [
+        "",
+        "**Useful (new) tok/s, loaded pipeline, steady state**",
+        "",
+        "| cached \\ new | 640 (p25) | 51200 (p99) |",
+        "|---|---|---|",
+        "| 0 | 18.5k | 49.4k |",
+        "| 311k (p75) | 13.7k | x |",
+    ]
+    mt.md_table("TTFT under load, p90 per request, ms", {(61440, 5120): 1503.4}, [61440], [5120], mt.MD_MS, True)
+    out = capsys.readouterr().out
+    assert out.startswith("\n<details><summary>TTFT under load, p90 per request, ms</summary>\n\n")
+    assert "| 61k (p25) | 1503 |" in out and out.rstrip().endswith("</details>")

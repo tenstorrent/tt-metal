@@ -39,6 +39,7 @@ import math
 import os
 import statistics
 import sys
+import threading
 import time
 
 sys.path.insert(
@@ -50,6 +51,30 @@ from matrix_math import read_rank_csv, steady_state, ttft_stats, wait_for_chunk 
 
 import ttnn  # noqa: E402
 from models.demos.common.prefill.runners import prefill_producer as pp  # noqa: E402  (reads PREFILL_* env at import)
+from models.demos.common.prefill.runners.layer_completion_ring_reader import (  # noqa: E402
+    connect_layer_completion_channel,
+)
+
+
+def start_completion_discard(timeout_s: int):
+    """Drop the scheduler's layer-completion messages on a daemon thread; returns a callable giving the count.
+    Nothing else reads that ring here, and a full ring (1024) stalls the pipeline. Not LayerCompletionDrain: it
+    rejects the repeated (slot, positions) keys of the loaded streams."""
+    ring = connect_layer_completion_channel(timeout_s)
+    if ring is None:
+        logger.warning("[matrix] no completion ring to drain; the runner hangs once its scheduler ring is full")
+        return lambda: 0
+    dropped = [0]
+
+    def run() -> None:
+        while True:
+            if ring.try_pop() is None:
+                time.sleep(0.001)
+            else:
+                dropped[0] += 1
+
+    threading.Thread(target=run, name="matrix-completion-discard", daemon=True).start()
+    return lambda: dropped[0]
 
 
 def main() -> int:
@@ -103,6 +128,7 @@ def main() -> int:
     service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[matrix] attached to {service_id}; payload={payload_bytes}B")
+    completions_dropped = start_completion_discard(timeout_s)
 
     # The runner's per-rank chunk counter continues across producer sessions: start from what is there. Every
     # rank processes every chunk exactly once, so rank 0 and the last rank must have logged the same chunk set,
@@ -265,7 +291,10 @@ def main() -> int:
             with open(args.out, "a") as fh:
                 fh.write(json.dumps(lr) + "\n")
             time.sleep(0.5)
-    logger.info(f"[matrix] ROW cached={C} done; tables: matrix_table.py {args.out}")
+    logger.info(
+        f"[matrix] ROW cached={C} done ({completions_dropped()} layer completions drained); "
+        f"tables: matrix_table.py {args.out}"
+    )
     return 0
 
 

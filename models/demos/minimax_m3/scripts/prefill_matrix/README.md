@@ -107,8 +107,10 @@ Results: `OUT` holds one JSON line per idle iteration (`mode: idle`) and per loa
 (`mode: loaded`). Print the tables again with
 
 ```bash
-models/demos/minimax_m3/scripts/prefill_matrix/matrix_table.py <results.jsonl> [--iter0] [--csv out.csv]
+models/demos/minimax_m3/scripts/prefill_matrix/matrix_table.py <results.jsonl> [--iter0] [--csv out.csv] [--markdown]
 ```
+
+`--markdown` prints the tables in the layout of the #57827 comments (the CI job summary uses it), ready to paste there.
 
 Per-run artefacts in `WORK`: `runner*.log` (all ranks), `producer*.log`, `timing_*/rank<r>.csv`
 (one row per chunk per rank: `rank,c,compute_start,compute_ms`, from `PREFILL_SYNC_PER_CHUNK=1`),
@@ -119,6 +121,38 @@ The measurement arithmetic (steady-state window, TTFT-under-load statistics, tim
 in the ttnn-free `matrix_math.py`, unit-tested by
 `models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py` (host-only, no device; run it with
 `pytest models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py`).
+
+## CI (Blaze prefill, SC4)
+
+`ci/run_matrix_ci.sh` runs the same measurement (`matrix_producer.py`, unchanged) as a CI job on the 4-galaxy
+`bh_sc4_high_power` (14 kW) pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"` in
+`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, `test_type: minimax_prefill_matrix`. It runs weekly,
+on the workflow's Saturday 20:00 UTC cron (`test_group: weekly`), not in the nightly run. Dispatch it alone with
+
+```bash
+gh workflow run blaze-models-prefill-tests.yaml -R tenstorrent/tt-metal --ref <branch> -f test-type=minimax_prefill_matrix
+```
+
+How it differs from `run_matrix.sh`:
+
+* No Slurm and no galaxy reset. Hosts come from `/etc/ttop/hostfile`, and the job's setup step has already reset and
+  validated the cluster.
+* The 16 ranks are placed by tt-run discovery on `quad_bh_galaxy_16stage_2x4_z_chain.textproto` (`MATRIX_CI_LAUNCH=discovery`,
+  the default), so the quad does not need to be wired as the exabox straight chain. `MATRIX_CI_LAUNCH=binding` falls
+  back to `binding_16stage_quad.yaml.in`, with the hosts in the ring order of `/etc/ttop/rankfile`.
+* Unlike `run_matrix.sh`, one runner launch serves every cached row, with the KV capacity at the model's max context
+  (`KV_CAPACITY`, default 1048576), as a production server allocates it, so the weights are loaded once. Capacity
+  barely affects speed: the dense-layer gather moves only the valid prefix. Each row is one producer session.
+* It runs the 5x7 table of the #57827 comments: cached 0 / 61440 / 143360 / 312320 (runs at 311296) / 552960 x new
+  640 / 1600 / 3072 / 5120 / 6900 / 32768 / 51200, 3 idle iterations, 4 users x 240 chunks loaded, in config C of #57827
+  (`CHUNK=2048`, `LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4`). The table is set by the env knobs (`CACHED`, `NEW`,
+  `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) in the job's `cmd`.
+* Perf is reported, not gated. The tables go to the job summary and the job log in the #57827 markdown layout
+  (`matrix_table.py --markdown`). The JSONL, CSV, runner/producer/rank logs and timing CSVs are uploaded as the
+  `prefill-results-sc4-*` artifact (`m3_prefill_matrix/`). The job fails only when the run breaks (bring-up, a producer
+  error, missing chunks).
+* `MATRIX_CI_DRY_RUN=1` prints the tt-run and producer commands without launching anything. `TTRUN_DIR` can point at
+  a fake `hostfile` / `rankfile` for that.
 
 ## Notes for comparing runs
 
@@ -144,6 +178,7 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 | `matrix_math.py` | stdlib-only measurement arithmetic used by the producer (unit-tested) |
 | `matrix_shutdown.py` | sends the SHUTDOWN sentinel to a live runner |
 | `matrix_table.py` | tables / CSV from a results JSONL |
+| `ci/run_matrix_ci.sh` | CI flavour (SC4, no Slurm): tt-run launch, one producer session per cached row, job-summary table |
 | `matrix_common.sh` | shared helpers sourced by the shell scripts: constants, ulimit raise, `srun` wrapper, producer/shutdown env, scoped runner shutdown + kill |
 | `binding_16stage_quad.yaml.in`, `quad_bh_galaxy_16stage_2x4_z_chain.textproto` | 4-galaxy 16-stage topology |
 | `binding_12stage_tri.yaml.in`, `tri_bh_galaxy_12stage_2x4_z_chain.textproto` | 3-galaxy 12-stage fallback |

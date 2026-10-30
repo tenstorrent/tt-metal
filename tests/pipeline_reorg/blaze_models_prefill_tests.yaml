@@ -1382,6 +1382,40 @@
   sp_config: sc1
 
 
+# MiniMax-M3 16-stage pipeline-prefill perf matrix: 5 cached x 7 new token counts, idle + loaded,
+# chunk 2048, dense layers on their own stages, one runner with a 1M-token KV cache. Perf is reported, not gated.
+- name: "(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export CACHED=0,61440,143360,312320,552960
+    export NEW=640,1600,3072,5120,6900,32768,51200
+    export ITERS=3
+    export USERS=4
+    export TARGET_CHUNKS=240
+    export CHUNK=2048
+    export LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4
+    export MATRIX_CI_EXPECT_14KW=1
+    exec bash models/demos/minimax_m3/scripts/prefill_matrix/ci/run_matrix_ci.sh
+  test_type: minimax_prefill_matrix
+  test_tags: [minimax_m3, runner]
+  test_group: weekly # Saturday only, not daily
+  artifact_subdir: m3_prefill_matrix
+  skus:
+    bh_sc4_high_power:
+      timeout: 30 # ~19 min measured
+      tier: 2
+      release_ready: false
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  budget_type: demo
+  sp_config: sc4
+
+
 # ===== Mistral-Small-4-119B ============================================================================
 
 # Mistral-Small-4-119B suite: one section per test, run serially on one allocation.
