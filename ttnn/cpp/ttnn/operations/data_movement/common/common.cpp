@@ -823,9 +823,15 @@ ttnn::MemoryConfig create_sharded_memory_config(
             case ShardStrategy::WIDTH:
                 computed_shard_shape = compute_width_sharded_shard_shape(squeezed_tensor_hw, total_num_cores);
                 break;
-            case ShardStrategy::HEIGHT:
-                computed_shard_shape = compute_height_sharded_shard_shape(squeezed_tensor_hw, layout, total_num_cores);
+            case ShardStrategy::HEIGHT: {
+                // A tiled tensor pads each batch's height to a whole tile, so shards must cover the padded rows.
+                const uint32_t physical_height = layout == tt::tt_metal::Layout::TILE
+                                                     ? batch_size * tt::round_up(height, tt::constants::TILE_HEIGHT)
+                                                     : tensor_height;
+                computed_shard_shape =
+                    compute_height_sharded_shard_shape({physical_height, tensor_width}, layout, total_num_cores);
                 break;
+            }
             default: TT_ASSERT(false, "Invalid shard strategy");
         }
     }

@@ -2843,12 +2843,12 @@ def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
         ttnn.deallocate(resident)
 
 
-def test_create_sharded_memory_config_height_sharded_tile_layout_pads_to_tiles(device):
-    shape = (1, 1, 96, 64)
+@pytest.mark.parametrize("shape, expected_shard_shape", [((1, 1, 96, 64), (64, 64)), ((8, 1, 33, 32), (256, 32))])
+def test_create_sharded_memory_config_height_sharded_tile_layout_pads_to_tiles(device, shape, expected_shard_shape):
     memory_config = ttnn.create_sharded_memory_config_(
         shape, ttnn.CoreGrid(x=2, y=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, tile_layout=True
     )
-    assert tuple(memory_config.shard_spec.shape) == (64, 64)
+    assert tuple(memory_config.shard_spec.shape) == expected_shard_shape
 
     torch_input = torch.rand(shape, dtype=torch.bfloat16)
     tensor = ttnn.from_torch(

@@ -107,4 +107,7 @@ def test_workload_descriptor_cache_hit_after_aliased_inputs_is_rejected(device, 
     q, k, v = to_device(1.0), to_device(1.0), to_device(1.0)
     with expect_error(RuntimeError, "cannot be re-patched"):
         ttnn.to_torch(ring_sdpa(q, k, v))
+
+    device.clear_program_cache()
+    ttnn.to_torch(ring_sdpa(q, k, v))
     device.clear_program_cache()

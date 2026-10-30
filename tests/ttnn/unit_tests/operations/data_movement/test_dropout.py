@@ -157,22 +157,32 @@ def test_dropout_cache_hit_rederives_buffer_address(device):
 
 @pytest.mark.parametrize("use_per_device_seed", [False, True])
 def test_dropout_mask_differs_across_cores(device, use_per_device_seed):
-    """Each tile lands on its own core; every core must draw its own mask on both the cache miss and hit."""
+    """Each tile lands on its own core; every core must draw its own mask, and a fixed seed must reproduce the
+    same masks whether the program is freshly built or served from the cache."""
     num_tiles = 8
     t = torch.ones((1, 1, num_tiles * 32, 32))
     tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    device.enable_program_cache()
-    device.clear_program_cache()
-
-    for _ in range(2):
+    def run(seed):
         out = ttnn.experimental.dropout(
-            tensor, probability=0.5, scale=2.0, seed=1234, use_per_device_seed=use_per_device_seed
+            tensor, probability=0.5, scale=2.0, seed=seed, use_per_device_seed=use_per_device_seed
         )
         masks = (ttnn.to_torch(out).float().reshape(num_tiles, 32, 32) == 0).reshape(num_tiles, -1)
         for i in range(num_tiles):
             for j in range(i + 1, num_tiles):
                 assert not torch.equal(masks[i], masks[j]), f"tiles {i} and {j} share an identical dropout mask"
+        return masks
 
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    miss = run(1234)
+    hit_same_seed = run(1234)
+    hit_new_seed = run(4321)
     assert device.num_program_cache_entries() == 1
+    assert torch.equal(miss, hit_same_seed), "a fixed seed must give the same masks on a cache miss and hit"
+    assert not torch.equal(miss, hit_new_seed)
+
+    device.clear_program_cache()
+    assert torch.equal(hit_new_seed, run(4321)), "a cache hit with a new seed must match a fresh build"
     device.disable_and_clear_program_cache()

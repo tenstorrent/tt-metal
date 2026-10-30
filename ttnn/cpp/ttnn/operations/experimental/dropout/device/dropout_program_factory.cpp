@@ -55,10 +55,24 @@ uint32_t per_device_seed(
                             : device->id());
 }
 
+uint32_t fmix32(uint32_t h) {
+    h ^= h >> 16;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    h *= 0xC2B2AE35u;
+    h ^= h >> 16;
+    return h;
+}
+
 // Every core's SFPU PRNG starts from its own seed, so cores sharing a seed would emit identical masks.
-// Keyed on the core's first tile (not its index) so it composes with per_device_seed's device-id offset.
+// Hashed rather than strided: Quasar's init_prng_seed seeds lane i with seed + i * 0x9E3779B9, so a linear
+// per-core stride would make one core's lanes shifted copies of another's. All-ones is the XNOR-LFSR lock-up
+// state and dropout_init passes the seed to init_prng_seed unfiltered.
 // Shared by the cache-miss build and override_runtime_arguments, which must agree bit-for-bit.
-uint32_t per_core_seed(uint32_t seed, uint32_t tile_offset) { return seed + (tile_offset * 0x9E3779B9u); }
+uint32_t per_core_seed(uint32_t seed, uint32_t tile_offset) {
+    const uint32_t core_seed = fmix32(seed ^ fmix32(tile_offset + 0x632BE5ABu));
+    return core_seed == 0xFFFFFFFFu ? 0xFFFFFFFEu : core_seed;
+}
 
 }  // namespace
 

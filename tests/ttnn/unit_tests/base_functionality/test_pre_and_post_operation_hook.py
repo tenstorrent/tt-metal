@@ -73,9 +73,11 @@ def test_pre_operation_hook_runs_for_concurrent_top_level_operations(device):
     worker_in_hook = threading.Event()
     main_op_done = threading.Event()
     hooked_threads = []
+    operation_ids = []
 
     def pre_hook(operation, args, kwargs):
         hooked_threads.append(threading.current_thread().name)
+        operation_ids.append(ttnn.decorators.get_current_operation_id())
         if threading.current_thread().name == "worker":
             worker_in_hook.set()
             main_op_done.wait(timeout=30)
@@ -100,3 +102,4 @@ def test_pre_operation_hook_runs_for_concurrent_top_level_operations(device):
 
     assert not worker_errors, worker_errors
     assert sorted(hooked_threads) == sorted(["worker", threading.current_thread().name])
+    assert len(set(operation_ids)) == 2, f"concurrent operations must keep their own operation ids: {operation_ids}"

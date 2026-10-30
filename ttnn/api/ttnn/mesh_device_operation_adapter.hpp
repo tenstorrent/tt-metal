@@ -687,7 +687,8 @@ public:
                             buffer_addresses(collected.buffers) == sv.unpatchable_buffer_addresses,
                             "{}: program cache hit on an entry built from a call that passed the same buffer in more "
                             "than one tensor slot, so its buffer addresses cannot be re-patched for the current "
-                            "tensors. Pass distinct tensors or disable the program cache for this op.",
+                            "tensors. The cached entry stays unpatchable: call clear_program_cache() on the device "
+                            "before this call, or run with the program cache disabled.",
                             ttsl::get_type_name<DeviceOperation>());
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
