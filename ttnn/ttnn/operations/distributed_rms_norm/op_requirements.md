@@ -103,7 +103,7 @@ stay green.
 does not fit, so Phase 0 plans are unchanged. It also fixed an order-dependent CB clash: `l1_budget` is now bounded
 by the lowest known L1 buffer, including the persistent semaphores. No structural L1 limits remain in this set.
 
-### [ ] Refinement 2 — Output placement independent of the input placement
+### [x] Refinement 2 — Output placement independent of the input placement
 
 **Goal**: move the translated model calls that ask for a **different output placement** than the input's from
 `NotImplementedError` (regime refusal (b)) to passing. Concretely, `test_translated.py::test_simulated_distributed_layernorm`:

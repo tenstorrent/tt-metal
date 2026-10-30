@@ -4,3 +4,4 @@
 {"event":"fix_applied","fix":"per-wave gather semaphores (SEM_GATHER_BASE+k); MIN_BLOCKS_PER_CORE 2->1; x_depth 1 for single-block cores; DRMS_ABLATE_EXCHANGE hook","result":"103/103 + 12 knob cases pass; focus fastest 30.92->23.93us (win), slowest 31.46->25.78","ts":"2026-10-30T18:41:24+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"memory-budget-metal","args":"","ts":"2026-10-30T23:14:46+00:00"}
 {"event":"test_run","result":"pass","detail":"Refinement 1: 120/120 target golden cells, 66 prior-passing gamma cells, unit files green; fixed l1_budget vs persistent semaphores clash","ts":"2026-10-30T23:23:05+00:00"}
+{"event":"test_run","status":"pass","tests":"test_output_placement 8/8, test_simulated_distributed_layernorm 16/16, unit 111/111, golden 8192 HEIGHT 160","ts":"2026-10-30T23:53:45+00:00"}

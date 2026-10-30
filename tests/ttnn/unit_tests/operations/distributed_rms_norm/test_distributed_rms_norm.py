@@ -142,6 +142,7 @@ def run_case(
     eps=1e-6,
     fp32_dest_acc_en=True,
     memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+    out_memory=None,
     seed=42,
 ):
     torch.manual_seed(seed)
@@ -160,6 +161,8 @@ def run_case(
     tx = to_mesh(x, mesh, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem)
     if memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         kwargs["memory_config"] = tx.memory_config()
+    if out_memory is not None:
+        kwargs["memory_config"] = out_memory(shape) if callable(out_memory) else out_memory
     tg = make_gamma(gamma, mesh, dtype=gamma_dtype, layout=gamma_layout) if has_gamma else None
 
     out = distributed_rms_norm(
@@ -295,6 +298,49 @@ def test_fp32_dest_off(mesh_shape, dtype, shape, mesh_device):
 def test_sharded(mesh_shape, memory_layout, shape, mesh_device):
     _, _, out = run_case(mesh_device, shape, cluster_axis=LINEAR_AXES[0], memory_layout=memory_layout)
     assert out.memory_config().memory_layout == memory_layout
+
+
+def _width_out(grid_x, grid_y, x0=0):
+    """WIDTH_SHARDED L1 output over a grid_x x grid_y rectangle at (x0, 0) (ragged last shard allowed)."""
+
+    def make(shape):
+        rows = 1
+        for d in shape[:-1]:
+            rows *= d
+        n = grid_x * grid_y
+        shard_w = -(-shape[-1] // (n * 32)) * 32
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x0, 0), ttnn.CoreCoord(x0 + grid_x - 1, grid_y - 1))})
+        return ttnn.create_sharded_memory_config(
+            shape=(-(-rows // 32) * 32, shard_w),
+            core_grid=crs,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    return make
+
+
+# Refinement 2: output placement independent of the input placement (writer TensorAccessor path).
+@needs_group
+@pytest.mark.parametrize("mesh_shape", [None])
+@pytest.mark.parametrize(
+    "in_layout,out_memory",
+    [
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.TensorMemoryLayout.INTERLEAVED, _width_out(8, 3)),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, _width_out(4, 2, 1)),
+    ],
+    ids=["ws_to_dram", "hs_to_dram", "dram_to_ws", "ws_to_ws_regrid"],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 32, 1792), (1, 1, 64, 1000)], ids=_id)
+def test_output_placement(mesh_shape, in_layout, out_memory, shape, mesh_device):
+    _, _, out = run_case(
+        mesh_device, shape, cluster_axis=LINEAR_AXES[0], memory_layout=in_layout, out_memory=out_memory
+    )
+    want = out_memory(shape) if callable(out_memory) else out_memory
+    assert out.memory_config().memory_layout == want.memory_layout
 
 
 @needs_group

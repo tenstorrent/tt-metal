@@ -95,3 +95,25 @@
 - Tests added: none. The 120 golden cells pin the path. Unit regression net: acceptance 103/103, debug 6/6,
   knobs 12/12, precision baseline 20 passed / 4 skipped (each file run on its own: running the whole directory in
   one process fails 42 setups on a fixture fabric-config reopen, which is unrelated to the op).
+
+## Refinement 2 — Output placement independent of the input placement
+- Date: 2026-10-30
+- What was done: split "input sharded" (`g.sharded`: `cb_x_tiles` zero-copy on the input shard) from "output native"
+  (`g.out_native`: `cb_output` zero-copy on the output shard, only when the output's placement equals the input's
+  shard). Every other placement pair takes the existing streaming `cb_output` (`STREAM_DEPTH·C` pages, added to
+  `cb_inventory` / the L1 solve) and the writer's output `TensorAccessor`: sharded in → interleaved out, interleaved in
+  → sharded out, sharded in → sharded out on another grid / shard shape (non-local writes). The compute / writer
+  `SHARDED` CT arg is now `out_native` (it only ever gated the output path). `same_placement` / `output_is_native`
+  moved into the program descriptor. `out_native` is in the program hash (both memory configs already were).
+  `validate()` regime refusal (b) is retired; a sharded output `memory_config` only needs a shard spec.
+  Reused: the shard-backed input CB, the interleaved writer path, the streaming cb_output. Added: one Geometry flag.
+  No kernel logic change.
+- Accuracy achieved: the golden tolerances (PCC ≥ 0.9997, atol 0.45, rtol 0.05) on all 16
+  `test_simulated_distributed_layernorm` cells (bf16 / bf8b input, 2048 W, WIDTH in → WIDTH out on 8x4 / 4x4@(1,0) /
+  8x3 / 4x2 grids); unit placement cases at the acceptance tolerance.
+- Golden test progress: 16/16 `test_simulated_distributed_layernorm` (the 12 placement-mismatch targets, previously
+  NotImplementedError). Regression slice: `test_golden.py -k "8192 and HEIGHT"` 160 passed (native output +
+  streaming γ path); unit acceptance file 111/111.
+- Issues encountered: None.
+- Tests added: `test_distributed_rms_norm.py::test_output_placement` (WS→DRAM, HS→DRAM, DRAM→WS 8x3, WS→WS regrid
+  4x2@(1,0); shapes 32x1792 and 64x1000 W-non-aligned), `run_case(out_memory=...)`.

@@ -186,22 +186,6 @@ def _classify(input_tensor, gamma, cfg, cluster_axis, topology, num_links):
     return axes
 
 
-def _same_placement(out_mc, in_mc) -> bool:
-    if out_mc.memory_layout != in_mc.memory_layout:
-        return False
-    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
-        return True
-    a, b = out_mc.shard_spec, in_mc.shard_spec
-    return (
-        out_mc.buffer_type == in_mc.buffer_type
-        and a is not None
-        and b is not None
-        and list(a.shape) == list(b.shape)
-        and a.grid == b.grid
-        and a.orientation == b.orientation
-    )
-
-
 def validate(
     input_tensor,
     *,
@@ -230,16 +214,14 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"distributed_rms_norm: unsupported combination (refinement candidate): {exc}")
 
-    # Regime refusal (b): a sharded input writes its own shard spec; an interleaved input an interleaved output.
-    in_mc = input_tensor.memory_config()
-    if memory_config is not None and not _same_placement(memory_config, in_mc):
-        if not (
-            in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-            and memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-        ):
-            raise NotImplementedError(
-                f"distributed_rms_norm: output placement {memory_config} must match the input placement {in_mc}"
-            )
+    # Output placement is independent of the input's (Refinement 2): the same shard -> cb_output zero-copy on it; any
+    # other placement -> the writer's TensorAccessor (interleaved, or a shard on another grid / shape).
+    if (
+        memory_config is not None
+        and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+        and memory_config.shard_spec is None
+    ):
+        raise NotImplementedError("distributed_rms_norm: a sharded output memory_config must carry a shard spec")
     return cfg, G, L, ring
 
 

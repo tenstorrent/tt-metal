@@ -290,10 +290,11 @@ class Geometry:
     masked: bool
     G: int  # devices per group
     gamma_resident: bool  # cb_gamma_tiles holds the whole window (Wp) vs streams STREAM_DEPTH * C pages
+    out_native: bool  # cb_output IS the output shard (same placement as the input shard) vs the writer path
 
 
 def compute_geometry(
-    input_tensor, gamma, chunk_cap, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident=True
+    input_tensor, gamma, chunk_cap, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident=True, out_native=None
 ) -> Geometry:
     W = list(input_tensor.shape)[-1]
     Wt = math.ceil(W / TILE_DIM)
@@ -332,6 +333,7 @@ def compute_geometry(
         masked=masked,
         G=G,
         gamma_resident=has_gamma and gamma_resident,
+        out_native=sharded if out_native is None else (sharded and out_native),
     )
 
 
@@ -369,6 +371,7 @@ def cb_inventory(g: Geometry, R: int, x_depth: int, input_dtype, output_dtype, g
     ]
     if not g.sharded:
         inv.append((CB_X_TILES, input_dtype, g.T_in, x_depth * R * g.WS))
+    if not g.out_native:
         inv.append((CB_OUTPUT, output_dtype, g.T_out, STREAM_DEPTH * g.C))
     if g.has_gamma:
         inv.append((CB_GAMMA_TILES, gamma_dtype, g.T_g, gamma_tiles_pages(g)))  # resident window or stream ring
@@ -414,26 +417,44 @@ def choose_block_rows(g: Geometry, rows_per_core_max: int, budget: int):
     return None
 
 
-def choose_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G):
+def choose_blocking(
+    input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, out_native=None
+):
     """Resident γ first (the γ window read once per call); when no blocking fits with it, the same search with γ
     streamed per (block, chunk) — the base op's L1 fallback for wide-row shards."""
     choice = None
     if GAMMA_RESIDENT or gamma is None:
-        choice = _search_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G)
+        choice = _search_blocking(
+            input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, True, out_native
+        )
     if choice is None and gamma is not None:
         choice = _search_blocking(
-            input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, False
+            input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, False, out_native
         )
     return choice
 
 
 def _search_blocking(
-    input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident=True
+    input_tensor,
+    gamma,
+    rows_max,
+    budget,
+    fp32_acc,
+    S,
+    sharded,
+    combine,
+    G_w,
+    masked,
+    G,
+    gamma_resident=True,
+    out_native=None,
 ):
     fallback = None
     cap = W_CHUNK_TILES
     while cap >= 1:
-        g = compute_geometry(input_tensor, gamma, cap, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident)
+        g = compute_geometry(
+            input_tensor, gamma, cap, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident, out_native
+        )
         choice = choose_block_rows(g, rows_max, budget)
         if choice is not None:
             if choice[1] == 2 or sharded or choice[0] >= rows_max:
@@ -515,6 +536,33 @@ def _r3_interleaved_layout(Wt, T, num_cores):
     return S, G_w, G_h
 
 
+def same_placement(out_mc, in_mc) -> bool:
+    """Output memory config identical in placement to the input's (interleaved / interleaved, or the same shard)."""
+    if out_mc.memory_layout != in_mc.memory_layout:
+        return False
+    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return True
+    a, b = out_mc.shard_spec, in_mc.shard_spec
+    return (
+        out_mc.buffer_type == in_mc.buffer_type
+        and a is not None
+        and b is not None
+        and list(a.shape) == list(b.shape)
+        and a.grid == b.grid
+        and a.orientation == b.orientation
+    )
+
+
+def output_is_native(input_tensor, output_tensor) -> bool:
+    """cb_output backed zero-copy on the output shard: only when the output shard IS the input shard's placement
+    (every core packs its own rows / columns into its own L1). Any other output placement (interleaved, or a shard on a
+    different grid / shape) goes through the writer's TensorAccessor: a genuinely non-local write."""
+    in_mc = input_tensor.memory_config()
+    return in_mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED and same_placement(
+        output_tensor.memory_config(), in_mc
+    )
+
+
 def _sharded_work(input_tensor, T, Wt):
     mc = input_tensor.memory_config()
     spec = mc.shard_spec
@@ -545,7 +593,7 @@ def _sharded_work(input_tensor, T, Wt):
     return _group_work(cores[:n], n, S, Wt, [(0, T)]), S, T
 
 
-def select_plan(input_tensor, gamma, fp32_acc, available, G, budget) -> Plan:
+def select_plan(input_tensor, gamma, fp32_acc, available, G, budget, out_native=None) -> Plan:
     W = list(input_tensor.shape)[-1]
     Wt = math.ceil(W / TILE_DIM)
     T = tensor_tile_rows_of(input_tensor)
@@ -557,7 +605,9 @@ def select_plan(input_tensor, gamma, fp32_acc, available, G, budget) -> Plan:
         # Compute-side W-pad mask (partial reduce scaler on the last tile): wherever the W-pad columns cannot be zeroed in
         # place — a caller's shard (read-only), or a Bfp8_b tile (16 datums share an exponent: no element-wise zero).
         masked = (W % TILE_DIM != 0) and (sharded or input_tensor.dtype == ttnn.bfloat8_b)
-        choice = choose_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G)
+        choice = choose_blocking(
+            input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, out_native
+        )
         if choice is None:
             return None
         g, R, x_depth = choice
@@ -736,6 +786,7 @@ def create_mesh_program_descriptor(
 
     # ---- ports + fused grid ----
     in_mc = input_tensor.memory_config()
+    out_native = output_is_native(input_tensor, output_tensor)
     busy = set()
     for t in (input_tensor, output_tensor):
         mc = t.memory_config()
@@ -767,7 +818,13 @@ def create_mesh_program_descriptor(
     for _ in range(4):
         try:
             plan = select_plan(
-                input_tensor, gamma, fp32_acc, available, G, l1_budget(mesh, l1_tensors, sem_addrs) - reserve
+                input_tensor,
+                gamma,
+                fp32_acc,
+                available,
+                G,
+                l1_budget(mesh, l1_tensors, sem_addrs) - reserve,
+                out_native,
             )
         except NotImplementedError as exc:
             if reserve == LANDING_L1_RESERVE:
@@ -819,6 +876,7 @@ def create_mesh_program_descriptor(
     ]
     if g.sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
+    if g.out_native:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor))
 
     w_valid_last = g.W % TILE_DIM or TILE_DIM
@@ -853,7 +911,7 @@ def create_mesh_program_descriptor(
         C,
         g.num_w_chunks,
         g.WS,
-        int(g.sharded),
+        int(g.out_native),  # compute packs straight into the output shard
         int(g.combine),
         int(g.masked),
         g.G_w,
@@ -871,7 +929,7 @@ def create_mesh_program_descriptor(
         g.num_w_chunks,
         g.Wt,
         g.WS,
-        int(g.sharded),
+        int(g.out_native),  # nothing to write: cb_output is the output shard
         g.T_out,
         g.T_g,
         g.es_g,
@@ -909,6 +967,7 @@ def create_mesh_program_descriptor(
             gamma.dtype if gamma is not None else None,
             gamma.layout if gamma is not None else None,
             g.gamma_resident,
+            g.out_native,
             plan.regime,
             [(w.core.x, w.core.y, w.start_tile_row, w.rows, w.w0, w.V, w.index) for w in plan.work],
             R,

@@ -15,7 +15,9 @@
 //           to row 0 of face 1 by 16 RISC-V word copies (no DRAM-aligned read can land there directly).
 // Output (interleaved): cb_output in C-page quanta, per block, per chunk, per tile-row (the order compute packs:
 //   per chunk, its waves in row order); the chunk's valid tiles are written (page tile_row * Wt + w0 + c * C + j), one
-//   write flush per quantum. Sharded: cb_output IS the output shard, compute packs into it; nothing to write.
+//   write flush per quantum, through the output TensorAccessor (interleaved, or a shard placed differently from the
+//   input: a non-local write). Native (output shard == input shard): cb_output IS the output shard, compute packs
+//   into it; nothing to write.
 // Raw NoC / CB calls: no kernel_lib helper reads a γ row-0 prefix or relays a γ stick into a tile's row 0.
 
 #include <stdint.h>
@@ -36,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t C = get_compile_time_arg_val(3);
     constexpr uint32_t num_w_chunks = get_compile_time_arg_val(4);
     constexpr uint32_t Wt = get_compile_time_arg_val(5);
-    constexpr bool sharded = get_compile_time_arg_val(7) != 0;
+    constexpr bool sharded = get_compile_time_arg_val(7) != 0;  // output native (zero-copy shard)
     constexpr uint32_t T_out = get_compile_time_arg_val(8);
     constexpr uint32_t T_g = get_compile_time_arg_val(9);
     constexpr uint32_t es_g = get_compile_time_arg_val(10);

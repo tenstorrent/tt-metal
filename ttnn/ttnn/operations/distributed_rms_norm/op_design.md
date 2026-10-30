@@ -21,7 +21,7 @@
 | `topology` (kw-only) | `ttnn.Topology` | no | `Linear`, `Ring` | `Linear` | host: exchange plan (RT) |
 | `num_links` (kw-only) | `Optional[int]` | no | `1 ≤ num_links ≤ L_usable`. `L_usable` is the minimum over every hop of the group of `len(ttnn.get_forwarding_link_indices(src, dst))`. | `None` (= `L_usable`) | host: port count `2L` |
 | `compute_kernel_config` (kw-only) | `ttnn.ComputeConfigDescriptor` | no | any `math_fidelity` / `math_approx_mode`; `fp32_dest_acc_en ∈ {True, False}`, except `{float32, False}` (EXCLUSION) | `default_compute_kernel_config()` | the compute kernel's `config=` (copied, plus `unpack_to_dest_mode[cb_stats_gather]`, see API Mapping) |
-| `memory_config` (kw-only) | `Optional[ttnn.MemoryConfig]` | no | interleaved (DRAM/L1), or the input's own shard spec for a sharded input | DRAM interleaved | host-only (output allocation) |
+| `memory_config` (kw-only) | `Optional[ttnn.MemoryConfig]` | no | any placement independent of the input's (interleaved DRAM/L1, HEIGHT/WIDTH sharded on any grid) | DRAM interleaved (interleaved input) / the input's shard spec (sharded input) | host-only (output allocation) |
 
 ### Entry-point contract
 
@@ -34,7 +34,7 @@
 | Support gate | Builds the axes dict exactly as `eval/golden_tests/distributed_rms_norm/axes.py:classify_call` does: `dtype`, `fp32_dest_acc_en` (from the resolved config), `layout`, `alignment`, `rank`, `gamma_mode`, `gamma_dtype` / `gamma_layout` (`"none"` when γ is absent), `memory_layout`, `cluster_axis`, `topology`, `num_links` (`None` resolved to `L_usable` before the check). Raises `UnsupportedAxisValue` / `ExcludedCell` (`ttnn/ttnn/operations/_op_contract.py`). `"none"` is always accepted. |
 | INPUT_TAGGERS | `alignment(inputs, axes)` takes `shape = inputs[0]`, `H = shape[-2]`, `W = shape[-1]` and returns `"tile_aligned"` if `H%32==0 and W%32==0`, `"w_non_aligned"` if `W%32≠0`, else `"h_non_aligned"`. `rank(inputs, axes)` returns `len(inputs[0])`. Exactly these two. |
 | EXCLUSIONS | `{dtype: float32, fp32_dest_acc_en: False}` — natively rejected (`precision_convention.md`). `{dtype: bfloat8_b, alignment: w_non_aligned}` — carried from the base op: W-pad columns of a bfp8 tile cannot be zeroed element-wise (the shared exponent), the same mechanism limit the base op hit. |
-| Regime refusals (NotImplementedError, not an axis) | (a) A sharded input or output whose shard grid leaves fewer than `2L` free cores for the ports (Work Distribution → Port placement). (b) A sharded input with an output `memory_config` that is not the input's own shard spec, or a sharded output with an interleaved input. (c) The L1 predicate of the selected local regime fails (the base op's refusal). Each one names its deferred regime row. |
+| Regime refusals (NotImplementedError, not an axis) | (a) A sharded input or output whose shard grid leaves fewer than `2L` free cores for the ports (Work Distribution → Port placement). (b) Retired by Refinement 2: the output placement is independent of the input's (a sharded output `memory_config` only needs a shard spec). (c) The L1 predicate of the selected local regime fails (the base op's refusal). Each one names its deferred regime row. |
 | Dispatch | Allocate the output (per-device shape, dtype and `Layout::TILE` as the input; placement per `memory_config`). Fetch or create the persistent exchange resources (Dataflow Strategy → Persistent resources). Build one `MeshProgramDescriptor` (one `ProgramDescriptor` per chip, `custom_program_hash` set per chip). Call `ttnn.generic_op` once. No host padding, slicing, synchronization or second dispatch. |
 
 ### Phase 0 support target (TARGET → Phase 0 / later)
@@ -195,7 +195,7 @@ The table enumerates the local regimes (ported) × the cross-device scheme and i
 | All-gather x itself, then a local rms_norm | **rejected** (dead end): moves `(G−1)·M·W_local·es` over the links (focus: 6.9 MB per chip ≈ 70 µs at 2 links) against 2.5 KiB of partials | — | — | 2700× the link bytes | — |
 | **G-MC**: γ read once + multicast per window group | deferred: stepping stone over per-core γ reads (the base's Perf 1 mechanism layers on). Positive reason: measured noise on the 640-row interleaved shape in the base. Its groups must first exclude the port hole. | interleaved with γ | — | removes `(cores per window − 1) · S` γ tile reads | — |
 | Sharded input whose grid leaves < 2L free cores | deferred: no INPUTS shape reaches it. `auto_shard_config` uses ≤ 86 of 110 cores across INPUTS (Work Distribution). Reaching it means moving a shard's local work to a neighbour core (one NoC read of that shard), with the rest unchanged. | free cores < 2L | — | +1 NoC read of the displaced shards | — |
-| Sharded in / interleaved out (or the reverse) | deferred: the golden suite passes the input's own memory_config for sharded inputs. Reachable by keeping the shard-backed `cb_x_tiles` and swapping `cb_output` for the interleaved writer path, which both exist. | placement mismatch | — | — | — |
+| Sharded in / interleaved out (or the reverse, or a shard on another grid) | **built (Refinement 2)**. `out_native` (output shard == input shard placement) keeps `cb_output` zero-copy on the output shard; any other placement keeps the shard-backed `cb_x_tiles` (if the input is sharded) and uses the streaming `cb_output` + the writer's output `TensorAccessor` (interleaved, or a genuinely non-local write into the output's shard grid). Compute / writer `SHARDED` CT arg = `out_native`. | placement mismatch | — | +`STREAM_DEPTH·C·T_out` per core | — |
 
 **Regime-selection function (host, exact).** `plan = select_plan(input, gamma, fp32_acc, available_cores)` is the base `select_plan` with the grid replaced by the available-core list:
 - `HEIGHT_SHARDED` → R1-HS.
@@ -307,7 +307,7 @@ The ports run independently of this loop. At kernel start each port opens its fa
 | γ DRAM → `cb_gamma_tiles` | γ dtype, row 0 valid | writer. TILE γ: base direct row-0 prefix read (`GAMMA_DIRECT_READ`). RM sticks: one page read per tile-column `j` of the window into `cb_gamma_row` page `j`, then the base row-0 expansion. | `BroadcastDim::Row` reads tile row 0 only |
 | `cb_x_tiles` × `cb_gamma_tiles` → `cb_x_gamma` | interm | chain FPU `Mul`, Row broadcast (base) | chunk 0 hoisted ahead of the inv_rms wait |
 | (`cb_x_gamma` / `cb_x_tiles`) × `cb_inv_rms` → `cb_output` | output dtype | chain FPU `Mul`, Col broadcast (base; `SCALE_BLOCK_TILES` blocking, srcB hold) | the final rounding to the output dtype happens here |
-| `cb_output` → DRAM / output shard | tiles | writer (base): valid tiles only, one barrier per quantum. Sharded: `cb_output` backed on the output shard. | — |
+| `cb_output` → DRAM / output shard | tiles | writer (base): valid tiles only, one barrier per quantum, through the output `TensorAccessor` (any placement). Native (output shard == input shard): `cb_output` backed on the output shard. | — |
 
 ### Cross-device exchange contract (TRANSPORT)
 
