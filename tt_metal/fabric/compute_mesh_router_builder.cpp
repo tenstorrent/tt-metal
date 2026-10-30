@@ -23,7 +23,7 @@
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt-logger/tt-logger.hpp>

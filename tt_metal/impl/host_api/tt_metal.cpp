@@ -39,7 +39,7 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
@@ -976,7 +976,7 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, /*cq_id=*/0));
 }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
