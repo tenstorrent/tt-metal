@@ -148,7 +148,11 @@ DENSE_DECODE_FUSION_ON = {
     # composite 0.7202 / 0.9448); Blackhole only (qkv_norm_rope_prefill_enabled refuses the flag on Wormhole)
     "GEMMA4_QKV_NORM_ROPE_PREFILL": "1",
 }
-DECODE_FUSION_OFF = {name: "0" for name in {**DECODE_FUSION_ON, **DENSE_DECODE_FUSION_ON}}
+# GEMMA4_SDPA_DECODE_SPLITFREE: the split-independent paged decode SDPA (custom_ops/sdpa_decode_splitfree; "1" the
+# global layers, "2" the sliding layers too). Off in every profile until device-validated; a build turns it on by
+# adding the name to its ON dict (tt/attention/decode.py reads it through decode_flag).
+SDPA_SPLITFREE_ENV = "GEMMA4_SDPA_DECODE_SPLITFREE"
+DECODE_FUSION_OFF = {name: "0" for name in {**DECODE_FUSION_ON, **DENSE_DECODE_FUSION_ON, SDPA_SPLITFREE_ENV: "0"}}
 FOUR_CHIP_SHAPES = (ROW_MESH_SHAPE, COLUMN_MESH_SHAPE)
 # The Galaxy lane engine (the 26B-A4B on the (8,4) Blackhole mesh): the fused QKV norm + RoPE program on the lane
 # decode frame, the rest as before (the lane entry's catalog carries its own set). Window 13 (2026-10-25, lane layer

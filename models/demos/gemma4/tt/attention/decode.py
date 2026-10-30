@@ -73,6 +73,29 @@ def _sdpa_max_cores_per_head_kwargs() -> dict:
     return {"max_cores_per_head_batch": int(v)} if v else {}
 
 
+SPLITFREE_ENV = "GEMMA4_SDPA_DECODE_SPLITFREE"
+_SPLITFREE_WARNED = set()
+
+
+def splitfree_sdpa_enabled(config) -> bool:
+    """GEMMA4_SDPA_DECODE_SPLITFREE (``decode_flag``: the env when set, else the build profile, default off):
+    "1" = the split-independent paged decode SDPA (custom_ops/sdpa_decode_splitfree) on the global layers,
+    "2" = on the sliding layers as well. Its output for a row is bitwise identical across the decode graphs of
+    a build (the unit is derived from the chip's grid, a build constant), so the graphs can use the cores they
+    have; the pin above stays as it is for the stock op."""
+    mode = decode_flag(SPLITFREE_ENV)
+    if mode == "2":
+        return True
+    return mode == "1" and not config.is_sliding
+
+
+def _splitfree_refused(reason: str):
+    """One warning per reason: the stock op serves the call."""
+    if reason not in _SPLITFREE_WARNED:
+        _SPLITFREE_WARNED.add(reason)
+        logger.warning(f"{SPLITFREE_ENV}: the stock paged decode SDPA serves this call: {reason}")
+
+
 def packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared):
     """True when ``packed_decode_forward`` writes the KV rows through the per-position
     ``paged_update_cache`` loop, which needs the probed height-sharded layout.
@@ -118,6 +141,7 @@ def decode_forward(
     sequential_kv_write=False,
     rope_presliced=False,
     rope_prepared=None,
+    sdpa_scratch=None,
 ):
     """
     Single-token decode attention, fully on device.
@@ -141,6 +165,8 @@ def decode_forward(
         page_table: optional paged attention table
         ccl_manager: optional CCL manager for TP > 1
         is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
+        sdpa_scratch: the model's persistent fp32 scratch of the split-independent decode SDPA
+            (``GEMMA4_SDPA_DECODE_SPLITFREE``, custom_ops/sdpa_decode_splitfree); None keeps the stock op
     """
     tp = mesh_config.tp if mesh_config else 1
 
@@ -442,7 +468,46 @@ def decode_forward(
         **_sdpa_max_cores_per_head_kwargs(),
     )
 
-    if page_table is not None:
+    tt_sdpa = None
+    if page_table is not None and sdpa_scratch is not None and splitfree_sdpa_enabled(config):
+        # GEMMA4_SDPA_DECODE_SPLITFREE: the custom op (custom_ops/sdpa_decode_splitfree): fixed KV units per
+        # (row, group) on a static core mapping, fp32 partials in the model's scratch, a fixed-order combine --
+        # the row's bits do not depend on the padded batch or the cores (tt-metal#59300), and a lone row at the
+        # full context puts one unit on (nearly) every core (the unit is derived from the grid, a build
+        # constant). Out of contract (the wrapper says why), the stock op serves.
+        from models.demos.gemma4.custom_ops.sdpa_decode_splitfree import SdpaDecodeSplitfree
+
+        sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+        if tt_q.is_sharded():  # the fused head ops leave q height-sharded in L1; the op reads interleaved tiles
+            q_dram = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+            tt_q.deallocate(True)
+            tt_q = q_dram
+        splitfree_kwargs = dict(
+            num_kv_heads=sdpa_num_local_kv_heads,
+            block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
+            sliding_window=sliding_window,
+        )
+        splitfree_reason = SdpaDecodeSplitfree.unsupported_reason(
+            tt_q, k_cache, v_cache, cache_pos, page_table, sdpa_scratch, **splitfree_kwargs
+        )
+        if splitfree_reason is None:
+            tt_sdpa = SdpaDecodeSplitfree.op(
+                tt_q,
+                k_cache,
+                v_cache,
+                cache_pos,
+                page_table,
+                sdpa_scratch,
+                scale=1.0,
+                cache_position_modulo=config.cache_position_modulo,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **splitfree_kwargs,
+            )
+        else:
+            _splitfree_refused(splitfree_reason)
+    if tt_sdpa is not None:
+        pass  # the split-independent op served the call
+    elif page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,

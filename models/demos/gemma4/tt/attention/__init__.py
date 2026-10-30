@@ -186,6 +186,12 @@ class Gemma4Attention:
         # None means packed_decode_forward falls back to the per-position loop.
         self.kv_staging = None
 
+        # The split-independent decode SDPA's persistent fp32 scratch (GEMMA4_SDPA_DECODE_SPLITFREE,
+        # custom_ops/sdpa_decode_splitfree): ONE per model, attached with the KV caches before any trace capture
+        # (Gemma4Model.attach_sdpa_splitfree_scratch: the model's own paged caches, or the vLLM generator's once
+        # the plugin has allocated them); None keeps the stock op.
+        self.sdpa_scratch = None
+
         # Trace-safe cross-chunk sliding-tail pool. The stash's runtime-allocated
         # clones can land on a live prefill trace's baked scratch, and an
         # INTERLEAVED request's trace replay then clobbers them (#30187 class —
@@ -336,6 +342,7 @@ class Gemma4Attention:
         if is_decode:
             return decode_forward(
                 hidden_states=hidden_states,
+                sdpa_scratch=self.sdpa_scratch,
                 cos_cache=cos_cache,
                 sin_cache=sin_cache,
                 weights=self.weights,

@@ -3126,12 +3126,31 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # GEMMA4_MAX_TOKENS_ALL_USERS=524288, where each global-layer file is
         # 539 MB and the write window is seconds). Tilizing zeros in-process
         # costs ~1 s/global layer; the cache saved less than it risked.
-        return allocate_vllm_kv_cache(
+        kv_cache = allocate_vllm_kv_cache(
             *args,
             **kwargs,
             dp_model=self.model,
             tt_cache_path=None,
         )
+        self._attach_sdpa_splitfree_scratch(kv_cache)
+        return kv_cache
+
+    def _attach_sdpa_splitfree_scratch(self, kv_cache):
+        """GEMMA4_SDPA_DECODE_SPLITFREE: the vLLM build creates no paged caches in the model (create_kv_cache=False,
+        so the model's own attach never runs); the split-independent decode SDPA's persistent scratch is allocated
+        and attached here, once the plugin's caches exist (their dtype sizes the plan) and before the decode warmup
+        captures the traces (``Gemma4Model.attach_sdpa_splitfree_scratch``; off: the layers keep the stock op)."""
+        for idx, model in enumerate(self.model):
+            attach = getattr(model, "attach_sdpa_splitfree_scratch", None)
+            if attach is None:
+                continue
+            kv_dtype = None
+            sub = kv_cache[idx] if kv_cache is not None and idx < len(kv_cache) else None
+            for layer_kv in sub or []:
+                if layer_kv and layer_kv[0] is not None:
+                    kv_dtype = layer_kv[0].dtype
+                    break
+            attach(kv_dtype=kv_dtype)
 
     def _text_config(self):
         model = self.model[0]
@@ -3341,6 +3360,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 continue
             for layer_idx, source_idx in kv_shared_map.items():
                 submesh_kv[layer_idx] = submesh_kv[source_idx]
+        self._attach_sdpa_splitfree_scratch(kv_cache)
         return kv_cache
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
