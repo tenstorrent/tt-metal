@@ -29,7 +29,7 @@ def env(monkeypatch):
     def set_env(forward_chunks=1, sp=8):
         monkeypatch.setattr(producer, "CHUNK_SIZE", C)
         monkeypatch.setattr(producer, "MAX_SEQ_LEN", MAX_SEQ_LEN)
-        monkeypatch.setattr(producer, "GLOBAL_MESH_SHAPE", (sp, 4))
+        monkeypatch.setattr(producer, "SP_FACTOR", sp)
         monkeypatch.setattr(producer, "MTP_LEVELS", 0)
         monkeypatch.setattr(producer, "FORWARD_CHUNKS", forward_chunks)
 
@@ -301,7 +301,7 @@ def test_packed_respects_max_requests(env, interleave):
 
 
 def test_import_config_defers_budget_check(monkeypatch, expect_error):
-    for name in ("GLOBAL_MESH_SHAPE", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
+    for name in ("SP_FACTOR", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
         monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reloads below
     monkeypatch.delenv("PREFILL_CHUNK_SIZE", raising=False)
     monkeypatch.setenv("PREFILL_FORWARD_TOKENS_BUDGET", str(8 * C))

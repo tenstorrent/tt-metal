@@ -108,6 +108,8 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             (4, 4),
             0,
             torus_x_device_params(),
+            PREFILL_CHUNK_TOKENS,
+            None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="SP4xTP4-torus-x-4x4",
         ),
