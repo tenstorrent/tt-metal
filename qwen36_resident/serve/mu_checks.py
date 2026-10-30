@@ -13,6 +13,8 @@ churn: N requests of mixed prompt lengths (an instruction plus the start of a te
     prefill"), alone they run whole, so equal tokens are the end-to-end check that a split prompt computes what it
     would whole (one PP chunk per sequence); the run script counts the split prompts. --long-tokens N adds one request
     of about N prompt tokens (the text file repeated): the memory check at the card's pool size and max_model_len.
+    CHURN NUMBERS / CHURN LONG lines: the concurrent phase's aggregate tok/s, per-user decode tok/s and TTFT.
+A request the server failed (an error event, a stream without a finish reason) is an error, never an empty match.
 
 usage: python -m qwen36_resident.serve.mu_checks identity --port 8000 --out identity.json
        python -m qwen36_resident.serve.mu_checks churn --port 8000 --out churn.json --doc FILE [--n 16] [--aborts 2]
@@ -21,6 +23,7 @@ import argparse
 import json
 import os
 import random
+import statistics
 import threading
 import time
 import urllib.request
@@ -33,8 +36,10 @@ LONG = [1100, 2100, 3333, 5000, 6000, 8000]
 
 
 def stream(port, model, msgs, max_tokens, thinking=True, abort_after=None, timeout=1800):
-    """one greedy streamed request: generated token ids, finish reason, seconds; abort_after: close the connection
-    after that many tokens (the server aborts the request)"""
+    """one greedy streamed request: generated token ids, finish reason, seconds, ttft_s (first token); abort_after:
+    close the connection after that many tokens (the server aborts the request). A request the server failed raises:
+    an error event in the stream, or a stream that ends without a finish reason (a dead engine ends it that way;
+    its empty token list would otherwise equal another empty one)"""
     body = dict(
         model=model,
         messages=msgs,
@@ -49,19 +54,32 @@ def stream(port, model, msgs, max_tokens, thinking=True, abort_after=None, timeo
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
-    ids, finish, t0 = [], None, time.time()
+    ids, finish, t0, ttft = [], None, time.time(), None
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         for line in resp:
             line = line.decode().strip()
             if not line.startswith("data:") or line.endswith("[DONE]"):
                 continue
-            for c in json.loads(line[5:]).get("choices", []):
+            d = json.loads(line[5:])
+            if "error" in d:
+                raise RuntimeError(f"server error in the stream after {len(ids)} tokens: {d['error']}")
+            for c in d.get("choices", []):
                 ids += c.get("token_ids") or []
                 finish = c.get("finish_reason") or finish
+            if ttft is None and ids:
+                ttft = time.time() - t0
             if abort_after is not None and len(ids) >= abort_after:
                 finish = "aborted"
                 break
-    return dict(token_ids=ids, finish=finish, seconds=time.time() - t0)
+    if finish in (None, "error"):
+        raise RuntimeError(f"stream ended with finish reason {finish} after {len(ids)} tokens")
+    return dict(token_ids=ids, finish=finish, seconds=time.time() - t0, ttft_s=ttft)
+
+
+def decode_rate(r):
+    """tokens after the first per second after the first (None for fewer than 2 tokens)"""
+    n, s = len(r["token_ids"]) - 1, r["seconds"] - (r["ttft_s"] or 0)
+    return n / s if n > 0 and s > 0 else None
 
 
 def concurrent(jobs):
@@ -154,7 +172,8 @@ def run_churn(a):
         jobs.append((r["key"], job))
     t0 = time.time()
     together = concurrent(jobs)
-    print(f"concurrent phase: {time.time() - t0:.1f} s", flush=True)
+    phase = time.time() - t0
+    print(f"concurrent phase: {phase:.1f} s", flush=True)
     rows, ok = [], True
     for r in reqs:
         got = together.get(r["key"], {})
@@ -166,13 +185,65 @@ def run_churn(a):
         if r["key"] in aborted:
             rows.append(dict(key=r["key"], isl=r["isl"], aborted=True))
             continue
-        solo = stream(a.port, model, r["msgs"], r["max_tokens"], False, timeout=a.timeout)
+        try:
+            solo = stream(a.port, model, r["msgs"], r["max_tokens"], False, timeout=a.timeout)
+        except Exception as e:  # recorded, the check fails on it
+            ok = False
+            rows.append(dict(key=r["key"], isl=r["isl"], error=f"solo run: {e!r}"))
+            print(f"{r['key']} (isl {r['isl']}): solo run ERROR {e!r}", flush=True)
+            continue
         d = first_diff(solo["token_ids"], got["token_ids"])
         ok &= d is None
-        rows.append(dict(key=r["key"], isl=r["isl"], tokens=len(got["token_ids"]), first_diff=d))
-        print(f"{r['key']} (isl {r['isl']}): {len(got['token_ids'])} tokens, vs solo first diff {d}", flush=True)
-    json.dump(dict(ok=ok, rows=rows, aborted=sorted(aborted)), open(a.out, "w"), indent=1)
+        row = dict(key=r["key"], isl=r["isl"], tokens=len(got["token_ids"]), first_diff=d, ttft_s=got["ttft_s"])
+        row.update(decode_tok_s=decode_rate(got), solo_ttft_s=solo["ttft_s"], solo_decode_tok_s=decode_rate(solo))
+        rows.append(row)
+        print(
+            f"{r['key']} (isl {r['isl']}): {len(got['token_ids'])} tokens, vs solo first diff {d}; TTFT "
+            f"{num(row['ttft_s'])} s (solo {num(row['solo_ttft_s'])}), decode {num(row['decode_tok_s'], 1)} tok/s "
+            f"(solo {num(row['solo_decode_tok_s'], 1)})",
+            flush=True,
+        )
+    numbers = churn_numbers(together, rows, phase)
+    json.dump(dict(ok=ok, rows=rows, aborted=sorted(aborted), numbers=numbers), open(a.out, "w"), indent=1)
     print("CHURN " + ("PASS" if ok else "FAIL"), flush=True)
+
+
+def num(v, digits=2):
+    return "-" if v is None else f"{v:.{digits}f}"
+
+
+def churn_numbers(together, rows, phase):
+    """the concurrent phase's numbers: every request's generated tokens (aborted ones too) over the phase's wall time
+    (it includes the staggered arrivals and the long request's prefill), and per completed request its TTFT and
+    decode rate (tokens after the first over the time after the first)"""
+    done = [r for r in rows if "tokens" in r]
+    rates = [r["decode_tok_s"] for r in done if r["decode_tok_s"]]
+    ttfts = [r["ttft_s"] for r in done if r["ttft_s"] is not None]
+    tokens = sum(len(g.get("token_ids", [])) for g in together.values())
+    out = dict(
+        phase_s=phase,
+        generated_tokens=tokens,
+        aggregate_tok_s=tokens / phase,
+        completed=len(done),
+        decode_tok_s=dict(mean=statistics.mean(rates), min=min(rates), max=max(rates)) if rates else None,
+        ttft_s=dict(median=statistics.median(ttfts), max=max(ttfts)) if ttfts else None,
+    )
+    d, t = out["decode_tok_s"] or {}, out["ttft_s"] or {}
+    print(
+        f"CHURN NUMBERS concurrent phase {phase:.1f} s, {tokens} tokens: aggregate {out['aggregate_tok_s']:.1f} tok/s; "
+        f"per user decode tok/s mean {num(d.get('mean'), 1)} min {num(d.get('min'), 1)} max {num(d.get('max'), 1)} "
+        f"({len(done)} completed); TTFT median {num(t.get('median'))} s, max {num(t.get('max'))} s",
+        flush=True,
+    )
+    for r in done:
+        if r["key"] == "long":
+            out["long"] = r
+            print(
+                f"CHURN LONG isl {r['isl']}: TTFT {num(r['ttft_s'], 1)} s (solo {num(r['solo_ttft_s'], 1)}), "
+                f"{r['tokens']} tokens, decode {num(r['decode_tok_s'], 1)} tok/s (solo {num(r['solo_decode_tok_s'], 1)})",
+                flush=True,
+            )
+    return out
 
 
 def main():
