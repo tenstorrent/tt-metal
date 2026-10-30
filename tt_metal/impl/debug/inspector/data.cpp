@@ -315,7 +315,8 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
 void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results) {
     // Get build environment info for all devices in this Inspector's owning MetalContext.
     // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex.
-    const auto& build_envs_info = BuildEnvManager::get_instance(context_id).get_all_build_envs_info();
+    const auto& build_envs_info =
+        tt::tt_metal::MetalContext::instance(context_id).build_env_manager().get_all_build_envs_info();
     // Populate RPC response with build environment info for all devices
     auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
     const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
