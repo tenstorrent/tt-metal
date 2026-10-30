@@ -141,6 +141,8 @@ struct NativeTuning {
     // and consumer transact at different granularities.
     NativeKnob dm_batch{"TTNN_QSR_DM_BATCH"};
     NativeKnob tiles_per_cycle{"TTNN_QSR_TILES_PER_CYCLE"};  // tiles per tile_regs_acquire in the compute
+    // Tiles per bank from which an uneven L1-interleaved slice is borrowed with tail rings; a smaller one moves.
+    NativeKnob slice_tail_min{"TTNN_QSR_SLICE_TAIL_MIN"};
     // TTNN_QSR_DRAM_BATCH=0 keeps one tile per step beside DRAM.
     bool dram_batch = true;
 };
@@ -180,6 +182,12 @@ struct NativeConfig {
 // The compute count of every program: the knob, else the rule's 4.
 uint32_t native_compute_threads(const NativeTuning& tuning);
 
+// The tiles per bank from which an uneven slice is borrowed: the knob, else kNativeSliceTailMinTiles on the FPU kernel
+// and never on the SFPU kernel. The tail rings' setup costs more than a smaller slice gains, and the SFPU kernel
+// computes no faster borrowed than over the NoC.
+inline constexpr uint32_t kNativeSliceTailMinTiles = 96;
+uint32_t native_slice_tail_min(const NativeTuning& tuning, bool sfpu);
+
 // Each set knob, else the rule's value for what the program moves. The rule takes the most threads and, with
 // every operand in L1, these batches: C = 4; R = C when an input moves, else 1; W = min(C, 6 - R) when the output
 // moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch native_max_tiles_per_cycle on the SFPU
@@ -193,7 +201,7 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
 std::string describe_native_value(const NativeKnob& knob, uint32_t value);
 
 // Parsed once into a function-local static. Knobs are TTNN_QSR_{NATIVE, IMPLICIT_SYNC, READER_THREADS,
-// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE, DRAM_BATCH}. Topology invariants are
-// asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
+// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE, DRAM_BATCH, SLICE_TAIL_MIN}.
+// Topology invariants are asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
 const NativeTuning& native_tuning();
 }  // namespace ttnn::operations::experimental::quasar::binary_ng

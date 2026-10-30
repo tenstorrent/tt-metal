@@ -164,7 +164,7 @@ void kernel_main() {
         process_sfpu_tiles(remainder, dfb_pre_lhs, dfb_post_lhs, dfb_pre_rhs, dfb_post_rhs, dfb_out ISCLOSE_RT_ARG_FWD);
     }
 #else
-    // No borrowed ring: a shard smaller than C lives entirely in the tail rings.
+    // No borrowed ring: a shard or slice smaller than C lives entirely in the tail rings.
     compute_kernel_hw_startup(static_cast<uint32_t>(dfb::pre_lhs_tail), static_cast<uint32_t>(dfb::out_tail));
     BINARY_SFPU_INIT
 #endif
@@ -172,7 +172,7 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST) or defined(PACK_RELU)
 #error "the tail rings carry no activation chain or fused RELU: the factory runs no tail beside one"
 #endif
-    // A borrowed shard's tiles past the largest multiple of C: one tail entry per compute thread. A thread
+    // A borrowed shard's or slice's tiles past the largest multiple of C: one tail entry per compute thread. A thread
     // past TAIL_TILES computes on padding, which the writer drops.
     {
         constexpr auto dfb_tail_lhs_id = static_cast<uint32_t>(dfb::pre_lhs_tail);

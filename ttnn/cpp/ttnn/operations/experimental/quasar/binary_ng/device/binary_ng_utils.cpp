@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <limits>
 #include <numeric>
 #include <string_view>
 
@@ -885,6 +886,10 @@ uint32_t native_compute_threads(const NativeTuning& tuning) {
     return tuning.compute_threads.env.value_or(kRuleComputeThreads);
 }
 
+uint32_t native_slice_tail_min(const NativeTuning& tuning, bool sfpu) {
+    return tuning.slice_tail_min.env.value_or(sfpu ? std::numeric_limits<uint32_t>::max() : kNativeSliceTailMinTiles);
+}
+
 uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit) {
     // The factory's compute config runs half sync, the default, so a section is half of the DST.
     return ttnn::get_dest_reg_count(ttnn::ComputeKernelConfig{.fp32_dest_acc_en = dst_32bit}) / (sfpu ? 2u : 1u);
@@ -979,6 +984,8 @@ const NativeTuning& native_tuning() {
         constexpr uint32_t kMaxThreads = 8;
         constexpr uint32_t kMaxBatch = 8;
         constexpr uint32_t kMaxEntriesPerThread = 255;
+        // Past any bank's tile count: the largest value keeps every uneven slice on the NoC.
+        constexpr uint32_t kMaxSliceTailMin = 1u << 20;
 
         NativeTuning t;
         t.enabled = read_switch("TTNN_QSR_NATIVE");
@@ -990,6 +997,7 @@ const NativeTuning& native_tuning() {
         read_knob(t.entries_per_thread, kMaxEntriesPerThread);
         read_knob(t.dm_batch, kMaxBatch);
         read_knob(t.tiles_per_cycle, kMaxBatch);
+        read_knob(t.slice_tail_min, kMaxSliceTailMin);
 
         // Only when enabled: with the native path off nothing reads these, so an unconditional throw
         // would have no protective value and would kill the fallback reference arm.
@@ -997,7 +1005,8 @@ const NativeTuning& native_tuning() {
             const bool any_knob_set = t.implicit_sync || t.reader_threads.env.has_value() ||
                                       t.compute_threads.env.has_value() || t.writer_threads.env.has_value() ||
                                       t.entries_per_thread.env.has_value() || t.dm_batch.env.has_value() ||
-                                      t.tiles_per_cycle.env.has_value() || !t.dram_batch;
+                                      t.tiles_per_cycle.env.has_value() || t.slice_tail_min.env.has_value() ||
+                                      !t.dram_batch;
             if (any_knob_set) {
                 log_warning(
                     tt::LogOp,
@@ -1067,8 +1076,10 @@ const NativeTuning& native_tuning() {
             describe_native_value(t.tiles_per_cycle, noc_sfpu_32bit.tiles_per_cycle));
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native batching beside DRAM {}.",
-            t.dram_batch ? "ON" : "OFF (TTNN_QSR_DRAM_BATCH=0)");
+            "binary_ng Quasar-native batching beside DRAM {}. Uneven L1 slices borrowed from {} tiles per bank, {}.",
+            t.dram_batch ? "ON" : "OFF (TTNN_QSR_DRAM_BATCH=0)",
+            describe_native_value(t.slice_tail_min, native_slice_tail_min(t, false)),
+            t.slice_tail_min.env.has_value() ? "on both kernels" : "on the FPU kernel only");
         return t;
     }();
     return tuning;

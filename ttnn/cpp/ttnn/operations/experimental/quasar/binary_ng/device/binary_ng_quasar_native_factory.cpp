@@ -357,8 +357,8 @@ m2::DataflowBufferSpec make_dfb(
 // not borrowed moves in the anchor's tile order.
 enum class AnchorKind { kNone, kShard, kSlice };
 
-// Whether a program may send a borrowed shard's last tiles through the tail rings. The tail rings carry no
-// activation chain, so a program with activations runs none.
+// Whether a program may send a borrowed shard's or slice's last tiles through the tail rings. They carry no activation
+// chain, so a program with activations runs none.
 enum class TailRings { kAllowed, kNone };
 
 struct BorrowAnchor {
@@ -520,17 +520,18 @@ uint32_t legacy_cluster_count(const Tensor& a, const Tensor& b, const Tensor& c,
 // The anchor that borrows the most operands, among the anchors on at least as many clusters as the legacy binary_ng
 // uses (legacy_cluster_count). On a tie, the one that borrows the output, then the one on more clusters, then the
 // earlier candidate: the output's shard config, a's, b's, the banks. A borrowed ring must divide by its max(producers,
-// consumers); with all three borrowed, a shard's tail tiles go through the tail rings instead where `tail_rings`
-// allows them, and a slice has no tail rings. A pad slot is computed and never read back; an operand that moves skips
-// it. A program-cache hit keeps this decision. It reads only the hashed specs, activations and worker grid, the tuning,
-// and the bank layout of the device, which never changes after the device opens.
+// consumers); with all three borrowed, the tail tiles of a shard, or of a slice of `slice_tail_min` tiles or more, go
+// through the tail rings instead where `tail_rings` allows them. A pad slot is computed and never read back; an operand
+// that moves skips it. A program-cache hit keeps this decision. It reads only the hashed specs, activations and
+// worker grid, the tuning, and the bank layout of the device, which never changes after the device opens.
 BorrowAnchor select_borrow_anchor(
     const Tensor& a,
     const Tensor& b,
     const Tensor& c,
     const CoreRangeSet& worker_grid,
     const NativeTuning& tuning,
-    TailRings tail_rings) {
+    TailRings tail_rings,
+    uint32_t slice_tail_min) {
     const std::array<const Tensor*, 3> operands{&a, &b, &c};
     const uint32_t compute_threads = native_compute_threads(tuning);
     const uint32_t min_clusters = legacy_cluster_count(a, b, c, worker_grid);
@@ -541,7 +542,8 @@ BorrowAnchor select_borrow_anchor(
         const bool inputs_move = !anchor.borrowed[0] || !anchor.borrowed[1];
         const bool output_moves = !anchor.borrowed[2];
         if (!inputs_move && !output_moves) {
-            const bool tails_take_the_rest = anchor.kind == AnchorKind::kShard && tail_rings == TailRings::kAllowed;
+            const bool tails_take_the_rest = tail_rings == TailRings::kAllowed &&
+                                             (anchor.kind == AnchorKind::kShard || anchor.tiles >= slice_tail_min);
             return tails_take_the_rest || anchor.tiles % compute_threads == 0;
         }
         const NativeConfig config = resolve_native_config(tuning, {.inputs = inputs_move, .output = output_moves});
@@ -755,8 +757,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool has_activations = has_lhs_act || has_rhs_act ||
                                  !compute_defines["PROCESS_POST_ACTIVATIONS(i)"].empty() ||
                                  compute_defines.contains("PACK_RELU");
+    const TailRings tail_rings = has_activations ? TailRings::kNone : TailRings::kAllowed;
     const BorrowAnchor anchor =
-        select_borrow_anchor(a, *b_opt, c, op.worker_grid, t, has_activations ? TailRings::kNone : TailRings::kAllowed);
+        select_borrow_anchor(a, *b_opt, c, op.worker_grid, t, tail_rings, native_slice_tail_min(t, is_sfpu));
     const bool a_borrowed = anchor.borrowed[0];
     const bool b_borrowed = anchor.borrowed[1];
     const bool c_borrowed = anchor.borrowed[2];
@@ -814,8 +817,8 @@ ProgramArtifacts create_no_bcast_artifacts(
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
     // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per compute
     // thread. A shard smaller than the count has no borrowed ring: all of it uses the tail rings. The tail rings
-    // run only with all three operands borrowed and no activation; otherwise the anchor is borrowed only when the
-    // count divides.
+    // run only with all three operands borrowed and no activation, and for a slice only from native_slice_tail_min;
+    // otherwise the anchor is borrowed only when the count divides.
     // The tail rings are temporary. When the DFB gives each tile counter its own capacity, remove them: the tail DFBs,
     // TAIL_TILES, HAS_MAIN_RING and the tail blocks of the reader, the writer and both compute kernels. The reader's
     // publish and the compute already take uneven shares. The divisibility checks in select_borrow_anchor come from the
