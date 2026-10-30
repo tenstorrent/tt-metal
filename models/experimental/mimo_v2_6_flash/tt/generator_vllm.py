@@ -134,6 +134,7 @@ from ..reference.spec_decode import (
     plan_verify_passes,
     planned_drafts,
 )
+from . import apc_debug
 from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
@@ -498,6 +499,8 @@ class MiMoV2ForCausalLM:
         if optimizations not in (None, "performance"):
             raise ValueError(f"MiMo-V2.6-Flash serves one datatype policy; optimizations={optimizations!r}")
         dp = tt_data_parallel
+        # MIMO_APC_DEBUG=1: log each request's lane, prefix-cache hit and prefill rows (tt/apc_debug.py).
+        apc_debug.install()
         num_devices = mesh_device.get_num_devices()
         if num_devices != TP * dp:
             raise ValueError(
@@ -823,6 +826,21 @@ class MiMoV2ForCausalLM:
                 cached, start = start // BLOCK_SIZE, 0
             placed.append((i, lane, slot, start, int(ends[i]), cached))
             table_rows[lane][slot] = self._group_rows(tables, i)
+            if apc_debug.ENABLED:
+                apc_debug._guard(
+                    "prefill row",
+                    apc_debug.log_prefill_row,
+                    i,
+                    lane,
+                    slot,
+                    int(starts[i]),
+                    start,
+                    int(ends[i]),
+                    cached,
+                    tokens[i],
+                    table_rows[lane][slot],
+                    self.group_block_sizes,
+                )
             # The MTP history: a chunk starting where the slot's last one ended continues its request.
             continues[i] = start > 0 and self.prefill_ends[lane].get(slot) == start
             self.prefill_ends[lane][slot] = int(ends[i])

@@ -215,7 +215,8 @@ class TtMiMoModel:
             return cache_dir is not None and os.path.exists(cache_name(cache_dir, tag, "complete"))
 
         def mark(tag):
-            if cache_dir is not None:
+            # Only a build writes the marker: a warm cache may be read-only (CI mounts /mnt/MLPerf read-only).
+            if cache_dir is not None and not warm(tag):
                 open(cache_name(cache_dir, tag, "complete"), "w").close()
 
         top = "top"
