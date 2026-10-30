@@ -735,6 +735,63 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
+class HASH_CB_SFPU_OP(TemplateParameter):
+    """Compile-time knobs for ``hash_cb_test.cpp``.
+
+    ``position``   where to run a whole-tile SFPU op on another DEST slot inside the
+                   same DEST window: ``None`` (the documented dedicated-window usage),
+                   ``"before_init"`` (before the hash init -- the production order of
+                   hash_cb_sfpu, where a user op precedes the hash) or
+                   ``"before_store"`` (between the fold loop and the store-back -- a
+                   standalone caller).
+    ``dst_index``  the ``dst_index`` handed to that SFPU op. Its
+                   ``_llk_math_eltwise_sfpu_start_`` leaves the math DEST offset at
+                   ``base + 64 * dst_index`` and ``_done_`` only resets the RWC, which
+                   is the state the hash must be immune to.
+    """
+
+    position: str | None = None
+    dst_index: int = 0
+
+    def __post_init__(self):
+        if self.position not in (None, "before_init", "before_store"):
+            raise ValueError(f"unknown HASH_CB_SFPU_OP position {self.position!r}")
+
+    def convert_to_cpp(self) -> str:
+        before_init = str(self.position == "before_init").lower()
+        before_store = str(self.position == "before_store").lower()
+        return "\n".join(
+            [
+                f"constexpr bool HASH_CB_SFPU_OP_BEFORE_INIT = {before_init};",
+                f"constexpr bool HASH_CB_SFPU_OP_BEFORE_STORE = {before_store};",
+                f"constexpr std::uint32_t HASH_CB_SFPU_OP_DST_INDEX = {self.dst_index}u;",
+            ]
+        )
+
+
+@dataclass
+class HASH_CB_DEST_BANK(TemplateParameter):
+    """Half-sync bank the hash window of ``hash_cb_test.cpp`` runs in.
+
+    Emits ``constexpr std::uint32_t HASH_CB_DEST_BANK = <bank>;``. The kernel
+    completes that many whole math/pack windows (datacopy + pack of the input
+    tiles to ``buffer_Res[1]``) before the hash window, so with ``bank = 1`` the
+    hash runs with ``dest_offset_id == 1`` and a bank base of
+    ``DEST_REGISTER_HALF_SIZE`` -- the state ``hash_cb_sfpu`` sees every other
+    window in production. ``tile_count_res`` must be ``1 + bank``.
+    """
+
+    bank: int = 0
+
+    def __post_init__(self):
+        if self.bank not in (0, 1):
+            raise ValueError(f"HASH_CB_DEST_BANK must be 0 or 1, got {self.bank!r}")
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t HASH_CB_DEST_BANK = {self.bank}u;"
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
