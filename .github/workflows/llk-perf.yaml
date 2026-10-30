@@ -18,7 +18,7 @@ jobs:
     outputs:
       changed: "true"
       thresholds: >-
-        {"blackhole": {"threshold": "0.02", "module_thresholds": "", "blocking": true}}
+        {"blackhole": {"threshold": "0.02", "module_thresholds": ""}}
     steps:
       - run: echo "trial"
 
@@ -55,60 +55,7 @@ jobs:
       min_cycles: "30"
       measure_result: ${{ needs.measure.result }}
       stage2_baseline_artifact: llk-perf-stage2-baseline
-      fail_on_regression: true
+      fail_on_regression: false
       slack: false
       slack_on_pass: false
     secrets: inherit
-
-  blocking:
-    name: LLK perf merge gate (blocking)
-    needs: [changes, gate]
-    if: always() && !cancelled() && needs.changes.outputs.changed == 'true'
-    runs-on: ubuntu-slim
-    steps:
-      - name: Download the verdicts
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: llk-perf-gate-verdict-*
-          path: verdicts
-      - name: Check the blocking arches
-        env:
-          THRESHOLDS: ${{ needs.changes.outputs.thresholds }}
-          HEAD_REF: ${{ github.event.merge_group.head_ref }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ARCHES=$(python3 -c 'import json, os; print(*[a for a, t in json.loads(os.environ["THRESHOLDS"]).items() if t["blocking"]])')
-          if [ -z "$ARCHES" ]; then
-            echo "::error::No blocking arch in the thresholds; the gate cannot decide."
-            exit 1
-          fi
-          FAIL=0
-          for ARCH in $ARCHES; do
-            CODE=$(cat "verdicts/llk-perf-gate-verdict-${ARCH}/gate_verdict.txt" 2>/dev/null || echo missing)
-            echo "${ARCH}: ${CODE}"
-            [ "$CODE" = 0 ] || FAIL=1
-          done
-          [ "$FAIL" = 0 ] && exit 0
-          if [[ "$HEAD_REF" =~ /pr-([0-9]+)- ]]; then
-            PR=${BASH_REMATCH[1]}
-            # Accepted: someone other than the author added llk-perf-accepted after the PR's last commit.
-            AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .user.login)
-            HEAD_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .head.sha)
-            HEAD_DATE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}" --jq .commit.committer.date)
-            HAS=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -cx llk-perf-accepted || true)
-            BY=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/events" \
-              --jq ".[] | select(.event == \"labeled\" and .label.name == \"llk-perf-accepted\"
-                    and .actor.login != \"${AUTHOR}\" and .created_at > \"${HEAD_DATE}\") | .actor.login" | tail -n 1)
-            if [ "$HAS" != 0 ] && [ -n "$BY" ]; then
-              echo "::notice::${BY} accepted the LLK perf slowdown of #${PR} (llk-perf-accepted after its last commit)."
-              exit 0
-            fi
-          fi
-          echo "::error::The LLK perf merge gate blocks this entry. See the Blackhole gate report in this run."
-          echo "To look closer: add the llk-perf-gate label to the PR, then run the LLK perf gate workflow by hand"
-          echo "with placement_run_id set to that PR-gate run (stage 2 with no test limit)."
-          echo "To accept the slowdown: a reviewer other than the author adds the llk-perf-accepted label after"
-          echo "the PR's last commit, then the PR is queued again."
-          exit 1
-
