@@ -16,12 +16,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
 
 #include <core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-umd/types/io_window_config.hpp>
 
 struct metal_SocDescriptor;
 
@@ -83,13 +85,24 @@ DramCoreL1Address dram_core_l1_address(
     const distributed::MeshDevice& mesh_device, IDevice* device, const CoreCoord& dram_logical, DeviceAddr local_addr);
 
 // Write `bytes` into DRAM-logical core `dram_logical`'s own L1 on `device`, at DRISC-L1 address
-// `local_addr`: a sender's state, or a DRAM receiver's config page.
+// `local_addr`: a sender's state, or a DRAM receiver's config page. An unset `ordering` takes the
+// Cluster's default for a DRAM core.
 void write_dram_core_l1(
     const distributed::MeshDevice& mesh_device,
     IDevice* device,
     const CoreCoord& dram_logical,
     DeviceAddr local_addr,
-    std::span<const std::byte> bytes);
+    std::span<const std::byte> bytes,
+    std::optional<tt::umd::IoOrdering> ordering = std::nullopt);
+
+// Read `bytes.size()` bytes of DRAM-logical core `dram_logical`'s own L1 on `device`, from DRISC-L1
+// address `local_addr`.
+void read_dram_core_l1(
+    const distributed::MeshDevice& mesh_device,
+    IDevice* device,
+    const CoreCoord& dram_logical,
+    DeviceAddr local_addr,
+    std::span<std::byte> bytes);
 
 // Package index of a DRAM core: its channel times the DRAM cores per channel, plus its subchannel. On
 // Quasar this is the CCE index cce_sram_address takes. Two logical coords can name one core.

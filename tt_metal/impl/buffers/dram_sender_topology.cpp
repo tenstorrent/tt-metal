@@ -134,11 +134,33 @@ void write_dram_core_l1(
     IDevice* device,
     const CoreCoord& dram_logical,
     DeviceAddr local_addr,
-    std::span<const std::byte> bytes) {
+    std::span<const std::byte> bytes,
+    std::optional<tt::umd::IoOrdering> ordering) {
     const DramCoreL1Address target = dram_core_l1_address(mesh_device, device, dram_logical, local_addr);
     MetalContext::instance(mesh_device.impl().get_context_id())
         .get_cluster()
-        .write_core(device->id(), tt_cxy_pair(device->id(), target.virtual_core), bytes, target.noc_addr);
+        .write_core(
+            bytes.data(),
+            static_cast<uint32_t>(bytes.size()),
+            tt_cxy_pair(device->id(), target.virtual_core),
+            target.noc_addr,
+            ordering);
+}
+
+void read_dram_core_l1(
+    const distributed::MeshDevice& mesh_device,
+    IDevice* device,
+    const CoreCoord& dram_logical,
+    DeviceAddr local_addr,
+    std::span<std::byte> bytes) {
+    const DramCoreL1Address source = dram_core_l1_address(mesh_device, device, dram_logical, local_addr);
+    MetalContext::instance(mesh_device.impl().get_context_id())
+        .get_cluster()
+        .read_core(
+            bytes.data(),
+            static_cast<uint32_t>(bytes.size()),
+            tt_cxy_pair(device->id(), source.virtual_core),
+            source.noc_addr);
 }
 
 uint32_t package_dram_core_index(const metal_SocDescriptor& soc_desc, const CoreCoord& dram_logical) {

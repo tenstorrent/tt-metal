@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Wire format of one Tensor prefetcher request page, shared by the host
-// (TensorPrefetcherManager composes the bytes) and the DRISC kernel (reads them
-// out of its H2D socket page via the same structs). Keep all structs packed so the
-// L1 byte layout matches on both sides.
+// (TensorPrefetcherManager composes the bytes) and the sender kernels (read them out
+// of their H2D socket page on Blackhole, their TL1 request ring on Quasar, via the
+// same structs). Keep all structs packed so the L1 byte layout matches on both sides.
 //
 // Every page starts with a TensorPrefetcherRequestHeader: a one-byte command id
 // (TensorPrefetcherBaseCmd) followed by a union of the per-command payloads,
@@ -22,7 +22,7 @@
 // entry and geometry bytes are identical across senders, but the header carries that
 // sender's target state address, every layout slot carries that sender's bank-local slab
 // base, and a streaming page carries only that sender's slice of the per-receiver rotation
-// table (see below) -- so worker_loop sends sender s's page to that sender's socket rather
+// table (see below) -- so worker_loop sends sender s's page to that sender alone rather
 // than broadcasting one page to all.
 //
 // For a PREFETCH page the payload region (kRequestPageBytes) has two halves that grow
@@ -64,14 +64,13 @@ namespace tt::tt_metal {
 
 // Fixed usable payload size of one request page, in bytes. Both the host (layout/entry
 // placement) and the kernel (backward layout indexing) must agree on this exact value —
-// it is the *unaligned* payload size, distinct from the pcie-aligned socket page size.
+// it is the *unaligned* payload size, distinct from the pcie-aligned Blackhole socket page size.
 // Larger packs more tensors per page but grows the per-socket DRISC L1 FIFO by
 // kSocketFifoPages × this.
 //
 // Sized for fine-grained queueing (one matmul per request → one entry per page): a single
 // tensor needs header + one layout + one entry = 72 B, so 128 B holds one comfortably with
-// room for a few entries that share a layout. The per-socket L1 FIFO is held constant by
-// scaling kSocketFifoPages inversely (see tensor_prefetcher_manager.hpp).
+// room for a few entries that share a layout.
 inline constexpr uint32_t kRequestPageBytes = 128;
 
 // Number of per-DRAM-core CQ signal slots (one uint32 counter per command queue).
@@ -82,6 +81,14 @@ constexpr uint32_t kNumCqSignalSlots = 2;
 // How a DRAIN request names a target: its target_state_addr, which is L1-aligned, with the low bit
 // set for a PrefetcherPipe and clear for a GlobalCircularBuffer.
 inline constexpr uint32_t kDrainTargetPipeBit = 1;
+
+// How a tensor's bytes sit in its DRAM bank (TensorPrefetcherTensorLayout::layout_mode). K-row-major is
+// one shard per bank, K-row-major within the bank. Receiver-contiguous stacks one (K, n_per_recv) slab per
+// receiver in each bank, so each receiver's bytes for a block are one contiguous DRAM region.
+enum TensorPrefetcherLayoutMode : uint32_t {
+    TENSOR_PREFETCHER_LAYOUT_K_ROW_MAJOR = 0,
+    TENSOR_PREFETCHER_LAYOUT_RECEIVER_CONTIGUOUS = 1,
+};
 
 // Address-independent per-tensor geometry handed to the Tensor prefetcher kernel.
 // All values are derived from the tensor shape + dtype + GCB ring topology + DRISC L1
@@ -101,7 +108,7 @@ struct TensorPrefetcherTensorLayout {
     uint32_t block_stride_bytes = 0;   // DRAM byte stride between ring-blocks
     uint32_t page_bytes_per_recv = 0;  // bytes per receiver per full block (fifo_page_size)
     // Receiver-contiguous-layout fields. Zero/unused under KRowMajor.
-    uint32_t layout_mode = 0;             // 0=KRowMajor, 1=ReceiverContiguous (matches LayoutMode)
+    uint32_t layout_mode = 0;             // a TensorPrefetcherLayoutMode
     uint32_t target_per_visit_pages = 1;  // recv-contig per-receiver visit size ceiling (blocks)
     uint32_t recv_stride_bytes = 0;       // GDDR byte stride between receiver slabs in a bank
     uint32_t block_count = 0;             // K-blocks for this tensor (per-tensor; was the shared GCB ring size)

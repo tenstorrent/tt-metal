@@ -32,6 +32,7 @@
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/tensor_prefetcher_cce_abi.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
+#include "impl/buffers/tensor_prefetcher_manager_test_access.hpp"
 #include "impl/buffers/tensor_prefetcher_transport.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/slow_dispatch.hpp"
@@ -142,7 +143,8 @@ TEST_F(MimirPrefetcher, MM7GatePreconditionsHold) {
     ScopedDevice device_guard;
     distributed::MeshDevice& mesh = device_guard.mesh();
 
-    const distributed::TensorPrefetcherPreconditions preconditions = distributed::tensor_prefetcher_preconditions(mesh);
+    const distributed::TensorPrefetcherPreconditions preconditions =
+        distributed::TensorPrefetcherManagerTestAccess::preconditions(mesh);
     EXPECT_TRUE(preconditions.ok) << preconditions.reason;
     EXPECT_TRUE(experimental::IsTensorPrefetcherSupported(mesh));
 
@@ -176,7 +178,8 @@ TEST_F(MimirPrefetcher, MM7GateUninitializedSenderFails) {
     ASSERT_EQ(read_go_signal(device, cce_index), dev_msgs::RUN_MSG_DONE) << "CCE " << cce_index;
 
     const ScopedInitGoSignal uninitialized_sender(device, cce_index);
-    const distributed::TensorPrefetcherPreconditions preconditions = distributed::tensor_prefetcher_preconditions(mesh);
+    const distributed::TensorPrefetcherPreconditions preconditions =
+        distributed::TensorPrefetcherManagerTestAccess::preconditions(mesh);
     log_info(tt::LogTest, "MM7Gate CCE {} at RUN_MSG_INIT: {}", cce_index, preconditions.reason);
     EXPECT_FALSE(preconditions.ok);
     EXPECT_NE(preconditions.reason.find(fmt::format("CCE {} ", cce_index)), std::string::npos) << preconditions.reason;
@@ -1185,7 +1188,8 @@ TEST_F(MimirPrefetcher, MM7GcbSmokePreconditionsWithReceiverRunning) {
         {smoke.receiver_launch(
             0, kGcbDiscardReceiverKernel, 0, gcb_abi::kModeDrainUntilStopped, 0, kGcbSmokeWaitBudgetCycles, schedule)});
     EXPECT_EQ(read_go_signal(device, other_sender_cce), dev_msgs::RUN_MSG_GO) << "CCE " << other_sender_cce;
-    const distributed::TensorPrefetcherPreconditions preconditions = distributed::tensor_prefetcher_preconditions(mesh);
+    const distributed::TensorPrefetcherPreconditions preconditions =
+        distributed::TensorPrefetcherManagerTestAccess::preconditions(mesh);
     EXPECT_TRUE(preconditions.ok) << preconditions.reason;
 
     receivers.stop_and_wait();
@@ -1238,7 +1242,7 @@ CceSenderStatus lifecycle_sender_status(distributed::MeshDevice& mesh, uint32_t 
     const std::vector<uint32_t> words = read_cce_tl1(
         mesh.get_devices().front(),
         cce_index,
-        distributed::cce_sender_control_base(mesh) + kCceSenderStatusOffset,
+        distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh) + kCceSenderStatusOffset,
         sizeof(CceSenderStatus));
     CceSenderStatus status{};
     std::memcpy(&status, words.data(), sizeof(status));
@@ -1250,7 +1254,8 @@ uint32_t lifecycle_bytes_acked(distributed::MeshDevice& mesh, uint32_t cce_index
     return read_cce_tl1(
                mesh.get_devices().front(),
                cce_index,
-               distributed::cce_sender_control_base(mesh) + kCceRingMetaOffset + offsetof(RingMeta, bytes_acked),
+               distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh) + kCceRingMetaOffset +
+                   offsetof(RingMeta, bytes_acked),
                sizeof(uint32_t))
         .front();
 }
@@ -1275,7 +1280,11 @@ std::vector<uint32_t> fill_lifecycle_control_block(distributed::MeshDevice& mesh
     for (uint32_t word = 0; word < pattern.size(); ++word) {
         pattern[word] = kGcbLayoutFillPattern | word;
     }
-    write_cce_tl1(mesh.get_devices().front(), cce_index, distributed::cce_sender_control_base(mesh), pattern);
+    write_cce_tl1(
+        mesh.get_devices().front(),
+        cce_index,
+        distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh),
+        pattern);
     return pattern;
 }
 
@@ -1301,7 +1310,8 @@ CceSenderStatus poll_sender_status(
     const std::function<bool(const CceSenderStatus&)>& reached,
     std::chrono::steady_clock::duration limit) {
     IDevice* device = mesh.get_devices().front();
-    const uint64_t status_address = distributed::cce_sender_control_base(mesh) + kCceSenderStatusOffset;
+    const uint64_t status_address =
+        distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh) + kCceSenderStatusOffset;
     const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + limit;
     CceSenderStatus status{};
     do {
@@ -1342,7 +1352,7 @@ TEST_F(MimirPrefetcher, MM7LifecycleStartStop) {
         tt::LogTest,
         "MM7Lifecycle sender CCE {} control block 0x{:x}",
         sender_cce,
-        distributed::cce_sender_control_base(mesh));
+        distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh));
 
     PrefetcherSession session(mesh, {0});
     EXPECT_EQ(read_go_signal(device, sender_cce), dev_msgs::RUN_MSG_GO) << "CCE " << sender_cce;
@@ -1363,7 +1373,7 @@ TEST_F(MimirPrefetcher, MM7LifecycleStartStopTwice) {
     distributed::MeshDevice& mesh = device_guard.mesh();
     IDevice* device = mesh.get_devices().front();
     const uint32_t sender_cce = gcb_layout_sender_cce(device, mesh, 0);
-    const uint32_t control_base = distributed::cce_sender_control_base(mesh);
+    const uint32_t control_base = distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh);
 
     PrefetcherSession first_session(mesh, {0});
     first_session.stop();
@@ -1404,7 +1414,7 @@ TEST_F(MimirPrefetcher, MM7LifecycleBusySenderFailsStart) {
     const uint32_t idle_sender_cce = gcb_layout_sender_cce(device, mesh, 0);
     const uint32_t busy_sender_cce = gcb_layout_sender_cce(device, mesh, *busy_bank);
 
-    const uint32_t control_base = distributed::cce_sender_control_base(mesh);
+    const uint32_t control_base = distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh);
     const std::vector<uint32_t> pattern = fill_lifecycle_control_block(mesh, idle_sender_cce);
     fill_lifecycle_control_block(mesh, busy_sender_cce);
 
@@ -1479,8 +1489,9 @@ TEST_F(MimirPrefetcher, MM7LifecycleWaitCq) {
     // queue_cq_wait_without_signal waits on CQ 0.
     ASSERT_EQ(command_queue.id(), 0u);
     PrefetcherSession session(mesh, {0});
-    const distributed::TensorPrefetcherManager::UnsignaledCqWait held_wait =
-        mesh.impl().tensor_prefetcher(&mesh).queue_cq_wait_without_signal();
+    const distributed::TensorPrefetcherManagerTestAccess::UnsignaledCqWait held_wait =
+        distributed::TensorPrefetcherManagerTestAccess::queue_cq_wait_without_signal(
+            mesh.impl().tensor_prefetcher(&mesh));
     const CceSenderStatus waiting = poll_sender_status(
         mesh,
         sender_cce,
@@ -1506,7 +1517,7 @@ TEST_F(MimirPrefetcher, MM7LifecycleWaitCq) {
         read_cce_tl1(
             mesh.get_devices().front(),
             sender_cce,
-            distributed::cce_sender_control_base(mesh) + kCceCqSignalSlotsOffset +
+            distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh) + kCceCqSignalSlotsOffset +
                 (command_queue.id() * kCceCqSignalSlotStrideBytes),
             sizeof(uint32_t))
             .front(),
@@ -1526,7 +1537,8 @@ TEST_F(MimirPrefetcher, MM7LifecycleDrainAtStop) {
     const uint32_t sender_cce = gcb_layout_sender_cce(smoke.device(), mesh, 0);
     const uint32_t page_units = kLifecycleDrainPageBytes / kDramReceiverCreditUnitBytes;
     PrefetcherSession session(mesh, {0});
-    mesh.impl().tensor_prefetcher(&mesh).register_drain_target(smoke.gcb());
+    distributed::TensorPrefetcherManagerTestAccess::register_drain_target(
+        mesh.impl().tensor_prefetcher(&mesh), smoke.gcb());
     smoke.credit_from_host(0, page_units);
 
     std::string stop_error;
@@ -2162,8 +2174,9 @@ TEST_F(MimirPrefetcher, MM7T3FenceLocal0To1) {
     CceReceiverProgram receivers(smoke.device(), {validator_launch(smoke, 0, schedule)});
     PrefetcherSession session(mesh, {*sender_bank});
 
-    const distributed::TensorPrefetcherManager::UnsignaledCqWait fence =
-        mesh.impl().tensor_prefetcher(&mesh).queue_cq_wait_without_signal();
+    const distributed::TensorPrefetcherManagerTestAccess::UnsignaledCqWait fence =
+        distributed::TensorPrefetcherManagerTestAccess::queue_cq_wait_without_signal(
+            mesh.impl().tensor_prefetcher(&mesh));
     queue_tensor(mesh, smoke, tensor, geometry.blocks);
     const CceSenderStatus waiting = poll_sender_status(
         mesh,
@@ -2323,7 +2336,8 @@ TEST_F(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
             stop_error.find(fmt::format("{} request page(s) left unread in its ring", kCceRequestRingSlots)),
             std::string::npos)
             << stop_error;
-        const uint64_t ring_meta_address = distributed::cce_sender_control_base(mesh) + kCceRingMetaOffset;
+        const uint64_t ring_meta_address =
+            distributed::TensorPrefetcherManagerTestAccess::cce_sender_control_base(mesh) + kCceRingMetaOffset;
         const uint32_t bytes_sent =
             read_cce_tl1(device, 1, ring_meta_address + offsetof(RingMeta, bytes_sent), sizeof(uint32_t)).front();
         EXPECT_EQ(bytes_sent - lifecycle_bytes_acked(mesh, 1), kCceRequestRingBytes);

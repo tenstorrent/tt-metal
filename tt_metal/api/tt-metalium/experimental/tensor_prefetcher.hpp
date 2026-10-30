@@ -84,12 +84,14 @@ struct TensorPrefetcherConfig {
     std::optional<QuasarTensorPrefetcherConfig> quasar = std::nullopt;
 };
 
-// Returns true if the Tensor prefetcher is supported on `mesh_device`. On Blackhole both must hold:
-//   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0), and
-//   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
-//     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
+// Returns true if the Tensor prefetcher is supported on `mesh_device`. On every architecture both must hold:
+//   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0; Quasar with
+//     programmable DRAM views in the SoC descriptor), and
+//   - the streaming profiler is off. On Blackhole, TT_METAL_STREAMING_PROFILER=1 parks a resident
+//     relay on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
 //     that DRISC's NIUs in stream mode, so the two cannot coexist.
-// On Quasar, slow dispatch must be on and every sender CCE must have initialized firmware.
+// On Quasar, every DRAM view must also have its own programmable sender CCE, slow dispatch must be
+// on, and every sender CCE must have initialized firmware.
 // When this returns false, StartTensorPrefetcher TT_FATALs, so callers (e.g. tests) can
 // use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
