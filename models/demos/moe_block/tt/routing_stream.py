@@ -34,6 +34,7 @@ from ttnn.bringup.combine_rf.routing_a2a import (
 
 import ttnn
 from ttnn.bringup.combine_rf import persist_l1
+from ttnn.bringup.combine_rf.sparse_combine_l1 import tie_mode
 
 DIR_OF = {"fwd": 0, "bwd": 1}  # (the gather's TP directions on X+ / X-: checked against the chips' coordinates)
 
@@ -750,7 +751,7 @@ class RoutingStream:
             ENT_CAP=self.inst_cap,
             WX=int(self.wrap_x),
             WY=int(self.wrap_y),
-            YT=int(os.environ.get("SPC_YTIE") == "1"),  # (the combine's Y tie split: the plan's ports, as routing_a2a)
+            YT=tie_mode(),  # (the combine's Y tie split: the plan's ports, as routing_a2a)
             DCACHE=1,
             PROBE_NOSTORE=0,
             CT0=ct0,

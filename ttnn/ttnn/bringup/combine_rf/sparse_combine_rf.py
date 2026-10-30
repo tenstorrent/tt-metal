@@ -37,7 +37,7 @@ import ttnn
 from .fabric_all_gather_py import NOC0, NOC1, _SEM_CACHE
 from .sparse_all_gather_2d import DIRS, OPP, mesh_plan, place_ports
 from .combine_plan import link_of
-from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, acc_compute_config, route
+from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, acc_compute_config, route, tie_mode
 
 CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT, CB_W = 0, 1, 2, 3, 4, 5, 6
 DISP_CBS = dict(rows=24, meta=25, plan=26, stage=27, dbg=28)  # (the dispatch phase's, on the port cores)
@@ -76,7 +76,7 @@ class CombineProbes:
     # bk x the sources (the Galaxy's 31 from the LoudBox's 7 at 4); the data path unchanged
     la: int = 0  # SPC_LA=w: the sender looks up to w rows past a row whose ring is full (0 / 1: strict queue order)
     gbgate: bool = False  # SPC_GBGATE=1: the sender's busy-pass credit scan only when the total pending reaches CRED_THR
-    ytie: bool = False  # SPC_YTIE=1: Y ties (the opposite row of a ring) split Y+ / Y- by column parity (route(ytie=)):
+    ytie: int = 0  # SPC_YTIE=1 (sparse_combine_l1.tie_mode; =fab: the fabric's parity tables): Y ties (the opposite row of a ring) split Y+ / Y- by column parity (route(ytie=)):
     # only the first hop's port changes - the 2D action map routes each later row by the destination's table entry
     snoc: str = "1"  # SPC_SNOC=0: the sender on NoC0 by running it on RISCV_1 (its readers move to RISCV_0 / NoC1)
     se: str = ""  # SPC_SE: shared_rows probes - off (no rows, both sides: wrong sums) / noread (no DRAM reads: garbage)
@@ -97,7 +97,7 @@ class CombineProbes:
             credbusy=int(env.get("SPC_CREDBUSY", "0")),
             credfin=env.get("SPC_CREDFIN") == "1",
             far=int(env.get("SPC_FAR", "0")),
-            ytie=env.get("SPC_YTIE") == "1",
+            ytie=tie_mode(env),
             gbgate=env.get("SPC_GBGATE") == "1",
             hcache=env.get("SPC_HCACHE", "1") != "0",
             credauto=env.get("SPC_CREDAUTO") == "1",

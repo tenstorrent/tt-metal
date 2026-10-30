@@ -6,6 +6,8 @@
 
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <limits>
 #include <memory>
 #include <ostream>
@@ -111,18 +113,25 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                                                          std::uint32_t src_chip_id,
                                                          std::uint32_t dst_chip_id,
                                                          RoutingDirection a,
-                                                         RoutingDirection b) -> RoutingDirection {
+                                                         RoutingDirection b,
+                                                         bool prefer_b_on_tie) -> RoutingDirection {
         // Loop through intra_mesh_connectivity starting with a or b direction and return direction that matches
-        // dst_chip_id_first In case of tie, this function is returning a
+        // dst_chip_id first. A tie (dst equidistant both ways, only possible on a wrapped axis) returns b if
+        // prefer_b_on_tie, else a
         std::uint32_t curr_a = src_chip_id, curr_b = src_chip_id;
         bool a_valid = true, b_valid = true;
         while (a_valid or b_valid) {
-            if (intra_mesh_connectivity[mesh_id_val][curr_a].contains(dst_chip_id) and
-                intra_mesh_connectivity[mesh_id_val][curr_a].at(dst_chip_id).port_direction == a) {
+            const bool a_reaches_dst = intra_mesh_connectivity[mesh_id_val][curr_a].contains(dst_chip_id) and
+                                       intra_mesh_connectivity[mesh_id_val][curr_a].at(dst_chip_id).port_direction == a;
+            const bool b_reaches_dst = intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
+                                       intra_mesh_connectivity[mesh_id_val][curr_b].at(dst_chip_id).port_direction == b;
+            if (a_reaches_dst and b_reaches_dst) {
+                return prefer_b_on_tie ? b : a;
+            }
+            if (a_reaches_dst) {
                 return a;
             }
-            if (intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
-                intra_mesh_connectivity[mesh_id_val][curr_b].at(dst_chip_id).port_direction == b) {
+            if (b_reaches_dst) {
                 return b;
             }
             a_valid = false;
@@ -151,6 +160,14 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             mesh_id_val);
         return RoutingDirection::NONE;  // This line should never be reached
     };
+    // Ties on a wrapped axis split by the parity of the source's position along that axis (even -> N/E, odd -> S/W),
+    // so both directions of each ring carry the same load (tenstorrent/tt-metal 50cad059098, aagarwal/fabric-tie-break-
+    // balance). On by default; TT_FABRIC_TIE_PARITY=0: every tie N/E as before.
+    const char* tie_parity_env = std::getenv("TT_FABRIC_TIE_PARITY");
+    const bool tie_parity = tie_parity_env == nullptr or std::string(tie_parity_env) != "0";
+    const auto prefer_negative_direction_on_tie = [tie_parity](std::uint32_t position_on_axis) {
+        return tie_parity and position_on_axis % 2 == 1;
+    };
     const auto& mesh_graph = topology_mapper_.get_mesh_graph();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
@@ -176,7 +193,12 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                         direction = intra_mesh_connectivity[mesh_id_val][src_chip_id].at(next_chip).port_direction;
                     } else {
                         direction = get_shorter_direction_on_row_or_col(
-                            mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
+                            mesh_id_val,
+                            src_chip_id,
+                            target_chip_id,
+                            RoutingDirection::N,
+                            RoutingDirection::S,
+                            prefer_negative_direction_on_tie(src_mesh_coord[0]));
                     }
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // TODO: today we are not updating the weight of the edge, should we use weight to balance
@@ -186,7 +208,12 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                     // Move East or West. The E/W axis carries no chords, so it always uses the base
                     // policy -- identical to main.
                     auto direction = get_shorter_direction_on_row_or_col(
-                        mesh_id_val, src_chip_id, dst_chip_id, RoutingDirection::E, RoutingDirection::W);
+                        mesh_id_val,
+                        src_chip_id,
+                        dst_chip_id,
+                        RoutingDirection::E,
+                        RoutingDirection::W,
+                        prefer_negative_direction_on_tie(src_mesh_coord[1]));
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else {

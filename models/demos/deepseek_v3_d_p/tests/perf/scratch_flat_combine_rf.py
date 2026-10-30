@@ -29,7 +29,7 @@ from loguru import logger
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
 from ttnn.bringup.combine_rf.routing_a2a import routing_a2a_planner_prepare, routing_a2a_reserve
 from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
-from ttnn.bringup.combine_rf.sparse_combine_l1 import route
+from ttnn.bringup.combine_rf.sparse_combine_l1 import route, tie_mode
 from ttnn.bringup.combine_rf.sparse_combine_rf import (
     WRITER_WORDS_ROWS,
     combine_auto,
@@ -272,7 +272,7 @@ def _ids(name, g, c):
     raise ValueError(name)
 
 
-YTIE = os.environ.get("SPC_YTIE") == "1"  # (the combine's Y tie split: the floor on the routes it sends)
+YTIE = tie_mode()  # (the combine's Y tie split: the floor on the routes it sends)
 
 
 def _routing(name, c, seed=0):

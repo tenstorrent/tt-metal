@@ -49,6 +49,7 @@ from ttnn.bringup.combine_rf import persist_l1
 
 from .fabric_all_gather_py import allowed_cores
 from .sparse_all_gather_2d import DIRS, mesh_plan, place_ports
+from .sparse_combine_l1 import tie_mode
 
 PLAN_WORDS = 1024
 
@@ -79,11 +80,11 @@ FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {  // DIRS index: 0 
     if (sr != dr) {
         if constexpr (WY) {  // (YT, the combine's SPC_YTIE: its plan's ports - the opposite row splits by column parity)
             const uint32_t f2 = 2 * ((dr + R - sr) % R);
-            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+            return f2 < R || (f2 == R && (YT == 1 ? ((sc + dc) & 1) : YT == 2 ? (sr & 1) : 0)) ? 2 : 3;
         }
         return dr > sr ? 2 : 3;
     }
-    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) < C || (2 * ((dc + C - sc) % C) == C && !(YT == 2 && (sc & 1))) ? 0 : 1;
     return dc > sc ? 0 : 1;
 }
 """
@@ -975,7 +976,7 @@ def routing_a2a_planner_prepare(
                     ENT_CAP=ENT_CAP,
                     WX=int(wrap_x),
                     WY=int(wrap_y),
-                    YT=int(os.environ.get("SPC_YTIE") == "1"),
+                    YT=tie_mode(),
                     DCACHE=int(dcache),
                     PROBE_NOSTORE=int(probe_nostore),
                 )

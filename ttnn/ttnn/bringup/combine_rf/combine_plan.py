@@ -29,6 +29,8 @@ import torch
 
 import ttnn
 
+from .sparse_combine_l1 import tie_mode
+
 PLAN_WORDS = 1024
 P_NINJ, P_NRET, P_NLOC, P_WANT = 0, 8, 16, 32  # plan word offsets
 P_ROWS, P_OVER = 600, 601
@@ -44,17 +46,17 @@ constexpr uint32_t N = R * C, T = N * S * K;
 constexpr uint32_t cb_in = 0, cb_out = 1;
 // direction index (sparse_all_gather_2d DIRS): 0 X+, 1 X-, 2 Y+, 3 Y-; Y first, then X (lines)
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
-constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=))
+constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=) - 0 Y- / X+, 1 column parity, 2 fabric parity)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
         if constexpr (WY) {
             const uint32_t f2 = 2 * ((dr + R - sr) % R);  // (YT: the opposite row splits by column parity)
-            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+            return f2 < R || (f2 == R && (YT == 1 ? ((sc + dc) & 1) : YT == 2 ? (sr & 1) : 0)) ? 2 : 3;
         }
         return dr > sr ? 2 : 3;
     }
-    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) < C || (2 * ((dc + C - sc) % C) == C && !(YT == 2 && (sc & 1))) ? 0 : 1;
     return dc > sc ? 0 : 1;
 }
 void kernel_main() {
@@ -190,17 +192,17 @@ constexpr uint32_t O_TIDX = O_NINJ + 64, O_TAB = O_TIDX + al64(ROWS_CAP * 4);
 constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
 constexpr uint32_t O_END = O_REG + al64(NG * 4);
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
-constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=))
+constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=) - 0 Y- / X+, 1 column parity, 2 fabric parity)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
         if constexpr (WY) {
             const uint32_t f2 = 2 * ((dr + R - sr) % R);  // (YT: the opposite row splits by column parity)
-            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+            return f2 < R || (f2 == R && (YT == 1 ? ((sc + dc) & 1) : YT == 2 ? (sr & 1) : 0)) ? 2 : 3;
         }
         return dr > sr ? 2 : 3;
     }
-    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) < C || (2 * ((dc + C - sc) % C) == C && !(YT == 2 && (sc & 1))) ? 0 : 1;
     return dc > sc ? 0 : 1;
 }
 void kernel_main() {
@@ -460,17 +462,17 @@ constexpr uint32_t O_RUN = O_GS + al64(NG * 8), O_SCH = O_RUN + al64(NG * 2), O_
 constexpr uint32_t O_NACT = O_SEID + al64(N * VM), O_ORD = O_NACT + al64(N * 4), O_DYN = O_ORD + OWN * OPG;
 constexpr uint32_t O_TF = O_DYN + 4096;
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
-constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=))
+constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=) - 0 Y- / X+, 1 column parity, 2 fabric parity)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
         if constexpr (WY) {
             const uint32_t f2 = 2 * ((dr + R - sr) % R);  // (YT: the opposite row splits by column parity)
-            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+            return f2 < R || (f2 == R && (YT == 1 ? ((sc + dc) & 1) : YT == 2 ? (sr & 1) : 0)) ? 2 : 3;
         }
         return dr > sr ? 2 : 3;
     }
-    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) < C || (2 * ((dc + C - sc) % C) == C && !(YT == 2 && (sc & 1))) ? 0 : 1;
     return dc > sc ? 0 : 1;
 }
 void kernel_main() {
@@ -1054,10 +1056,12 @@ def first_hop_idx(src, dst, C, R=None, wrap=(False, False)):
     if sr != dr:
         if wrap[1]:
             f2 = 2 * ((dr - sr) % R)  # (SPC_YTIE: the opposite row splits by column parity, as the planner's YT)
-            return 2 if f2 < R or (f2 == R and os.environ.get("SPC_YTIE") == "1" and (sc + dc) % 2) else 3
+            yt = tie_mode()
+            return 2 if f2 < R or (f2 == R and ((yt == 1 and (sc + dc) % 2) or (yt == 2 and sr % 2))) else 3
         return 2 if dr > sr else 3
     if wrap[0]:
-        return 0 if 2 * ((dc - sc) % C) <= C else 1
+        g2 = 2 * ((dc - sc) % C)
+        return 0 if g2 < C or (g2 == C and not (tie_mode() == 2 and sc % 2)) else 1
     return 0 if dc > sc else 1
 
 
@@ -1168,7 +1172,7 @@ def combine_planner_prepare(
     NG = N * EPC
     assert rows_cap % 32 == 0 and N * S * K < (1 << 16) * 64 and N <= 32 and A <= 16
     _, _, (wrap_x, wrap_y) = mesh_plan(mesh_device, L, torus)
-    yt = int(os.environ.get("SPC_YTIE") == "1")  # (the combine's probe, CombineProbes.ytie: both sides route alike)
+    yt = tie_mode()  # (the combine's probe, CombineProbes.ytie: both sides route alike)
     wsub = lambda src: (  # noqa: E731
         src.replace("__WX__", str(int(wrap_x))).replace("__WY__", str(int(wrap_y))).replace("__YT__", str(yt))
     )

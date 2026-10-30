@@ -654,6 +654,21 @@ void kernel_main() {
 """
 
 
+def tie_mode(env=None):
+    """The tie rule our planners route by (the source's first hop of a torus tie): 2 (default) the fabric's - its routing
+    tables split a tie by the parity of the source's position on that axis (odd: Y+ / X-; the X tie of a route that
+    turns decided at the turn chip, in the source's column; routing_table_generator, TT_FABRIC_TIE_PARITY on by default);
+    0 every tie Y- / X+ (the old tables: TT_FABRIC_TIE_PARITY=0, or SPC_YTIE=0); 1 (SPC_YTIE=1, our Y split, off) a Y tie
+    Y+ when the source's and home's columns differ in parity."""
+    e = os.environ if env is None else env
+    v = e.get("SPC_YTIE", "")
+    if v == "1":
+        return 1
+    if v == "0" or e.get("TT_FABRIC_TIE_PARITY", "1") == "0":
+        return 0
+    return 2
+
+
 def route(src, home, R, C, wrap_x, wrap_y, link, ytie=False):
     """[(chip, direction)] hops from src to home: Y first, then X (lines: forced; rings: shorter way). Ties as the
     fabric's routing tables (routing_table_generator.cpp: the first of (N, S) / (E, W)): Y- (North, row - 1) and X+
@@ -670,11 +685,12 @@ def route(src, home, R, C, wrap_x, wrap_y, link, ytie=False):
             return (1 if plus else -1), (f if plus else n - f)
         return (1 if b > a else -1), abs(b - a)
 
-    s, k = step(R, r, home[0], wrap_y, ytie and (c + home[1]) % 2 == 1)
+    mode = 2 if ytie == 2 else int(bool(ytie))
+    s, k = step(R, r, home[0], wrap_y, (mode == 1 and (c + home[1]) % 2 == 1) or (mode == 2 and r % 2 == 1))
     for _ in range(k):
         hops.append(((r, c), "Y+" if s > 0 else "Y-"))
         r = (r + s) % R
-    s, k = step(C, c, home[1], wrap_x, True)
+    s, k = step(C, c, home[1], wrap_x, not (mode == 2 and c % 2 == 1))
     for _ in range(k):
         hops.append(((r, c), "X+" if s > 0 else "X-"))
         c = (c + s) % C
