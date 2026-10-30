@@ -228,12 +228,20 @@ class BlackholeArch(ArchGolden):
     # way, against 1292 and 876 wrong with ties to even.
     fpu = Fpu(_BLACKHOLE_L1, dest_ties_away=True)
     # The packer truncates these on the card where the stimuli codecs round.
-    # Bfp8_b is known wrong too, off on 460 of 4096, but its lattice is a
-    # shared block exponent rather than a mantissa width, so it needs the
-    # reference block conversion and is not fixed here.
+    # The three block floats come along because they leave by the same
+    # conversion: their lattice is a shared block exponent rather than a
+    # mantissa width, but it is floored the same way.
     pack = Pack(
         _BLACKHOLE_L1,
-        truncating_outputs=frozenset({DataFormat.Fp8_e4m3, DataFormat.Float16_b}),
+        truncating_outputs=frozenset(
+            {
+                DataFormat.Fp8_e4m3,
+                DataFormat.Float16_b,
+                DataFormat.Bfp8_b,
+                DataFormat.Bfp4_b,
+                DataFormat.Bfp2_b,
+            }
+        ),
     )
 
 

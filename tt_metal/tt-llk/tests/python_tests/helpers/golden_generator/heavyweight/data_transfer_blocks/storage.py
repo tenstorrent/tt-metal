@@ -18,6 +18,9 @@ from helpers.llk_params import DestAccumulation, format_dict
 #: Explicit mantissa bits in an IEEE float32, the width every mask is cut from.
 FP32_MANTISSA_BITS = 23
 
+#: What an IEEE float32 adds to an exponent before storing it.
+FP32_EXPONENT_BIAS = 127
+
 #: Explicit mantissa bits a src-register datum holds (the datum is 19 bits:
 #: 1 sign + 8 exponent + 10 mantissa).
 SRC_MANT_BITS = 10
@@ -173,7 +176,8 @@ DEST_MANTISSA_BITS = {
 #: Explicit mantissa bits an L1 float format holds, for the formats whose
 #: lattice is a plain mantissa width. The block-scaled families are absent on
 #: purpose: their step is set by an exponent shared across the block, so a
-#: per-datum mantissa width does not describe them.
+#: per-datum mantissa width does not describe them. See
+#: :data:`L1_BLOCK_MAGNITUDE_BITS` for the block-float ones.
 L1_MANTISSA_BITS = {
     DataFormat.Float32: FP32_MANTISSA_BITS,
     DataFormat.Tf32: SRC_MANT_BITS,
@@ -191,6 +195,18 @@ L1_MIN_NORMAL_EXP = {
     DataFormat.Float16: -14,
     DataFormat.Float16_b: -126,
     DataFormat.Fp8_e4m3: -6,
+}
+
+#: Datums a block-float format shares one exponent across.
+BFP_BLOCK_SIZE = 16
+
+#: Magnitude bits a block-float datum stores, the sign bit excluded. The block
+#: exponent carries the scale, so the leading bit is stored rather than implied
+#: and Bfp8_b's 7 bits are worth 6 explicit mantissa bits plus that one.
+L1_BLOCK_MAGNITUDE_BITS = {
+    DataFormat.Bfp8_b: 7,
+    DataFormat.Bfp4_b: 3,
+    DataFormat.Bfp2_b: 1,
 }
 
 #: Explicit mantissa bits a src register keeps per format. The ISA documents a
@@ -236,18 +252,59 @@ def to_src_storage(
     return values.to(format_dict[src_format])
 
 
+def truncate_to_block_lattice(
+    values: torch.Tensor, magnitude_bits: int, l1_format: DataFormat
+) -> torch.Tensor:
+    """Quantize toward zero onto a block-float lattice.
+
+    Each block takes the largest biased exponent among its datums, and every
+    datum then stores a magnitude weighted
+    ``2 ** (shared - FP32_EXPONENT_BIAS - (magnitude_bits - 1))``. Flooring that
+    magnitude is the whole conversion, since the leading bit is stored rather
+    than implied and there is nothing left to normalise.
+    """
+    wide = values.to(torch.float32)
+    if wide.numel() % BFP_BLOCK_SIZE:
+        raise ValueError(
+            f"{l1_format} shares one exponent across {BFP_BLOCK_SIZE} datums, "
+            f"so {wide.numel()} datums is not a whole number of blocks."
+        )
+    blocks = wide.reshape(-1, BFP_BLOCK_SIZE)
+    raw = blocks.contiguous().view(torch.int32)
+    # Every datum arriving here has a real exponent, because Dest flushes
+    # subnormals before the packer reads it. An exponent field of zero would
+    # mean the leading bit below is fabricated rather than stored.
+    shared = ((raw >> FP32_MANTISSA_BITS) & 0xFF).amax(dim=1, keepdim=True)
+    # float64 for the step and the division: a block of small exponents puts
+    # the step below float32's smallest normal, where it would flush to zero
+    # and the division would hand back an infinity.
+    weight = shared - FP32_EXPONENT_BIAS - (magnitude_bits - 1)
+    step = torch.pow(2.0, weight.double())
+    magnitude = torch.clamp(
+        torch.floor(blocks.double().abs() / step), max=(1 << magnitude_bits) - 1
+    )
+    quantized = torch.sign(blocks.double()) * magnitude * step
+    # A magnitude that floors to zero drops its sign. The codecs do the same,
+    # because the unpacker reads a sign bit over a zero magnitude as -inf.
+    quantized = torch.where(magnitude == 0, torch.zeros_like(quantized), quantized)
+    return quantized.to(torch.float32).reshape(values.shape)
+
+
 def truncate_to_l1_lattice(
     values: torch.Tensor, l1_format: DataFormat
 ) -> Optional[torch.Tensor]:
     """Quantize toward zero onto `l1_format`'s lattice, or None if unmodelled.
 
-    For a packer that truncates where the codec rounds. Dropping the mantissa
-    bits the format cannot hold lands the value on that format's lattice, so
-    the codec's own conversion afterwards has nothing left to round.
+    For a packer that truncates where the codec rounds. Dropping whatever the
+    format cannot hold lands the value on that format's lattice, so the codec's
+    own conversion afterwards has nothing left to round.
 
-    Returns None for a format whose lattice is not a plain mantissa width,
-    which is every block-scaled one.
+    Returns None for a format whose lattice this module does not describe,
+    which today means the MX family and its per-block scale.
     """
+    block_bits = L1_BLOCK_MAGNITUDE_BITS.get(l1_format)
+    if block_bits is not None:
+        return truncate_to_block_lattice(values, block_bits, l1_format)
     keep = L1_MANTISSA_BITS.get(l1_format)
     if keep is None:
         return None
