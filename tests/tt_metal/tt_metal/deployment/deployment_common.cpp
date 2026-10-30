@@ -49,7 +49,7 @@ std::string read_text_file_trimmed(const std::string& path) {
 
 std::string get_ubb_id_str(uint32_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    tt::umd::ClusterDescriptor& cluster_desc = (*(cluster.get_cluster_desc()));
+    tt::umd::ClusterDescriptor& cluster_desc = *cluster.get_cluster_desc();
     auto ubb_id = tt::tt_fabric::get_ubb_id(cluster_desc, chip_id);
     return fmt::format(
         "UBB: {}, Chip: {}, BDF: {}, SN: {}",
