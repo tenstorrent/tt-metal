@@ -105,7 +105,6 @@ private:
     std::vector<NodeId> nodes_cache_;
 };
 
-std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph);
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraphDescriptor& mgd);
 
 std::map<MeshId, AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>> build_adjacency_graph_physical(

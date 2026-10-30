@@ -16,9 +16,33 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
 )
 
+# Runtime-free topology sources — compiled into the TT::FabricTopologyUtils shared library
+# (see tt_metal/fabric/CMakeLists.txt). NOTE: mesh_graph.cpp, routing_table_generator.cpp and topology_mapper.cpp
+# stay in FABRIC_SOURCES below (MeshGraph, the routing-table builder and the runtime TopologyMapper stay in fabric).
+set(FABRIC_TOPOLOGY_UTILS_SOURCES
+    mesh_graph_descriptor.cpp
+    physical_system_descriptor.cpp
+    physical_system_descriptor_diff.cpp
+    serialization/physical_system_descriptor_serialization.cpp
+    topology_mapper_utils.cpp
+    topology_solver.cpp
+    topology_solver_sat.cpp
+    topology_solver_sat_solver.cpp
+    physical_grouping_descriptor_core.cpp
+    physical_grouping_descriptor_graph_building.cpp
+    physical_grouping_descriptor_matching.cpp
+    physical_descriptor_builder.cpp
+)
+
+# Runtime-free value types shared with the runtime (FabricNodeId & friends, PhysicalNodeId): compiled into
+# TT::Metalium::Types (declared in tt_metal/CMakeLists.txt), which both libtt_metal and the topology library link.
+set(FABRIC_TYPES_SOURCES
+    fabric_types.cpp
+    physical_node_id.cpp
+)
+
 set(FABRIC_SOURCES
     control_plane.cpp
-    mesh_graph_descriptor.cpp
     routing_table_generator.cpp
     axis_route_topology.cpp
     mcast_reverse_tree.cpp
@@ -57,28 +81,15 @@ set(FABRIC_SOURCES
     fabric_mux_v2_config.cpp
     fabric_tensix_builder.cpp
     fabric_tensix_builder_impl.cpp
-    fabric_types.cpp
     compressed_direction_table.cpp
     compressed_routing_path.cpp
     serialization/router_port_directions.cpp
-    serialization/physical_system_descriptor_serialization.cpp
     serialization/intermesh_connections_serialization.cpp
     serialization/port_descriptor_serialization.cpp
     ccl/ccl_common.cpp
     link_health.cpp
     fsd_host_filter.cpp
-    physical_node_id.cpp
     physical_system_discovery.cpp
-    physical_system_descriptor.cpp
-    physical_system_descriptor_diff.cpp
     topology_mapper.cpp
-    topology_mapper_utils.cpp
-    topology_solver.cpp
-    topology_solver_sat.cpp
-    topology_solver_sat_solver.cpp
     pipeline_builder.cpp
-    physical_grouping_descriptor_core.cpp
-    physical_grouping_descriptor_graph_building.cpp
-    physical_grouping_descriptor_matching.cpp
-    physical_descriptor_builder.cpp
 )

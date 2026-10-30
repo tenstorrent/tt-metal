@@ -6,7 +6,7 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/physical_system_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt_metal/llrt/tt_target_device.hpp>
+#include "llrt/tt_target_device.hpp"
 
 #include <tt-umd-workload/cluster.hpp>
 
