@@ -128,7 +128,7 @@ def main():
         "--iter0", action="store_true", help="idle tables from the cold iteration 0 instead of iterations >= 1"
     )
     ap.add_argument("--csv", metavar="OUT", help="also write one CSV row per (cached, new) cell")
-    ap.add_argument("--markdown", action="store_true", help="markdown tables in the layout of tt-metal#57827")
+    ap.add_argument("--markdown", action="store_true", help="markdown tables")
     args = ap.parse_args()
     rows = load(args.results)
     med = {k: st.median(v) for k, v in idle_ttfts(rows, args.iter0).items()}
