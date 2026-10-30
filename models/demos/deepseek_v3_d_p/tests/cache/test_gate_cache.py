@@ -245,3 +245,19 @@ def test_gate_bias_centered_cache(mesh_device, device_params, expect_error):
     # Same expert ranking as the fp32 bias wherever bf16 can separate it.
     order = torch.argsort(bias, descending=True)
     assert (loaded[order][:-1] >= loaded[order][1:]).all(), "centred bf16 bias reorders experts"
+
+
+def test_centre_gate_bias_host():
+    """Host-only: centring keeps the fp32 ranking exactly and gives bf16 far more distinct values (no device)."""
+    torch.manual_seed(0)
+    bias = 34.0 + 0.14 * torch.randn(256, dtype=torch.float32)  # GLM-5.3 layer-3 like: large offset, small spread
+    centred = centre_gate_bias(bias)
+    assert centred.dtype == torch.float32
+    assert abs(centred.mean().item()) < 1e-5
+    # A constant shift: identical top-k, and identical full order, in fp32.
+    assert torch.equal(torch.topk(centred, 8).indices, torch.topk(bias, 8).indices)
+    assert torch.equal(torch.argsort(centred), torch.argsort(bias))
+    assert torch.allclose(centred - bias, torch.full_like(bias, -bias.mean().item()), atol=1e-5)
+    # bf16 collapses the uncentred bias to a handful of values; centred it keeps ~1e-3 resolution.
+    assert bias.to(torch.bfloat16).unique().numel() < 16
+    assert centred.to(torch.bfloat16).unique().numel() > 4 * bias.to(torch.bfloat16).unique().numel()
