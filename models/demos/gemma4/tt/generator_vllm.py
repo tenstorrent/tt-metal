@@ -6567,11 +6567,17 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #                                 While a record serves, its credit is what the current run delivered (the mean
 #                                 tokens per row of its own steps), not the pool of earlier runs
 #   GEMMA4_SPEC_RETRY_STEPS=8     the fewest plain steps before a retry: a record measured at break-even or
-#                                 better re-enters once its retry cycle (reseed + overtaken replay + reload, as
-#                                 served) pays over the horizon, unless its last run failed; else the cheapest
-#                                 record is exploration...
-#   GEMMA4_SPEC_RETRY_OVERHEAD=0.03  ...whose cycle (with GEMMA4_SPEC_TRIAL_STEPS record steps as a loss) over
-#                                 those plain steps is at most this fraction of them
+#                                 better re-enters once its entry as served (the reseed at a first proposal;
+#                                 mid-request the cycle -- reseed, overtaken replay, reload -- times the reseeds
+#                                 expected before every row's first draft matches) pays over the horizon,
+#                                 unless its last run failed; else the cheapest record is exploration...
+#   GEMMA4_SPEC_RETRY_OVERHEAD=0.01  ...within the rung's budget, like every reseeding entry out of the plain
+#                                 regime but one on the measured credit of a rung without debt: the realized loss
+#                                 of the rung's failed runs since it last paid plus the entry's expected loss
+#                                 (GEMMA4_SPEC_TRIAL_STEPS steps at the rung's credit, every draft rejected on a
+#                                 rung never measured) is at most this fraction of the plain time the rung served
+#                                 since its last failed run (a new request does not reset that clock); the
+#                                 log's reason "budget" is a step that waits for it
 #   GEMMA4_SPEC_TRIAL_GAIN=0.6    a new request's first proposal replays the cheapest record once (its trial)
 #                                 when the gain estimate is at least this -- GEMMA4_SPEC_MIN_GAIN once serving has
 #                                 GEMMA4_SPEC_CALIB_MIN samples of the record at the rung, fresh or stale -- and

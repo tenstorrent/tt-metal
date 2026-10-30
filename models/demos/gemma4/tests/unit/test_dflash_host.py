@@ -3386,9 +3386,10 @@ def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
     return model
 
 
-def _costed(adapter, monkeypatch):
+def _costed(adapter, monkeypatch, served=10000):
     """A contract model with the CI leg's costs, a three-step retry at a 1.2 overhead (the cycle: the bootstrap
-    replay and one record step) and no probe."""
+    replay and one record step) and no probe, on a rung that served ``served`` plain steps (0: a cold rung,
+    whose exploration budget admits no entry yet)."""
     env = {
         "GEMMA4_SPEC_RETRY_STEPS": "3",
         "GEMMA4_SPEC_RETRY_OVERHEAD": "1.2",  # the gate charges the whole one-step trial cycle
@@ -3397,7 +3398,16 @@ def _costed(adapter, monkeypatch):
         "GEMMA4_SPEC_MIN_GAIN": "1.10",  # the band mechanics below are written at the 1.10 bar (the default is 1.25)
         "GEMMA4_SPEC_TRIAL_STEPS": "1",  # the scenarios describe one-step trials and retries
     }
-    return _with_costs(build_model(adapter, monkeypatch, env=env))
+    return _served(_with_costs(build_model(adapter, monkeypatch, env=env)), served)
+
+
+def _served(model, steps=10000):
+    """``model`` on an engine whose rungs served ``steps`` plain steps since any failed run there: the rung's
+    exploration budget (``SpecPolicy.rung_clock``) admits a reseeding entry, as a cold rung's does not."""
+    for key in model._spec_costs or {}:
+        if key[0] == "step":
+            model._spec_policy.rung_clock[int(key[2])] = int(steps)
+    return model
 
 
 def _inform_prior(model, cond):
@@ -3452,6 +3462,21 @@ def _dflash_without_a_cost_table_every_solo_greedy_request_speculates_and_a_warn
 def _dflash_the_first_request_speculates_from_the_optimistic_prior_and_the_counts_feed_its_ewma(
     adapter, monkeypatch, expect_error=None
 ):
+    """The optimistic prior's one-step trial waits for the rung's exploration budget like every reseeding entry:
+    priced at every draft rejected (the bootstrap 46.9 and the step's 46.9 - 34 = 59.8 ms) it needs 1.2 x 34 ms
+    x 2 plain steps at the fixture's overhead, so a cold rung's first request runs plain (reason "budget", the
+    taps dropped) and two plain proposals later the next request bootstraps; with the rung served the first
+    request does at once, and its verify's counts feed the row's and the prior's EWMAs."""
+    cold = _costed(adapter, monkeypatch, served=0)
+    _prefill(cold, prompt_len=2, key=10)
+    assert _ordinary(cold, [3], [2], [10], result="device") == "device" and _names(cold, "bootstrap") == []
+    assert cold._spec_policy.last_reason == "budget" and cold._spec_policy.rung_clock == {1024: 0}
+    for pos in (3, 4):
+        proposal = _propose(cold, [[pos] + [-1] * 5], [[pos] + [-1] * 5])
+        assert proposal.num_valid.tolist() == [0]
+    assert cold._spec_policy.rung_clock == {1024: 2}
+    cold.release_request(0)
+    assert _dflash_rounds(cold, [2], key=20) == [5, 5], "the budget covers the trial: the bootstrap"
     costed = _costed(adapter, monkeypatch)
     assert _dflash_rounds(costed, [2]) == [5, 5]  # the verify carried 5 drafts and committed 3 tokens
     stats = costed._dflash_stats
@@ -3562,7 +3587,7 @@ def _dflash_the_cost_table_is_consumed_as_measured(adapter, monkeypatch, expect_
     (0.96x: above the trial gain, but 1.97 tokens at 70 ms save nothing, so the bootstrap cannot pay) and not
     at all below the trial gain."""
     for step_ms, cond, bootstraps in ((46.9, 0.5, True), (70.0, 0.5, False), (70.0, 0.1, False)):
-        model = _with_costs(build_model(adapter, monkeypatch), step_ms=step_ms)
+        model = _served(_with_costs(build_model(adapter, monkeypatch), step_ms=step_ms))
         _inform_prior(model, [cond] * 5)  # 1.97 expected tokens: 1.43x at 46.9 ms, 0.96x at 70 ms; 1.11: 0.54x
         _prefill(model, prompt_len=2, key=10)
         out = _ordinary(model, [3], [2], [10], result="device")
@@ -3669,7 +3694,7 @@ def _mtp_adaptive(adapter, monkeypatch, env=None):
     }
     model = mh.build_mtp_model(adapter, monkeypatch, env=env)
     mh.install_decoder(model, step_ms=MTP_STEP_MS, plain_ms=mh.PLAIN_MS)
-    return model
+    return _served(model)
 
 
 def _mtp_rounds(mtp, accepted_per_round):
@@ -3791,68 +3816,59 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
     """One verify at five accepted, then rejections of the first draft only, with 20 ms reseeds. The optimistic
     prior's first proposal is a one-step trial of (1,5); the per-position EWMA at 0.1 keeps (8,3) (1.75x) the
     best record, then (16,1) is held, and the record's OWN steps (one token each) end the hold after two
-    decisions below the exit gain. The model, whose deep positions were observed accepted once and never
-    reached again, still rates (1,5) at 1.71x after the cooldown's three plain steps, so the row re-enters
-    (the fixture never calibrates a pool: in serving the measured credit would refuse it), falls out the same
-    way, and after five plain steps the exploration retry replays the cheapest record, (16,1): its cycle, the
-    reseed interval (20 + 30 - 20) plus one record step (10), is 40 ms = 0.4 of five plain steps."""
+    decisions below the exit gain. That run lost 15 ms (the reseed and five record steps, 215 ms, for ten
+    tokens): the rung's debt, which with the entry's own expected loss (one record step at every draft
+    rejected, 30) the budget covers after the cooldown and two more plain steps at the fixture's 0.4
+    overhead. The model, whose deep positions were observed accepted once and never reached again, still
+    rates (1,5) at 1.71x, so the row re-enters (the fixture never calibrates a pool: in serving the measured
+    credit would refuse it) and falls out the same way, now owing 130 ms: the exploration retry of the
+    cheapest record, (16,1), priced as served (2.58 reseeds expected before its overtaken replay takes, 30 each,
+    plus one record step, 10) waits 27 plain steps of budget, not the five of the old cadence."""
     adaptive = _mtp_adaptive(adapter, monkeypatch)
     adaptive._spec_costs.update({("reseed", shape): CostLine.flat(20.0) for shape in mh.DEFAULT_SHAPES})
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
     monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
     offered = _mtp_rounds(adaptive, [5] + [0] * 21)
-    assert offered == [5, 5, 3, 1, 1, 0, 0, 0, 0, 5, 3, 5, 1, 1, 0, 0, 0, 0, 0, 1, 3, 5, 1]
+    assert offered == [5, 5, 3, 1, 1, 0, 0, 0, 0, 0, 0, 5, 3, 5, 1, 1, 0, 0, 0, 0, 0, 0, 0]
     assert [s[1] for s in mh._steps(adaptive)] == [(1, 5), (1, 5), (8, 3), (16, 1), (16, 1)] + [
         (1, 5),
         (8, 3),
         (1, 5),
         (16, 1),
         (16, 1),
-    ] + [(16, 1), (8, 3), (1, 5), (16, 1)]
-    assert len(_names(adaptive, "decode")) == 1 + 9, "the first step and the nine plain steps ran the base decode"
-    assert [r[1:3] for r in _names(adaptive, "reseed")] == [((1, 5), [0]), ((1, 5), [0]), ((16, 1), [0])]
-    assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**12)
-    assert adaptive._spec_policy.declined == 0 and not adaptive._spec_policy.trial
+    ]
+    assert len(_names(adaptive, "decode")) == 1 + 12, "the first step and the twelve plain steps ran the base decode"
+    assert [r[1:3] for r in _names(adaptive, "reseed")] == [((1, 5), [0]), ((1, 5), [0])]
+    assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**9)
+    policy = adaptive._spec_policy
+    assert policy.declined == 7 and not policy.trial and policy.last_reason == "budget"
+    assert policy.rung_debt == {1024: pytest.approx(130.0)} and policy.rung_clock[1024] == 7
     reasons = [
         re.search(r"\((\w+); was", line).group(1) for line in messages if line.startswith("Gemma4MTP adaptive K:")
     ]
-    assert reasons == [
-        "trial",
-        "gain",
-        "hold",
-        "exit",
-        "enter",
-        "gain",
-        "gain",
-        "hold",
-        "exit",
-        "retry",
-        "hold",
-        "hold",
-        "hold",
-    ]
+    assert reasons == ["trial", "gain", "hold", "exit", "enter", "gain", "gain", "hold", "exit"]
     assert "(trial; was none)" in messages[0] and "entry 20.0 ms" in messages[0], "the optimistic prior: a trial"
     # the instrumentation: the closed intervals by mode, clean only without a switch, a reseed or a prefill
-    calib = adaptive._spec_policy.calibration
+    calib = policy.calibration
     modes = {mode: (stats.steps, stats.clean + stats.outliers[0]) for mode, stats in calib.modes.items()}
-    assert modes[("step", (1, 5), 1024)] == (5, 1), "the first interval starts with a reseed"
-    assert modes[("step", (8, 3), 1024)] == (3, 0), "every (8,3) interval starts at a switch"
-    assert modes[("step", (16, 1), 1024)] == (5, 2)
-    assert modes[("plain", 32)] == (9, 7), "the plain steps after a record step are reported, never cost samples"
-    assert calib.reseeds[(1, 5)][0] == 2 and calib.reseeds[(16, 1)][0] == 1
+    assert modes[("step", (1, 5), 1024)] == (4, 1), "the first interval starts with a reseed"
+    assert modes[("step", (8, 3), 1024)] == (2, 0), "every (8,3) interval starts at a switch"
+    assert modes[("step", (16, 1), 1024)] == (4, 2)
+    assert modes[("plain", 32)] == (12, 10), "the plain steps after a record step are reported, never cost samples"
+    assert calib.reseeds[(1, 5)][0] == 2 and (16, 1) not in calib.reseeds
     assert {name: calls for name, (calls, _ms) in calib.phases.items()} == {
-        "tables": 14,
+        "tables": 10,
         "refresh": 1,
-        "reseed": 3,
-        "replay": 14,
+        "reseed": 2,
+        "replay": 10,
         "host": 23,
         # the runner's call boundaries (8b3f194aca3): a gap per proposal-to-step and step-to-proposal, by the step's kind
-        "gap_pv_v": 13,
-        "gap_vp_v": 13,
-        "gap_pv_p": 9,
-        "gap_vp_p": 10,
-        "verify": 13,
+        "gap_pv_v": 10,
+        "gap_vp_v": 10,
+        "gap_pv_p": 12,
+        "gap_vp_p": 13,
+        "verify": 10,
     }
     assert calib.prefills == 1 and calib.window_prefills == 1
     assert calib.total[0] == 22 and calib.total[2] == 6 + 12 + 9, "every closed interval, with its tokens"
@@ -3860,7 +3876,7 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
         sum(entry[0] for entry in calib.dirty.values()) + sum(s.clean + s.outliers[0] for s in calib.modes.values())
         == 22
     )
-    assert {cause: entry[0] for cause, entry in calib.dirty.items()} == {"reseed": 3, "switch": 9}
+    assert {cause: entry[0] for cause, entry in calib.dirty.items()} == {"reseed": 2, "switch": 7}
 
 
 def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
