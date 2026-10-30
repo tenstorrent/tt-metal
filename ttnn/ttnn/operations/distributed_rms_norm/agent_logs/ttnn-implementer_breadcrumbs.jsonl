@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","test":"test_linear -k 1x1x32x32 and bf16","note":"first end-to-end pass, both cluster axes on 2x2","ts":"2026-10-30T18:10:00+00:00"}
+{"event":"test_run","status":"pass","test":"test_distributed_rms_norm.py (all groups, split runs)","note":"103/103 pass; --dev teardown leaves eth cores stuck after fabric traffic (watcher artifact, clean without --dev); fixed resource cache keyed on mesh.id()","ts":"2026-10-30T18:29:08+00:00"}

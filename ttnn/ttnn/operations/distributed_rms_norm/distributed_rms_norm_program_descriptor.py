@@ -554,13 +554,15 @@ def get_resources(mesh, port_cores, G, landing_words):
     pkey = tuple(sorted((c.x, c.y) for c in port_cores))
     crs = _crs(port_cores)
     created = False
-    skey = (id(mesh), pkey, G)
+    # MeshDevice.id() is unique per opened mesh (a Python id() can be recycled after a close / reopen).
+    mid = int(mesh.id())
+    skey = (mid, pkey, G)
     if skey not in _SEM_CACHE:
         _SEM_CACHE[skey] = [ttnn.create_global_semaphore(mesh, crs, 0) for _ in range(G)]
         created = True
     words = _landing_words_bucket(landing_words)
-    lkey = (id(mesh), pkey, words)
-    if lkey not in _LANDING_CACHE:
+    lkey = (mid, pkey, words)
+    if lkey not in _LANDING_CACHE or not _LANDING_CACHE[lkey].is_allocated():
         n_ports = len(port_cores)
         mc = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
