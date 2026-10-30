@@ -9,6 +9,7 @@
 #include "experimental/cce_gddr.h"
 #include "experimental/cce_hart.h"
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#include "risc_common.h"
 
 #include "cce_test_status_abi.h"
 
@@ -16,12 +17,32 @@ namespace cce_test {
 
 using experimental::cce_hart::arg_u64;
 using experimental::cce_hart::own_tl1_words;
+using experimental::cce_hart::peer_tl1_word;
 using experimental::cce_hart::read_cycle_counter;
 using experimental::cce_hart::wait_until;
 using experimental::cce_hart::WaitDeadline;
 
 inline constexpr uint32_t kLineBytes = L2_CACHE_LINE_SIZE;
 static_assert(kLineBytes == cce_test_status_abi::kLineBytes);
+
+// The TL1 area tests may use: from the end of the harts' kernel text (the HAL's UNRESERVED base for the DRAM core
+// before its alignment, qa_hal_dram.cpp:67-68) to the end of the hart-cacheable port.
+inline constexpr uint64_t kTestAreaBegin =
+    MEM_CCE_KERNEL_BASE + static_cast<uint64_t>(MEM_CCE_KERNEL_SIZE) * MEM_CCE_LOCAL_HARTS;
+inline constexpr uint64_t kTestAreaEnd = MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE;
+
+// A status line the host can find: 64 B aligned, inside the test area. Otherwise the kernel writes nothing and the host
+// deadline reports it.
+inline bool status_line_valid(uint32_t status_offset) {
+    return status_offset % kLineBytes == 0 && status_offset >= kTestAreaBegin &&
+           status_offset + static_cast<uint64_t>(kLineBytes) <= kTestAreaEnd;
+}
+
+// Ends a status line whose fields are stored: `fence w, w`, then the done magic.
+inline void publish_done_magic(volatile uint32_t* status, uint32_t done_magic) {
+    asm volatile("fence w, w" ::: "memory");
+    status[cce_test_status_abi::kStatusMagic] = done_magic;
+}
 
 inline __attribute__((always_inline)) void copy_words(
     volatile uint32_t* dst, const volatile uint32_t* src, uint32_t num_words, uint32_t& xor_accumulator) {
