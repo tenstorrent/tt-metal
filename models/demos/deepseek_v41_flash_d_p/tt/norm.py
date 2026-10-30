@@ -50,7 +50,7 @@ import torch
 
 import ttnn
 
-from . import ccl
+from . import ccl, host_alloc
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, act_dtype, cast, fp32_acc, tp_sum
 from .settings import settings
@@ -80,6 +80,10 @@ class TtDistributedRmsNorm:
             assert not gather, "gather norms take FFN_NORM_DTYPE"
             self.out_dtype = dtype
         self.inv_h = 1.0 / float(hidden)
+        # FORK_OUT_BUFFERS=on (P.16): the site whose load-time outputs this norm writes (tt/host_alloc.reserve_forks
+        # names it; None = the op allocates)
+        self.site = None
+        self._stats_widths: dict = {}
         self.impl = settings.get("NORM_IMPL")  # P.18: on = ttnn.bringup.rms_norm, off = the fp32 SFPU composition
         # the fork's normal settings: HiFi4 (its default), fp32 DEST (the statistic; FP32_ACC needed), exact SFPU
         self.ckc = ttnn.init_device_compute_kernel_config(
@@ -128,24 +132,51 @@ class TtDistributedRmsNorm:
         kw = dict(epsilon=self.eps, weight=self.weight, compute_kernel_config=self.ckc, memory_config=DRAM)
         if self.out_dtype != x.dtype:
             kw["dtype"] = self.out_dtype
+        rows = x.shape[-2]
         if not self.split:
             if window is not None and tuple(window) != (0, x.shape[-1]):
                 kw["input_window"] = tuple(window)
-            return ttnn.bringup.rms_norm(x, **kw)
+            out = self._out(self.site, rows, self.hidden)
+            if out is None:
+                return ttnn.bringup.rms_norm(x, **kw)
+            ttnn.bringup.rms_norm(x, output_tensor=out, **kw)
+            return out  # (the kept object: the op returns a new wrapper of its buffer, DS41-149)
         assert window is None, "a column-split norm takes its whole input"
-        part = ttnn.bringup.rms_norm(x, stats_out=True, compute_kernel_config=self.ckc, memory_config=DRAM)
+        w = x.shape[-1]
+        so = None if self.site is None else self._out(self.site + ".stats", rows, self._stats_w(rows, w), ttnn.float32)
+        part = ttnn.bringup.rms_norm(
+            x, stats_out=True, compute_kernel_config=self.ckc, memory_config=DRAM, output_tensor=so
+        )
+        if so is not None:
+            part = so
         if self.tp > 1:
             gathered = ccl.all_gather(part, 3, TP_AXIS, site="norm.stats")  # (HOST_ALLOC)
             dealloc(part)
         else:
             gathered = part
-        y = ttnn.bringup.rms_norm(x, partial_stats=gathered, stats_width=self.hidden, **kw)
+        out = self._out(self.site, rows, w)
+        y = ttnn.bringup.rms_norm(x, partial_stats=gathered, stats_width=self.hidden, output_tensor=out, **kw)
+        if out is not None:
+            y = out
         dealloc(gathered)
         if not self.gather:
             return y
         full = ccl.all_gather(y, 3, TP_AXIS)  # ffn_norm: whole token rows on every chip of the mesh row
         dealloc(y)
         return full
+
+    def _out(self, site, rows: int, width: int, dtype=None):
+        """FORK_OUT_BUFFERS=on (P.16): ``site``'s load-time output [1, 1, rows, width] (this norm's out dtype), or None
+        (no site: allocate)."""
+        if site is None:
+            return None
+        return host_alloc.fork_out(self.mesh, site, (1, 1, rows, width), self.out_dtype if dtype is None else dtype)
+
+    def _stats_w(self, rows: int, width: int) -> int:
+        w = self._stats_widths.get((rows, width))
+        if w is None:
+            w = self._stats_widths[(rows, width)] = host_alloc.norm_stats_width(self.mesh, rows, width)
+        return w
 
     def __call__(self, x: ttnn.Tensor, window=None) -> ttnn.Tensor:
         if self.impl == "on":

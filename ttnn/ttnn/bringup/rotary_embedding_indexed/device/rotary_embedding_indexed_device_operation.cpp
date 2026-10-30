@@ -78,6 +78,23 @@ void validate_runtime_args(
     // would silently pick the wrong extent and corrupt the per-device sharding math.
     TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
 
+    // output_tensor (P.16): the caller's output must be exactly the spec the op would allocate (the program and
+    // the framework's hit check are built from that spec), and must not be the input (the op is not in place).
+    if (tensor_args.output.has_value()) {
+        const auto& out = *tensor_args.output;
+        TT_FATAL(
+            out.storage_type() == StorageType::DEVICE && out.is_allocated(),
+            "rotary_embedding_indexed: output_tensor must be an allocated device tensor");
+        TT_FATAL(
+            out.tensor_spec() == RotaryEmbeddingIndexedDeviceOperation::compute_output_specs(args, tensor_args),
+            "rotary_embedding_indexed: output_tensor spec {} is not the op's output spec {}",
+            out.tensor_spec(),
+            RotaryEmbeddingIndexedDeviceOperation::compute_output_specs(args, tensor_args));
+        TT_FATAL(
+            out.buffer()->address() != tensor_args.input.buffer()->address(),
+            "rotary_embedding_indexed: output_tensor must not be the input (the op is not in place)");
+    }
+
     if (args.uniform) {
         // One program serves every chip only when the reader's cos/sin row offset (update_idxt) is the same on
         // every coordinate: with kv_actual_global == 0 and no query subshard it is 0 for any my_sp_coord.
@@ -322,6 +339,9 @@ RotaryEmbeddingIndexedDeviceOperation::spec_return_value_t RotaryEmbeddingIndexe
 RotaryEmbeddingIndexedDeviceOperation::tensor_return_value_t
 RotaryEmbeddingIndexedDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {  // output_tensor (P.16): validated in validate_runtime_args
+        return *tensor_args.output;
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
@@ -851,7 +871,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
-    bool uniform) {
+    bool uniform,
+    const std::optional<ttnn::Tensor>& output_tensor) {
     using OperationType = ttnn::operations::bringup::rotary_embedding_indexed::RotaryEmbeddingIndexedDeviceOperation;
 
     auto arch = input.storage_type() == StorageType::DEVICE ? input.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -883,7 +904,8 @@ ttnn::Tensor rotary_embedding_indexed(
         .sin = sin,
         .trans_mat = trans_mat,
         .metadata = metadata,
-        .concat_prefix = concat_prefix};
+        .concat_prefix = concat_prefix,
+        .output = output_tensor};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 

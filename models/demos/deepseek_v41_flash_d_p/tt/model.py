@@ -747,6 +747,7 @@ class TtDS41Model:
             for slot, i in last.items():
                 self.memo_last.setdefault(i, []).append(slot)
         host_alloc.reserve_sites(self)  # HOST_ALLOC=on (P.15): the in-step gathers' outputs, at load time (DS41-146)
+        host_alloc.reserve_forks(self)  # FORK_OUT_BUFFERS=on (P.16): the forks' in-layer outputs, at load time
         self.load_seconds = time.time() - t0
 
     def next_hc(self, i: int):

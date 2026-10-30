@@ -140,6 +140,9 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         them in dim-1 order, ((p0 + p1) + p2) + ..., in fp32 on the SFPU (each add one IEEE rounding: the sum
         all_gather + ttnn.add gives) before the coefficient math; hc / y are (1, 1, T, ...) (deepseek_v41_flash_d_p
         P.19: the mHC exchange as one all_gather).
+        hc_output / y_output (ttnn.Tensor, optional; default None = the op allocates them; deepseek_v41_flash_d_p
+        P.16): the caller's buffers for hc and y, each exactly the spec the op would allocate (checked on every
+        call), none of them an input; the results are tensors of those buffers (new Python objects).
 
         Returns:
             tuple[ttnn.Tensor | None, ttnn.Tensor | None]: (hc, y); hc when computed, y when streams are given.
@@ -161,7 +164,9 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("deepseek") = false,
         nb::arg("collapse_pre") = nb::none(),
-        nb::arg("partials") = 1);
+        nb::arg("partials") = 1,
+        nb::arg("hc_output") = nb::none(),
+        nb::arg("y_output") = nb::none());
 
     ttnn::bind_function<"mhc_pre_xing_pack", "ttnn.bringup.">(
         mod,
@@ -179,6 +184,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
                 deepseek_v41_flash_d_p P.14): (..., T, >= n*C) float32 TILE, the keys k in columns 0 .. n*C - 1.
             engram_weight (ttnn.Tensor, optional): (..., 32, n*C) float32 TILE, leading dims 1: the weight row w on
                 all 32 rows.
+            output_tensor (ttnn.Tensor, optional): default None = the op allocates its output
+                (deepseek_v41_flash_d_p P.16; not in engram mode): the caller's buffer, exactly the output's spec.
 
         Returns:
             ttnn.Tensor: mix with column n (n + 2) = sum over the row of streams^2 (exact fp32 on the SFPU). Engram
@@ -191,7 +198,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("n") = 4,
         nb::arg("engram_keys") = nb::none(),
-        nb::arg("engram_weight") = nb::none());
+        nb::arg("engram_weight") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 
     mod.def(
         "_mhc_pre_ttnn_program_descriptor",

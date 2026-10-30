@@ -59,9 +59,12 @@ Realistic (use by default): every option below.
 - `mix`: (..., T, 32) fp32 TILE (None only in engram mode); `streams`: (..., T, n*C) fp32 or (CHANGELOG 11) bf16 TILE; `n=4` (1..4). Returns mix (fp32) with column n(n+2) = sum streams^2 (exact fp32 on the streams' values).
 - `engram_keys=None`, `engram_weight=None` (opt-in together, mix None; CHANGELOG 9): keys (..., T, >= n*C) fp32, or bf16 with bf16 streams (CHANGELOG 11) (columns 0..n*C-1 read), weight (..., 32, n*C) fp32 with leading dims 1 (the weight row on all 32 rows). Returns a new row (..., T, 32) fp32 = [sum_c h_i w_i k_i | sum_c h_i^2 | sum_c k_i^2 | 0 ...]. Realistic (exact fp32 SFPU, as the op chain it replaces).
 
+- `hc_output=`, `y_output=` on `mhc_pre_xing` / `mhc_pre_xing_pack` (default None = the op allocates them, unchanged): the caller's buffers for hc and y, each exactly the spec the op would allocate (checked on every call), none of them an input. (CHANGELOG: hc_output / y_output (mhc_pre_xing, mhc_pre_xing_pack), deepseek_v41_flash_d_p P.16.)
 Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is required, not an option).
 
 ## Measured
+
+- Output buffers (P.16, 8x4): mhc_pre_xing 126.9 -> 84.4 us of host a call (8x4, 80 calls a chunk); mhc_pre_xing_pack 110 -> 105 us (3 calls, not given buffers by the model).
 - `mhc_pre` C++ host side, GLM-5.3 shape (T 5120, n*C 16384, bf16 X and W): host 2.037 -> 0.043 ms per call, wall 2.067 -> 0.597 ms per call vs the Python builder (CHANGELOG.md change 2).
 - `mhc_pre` device kernel time, Blackhole p150, bf16 X / fp32 W, after perf round 2: 640x7168 123.8 us, 640x1792 43.0 us, 1280x4096 137.8 us (changelog.md, Perf 2 table).
 - `mhc_pre` vs composite, fp32, 640x7168: 382 us vs 2396 us (changelog.md, Phase 0).

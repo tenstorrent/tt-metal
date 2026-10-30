@@ -4492,3 +4492,38 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   models/demos/deepseek_v41_flash_d_p/tt/perf_host_alloc_identity.py -s` (8 min); per call `...
   tt/perf_host_alloc.py -s` (1 min); `python -m models.demos.common.bringup.orchestrator measure --task P.15`; old path
   DS41_HOST_ALLOC=off.
+
+## P.16 perf (galaxy 8x4, attempts 1-2): FORK_OUT_BUFFERS (forks write load-time output buffers)
+
+- Setting FORK_OUT_BUFFERS (tt/settings.py, default on; off = the ops allocate, the old path).
+- Forks (C++ op + nanobind, default None = allocate; spec checked every call, miss and hit; the result is a new
+  Python wrapper of the given buffer, DS41-149): ttnn.bringup.rms_norm `output_tensor` (default and split programs),
+  mhc_post `output_tensor` / `stats_output` / `stats_scratch` (helper device/mhc_post_given_output.hpp), mhc_pre_xing /
+  mhc_pre_xing_pack `hc_output` / `y_output`, rotary_embedding_indexed `output_tensor` (scalar form). Kernels and
+  programs unchanged. CHANGELOG / README / INDEX updated in each fork.
+- Model (tt/host_alloc.reserve_forks at load, one buffer per site shared by all layers; fork_out returns None when
+  off): attn_norm, q_norm, kv_norm, ffn_norm (stats + output), attn_hc (hc, y), ffn_hc (y), attn_residual's stats
+  row, both residuals' partials scratch, kv / q / output RoPE. Lifetime check: kept across layers or chunks, so still
+  allocating: the mHC streams, ffn_hc's hc (the next layer's pending pre), ffn_residual's stats row (read by the next
+  layer), the final norm, compressor / indexer sites (ChunkMemo).
+- Census (8x4, profile rung's last chunk [51200, 56320), DS41_ENGRAM_TABLE=resident, 3 warm chunks; logs
+  /scratch/dnijemcevic/p16/census_{off,on}.{log,json}), calls a chunk and host us a call off -> on:
+  rms_norm 208, 65.9 -> 43.6; mhc_post 82, 137.4 -> 101.4; mhc_pre_xing 80, 126.9 -> 84.4; mhc_pre_xing_pack 3, 110
+  -> 105 (not given buffers); rotary_embedding_indexed 136, 69.1 -> 50.8. Fork host total 44.9 -> 31.4 ms a chunk
+  (-13.5). Op outputs allocated inside the forks a chunk: ~500 -> the kept sites only; ttnn.allocate_tensor_on_device
+  132 -> 132 (MoE arenas, not this change). Plain warm walls in the census process: off median 332.6 ms
+  (328.9-344.4), on 306.2 (304.1-314.5).
+- Bit-identical: tt/perf_fork_out_identity.py (one process, alternating on / off): final hidden equal every run,
+  PCC vs golden 0.578422 both; walls on 297.2 / 317.6, off 328.4 / 367.0.
+- Device time / host_overhead_ms: not profiled here (same programs, outputs at other addresses: no device change by
+  construction); the orchestrator's A/B profiles both sides.
+- Tests: the four new unit tests passed on the 8x4 (rms_norm 4, mhc_post 3, mhc_pre_xing 3, rope with uniform 14).
+  Fork regressions partly run in attempt 1, then stopped by the owner (OV-24 / OV-25; F.1 runs them): mhc_post model
+  cases 206 passed, mhc_pre unit 144 + cases 71 passed, rms_norm source 26 passed, rope unit 22 + source 9 passed.
+  DS41-173: rms_norm tests/unit (6 files) and mhc_post / mhc_pre tests/golden import a missing `eval` package.
+  test_mhc_post_ttnn.py's mesh fixture opens the whole box when no case was captured at its size (the Galaxy).
+- OV-3: nothing padded. OV-23: no Python-built op added or touched (the four forks are C++ device ops).
+- Re-run: identity `PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident DS41_FORK_OUT_BUFFERS=on scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_fork_out_identity.py -s`; census
+  `/scratch/dnijemcevic/p16/census.sh <tag> DS41_FORK_OUT_BUFFERS=on|off`; A/B `python -m
+  models.demos.common.bringup.orchestrator measure --task P.16`; old path DS41_FORK_OUT_BUFFERS=off.

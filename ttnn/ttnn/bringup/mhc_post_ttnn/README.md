@@ -29,9 +29,12 @@ Realistic (use by default): every option below.
 - `stats_weight=None` (opt-in, CHANGELOG 7): W (..., n*C, 32) fp32 TILE DRAM, leading dims 1; then the op returns `(X', stats)`. Needs fp32 X with fp32 or (CHANGELOG 8) bf16 F, or (CHANGELOG 9) bf16 X with bf16 F (X' bf16, the projection of the bf16 X', the sum of squares of the fp32 mix), n <= 4; X' is bit-identical to the op without it; the projection runs at `compute_kernel_config`'s fidelity (pass the model's matmul fidelity). Realistic.
 - `post_col=0`, `comb_col=0` (opt-in, CHANGELOG 8): post_k at post's column post_col + k, comb[i*n + j] at comb's column comb_col + i*n + j; nonzero: n = the residual's stream count, post / comb may be one packed tensor (the mixes [pre | post | comb]: post=comb=mixes, post_col=n, comb_col=2n), both within one tile row. Both programs. Realistic (data move: bit-identical to the sliced call).
 
+- `output_tensor=`, `stats_output=`, `stats_scratch=` (default None = the op allocates them, unchanged): the caller's buffers for X', the stats row and (with `stats_weight`) the partials scratch ([1, 1, R, 32 blocks] float32 TILE DRAM). Each must have exactly the spec the op would allocate (checked on every call) and must not be an input. Shared helper `device/mhc_post_given_output.hpp`. (CHANGELOG: output_tensor / stats_output / stats_scratch, deepseek_v41_flash_d_p P.16.)
 Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is required, not an option).
 
 ## Measured
+
+- Output buffers (P.16, 8x4): mhc_post 137.4 -> 101.4 us of host a call (8x4, 82 calls a chunk).
 - C++ host side, GLM-5.3 shape (T 5120, C 4096, n 4, bf16): host 0.676 -> 0.019 ms per call, device-bound wall 1.195 -> 1.161 ms per call (CHANGELOG.md change 2).
 - Device kernel time, Blackhole p150, 110 cores, after perf round 2: bf16 T640 C7168 205.5 us, T640 C1792 62.3 us, T1280 C4096 230.4 us; fp32 445.4 / 115.4 / 509.7 us (changelog.md, Perf 2).
 - vs composite, fp32 T640 C7168: 537 us vs 3781 us for the 81-op composite (changelog.md, Phase 0).

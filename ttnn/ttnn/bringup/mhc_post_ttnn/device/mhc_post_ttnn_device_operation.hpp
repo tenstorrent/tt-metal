@@ -41,5 +41,6 @@ ttnn::Tensor mhc_post_ttnn(
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
     bool comb_transposed = true,
     uint32_t post_col = 0,
-    uint32_t comb_col = 0);
+    uint32_t comb_col = 0,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
 }  // namespace ttnn::prim::bringup

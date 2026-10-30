@@ -59,6 +59,8 @@ class TtWindowKv:
     bf16, replicated over TP. ``from_proj(p, start)``: the same from the fused projection's output (columns
     ``proj.cols['wkv']``). Does not consume its input."""
 
+    rope_site = None  # FORK_OUT_BUFFERS=on (P.16, tt/host_alloc.reserve_forks): the kv rope's load-time output
+
     def __init__(self, mesh, proj: TtAttnInProj, kv_norm: torch.Tensor, eps: float, rope: RopeTable, rope_dim: int):
         self.mesh, self.proj, self.rope = mesh, proj, rope
         self.k0, self.k1 = proj.cols["wkv"]
@@ -79,7 +81,9 @@ class TtWindowKv:
         else:
             cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
         if self.stock:  # ROPE_IMPL=on (P.17): one stock rotary op on the bf16 norm output
-            out = rope_stock(kn, cos, sin, self.rope.trans)
+            out = rope_stock(
+                kn, cos, sin, self.rope.trans, site=self.rope_site, mesh=self.mesh
+            )  # (FORK_OUT_BUFFERS, P.16)
             dealloc(kn)
             self.rope.free(cos, sin)
             return out

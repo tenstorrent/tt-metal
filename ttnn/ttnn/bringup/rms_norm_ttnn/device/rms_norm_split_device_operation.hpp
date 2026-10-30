@@ -46,6 +46,7 @@ struct RmsNormSplitInputs {
     Tensor input;
     std::optional<Tensor> weight;
     std::optional<Tensor> partial_stats;
+    std::optional<Tensor> output;  // `output_tensor` (P.16, default absent = the op allocates)
 };
 
 struct RmsNormSplitProgramFactory {
@@ -86,5 +87,6 @@ ttnn::Tensor rms_norm_split(
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& partial_stats,
-    const ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitParams& attrs);
+    const ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitParams& attrs,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
 }  // namespace ttnn::prim::bringup

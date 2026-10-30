@@ -41,6 +41,22 @@ RmsNormDeviceOperation::tensor_return_value_t RmsNormDeviceOperation::create_out
         // `inplace`: the output IS the input -- cb_output_tiles aliases its shard.
         return tensor_args.input;
     }
+    if (tensor_args.output.has_value()) {  // output_tensor (P.16): the caller's buffer, exactly the op's output spec
+        const auto& out = *tensor_args.output;
+        const auto want = compute_output_specs(attrs, tensor_args);
+        TT_FATAL(
+            out.storage_type() == ttnn::StorageType::DEVICE && out.is_allocated(),
+            "rms_norm_ttnn: output_tensor must be an allocated device tensor");
+        TT_FATAL(
+            out.tensor_spec() == want,
+            "rms_norm_ttnn: output_tensor spec {} is not the op's output spec {}",
+            out.tensor_spec(),
+            want);
+        TT_FATAL(
+            out.buffer()->address() != tensor_args.input.buffer()->address(),
+            "rms_norm_ttnn: output_tensor must not be the input (use program_config inplace)");
+        return out;
+    }
     return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input.device());
 }
 
@@ -114,7 +130,8 @@ ttnn::Tensor rms_norm_ttnn(
     uint32_t subblock_w,
     bool inplace,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<ttnn::Tensor>& residual_sum) {
+    const std::optional<ttnn::Tensor>& residual_sum,
+    const std::optional<ttnn::Tensor>& output) {
     using OperationType = ttnn::operations::bringup::rms_norm_ttnn::RmsNormDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .epsilon = epsilon,
@@ -123,7 +140,12 @@ ttnn::Tensor rms_norm_ttnn(
         .inplace = inplace,
         .output_mem_config = output_mem_config};
     auto args = OperationType::tensor_args_t{
-        .input = input, .weight = weight, .bias = bias, .residual = residual, .residual_sum = residual_sum};
+        .input = input,
+        .weight = weight,
+        .bias = bias,
+        .residual = residual,
+        .residual_sum = residual_sum,
+        .output = output};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
 

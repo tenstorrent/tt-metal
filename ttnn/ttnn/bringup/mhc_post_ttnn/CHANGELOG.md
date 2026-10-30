@@ -148,3 +148,11 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
 - Why: `mhc_post_compute` and `mhc_post_dm` no longer compiled.
 - Needed by: rebase 2026-10-27
 - Files: `kernels/perf_instrumentation.hpp`, `kernels/mhc_post_compute.cpp`
+
+### output_tensor / stats_output / stats_scratch: write a caller's output buffer (2026-10-30)
+- What: `output_tensor=`, `stats_output=`, `stats_scratch=` (default None = the op allocates them, unchanged): the caller's buffers for X', the stats row and (with `stats_weight`) the partials scratch ([1, 1, R, 32 blocks] float32 TILE DRAM). Each must have exactly the spec the op would allocate (checked on every call) and must not be an input. Shared helper `device/mhc_post_given_output.hpp`. Kernels and programs unchanged; outputs byte-identical to the allocating call.
+- Why: each call allocated its output (~35 us of host). The model passes load-time buffers at the call sites whose
+  output is read and dropped inside the layer. Measured: mhc_post 137.4 -> 101.4 us of host a call (8x4, 82 calls a chunk).
+- Tests: `tests/unit/test_mhc_post_output_buffers.py` 3 passed on the 8x4. Model-case regression `tests/test_mhc_post_ttnn.py`: 206 passed (5 first errored in the batch, passed on re-run). `tests/golden/` does not import here (no `eval` package, DS41 known issue).
+- Needed by: deepseek_v41_flash_d_p P.16 (FORK_OUT_BUFFERS, 2026-10-30)
+- Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_ttnn_device_operation{.hpp,.cpp,_types.hpp}`, `device/mhc_post_stats_device_operation.{hpp,cpp}`, `device/mhc_post_given_output.hpp`, `tests/unit/test_mhc_post_output_buffers.py`, `tests/test_mhc_post_ttnn.py` (mesh fixture: the whole box when no case was captured on a box of this size)

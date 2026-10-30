@@ -36,12 +36,16 @@ _DTYPE = {"BFLOAT16": (ttnn.bfloat16, torch.bfloat16), "FLOAT32": (ttnn.float32,
 @pytest.fixture(scope="module")
 def mesh():
     # Open the mesh of a case captured on a box of this size (a 2x2 submesh of a 4x2 box fails the 2D fabric
-    # handshake); the per-chip math does not depend on the mesh shape.
+    # handshake); the per-chip math does not depend on the mesh shape. No case captured on a box of this size (e.g.
+    # the 32-chip Galaxy): the whole box, as test_mhc_pre_xing.py (deepseek_v41_flash_d_p P.16).
     n_sys = ttnn.get_num_devices()
-    c = next((c for c in CASES if c["mesh"][0] * c["mesh"][1] == n_sys), CASES[0])
-    p = c["device_params"]
+    c = next((c for c in CASES if c["mesh"][0] * c["mesh"][1] == n_sys), None)
+    p = (c or CASES[0])["device_params"]
     ttnn.set_fabric_config(getattr(ttnn.FabricConfig, p["fabric_config"]))
-    m = ttnn.open_mesh_device(ttnn.MeshShape(*c["mesh"]), l1_small_size=p["l1_small_size"])
+    if c is not None:
+        m = ttnn.open_mesh_device(ttnn.MeshShape(*c["mesh"]), l1_small_size=p["l1_small_size"])
+    else:
+        m = ttnn.open_mesh_device(l1_small_size=p["l1_small_size"])
     yield m
     ttnn.close_mesh_device(m)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
