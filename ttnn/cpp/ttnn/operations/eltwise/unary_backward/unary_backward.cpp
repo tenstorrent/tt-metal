@@ -953,8 +953,14 @@ std::vector<Tensor> relu6_bw(
 }
 
 // Silu
-// result:  grad * (sigmoid_result + (sig_deriv == 0 ? 0 : input * sig_deriv))
-// where sig_deriv = sigmoid_result * (1 - sigmoid_result)
+// result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
+//
+// In the saturated tails sigmoid_result underflows to exactly 0, so the term
+// input * (1 - sigmoid_result) becomes inf * 0 = NaN. The guard below replaces
+// that product with 0 where the derivative has underflowed. It costs two extra
+// kernels (eqz + where), so it is applied only where it is actually needed:
+// bfloat16 underflows earlier and does not produce the NaN on main, so it keeps
+// the original six-kernel path.
 std::vector<std::optional<Tensor>> silu_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -969,24 +975,37 @@ std::vector<std::optional<Tensor>> silu_bw(
         (int)ttnn::operations::unary::VecMode::RC,
         ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-    Tensor sig_deriv = ttnn::multiply(
-        sigmoid_res,
-        ttnn::rsub(sigmoid_res, 1.0f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    Tensor x_sig_deriv = ttnn::where(
-        ttnn::eqz(sig_deriv, output_mem_config),
-        0.0f,
-        ttnn::multiply(input, sig_deriv, std::nullopt, output_mem_config),
-        output_mem_config);
-    Tensor d_silu = ttnn::add(sigmoid_res, x_sig_deriv, std::nullopt, output_mem_config);
-    ttnn::multiply(grad, d_silu, std::nullopt, output_mem_config, input_grad);
+
+    if (input.dtype() == DataType::FLOAT32) {
+        // Guarded path. sig_deriv underflows to 0 exactly where input has
+        // saturated to +/-inf; multiplying the two is what produced the NaN.
+        Tensor sig_deriv = ttnn::multiply(
+            sigmoid_res,
+            ttnn::rsub(sigmoid_res, 1.0f, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config);
+        Tensor x_sig_deriv = ttnn::where(
+            ttnn::eqz(sig_deriv, output_mem_config),
+            0.0f,
+            ttnn::multiply(input, sig_deriv, std::nullopt, output_mem_config),
+            output_mem_config);
+        Tensor d_silu = ttnn::add(sigmoid_res, x_sig_deriv, std::nullopt, output_mem_config);
+        ttnn::multiply(grad, d_silu, std::nullopt, output_mem_config, input_grad);
+    } else {
+        // Original path: six kernels instead of eight.
+        Tensor grad_sigmoid = ttnn::multiply(grad, sigmoid_res, std::nullopt, output_mem_config);
+        Tensor add_sub = ttnn::add(
+            ttnn::multiply(
+                ttnn::rsub(sigmoid_res, 1.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config),
+            1.0f,
+            std::nullopt,
+            output_mem_config);
+        ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config, input_grad);
+    }
     result[0] = input_grad;
     return result;
 }
 
-// Selu
-// result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
 std::vector<Tensor> selu_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
