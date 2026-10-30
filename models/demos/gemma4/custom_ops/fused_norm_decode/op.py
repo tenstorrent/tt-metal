@@ -15,8 +15,10 @@ rsqrt(mean(x^2) + eps)`` (the layer applies its scalar after the residual add). 
 * ``x2`` / ``gamma2``: ``out = norm(x) * gamma + norm(x2) * gamma2`` (post_feedforward_1 of the shared MLP output
   plus post_feedforward_2 of the expert output).
 
-``N`` cores (a divisor of the ``W/32`` column tiles, ``GEMMA4_FUSED_NORM_CORES`` caps it, default 22) each own
-``per`` contiguous column tiles: they square their tiles (FPU, fp32 dest), row-reduce them (FPU reduce with a unit
+``N`` cores (a divisor of the ``W/32`` column tiles: the fewest whose ``per <= 8 / inputs`` tiles fit one fp32
+dest window, 11 for the 26B's 2816 width -- the all-to-all exchange makes a wider group slower, see
+``grid.plan_norm_split``; ``GEMMA4_FUSED_NORM_CORES`` prefers another count) each own ``per`` contiguous column
+tiles: they square their tiles (FPU, fp32 dest), row-reduce them (FPU reduce with a unit
 scaler) into one fp32 partial tile, send its column (32 fp32) to every core (one 128-byte NoC write per input and
 destination), scatter the ``N`` received columns into one fp32 tile and row-reduce it again, so the full row sums
 and ``rsqrt(sum / W + eps)`` come out of the FPU / SFPU on every core; the outputs are then ``x * inv`` (FPU column
@@ -78,9 +80,10 @@ class FusedNormDecode:
 
     @staticmethod
     def num_cores(cols_t: int, nin: int = 1, grid_cores_: int = None) -> int:
-        """Largest divisor of the column tiles up to the cap (``GEMMA4_FUSED_NORM_CORES``, default 22, at most 64)
-        whose per-core tile count fits one fp32 dest window (8 tiles, 4 per input with two inputs); with
-        ``grid_cores_`` the count is also limited to the grid (one row tile)."""
+        """The exchange-group size of one row tile: the fewest cores (a divisor of the column tiles, at most 64)
+        whose per-core tile count fits one fp32 dest window (8 tiles, 4 per input with two inputs), unless
+        ``GEMMA4_FUSED_NORM_CORES`` prefers another count that fits; with ``grid_cores_`` the count is also
+        limited to the grid (one row tile)."""
         return FusedNormDecode.plan(cols_t, nin, 1, grid_cores_ or FusedNormDecode.MAX_CORES)[0]
 
     @staticmethod
