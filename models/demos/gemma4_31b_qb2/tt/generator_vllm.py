@@ -375,10 +375,15 @@ class Gemma4ForCausalLM:
         maximum_full = maximum_sliding = 0
         for members in self._kv_alias_pool_members.values():
             full_ids, sliding_ids = set(), set()
+            seen = set()
             for i in members:
                 full = self._kv_alias_factors[i] == 2
                 target = full_ids if full else sliding_ids
                 source = sources[i]
+                # Layers of one KV group share the scheduler's table object: identical ids, read once.
+                if (id(source), full) in seen:
+                    continue
+                seen.add((id(source), full))
                 for row, limits in enumerate(ranges):
                     if limits is None:
                         continue
@@ -386,7 +391,7 @@ class Gemma4ForCausalLM:
                     granule = 256 if full and self._kv_full_pack else 128
                     begin_page = 0 if full else sliding_begin // 128
                     end_page = (end + granule - 1) // granule
-                    target.update(int(v) for v in source[row, begin_page:end_page].tolist() if int(v) > 0)
+                    target.update(v for v in source[row, begin_page:end_page].tolist() if v > 0)
             overlap = full_ids & sliding_ids
             if overlap:
                 raise RuntimeError(f"Full/sliding live consumer block collision: {sorted(overlap)[:16]}")
@@ -618,6 +623,7 @@ class Gemma4ForCausalLM:
         retain_prefill_history=None,
         **kwargs,
     ):
+        self._prefill_since_decode = True
         starts = [0] * len(prompt_lens) if start_pos is None else [int(x) for x in start_pos]
         lengths = [int(x) for x in prompt_lens]
         slots = list(range(len(lengths))) if empty_slots is None else list(empty_slots)
@@ -824,6 +830,14 @@ class Gemma4ForCausalLM:
             sum(n - 1 for members in passes for _, n in members)
         )
         self._verify_exit(len(need))
+        self._period_last = (
+            "verify",
+            t,
+            len(need),
+            rows_used,
+            width > 4,
+            float(sum(int(first[b]) for b, _ in need)) / max(1, len(need)),
+        )
         if self.spec_stats["verifies"] % 256 == 1:
             self._log_spec_stats()
         return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
@@ -882,6 +896,29 @@ class Gemma4ForCausalLM:
         # output processing, drafting): serial on verify steps, which give up the plain path's async overlap.
         self._t_verify_exit = (time.perf_counter(), self._batch_bucket(live))
 
+    def _period_stamp(self, plain, start_pos):
+        """Feed spec_ngram.COST with plain-step and verify-step periods (entry to next entry), skipping any period
+        that contained a prefill."""
+        from models.demos.gemma4_31b_qb2.tt import spec_ngram
+
+        now = time.perf_counter()
+        last = getattr(self, "_period_last", None)
+        clean = not getattr(self, "_prefill_since_decode", False)
+        self._prefill_since_decode = False
+        if last is not None and clean:
+            period_ms = (now - last[1]) * 1000.0
+            if last[0] == "plain" and plain:
+                spec_ngram.COST.observe_plain(last[2], period_ms)
+            elif last[0] == "verify":
+                spec_ngram.COST.observe_verify(last[2], last[3], last[4], period_ms, last[5])
+        self._period_last = None
+        if plain:
+            sp = torch.as_tensor(start_pos)
+            first = sp if sp.dim() == 1 else sp[:, 0]
+            live = int((first >= 0).sum())
+            if live:
+                self._period_last = ("plain", now, live)
+
     def _gap_stamp(self):
         last = getattr(self, "_t_verify_exit", None)
         if last is None:
@@ -896,7 +933,9 @@ class Gemma4ForCausalLM:
     def _log_spec_stats(self):
         from models.demos.gemma4_31b_qb2.tt import spec_ngram
 
-        stats = dict(self.spec_stats, wall_s=time.time(), acceptance=spec_ngram.MODEL.summary())
+        stats = dict(
+            self.spec_stats, wall_s=time.time(), acceptance=spec_ngram.MODEL.summary(), cost=spec_ngram.COST.summary()
+        )
         stats.update(
             {"timing_" + k: round(v, 4) if isinstance(v, float) else v for k, v in self.generator.spec_timing.items()}
         )
@@ -924,6 +963,7 @@ class Gemma4ForCausalLM:
         num_valid_drafts = kwargs.pop("num_valid_drafts", None)
         if spec_ngram_enabled():
             self._gap_stamp()
+            self._period_stamp(spec_mode is None, start_pos)
         kwargs.pop("accepted_counts", None)
         if spec_mode is not None:
             if kv_cache is not self.cache:

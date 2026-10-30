@@ -90,6 +90,72 @@ def propose_one(history, k):
 OVERHEAD_P4_MS = float(os.environ.get("GEMMA_SPEC_OVERHEAD_P4_MS", "5.0"))
 OVERHEAD_P8_MS = float(os.environ.get("GEMMA_SPEC_OVERHEAD_P8_MS", "8.0"))
 PRIOR_WEIGHT = float(os.environ.get("GEMMA_SPEC_PRIOR_WEIGHT", "20"))
+ONLINE_COST = os.environ.get("GEMMA_SPEC_ONLINE_COST", "1") == "1"
+
+
+def batch_bucket(b):
+    for hi in (1, 2, 4, 8, 12, 16, 20, 24, 28):
+        if b <= hi:
+            return hi
+    return 32
+
+
+class CostModel:
+    """Serving verify tax, measured online: (verify step period) - (plain step period at the same batch) - (table
+    cost of the extra rows), per verify trace width and batch bucket. A verify is synchronous (the plain path's
+    async overlap of host scheduling, output processing and input upload is lost), so this tax grows with the batch
+    and differs by host; the fixed priors below are what F6 measured at B1. Exponential averages; plain periods
+    are only sampled between two plain steps with no prefill in between, verify periods only when no prefill ran
+    in the gap after the verify."""
+
+    def __init__(self, alpha=0.05):
+        self.alpha = alpha
+        self.plain = {}
+        self.tax = {}
+        self.samples = {}
+
+    def observe_plain(self, b, period_ms):
+        k = batch_bucket(b)
+        old = self.plain.get(k)
+        self.plain[k] = period_ms if old is None else old + self.alpha * (period_ms - old)
+
+    def observe_verify(self, b, rows, wide_p8, period_ms, ctx):
+        k = batch_bucket(b)
+        base = self.plain.get(k)
+        if base is None:
+            # No clean plain period at this batch yet (verifying every step): nearest measured bucket, moved along
+            # the table; with none at all, the table itself (a pipelined plain step runs at device speed).
+            if self.plain:
+                near = min(self.plain, key=lambda x: abs(x - k))
+                base = self.plain[near] + step_ms(b, ctx) - step_ms(near, ctx)
+            else:
+                base = step_ms(b, ctx)
+        sample = period_ms - base - (step_ms(rows, ctx) - step_ms(b, ctx))
+        key = (8 if wide_p8 else 4, k)
+        old = self.tax.get(key)
+        self.tax[key] = sample if old is None else old + self.alpha * (sample - old)
+        self.samples[key] = self.samples.get(key, 0) + 1
+
+    def overhead(self, p8, b):
+        prior = OVERHEAD_P8_MS if p8 else OVERHEAD_P4_MS
+        if not ONLINE_COST:
+            return prior
+        key = (8 if p8 else 4, batch_bucket(b))
+        n = self.samples.get(key, 0)
+        if n == 0:
+            return prior
+        w = min(1.0, n / 16.0)
+        return (1 - w) * prior + w * self.tax[key]
+
+    def summary(self):
+        return {
+            "plain_ms": {k: round(v, 2) for k, v in sorted(self.plain.items())},
+            "tax_ms": {f"P{p}b{b}": round(v, 2) for (p, b), v in sorted(self.tax.items())},
+            "tax_n": {f"P{p}b{b}": n for (p, b), n in sorted(self.samples.items())},
+        }
+
+
+COST = CostModel()
 
 
 def bucket(m):
@@ -160,7 +226,7 @@ def allocate_best(proposals, contexts, wide=False):
             for j in range(1, k + 1):
                 v *= MODEL.q(m, j)
                 exp += v
-        over = OVERHEAD_P8_MS if max(take, default=0) > 3 else OVERHEAD_P4_MS
+        over = COST.overhead(max(take, default=0) > 3, B)
         if rows <= ROW_BUDGET:
             cost = (step_ms(rows, mean_ctx) - t_plain + over) if rows > B else 0.0
         else:
@@ -195,7 +261,7 @@ def _plan(proposals, mean_ctx, B, cap, row_budget, model):
         take[i] = j
         rows += 1
         expected += value
-    overhead = OVERHEAD_P8_MS if max(take, default=0) > 3 else OVERHEAD_P4_MS
+    overhead = COST.overhead(max(take, default=0) > 3, B)
     gain = expected * ms_per_token - (step_ms(rows, mean_ctx) - t_plain + overhead)
     return take, gain
 
