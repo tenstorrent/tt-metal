@@ -42,7 +42,7 @@ from qwen36_resident import weights as Q
 from qwen36_resident.generator_vllm import PREFILL_CHUNKS, Qwen36ResidentRowsForCausalLM
 from qwen36_resident.model import CONV_K, TILE
 from qwen36_resident.tests.e0_bringup import close_mesh, open_mesh, pcc
-from qwen36_resident.vllm_rows import BLOCK, CHUNK_UNIT
+from qwen36_resident.vllm_rows import BLOCK, CHUNK_UNIT, ROWS
 
 TARGET = 9  # resident slot of the split prompt: launch 1, beside live slot 8
 LIVE = 9  # live users in vLLM slots 0..8 -> resident slots 0..8
@@ -212,9 +212,10 @@ def main():
                 m._write_tables()
                 ttnn.synchronize_device(mesh)
                 st = model.read_slot(TARGET)
-                lg = [eng.first_token(TARGET, int(ids[T - 1]), T - 1, preserve=True)]
+                k = TARGET // ROWS
+                lg = [eng.first_tokens({TARGET: (int(ids[T - 1]), T - 1)}, [k], {k})[0]]
                 for i in range(a.extra):
-                    lg.append(eng.first_token(TARGET, int(lg[-1].argmax()), T + i, preserve=True))
+                    lg.append(eng.first_tokens({TARGET: (int(lg[-1].argmax()), T + i)}, [k], {k})[0])
                 return st, torch.stack(lg)
 
             def whole(chunk):

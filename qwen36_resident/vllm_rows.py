@@ -38,9 +38,11 @@ import torch
 from loguru import logger
 
 ROWS = 8  # users per launch: the rows-mode build is compiled at width 8 for every launch
-# RESIDENT_SCHED_TRACE=<file>: one JSON line per prefill_forward call (wall times of each row's PP + handoff and
-# first-token launch; the PP calls end in a device sync, so host time is device time) for the scheduling analysis
+# RESIDENT_SCHED_TRACE=<file>: one JSON line per prefill_forward call (wall times of each row's PP + handoff and of
+# the first-token launches; the PP calls end in a device sync, so host time is device time) for the scheduling analysis
 SCHED_TRACE = os.environ.get("RESIDENT_SCHED_TRACE")
+# 0: one first-token launch per prompt (A/B) instead of one per launch for every prompt a step hands off
+FIRST_TOKEN_BATCH = os.environ.get("RESIDENT_FIRST_TOKEN_BATCH", "1") == "1"
 BLOCK = 64  # KV block (positions) = vLLM block_size
 CHUNK_UNIT = 1024  # the PP prefill's largest chunk: a split prompt resumes only at its multiples
 
@@ -219,20 +221,40 @@ class ResidentRowsAdapter:
             raise RuntimeError(f"more than one split prompt in one step (starts {starts}, finals {finals})")
         out = torch.zeros(n, 1, self.vocab)
         trace = [] if SCHED_TRACE else None
+        first_ms = []
         t_call = time.time()
-        # whole prompts first, the first chunk of a split prompt last: a whole prompt restarts the PP pipeline
-        for j in wholes + conts + firsts:
-            ids = tokens[j, : ends[j]]
+
+        def first_tokens(handed):
+            # the handed-off prompts' first-token launches: one replay per launch for all its new rows
+            if not handed:
+                return
             t0 = time.perf_counter()
-            lg = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j], trace)
-            if trace is not None:
-                trace[-1]["ms"] = round((time.perf_counter() - t0) * 1000, 2)
-            if lg is not None:
-                out[j, 0] = lg
+            groups = [handed] if FIRST_TOKEN_BATCH else [[h] for h in handed]
+            for g, group in enumerate(groups):
+                later = {h[1] for later_group in groups[g + 1 :] for h in later_group}
+                for j, lg in zip([h[0] for h in group], self._first_tokens([h[1:] for h in group], later)):
+                    out[j, 0] = lg
+            first_ms.append(round((time.perf_counter() - t0) * 1000, 2))
+
+        # whole prompts first, the first chunk of a split prompt last: a whole prompt restarts the PP pipeline; the
+        # whole prompts' first tokens launch before the split prompt's span (its pipeline state stays untouched)
+        for group in (wholes, conts + firsts):
+            handed = []
+            for j in group:
+                ids = tokens[j, : ends[j]]
+                t0 = time.perf_counter()
+                h = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j], trace)
+                if trace is not None:
+                    trace[-1]["ms"] = round((time.perf_counter() - t0) * 1000, 2)
+                if h is not None:
+                    handed.append((j,) + h)
+            first_tokens(handed)
         if trace is not None:
             with open(SCHED_TRACE, "a") as f:
-                f.write(json.dumps(dict(t=round(t_call, 4), ms=round((time.time() - t_call) * 1000, 2), rows=trace)))
-                f.write("\n")
+                line = dict(
+                    t=round(t_call, 4), ms=round((time.time() - t_call) * 1000, 2), first_ms=first_ms, rows=trace
+                )
+                f.write(json.dumps(line) + "\n")
         return (out, torch.zeros(n, dtype=torch.long)) if self.mrope else out
 
     def _pp_chunk(self, total):
@@ -244,6 +266,8 @@ class ResidentRowsAdapter:
         return c
 
     def _prefill_row(self, ids, table_row, vslot, start, end, final, total, trace=None):
+        """one row's PP work; a final row (its whole prompt handed off into its slot) returns what its first-token
+        launch needs, (resident slot, last prompt token, its position, block table row), a partial one None"""
         C = self.chunk
         if trace is not None:
             trace.append(dict(start=start, end=end, total=total, final=final))
@@ -266,7 +290,7 @@ class ResidentRowsAdapter:
                     self.engine.prefill_whole(ids[: T - 1], r, self._blocks_for(table_row, T), self._pp_chunk(T))
                 else:
                     self.engine.clear_slot(r)
-                return self._first_token(r, ids, T, table_row, trace)
+                return r, int(ids[T - 1]), T - 1, table_row
             if end % C:
                 raise RuntimeError(f"first chunk ends at {end}, not a multiple of the PP chunk unit {C}")
             c = self._pp_chunk(total)
@@ -296,22 +320,25 @@ class ResidentRowsAdapter:
         self.pp_partial = None
         # the churn check counts these: split prompts are the ones whose numerics the per-sequence chunk keeps whole
         logger.info(f"split prefill: resident slot {r}, {T} tokens in {calls + 1} calls at PP chunk {c}")
-        return self._first_token(r, ids, T, table_row, trace)
+        return r, int(ids[T - 1]), T - 1, table_row
 
-    def _first_token(self, r, ids, T, table_row, trace=None):
-        """the masked first-token launch of resident slot r at position T - 1: [vocab] logits"""
-        t0 = time.perf_counter()
-        self.tables[r] = [int(b) for b in table_row]
+    def _first_tokens(self, handed, waiting=()):
+        """the first-token launches of resident slots whose prompts were just handed off, handed = [(slot, last prompt
+        token, its position, block table row)]: each slot's row active at its position, one replay per launch (rows
+        are independent), preserve where the launch has rows outside the batch whose conv history must survive (live
+        ones, and `waiting`: handed off, first token still to launch). [len(handed), vocab] logits"""
+        new = [r for r, _, _, _ in handed]
+        for r, _, _, table_row in handed:
+            self.tables[r] = [int(b) for b in table_row]
         self._write_tables()
-        k = self._launch(r)
-        neighbours = any(self._launch(s) == k and s != r for s in self.live)
-        lg = self.engine.first_token(r, int(ids[T - 1]), T - 1, preserve=neighbours)
-        self.live.add(r)
-        # the launch's token state now runs only row r: the next decode must rewrite it (the plugin reloads inputs
-        # after a prefill), and the device sampler's fed state of this launch is stale
+        launches = sorted({self._launch(r) for r in new})
+        keep = (self.live | set(waiting)) - set(new)
+        preserve = {self._launch(s) for s in keep if self._launch(s) in launches}
+        lg = self.engine.first_tokens({r: (tok, pos) for r, tok, pos, _ in handed}, launches, preserve)
+        self.live.update(new)
+        # the launches' token states now run only the new rows: the next decode must rewrite them (the plugin reloads
+        # inputs after a prefill), and the device sampler's fed state of these launches is stale
         self._fed_launches = None
-        if trace is not None:
-            trace[-1]["first_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         return lg
 
     # ------------------------------------------------------------------ decode
@@ -509,11 +536,11 @@ class RowsEngine:
     def clear_slot(self, r):
         self.model.clear_slot(r)
 
-    def first_token(self, r, tok, pos, preserve):
-        k = r // ROWS
-        self.model.step(self._token_states({r: (tok, pos)}, [k], {k} if preserve else ()), launches=[k])
+    def first_tokens(self, feed, launches, preserve_launches):
+        """the first-token launches of the slots in feed {slot: (token, position)}: [len(feed), vocab] logits"""
+        self.model.step(self._token_states(feed, launches, preserve_launches), launches=launches)
         self.sync()
-        return self._logits([r])[0]
+        return self._logits(list(feed))
 
     def decode(self, feed, launches, preserve_launches=()):
         if feed is None:
