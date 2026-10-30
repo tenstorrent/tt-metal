@@ -8,14 +8,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
-
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
 
-@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 1),),
@@ -31,7 +29,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wor
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "num_command_queues": 1}],
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
@@ -104,9 +102,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     with torch.no_grad():
         tt_out = tt_model(attention_input, position_embeddings=(cos_t, sin_t))
         reference_output = reference_model(
-            pt_attention_input.float(),
-            attention_mask=attention_mask.float(),
-            position_embeddings=(cos.float(), sin.float()),
+            pt_attention_input, attention_mask=attention_mask, position_embeddings=(cos, sin)
         )[0]
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             : tt_out.shape[0]

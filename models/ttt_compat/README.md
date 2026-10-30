@@ -357,11 +357,11 @@ Max Prefill Chunk Sizes (text-only):
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 - EXAONE-4.5-33B runs on P150x8 (BH LoudBox) only, with a single 128k-token prefill chunk. Its max context length is 128k: the checkpoint advertises 256k, but chunked prefill is not supported on its sliding-window layers.
 
-**Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
+**Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k. The vision stack, its tests and the vision demo are in [models/demos/multimodal/llama3_vision](../demos/multimodal/llama3_vision).
 
-**Chunked prefill (Mistral-Small-3.1-24B multimodal)**: Mistral-Small-3.1-24B-Instruct-2503 (Pixtral vision) is currently supported on T3000. On T3000, a max prefill context length of 128k is supported.
+**Chunked prefill (Mistral-Small-3.1-24B multimodal)**: Mistral-Small-3.1-24B-Instruct-2503 (Pixtral vision) is currently supported on T3000. On T3000, a max prefill context length of 128k is supported. The vision tower and its tests are in [models/experimental/mistral_24b](../experimental/mistral_24b).
 
-**Chunked prefill (EXAONE-4.5-33B multimodal)**: EXAONE-4.5-33B is supported on P150x8 as a text decoder. Image input is experimental: the hybrid demo [exaone_45_vision_hybrid.py](demo/exaone_45_vision_hybrid.py) runs the vision tower on the host (or on device with `--vision-device tt`, using [models/experimental/exaone45_vl](../experimental/exaone45_vl)) and the text decoder on P150x8, with trace disabled for the vision prefill. Vision input is not wired through vLLM.
+**Chunked prefill (EXAONE-4.5-33B multimodal)**: EXAONE-4.5-33B is supported on P150x8 as a text decoder. Image input is experimental: the hybrid demo [exaone_45_vision_hybrid.py](../experimental/exaone45_vl/demo/exaone_45_vision_hybrid.py) runs the vision tower on the host (or on device with `--vision-device tt`, using [models/experimental/exaone45_vl](../experimental/exaone45_vl)) and the text decoder on P150x8, with trace disabled for the vision prefill. Vision input is not wired through vLLM.
 
 ---
 

@@ -152,7 +152,7 @@
 - name: Llama 3.2-11B Vision e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-11B-Vision-Instruct MESH_DEVICE=T3K
-    pytest --timeout 900 models/ttt_compat/demo/simple_vision_demo.py -k "not batch1-notrace"
+    pytest --timeout 900 models/demos/multimodal/llama3_vision/demo/simple_vision_demo.py -k "not batch1-notrace"
   model: llama3.2-11b-vision
   model_family: Llama
   skus:
@@ -167,7 +167,7 @@
 - name: Llama 3.2-90B-Vision e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
-    pytest --timeout 1500 models/ttt_compat/demo/simple_vision_demo.py -k "batch1-trace"
+    pytest --timeout 1500 models/demos/multimodal/llama3_vision/demo/simple_vision_demo.py -k "batch1-trace"
   model: llama3.2-90b-vision
   model_family: Llama
   skus:
@@ -932,8 +932,8 @@
 - name: Mixtral-8x7B e2e tests
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-Instruct-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-Instruct-v0.1
-    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/demos/mixtral8x7b/demo/demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/demos/mixtral8x7b/demo/demo.py -k "performance-ci-eval-32"
   model: mixtral-8x7b
   model_family: Mistral
   skus:

@@ -8,8 +8,6 @@ from models.common.rmsnorm import RMSNorm
 from models.ttt_compat.tt.attention import Attention as DefaultAttention
 from models.ttt_compat.tt.common import Mode
 from models.ttt_compat.tt.distributed_norm import DistributedNorm
-from models.ttt_compat.tt.mixtral_mlp import TtMixtralMLP
-from models.ttt_compat.tt.mixtral_moe import TtMoeLayer
 from models.ttt_compat.tt.mlp import MLP
 from models.ttt_compat.tt.model_config import TensorGroup
 
@@ -66,6 +64,9 @@ class TransformerBlock(LightweightModule):
         )
 
         if getattr(self.args, "is_mixture_of_experts", False):
+            from models.demos.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
+            from models.demos.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
+
             self.feed_forward = TtMoeLayer(
                 mesh_device=mesh_device,
                 state_dict=state_dict,
