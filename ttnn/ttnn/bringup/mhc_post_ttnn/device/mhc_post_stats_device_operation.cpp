@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mhc_post_stats_device_operation.hpp"
+#include "mhc_post_given_output.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -89,10 +90,12 @@ MhcPostStatsDeviceOperation::spec_return_value_t MhcPostStatsDeviceOperation::co
 
 MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const auto specs = compute_output_specs(attrs, t);
+    const auto ins = {&t.input, &t.residual, &t.post, &t.comb, &t.weight};
     tensor_return_value_t out;
-    for (const auto& spec : compute_output_specs(attrs, t)) {
-        out.push_back(create_device_tensor(spec, t.residual.device()));
-    }
+    out.push_back(given_or_new(t.output, specs[0], t.residual, ins, "output_tensor"));
+    out.push_back(given_or_new(t.stats_output, specs[1], t.residual, ins, "stats_output"));
+    out.push_back(given_or_new(t.stats_scratch, specs[2], t.residual, ins, "stats_scratch"));
     return out;
 }
 
@@ -138,7 +141,10 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
     bool comb_transposed,
     uint32_t post_col,
-    uint32_t comb_col) {
+    uint32_t comb_col,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<ttnn::Tensor>& stats_output,
+    const std::optional<ttnn::Tensor>& stats_scratch) {
     using OperationType = ttnn::operations::bringup::mhc_post_ttnn::MhcPostStatsDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .compute_config = compute_config,
@@ -146,7 +152,14 @@ std::vector<ttnn::Tensor> mhc_post_stats(
         .post_col = post_col,
         .comb_col = comb_col};
     auto args = OperationType::tensor_args_t{
-        .input = input, .residual = residual, .post = post, .comb = comb, .weight = weight};
+        .input = input,
+        .residual = residual,
+        .post = post,
+        .comb = comb,
+        .weight = weight,
+        .output = output_tensor,
+        .stats_output = stats_output,
+        .stats_scratch = stats_scratch};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <stdexcept>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -27,10 +28,11 @@ struct MhcPostParams {
 };
 
 struct MhcPostInputs {
-    Tensor input;     // F   (..., T, C)      the sublayer output
-    Tensor residual;  // X   (..., T, n*C)    the n residual streams
-    Tensor post;      // (..., T, n)          float32
-    Tensor comb;      // (..., T, n*n)        float32, comb[i*n + j]
+    Tensor input;                  // F   (..., T, C)      the sublayer output
+    Tensor residual;               // X   (..., T, n*C)    the n residual streams
+    Tensor post;                   // (..., T, n)          float32
+    Tensor comb;                   // (..., T, n*n)        float32, comb[i*n + j]
+    std::optional<Tensor> output;  // output_tensor (P.16; default absent = the op allocates X')
 };
 
 // The refusals keep the Python op's exception types: std::invalid_argument surfaces as ValueError (nanobind's

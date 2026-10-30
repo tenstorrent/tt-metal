@@ -44,5 +44,6 @@ ttnn::Tensor rms_norm_ttnn(
     uint32_t subblock_w,
     bool inplace,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<ttnn::Tensor>& residual_sum = std::nullopt);
+    const std::optional<ttnn::Tensor>& residual_sum = std::nullopt,
+    const std::optional<ttnn::Tensor>& output = std::nullopt);
 }  // namespace ttnn::prim::bringup

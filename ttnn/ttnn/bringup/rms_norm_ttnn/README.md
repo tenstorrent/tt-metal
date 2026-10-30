@@ -44,9 +44,13 @@ Realistic (use by default): every option below.
 - `dtype=None` (opt-in, split program): the output's dtype; default the input's.
 - The split program takes TILE interleaved float32 / bfloat16 inputs, a [1, 1, 1, W] TILE weight (float32 / bfloat16), `fp32_dest_acc_en=True`; no bias, residual, program_config or return_residual_sum.
 
+- `output_tensor=` (default None = the op allocates its output, unchanged). Given, the op writes that tensor, which must have exactly the output's spec (shape, dtype, layout, memory config; checked on every call, miss and hit) and must not be the input; default and split programs; not with `inplace`. The result is a tensor of its buffer. (CHANGELOG: output_tensor, deepseek_v41_flash_d_p P.16.)
+
 Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is the stock `compute_kernel_config` choice).
 
 ## Measured
+
+- Output buffers (P.16, 8x4): rms_norm 65.9 -> 43.6 us of host a call (8x4, 208 calls a chunk, census of the profile rung's last chunk).
 - MiMo shape, input [1,1,5120,4096] bf16 per chip, bf16 weight, HiFi4 + fp32 DEST, 1x4 mesh, 20 calls device max: norm 0.230 ms, fused residual 0.429 ms (CHANGELOG.md change 5).
 - Same shape vs float64, MiMo golden layer 1 input + attn_norm weight: rel L2 0.00188, row-norm ratio 1.00015; native `ttnn.rms_norm` 0.00205 / 0.99945 (CHANGELOG.md change 5).
 - Random inputs, random weight, vs float64: rel L2 0.00168 without residual, 0.00235 with; native 0.00191 / 0.00200 (CHANGELOG.md change 5).

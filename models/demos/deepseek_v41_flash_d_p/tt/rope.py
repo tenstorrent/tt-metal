@@ -35,6 +35,7 @@ import torch
 
 import ttnn
 
+from . import host_alloc
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
 from .settings import settings
@@ -81,7 +82,13 @@ def pair_table(rot: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def rope_stock(
-    x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, trans: ttnn.Tensor, prefix: ttnn.Tensor | None = None
+    x: ttnn.Tensor,
+    cos: ttnn.Tensor,
+    sin: ttnn.Tensor,
+    trans: ttnn.Tensor,
+    prefix: ttnn.Tensor | None = None,
+    site: str | None = None,
+    mesh=None,
 ) -> ttnn.Tensor:
     """ROPE_IMPL=on (P.17): RoPE of the last R = cos.shape[-1] columns of x [B, H, rows, W] bf16 TILE (adjacent pairs,
     the reference's order) by cos / sin [1, 1, rows, R] bf16 (``pair_table`` rows of this chip's positions, broadcast
@@ -91,11 +98,35 @@ def rope_stock(
     pre-sliced per chip, so kv_actual_global is 0 (every chip reads its cos / sin from row 0; any start). The op's
     default compute config (HiFi4, fp32 DEST: the trans-mat's 0 / +-1 product is exact on bf16, DS41-83). Output dtype
     = x's. Does not consume its inputs. ROPE_UNIFORM_PROGRAM=on (P.5): the same op through the fork
-    ttnn.bringup.rotary_embedding_indexed(uniform=True), one program for the mesh instead of one per chip."""
+    ttnn.bringup.rotary_embedding_indexed(uniform=True), one program for the mesh instead of one per chip.
+    ``site`` / ``mesh`` (FORK_OUT_BUFFERS=on, P.16): the call writes that site's load-time output (tt/host_alloc.py) when its
+    spec has one, and returns that very object."""
     rd = cos.shape[-1]
     if settings.get("ROPE_UNIFORM_PROGRAM") == "on":
         # P.5: the fork's uniform program (one program for the mesh; valid because kv_actual_global is 0 on
         # pre-sliced rows, checked by the op on every call)
+        out = None
+        if site is not None:
+            shape = list(x.shape)
+            if prefix is not None:
+                shape[-1] += int(prefix.shape[-1])
+            out = host_alloc.fork_out(mesh, site, shape, x.dtype)
+        if out is not None:  # (the kept object: the op returns a new wrapper of its buffer, DS41-149)
+            ttnn.bringup.rotary_embedding_indexed(
+                x,
+                cos,
+                sin,
+                trans,
+                0,
+                SP_AXIS,
+                memory_config=DRAM,
+                rotary_dim=rd,
+                rotary_offset=x.shape[-1] - rd,
+                concat_prefix=prefix,
+                uniform=True,
+                output_tensor=out,
+            )
+            return out
         return ttnn.bringup.rotary_embedding_indexed(
             x,
             cos,

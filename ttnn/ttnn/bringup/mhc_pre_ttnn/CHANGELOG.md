@@ -264,3 +264,11 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
 - Why: all three kernels no longer compiled (missing header; the chain's static_assert on unbound buffers).
 - Needed by: rebase 2026-10-27
 - Files: `kernels/perf_instrumentation.hpp`, `kernels/mhc_pre_compute.cpp`
+
+### hc_output / y_output (mhc_pre_xing, mhc_pre_xing_pack): write a caller's output buffer (2026-10-30)
+- What: `hc_output=`, `y_output=` on `mhc_pre_xing` / `mhc_pre_xing_pack` (default None = the op allocates them, unchanged): the caller's buffers for hc and y, each exactly the spec the op would allocate (checked on every call), none of them an input. Kernels and programs unchanged; outputs byte-identical to the allocating call.
+- Why: each call allocated its output (~35 us of host). The model passes load-time buffers at the call sites whose
+  output is read and dropped inside the layer. Measured: mhc_pre_xing 126.9 -> 84.4 us of host a call (8x4, 80 calls a chunk); mhc_pre_xing_pack 110 -> 105 us (3 calls, not given buffers by the model).
+- Tests: `tests/unit/test_xing_output_buffers.py` 3 passed on the 8x4. Regression: unit 144 passed, model cases 71 passed; stopped by the owner before the end (F.1 runs it).
+- Needed by: deepseek_v41_flash_d_p P.16 (FORK_OUT_BUFFERS, 2026-10-30)
+- Files: `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`, `tests/unit/test_xing_output_buffers.py`

@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "DS41-172",
+   "how": "Sized the win (an op's own output allocation ~35 us on 8x4) and chose caller-buffer options on the four forks, buffers from tt/host_alloc (P.15 pattern).",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-171",
+   "how": "The forks are C++ ops already dispatching from the program cache, so the remaining host cost was output allocation, not program build.",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "The forks return a new Python wrapper of the given buffer; call sites keep the load-time object and never deallocate the returned wrapper.",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "The fork test suites of rms_norm_ttnn (tests/unit) and mhc_post / mhc_pre (tests/golden) import a tt_ops_code_gen `eval` package absent from this tree (now DS41-173).",
+  "Which fork outputs outlive their layer (ffn_hc's hc, ffn_residual's stats row, mHC streams): no entry lists the cross-layer lifetimes; worked out from tt/mhc.py and tt/residual.py."
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "No padding or duplicated work: the forks only take an optional output buffer of exactly the spec they would allocate."
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "No Python-built op added or touched: rms_norm, mhc_post, mhc_pre_xing and rotary_embedding_indexed are C++ device ops (program cache, address override on a hit)."
+  },
+  {
+   "id": "OV-24",
+   "answer": "done",
+   "evidence": "Attempt 2 ran no fork regression or unit suite and no device run; it only wrote the fork CHANGELOG/README/INDEX entries, BREADCRUMBS, known_issues DS41-173 (eval imports) and DS41-174, and this report."
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "No fork suites on the 8x4 in attempt 2; attempt 1's partial regression results are recorded in BREADCRUMBS for F.1."
+  }
+ ],
+ "cited_only": [
+  "DS41-173",
+  "DS41-174"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.16",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T09:21:49",
+  "head": "cfe51ab8232",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.16.perf.2.json",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/README.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/README.md"
+  ]
+ }
+}

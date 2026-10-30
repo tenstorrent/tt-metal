@@ -44,6 +44,10 @@ struct MhcPreXingInputs {
     Tensor input;                        // (..., T, 32) mix row, or (..., T, n(n+2)) hc
     std::optional<Tensor> streams;       // (..., T, n*C) fp32
     std::optional<Tensor> collapse_pre;  // (..., T, n..32) fp32: the pre y collapses with (given_pre)
+    // P.16 (default absent = the op allocates): the caller's buffers for hc (or the packed row under pack_stats)
+    // and y; each must have exactly the spec compute_output_specs gives it (checked on every call).
+    std::optional<Tensor> hc_output;
+    std::optional<Tensor> y_output;
 };
 
 tt::tt_metal::ProgramDescriptor create_xing_program_descriptor(
@@ -86,5 +90,7 @@ std::vector<ttnn::Tensor> mhc_pre_xing(
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& streams,
     const ttnn::operations::bringup::mhc_pre_ttnn::MhcPreXingParams& params,
-    const std::optional<ttnn::Tensor>& collapse_pre = std::nullopt);
+    const std::optional<ttnn::Tensor>& collapse_pre = std::nullopt,
+    const std::optional<ttnn::Tensor>& hc_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& y_output = std::nullopt);
 }  // namespace ttnn::prim::bringup

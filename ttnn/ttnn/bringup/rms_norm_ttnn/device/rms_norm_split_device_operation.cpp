@@ -179,6 +179,22 @@ RmsNormSplitDeviceOperation::spec_return_value_t RmsNormSplitDeviceOperation::co
 
 RmsNormSplitDeviceOperation::tensor_return_value_t RmsNormSplitDeviceOperation::create_output_tensors(
     const operation_attributes_t& a, const tensor_args_t& t) {
+    if (t.output.has_value()) {  // output_tensor (P.16): the caller's buffer, exactly the op's output spec
+        const auto& out = *t.output;
+        const auto want = compute_output_specs(a, t);
+        TT_FATAL(
+            out.storage_type() == ttnn::StorageType::DEVICE && out.is_allocated(),
+            "rms_norm_ttnn: output_tensor must be an allocated device tensor");
+        TT_FATAL(
+            out.tensor_spec() == want,
+            "rms_norm_ttnn: output_tensor spec {} is not the op's output spec {}",
+            out.tensor_spec(),
+            want);
+        TT_FATAL(
+            out.buffer()->address() != t.input.buffer()->address(),
+            "rms_norm_ttnn: output_tensor must not be the input (use program_config inplace)");
+        return out;
+    }
     return create_device_tensor(compute_output_specs(a, t), t.input.device());
 }
 
@@ -347,9 +363,10 @@ ttnn::Tensor rms_norm_split(
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& partial_stats,
-    const ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitParams& attrs) {
+    const ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitParams& attrs,
+    const std::optional<ttnn::Tensor>& output) {
     using Op = ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitDeviceOperation;
-    auto args = Op::tensor_args_t{.input = input, .weight = weight, .partial_stats = partial_stats};
+    auto args = Op::tensor_args_t{.input = input, .weight = weight, .partial_stats = partial_stats, .output = output};
     return ttnn::device_operation::launch<Op>(attrs, args);
 }
 

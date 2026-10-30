@@ -60,7 +60,8 @@ RmsNormResult rms_norm_full(
     const std::optional<ProgramConfigArg>& program_config,
     const std::optional<ComputeConfigArg>& compute_kernel_config,
     bool return_residual_sum,
-    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config);
+    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
 
 // RMSNorm over the last dimension (rms_norm_ttnn.py's rms_norm_ttnn()).  The second member is true
 // when program_config.inplace made the output the input tensor itself.
@@ -101,6 +102,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> rms_norm_with_residual_sum(
 // partial sums of squares of the input's (window's) columns; `partial_stats` normalizes by the row sum of the
 // gathered partials over `stats_width` columns; `input_window` reads only columns [c0, c1); `dtype` sets the
 // output's dtype.  None of them set -> rms_norm_full's program, unchanged.
+// `output_tensor` (P.16, both entries; default none = the op allocates its output): the op writes this tensor, whose
+// spec must be exactly the output spec it would allocate (checked on every call), never the input.
 ttnn::Tensor rms_norm_split_full(
     const ttnn::Tensor& input_tensor,
     double epsilon,
@@ -111,7 +114,8 @@ ttnn::Tensor rms_norm_split_full(
     const std::optional<const ttnn::Tensor>& partial_stats,
     int64_t stats_width,
     const std::optional<std::pair<int64_t, int64_t>>& input_window,
-    const std::optional<tt::tt_metal::DataType>& dtype);
+    const std::optional<tt::tt_metal::DataType>& dtype,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn
 

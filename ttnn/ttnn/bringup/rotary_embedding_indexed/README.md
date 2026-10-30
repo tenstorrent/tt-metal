@@ -17,7 +17,11 @@ per chip) with `kv_actual_global` 0. That is the natural-block layout, where eve
   per mesh coordinate range. It requires `kv_actual_global == 0` and no `seq_subshard_axis`, checked on every call
   (miss and hit). It is in the program hash.
 
+- `output_tensor=` (scalar form only, default None = the op allocates its output, unchanged): the op writes that tensor, whose spec must be exactly the output spec (checked on every call, miss and hit), and returns a tensor of its buffer. Not the input. (CHANGELOG: output_tensor, deepseek_v41_flash_d_p P.16.)
+
 ## Measured
+
+- Output buffers (P.16, 8x4): rotary_embedding_indexed 69.1 -> 50.8 us of host a call (8x4, 136 calls a chunk).
 - Galaxy 8x4 (32 BH chips), `tests/unit/test_uniform.py::test_uniform_host_time`, warm host time a call (dispatch
   only), q-with-prefix shape [1, 64, 160, 64] + prefix [1, 64, 160, 448] bf16: stock 101.0 us, uniform 52.0 us.
 - DeepSeek-V4.1 all-device model, 136 calls a chunk, profile rung's last chunk [51200, 56320), same process,

@@ -80,6 +80,10 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                     coordinate, as the stock op). True: one program for the whole mesh range; valid
                     only for per-chip pre-sliced cos/sin read from row 0, so it requires
                     kv_actual_global == 0 and no seq_subshard_axis (checked on every call).
+                output_tensor (ttnn.Tensor, optional): bring-up option, scalar form only, default None
+                    (the op allocates its output). Given: the op writes this tensor, whose spec must be
+                    exactly the output spec (shape, dtype, layout, memory config; checked on every call),
+                    and returns a tensor of its buffer. Not the input (the op is not in place).
 
             Returns:
                 ttnn.Tensor: a rotary-embedded tensor, with concat_prefix channels first when supplied.
@@ -99,7 +103,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const std::optional<uint32_t>&,
                 uint32_t,
                 const std::optional<Tensor>&,
-                bool>(&rotary_embedding_indexed),
+                bool,
+                const std::optional<Tensor>&>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -112,7 +117,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("rotary_dim") = std::nullopt,
             nb::arg("rotary_offset") = 0,
             nb::arg("concat_prefix") = std::nullopt,
-            nb::arg("uniform") = false),
+            nb::arg("uniform") = false,
+            nb::arg("output_tensor") = std::nullopt),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
