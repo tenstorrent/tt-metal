@@ -310,7 +310,8 @@ RouterVcShape router_vc_shape(
         if (z_boundary_router) {
             vc0_senders = boundary_vc0_sender_count();
         } else if (
-            intermesh_vc_disabled && chip_z_role == ZPortRole::INTERMESH_BOUNDARY && !is_x_axis_direction(facing)) {
+            intermesh_vc_disabled && chip_z_role == ZPortRole::INTERMESH_BOUNDARY &&
+            !is_x_axis_direction(facing, express_axis)) {
             TT_FATAL(!express_routing_enabled, "intermesh_vc_disabled does not support express routing");
             // The Z router hands landed packets to N and S on VC0, so they get one more VC0 sender.
             vc0_senders = non_express_vc0_sender_count() + 1;
@@ -396,7 +397,7 @@ RouterTurnSet turn_set_for_router(
         for (const auto dir : k_cardinal_directions) {
             if (intermesh_vc_disabled) {
                 // With intermesh_vc_disabled the template is on VC0 and holds only N and S.
-                if (!is_x_axis_direction(dir)) {
+                if (!is_x_axis_direction(dir, express_axis)) {
                     turn_set[0].push_back(ConnectionTarget(0, dir));
                 }
             } else {

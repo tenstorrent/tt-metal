@@ -2530,6 +2530,13 @@ Program build_entry_relay_program(
     std::map<tt::tt_fabric::RoutingDirection, uint32_t> conn_of_dir[2];
     std::vector<uint32_t> lanes(num_slots, 1);
     std::vector<uint32_t> conn_idx[2] = {std::vector<uint32_t>(num_slots, 0), std::vector<uint32_t>(num_slots, 0)};
+    if (!relay_entry_two_lanes_fit(*mesh, relay, p)) {
+        log_warning(
+            tt::LogOp,
+            "D2DStreamService relay: the entry relay on coord {} sends in all four directions. Two links per "
+            "target would need more semaphores than its core has, so each target uses one link (less bandwidth).",
+            e);
+    }
     for (uint32_t k = 0; k < num_slots; ++k) {
         if (k == own_slot) {
             continue;

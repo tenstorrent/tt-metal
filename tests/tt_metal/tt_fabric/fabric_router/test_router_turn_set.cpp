@@ -219,7 +219,7 @@ TEST_F(RouterTurnSetTest, IntermeshVCDisabled_BoundaryForwardsOnlyNorthSouthOnVC
         Topology::Mesh,
         RoutingDirection::Z,
         chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
+        ExpressAxis::NONE,
         &k_intermesh_vc_disabled);
 
     EXPECT_EQ(target_directions(turn_set, 0), (std::set<RoutingDirection>{RoutingDirection::N, RoutingDirection::S}));
@@ -235,7 +235,7 @@ TEST_F(RouterTurnSetTest, IntermeshVCDisabled_NoRouterHasVC1Channels) {
             Topology::Mesh,
             facing,
             chip_with_z(EdgeCapability::INTERMESH),
-            /*express_routing_enabled=*/false,
+            ExpressAxis::NONE,
             &k_intermesh_vc_disabled);
 
         EXPECT_EQ(shape.num_vcs, 1) << "facing " << enchantum::to_string(facing);
@@ -252,10 +252,10 @@ TEST_F(RouterTurnSetTest, IntermeshVCDisabled_OnlyNorthSouthGetTheZSenderSlot) {
             Topology::Mesh,
             facing,
             chip_with_z(EdgeCapability::INTERMESH),
-            /*express_routing_enabled=*/false,
+            ExpressAxis::NONE,
             &k_intermesh_vc_disabled);
-        const auto plain_chip = router_vc_shape(
-            Topology::Mesh, facing, chip_with_z(std::nullopt), /*express_routing_enabled=*/false, nullptr);
+        const auto plain_chip =
+            router_vc_shape(Topology::Mesh, facing, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
 
         const bool feeds_from_z = facing == RoutingDirection::N || facing == RoutingDirection::S;
         EXPECT_EQ(boundary_chip.sender_counts[0], plain_chip.sender_counts[0] + (feeds_from_z ? 1 : 0))
@@ -268,7 +268,7 @@ TEST_F(RouterTurnSetTest, IntermeshVCDisabled_RejectsExpressRouting) {
         Topology::Torus,
         RoutingDirection::N,
         chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/true,
+        ExpressAxis::Y,
         &k_intermesh_vc_disabled));
 }
 
