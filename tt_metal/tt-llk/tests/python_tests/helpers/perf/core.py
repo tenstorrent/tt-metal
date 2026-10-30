@@ -26,6 +26,7 @@ from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from . import window_hash
 from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
@@ -783,6 +784,13 @@ def _expand_run_types(text):
     return names
 
 
+_ISOLATE_RUN_TYPES = (
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+)
+
+
 def _selected_run_types(run_types):
     """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
@@ -830,6 +838,15 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
+        # Experiment (be61600d8bb): a run without isolate kernels also warms up the first isolate kernel of the test.
+        self.warmup_configs = list(self.run_configs)
+        if not any(rt in _ISOLATE_RUN_TYPES for _, _, rt in self.run_configs):
+            extra = next((rt for rt in _ISOLATE_RUN_TYPES if rt in run_types), None)
+            if extra is not None and self.run_configs:
+                self.warmup_configs.insert(
+                    0,
+                    (templates.copy() + [PERF_RUN_TYPE(extra)], runtimes.copy(), extra),
+                )
 
         super().__init__(
             test_name,
@@ -982,9 +999,10 @@ class PerfConfig(TestConfig):
         results = []
         counter_results_list = []
         code_sizes = {}
+        window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            for templates, runtimes, run_type in self.run_configs:
+            for templates, runtimes, run_type in self.warmup_configs:
                 self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
                 # because we run TestConfig constructor only once
@@ -1002,6 +1020,21 @@ class PerfConfig(TestConfig):
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
         PerfConfig.TEST_COUNTER += 1
+
+        # Experiment: run each kernel once unrecorded, so no measured kernel follows a kernel of another test.
+        for templates, runtimes, run_type in self.warmup_configs:
+            self.current_run_type = run_type
+            if TestConfig.SPEED_OF_LIGHT:
+                self.templates = templates + runtimes
+                self.runtimes = []
+                self.compile_time_formats = True
+            else:
+                self.templates = templates
+                self.runtimes = runtimes
+            self.generate_variant_hash()
+            self.write_runtimes_to_L1()
+            self.run_elf_files()
+            self.wait_for_tensix_operations_finished()
 
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
@@ -1030,6 +1063,20 @@ class PerfConfig(TestConfig):
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
                     for c in components
                 )
+                window_rows += [
+                    (
+                        run_type.name,
+                        c,
+                        (
+                            window_hash.fingerprint(
+                                TestConfig.OBJDUMP, elf_dir / f"{c}.elf"
+                            )
+                            if window_hash.enabled()
+                            else ""
+                        ),
+                    )
+                    for c in components
+                ]
 
             variant_raw_data = []
             variant_counter_results = []
@@ -1112,6 +1159,19 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
+        window_hash.write_rows(
+            TestConfig.perf_run_dir(),
+            self.test_name,
+            PerfConfig._build_sweep_frame(
+                code_sizes,
+                self.formats_config,
+                self.unpack_to_dest,
+                self.dest_acc,
+                self.passed_templates,
+                self.passed_runtimes,
+            ),
+            window_rows,
+        )
 
         # Append raw counter data to the separate counter report
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:
