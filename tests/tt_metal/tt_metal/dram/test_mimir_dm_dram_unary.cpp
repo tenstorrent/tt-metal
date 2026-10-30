@@ -63,17 +63,6 @@ static_assert(kChunkBytes % abi::kLineBytes == 0 && kChunkBytes <= abi::kMaxChun
 static_assert(kNumSlots <= abi::kMaxSlots && kNumChunks <= abi::kMaxChunks);
 static_assert(kSourceViewOffset + kTotalBytes <= kDestinationViewOffset);
 
-std::string dram_unary_skip_reason(uint32_t cce_index) {
-    if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
-        return watcher_reason;
-    }
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        return fmt::format("Descriptor has {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
-    }
-    return "";
-}
-
 struct DramUnaryLayout {
     uint32_t cce_index = 0;
     uint32_t local_mimir = 0;
@@ -250,7 +239,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    if (const std::string skip_reason = dram_unary_skip_reason(cce_index); !skip_reason.empty()) {
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_closer;

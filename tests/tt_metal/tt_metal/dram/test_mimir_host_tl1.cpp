@@ -347,10 +347,6 @@ TEST_P(MimirHostTl1Cce, PerCceVisibility) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        GTEST_SKIP() << "Descriptor exposes only " << topology.num_cces << " CCEs.";
-    }
     MIMIR_REQUIRE_IDENTITY();
 
     constexpr ChipId chip = 0;

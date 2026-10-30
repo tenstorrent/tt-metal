@@ -149,9 +149,6 @@ TEST_P(MimirHostDramView, PatternReadback) {
     skip_unless_mimir_local_package();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const uint32_t view = GetParam();
-    if (view >= topology.num_views) {
-        GTEST_SKIP() << "Descriptor exposes " << topology.num_views << " DRAM views.";
-    }
     MIMIR_REQUIRE_IDENTITY();
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
@@ -216,9 +213,6 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
     skip_unless_mimir_local_package();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const uint32_t view = GetParam();
-    if (view >= topology.num_views) {
-        GTEST_SKIP() << "Descriptor exposes " << topology.num_views << " DRAM views.";
-    }
     MIMIR_REQUIRE_IDENTITY();
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);

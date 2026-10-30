@@ -397,17 +397,6 @@ INSTANTIATE_TEST_SUITE_P(
 inline constexpr std::chrono::seconds kProbeHostDeadline{300};
 inline constexpr uint32_t kSnoopMasterDefault = 0x6;
 
-std::string cce_skip_reason(uint32_t cce_index) {
-    if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
-        return watcher_reason;
-    }
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
-    }
-    return "";
-}
-
 // Runs one cce_cache_ops kernel per (hart, args) on `cce_index` in one Program and returns each status line in launch
 // order; nullopt on the host deadline.
 std::optional<std::vector<std::vector<uint32_t>>> run_on_cce(
@@ -444,7 +433,7 @@ class MimirCacheProbe : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
     }
@@ -1184,7 +1173,7 @@ class MimirCacheSharedL2 : public ::testing::TestWithParam<SharedParam> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = cce_skip_reason(std::get<0>(GetParam())); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
         if (const std::string skip_reason = fresh_session_skip_reason(); !skip_reason.empty()) {
@@ -1519,7 +1508,7 @@ protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
         skip_unless_mimir_local_package();
-        if (const std::string skip_reason = cce_skip_reason(std::get<0>(GetParam())); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
         if (const std::string skip_reason = fresh_session_skip_reason(); !skip_reason.empty()) {
@@ -1968,7 +1957,7 @@ protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
         skip_unless_mimir_local_package();
-        if (const std::string skip_reason = cce_skip_reason(std::get<0>(GetParam())); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
         if (const std::string skip_reason = fresh_session_skip_reason(); !skip_reason.empty()) {

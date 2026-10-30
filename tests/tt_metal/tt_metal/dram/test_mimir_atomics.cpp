@@ -141,17 +141,6 @@ std::string idma_code_note(uint32_t code) {
                : "";
 }
 
-std::string cce_skip_reason(uint32_t cce_index) {
-    if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
-        return watcher_reason;
-    }
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
-    }
-    return "";
-}
-
 uint32_t leg_seed(uint32_t tag) { return mimir_test_seed() ^ (tag * 0x9E3779B9u); }
 
 std::vector<uint32_t> seeded_words(size_t num_words, uint32_t seed, uint32_t mask = 0xFFFFFFFFu) {
@@ -648,7 +637,7 @@ class MimirAtomicCceTest : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
     }

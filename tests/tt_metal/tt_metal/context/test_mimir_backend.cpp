@@ -43,10 +43,6 @@ TEST_P(CceSramRoundTripThroughMetalCluster, RoundTrip) {
     constexpr ChipId chip_id = 0;
     const uint32_t cce_index = GetParam();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    const uint32_t num_cces = num_cces_from_soc(soc_desc);
-    if (cce_index >= num_cces) {
-        GTEST_SKIP() << "Configured descriptor exposes only " << num_cces << " CCEs.";
-    }
     const CoreCoord cce = translated_dram_core(soc_desc, cce_index);
     constexpr uint64_t address = MEM_CCE_L1_NOC_OFFSET + kCceSramTestOffset;
     const uint32_t written = 0xC0FFEE01 + cce_index;

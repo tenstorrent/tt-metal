@@ -50,9 +50,6 @@ static_assert(kSharedDestinationOffsetFromData + MEM_CCE_LOCAL_HARTS * kSlotStri
 
 std::string topology_skip_reason(uint32_t cce_index) {
     const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        return fmt::format("Descriptor has {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
-    }
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
     if (std::find(topology.view_mimir.begin(), topology.view_mimir.end(), local_mimir) == topology.view_mimir.end()) {
         return fmt::format("Descriptor has no DRAM view on Mimir {} for CCE {}.", local_mimir, cce_index);

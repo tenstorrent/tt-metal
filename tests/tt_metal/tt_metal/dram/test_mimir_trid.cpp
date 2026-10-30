@@ -149,17 +149,6 @@ std::string code_note(uint32_t code) {
                : "";
 }
 
-std::string cce_skip_reason(uint32_t cce_index) {
-    if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
-        return watcher_reason;
-    }
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
-    }
-    return "";
-}
-
 uint64_t gddr_view_offset() { return dram_unreserved_base() + kGddrTargetOffset; }
 
 std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid, uint64_t peer_flag_offset) {
@@ -840,7 +829,7 @@ class MimirTridIdma : public ::testing::TestWithParam<uint32_t>, protected Mimir
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
     }
@@ -1490,7 +1479,7 @@ protected:
         if (!MetalContext::instance().rtoptions().get_force_context_reinit()) {
             GTEST_SKIP() << "Set TT_METAL_FORCE_REINIT=1.";
         }
-        if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
     }
