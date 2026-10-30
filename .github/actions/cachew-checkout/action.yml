@@ -9,7 +9,7 @@ inputs:
   ref:
     description: Branch, tag or SHA. Defaults to the event ref for this repository, otherwise the default branch.
   token:
-    description: GitHub token used by checkout. Standard checkout owns its persistence and post-job removal.
+    description: GitHub token used by checkout. Upstream receives it only to resolve branch and tag names.
     default: ${{ github.token }}
   ssh-key:
     description: SSH private key. SSH checkout bypasses cachew.
@@ -22,7 +22,10 @@ inputs:
     description: User for SSH transport.
     default: 'git'
   persist-credentials:
-    description: Retain upstream credentials until standard checkout post-job cleanup.
+    description: >-
+      Persist upstream credentials as actions/checkout does: a RUNNER_TEMP credentials file
+      included from the repository configuration. The runner deletes RUNNER_TEMP at job end;
+      a fallback actions/checkout also removes it in its post step.
     default: 'true'
   path:
     description: Checkout directory relative to GITHUB_WORKSPACE.
@@ -30,14 +33,14 @@ inputs:
     description: Clean and reset an existing checkout before fetching.
     default: 'true'
   filter:
-    description: Partial-clone filter for the main repository, as in standard checkout. Cachew seeds the complete tip and the filtered history.
+    description: Partial-clone filter for the main repository, as in standard checkout. Cachew fetches the complete tip and the filtered history.
   sparse-checkout:
     description: Newline-separated sparse checkout patterns. A nonempty value bypasses cachew.
   sparse-checkout-cone-mode:
     description: Use cone mode for sparse checkout.
     default: 'true'
   fetch-depth:
-    description: History depth. Zero fetches all history through standard checkout.
+    description: History depth. Zero fetches all branches, tags and history.
     default: '1'
   fetch-tags:
     description: Fetch tags even with limited history depth.
@@ -76,16 +79,16 @@ inputs:
     default: '120'
 outputs:
   ref:
-    description: The branch, tag or SHA checked out by actions/checkout.
-    value: ${{ steps.checkout.outputs.ref }}
+    description: The branch, tag or SHA checked out, as actions/checkout reports it.
+    value: ${{ steps.prefetch.outputs.prefetched == 'true' && steps.prefetch.outputs.ref || steps.checkout.outputs.ref }}
   commit:
     description: The checked out commit SHA.
-    value: ${{ steps.checkout.outputs.commit }}
+    value: ${{ steps.prefetch.outputs.prefetched == 'true' && steps.prefetch.outputs.commit || steps.checkout.outputs.commit }}
   cachew-configured:
     description: Whether job-global caching is active for later dependency fetches.
     value: ${{ steps.configure.outputs.configured || 'false' }}
   cachew-prefetched:
-    description: Whether cachew supplied a complete object seed before standard checkout.
+    description: Whether cachew produced the complete checkout, so actions/checkout did not run.
     value: ${{ steps.prefetch.outputs.prefetched || 'false' }}
 runs:
   using: composite
@@ -110,7 +113,7 @@ runs:
       # is the only pin. There is no post step; the runner empties RUNNER_TEMP,
       # and with it the session, when the job completes.
       run: bash "$GITHUB_ACTION_PATH/session/prepare.sh"
-    - name: Prefetch from cachew once
+    - name: Checkout from cachew
       id: prefetch
       if: steps.session.outputs.ready == 'true'
       continue-on-error: true
@@ -143,12 +146,15 @@ runs:
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
       run: |
         if command -v python3 >/dev/null 2>&1; then
-          python3 "$CACHEW_ACTION_PATH/prefetch.py" || echo "Cachew prefetch unavailable; continuing with upstream checkout."
+          python3 "$CACHEW_ACTION_PATH/prefetch.py" || echo "Cachew checkout unavailable; continuing with upstream checkout."
         else
           echo "python3 unavailable; continuing with upstream checkout."
         fi
+    # Only when cachew did not produce the complete checkout: skipped session,
+    # unsupported mode, existing checkout, or any cache or local failure.
     - name: Checkout from upstream
       id: checkout
+      if: steps.prefetch.outputs.prefetched != 'true'
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         repository: ${{ inputs.repository }}

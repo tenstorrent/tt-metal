@@ -137,7 +137,9 @@ class SessionTests(unittest.TestCase):
     def flow(self):
         self.prepare()
         seeded = self.fixture.attempt()
-        self.checkout()
+        # As in action.yml: the official checkout runs only when cachew did not check out.
+        if not seeded:
+            self.checkout()
         active = self.activate()
         return seeded, active
 
@@ -168,7 +170,6 @@ class SessionTests(unittest.TestCase):
     def test_default_safe_directory_survives_activation_and_later_prepare(self):
         self.prepare()
         self.assertTrue(self.fixture.attempt())
-        self.checkout()
         before = self.safe_directories()
         self.assertIn(str(self.fixture.target.resolve()), [str(Path(value).resolve()) for value in before if value])
         self.assertTrue(self.activate())
@@ -201,7 +202,6 @@ class SessionTests(unittest.TestCase):
     def test_safe_directory_empty_reset_and_deduplication_survive_rebuild(self):
         self.prepare()
         self.assertTrue(self.fixture.attempt())
-        self.checkout()
         trusted = str(self.fixture.workspace / "explicitly-trusted")
         self.real_git("config", "--global", "--add", "safe.directory", "")
         self.real_git("config", "--global", "--add", "safe.directory", trusted)

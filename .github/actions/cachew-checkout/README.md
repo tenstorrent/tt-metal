@@ -51,9 +51,9 @@ step. An untrusted or non-HTTPS `cachew-url` (including the in-cluster
 `cachew.cachew.svc.cluster.local`) leaves the plain checkout: no session, token,
 wrapper or configuration change.
 
-`cachew-prefetched` reports whether cachew supplied a complete checkout object
-seed. `cachew-configured` reports whether global caching was enabled for later
-Git operations when the action finished.
+`cachew-prefetched` reports whether cachew produced the complete checkout, in
+which case `actions/checkout` did not run. `cachew-configured` reports whether
+global caching was enabled for later Git operations when the action finished.
 
 ## Checkout and later dependencies
 
@@ -64,23 +64,41 @@ cachew rewrites. The original files are never modified. If the session cannot be
 created (no Git, Git older than 2.32, unreadable configuration), the action falls
 back to the plain checkout and leaves the job environment unchanged.
 
-The cache phase fetches main repository objects once, then each requested
-submodule at its exact gitlink SHA, including nested submodules. Cachew serves
-commit SHAs and `refs/pull/*` from its mirror and forwards anything missing
-upstream. Full-history checkouts seed all branches and tags. Sparse, LFS, SSH
-and non-empty targets skip object seeding.
+The cache phase performs the whole checkout and leaves the repository the pinned
+`actions/checkout` would have created: the same `origin` remote, remote-tracking
+branch, pull or tag ref, checked-out branch or detached `HEAD`, shallow depth,
+`gc.auto = 0`, submodule configuration, persisted credentials (a
+`RUNNER_TEMP/git-credentials-<uuid>.config` file with host and container
+`includeIf` entries, plus `insteadOf` rewrites in submodules), the
+`safe.directory` entry and the `ref` and `commit` outputs. One difference
+remains: checkout clones each submodule's default branch, which adds a local
+tracking branch and, when shallow, a single-branch refspec; cachew fetches only
+the gitlink commit and keeps the default refspec.
 
-With `filter`, the main repository is seeded in two cache fetches: the complete
-tip commit, then the filtered history at the requested depth. The worktree
-therefore needs no lazy fetches. The seed records `origin` as the promisor
-remote with the same filter, as standard checkout does, so objects missing
-later are fetched lazily from upstream. Submodules are seeded unfiltered, as
-standard checkout fetches them.
+A commit SHA, including the event's `GITHUB_SHA`, never contacts upstream.
+A branch, tag or other ref name, or the default branch of another repository,
+costs one upstream `ls-remote` with the token; the objects for the resolved
+SHA then come from cachew. The main repository is fetched once, then each
+requested submodule at its exact gitlink SHA, including nested submodules.
+Cachew serves commit SHAs and `refs/pull/*` from its mirror and forwards
+anything missing upstream. Full-history checkouts fetch all branches and tags
+from the cache; `fetch-tags` takes the tag list from the cache. Worktree and
+submodule commands run with `protocol.allow=never`, so any missing object fails
+the attempt rather than reaching upstream.
 
-The pinned official checkout then runs against upstream using the cached objects,
-with its own throwaway global file, so its temporary global settings never leak
-into the job. It owns ref resolution, worktree creation, outputs and its
-credential persistence and cleanup. Afterward the action adds:
+With `filter`, the main repository needs two cache fetches: the complete tip
+commit, then the filtered history at the requested depth. The worktree
+therefore needs no lazy fetches. `origin` is recorded as the promisor remote with
+the same filter, as standard checkout does, so objects missing later are
+fetched lazily from upstream. Submodules are fetched unfiltered, as standard
+checkout fetches them.
+
+The pinned official checkout runs only when cachew did not produce the checkout:
+cachew skipped (hosted runner, `cachew: false`, no session), an unsupported mode
+(sparse, LFS, SSH), a non-empty target, or any failure of the cache or of the
+local steps. A failed attempt first removes everything it created, so checkout
+starts from the same empty directory, with its own throwaway global file.
+Afterward the action adds:
 
 ```text
 url.<cachew>/git/github.com/.insteadOf = https://github.com/
@@ -94,7 +112,7 @@ gc.auto = 0
 Tokens are scoped to cache URLs. Upstream credentials stay exactly where
 `actions/checkout` puts them (repository-local), so later steps can use other
 credentials for other repositories. With `persist-credentials: false` the token
-is used only for that checkout's seeding. Steps may write the global
+is used only for the checkout itself. Steps may write the global
 configuration (`git config --global ...`); cachew only adds and removes its own
 keys, so those writes survive cache fallback and later checkouts.
 
@@ -110,8 +128,9 @@ the job.
 There is no post step: composite actions cannot have one, and a separate
 JavaScript action would need its own pin. The session directory lives in
 `RUNNER_TEMP`, which the runner empties when the job completes (also for failed
-and cancelled jobs) and again before the next job starts, together with
-`actions/checkout`'s own credentials file in the same directory. Until then later
+and cancelled jobs) and again before the next job starts, together with the
+checkout credentials file in the same directory. A repository checked out from
+cachew keeps its `includeIf` entries; once the file is gone they include nothing. Until then later
 steps and other actions' post steps keep a working `GIT_CONFIG_GLOBAL`. If the
 runner process itself dies, the files remain until that runner's next job starts.
 
@@ -132,8 +151,7 @@ missing ref, `ls-remote --exit-code` finding nothing) keep caching on. A failed
 cache clone's partial destination is removed before the upstream retry.
 
 Native recursive clones, submodule commands, initialized-submodule fetches,
-pushes and pulls use upstream directly. Successful cache checkout still needs
-upstream ref negotiation; this action does not provide an offline checkout.
+pushes and pulls use upstream directly.
 
 ## Verification, pins and adoption
 

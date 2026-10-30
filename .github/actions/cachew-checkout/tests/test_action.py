@@ -41,17 +41,26 @@ def steps():
     return result
 
 
-def evaluate(expression, context):
+def value(expression, context):
     """Evaluate the subset of GitHub expression syntax used in action.yml."""
 
     def lookup(match):
         value = context.get(f"{match[1]}.{match[2]}", "")
         return repr(str(value).lower())
 
-    python = CONTEXT.sub(lookup, expression)
+    python = CONTEXT.sub(lookup, expression.removeprefix("${{").removesuffix("}}"))
     python = re.sub(r"'([^']*)'", lambda m: repr(m[1].lower()), python)
     python = python.replace("&&", " and ").replace("||", " or ")
-    return bool(eval(python, {"__builtins__": {}}, {}))  # noqa: S307 - fixed, test-only grammar
+    return eval(python, {"__builtins__": {}}, {})  # noqa: S307 - fixed, test-only grammar
+
+
+def evaluate(expression, context):
+    return bool(value(expression, context))
+
+
+def output(name):
+    text = ACTION.read_text().split("\noutputs:\n", 1)[1].split("\nruns:\n", 1)[0]
+    return re.search(rf"^  {name}:\n(?:    .*\n)*?    value: (.*)$", text, re.M)[1]
 
 
 def runner(environment, os="Linux", cachew="auto", kill_switch=None):
@@ -67,30 +76,33 @@ class RunnerGateTests(unittest.TestCase):
         self.session = next(step for step in self.steps if step.get("id") == "session")
         self.checkout = next(step for step in self.steps if step.get("id") == "checkout")
 
-    def active_steps(self, context):
-        """Steps the runner would start for a given runner context."""
-        session_runs = evaluate(self.session["if"], context)
+    def active_steps(self, context, cloned=False):
+        """Steps the runner would start for a given runner context and cachew outcome."""
+        local = dict(context)
         started = []
         for step in self.steps:
-            if step is self.checkout:
-                started.append(step["id"])
-                continue
             condition = step.get("if")
-            self.assertIsNotNone(condition, f"cachew step {step['name']!r} must be gated")
-            local = dict(context)
-            # A skipped session step publishes no outputs.
-            local["steps.session.outputs.ready"] = "true" if session_runs else ""
+            self.assertIsNotNone(condition, f"step {step['name']!r} must be gated")
             if evaluate(condition, local):
                 started.append(step["id"])
+                # A skipped step publishes no outputs.
+                if step["id"] == "session":
+                    local["steps.session.outputs.ready"] = "true"
+                elif step["id"] == "prefetch":
+                    local["steps.prefetch.outputs.prefetched"] = str(cloned).lower()
         return started
 
     def test_github_hosted_runners_only_run_the_official_checkout(self):
         for environment in ("github-hosted", ""):
             with self.subTest(environment=environment):
                 self.assertEqual(self.active_steps(runner(environment)), ["checkout"])
+                self.assertEqual(self.active_steps(runner(environment), cloned=True), ["checkout"])
 
     def test_self_hosted_linux_runs_cachew_by_default(self):
         self.assertEqual(self.active_steps(runner("self-hosted")), ["session", "prefetch", "checkout", "configure"])
+
+    def test_official_checkout_runs_only_when_cachew_did_not_check_out(self):
+        self.assertEqual(self.active_steps(runner("self-hosted"), cloned=True), ["session", "prefetch", "configure"])
 
     def test_opt_out_and_unsupported_platforms_are_no_ops(self):
         for context in (
@@ -108,15 +120,32 @@ class RunnerGateTests(unittest.TestCase):
             self.active_steps(runner("github-hosted", cachew="true")), ["session", "prefetch", "checkout", "configure"]
         )
 
-    def test_official_checkout_is_unconditional_and_unmodified(self):
-        self.assertNotIn("if", self.checkout)
+    def test_official_checkout_is_unmodified(self):
+        self.assertEqual(self.checkout["if"], "steps.prefetch.outputs.prefetched != 'true'")
         self.assertNotIn("\n      env:", self.checkout["raw"])
         self.assertIn("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd", self.checkout["uses"])
 
     def test_outputs_default_to_false_when_cachew_is_skipped(self):
-        text = ACTION.read_text()
-        self.assertIn("value: ${{ steps.configure.outputs.configured || 'false' }}", text)
-        self.assertIn("value: ${{ steps.prefetch.outputs.prefetched || 'false' }}", text)
+        self.assertEqual(output("cachew-configured"), "${{ steps.configure.outputs.configured || 'false' }}")
+        self.assertEqual(output("cachew-prefetched"), "${{ steps.prefetch.outputs.prefetched || 'false' }}")
+
+    def test_ref_and_commit_come_from_whichever_step_checked_out(self):
+        for name in ("ref", "commit"):
+            cachew = {
+                "steps.prefetch.outputs.prefetched": "true",
+                f"steps.prefetch.outputs.{name}": "from-cachew",
+            }
+            fallback = {
+                "steps.prefetch.outputs.prefetched": "false",
+                f"steps.prefetch.outputs.{name}": "unused",
+                f"steps.checkout.outputs.{name}": "from-checkout",
+            }
+            with self.subTest(name=name):
+                self.assertEqual(value(output(name), cachew), "from-cachew")
+                self.assertEqual(value(output(name), fallback), "from-checkout")
+                self.assertEqual(value(output(name), {f"steps.checkout.outputs.{name}": "hosted"}), "hosted")
+        # SHA input: checkout reports an empty ref, and so does cachew.
+        self.assertEqual(value(output("ref"), {"steps.prefetch.outputs.prefetched": "true"}), "")
 
     def test_action_needs_no_pin_besides_the_consumers_pin(self):
         # Everything runs from the action's own directory; the only remote

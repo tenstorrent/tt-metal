@@ -1,19 +1,24 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Best-effort object seeding. Final checkout and credential cleanup belong to actions/checkout."""
+"""Complete checkout from cachew, leaving the repository actions/checkout would create.
+
+Any failure removes everything this attempt created, so actions/checkout (which
+runs only then) starts from the same empty target."""
 
 import base64
 import json
 import math
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import shutil
 import signal
 import subprocess
 import tempfile
 import urllib.parse
+import uuid
 
 
 ACTION = Path(__file__).resolve().parent
@@ -30,6 +35,9 @@ TRANSPORT_ERRORS = re.compile(
 # A slow cache is fine; a stalled one is not. The wall-clock cap only guards
 # against a transfer that trickles forever just above the low-speed limit.
 HARD_DEADLINE_SECONDS = 3600
+SHA = re.compile(r"[0-9a-fA-F]{40}")
+HEADS_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
+TAGS_REFSPEC = "+refs/tags/*:refs/tags/*"
 
 
 class Bypass(Exception):
@@ -72,6 +80,11 @@ def relative_path(value):
     if "\\" in value or any(ord(c) < 32 for c in value):
         raise Bypass("unsafe repository or submodule path")
     return path
+
+
+def container_path(*parts):
+    """Node's path.posix.join, which also collapses '..' segments."""
+    return posixpath.normpath(posixpath.join("/github/workspace", *parts))
 
 
 def duration(value, maximum):
@@ -140,16 +153,43 @@ class Prefetch:
             raise Bypass("unsupported repository name")
         relative_path(repository)
         self.url = f"{self.upstream}/{repository}"
+        # The same ref and commit as actions/checkout's input helper.
         self.ref = environ.get("CACHEW_REF", "").strip()
+        self.commit = ""
         if not self.ref:
-            self.ref = environ["GITHUB_SHA"] if repository.lower() == environ["GITHUB_REPOSITORY"].lower() else "HEAD"
+            if repository.lower() == environ["GITHUB_REPOSITORY"].lower():
+                self.ref = environ.get("GITHUB_REF", "")
+                self.commit = environ.get("GITHUB_SHA", "")
+                if self.commit and self.ref and not self.ref.startswith("refs/"):
+                    self.ref = f"refs/heads/{self.ref}"
+        elif SHA.fullmatch(self.ref):
+            self.commit, self.ref = self.ref, ""
+        if self.commit and not SHA.fullmatch(self.commit):
+            raise Bypass("unsupported checkout commit")
+        self.commit = self.commit.lower()
         if self.ref.startswith(("-", "+")) or any(c.isspace() or c in ":*?[^~\\" for c in self.ref):
-            raise Bypass("unsupported prefetch ref")
+            raise Bypass("unsupported checkout ref")
         self.depth = int(environ.get("CACHEW_FETCH_DEPTH", "1") or "1")
         if self.depth < 0:
             raise Bypass("unsupported fetch depth")
         self.tags = environ.get("CACHEW_FETCH_TAGS", "false").lower() == "true"
         self.submodules = environ.get("CACHEW_SUBMODULES", "false").lower()
+        self.persist = environ.get("CACHEW_PERSIST_CREDENTIALS", "true").lower() == "true"
+        self.safe_directory = environ.get("CACHEW_SET_SAFE_DIRECTORY", "true").lower() == "true"
+        self.runner_temp = environ.get("RUNNER_TEMP", "")
+        if self.persist and not self.runner_temp:
+            raise Bypass("RUNNER_TEMP is not defined")
+        self.organization = None
+        try:
+            with open(environ["GITHUB_EVENT_PATH"]) as stream:
+                owner_id = json.load(stream)["repository"]["owner"]["id"]
+            if isinstance(owner_id, int) and not isinstance(owner_id, bool):
+                self.organization = owner_id
+        except (KeyError, TypeError, OSError, ValueError):
+            pass
+        # Unresolved, as actions/checkout writes them into persisted configuration.
+        self.workspace_path = os.path.abspath(environ["GITHUB_WORKSPACE"])
+        self.repository_path = os.path.abspath(os.path.join(self.workspace_path, environ.get("CACHEW_PATH", "")))
         workspace = Path(environ["GITHUB_WORKSPACE"]).resolve()
         target = workspace / environ.get("CACHEW_PATH", "")
         # Resolve existing ancestors before creating anything, including symlinks.
@@ -160,6 +200,12 @@ class Prefetch:
             remove_stale_stages(self.target)
         if self.target.exists() and (not self.target.is_dir() or any(self.target.iterdir())):
             raise Bypass("existing checkout uses upstream directly")
+        # Worktree commands see the caller's Git configuration, as actions/checkout's do,
+        # but can never reach the network: a missing object fails the attempt instead.
+        self.local_env = {
+            key: value for key, value in environ.items() if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+        }
+        self.local_env.update(GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="Never", GIT_LFS_SKIP_SMUDGE="1")
         self.env = dict(environ)
         for key in list(self.env):
             if key.startswith(("GIT_CONFIG_", "GIT_TRACE")) or key in (
@@ -177,7 +223,24 @@ class Prefetch:
             GIT_LFS_SKIP_SMUDGE="1",
         )
         self.token = environ.get("CACHEW_TOKEN", "")
+        self.auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
+        self.upstream_env = dict(self.env)
+        upstream_config = [
+            ("credential.helper", ""),
+            ("http.lowSpeedLimit", "1000"),
+            ("http.lowSpeedTime", str(max(1, math.ceil(self.fetch_timeout)))),
+        ]
+        if self.token:
+            upstream_config.append((f"http.{self.upstream}/.extraHeader", f"AUTHORIZATION: basic {self.auth}"))
+        self.upstream_env["GIT_CONFIG_COUNT"] = str(len(upstream_config))
+        for index, (key, value) in enumerate(upstream_config):
+            self.upstream_env[f"GIT_CONFIG_KEY_{index}"] = key
+            self.upstream_env[f"GIT_CONFIG_VALUE_{index}"] = value
         self.modules = 0
+        self.refs = {}
+        self.want = ""
+        self.checkout_target = None
+        self.credentials = None
 
     def configure_transport(self):
         """Transport settings for the selected cache only. The token is never
@@ -197,46 +260,125 @@ class Prefetch:
             self.env[f"GIT_CONFIG_KEY_{index}"] = key
             self.env[f"GIT_CONFIG_VALUE_{index}"] = value
 
-    def git(self, gitdir, *arguments):
-        command = [self.git_executable, f"--git-dir={gitdir}", *arguments]
+    def run_git(self, command, env, message, upstream=False):
         with subprocess.Popen(
-            command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
         ) as process:
             try:
                 output, errors = process.communicate(timeout=self.hard_deadline)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
-                raise Bypass("cache operation timed out", transport=True) from None
+                raise Bypass(f"{message} timed out", transport=not upstream) from None
         if process.returncode:
             # Git's diagnostics may contain credentials or untrusted server text,
             # so they are only classified, never printed.
-            raise Bypass("cache Git operation failed", transport=bool(TRANSPORT_ERRORS.search(errors or b"")))
+            transport = not upstream and bool(TRANSPORT_ERRORS.search(errors or b""))
+            raise Bypass(f"{message} failed", transport=transport)
         return output
 
-    def seed(self, gitdir, url, ref, main=False):
-        self.git(gitdir, "init", "--bare", str(gitdir))
-        self.git(gitdir, "remote", "add", "origin", url)
-        cache_url = f"{self.cache}/git/{urllib.parse.urlsplit(self.upstream).netloc}/{url[len(self.upstream) + 1:]}"
-        options = ["--force", "--no-recurse-submodules"]
-        refs = [ref]
-        if main and self.depth == 0:
-            refs.extend(("+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"))
-        elif main:
-            options.append("--tags" if self.tags else "--no-tags")
+    def git(self, gitdir, *arguments):
+        return self.run_git([self.git_executable, f"--git-dir={gitdir}", *arguments], self.env, "cache Git operation")
+
+    def local(self, *arguments, cwd=None):
+        command = [self.git_executable, "-c", "protocol.allow=never", "-C", str(cwd or self.target), *arguments]
+        return self.run_git(command, self.local_env, "local checkout")
+
+    def ls_remote(self, *arguments):
+        """The only upstream contact: names resolve there, objects come from the cache."""
+        output = self.run_git(
+            [self.git_executable, "ls-remote", *arguments], self.upstream_env, "upstream ref lookup", upstream=True
+        )
+        refs, symrefs = {}, {}
+        for line in output.decode().splitlines():
+            value, _, name = line.partition("\t")
+            if value.startswith("ref: "):
+                symrefs[name] = value[len("ref: ") :]
+            elif SHA.fullmatch(value):
+                refs[name] = value
+        return refs, symrefs
+
+    def lookup(self, ref, *options):
+        sha = self.ls_remote("--refs", *options, self.url, ref)[0].get(ref)
+        if not sha:
+            raise Bypass("ref not found upstream")
+        return sha
+
+    def resolve(self):
+        """The local refs and checkout target that actions/checkout's fetch and
+        getCheckoutInfo produce for the same input, keyed by object name."""
+        ref, commit = self.ref, self.commit
+        if not ref and not commit:
+            refs, symrefs = self.ls_remote("--symref", self.url, "HEAD")
+            ref = symrefs.get("HEAD", "")
+            if not ref.startswith("refs/heads/") or "HEAD" not in refs:
+                raise Bypass("default branch not found upstream")
+            self.ref, commit = ref, refs["HEAD"]
+        lower = ref.lower()
+        if lower.startswith("refs/heads/"):
+            branch = ref[len("refs/heads/") :]
+            commit = commit or self.lookup(ref, "--heads")
+            self.refs[f"refs/remotes/origin/{branch}"] = commit
+            self.want, self.checkout_target = commit, (branch, f"refs/remotes/origin/{branch}")
+        elif lower.startswith("refs/pull/"):
+            local = f"refs/remotes/pull/{ref[len('refs/pull/'):]}"
+            self.refs[local] = commit or self.lookup(ref)
+            self.want, self.checkout_target = self.refs[local], (local, None)
+        elif lower.startswith("refs/tags/"):
+            # Tags are fetched by name; the commit only verifies them.
+            self.refs[ref] = self.lookup(ref, "--tags")
+            self.want, self.checkout_target = self.refs[ref], (ref, None)
+        elif lower.startswith("refs/"):
+            if commit:
+                self.want, self.checkout_target = commit, (commit, None)
+            else:
+                self.refs[ref] = self.lookup(ref)
+                self.want, self.checkout_target = self.refs[ref], (ref, None)
+        elif ref:
+            # The refspecs refs/heads/<ref>* and refs/tags/<ref>*, then a branch before a tag.
+            listed = self.ls_remote("--refs", "--heads", "--tags", self.url)[0]
+            for name, sha in listed.items():
+                if name.startswith(f"refs/heads/{ref}"):
+                    self.refs[f"refs/remotes/origin/{name[len('refs/heads/'):]}"] = sha
+                elif name.startswith(f"refs/tags/{ref}") and (not self.tags or name == f"refs/tags/{ref}"):
+                    self.refs[name] = sha
+            if f"refs/remotes/origin/{ref}" in self.refs:
+                self.want = self.refs[f"refs/remotes/origin/{ref}"]
+                self.checkout_target = (ref, f"refs/remotes/origin/{ref}")
+            elif f"refs/tags/{ref}" in self.refs:
+                self.want, self.checkout_target = self.refs[f"refs/tags/{ref}"], (f"refs/tags/{ref}", None)
+            else:
+                raise Bypass("branch or tag not found upstream")
         else:
-            # A raw SHA fetch does not auto-follow tags without a destination.
-            refs = [f"{ref}:refs/cachew/gitlink"]
+            self.want, self.checkout_target = commit, (commit, None)
+        self.commit = commit
+
+    def cache_url(self, url):
+        return f"{self.cache}/git/{urllib.parse.urlsplit(self.upstream).netloc}/{url[len(self.upstream) + 1:]}"
+
+    def seed_main(self, gitdir):
+        self.git(gitdir, "init", "--bare", str(gitdir))
+        self.git(gitdir, "remote", "add", "origin", self.url)
+        cache_url = self.cache_url(self.url)
+        options = ["--force", "--no-recurse-submodules", "--no-tags"]
+        refspecs = [HEADS_REFSPEC, TAGS_REFSPEC] if self.depth == 0 else [TAGS_REFSPEC] if self.tags else []
         if self.depth:
             options.append(f"--depth={self.depth}")
         # Explicit URL, never a persisted rewrite.
-        if main and self.filter:
-            # Standard checkout passes the filter to the main repository only. Without
-            # the tip's trees and blobs, its worktree checkout would lazily fetch all of
-            # them from upstream, so seed the complete tip first; the filtered fetch then
-            # adds only history.
+        if self.filter:
+            # Standard checkout passes the filter to the main repository only. The
+            # worktree checkout cannot fetch lazily, so seed the complete tip first;
+            # the filtered fetch then adds only history.
             self.git(
-                gitdir, "fetch", "--force", "--no-recurse-submodules", "--no-tags", "--depth=1", "--", cache_url, ref
+                gitdir,
+                "fetch",
+                "--force",
+                "--no-recurse-submodules",
+                "--no-tags",
+                "--depth=1",
+                "--",
+                cache_url,
+                self.want,
             )
             # Lazy fetches belong to upstream, exactly as standard checkout configures them.
             self.git(gitdir, "config", "remote.origin.promisor", "true")
@@ -244,8 +386,9 @@ class Prefetch:
             options.append(f"--filter={self.filter}")
             if not self.depth:
                 options.append("--unshallow")
-        self.git(gitdir, "fetch", *options, "--", cache_url, *refs)
-        if main and self.filter:
+        wants = sorted({self.want, *self.refs.values()})
+        self.git(gitdir, "fetch", *options, "--", cache_url, *refspecs, *wants)
+        if self.filter:
             # A filtered fetch from a URL registers that URL as a promisor remote.
             section = f"remote.{cache_url}."
             if any(
@@ -253,11 +396,29 @@ class Prefetch:
                 for line in self.git(gitdir, "config", "--local", "--list").decode().splitlines()
             ):
                 self.git(gitdir, "config", "--remove-section", section[:-1])
-        commit = self.git(gitdir, "rev-parse", "FETCH_HEAD^{commit}").decode().strip()
-        self.git(gitdir, "update-ref", "--no-deref", "HEAD", commit)
-        if not main:
-            self.git(gitdir, "update-ref", "-d", "refs/cachew/gitlink")
+        # Upstream's answer wins over the cache's copy of the same name.
+        for name, sha in self.refs.items():
+            self.git(gitdir, "update-ref", name, sha)
+        commit = self.git(gitdir, "rev-parse", f"{self.want}^{{commit}}").decode().strip()
+        if self.commit and commit != self.commit:
+            raise Bypass("ref does not point to the expected commit")
         self.git(gitdir, "config", "core.bare", "false")
+        self.git(gitdir, "config", "core.logallrefupdates", "true")
+        return commit
+
+    def seed(self, gitdir, url, sha):
+        self.git(gitdir, "init", "--bare", str(gitdir))
+        self.git(gitdir, "remote", "add", "origin", url)
+        options = ["--force", "--no-recurse-submodules"]
+        if self.depth:
+            options.append(f"--depth={self.depth}")
+        # A raw SHA fetch does not auto-follow tags without a destination.
+        self.git(gitdir, "fetch", *options, "--", self.cache_url(url), f"{sha}:refs/cachew/gitlink")
+        commit = self.git(gitdir, "rev-parse", "refs/cachew/gitlink^{commit}").decode().strip()
+        self.git(gitdir, "update-ref", "--no-deref", "HEAD", commit)
+        self.git(gitdir, "update-ref", "-d", "refs/cachew/gitlink")
+        self.git(gitdir, "config", "core.bare", "false")
+        self.git(gitdir, "config", "core.logallrefupdates", "true")
         return commit
 
     def seed_children(self, gitdir, url, commit, level=0):
@@ -338,18 +499,104 @@ class Prefetch:
                 return
         raise Bypass("cache liveness failed")
 
+    def persist_credentials(self):
+        """actions/checkout's persisted token layout: a RUNNER_TEMP credentials file
+        included only for this repository's Git directories, host and container paths."""
+        self.credentials = os.path.join(self.runner_temp, f"git-credentials-{uuid.uuid4()}.config")
+        placeholder = "AUTHORIZATION: basic ***"
+        # The token never appears in a command line.
+        self.local("config", "--file", self.credentials, f"http.{self.upstream}/.extraheader", placeholder)
+        content = Path(self.credentials).read_text()
+        if content.count(placeholder) != 1:
+            raise Bypass("unable to write checkout credentials")
+        Path(self.credentials).write_text(content.replace(placeholder, f"AUTHORIZATION: basic {self.auth}"))
+        container_credentials = f"/github/runner_temp/{os.path.basename(self.credentials)}"
+        gitdir = f"{self.repository_path}/.git"
+        relative = os.path.relpath(self.repository_path, self.workspace_path)
+        container_gitdir = container_path(relative, ".git")
+        for key, value in (
+            (f"includeIf.gitdir:{gitdir}.path", self.credentials),
+            (f"includeIf.gitdir:{gitdir}/worktrees/*.path", self.credentials),
+            (f"includeIf.gitdir:{container_gitdir}.path", container_credentials),
+            (f"includeIf.gitdir:{container_gitdir}/worktrees/*.path", container_credentials),
+        ):
+            self.local("config", "--local", key, value)
+
+    def persist_submodule_credentials(self, recursive):
+        container_credentials = f"/github/runner_temp/{os.path.basename(self.credentials)}"
+        listed = self.local(
+            "submodule",
+            "foreach",
+            *recursive,
+            "git config --local --show-origin --name-only --get-regexp remote.origin.url",
+        ).decode()
+        for config in re.findall(r"^file:([^\t]+)\tremote\.origin\.url", listed, re.M):
+            gitdir = os.path.dirname(config)
+            container = container_path(os.path.relpath(gitdir, self.workspace_path))
+            self.local("config", "--file", config, f"includeIf.gitdir:{gitdir}.path", self.credentials)
+            self.local("config", "--file", config, f"includeIf.gitdir:{container}.path", container_credentials)
+        rewrites = [f"git@{urllib.parse.urlsplit(self.upstream).hostname}:"]
+        if self.organization is not None:
+            rewrites.append(f"org-{self.organization}@github.com:")
+        for rewrite in rewrites:
+            command = f"git config --local --add 'url.{self.upstream}/.insteadOf' '{rewrite}'"
+            self.local("submodule", "foreach", *recursive, command)
+
+    def finish(self):
+        """actions/checkout's steps after its fetch, offline."""
+        if self.safe_directory:
+            # GIT_CONFIG_GLOBAL is the session's checkout.config; activation keeps the entry.
+            self.local("config", "--global", "--add", "safe.directory", self.repository_path)
+        self.local("config", "--local", "gc.auto", "0")
+        if self.persist:
+            self.persist_credentials()
+        self.local("sparse-checkout", "disable")
+        # Disabling leaves this behind even in a pristine repository; checkout removes it too.
+        if self.local("config", "--local", "--get", "--default=", "extensions.worktreeConfig").strip():
+            self.local("config", "--local", "--unset-all", "extensions.worktreeConfig")
+        branch, start = self.checkout_target
+        self.local("checkout", "--force", *(("-B", branch, start) if start else (branch,)))
+        if self.submodules in ("true", "recursive"):
+            recursive = ["--recursive"] if self.submodules == "recursive" else []
+            depth = [f"--depth={self.depth}"] if self.depth else []
+            self.local("submodule", "sync", *recursive)
+            self.local("submodule", "update", "--init", "--force", *depth, *recursive)
+            self.local("submodule", "foreach", *recursive, "git config --local gc.auto 0")
+            if self.persist:
+                self.persist_submodule_credentials(recursive)
+        return self.local("log", "-1", "--format=%H").decode().strip()
+
+    def discard(self):
+        """Leave the empty target actions/checkout would have found."""
+        if self.credentials:
+            Path(self.credentials).unlink(missing_ok=True)
+        if not self.target.is_dir():
+            return
+        for entry in self.target.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+
     def run(self):
         self.target.mkdir(parents=True, exist_ok=True)
-        # Stage on the target filesystem; publish only a complete object seed.
-        with tempfile.TemporaryDirectory(prefix=STAGE_PREFIX, dir=self.target) as stage:
-            gitdir = Path(stage) / ".git"
-            commit = self.seed(gitdir, self.url, self.ref, main=True)
-            self.seed_children(gitdir, self.url, commit)
-            gitdir.rename(self.target / ".git")
+        try:
+            self.resolve()
+            # Stage on the target filesystem; publish only a complete object seed.
+            with tempfile.TemporaryDirectory(prefix=STAGE_PREFIX, dir=self.target) as stage:
+                gitdir = Path(stage) / ".git"
+                commit = self.seed_main(gitdir)
+                self.seed_children(gitdir, self.url, commit)
+                gitdir.rename(self.target / ".git")
+            return self.finish()
+        except BaseException:
+            self.discard()
+            raise
 
 
 def main():
     prefetched = False
+    outputs = {}
     # unknown: no probe happened, so activation probes for itself.
     # true: a trusted cache answered; later per-command failures fall back individually.
     # false: the cache endpoint itself failed, so later dependencies skip it.
@@ -365,21 +612,25 @@ def main():
         attempt.probe()
         available = "true"
         selected = attempt.cache
-        attempt.run()
+        commit = attempt.run()
         prefetched = True
-        print("Cachew object prefetch complete; continuing with upstream checkout.")
+        # The same outputs as actions/checkout, which does not run.
+        outputs = {"ref": attempt.ref, "commit": commit}
+        print(f"Checked out {commit} from cachew; upstream checkout is not needed.")
     except Bypass as error:
         if error.transport:
             available = "false"
-        print(f"Cachew prefetch bypassed: {error}. Continuing with upstream checkout.")
+        print(f"Cachew checkout bypassed: {error}. Continuing with upstream checkout.")
     except Exception:
         available = "false"
-        print("Cachew prefetch unavailable. Continuing immediately with upstream checkout.")
+        print("Cachew checkout unavailable. Continuing immediately with upstream checkout.")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a") as stream:
             stream.write(f"prefetched={str(prefetched).lower()}\n")
             stream.write(f"available={available}\n")
             stream.write(f"cache-url={selected}\n")
+            for key, value in outputs.items():
+                stream.write(f"{key}={value}\n")
 
 
 if __name__ == "__main__":

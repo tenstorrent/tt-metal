@@ -147,9 +147,12 @@ class GitServer:
                     GIT_CONFIG_GLOBAL=os.devnull,
                     GIT_CONFIG_NOSYSTEM="1",
                     # GitHub and cachew both serve partial-clone filters.
-                    GIT_CONFIG_COUNT="1",
+                    GIT_CONFIG_COUNT="2",
                     GIT_CONFIG_KEY_0="uploadpack.allowFilter",
                     GIT_CONFIG_VALUE_0="true",
+                    # Lazy fetches ask for unadvertised objects, which GitHub serves.
+                    GIT_CONFIG_KEY_1="uploadpack.allowAnySHA1InWant",
+                    GIT_CONFIG_VALUE_1="true",
                 )
                 response = subprocess.check_output(
                     [owner.real_git, "http-backend"], input=body, env=env, stderr=subprocess.PIPE
@@ -234,8 +237,10 @@ class PrefetchTests(unittest.TestCase):
             CACHEW_CACHEW_HEALTH_TIMEOUT="0.1",
             CACHEW_CACHEW_FETCH_TIMEOUT="5",
             CACHEW_REPOSITORY="org/main",
-            CACHEW_REF="main",
+            CACHEW_REF="",
             CACHEW_PATH="checkout",
+            CACHEW_PERSIST_CREDENTIALS="true",
+            CACHEW_SET_SAFE_DIRECTORY="true",
             CACHEW_FETCH_DEPTH="1",
             CACHEW_FETCH_TAGS="true",
             CACHEW_SUBMODULES="recursive",
@@ -246,7 +251,9 @@ class PrefetchTests(unittest.TestCase):
         )
         self.env.pop("GIT_CONFIG_GLOBAL", None)
         (self.home / ".gitconfig").write_text("[user]\n\tname = Fixture\n\temail = fixture@example.com\n")
-        (self.root / "event.json").write_text(json.dumps({"repository": {"default_branch": "main"}}))
+        (self.root / "event.json").write_text(
+            json.dumps({"repository": {"default_branch": "main", "owner": {"id": 1234}}})
+        )
         for name in ("output", "state", "env", "path"):
             (self.root / name).touch()
         grand = self.repository("grand")
@@ -303,21 +310,25 @@ class PrefetchTests(unittest.TestCase):
             self.assertNotIn(encoded, data)
             self.assertNotIn(self.cache.url.encode(), data)
 
-    def checkout(self, **inputs):
-        env = dict(self.env)
-        for name, value in {
-            "repository": "org/main",
+    def checkout_inputs(self, **inputs):
+        return {
+            "repository": self.env["CACHEW_REPOSITORY"],
             "ref": self.env["CACHEW_REF"],
             "token": TOKEN,
             "path": "checkout",
             "fetch-depth": self.env["CACHEW_FETCH_DEPTH"],
             "fetch-tags": self.env["CACHEW_FETCH_TAGS"],
             "submodules": self.env["CACHEW_SUBMODULES"],
+            "filter": self.env.get("CACHEW_FILTER", ""),
             "clean": "true",
-            "persist-credentials": "true",
-            "set-safe-directory": "false",
+            "persist-credentials": self.env["CACHEW_PERSIST_CREDENTIALS"],
+            "set-safe-directory": self.env["CACHEW_SET_SAFE_DIRECTORY"],
             **inputs,
-        }.items():
+        }
+
+    def checkout(self, **inputs):
+        env = dict(self.env)
+        for name, value in self.checkout_inputs(**inputs).items():
             env["INPUT_" + name.upper()] = value
         before = list(self.cache.requests)
         result = subprocess.run(
@@ -341,10 +352,142 @@ class PrefetchTests(unittest.TestCase):
                 self.assertNotIn(TOKEN.encode(), path.read_bytes())
                 self.assertNotIn(base64.b64encode(f"x-access-token:{TOKEN}".encode()), path.read_bytes())
 
-    def test_success_seeds_exact_recursive_commits_without_persisting_transport(self):
+    def snapshot(self, target, workspace, outputs):
+        """Everything actions/checkout leaves behind that later steps can observe."""
+
+        def normalize(text):
+            for path in (str(workspace), os.path.realpath(workspace)):
+                text = text.replace(path, "<workspace>")
+            for path in (str(self.runtime), os.path.realpath(self.runtime)):
+                text = text.replace(path, "<temp>")
+            return re.sub(r"git-credentials-[0-9a-f-]{36}\.config", "git-credentials-<uuid>.config", text)
+
+        def run(*arguments):
+            return git(target, *arguments, env=self.env)
+
+        def config(*arguments):
+            return sorted(normalize(run(*arguments, "config", "--local", "--list")).splitlines())
+
+        symbolic = subprocess.run(
+            ["git", "-C", str(target), "symbolic-ref", "-q", "HEAD"], env=self.env, capture_output=True, text=True
+        ).stdout.strip()
+        includes = [line.split("=", 1)[1] for line in run("config", "--local", "--list").splitlines()]
+        credentials = sorted({Path(path).read_text() for path in includes if path.startswith(str(self.runtime))})
+        modules = {}
+        if (target / ".gitmodules").exists() and self.env["CACHEW_SUBMODULES"] != "false":
+            for line in run("submodule", "status", "--recursive").splitlines():
+                if line.startswith("-"):
+                    continue
+                path = line.split()[1]
+                modules[path] = {
+                    # Checkout clones each submodule's default branch from upstream: a
+                    # tracking branch and, when shallow, a single-branch refspec. Cachew
+                    # fetches only the gitlink and keeps the default refspec.
+                    "config": [
+                        line for line in config("-C", path) if not line.startswith(("branch.", "remote.origin.fetch="))
+                    ],
+                    "shallow": run("-C", path, "rev-parse", "--is-shallow-repository"),
+                    "head": run("-C", path, "rev-parse", "HEAD"),
+                }
+        return {
+            "head": run("rev-parse", "HEAD"),
+            "symbolic": symbolic,
+            "refs": run("for-each-ref", "--format=%(refname) %(objectname)"),
+            "shallow": sorted((target / ".git/shallow").read_text().split())
+            if (target / ".git/shallow").exists()
+            else [],
+            "config": config(),
+            "index": run("ls-files", "-s"),
+            "status": run("status", "--porcelain", "--ignore-submodules=none"),
+            "submodules": run("submodule", "status", "--recursive") if modules else "",
+            "modules": modules,
+            "credentials": [normalize(text) for text in credentials],
+            "outputs": {key: outputs.get(key) for key in ("ref", "commit")},
+        }
+
+    def reference(self):
+        """The pinned official checkout of the same inputs, in its own workspace."""
+        workspace = self.root / "reference"
+        shutil.rmtree(workspace, ignore_errors=True)
+        workspace.mkdir()
+        output = self.root / "reference-output"
+        output.write_text("")
+        env = dict(self.env, GITHUB_WORKSPACE=str(workspace), GITHUB_OUTPUT=str(output))
+        env["GITHUB_STATE"] = str(self.root / "reference-state")
+        (self.root / "reference-state").write_text("")
+        for name, value in self.checkout_inputs().items():
+            env["INPUT_" + name.upper()] = value
+        before = list(self.cache.requests)
+        result = subprocess.run(
+            ["node", CHECKOUT_JS], cwd=workspace, env=env, capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.cache.requests, before)
+        return self.snapshot(workspace / "checkout", workspace, runner_file(output))
+
+    def assert_matches_checkout(self, upstream_lookups):
+        (self.root / "output").write_text("")
+        self.upstream.requests.clear()
+        self.assertTrue(self.attempt())
+        self.assertEqual(self.upstream.discoveries(), upstream_lookups)
+        ours = self.snapshot(self.target, self.workspace, self.output())
+        self.assertEqual(ours, self.reference())
+        self.assert_no_cache_credentials()
+        return ours
+
+    @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
+    def test_clone_matches_pinned_checkout(self):
+        source = self.project_root / "org/main"
+        git(source, "update-ref", "refs/pull/7/merge", self.sha)
+        old = self.sha
+        self.update_main()
+        git(source, "tag", "-a", "-m", "annotated", "v2.0.0", env=self.env)
+        cases = {
+            "push event SHA": dict(CACHEW_REF=""),
+            "unqualified branch with tags": dict(CACHEW_REF="main", CACHEW_FETCH_TAGS="true"),
+            "unqualified tag": dict(CACHEW_REF="v1.0.0", CACHEW_FETCH_TAGS="false"),
+            "qualified branch, full history": dict(CACHEW_REF="refs/heads/main", CACHEW_FETCH_DEPTH="0"),
+            "annotated tag event": dict(CACHEW_REF="", GITHUB_REF="refs/tags/v2.0.0"),
+            "lightweight tag, full history": dict(CACHEW_REF="refs/tags/v1.0.0", CACHEW_FETCH_DEPTH="0"),
+            "explicit SHA, direct submodules, no credentials": dict(
+                CACHEW_REF=old, CACHEW_SUBMODULES="true", CACHEW_PERSIST_CREDENTIALS="false"
+            ),
+            "pull request merge ref": dict(CACHEW_REF="", GITHUB_REF="refs/pull/7/merge", GITHUB_SHA=old),
+            "filtered history": dict(CACHEW_REF="", CACHEW_FILTER="tree:0"),
+            "filtered full history": dict(CACHEW_REF="main", CACHEW_FILTER="blob:none", CACHEW_FETCH_DEPTH="0"),
+        }
+        names = ("main", "v1.0.0", "refs/heads/main", "refs/tags/v1.0.0")
+        base = dict(self.env)
+        for case, values in cases.items():
+            with self.subTest(case=case):
+                self.env = {**base, "CACHEW_FETCH_DEPTH": "500", "CACHEW_FETCH_TAGS": "false", **values}
+                shutil.rmtree(self.target, ignore_errors=True)
+                self.cache.requests.clear()
+                by_name = self.env["CACHEW_REF"] in names or (
+                    not self.env["CACHEW_REF"] and self.env["GITHUB_REF"].startswith("refs/tags/")
+                )
+                # Names cost one upstream ls-remote; SHAs never contact upstream.
+                self.assert_matches_checkout(["/org/main/info/refs"] if by_name else [])
+
+    def test_filtered_clone_is_offline_beyond_the_cache(self):
+        self.update_main()
+        self.env.update(CACHEW_REF="", CACHEW_FILTER="tree:0")
+        self.upstream.fail_repo = "main"
+        self.assertTrue(self.attempt())
+        self.assertEqual((self.target / "content.txt").read_text(), "updated main")
+        self.assertEqual((self.target / "deps/child/deep/grand/content.txt").read_text(), "grand")
+        self.assertEqual(self.upstream.requests, [])
+
+    def test_success_checks_out_recursively_from_the_cache_only(self):
         self.assertTrue(self.attempt())
         self.assert_single_cache_attempts(["main", "child", "grand"])
+        self.assertEqual(self.upstream.requests, [])
         self.assertEqual(git(self.target, "rev-parse", "HEAD"), self.sha)
+        self.assertEqual(git(self.target, "symbolic-ref", "HEAD"), "refs/heads/main")
+        self.assertEqual(git(self.target, "status", "--porcelain", "--ignore-submodules=none"), "")
+        self.assertEqual((self.target / "deps/child/deep/grand/content.txt").read_text(), "grand")
+        self.assertEqual(self.output()["commit"], self.sha)
+        self.assertEqual(self.output()["ref"], "refs/heads/main")
         self.assertTrue((self.target / ".git/modules/child-name/modules/nested-name/objects").is_dir())
         self.assertEqual(git(self.target, "remote", "get-url", "origin"), self.upstream.url + "/org/main")
         self.assertEqual(
@@ -389,26 +532,6 @@ class PrefetchTests(unittest.TestCase):
         self.assertEqual(git(self.target, "rev-parse", "HEAD"), self.sha)
         self.assertEqual(git(self.target, "rev-parse", "refs/remotes/origin/another-branch"), other)
         self.assertEqual(git(self.target, "rev-parse", "refs/tags/other-tag"), other)
-        self.assert_single_cache_attempts(["main", "child", "grand"])
-
-    @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
-    def test_pinned_checkout_reuses_all_objects_and_cleans_up_auth(self):
-        self.assertTrue(self.attempt())
-
-        def objects():
-            return {
-                p: (p.stat().st_ino, p.stat().st_size)
-                for p in self.target.rglob("*")
-                if p.is_file() and "objects" in p.parts
-            }
-
-        seeded_objects = objects()
-        self.assertTrue(seeded_objects)
-        self.assertEqual(len(list(self.target.rglob("objects"))), 3)
-        self.upstream.block_submodules = True
-        self.checkout()
-        self.assertEqual(seeded_objects, objects())
-        self.assertTrue(all("/org/main/" in path for _, path, _ in self.upstream.requests))
         self.assert_single_cache_attempts(["main", "child", "grand"])
 
     @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
@@ -542,23 +665,15 @@ class PrefetchTests(unittest.TestCase):
         self.assertFalse((self.home / "escape").exists())
         self.assertEqual(self.cache.requests, [])
 
-    @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
-    def test_full_history_tag_keeps_official_semantics(self):
-        self.env["CACHEW_REF"] = "refs/tags/v1.0.0"
-        self.env["CACHEW_FETCH_DEPTH"] = "0"
-        self.assertTrue(self.attempt())
-        self.checkout()
-        self.assertEqual(git(self.target, "rev-parse", "--is-shallow-repository"), "false")
-        self.assertEqual(git(self.target, "describe", "--tags"), "v1.0.0")
-
-    @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
     def test_explicit_sha_and_direct_submodules_at_depth_500(self):
         self.env.update(CACHEW_REF=self.sha, CACHEW_SUBMODULES="true", CACHEW_FETCH_DEPTH="500")
         self.assertTrue(self.attempt())
         self.assert_single_cache_attempts(["main", "child"])
-        self.checkout(**{"persist-credentials": "false"})
+        self.assertEqual(self.upstream.requests, [])
         self.assertEqual((self.target / "deps/child/content.txt").read_text(), "child")
         self.assertFalse((self.target / "deps/child/deep/grand/content.txt").exists())
+        self.assertEqual(self.output()["ref"], "")
+        self.assertEqual(git(self.target, "rev-parse", "HEAD"), self.sha)
 
     def update_main(self):
         source = self.project_root / "org/main"
@@ -602,33 +717,74 @@ class PrefetchTests(unittest.TestCase):
             git(self.target, "rev-parse", "refs/tags/v1.0.0^{commit}"), git(self.target, "rev-parse", "HEAD~1")
         )
 
-    @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
-    def test_pinned_filtered_checkout_reuses_seed_without_lazy_upstream_fetches(self):
+    def test_upstream_name_lookup_uses_the_token_and_failure_falls_back(self):
+        expected = "basic " + base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode()
+        self.upstream.required_auth["main"] = expected
+        self.env["CACHEW_REF"] = "main"
+        self.assertTrue(self.attempt())
+        self.assertEqual(git(self.target, "symbolic-ref", "HEAD"), "refs/heads/main")
+        self.assertEqual(self.output()["ref"], "main")
+        shutil.rmtree(self.target)
+        self.cache.requests.clear()
+        self.env["CACHEW_TOKEN"] = "wrong"
+        self.assertFalse(self.attempt())
+        # A private repository's answer is not a cache outage.
+        self.assertEqual(self.output()["available"], "true")
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual(self.cache.discoveries(), [])
+
+    def test_missing_ref_upstream_falls_back(self):
+        self.env["CACHEW_REF"] = "no-such-branch"
+        self.assertFalse(self.attempt())
+        self.assertEqual(list(self.target.iterdir()), [])
+
+    def test_moved_tag_is_rejected_like_checkout(self):
+        old = self.sha
         self.update_main()
-        self.env["CACHEW_FILTER"] = "tree:0"
+        self.env.update(CACHEW_REF="", GITHUB_REF="refs/tags/v1.0.0", GITHUB_SHA=self.sha)
+        self.assertFalse(self.attempt())
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.env["GITHUB_SHA"] = old
         self.assertTrue(self.attempt())
+        self.assertEqual(git(self.target, "rev-parse", "HEAD"), old)
 
-        def objects():
-            listed = git(self.target, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)")
-            return dict(line.split() for line in listed.splitlines())
+    def test_default_branch_of_another_repository(self):
+        self.env.update(CACHEW_REPOSITORY="org/child", CACHEW_REF="")
+        self.assertTrue(self.attempt())
+        self.assertEqual(self.upstream.discoveries(), ["/org/child/info/refs"])
+        self.assertEqual(git(self.target, "symbolic-ref", "HEAD"), "refs/heads/main")
+        self.assertEqual(self.output()["ref"], "refs/heads/main")
+        self.assertEqual((self.target / "deep/grand/content.txt").read_text(), "grand")
 
-        seeded = objects()
-        self.upstream.block_submodules = True
-        self.checkout(filter="tree:0")
-        self.assertEqual((self.target / "content.txt").read_text(), "updated main")
-        self.assertEqual(git(self.target, "config", "remote.origin.partialclonefilter"), "tree:0")
-        # A lazy fetch would open its own upstream connection.
-        self.assertEqual(self.upstream.discoveries(), ["/org/main/info/refs"])
-        # Negotiation may re-send the shallow tip commit; every tree and blob comes from the seed.
-        added = objects().items() - seeded.items()
-        self.assertLessEqual({kind for _, kind in added}, {"commit", "tag"})
+    def test_missing_submodule_object_fails_offline_and_discards(self):
+        # Without the seeded submodule repository, `submodule update` would clone it upstream.
+        with patch.object(prefetch.Prefetch, "seed_children", lambda *_: None):
+            self.assertFalse(self.attempt())
+        self.assertEqual(self.upstream.requests, [])
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual([p for p in self.runtime.iterdir() if p.name.startswith("git-credentials-")], [])
 
     @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
-    def test_pull_request_merge_ref_keeps_official_semantics(self):
-        git(self.project_root / "org/main", "update-ref", "refs/pull/7/merge", self.sha)
-        self.env.update(CACHEW_REF="refs/pull/7/merge", GITHUB_REF="refs/pull/7/merge")
-        self.assertTrue(self.attempt())
+    def test_late_failure_discards_everything_for_the_fallback_checkout(self):
+        finish = prefetch.Prefetch.finish
+
+        def failing(attempt):
+            finish(attempt)
+            raise prefetch.Bypass("injected")
+
+        with patch.object(prefetch.Prefetch, "finish", failing):
+            self.assertFalse(self.attempt())
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual(list(self.runtime.iterdir()), [])
         self.checkout()
+
+    def test_safe_directory_is_written_to_the_checkout_global_config(self):
+        global_config = self.root / "checkout.config"
+        global_config.write_text("")
+        self.env["GIT_CONFIG_GLOBAL"] = str(global_config)
+        self.assertTrue(self.attempt())
+        values = git(self.root, "config", "--file", str(global_config), "--get-all", "safe.directory")
+        self.assertEqual(values, str(self.target))
 
     def test_default_event_sha_without_submodules(self):
         self.env.update(CACHEW_REF="", CACHEW_SUBMODULES="false", CACHEW_FETCH_TAGS="false")
@@ -642,6 +798,7 @@ class PrefetchTests(unittest.TestCase):
         git(repository, "config", "-f", ".gitmodules", "submodule.child-name.path", "../escape")
         git(repository, "add", ".gitmodules", env=self.env)
         git(repository, "commit", "-m", "unsafe path", env=self.env)
+        self.env["CACHEW_REF"] = "main"
         self.assertFalse(self.attempt())
         self.assert_single_cache_attempts(["main"])
         self.assertEqual(list(self.target.iterdir()), [])
@@ -739,8 +896,12 @@ class PrefetchTests(unittest.TestCase):
         for name in names:
             self.assertIn(f"{name}: ${{{{ inputs.{name} }}}}", forwarding)
         self.assertIn("continue-on-error: true", action)
-        self.assertIn("value: ${{ steps.checkout.outputs.ref }}", action)
-        self.assertIn("value: ${{ steps.checkout.outputs.commit }}", action)
+        for name in ("ref", "commit"):
+            self.assertIn(
+                f"value: ${{{{ steps.prefetch.outputs.prefetched == 'true' && steps.prefetch.outputs.{name} "
+                f"|| steps.checkout.outputs.{name} }}}}",
+                action,
+            )
         self.assertIn("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd", action)
 
 
