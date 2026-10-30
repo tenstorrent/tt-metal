@@ -237,6 +237,69 @@ def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layou
     assert mesh_device.num_program_cache_entries() == cache_entries_before + 1
 
 
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (1, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"), id="1x1"
+        ),
+    ],
+    indirect=True,
+)
+def test_zero_padded_kv_cache_single_device_metadata_mixed_memory(mesh_device):
+    """Single-chip metadata (tensor) path with slot_idx in L1 and valid_global in DRAM. Each metadata
+    tensor has its own accessor and buffer binding, so their memory configs may differ. Two calls on one
+    cached program with freshly allocated metadata tensors and different slots: each must zero its own
+    window, which needs the bindings refreshed on the cache hit."""
+    sp_axis = 0
+    chunk_size_global, seq_len_cache, num_users = 256, 512, 2
+    cache = _init_cache_filled_with_ones(
+        mesh_device,
+        head_dim=64,
+        seq_len_cache=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        sp_axis=sp_axis,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        num_users=num_users,
+    )
+
+    def scalar_tensor(value, memory_config):
+        return ttnn.from_torch(
+            torch.tensor([[[[value]]]], dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    windows = {}
+    for call, (slot_idx, valid_global) in enumerate([(0, 40), (1, 300)]):
+        slot_t = scalar_tensor(slot_idx, ttnn.L1_MEMORY_CONFIG)
+        valid_t = scalar_tensor(valid_global, ttnn.DRAM_MEMORY_CONFIG)
+        entries = mesh_device.num_program_cache_entries()
+        ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+            cache, slot_t, valid_t, 0, 1, chunk_size_global, sp_axis, 128
+        )
+        if call == 1:
+            assert mesh_device.num_program_cache_entries() == entries, "second call should hit the cached program"
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(valid_t)
+        windows[(slot_idx, 0)] = (valid_global, math.ceil(valid_global / 128) * 128)
+    ttnn.synchronize_device(mesh_device)
+
+    _assert_cache_windows(
+        cache,
+        mesh_device,
+        chunk_size_global=chunk_size_global,
+        seq_len_cache=seq_len_cache,
+        sp_axis=sp_axis,
+        num_layers=1,
+        windows=windows,
+    )
+
+
 @pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
 @pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
 @pytest.mark.parametrize("chunk_size_global,seq_len_cache,valid_global,expected_chip", _CASES, ids=_IDS)

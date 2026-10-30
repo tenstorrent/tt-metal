@@ -27,8 +27,8 @@ inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_
 //
 // The per-request `slot_idx` and `kv_actual_global` reach the kernel one of two ways, selected by the
 // `has_metadata` compile-time flag (the op sets it from whether the metadata tensors were supplied):
-//   - metadata path: read on-device from two 1-element uint32 DRAM tensors (raw addresses in common
-//     args 8 and 9) -> slot_idx = slot_idx tensor's element [0], kv_actual_global (tokens) =
+//   - metadata path: read on-device from two 1-element uint32 DRAM tensors (base addresses bound to
+//     common args 8 and 9) -> slot_idx = slot_idx tensor's element [0], kv_actual_global (tokens) =
 //     kv_actual_global tensor's element [0]. The values stay off the host dispatch path, so the op is
 //     traceable and one cached program per layer is reused across users/chunks.
 //   - scalar path: read from common runtime args 8/9 (patched on cache hits by the op's
@@ -40,9 +40,9 @@ inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_
 //
 // Compile args: [0]=cb_id_out, [1]=has_metadata, [2]=cb_id_meta, [3]=tile_height, [4]=has_valid,
 // [5]=untilize, [6]=block_pages, [7]=scaled-FP8 packing, [8]=tiled RoPE CB, [9..]=cache accessor, then (metadata path
-// only) ONE metadata accessor (the 1-element tensors share an identical layout, so the same accessor serves every
-// read). tile_height divides kv tokens into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so one kernel
-// handles both layouts.
+// only) one accessor per metadata tensor: slot_idx, kv_actual_global, then valid_global when HasValid. tile_height
+// divides kv tokens into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so one kernel handles both
+// layouts.
 //
 // The body lives in a template on `HasMeta` so the `if constexpr` below actually DISCARDS (does not
 // instantiate) the unused branch — `kernel_main` is not a template, so an `if constexpr` there would
@@ -88,22 +88,26 @@ static void run_writer() {
         // same slot with kv_actual_global. Single reserve_back/push_back (a second reserve_back on a
         // single-page CB with no intervening pop would deadlock).
         constexpr uint32_t cb_id_meta = get_compile_time_arg_val(2);
-        // ONE metadata accessor follows the cache accessor in the compile args; it serves both 1-element
-        // tensors (identical layout). Gate the offset on HasMeta so this TensorAccessorArgs<> is a
-        // *dependent* template-id: `if constexpr` only skips instantiation of the discarded branch's
-        // template-parameter-dependent constructs, so the scalar program (no metadata accessor) must
-        // not name a fixed out-of-range offset here.
-        constexpr uint32_t kMetaArgsOffset = HasMeta ? cache_args.next_compile_time_args_offset() : 0;
+        // One accessor per metadata tensor follows the cache accessor in the compile args: slot_idx,
+        // kv_actual_global, then valid_global when HasValid. Gate the offsets on HasMeta so these
+        // TensorAccessorArgs<> are *dependent* template-ids: `if constexpr` only skips instantiation of the
+        // discarded branch's template-parameter-dependent constructs, so the scalar program (no metadata
+        // accessors) must not name a fixed out-of-range offset here.
+        constexpr uint32_t kSlotArgsOffset = HasMeta ? cache_args.next_compile_time_args_offset() : 0;
+        constexpr uint32_t kKvActualArgsOffset =
+            HasMeta ? TensorAccessorArgs<kSlotArgsOffset>().next_compile_time_args_offset() : 0;
+        constexpr uint32_t kValidArgsOffset =
+            (HasMeta && HasValid) ? TensorAccessorArgs<kKvActualArgsOffset>().next_compile_time_args_offset() : 0;
         CircularBuffer cb_meta(cb_id_meta);
         cb_meta.reserve_back(1);
 
-        slot_idx = kv_cache_dataflow::read_metadata<kMetaArgsOffset>(noc, cb_meta, get_common_arg_val<uint32_t>(8));
+        slot_idx = kv_cache_dataflow::read_metadata<kSlotArgsOffset>(noc, cb_meta, get_common_arg_val<uint32_t>(8));
         kv_actual_global_t =
-            kv_cache_dataflow::read_metadata<kMetaArgsOffset>(noc, cb_meta, get_common_arg_val<uint32_t>(9)) /
+            kv_cache_dataflow::read_metadata<kKvActualArgsOffset>(noc, cb_meta, get_common_arg_val<uint32_t>(9)) /
             tile_height;
         if constexpr (HasValid) {
             valid_tokens =
-                kv_cache_dataflow::read_metadata<kMetaArgsOffset>(noc, cb_meta, get_common_arg_val<uint32_t>(10));
+                kv_cache_dataflow::read_metadata<kValidArgsOffset>(noc, cb_meta, get_common_arg_val<uint32_t>(10));
         }
         cb_meta.push_back(1);
     } else {

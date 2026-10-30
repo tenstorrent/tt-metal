@@ -244,6 +244,111 @@ def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
             logger.info(f"  [{dtype}] user {u} layer {l}: exact match")
 
 
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (1, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"), id="1x1"
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "dtype, layout",
+    [(ttnn.bfloat8_b, ttnn.TILE_LAYOUT), (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)],
+    ids=["bfp8_tile", "bf16_rm"],
+)
+def test_update_padded_kv_cache_single_device_metadata_mixed_memory_clamp(mesh_device, dtype, layout):
+    """Single-chip metadata path with the three metadata tensors in different memory (slot_idx and
+    valid_global in L1, kv_actual_global in DRAM) and a valid_global clamp. Each metadata tensor has its
+    own accessor and buffer binding, so their memory configs may differ. Two calls on one cached program
+    with freshly allocated metadata tensors: each must read its own values (the bindings are refreshed on
+    the cache hit) and write only the real rows, leaving the rest of the slab untouched."""
+    sp_axis = 0
+    tile = ttnn.TILE_SIZE
+    chunk = 4 * tile
+    cache_tokens = 2 * chunk
+    num_layers = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, None))
+
+    def to_device(rows):
+        return _make_input(rows.reshape(1, 1, chunk, KVPE_HEAD_DIM), dtype, layout, mesh_device, mapper)
+
+    def read_cache():
+        cache_host = ttnn.to_torch(kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        return cache_host.to(torch.float32).reshape(num_layers, 1, cache_tokens, KVPE_HEAD_DIM)[0, 0]
+
+    mesh_device.enable_program_cache()
+    kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=cache_tokens,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        dtype=dtype,
+        layout=layout,
+    )
+    torch.manual_seed(5)
+    # Sentinel: fill both slabs of slot 0 / layer 0 through the scalar path.
+    for slab in range(2):
+        tt_slab = to_device(torch.randn(chunk, KVPE_HEAD_DIM, dtype=torch.bfloat16))
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kv_cache,
+            tt_slab,
+            slot_idx=0,
+            layer_idx=0,
+            num_layers=num_layers,
+            kv_actual_global=slab * chunk,
+            cluster_axis=sp_axis,
+        )
+        ttnn.deallocate(tt_slab)
+    ttnn.synchronize_device(mesh_device)
+
+    def scalar_tensor(value, memory_config):
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    # (kv_actual_global, valid_global): a mid-chunk end in slab 0, then one tile into slab 1.
+    for call, (kv_actual, valid_global) in enumerate([(0, chunk - 2 * tile - 5), (chunk, chunk + tile)]):
+        before = read_cache()
+        tt_input = to_device(torch.randn(chunk, KVPE_HEAD_DIM, dtype=torch.bfloat16))
+        sent = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+        sent = sent.to(torch.float32).reshape(chunk, KVPE_HEAD_DIM)
+        slot_t = scalar_tensor(0, ttnn.L1_MEMORY_CONFIG)
+        kv_t = scalar_tensor(kv_actual, ttnn.DRAM_MEMORY_CONFIG)
+        valid_t = scalar_tensor(valid_global, ttnn.L1_MEMORY_CONFIG)
+        entries = mesh_device.num_program_cache_entries()
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kv_cache,
+            tt_input,
+            slot_t,
+            kv_t,
+            layer_idx=0,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            valid_global=valid_t,
+        )
+        if call == 1:
+            assert mesh_device.num_program_cache_entries() == entries, "second call should hit the cached program"
+        ttnn.synchronize_device(mesh_device)
+        after = read_cache()
+
+        # Real tokens are written in whole 32-token blocks; everything else keeps its old value.
+        write_end = -(-valid_global // 32) * 32
+        expected = before.clone()
+        expected[kv_actual:write_end] = sent[: write_end - kv_actual]
+        assert torch.equal(after, expected), f"call {call}: cache differs in {(after != expected).any(-1).sum()} rows"
+        for t in (tt_input, slot_t, kv_t, valid_t):
+            ttnn.deallocate(t)
+
+
 def _make_scalar_tensor(mesh_device, value):
     """Build one 1-element uint32 DRAM tensor ([1,1,1,1], ROW_MAJOR), replicated across the mesh.
     The op's per-element-tensor (traceable) path reads element [0] of one such tensor for slot_idx
