@@ -58,7 +58,7 @@ class TTMLRolloutSampler(RolloutSampler):
     ``cross_entropy_loss`` gather.
 
     Args:
-        model: A ttml ``Llama`` (e.g. ``LlamaCompositeKV``) or ``Qwen3``.
+        model: A ttml ``Llama`` or ``Qwen3``.
         tokenizer: The HuggingFace tokenizer matching ``model``.
         max_completion_length: Maximum generated tokens per completion, and
             the width of ``RolloutBatch.logprobs``.
@@ -382,7 +382,7 @@ class TTMLRolloutSampler(RolloutSampler):
                     prompt_np[b, : len(seq)] = np.asarray(seq, dtype=np.uint32)
 
                 input_tensor = self._tokens_to_tensor(prompt_np, B)
-                # Llama's forward_kv slices the KV cache to the mask width and uses the composite SDPA, so it needs a mask.
+                # Llama's forward_kv slices the KV cache to the mask width, so it needs a mask.
                 # Qwen3's prefill uses the fused SDPA, which treats None as causal.
                 prefill_mask = build_causal_mask(prefill_width, device=True) if self._kind == "llama" else None
                 logits = self._forward(input_tensor, prefill_mask, kv, new_tokens=cache_advance)

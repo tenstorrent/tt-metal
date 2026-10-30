@@ -175,9 +175,14 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(
-            q_heads, k_cache_to_process, v_cache_to_process, mask
+        # The fused SDPA needs q_seq == k_seq and a [1, 1, S, S] mask; decode uses the composite one.
+        q_seq = q_heads.shape()[2]
+        sdpa_fn = (
+            ttml.ops.attention.scaled_dot_product_attention
+            if list(mask.shape()) == [1, 1, q_seq, q_seq]
+            else ttml.ops.attention.scaled_dot_product_attention_composite
         )
+        attention = sdpa_fn(q_heads, k_cache_to_process, v_cache_to_process, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)

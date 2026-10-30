@@ -191,7 +191,7 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   `update_weights` returns.
 
 - **Q / K row order (RoPE convention).** ttml's
-  `GroupedQueryAttentionCompositeKV` applies RoPE on Meta-style
+  `GroupedQueryAttention` applies RoPE on Meta-style
   interleaved-pair rotary `(h_0, h_1), (h_2, h_3), …`;
   `safetensors_loader._unpermute_proj_rows` has already converted
   HF → Meta on load. tt-transformers' default for Llama-3.2-1B
@@ -266,8 +266,8 @@ End-to-end smoke tests (run under tt-run, not in CI):
 
 * HF reference implementation: `transformers.models.llama.modeling_llama`
   ([huggingface/transformers](https://github.com/huggingface/transformers/tree/main/src/transformers/models/llama)).
-* ttml model definition: `LlamaCompositeKV` in
-  [`ttml/trainers/grpo_trainer/llama_composite_kv.py`](../sources/ttml/ttml/trainers/grpo_trainer/llama_composite_kv.py).
+* ttml model definition: `Llama` in
+  [`ttml/models/llama/__init__.py`](../sources/ttml/ttml/models/llama/__init__.py).
 * ttml weight export: `weights_ref_hf_dict` in
   [`ttml/trainers/grpo_trainer/grpo_ttml_model.py`](../sources/ttml/ttml/trainers/grpo_trainer/grpo_ttml_model.py).
 * tt-transformers dispatcher:

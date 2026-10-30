@@ -52,7 +52,6 @@ from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.weights import load_weights_from_hf
 
 from .distributed import resolve_batch_layout
-from .llama_composite_kv import LlamaCompositeKV
 
 _SUPPORTED_KINDS = ("llama", "qwen3")
 
@@ -163,7 +162,7 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
     tf_config.vocab_size = len(tokenizer)
     llama_cfg = LlamaConfig.from_transformer_config(tf_config, len(tokenizer))
 
-    tt_model = LlamaCompositeKV(llama_cfg)
+    tt_model = Llama(llama_cfg)
 
     if device_config.enable_ddp:
         # NOTE: TP is intentionally disabled here. cross_entropy_loss assumes full-vocab logits.
