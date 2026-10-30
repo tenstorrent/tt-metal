@@ -91,7 +91,7 @@ class Gemma4ForCausalLM:
         self.prefill_slot_keys = {}
         self.next_prefill_key = 0
         self._spec_dirty = False
-        self.spec_stats = dict(propose_s=0.0, proposals=0, drafted=0, verify_s=0.0, verifies=0, verify_rows=0)
+        self.spec_stats = dict(propose_s=0.0, proposals=0, drafted=0, verify_s=0.0, verifies=0, verify_rows=0, verify_passes=0)
         self._pool_memory_interval = int(os.environ.get("GEMMA_POOL_MEMORY_SAMPLE_INTERVAL", "1"))
         if not 1 <= self._pool_memory_interval <= 65536:
             raise ValueError("GEMMA_POOL_MEMORY_SAMPLE_INTERVAL must be in 1..65536")
@@ -603,44 +603,65 @@ class Gemma4ForCausalLM:
             raise ValueError("Speculative verify samples on device; host sampling is not supported here")
         # Per-request seeds follow the plain path: seed + position of the input token (_sampling).
         params = self._sampling(sampling_params, self.max_batch_size, first.tolist(), reset_seed=True)
-        row_tokens = torch.zeros(32, dtype=torch.int64)
-        row_pos = torch.full((32,), -1, dtype=torch.int32)
-        row_slot = torch.zeros(32, dtype=torch.int32)
-        row_cand = torch.zeros(32, dtype=torch.int32)
-        row_params = {name: [params[name][0]] * 32 for name in ("top_k", "top_p", "temperature")}
-        row_params["seed"] = [0] * 32
-        where = {}
-        r = 0
-        for b in range(batch):
-            if int(first[b]) < 0:
-                continue
-            n = 1 + int(num_valid_drafts[b])
-            n = min(n, 32 - r)
-            for j in range(n):
-                row_tokens[r] = int(tokens[b, j])
-                row_pos[r] = int(start_pos[b, j])
-                row_slot[r] = b
-                row_cand[r] = j
-                for name in ("top_k", "top_p", "temperature"):
-                    row_params[name][r] = params[name][b]
-                row_params["seed"][r] = (int(params["seed"][b]) + j) % (2**31)
-                where[(b, j)] = r
-                r += 1
-            if r >= 32:
-                break
         groups = self._check_spec_groups()
-        sampled = self.generator.spec_decode(kv_cache, tokens=row_tokens, positions=row_pos, slots=row_slot,
-                                             candidates=row_cand, host_tables=tables, groups=groups,
-                                             sampling_params=row_params)
+        # Every live request needs its committed-token row and every draft the plugin counted (the accept walk reads
+        # columns 0..num_valid), so drafts are never dropped: a block wider than 32 rows (requests that joined
+        # decode after the proposal) runs as several 32-row passes, each request's candidates kept together.
+        need = [(b, 1 + int(num_valid_drafts[b])) for b in range(batch) if int(first[b]) >= 0]
+        passes, current, used = [], [], 0
+        for b, n in need:
+            if used + n > 32:
+                passes.append(current)
+                current, used = [], 0
+            current.append((b, n))
+            used += n
+        if current:
+            passes.append(current)
         ids = torch.full((batch, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
-        for (b, j), row in where.items():
-            ids[b, j] = int(sampled[row])
+        rows_used = 0
+        for members in passes:
+            row_tokens = torch.zeros(32, dtype=torch.int64)
+            row_pos = torch.full((32,), -1, dtype=torch.int32)
+            row_slot = torch.zeros(32, dtype=torch.int32)
+            row_cand = torch.zeros(32, dtype=torch.int32)
+            row_params = {name: [params[name][0]] * 32 for name in ("top_k", "top_p", "temperature")}
+            row_params["seed"] = [0] * 32
+            where = {}
+            r = 0
+            for b, n in members:
+                for j in range(n):
+                    row_tokens[r] = int(tokens[b, j])
+                    row_pos[r] = int(start_pos[b, j])
+                    row_slot[r] = b
+                    row_cand[r] = j
+                    for name in ("top_k", "top_p", "temperature"):
+                        row_params[name][r] = params[name][b]
+                    row_params["seed"][r] = (int(params["seed"][b]) + j) % (2**31)
+                    where[(b, j)] = r
+                    r += 1
+            sampled = self.generator.spec_decode(kv_cache, tokens=row_tokens, positions=row_pos, slots=row_slot,
+                                                 candidates=row_cand, host_tables=tables, groups=groups,
+                                                 sampling_params=row_params)
+            for (b, j), row in where.items():
+                ids[b, j] = int(sampled[row])
+            rows_used += r
+        self.spec_stats["verify_passes"] += len(passes)
         # The plain trace's resident inputs and sampler state are stale after a verify.
         self._spec_dirty = True
         self.spec_stats["verify_s"] += time.perf_counter() - t
         self.spec_stats["verifies"] += 1
-        self.spec_stats["verify_rows"] += r
+        self.spec_stats["verify_rows"] += rows_used
+        self.spec_stats["verify_drafts"] = self.spec_stats.get("verify_drafts", 0) + int(
+            sum(n - 1 for members in passes for _, n in members))
+        if self.spec_stats["verifies"] % 256 == 1:
+            self._log_spec_stats()
         return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
+
+    def _log_spec_stats(self):
+        stats = dict(self.spec_stats, wall_s=time.time())
+        stats.update({"timing_" + k: round(v, 4) if isinstance(v, float) else v
+                      for k, v in self.generator.spec_timing.items()})
+        print("GEMMA_SPEC_STATS " + json.dumps(stats), flush=True)
 
     def decode_forward(
         self,
@@ -675,6 +696,10 @@ class Gemma4ForCausalLM:
             reset_sampling_state = True
             reload_sampling_params = True
             self._spec_dirty = False
+        if spec_ngram_enabled():
+            self.spec_stats["plain_steps"] = self.spec_stats.get("plain_steps", 0) + 1
+            if self.spec_stats["plain_steps"] % 4096 == 1:
+                self._log_spec_stats()
         if "reset_batch" in kwargs:
             raise TypeError("decode_input_update_contract=1 requires explicit reload flags")
         if not enable_trace:

@@ -1052,6 +1052,8 @@ class Gemma4Generator:
             return self.traces[key]
         trace_entry_start = time.perf_counter()
         self._retire_traces()
+        if self.spec_groups is not None:
+            self._spec_alloc_inputs(state, self.spec_groups)
         cache_ids = tuple(id(t) for pair in state.kv for t in pair)
         table_ids = {k: id(v) for k, v in state.device_tables.items()}
         cache_buffer_ids = tuple(t.buffer_unique_id() for pair in state.kv for t in pair)
@@ -1367,6 +1369,32 @@ class Gemma4Generator:
     # layer, ~+0.9 ms at P=4 and ~+3 ms at P=8 per step); a step uses the narrowest width that holds its drafts.
     SPEC_WIDTHS = tuple(sorted({min(4, SPEC_MAX_CANDIDATES), SPEC_MAX_CANDIDATES}))
 
+    def _spec_alloc_inputs(self, state, groups):
+        """Persistent verify inputs, shared by all widths of this state (one set of host uploads per step).
+
+        Must exist before any decode trace is captured: a trace's intermediate buffers are free memory to the
+        allocator after capture, so a persistent tensor allocated later can sit inside them and be overwritten
+        whenever that trace replays (seen as a device hang when a verify read clobbered page tables).
+        """
+        shared = self.spec_inputs.get(id(state))
+        if shared is not None and shared["groups"] == groups:
+            return shared
+        if self.traces or self.spec_traces:
+            raise RuntimeError("Verify inputs must be allocated before any decode trace is captured")
+        width = state.capacity // 128
+        shared = {
+            "groups": groups,
+            "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
+            # rows: 0 positions, 1 RoPE positions, 2.. update positions of candidate 0..P_max-1
+            "packed": self._upload(torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32)),
+            "group_tables": [self._upload(torch.zeros(32, width, dtype=torch.int32)) for _ in groups],
+            "logits": self.model.tensor(torch.zeros(1, 1, 32, self.model.config.vocab_size), dim=3,
+                                        dtype=ttnn.bfloat16),
+            "last": {},
+        }
+        self.spec_inputs[id(state)] = shared
+        return shared
+
     def _spec_entry(self, state, groups, P=None):
         """Capture (once per cache state and width P) the 32-row verify model trace and its sampling trace.
 
@@ -1386,21 +1414,7 @@ class Gemma4Generator:
                 raise ValueError("Speculative trace was captured for different cache tensors or table groups")
             return entry
         start = time.perf_counter()
-        width = state.capacity // 128
-        # Inputs shared by all widths of this state (one set of host uploads per step).
-        shared = self.spec_inputs.get(id(state))
-        if shared is None or shared["groups"] != groups:
-            shared = {
-                "groups": groups,
-                "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
-                # rows: 0 positions, 1 RoPE positions, 2.. update positions of candidate 0..P_max-1
-                "packed": self._upload(torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32)),
-                "group_tables": [self._upload(torch.zeros(32, width, dtype=torch.int32)) for _ in groups],
-                "logits": self.model.tensor(torch.zeros(1, 1, 32, self.model.config.vocab_size), dim=3,
-                                            dtype=ttnn.bfloat16),
-                "last": {},
-            }
-            self.spec_inputs[id(state)] = shared
+        shared = self._spec_alloc_inputs(state, groups)
         entry = dict(shared, state=state, cache_ids=cache_ids, P=P)
         tables = {k: shared["group_tables"][g] for g, keys in enumerate(groups) for k in keys}
         packed = shared["packed"]
