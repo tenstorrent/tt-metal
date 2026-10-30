@@ -14,14 +14,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_align.hpp>
 
-#include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_expert_rows_plan.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -29,8 +26,9 @@ using namespace expert_rows_host;
 
 namespace {
 
-// The cost model. Cycles are AI clock cycles, at the clock under load (tt-smi): the live clock idles lower (800 MHz on
-// Blackhole) and would make the choice depend on what ran before.
+// The cost model of a job, by which the expert rows path picks its row tiles per job and rows_reader.cpp deals the
+// jobs to the expert groups. Cycles are AI clock cycles, at the clock under load (tt-smi): the live clock idles lower
+// (800 MHz on Blackhole) and would make the choice depend on what ran before.
 constexpr double kAiClockHzBlackhole = 1.35e9;
 constexpr double kAiClockHzWormhole = 1.0e9;
 // Peak DRAM bandwidth, decimal GB / s: Blackhole 512 (32 GB GDDR6 at 16 GT/s), Wormhole 12 x 21.5
@@ -40,22 +38,10 @@ constexpr double kDramPeakBytesPerSecondWormhole = 258e9;
 // One 32 x 32 x 32 tile matmul per fidelity phase: 32768 multiply-adds at 2048 per cycle (8x16 x 16x16,
 // tech_reports/matrix_engine/matrix_engine.md).
 constexpr double kMatmulCyclesPerFidelityPhase = 16.0;
-// Fitted to Blackhole p150b device profiles: the ring's pass of one job per ring position; writing one FP32 partial
-// tile to L1 and reading it back into DEST, and one NoC command of the writer RISC (address and issue), both at the
-// fastest row tiles per job.
-constexpr double kRingHopCycles = 350.0;
+// Fitted to Blackhole p150b device profiles: writing one FP32 partial tile to L1 and reading it back into DEST, and one
+// NoC command of the writer RISC (address and issue), both at the fastest row tiles per job.
 constexpr double kReloadTileCycles = 64.0;
 constexpr double kWriterOpCycles = 60.0;
-// rows_combine.cpp sends a device's routed rows at these rates (Blackhole p150b). FullCcl: the placement program's span
-// on device 0 over its rows' bytes (1x8 ring, Qwen3.6-like T 32 and 64 and DeepSeek-V3 T 8 per device). SingleDevice,
-// NoC writes only: its call time minus ComputeOnly's for the same cell, over the rows' bytes, 180-320 GB/s at hidden
-// size 6144-7168 (device 0 of 8-32, T 4-64).
-constexpr double kFabricCombineBytesPerSecond = 23e9;
-constexpr double kLocalCombineBytesPerSecond = 200e9;
-constexpr double kCostMargin = 0.10;           // the margin the expert rows path must predict over the ring
-constexpr uint64_t kRingSmallCbBytes = 4096;   // the ring tilize cores' count / flag CBs
-constexpr uint64_t kRingTokensPerChunk = 32;   // the ring tilize cores' input chunk
-constexpr uint64_t kRingFitMargin = 32768;     // L1 the ring-fit estimate leaves for what it does not model
 constexpr uint32_t kCombinePacketHeaders = 3;  // combine_fabric.hpp: row unicasts, the barrier's two directions
 
 double ai_clock_hz(tt::ARCH arch) { return arch == tt::ARCH::BLACKHOLE ? kAiClockHzBlackhole : kAiClockHzWormhole; }
@@ -171,7 +157,7 @@ struct CostedPlan {
 };
 
 // TT_METAL_MOE_COMPUTE_KERNEL, a test and benchmark hook: =ring forces the ring; =expert_rows forces the expert rows
-// path (over the cost model and the Wormhole gate; a call that path cannot run is refused with the reason).
+// path (over the Wormhole gate; a call that path cannot run is refused with the reason).
 enum class ForcedKernel { None, Ring, ExpertRows };
 constexpr const char* kKernelEnv = "TT_METAL_MOE_COMPUTE_KERNEL";
 constexpr const char* kRowTilesEnv = "TT_METAL_MOE_COMPUTE_ROW_TILES";
@@ -299,37 +285,6 @@ uint64_t l1_outputs_per_core(ttnn::MeshDevice& mesh_device, const std::vector<tt
         }
     }
     return bytes;
-}
-
-// The ring program's token-sized CBs on its tilize cores: the e_t lists, activation rows, the second RISC's halves of
-// both, the mapping and an input chunk. When they do not fit below moe_compute's outputs, the ring program refuses the
-// call and the caller would have to split it, so the expert rows path runs it.
-uint64_t ring_tilize_cb_bytes(
-    ttnn::MeshDevice* mesh_device,
-    const MoEComputeParams& args,
-    const MoEExpertRowsShape& shape,
-    const std::vector<tt::tt_metal::TensorSpec>& specs,
-    const MoEComputeInputs& tensor_args) {
-    const auto ring_cores = ttnn::operations::ccl::common::select_moe_compute_cores(
-        mesh_device,
-        args.num_token_parallel_cores,
-        args.num_data_parallel_cores,
-        shape.hidden_size,
-        args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{},
-        args.bh_ring_size);
-    const auto& map = tensor_args.tilize_expert_mapping_tensor;
-    const uint64_t l1_align = tt::tt_metal::hal::get_l1_alignment();
-    const uint64_t tokens = shape.tokens, local_experts = shape.local_experts;
-    const uint64_t activation_row_bytes = tt::align((2 * local_experts + 1) * kWordBytes, l1_align);
-    const uint64_t tilize_cores = std::max<size_t>(1, ring_cores.tilize_cores.size());
-    const uint64_t x_page = tensor_args.tilize_input_tensor.buffer()->aligned_page_size();
-    return local_experts * specs[kETPages].compute_page_size_bytes()                      // e_t lists
-           + tokens * activation_row_bytes                                                // activation rows
-           + tt::div_up(tokens, 2) * l1_align * local_experts                             // second RISC's e_t
-           + tt::div_up(tokens, 2) * activation_row_bytes                                 // second RISC's rows
-           + map.buffer()->num_pages() * map.buffer()->aligned_page_size()                // mapping
-           + kRingTokensPerChunk * tt::align(tt::div_up(x_page, tilize_cores), l1_align)  // input
-           + kRingSmallCbBytes;
 }
 
 // Weight-stationary jobs: the most row tiles per job that keep the weight stream the longest part of a job while the
@@ -508,35 +463,11 @@ std::optional<MoEExpertRowsParams> choose_path(
                 outputs_per_core,
                 budget));
     }
-    // Can the ring program run this call at all (ring_tilize_cb_bytes)?
-    const bool ring_fits =
-        ring_tilize_cb_bytes(mesh_device, args, shape, specs, tensor_args) + outputs_per_core + kRingFitMargin <=
-        budget;
-    // Cost model. Every path streams each touched expert's weights once per job: a job is at most 32 of its rows on the
-    // ring and with one row tile per job, at most 32 row_tiles rows with weight-stationary jobs. A bank's weights come
-    // at 1 / banks of the DRAM peak, so the busiest bank sets the stream time of a job (stream_s). The ring computes
-    // each job on one core per bank and pays a ring pass per job; the expert rows path spreads the work over
-    // readers_per_bank cores per bank and runs expert_groups groups in parallel. With the combine (SingleDevice,
-    // FullCcl) the ring overlaps it with its compute, while the expert rows path sends the rows after they exist, so
-    // that path also pays its combine: the device's rows at kFabricCombineBytesPerSecond, or
-    // kLocalCombineBytesPerSecond on SingleDevice.
-    //   t_ring = jobs(32) * (max(stream_s, ring_tiles * tile_s) + ring * hop)
-    //   t_expert_rows = max(jobs(32 row_tiles) * stream_s,
-    //                       ceil(jobs(32) / expert_groups) * (busiest * tile_s + reloads * reload))
-    //                   [+ rows * row_bytes / combine_bytes_per_s]
-    // tile_s: seconds per tile matmul (matmul_tile_cycles at the AI clock); hop and reload (kRingHopCycles,
-    // kReloadTileCycles): cycle counts at the clock; jobs(n):
-    // expected jobs of at most n rows (expected_jobs: top_k / global experts of each token); row_tiles: row tiles per
-    // job; reloads: the partial tiles a row tile of a job of several row tiles writes and reads back between chunks.
-    // The expert rows path runs only with a clear predicted margin over the ring (kCostMargin); within it the ring is
-    // kept.
-    const uint32_t hidden_tiles = shape.hidden_tiles(), intermediate_tiles = shape.intermediate_tiles();
-    const uint32_t num_shards = shard_banks.size();
-    const uint32_t w0_w1_k_rows = hidden_tiles + shape.bias_rows(), w2_k_rows = intermediate_tiles + shape.bias_rows();
+    // Every call the expert rows path can run takes it; the ring runs the rest.
     const double clock_hz = ai_clock_hz(mesh_device->arch());
     const CostModel model{
         .shape = shape,
-        .num_shards = num_shards,
+        .num_shards = static_cast<uint32_t>(shard_banks.size()),
         .arch = mesh_device->arch(),
         .tile_s = matmul_tile_cycles(args.math_fidelity) / clock_hz,
         .clock_hz = clock_hz};
@@ -547,44 +478,11 @@ std::optional<MoEExpertRowsParams> choose_path(
     if (const auto* why = std::get_if<std::string>(&chosen)) {
         return ring_with_reason(forced, *why);
     }
-    const auto& [plan, cost] = std::get<CostedPlan>(chosen);
-    const double jobs = expected_jobs(shape, expert_rows::tile_rows);
-    uint32_t ring_columns = 0;  // gate/up columns of the ring's busiest core (moe_ring_common.h)
-    for (uint32_t position = 0; position < num_shards; ++position) {
-        ring_columns = std::max(ring_columns, moe_ring::w0_w1_stored_cols(intermediate_tiles, position, num_shards));
-    }
-    const PreparedLayout prepared = prepared_layout(hidden_tiles, intermediate_tiles, shape.has_bias, num_shards);
-    // matmul tiles of the ring's busiest core per job: W0 and W1 of its columns, its W2 output groups
-    const double ring_tiles =
-        2.0 * w0_w1_k_rows * ring_columns + static_cast<double>(prepared.w2_groups.tiles()) * w2_k_rows;
-    const double t_ring =
-        jobs * (std::max(cost.stream_s, ring_tiles * model.tile_s) + num_shards * kRingHopCycles / clock_hz);
-    double t_expert_rows = cost.call_s;
-    if (args.path != MoEComputePath::ComputeOnly) {
-        const double rows =
-            static_cast<double>(shape.tokens) * shape.top_k * shape.local_experts / shape.global_experts;
-        const double combine_bytes_per_s =
-            args.path == MoEComputePath::SingleDevice ? kLocalCombineBytesPerSecond : kFabricCombineBytesPerSecond;
-        t_expert_rows += rows * shape.hidden_size * kBf16Bytes / combine_bytes_per_s;
-    }
-    if (ring_fits && t_expert_rows * (1.0 + kCostMargin) >= t_ring && forced != ForcedKernel::ExpertRows) {
-        return ring_with_reason(
-            forced,
-            fmt::format(
-                "cost model: ring {:.1f} us, expert rows {:.1f} us for {:.1f} expected jobs, no clear margin",
-                t_ring * 1e6,
-                t_expert_rows * 1e6,
-                jobs));
-    }
+    const ExpertRowsPlan& plan = std::get<CostedPlan>(chosen).plan;
     log_debug(
         tt::LogOp,
-        "moe_compute: expert rows kernel (cost model: expert rows {:.1f} us, ring {:.1f} us for {:.1f} expected jobs, "
-        "ring program {} L1; {} row tiles per job, {} readers per bank, {} expert groups of {} cores, "
+        "moe_compute: expert rows kernel ({} row tiles per job, {} readers per bank, {} expert groups of {} cores, "
         "x / intermediate slots {} / {}, x chunk {} tiles, W2 chunk {} rows, {} B CBs)",
-        t_expert_rows * 1e6,
-        t_ring * 1e6,
-        jobs,
-        ring_fits ? "fits" : "does not fit",
         plan.row_tiles,
         plan.readers_per_bank,
         plan.expert_groups,
@@ -609,7 +507,7 @@ std::optional<MoEExpertRowsParams> choose_path(
 }  // namespace
 
 // The choice is kept per call shape (moe_compute's attributes without the layer, its tensors, the device, the CB budget
-// and the test hooks): a repeated shape skips the validation, plan search and cost model.
+// and the test hooks): a repeated shape skips the validation and the plan search.
 std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
     const MoEComputeParams& args, const MoEComputeInputs& tensor_args) {
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
