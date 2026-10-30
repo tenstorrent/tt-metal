@@ -5,19 +5,15 @@ import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
     PerfRunType,
 )
 from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    LOOP_FACTOR,
-    TILE_COUNT,
-    generate_input_dim,
-)
+from test_pack_untilize import test_pack_untilize as run_pack_untilize
 
 
 @pytest.mark.perf
@@ -33,12 +29,24 @@ from helpers.test_variant_parameters import (
     ),
     full_rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     full_ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    run_types=[
+        [
+            PerfRunType.L1_TO_L1,
+            PerfRunType.PACK_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+        ]
+    ],
+    loop_factor=[32],
+    is_perf=[True],
 )
 def test_perf_pack_untilize(
     perf_report,
     formats,
     full_rt_dim,
     full_ct_dim,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
@@ -72,30 +80,17 @@ def test_perf_pack_untilize(
             block_ct_dim = candidate
             break
 
-    tile_count = full_rt_dim * full_ct_dim
     dimensions = [full_rt_dim * 32, full_ct_dim * 32]
 
-    configuration = PerfConfig(
-        "sources/pack_untilize_perf.cpp",
+    run_pack_untilize(
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
-        templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
-        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(32)],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
+        DestAccumulation.No,
+        dimensions,
+        DestSync.Half,
+        0,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        block_ct_dim=block_ct_dim,
     )
-
-    configuration.run(perf_report)
