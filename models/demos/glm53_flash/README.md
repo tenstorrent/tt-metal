@@ -145,6 +145,13 @@ requests: TTFT 5.2 s mean (unchanged), **14.1 tok/s per user, 288 tok/s output**
 per-step upload (`tests/test_decode_packed_inputs_mesh.py`). Next on this path: vLLM's async scheduling over the chain
 (the adapter's ids readback is non-blocking) and a decode step between prefill chunks (`doc/mesh/resident_decode.md`).
 
+A 1 M prompt through the API (2026-10-30, the same 1 M profile with APC on the host store, resident decode and
+async scheduling; one smoke run each): a 1 039 157-token needle prompt prefills in 64 sequence-parallel chunks of 16 K
+at 7.4-7.5 s each, **TTFT 495-498 s**, then decodes at **66 ms per token (15.1 tok/s per user)** at ~1 M positions; the
+needle 104 K tokens before the question is answered exactly (`amber-falcon-7391`, `needle1m_r6`), while one 457 K
+tokens before it (depth 0.56) is not and the model loops on its thinking preamble (`needle1m_r5`), the ~460 K
+retrieval limit measured in the harness. The chunk-end KDA snapshots to the host store cost nothing visible.
+
 The 128 K profile served the same way (192 distinct requests = 6 slots per chip under per-row prefill ownership, prefix
 cache off; 2026-10-29 14:58, one smoke run, 0 program-cache misses; 224 = 7 per chip runs out of DRAM at boot): 4 concurrent
 65 514-token prompts 4/4 (TTFT 49 / 64 / 106 / 113 s), `vllm bench` 128 x 128 at 192 concurrent requests TTFT 27.0 s mean,
