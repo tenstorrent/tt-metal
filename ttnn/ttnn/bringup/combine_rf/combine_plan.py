@@ -58,10 +58,14 @@ constexpr uint32_t N = R * C, T = N * SF * K;
 constexpr uint32_t cb_in = 0, cb_out = 1;
 // direction index (sparse_all_gather_2d DIRS): 0 X+, 1 X-, 2 Y+, 3 Y-; Y first, then X (lines)
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
+constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=))
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
-        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        if constexpr (WY) {
+            const uint32_t f2 = 2 * ((dr + R - sr) % R);  // (YT: the opposite row splits by column parity)
+            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+        }
         return dr > sr ? 2 : 3;
     }
     if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
@@ -339,10 +343,14 @@ constexpr uint32_t O_TIDX = O_NINJ + 64, O_TAB = O_TIDX + al64(ROWS_CAP * 4);
 constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
 constexpr uint32_t O_END = O_REG + al64(NG * 4);
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
+constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=))
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
-        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        if constexpr (WY) {
+            const uint32_t f2 = 2 * ((dr + R - sr) % R);  // (YT: the opposite row splits by column parity)
+            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+        }
         return dr > sr ? 2 : 3;
     }
     if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
@@ -605,10 +613,14 @@ constexpr uint32_t O_RUN = O_GS + al64(NG * 8), O_SCH = O_RUN + al64(NG * 2), O_
 constexpr uint32_t O_NACT = O_SEID + al64(N * VM), O_ORD = O_NACT + al64(N * 4), O_DYN = O_ORD + OWN * OPG;
 constexpr uint32_t O_TF = O_DYN + 4096;
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
+constexpr uint32_t YT = __YT__;  // (SPC_YTIE: sparse_combine_l1.route(ytie=))
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
-        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        if constexpr (WY) {
+            const uint32_t f2 = 2 * ((dr + R - sr) % R);  // (YT: the opposite row splits by column parity)
+            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+        }
         return dr > sr ? 2 : 3;
     }
     if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
@@ -1680,7 +1692,8 @@ def first_hop_idx(src, dst, C, R=None, wrap=(False, False)):
     sr, sc, dr, dc = src // C, src % C, dst // C, dst % C
     if sr != dr:
         if wrap[1]:
-            return 2 if 2 * ((dr - sr) % R) < R else 3
+            f2 = 2 * ((dr - sr) % R)  # (SPC_YTIE: the opposite row splits by column parity, as the planner's YT)
+            return 2 if f2 < R or (f2 == R and os.environ.get("SPC_YTIE") == "1" and (sc + dc) % 2) else 3
         return 2 if dr > sr else 3
     if wrap[0]:
         return 0 if 2 * ((dc - sc) % C) <= C else 1
@@ -1874,7 +1887,10 @@ def combine_planner_prepare(
     NG = N * EPC
     assert rows_cap % 32 == 0 and N * S * K < (1 << 16) * 64 and N <= 32 and A <= 16
     _, _, (wrap_x, wrap_y) = mesh_plan(mesh_device, L, torus)
-    wsub = lambda src: src.replace("__WX__", str(int(wrap_x))).replace("__WY__", str(int(wrap_y)))  # noqa: E731
+    yt = int(os.environ.get("SPC_YTIE") == "1")  # (the combine's probe, CombineProbes.ytie: both sides route alike)
+    wsub = lambda src: (  # noqa: E731
+        src.replace("__WX__", str(int(wrap_x))).replace("__WY__", str(int(wrap_y))).replace("__YT__", str(yt))
+    )
     shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R_m, C_m), dims=(0, 1))
     zeros = lambda w: ttnn.from_torch(  # noqa: E731
         torch.zeros(R_m, C_m, 1, w, dtype=torch.int32),

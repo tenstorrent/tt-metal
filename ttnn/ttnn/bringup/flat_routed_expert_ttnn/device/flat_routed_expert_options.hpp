@@ -16,7 +16,9 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 // every program hash, passed from Python (FlatRoutedExpert(layout=...), presets in flat_layouts.py). Every default is
 // the plan's own choice - what an unset environment gave before these were options (ENV_CLEANUP.md). -1: unset.
 // the x-ready word's byte offset in each relay's words (past the gate/up cores' freed words, which the relays zero)
-constexpr uint32_t X_READY_OFF = 2032;
+// (in the relays' words after the gate/up cores' freed words, 4 B each: a caller's persistent words need only
+// X_READY_OFF + 4 bytes a relay - 512 B, not a 2 KB tile, of persistent L1 / L1_SMALL)
+constexpr uint32_t X_READY_OFF = 496;
 
 struct FlatLayoutOptions {
     // Defaults (EXPERTS_COMBINE_CLOSEOUT.md): DRISC only - every gate/up weight from the DRAM cores, no Tensix weight

@@ -10,7 +10,7 @@ synthetic shapes."""
 
 from dataclasses import dataclass, field
 
-from models.demos.moe_block.tt.se_engine3 import ARENA_MAX
+from models.demos.moe_block.tt.se_engine3 import ARENA_MAX, dest_tiles
 
 
 @dataclass(frozen=True)
@@ -150,7 +150,7 @@ def size(shape: HeadShape, lay: HeadLayout, arena_max=ARENA_MAX, compact=None):
         NTH=shape.H // 32,
         scatter=shape.rs_dim,
         nv=shape.links,
-        pwmax=8 // lay.MT,
+        pwmax=dest_tiles() // lay.MT,
         compact=lay.compact if compact is None else compact,
     )
     cap = arena_max(lay.KB) if callable(arena_max) else arena_max

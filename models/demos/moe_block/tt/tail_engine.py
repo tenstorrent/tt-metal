@@ -36,6 +36,7 @@ import math
 import struct
 
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.combine_rf.lin2d import column_split
 
 import ttnn
@@ -871,7 +872,7 @@ class TailEngine:
         )
         # (the fence: a port's ready counter - persistent, re-armed by its one waiter. The engine cores' per-step
         # words (landed, shares in, E tiles in) + their NCRISC's call count: persistent, only counting up)
-        self.ready = ttnn.create_global_semaphore(mesh, self.port_crs, 0)
+        self.ready = persist_l1.semaphore(mesh, self.port_crs, 0)
         nw = 4 * (3 * self.NSTMAX + 1 + self.NSTMAX * GX)  # (+ the shares' words: a column a step)
         self.words = ttnn.from_torch(
             torch.zeros(GX * GY, nw, dtype=torch.int32),
@@ -880,7 +881,7 @@ class TailEngine:
             device=mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(self.crs, [1, nw], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
@@ -892,7 +893,7 @@ class TailEngine:
             device=mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(self.port_crs, [1, 4], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
@@ -951,6 +952,15 @@ class TailEngine:
         """Chip coord's program: the engine (every core of the rectangle) and its gather ports."""
         mesh, GX, GY, cx0, RT, PAIRS = self.mesh, self.GX, self.GY, self.cx0, self.RT, self.PAIRS
         ch = self.chips[coord]
+        # (this chip's port cores: the port kernels and CBs go only there - self.port_crs is the union over the chips
+        # (the allocations every chip shares), and a core that is a port on another chip only would run the port
+        # kernels with no runtime args here)
+        pcrs = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
+                for x, y in sorted({(c.x, c.y) for c in ch["ports"].values()})
+            ]
+        )
         order = ch["order"]
         b, off = int(self.arena.buffer_address()), self.off
         wa = int(self.words.buffer_address())
@@ -993,12 +1003,12 @@ class TailEngine:
         # (then the poll word, the group counts (CB 1), the shares' polled words: 16 B a (row tile, column))
         assert PSTAGE * 2048 + 64 + 64 + RT * GX * 16 <= self.arena_bytes
         d = ttnn.cb_descriptor_from_sharded_tensor(
-            0, self.arena, address_offset=0, total_size=PSTAGE * 2048, core_ranges=self.port_crs
+            0, self.arena, address_offset=0, total_size=PSTAGE * 2048, core_ranges=pcrs
         )
         d.format_descriptors = [ttnn.CBFormatDescriptor(0, ttnn.bfloat16, 2048)]
         cbs.append(d)
         d = ttnn.cb_descriptor_from_sharded_tensor(
-            1, self.arena, address_offset=PSTAGE * 2048 + 64, total_size=4 * 16, core_ranges=self.port_crs
+            1, self.arena, address_offset=PSTAGE * 2048 + 64, total_size=4 * 16, core_ranges=pcrs
         )
         d.format_descriptors = [ttnn.CBFormatDescriptor(1, ttnn.uint32, 16)]
         cbs.append(d)
@@ -1103,7 +1113,7 @@ class TailEngine:
             args = [
                 b + off["land"],
                 wa,
-                int(ttnn.get_global_semaphore_address(self.ready)),
+                persist_l1.address(self.ready),
                 int(send_ready),
                 rc.x,
                 rc.y,
@@ -1158,7 +1168,7 @@ class TailEngine:
             ttnn.KernelDescriptor(
                 kernel_source=self.dbg + _PORT_READER,
                 source_type=st,
-                core_ranges=self.port_crs,
+                core_ranges=pcrs,
                 compile_time_args=pct,
                 runtime_args=pr_rt,
                 config=dm("RISCV_1", ttnn.NOC.NOC_0),
@@ -1166,7 +1176,7 @@ class TailEngine:
             ttnn.KernelDescriptor(
                 kernel_source=self.dbg + f"#define WG {self.WG}\n" + _PORT_SENDER,
                 source_type=st,
-                core_ranges=self.port_crs,
+                core_ranges=pcrs,
                 compile_time_args=pct,
                 runtime_args=ps_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_1),
@@ -1210,9 +1220,15 @@ class TailEngine:
         # Prepared dispatch (ttnn.bringup.prepare_program): built and prepared for these addresses, each call patches
         # only the CBs on the arena (taken again at its base); rebuilt when any address moves - the runtime args hold
         # addresses inside y / se / out (rows at offsets), which exact-address patching cannot follow
-        pkey = (base,) + tuple(int(t.buffer_address()) for t in (y, w, se, out))
-        if self.state.get("pp") is not None and self.state.get("pkey") == pkey:
-            ttnn.bringup.run_prepared(self.state["pp"], io)
+        from models.demos.moe_block.tt.fused_head import _addr
+
+        a = _addr if getattr(self, "cache_addrs", False) else (lambda t: int(t.buffer_address()))  # noqa: E731
+        pkey = (base, a(y), a(w), a(se), int(out.buffer_address()))  # (out: a new tensor a call)
+        # (one prepared program per address set: several layers on one tail - each its own latent up / norm, w - would
+        # otherwise rebuild all the chips' programs at every layer switch, ~300 ms a call in K3's 24-layer stack)
+        hit = self.state.setdefault("pps", {}).get(pkey)
+        if hit is not None:
+            ttnn.bringup.run_prepared(hit, io)
             if not self.keep_arena:
                 self.free_arena()
             return out
@@ -1229,6 +1245,10 @@ class TailEngine:
         else:
             self._rebind()
         self.state.update(pp=ttnn.bringup.prepare_program(self.state["md"], io), pkey=pkey)
+        pps = self.state["pps"]
+        if len(pps) >= 64:  # (bounded: a stream of new addresses only cycles it)
+            pps.pop(next(iter(pps)))
+        pps[pkey] = self.state["pp"]
         ttnn.bringup.run_prepared(self.state["pp"], io)
         if not self.keep_arena:  # (keep_arena: a test reads it back)
             self.free_arena()

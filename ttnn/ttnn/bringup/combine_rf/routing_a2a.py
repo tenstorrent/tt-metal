@@ -42,7 +42,10 @@ entry of a source to one chip: S x min(K, EPC)). Two arrival counters (one per p
 core 0): wait for N, then subtract N (counts stay right with the next call's early arrivals).
 """
 
+import os
+
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 from .fabric_all_gather_py import allowed_cores
 from .sparse_all_gather_2d import DIRS, mesh_plan, place_ports
@@ -70,10 +73,14 @@ def slot_bytes(S, K, EPC, M):
 
 _FIRST_HOP = r"""
 constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
+constexpr uint32_t YT = __YT__;  // (used only for the combine plan's ports: this op's own packets route as the fabric)
 FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {  // DIRS index: 0 X+, 1 X-, 2 Y+, 3 Y-; Y first, then X
     const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
     if (sr != dr) {
-        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        if constexpr (WY) {  // (YT, the combine's SPC_YTIE: its plan's ports - the opposite row splits by column parity)
+            const uint32_t f2 = 2 * ((dr + R - sr) % R);
+            return f2 < R || (YT && f2 == R && ((sc + dc) & 1)) ? 2 : 3;
+        }
         return dr > sr ? 2 : 3;
     }
     if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
@@ -727,17 +734,17 @@ def routing_a2a_reserve(mesh_device, *, L=2, torus=(False, False), max_cores=16)
         [ttnn.CoreRange(ttnn.CoreCoord(*x), ttnn.CoreCoord(*x)) for x in sorted(cells)]
     )
     c0_ = crs(pcells[:1])
-    sems = [ttnn.create_global_semaphore(mesh_device, c0_, 0) for _ in range(2)]  # (arrivals, per call parity)
-    sems.append(ttnn.create_global_semaphore(mesh_device, crs(pcells), 0))  # (every planner core's call count)
-    sems.append(ttnn.create_global_semaphore(mesh_device, crs(port_cells), 0))  # (every port core's call count)
-    sems.append(ttnn.create_global_semaphore(mesh_device, crs(port_cells), 0))  # (port cores: "slices in")
+    sems = [persist_l1.semaphore(mesh_device, c0_, 0) for _ in range(2)]  # (arrivals, per call parity)
+    sems.append(persist_l1.semaphore(mesh_device, crs(pcells), 0))  # (every planner core's call count)
+    sems.append(persist_l1.semaphore(mesh_device, crs(port_cells), 0))  # (every port core's call count)
+    sems.append(persist_l1.semaphore(mesh_device, crs(port_cells), 0))  # (port cores: "slices in")
     return dict(
         chips=chips,
         wraps=wraps,
         port_core=port_core,
         pcells=pcells,
         sems=sems,
-        addrs=[int(ttnn.get_global_semaphore_address(x)) for x in sems],
+        addrs=[persist_l1.address(x) for x in sems],
         torus=torus,
         L=L,
     )
@@ -968,6 +975,7 @@ def routing_a2a_planner_prepare(
                     ENT_CAP=ENT_CAP,
                     WX=int(wrap_x),
                     WY=int(wrap_y),
+                    YT=int(os.environ.get("SPC_YTIE") == "1"),
                     DCACHE=int(dcache),
                     PROBE_NOSTORE=int(probe_nostore),
                 )

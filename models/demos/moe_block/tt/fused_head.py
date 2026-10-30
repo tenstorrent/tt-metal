@@ -12,6 +12,7 @@ router cores) in the last."""
 from dataclasses import dataclass
 
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 
 import ttnn
 
@@ -101,6 +102,22 @@ def head_layouts(rows, G, *, grid_y=10, GX=11, num_links=2, router=True):
     return out
 
 
+_ADDRS: dict = {}  # id(tensor) -> (tensor, its buffer address): long-lived io tensors' addresses, read once
+
+
+def _addr(t):
+    """t's buffer address, read once a tensor object (it holds t: an id is not reused while cached). Only for tensors
+    that keep their buffer for their lifetime - a new allocation is a new object, so it misses."""
+    hit = _ADDRS.get(id(t))
+    if hit is not None and hit[0] is t:
+        return hit[1]
+    a = int(t.buffer_address())
+    if len(_ADDRS) > 4096:
+        _ADDRS.clear()
+    _ADDRS[id(t)] = (t, a)
+    return a
+
+
 class HeadSE3:
     """The fused head's x chain, v3 (row-chunk-major, weights resident): x [rows, H / TP] a chip -> the x all-gather a
     row chunk at a time straight into the engine's x-own L1 (tt/x_gather3.py) -> per chunk gate / up -> h -> down ->
@@ -147,7 +164,7 @@ class HeadSE3:
         and after it is placed again over the mover column (the L1 this head keeps - the gather's semaphores, mailboxes,
         the router's and the routing's buffers - then sits above the arena, not stranded below it, where a caller that
         frees the arena between calls has other programs' circular buffers)."""
-        from models.demos.moe_block.tt.se_engine3 import SeEngine3
+        from models.demos.moe_block.tt.se_engine3 import SeEngine3, dest_tiles
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
         self.mesh = mesh_device
@@ -214,7 +231,7 @@ class HeadSE3:
                     NTH=H // 32,
                     scatter=rs_dim,
                     nv=num_links,
-                    pwmax=8 // MT,
+                    pwmax=dest_tiles() // MT,
                     compact=self._compact,
                 )
             try:
@@ -352,7 +369,8 @@ class HeadSE3:
             # (SE / latent hand-offs, the router cores', the routing's forwards and their landed count, then the logits
             # ports' sub-block words: 16 B a (unit, core) - a port's units (the owners it sends to) x its link's router
             # cores, at least 16)
-            self.lw_off = (2 * GX * GY * 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
+            HS = persist_l1.handoff_bytes()  # (a hand-off word every HS bytes: 16, or 4 with PERSIST_L1=small)
+            self.lw_off = (2 * GX * GY * HS // 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
             nrc = rows // 32 // G * (2 if router is not None and router.split else 1)
             self.port_words = max(16, (G - 1) * -(-nrc // num_links))
             # (then, with chunks, the RS zone credits: a port's zone-free word (its chip's cores) and zone-credit word
@@ -366,14 +384,14 @@ class HeadSE3:
                 device=mesh_device,
                 memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
+                    persist_l1.buffer_type(),
                     ttnn.ShardSpec(crs, (1, words), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
             # (arrivals fwd / bwd, the latent's; with chunks the ports' FINB-free credits)
             self.arr_sems = [
-                ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(4 if self.eng.NCH > 1 else 3)
+                persist_l1.semaphore(mesh_device, self.eng.crs, 0) for _ in range(4 if self.eng.NCH > 1 else 3)
             ]
             ttnn.synchronize_device(mesh_device)
         self.router = None
@@ -447,7 +465,7 @@ class HeadSE3:
                 rows_cap=rows_cap,
                 ycores=[watcher],
                 arena=(self.eng.base, self.eng.arena_bytes, off0),
-                flags=int(self.mbox.buffer_address()) + 16 * 2 * GX * GY + 128,
+                flags=int(self.mbox.buffer_address()) + persist_l1.handoff_bytes() * 2 * GX * GY + 128,
             )
             self.router.ra = self.routing
             if routing.prep:
@@ -582,14 +600,16 @@ class HeadSE3:
         """The cached programs' arena-backed CBs (the engine's, the router cores') onto the arena tensor taken again at
         the same address (a CB binds its buffer: a freed one is no use) - not a rebuild of every chip's program."""
         tmpl = ttnn.cb_descriptor_from_sharded_tensor(0, self.eng.arena)
+        dd = self.eng.arena_delta - self.state.get("delta", 0)  # (onto another tensor: the same L1, offsets shift)
         md = ttnn.MeshProgramDescriptor()
         for (r, c), prog, on in self.state["progs"]:
             cbs = list(prog.cbs)
             for i in on:
                 cbs[i].set_buffer_from_cb(tmpl)
+                cbs[i].address_offset = cbs[i].address_offset + dd
             prog.cbs = cbs
             md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
-        self.state.update(desc=md, arena=self.eng.arena)
+        self.state.update(desc=md, arena=self.eng.arena, delta=self.eng.arena_delta)
 
     def settle_arena(self):
         """Take the arena once more and give it back, filling any free L1 right above its range (see
@@ -597,8 +617,15 @@ class HeadSE3:
         if not self.eng.arena.is_allocated():
             self.eng.realloc_arena(settle=True)
             if self.router is not None:
-                self.router.arena = self.eng.arena
+                self.router.arena, self.router.arena_delta = self.eng.arena, 0
         self.free_arena()
+
+    def use_arena(self, arena, nbytes):
+        """This call on the caller's L1 tensor (nbytes a core) holding the engine's arena range (the MoE block's one
+        arena a forward, the exchange's): no allocation of its own; the caller frees it (not free_arena)."""
+        d = self.eng.use_arena(arena, nbytes)
+        if self.router is not None:
+            self.router.arena, self.router.arena_delta = arena, d
 
     def free_arena(self):
         """Give the arena's L1 back between calls (a caller sharing the L1 left with another op): run() takes it
@@ -626,7 +653,7 @@ class HeadSE3:
         if self.rs_mode == "fused" and not self.eng.arena.is_allocated():
             self.eng.realloc_arena()
             if self.router is not None:  # (its CBs are carved from the arena too)
-                self.router.arena = self.eng.arena
+                self.router.arena, self.router.arena_delta = self.eng.arena, 0
         if self.rs_mode == "fused":
             G = self.plan.G
             self.outputs = {}
@@ -719,8 +746,13 @@ class HeadSE3:
         layers = getattr(self, "layers", False)
         nr = 4 + len(self.outputs)
         wpos = {1} | (set(range(nr, nr + len(self.rw))) if self.router is not None else set())
+        keep = getattr(self, "persist", False)  # (the outputs reused across calls: their addresses can be cached)
+        # (the key's addresses: the arena's read each call - a new tensor every forward - the rest, long-lived, from
+        # their first read: buffer_address() on a mesh tensor costs ~20 us, ~17 of them a call were most of _run)
         skey = (self.eng.base, len(io)) + tuple(
-            0 if layers and i in wpos else int(t.buffer_address()) for i, t in enumerate(io) if i
+            0 if layers and i in wpos else (_addr(t) if keep and i != 3 else int(t.buffer_address()))
+            for i, t in enumerate(io)
+            if i
         )
         if self.state.get("pp") is not None and self.state.get("skey") == skey:
             ttnn.bringup.run_prepared(self.state["pp"], io)
@@ -747,7 +779,7 @@ class HeadSE3:
                     virt = self.mesh.worker_core_from_logical_core
                     pc = {(d, l): virt(c) for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
                     mbox = int(self.mbox.buffer_address())
-                    arr = tuple(int(ttnn.get_global_semaphore_address(s_)) for s_ in self.arr_sems)
+                    arr = tuple(persist_l1.address(s_) for s_ in self.arr_sems)
                     zfree = mbox + 4 * self.zw_off
                     rsx = dict(
                         plan=self.plan,
@@ -765,7 +797,10 @@ class HeadSE3:
                     if self.latent:
                         # (fence: the latent's end-to-end "started" word - the old router words' slot, zeroed, free)
                         la = dict(
-                            word=mbox + 16 * e.GX * e.GY + 128, ctr=arr[2], out=self.lout, fence=mbox + 16 * e.GX * e.GY
+                            word=mbox + persist_l1.handoff_bytes() * e.GX * e.GY + 128,
+                            ctr=arr[2],
+                            out=self.lout,
+                            fence=mbox + persist_l1.handoff_bytes() * e.GX * e.GY,
                         )
                     rse = dict(
                         rs_pos=p,
@@ -817,16 +852,21 @@ class HeadSE3:
                 prog.kernels = k0 + k1
                 r, c = coord
                 base = self.eng.base  # (which CBs the arena backs: _rebind's - a freed buffer reports no address)
+                ab = int(self.eng.arena.buffer_address())  # (a caller's arena: at base - arena_delta)
                 on = [
                     i
                     for i, cb in enumerate(prog.cbs)
-                    if cb.has_buffer() and base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset)
+                    if cb.has_buffer()
+                    and (
+                        base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset)
+                        or cb.buffer_address() == ab
+                    )
                 ]
                 # (its structural hash once: a cached descriptor is not re-hashed - kernel sources and all - each call)
                 prog.custom_program_hash = ttnn.compute_program_descriptor_hash(prog)
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
                 progs.append((coord, prog, on))
-            self.state.update(key=key, desc=md, progs=progs, arena=self.eng.arena)
+            self.state.update(key=key, desc=md, progs=progs, arena=self.eng.arena, delta=self.eng.arena_delta)
         self.state.update(pp=ttnn.bringup.prepare_program(self.state["desc"], io), skey=skey)
         ttnn.bringup.run_prepared(self.state["pp"], io)
         return y

@@ -31,8 +31,10 @@ H = int(os.environ.get("GLM_SWEEP_H", "4096"))
 I = int(os.environ.get("GLM_SWEEP_I", "2048"))
 MS = (32, 64, 96, 128, 160, 192, 256, 384, 512, 768, 1024, 2048, 5120)
 ITERS = int(os.environ.get("GLM_SWEEP_ITERS", "10"))
-BFP4_TILE = 576  # bytes: 512 mantissa + 64 shared exponents
-W_BYTES = E * 3 * (H // 32) * (I // 32) * BFP4_TILE
+# GLM_SWEEP_WDT: the flat op's weight dtype (bf4 default; bf8 e.g. a shared expert's)
+WDT = os.environ.get("GLM_SWEEP_WDT", "bf4")
+W_TILE = {"bf4": 576, "bf8": 1088}[WDT]  # bytes: mantissas + shared exponents
+W_BYTES = E * 3 * (H // 32) * (I // 32) * W_TILE
 YRM = os.environ.get("GLM_SWEEP_YRM", "1") == "1"  # 0: y as bfp8 tiles
 DFP32 = os.environ.get("GLM_SWEEP_DFP32", "1") == "1"  # 0: bf16 DEST for the down projection
 # GLM_SWEEP_OP=unified: ttnn.bringup.unified_routed_expert_moe on the same bfp4 experts at LoFi (fp32 DEST, packer L1
@@ -48,7 +50,7 @@ DRAM_GBS, FLOP_CYC, N_COMPUTE, N_GRID = 512.0, 4096, 64 + 26, 110
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_flat_balanced_sweep(device):
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
-    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY, flat_layout, layout_from_env
 
     torch.manual_seed(0)
     W = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
@@ -65,20 +67,40 @@ def test_flat_balanced_sweep(device):
             math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
     else:
-        op = FlatRoutedExpert(
-            device,
-            W,
-            m=CAP,
-            H=H,
-            I=I,
-            gids=[list(range(E))],
-            n_global=NG,
-            wdtype="bf4",
-            act=ACT,
-            pin=1,
-            x_bf16=XBF16,
-            h_bf16=HBF16,
-            layout=LEGACY,  # (GLM-5.3's plan: tt/experts_ag.py)
+        # GLM_SWEEP_ROWS_HINT: layout.rows_hint (expected rows per expert) - an integer for every M, or "auto": the
+        # op is built per M with the hint M (balanced routing: the exact mean)
+        HINT = os.environ.get("GLM_SWEEP_ROWS_HINT")
+
+        def make_op(hint):
+            lay = layout_from_env(LEGACY)  # (GLM-5.3's plan, tt/experts_ag.py; the MIMO_FL_* recipe names override it)
+            if hint is not None:
+                lay = flat_layout(lay, rows_hint=int(hint))
+            return FlatRoutedExpert(
+                device,
+                W,
+                m=CAP,
+                H=H,
+                I=I,
+                gids=[list(range(E))],
+                n_global=NG,
+                wdtype=WDT,
+                act=ACT,
+                pin=1,
+                x_bf16=XBF16,
+                h_bf16=HBF16,
+                layout=lay,
+            )
+
+        op = make_op(None if HINT in (None, "auto") else HINT)
+        if HINT != "auto":  # (the host weights are kept only to rebuild the op per M)
+            del W
+    if not UNIFIED:  # (the plan's roles: what the layout resolved to)
+        pl = op.plan
+        print(
+            f"[sweep] plan: gate/up {len(pl['gu'])} cores (units nu {pl['nu']}, hg {pl['hg']}), down {len(pl['down'])} cores "
+            f"(nd {pl['nd']}), y writers {len(pl['y_writers'])}, relays {len(pl['relays'])}, tensix readers "
+            f"{len(pl.get('tensix_readers', []))}, drisc {pl['drisc']} dual {pl['dual']}, gu idle {len(pl['gu_idle'])}, x slots {pl['x_slots']}",
+            flush=True,
         )
     del W
     x = rm(torch.randn(T, H).to(torch.bfloat16) * 0.3, ttnn.bfloat16)
