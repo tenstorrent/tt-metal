@@ -460,17 +460,18 @@ uint32_t compute_packets_per_slot(
     uint32_t packet_cap,
     uint32_t num_slices,
     uint32_t header_bytes,
-    const Tensor& input_tensor) {
+    const Tensor& input_tensor,
+    uint32_t min_slots) {
     // A slot's packets are read behind one read barrier: enough of them to keep about 30 KB of reads in flight, which
     // hides DRAM read latency whatever the fabric payload (BH: two 15168 B packets per barrier take 24% less worker
-    // time per packet than one), at least two slots per worker iteration so both work, and only as many as fit in L1.
+    // time per packet than one), at least min_slots slots per worker iteration, and only as many as fit in L1.
     const uint32_t read_bytes_per_barrier = ag_test::env_u32("TT_AG_READ_BYTES").value_or(30336);  // TEST ONLY env
     constexpr uint32_t max_packets_per_slot = 32;
     const uint32_t num_elements = input_tensor.buffer()->num_pages() * geo.in_page_units / geo.element_units;
     const uint64_t iter_packets = tt::div_up(
         uint64_t{tt::div_up(num_elements, num_slices)} * geo.element_units * geo.unit_bytes, uint64_t{packet_cap});
     uint32_t packets_per_slot = static_cast<uint32_t>(std::clamp<uint64_t>(
-        std::min<uint64_t>(tt::div_up(read_bytes_per_barrier, packet_cap), iter_packets / all_gather_walk::kNumSlots),
+        std::min<uint64_t>(tt::div_up(read_bytes_per_barrier, packet_cap), iter_packets / min_slots),
         1,
         max_packets_per_slot));
     if (const auto k = ag_test::env_u32("TT_AG_K")) {  // TEST ONLY

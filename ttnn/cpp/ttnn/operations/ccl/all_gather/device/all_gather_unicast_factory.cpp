@@ -132,16 +132,21 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // Num worker cores per direction per link.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
     uint32_t num_links = operation_attributes.axis_num_links[axis];
+    const bool is_wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
+    const uint64_t busiest_link_packets =
+        tt::div_up(input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
     uint32_t workers_per_dir = 1;
-    if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
-        // Main's value, not yet re-measured with these kernels on WH.
-        workers_per_dir = 2;
+    if (is_wormhole) {
+        // 2 workers keep up with a link (1 link, 6144 B payload, ring: 3 are 3-13% slower on bf16 tiles at 2-4 MB)
+        // unless short segments cut every packet below the payload (packet_cap < max_packet_bytes: row-major rows of
+        // 1 KB or less per device, bfp8 tiles in one-tile lanes). There 3 are faster from about 400 packets on the
+        // busiest link-direction (ring 1-8 MB: 1-9%; forced-unicast line: 5-19%) and up to 5% slower below 300.
+        constexpr uint64_t three_worker_packets = 400;
+        workers_per_dir = (packet_cap < geo.max_packet_bytes && busiest_link_packets >= three_worker_packets) ? 3 : 2;
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
         // 2 workers cannot keep up with a ring's link (3 are 1.4-7% faster at 256 KB - 9 MB); on a line 2 are 10%
         // faster at 121 packets on the busiest link-direction, 3 as fast or faster from 242.
-        const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
-        const uint64_t busiest_link_packets = tt::div_up(
-            input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
         constexpr uint64_t line_three_worker_packets = 160;
         workers_per_dir = (is_ring || busiest_link_packets >= line_three_worker_packets) ? 3 : 2;
     }
@@ -276,8 +281,17 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // writer's fabric headers.
     const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    const uint32_t packets_per_slot =
-        compute_packets_per_slot(geo, packet_cap, total_slices, packet_header_size, input_tensor);
+    // WH ring: at least 4 slots per worker iteration, so a short one still pipelines (1 MB, 6144 B payload: 11 packets
+    // per iteration, 2 per slot instead of 5 are 11% faster; 4352 B payload, 1-1.5 MB: 3-4%). A unicast line gains at
+    // 6144 B but is up to 10% slower at 4352 B (512 KB - 1 MB), so it keeps 2. From 20 packets per iteration (6144 B)
+    // k keeps its 30 KB target.
+    const uint32_t packets_per_slot = compute_packets_per_slot(
+        geo,
+        packet_cap,
+        total_slices,
+        packet_header_size,
+        input_tensor,
+        (is_wormhole && is_ring) ? 4u : all_gather_walk::kNumSlots);
     const uint32_t cb_page_size =
         all_gather_walk::slot_offsets(packets_per_slot, unit_bytes, packet_header_size, packet_cap).slot_bytes;
 
@@ -384,11 +398,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     }
 
-    // Data_valid cadence: about 4 signals per worker iteration, every 2 to 16 packets. Each signal is a packet: fewer
-    // save link time, more start the downstream relay sooner (BH: 1-packet cadence up to 1.5x slower at 8-26 MB).
+    // Data_valid cadence: about 4 signals per worker iteration, every 2 to 16 packets (WH: 64). Each signal is a
+    // packet: fewer save link time, more start the downstream relay sooner (BH: 1-packet cadence up to 1.5x slower at
+    // 8-26 MB; WH ring, 6144 B payload: 64 instead of 16 is 1.4-3.4% faster at 8-42 MB).
     const uint64_t signals_per_iter = ag_test::env_u32("TT_AG_SIG_PER_ITER").value_or(4),  // TEST ONLY env
         min_cadence_packets = ag_test::env_u32("TT_AG_SIG_MIN").value_or(2),
-                   max_cadence_packets = ag_test::env_u32("TT_AG_SIG_MAX").value_or(16);
+                   max_cadence_packets = ag_test::env_u32("TT_AG_SIG_MAX").value_or(is_wormhole ? 64 : 16);
     TT_FATAL(signals_per_iter > 0 && min_cadence_packets <= max_cadence_packets, "bad TT_AG_SIG_* values");
     auto cadence_for = [&](uint64_t slice_packets) {
         return std::clamp(tt::div_up(slice_packets, signals_per_iter), min_cadence_packets, max_cadence_packets);

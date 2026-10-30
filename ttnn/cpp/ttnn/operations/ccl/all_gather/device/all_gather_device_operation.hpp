@@ -59,13 +59,15 @@ std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
 uint32_t compute_packet_cap(const all_gather_walk::WalkGeo& geo, const Tensor& output_tensor);
 
 // Packets per CB slot when the walk elements are split over num_slices workers. header_bytes: the fabric packet header
-// the writer keeps in the slot, 0 for none (all_gather_walk::slot_offsets).
+// the writer keeps in the slot, 0 for none (all_gather_walk::slot_offsets). min_slots: the slots a worker iteration
+// should fill at least (all_gather_walk::kNumSlots, so both work).
 uint32_t compute_packets_per_slot(
     const all_gather_walk::WalkGeo& geo,
     uint32_t packet_cap,
     uint32_t num_slices,
     uint32_t header_bytes,
-    const Tensor& input_tensor);
+    const Tensor& input_tensor,
+    uint32_t min_slots = all_gather_walk::kNumSlots);
 
 // Worker cores the op may use: the sub-device's, within sub_core_grid.
 CoreRangeSet get_available_worker_cores(const AllGatherParams& args, const Tensor& input_tensor);
