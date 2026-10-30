@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -72,6 +73,8 @@ private:
     // Make this mutable, since this is JIT populated
     // through a const instance when queried
     mutable std::vector<tt_cxy_pair> dispatch_cores_;
+    // Set once dispatch_cores_ is populated; later queries read it without taking the mutex.
+    mutable std::atomic<bool> dispatch_cores_ready_{false};
     mutable std::mutex modifier_mutex;
 };
 

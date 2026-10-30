@@ -118,7 +118,7 @@ bool eth_direct_sender_receiver_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto ethernet_config = tt_metal::EthernetConfig{
         .noc = tt_metal::NOC::NOC_0,
@@ -146,7 +146,7 @@ bool eth_direct_sender_receiver_kernels(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,

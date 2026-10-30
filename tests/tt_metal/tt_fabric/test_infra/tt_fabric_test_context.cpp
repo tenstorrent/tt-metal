@@ -324,7 +324,14 @@ void TestContext::setup_devices() {
     const auto& available_coords = this->fixture_->get_host_local_device_coordinates();
     for (const auto& coord : available_coords) {
         test_devices_.emplace(
-            coord, TestDevice(coord, this->fixture_, this->fixture_, &sender_memory_map_, &receiver_memory_map_));
+            coord,
+            TestDevice(
+                coord,
+                this->fixture_->get_mesh_device(),
+                this->fixture_,
+                this->fixture_,
+                &sender_memory_map_,
+                &receiver_memory_map_));
     }
 }
 
