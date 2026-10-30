@@ -1701,7 +1701,9 @@ class Qwen36Model:
         if cache is None or start_pos is None or self.args.max_batch_size <= 1:
             return None
         from models.demos.blackhole.qwen36.tt.prefix_cache import (
+            SPEC_VLLM_BLOCK,
             SpecPoints,
+            prefix_end_at_cap,
             spec_learn_positions,
             spec_resume_cap,
             spec_save_points,
@@ -1717,6 +1719,12 @@ class Qwen36Model:
             p, slot = cache.lookup(tokens_row, cap)
             if slot is not None:
                 s, src = p, (cache, slot)
+        end_kw = {}
+        if prefix_end_at_cap():
+            # QWEN36_PREFIX_END_AT_CAP: the end checkpoint at the resume cap of the next request extending this prompt,
+            # whose start_pos vLLM counts in blocks of the paged KV cache (64 in serving).
+            kv = getattr(self, "_paged_kv_caches", None)
+            end_kw["end_block"] = get_block_size(kv) if kv else SPEC_VLLM_BLOCK
         points = spec_save_points(
             L,
             s,
@@ -1725,6 +1733,7 @@ class Qwen36Model:
             min_len=int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "8192")),
             stride=int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_STRIDE", "8192")),
             end_point=not nonfinal,
+            **end_kw,
         )
         forced = [int(p) for p in force_points if s < int(p) <= L - 3 and int(p) % 128 == 0]
         if forced:

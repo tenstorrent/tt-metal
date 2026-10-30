@@ -20,6 +20,12 @@ Opt-in policy knobs (all default OFF = the plain LRU + low-priority strides abov
     bytes, every device of the mesh) before its slot is reused; a later hit writes it back (copy_host_to_device_tensor
     into one staging slot allocated at construction, then the same device copy as a device hit). A restore is a byte
     copy, so a host hit resumes from exactly the state a device hit would have. Host LRU of N entries.
+  * QWEN36_PREFIX_END_AT_CAP=1: the spec end-of-prompt checkpoint sits at the resume cap of the next request that
+    extends the prompt (spec_followup_cap) instead of floor((L-3)/128)*128, which is one block above that cap whenever
+    L mod 128 is in [3, 63]. Never more save points than today, so no extra prefill split.
+  * QWEN36_PREFIX_CACHE_FAST_ALLOC=1: the slots (and the host-tier staging set) are allocated on device, uninitialized,
+    instead of from uploaded host zeros (25 ms per slot at TP8, i.e. 6.5 s of start-up for 256 slots; 1.3 ms on
+    device). Slot contents are never read before a save writes them.
 """
 
 import bisect
@@ -45,6 +51,24 @@ def alloc_zeros_like(t, mesh):
         layout=ttnn.TILE_LAYOUT,
         device=mesh,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def prefix_cache_fast_alloc():
+    """QWEN36_PREFIX_CACHE_FAST_ALLOC (default "0" = today's slots: host zeros built and uploaded tensor by tensor,
+    25 ms per slot at TP8 on the Galaxy, 6.5 s for 256 slots): "1" allocates the snapshot slots and the host-tier
+    staging set directly on device, uninitialized (alloc_empty_like; 1.3 ms per slot). Safe because a slot is only read
+    after save() copied a state into it (lookup returns saved keys only; the staging set is written by restore right
+    before its copy). Read once per cache, at construction (before any trace capture, as today)."""
+    return os.environ.get("QWEN36_PREFIX_CACHE_FAST_ALLOC", "0") == "1"
+
+
+def alloc_empty_like(t, mesh):
+    """Uninitialized DRAM-interleaved tensor on every device of `mesh` with the shape / dtype / TILE layout of the GDN
+    state `t`: the same spec alloc_zeros_like produces (from_torch's default memory config), without the host zeros and
+    the per-device upload."""
+    return ttnn.allocate_tensor_on_device(
+        ttnn.Shape([int(d) for d in t.shape]), t.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
 
 
@@ -93,6 +117,33 @@ def spec_learn_positions(start_pos, prompt_len, align=SPEC_PREFIX_ALIGN, min_tai
     return out
 
 
+# The vLLM KV block size the spec engine serves with (qwen36_vllm._BLOCK_SIZE; its spec gate refuses any other): vLLM's
+# start_pos (num_computed_tokens of a prefix hit) is a multiple of it.
+SPEC_VLLM_BLOCK = 64
+
+
+def prefix_end_at_cap():
+    """QWEN36_PREFIX_END_AT_CAP (default "0" = today's end-of-prompt checkpoint at floor((L-3)/128)*128): "1" saves it
+    at spec_followup_cap(L), the resume cap of the next request that extends the prompt. Spec planner only
+    (Qwen36Model.plan_spec_prefix); read per prefill."""
+    return os.environ.get("QWEN36_PREFIX_END_AT_CAP", "0") == "1"
+
+
+def spec_followup_cap(prompt_len, block=SPEC_VLLM_BLOCK, align=SPEC_PREFIX_ALIGN):
+    """spec_resume_cap of a later request that extends this ``prompt_len``-token prompt (an exact-prefix follow-up, e.g.
+    the next chat turn): vLLM reports the prompt's full KV blocks as cached, start_pos = floor(L/block)*block, and the
+    follow-up resumes at most at floor((start_pos-1)/align)*align (its min-tail walk never triggers: >= 64 tokens
+    follow).
+
+    The default end checkpoint floor((L-3)/align)*align is the same position for L mod 128 in {0, 1, 2} and [64, 127],
+    and one block ABOVE this cap for L mod 128 in [3, 63] (start_pos = 128q, cap = 128(q-1), checkpoint 128q), so about
+    half of the exact-prefix follow-ups miss it and resume from an older snapshot. Here every one of them finds it. A
+    follow-up that matched further (its cap is higher) still resumes here, at most 128 tokens below its cap; it
+    recomputes the matched decode tokens anyway (they are never snapshotted). <= L - 3 for L >= 128; 0 below 128."""
+    sp = (int(prompt_len) // int(block)) * int(block)
+    return ((sp - 1) // align) * align if sp > 0 else 0
+
+
 def _env_int(name, default):
     return int(os.environ.get(name, str(default)))
 
@@ -138,7 +189,15 @@ class SpecPoints(list):
 
 
 def spec_save_points(
-    prompt_len, s, learn, chunk=2048, min_len=8192, stride=8192, align=SPEC_PREFIX_ALIGN, end_point=True
+    prompt_len,
+    s,
+    learn,
+    chunk=2048,
+    min_len=8192,
+    stride=8192,
+    align=SPEC_PREFIX_ALIGN,
+    end_point=True,
+    end_block=None,
 ):
     """Sorted segment split positions (snapshot after tokens[:p]) for a spec prefill resuming at s, p in (s, L-3]:
     the learn positions, the end-of-prompt position for L >= min_len, else the last full-chunk boundary, and every
@@ -146,9 +205,19 @@ def spec_save_points(
     ``end_point`` False (a non-final chunked-prefill chunk resumed exactly, Option B): no end-of-prompt / last-full-chunk
     point (the caller snapshots the chunk end itself); learn positions and strides stay. The result is a SpecPoints whose
     ``low`` holds the pure stride points (in the stride range only: not a learn / end / last-chunk point).
+    ``end_block`` (QWEN36_PREFIX_END_AT_CAP: the vLLM block size; None = today's rule): the end-of-prompt position is
+    spec_followup_cap(prompt_len, end_block) instead of floor((prompt_len-3)/align)*align, so the next request extending
+    the prompt finds it at its resume cap. The move never adds a split: a stride point at today's end position (it stood
+    in for the end point there) is dropped when the moved end point is taken, one block below it.
     """
     pts = {p for p in learn if s < p <= prompt_len - 3}
     b_end = ((prompt_len - 3) // align) * align
+    moved_from = None
+    if end_block is not None:
+        e = spec_followup_cap(prompt_len, end_block, align)
+        if e != b_end:
+            moved_from = b_end
+        b_end = e
     end = set()
     if not end_point:
         pass
@@ -167,6 +236,8 @@ def spec_save_points(
     out.end = frozenset(end)
     if stride > 0 and stride % chunk == 0:
         strided = set(range(s + stride, prompt_len - 2, stride))
+        if moved_from is not None and end:
+            strided.discard(moved_from)  # QWEN36_PREFIX_END_AT_CAP: the end point one block lower replaces it
         out.low = frozenset(strided - pts)
         pts.update(strided)
     out.extend(sorted(pts))
@@ -189,6 +260,8 @@ class GdnPrefixStateCache:
         # The B=1 scratch (and its init buffers) must exist first: the slots mirror its shapes.
         model._ensure_gdn_prefill_scratch()
         self._dns = [dn for dn, *_ in model._gdn_prefill_scratch]
+        self.fast_alloc = prefix_cache_fast_alloc()  # QWEN36_PREFIX_CACHE_FAST_ALLOC
+        t_alloc = time.perf_counter()
         self._slots = []  # slot -> [(rec, conv_carry)] per GDN layer
         for _ in range(self.num_slots):
             self._slots.append([self._alloc_pair(dn) for dn in self._dns])
@@ -197,7 +270,13 @@ class GdnPrefixStateCache:
         self._by_pos = {}  # pos -> {digest, ...}
         self._positions = []  # sorted positions present
         self.stats = dict(lookups=0, hits=0, tokens_skipped=0, saves=0, evictions=0, evictions_low=0)
-        logger.info(f"{self.name}: {self.num_slots} slots x {len(self._dns)} GDN layers allocated.")
+        if self.fast_alloc:
+            logger.info(
+                f"{self.name}: {self.num_slots} slots x {len(self._dns)} GDN layers allocated on device "
+                f"(QWEN36_PREFIX_CACHE_FAST_ALLOC=1, uninitialized) in {time.perf_counter() - t_alloc:.2f} s."
+            )
+        else:
+            logger.info(f"{self.name}: {self.num_slots} slots x {len(self._dns)} GDN layers allocated.")
         # Host spill tier (QWEN36_PREFIX_HOST_SLOTS, default 0 = off): one device staging set, allocated here (before any
         # trace capture), receives a host snapshot; restore then copies staging -> bound state like a device hit.
         self.host_slots = int(host_slots if host_slots is not None else os.environ.get("QWEN36_PREFIX_HOST_SLOTS", "0"))
@@ -227,7 +306,8 @@ class GdnPrefixStateCache:
 
     def _alloc_pair(self, dn):
         scratch = next(s for s in self.model._gdn_prefill_scratch if s[0] is dn)
-        return alloc_zeros_like(scratch[1], dn.mesh), alloc_zeros_like(scratch[3], dn.mesh)
+        alloc = alloc_empty_like if self.__dict__.get("fast_alloc", False) else alloc_zeros_like
+        return alloc(scratch[1], dn.mesh), alloc(scratch[3], dn.mesh)
 
     @staticmethod
     def _digest(buf, pos):
