@@ -298,57 +298,8 @@ CceStatuses run_hart_copies(
     return run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
 }
 
-std::string code_name(uint32_t code) {
-    switch (code) {
-        case abi::kCodeLanded: return "landed";
-        case abi::kCodeAcked: return "acked";
-        case abi::kCodeVcSpaceTimeout: return "vc_space_timeout";
-        case abi::kCodeAckTimeout: return "ack_timeout";
-        case abi::kCodeDataTimeout: return "data_timeout";
-        case abi::kCodeBadArgs: return "bad_args";
-    }
-    return fmt::format("unknown_code_0x{:x}", code);
-}
-
-std::string poll_name(uint32_t poll) {
-    switch (poll) {
-        case abi::kPollNone: return "none";
-        case abi::kPollVcSpace: return "vc_space";
-        case abi::kPollAck: return "ack";
-        case abi::kPollData: return "data";
-    }
-    return fmt::format("unknown_poll_{}", poll);
-}
-
-std::string status_detail(const std::vector<uint32_t>& status) {
-    const uint32_t flags = status[abi::kStatusFlags];
-    return fmt::format(
-        "kernel code {} flags [vc_space {} acked {} landed {}], {} commands issued, last poll {} {}, cycles vc_space "
-        "{} ack {} data {}, pending high water {}, kernel mismatches {} (first word {} observed 0x{:08x} expected "
-        "0x{:08x})",
-        code_name(status[abi::kStatusCode]),
-        (flags & abi::kFlagVcSpace) != 0,
-        (flags & abi::kFlagAcked) != 0,
-        (flags & abi::kFlagLanded) != 0,
-        status[abi::kStatusElementsIssued],
-        poll_name(status[abi::kStatusLastPoll]),
-        status[abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
-        status[abi::kStatusVcSpaceCycles],
-        status[abi::kStatusAckCycles],
-        status[abi::kStatusDataCycles],
-        status[abi::kStatusPendingHighWater],
-        status[abi::kStatusMismatchedWords],
-        status[abi::kStatusFirstMismatchWord],
-        status[abi::kStatusObserved],
-        status[abi::kStatusExpected]);
-}
-
 // A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
-std::string code_note(uint32_t code) {
-    return code == abi::kCodeVcSpaceTimeout || code == abi::kCodeAckTimeout || code == abi::kCodeDataTimeout
-               ? kFreshSessionNote
-               : "";
-}
+std::string code_note(uint32_t code) { return idma_code_leaves_command_in_flight(code) ? kFreshSessionNote : ""; }
 
 // Every copy of a launch ended with its success code after issuing every command. A pending high water of 0 is logged,
 // not failed: the count can clear before the kernel reads it.
@@ -365,9 +316,9 @@ std::string code_note(uint32_t code) {
                 "{} hart {}: expected {} after {} commands; {}{}\n",
                 label,
                 copy.hart,
-                code_name(expected_code),
+                idma_code_name(expected_code),
                 expected_commands,
-                status_detail(status),
+                idma_status_detail(status),
                 code_note(status[abi::kStatusCode]));
         }
         if (status[abi::kStatusPendingHighWater] == 0) {

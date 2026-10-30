@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
@@ -105,6 +108,66 @@ inline std::vector<uint32_t> idma_copy_args(const IdmaCopyArgs& copy) {
     args[abi::kArgPollRegionBytes] = copy.poll_region_bytes;
     args[abi::kArgCheckAtAck] = copy.check_at_ack ? 1 : 0;
     return args;
+}
+
+inline std::string idma_code_name(uint32_t code) {
+    namespace abi = cce_idma_copy_abi;
+    switch (code) {
+        case abi::kCodeLanded: return "landed";
+        case abi::kCodeAcked: return "acked";
+        case abi::kCodeVcSpaceTimeout: return "vc_space_timeout";
+        case abi::kCodeAckTimeout: return "ack_timeout";
+        case abi::kCodeDataTimeout: return "data_timeout";
+        case abi::kCodeBadArgs: return "bad_args";
+        case abi::kCodePeerTimeout: return "peer_timeout";
+        case abi::kCodeStreamBudget: return "stream_budget";
+        case abi::kCodeNotLandedAtAck: return "not_landed_at_ack";
+    }
+    return fmt::format("unknown_code_0x{:x}", code);
+}
+
+inline std::string idma_poll_name(uint32_t poll) {
+    namespace abi = cce_idma_copy_abi;
+    switch (poll) {
+        case abi::kPollNone: return "none";
+        case abi::kPollVcSpace: return "vc_space";
+        case abi::kPollAck: return "ack";
+        case abi::kPollData: return "data";
+        case abi::kPollPeer: return "peer";
+    }
+    return fmt::format("unknown_poll_{}", poll);
+}
+
+// A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
+inline bool idma_code_leaves_command_in_flight(uint32_t code) {
+    namespace abi = cce_idma_copy_abi;
+    return code == abi::kCodeVcSpaceTimeout || code == abi::kCodeAckTimeout || code == abi::kCodeDataTimeout;
+}
+
+inline std::string idma_status_detail(const std::vector<uint32_t>& status) {
+    namespace abi = cce_idma_copy_abi;
+    const uint32_t flags = status[abi::kStatusFlags];
+    return fmt::format(
+        "kernel code {} flags [vc_space {} acked {} landed {}], {} commands issued, last poll {} {}, cycles vc_space "
+        "{} ack {} data {}, pending high water {}, probe {} / {}, kernel mismatches {} (first word {} observed "
+        "0x{:08x} expected 0x{:08x})",
+        idma_code_name(status[abi::kStatusCode]),
+        (flags & abi::kFlagVcSpace) != 0,
+        (flags & abi::kFlagAcked) != 0,
+        (flags & abi::kFlagLanded) != 0,
+        status[abi::kStatusElementsIssued],
+        idma_poll_name(status[abi::kStatusLastPoll]),
+        status[abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
+        status[abi::kStatusVcSpaceCycles],
+        status[abi::kStatusAckCycles],
+        status[abi::kStatusDataCycles],
+        status[abi::kStatusPendingHighWater],
+        status[abi::kStatusProbeFirst],
+        status[abi::kStatusProbeSecond],
+        status[abi::kStatusMismatchedWords],
+        status[abi::kStatusFirstMismatchWord],
+        status[abi::kStatusObserved],
+        status[abi::kStatusExpected]);
 }
 
 // MIM-407 backend of a write into GDDR: GDDR0 is the low 4 GiB tile of a Mimir, GDDR1 the high one.
