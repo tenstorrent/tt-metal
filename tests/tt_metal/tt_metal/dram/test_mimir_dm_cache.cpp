@@ -538,22 +538,21 @@ INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheProbe, ::testing::ValuesIn(mimir_contra
 
 namespace idma_abi = cce_idma_copy_abi;
 
-// From MM41/MimirCacheProbe.L2Geometry (2026-10-22, every CCE of mimir_2x_package): L2 CONFIGURATION reads 4 banks x
-// 8 ways x 64 sets of 64 B, lines 16 KiB apart share a set, and replacement is not LRU, so eviction of a given line is
-// forced only by at least 24 same-set reads.
+// Measured by the removed MM41/MimirCacheProbe.L2Geometry (2026-10-22, every CCE of mimir_2x_package): L2
+// CONFIGURATION reads 4 banks x 8 ways x 64 sets of 64 B, lines 16 KiB apart share a set, and replacement is not LRU,
+// so eviction of a given line is forced only by at least 24 same-set reads.
 inline constexpr uint32_t kL2ConflictStrideBytes = 16 * 1024;
 inline constexpr uint32_t kL2EvictingReads = 24;
 // Set by MM41/MimirCacheWriterProbe.ExternalWriters (2026-10-22): writes without a snoop bit do not reach the reader's
 // cached copy without an invalidate (SiblingSpa and RemoteCce in SnoopOffInvalidate).
 inline constexpr bool kSiblingSpaWritesSnooped = false;
 inline constexpr bool kRemoteSpaWritesSnooped = false;
-// Expected behaviour, not a probe result: an iDMA write with the snoop packet tag refreshes the reader's cached copy,
-// as chippy's GRENSV-2290 test cce_xcce_snoop_dma requires (idma.c setup_packet_tags_cmdbuf). Every case that depends
-// on it asserts it.
-inline constexpr bool kIdmaSnoopBitRefreshesCache = true;
+// The iDMA snoop packet tag applies to writes from a sibling CCE into this CCE's TL1: the receiving CCE's snoop master
+// refreshes its cached copy (GRENSV-3774, chippy cce_xcce_snoop_dma; GRENSV-1577). The hardware never snoops an iDMA
+// write from a CCE into its own TL1.
 inline constexpr const char* kIdmaSnoopNote =
-    "iDMA snoop packet tag not honoured; expected per GRENSV-2290 (chippy cce_xcce_snoop_dma); seen on the "
-    "mimir_2x_package emulator 2026-10-22";
+    "iDMA snoop packet tag not honoured; it applies only to a sibling CCE's iDMA writes into this CCE's TL1 "
+    "(GRENSV-3774, GRENSV-1577), and the hardware never snoops a CCE's iDMA writes into its own TL1";
 
 inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
 // Up to three sequential polls plus launch, as MM-8 sizes 400 s for three.
@@ -1850,8 +1849,8 @@ TEST_P(MimirCacheCoherence, CrossCce) {
 }
 
 // The sibling CCE's iDMA writes into this CCE's warmed lines with the snoop bit set (cce_idma_copy kArgSnoop), after
-// the reader set its warmed flag. The cached copy must be refreshed with no invalidate (kIdmaSnoopBitRefreshesCache,
-// GRENSV-2290), and the read after the invalidate must be fresh.
+// the reader set its warmed flag. The cached copy must be refreshed with no invalidate (the snoop packet tag on a
+// sibling CCE's iDMA writes, GRENSV-3774, GRENSV-1577), and the read after the invalidate must be fresh.
 TEST_P(MimirCacheCoherence, CrossCceSnoopOn) {
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
@@ -1916,11 +1915,9 @@ TEST_P(MimirCacheCoherence, CrossCceSnoopOn) {
         << label << ": writer " << idma_detail(writer_status) << idma_code_note(writer_status[idma_abi::kStatusCode]);
     ASSERT_EQ(reader[abi::kStatusCode], abi::kCodeDone)
         << label << ": reader " << mm41_detail(reader) << cache_code_note(reader[abi::kStatusCode]);
-    if (kIdmaSnoopBitRefreshesCache) {
-        EXPECT_EQ(reader[abi::kStatusWarmOld], kCacheWords) << label << ": warm read; " << verdict;
-        EXPECT_EQ(reader[abi::kStatusStaleBefore], 0u)
-            << label << ": snooped write left the cached copy stale (" << verdict << "): " << kIdmaSnoopNote;
-    }
+    EXPECT_EQ(reader[abi::kStatusWarmOld], kCacheWords) << label << ": warm read; " << verdict;
+    EXPECT_EQ(reader[abi::kStatusStaleBefore], 0u)
+        << label << ": snooped write left the cached copy stale (" << verdict << "): " << kIdmaSnoopNote;
     EXPECT_EQ(reader[abi::kStatusMatches], kCacheWords) << label << ": cached read after the invalidate";
     expect_host_on_cce(device, cce_index, region_offset, pattern_words(value, kCacheWords), tag, label);
 }
@@ -2006,10 +2003,11 @@ protected:
 // Under one NOC_SNOOP_TL_MASTER_CFG value, for each target (the external words beside the hart's dirty words on the
 // line, or the same words) and each hart action (conflict-stride eviction reads, FLUSH64, INVALIDATE64): the hart
 // dirties its words cached and sets a flag, the sibling CCE's snooped iDMA writes the external words while the hart
-// repeats the action until it reads them in TL1, and the host checks the line after a final FLUSH64. The external
-// words must survive, and the hart's words too unless the action is INVALIDATE64 (which may drop them). Only the
-// default configuration gates, on the snooped behaviour GRENSV-2290 expects (kIdmaSnoopBitRefreshesCache); the
-// others record. The configuration is restored when the case ends. A leg whose
+// repeats the action until it reads them in TL1, and the host checks the line after a final FLUSH64. The snoop
+// packet tag applies to the sibling's writes (GRENSV-3774, GRENSV-1577). The external words must survive under every
+// configuration. On the Neighbour legs the hart's words must survive too under the configurations with inline writes
+// enabled (bit 0 clear) unless the action is INVALIDATE64 (which may drop them); under the others they are recorded.
+// The configuration is restored when the case ends. A leg whose
 // hart ran out of budget before it read the external words stops the case: the iDMA may still be in flight
 // (MIM-601).
 TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
@@ -2061,7 +2059,7 @@ TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
     ASSERT_EQ(config_guard.applied(), config)
         << "CCE" << cce_index << " NOC_SNOOP_TL_MASTER_CFG did not take the written value";
     RecordProperty("snoop_master_cfg", fmt::format("0x{:x}", config));
-    const bool gates = config == kSnoopMasterDefault && kIdmaSnoopBitRefreshesCache;
+    const bool inline_writes_enabled = (config & 0x1) == 0;
     for (const RaceTarget target : {RaceTarget::Neighbour, RaceTarget::Same}) {
         for (const uint32_t action : {abi::kRaceActionEvict, abi::kRaceActionFlush, abi::kRaceActionInvalidate}) {
             const uint32_t tag = 0xA0 + action * 2 + static_cast<uint32_t>(target);
@@ -2148,14 +2146,11 @@ TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
             ASSERT_EQ(writer_status[idma_abi::kStatusCode], idma_success_code(writer))
                 << label << ": writer " << idma_detail(writer_status)
                 << idma_code_note(writer_status[idma_abi::kStatusCode]);
-            if (!gates) {
-                continue;
-            }
             EXPECT_EQ(hart_status[abi::kStatusCode], abi::kCodeDone)
                 << label << ": " << result << ": " << kIdmaSnoopNote;
             EXPECT_EQ(external_kept, kRaceHartWords)
                 << label << ": external write lost; " << result << ": " << kIdmaSnoopNote;
-            if (target == RaceTarget::Neighbour && action != abi::kRaceActionInvalidate) {
+            if (target == RaceTarget::Neighbour && inline_writes_enabled && action != abi::kRaceActionInvalidate) {
                 EXPECT_EQ(hart_new, kRaceHartWords)
                     << label << ": hart's dirty words lost; " << result << ": " << kIdmaSnoopNote;
             }
@@ -2381,11 +2376,9 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
         << label << ": " << mm41_detail(status) << cache_code_note(status[abi::kStatusCode]);
     EXPECT_EQ(status[abi::kStatusWarmOld], kChurnWords) << label << ": warm read of the hot set";
     EXPECT_EQ(status[abi::kStatusPasses], kChurnRounds) << label;
-    if (!snoop || kIdmaSnoopBitRefreshesCache) {
-        const std::string note = snoop ? std::string(": ") + kIdmaSnoopNote : std::string();
-        EXPECT_EQ(status[abi::kStatusStaleBefore], 0u) << label << ": stale words consumed; " << result << note;
-        EXPECT_EQ(status[abi::kStatusMatches], kChurnRounds) << label << ": " << result << note;
-    }
+    const std::string note = snoop ? std::string(": ") + kIdmaSnoopNote : std::string();
+    EXPECT_EQ(status[abi::kStatusStaleBefore], 0u) << label << ": stale words consumed; " << result << note;
+    EXPECT_EQ(status[abi::kStatusMatches], kChurnRounds) << label << ": " << result << note;
     expect_host_on_cce(
         device,
         cce_index,
@@ -2396,7 +2389,8 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
 }
 
 // Snoop-off preload with producer completion and a targeted INVALIDATE64 (gates), then snoop-on preload with no
-// invalidate (gates on kIdmaSnoopBitRefreshesCache, GRENSV-2290). Hot-set refill and hit cycles are recorded.
+// invalidate (gates: the snoop packet tag on a sibling CCE's iDMA writes, GRENSV-3774, GRENSV-1577). Hot-set refill and
+// hit cycles are recorded.
 TEST_P(MimirCacheStress, PreloadChurn) {
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
