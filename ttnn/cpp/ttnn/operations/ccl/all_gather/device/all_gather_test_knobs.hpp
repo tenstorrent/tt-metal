@@ -12,6 +12,7 @@
 //                     and writer must stay on different NOCs)
 //   TT_AG_NO_INIT=1 (writers skip the init handshake: races across back-to-back launches, timing diagnosis only)
 //   TT_AG_ZONES=1 (device-profiler zones around the init wait, main loop and tail of both kernels)
+//   TT_AG_WH_LEGACY=1 (Wormhole unicast keeps its pre-tuning values: 2 workers, 2 slots per iteration, cadence <= 16)
 
 #include <cstdint>
 #include <cstdlib>
@@ -56,6 +57,8 @@ inline void check_distinct_nocs(tt::tt_metal::NOC reader, tt::tt_metal::NOC writ
         knobs,
         static_cast<int>(reader));
 }
+
+inline bool wh_legacy() { return env_u32("TT_AG_WH_LEGACY").value_or(0) != 0; }
 
 inline bool log_enabled() { return env_u32("TT_AG_LOG").value_or(0) != 0; }
 
