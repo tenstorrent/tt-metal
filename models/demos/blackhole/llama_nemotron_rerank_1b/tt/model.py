@@ -22,6 +22,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops._mm_grid import m_tiles_per_core
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_add_rmsnorm import fused_add_rmsnorm
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_heads_rope import fused_heads_rope
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_add_norm import (
@@ -30,6 +31,7 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_add_no
     resident_rmsnorm,
     to_resident,
 )
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_add_norm.op import RESIDUAL_M_MIN_BLOCK
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_qkv_rope import (
     make_rope_table,
     matmul_qkv_rope,
@@ -390,7 +392,7 @@ class NemotronReranker:
             cfg.sdpa_mask_cache
             and use_block_map
             and cfg.sdpa_concat_heads
-            and B in (8, 32)
+            and 2 <= B <= 32
             and S in (128, 256, 512)
             and (qc, kc) == (128, S)
         ):
@@ -492,7 +494,7 @@ class NemotronReranker:
     def _mm_add_norm(self, x, w, res, consts, kind, y_dtype=None):
         """res += x @ w (res: the L1-resident residual stream), returns rmsnorm(res) * gamma."""
         rows = x.shape[-2] * x.shape[-3]
-        mpc = -(-(rows // 32) // self.grid.x)
+        mpc = m_tiles_per_core(rows // 32, self.grid.x, RESIDUAL_M_MIN_BLOCK)
         mb, kb, nb, sh, sw = MM_ADD_NORM_CONFIGS[kind]
         mb = max(d for d in range(1, mb + 1) if mpc % d == 0)
         sh = max(d for d in range(1, sh + 1) if mb % d == 0)

@@ -37,6 +37,21 @@ IN0_NOC = ttnn.NOC.NOC_0
 IN1_NOC = ttnn.NOC.NOC_1
 
 
+def m_tiles_per_core(mt, n_m, min_block=4):
+    """Tile rows per core along M for mt tile rows over n_m cores: ceil(mt / n_m), padded up when that count is
+    above 8 and has no divisor from 4 to 8 (an op's M block must divide a core's rows, so it would fall to 1 or
+    2 and re-read the weight block for every tile row), to the next count with a divisor of at least
+    ``min_block``. E.g. 10 x 512 tokens: 160 tile rows over 13 cores is 13 per core (prime); the resident
+    residual and its fused ops pad to 16 (M block 8), other matmuls to 14 (M block 7). Counts that already
+    split into blocks of 4-8 (8 x 512: 10, 32 x 512: 40) are unchanged."""
+    best = lambda m: max(d for d in range(1, 9) if m % d == 0)
+    mpc = -(-mt // n_m)
+    if mpc > 8 and best(mpc) < 4:
+        while best(mpc) < min_block:
+            mpc += 1
+    return mpc
+
+
 @dataclass
 class Grid:
     gx: int
@@ -48,6 +63,7 @@ class Grid:
     K_block: int
     N_block: int
     transposed: bool = True
+    m_min_block: int = 4  # see m_tiles_per_core
     padded_M: int = 0
     M_per_core: int = 0
     N_per_core: int = 0
@@ -57,7 +73,7 @@ class Grid:
     def __post_init__(self):
         self.n_m = self.gx if self.transposed else self.gy  # cores along the M axis
         self.n_n = self.gy if self.transposed else self.gx  # cores along the N axis
-        self.padded_M = -(-self.M // self.n_m) * self.n_m
+        self.padded_M = m_tiles_per_core(self.M, self.n_m, self.m_min_block) * self.n_m
         self.M_per_core = self.padded_M // self.n_m
         self.N_per_core = -(-self.N // self.n_n)
         self.M_blocks_per_core = -(-self.M_per_core // self.M_block)

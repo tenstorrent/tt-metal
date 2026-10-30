@@ -419,7 +419,7 @@ def sdpa_mask_cache(
     q_chunk_size, k_chunk_size = int(program_config.q_chunk_size), int(program_config.k_chunk_size)
     if q_chunk_size % TILE or k_chunk_size % TILE:
         raise ValueError("chunk sizes must be multiples of 32")
-    if B not in (8, 32) or Sq not in (128, 256, 512) or Sk != Sq or q_chunk_size != 128 or k_chunk_size != Sk:
+    if not 2 <= B <= 32 or Sq not in (128, 256, 512) or Sk != Sq or q_chunk_size != 128 or k_chunk_size != Sk:
         # The shapes this port was checked on (perf_tools/probe_sdpa_mask_cache.py). Others reach C++ branches
         # not ported here (several K chunks: no K/V retention, the unretained chain key; B 1: batch-broadcast mask).
         raise NotImplementedError(f"B {B}, S {Sq}x{Sk}, chunks q{q_chunk_size} k{k_chunk_size} not ported")

@@ -54,6 +54,11 @@ def make_matmul_add_norm_constants(gamma: torch.Tensor, device):
     return g, const(1.0 / width), const(1.0)
 
 
+# The resident residual and the fused ops on it: when a core's rows need padding (m_tiles_per_core), pad to
+# M blocks of 8. 10 x 512: 13 -> 16 rows per core, FF2 + add + norm 34.6 -> 9.8 M cycles, WO 9.5 -> 5.3 M.
+RESIDUAL_M_MIN_BLOCK = 8
+
+
 def residual_layout(rows, width, grid, transposed=True):
     """(rows, width covered by the core grid, shard rows, shard width) in elements for a [rows, width]
     residual stream on ``grid``: rows split over x and columns over y (``transposed``, as
@@ -61,7 +66,7 @@ def residual_layout(rows, width, grid, transposed=True):
     gx, gy = int(grid.x), int(grid.y)
     n_m, n_n = (gx, gy) if transposed else (gy, gx)
     mt, nt = rows // TILE, width // TILE
-    mpc, npc = -(-mt // n_m), -(-nt // n_n)
+    mpc, npc = mg.m_tiles_per_core(mt, n_m, RESIDUAL_M_MIN_BLOCK), -(-nt // n_n)
     return n_m * mpc * TILE, n_n * npc * TILE, mpc * TILE, npc * TILE
 
 
@@ -145,7 +150,7 @@ def matmul_add_norm(
     gxy = grid or device.compute_with_storage_grid_size()
     gx, gy = int(gxy.x), int(gxy.y)
     mb, kb, nb, sh, sw = block
-    g = mg.Grid(gx, gy, M, K, N, mb, kb, nb, transposed=transposed)
+    g = mg.Grid(gx, gy, M, K, N, mb, kb, nb, transposed=transposed, m_min_block=RESIDUAL_M_MIN_BLOCK)
     if g.N_blocks_per_core != 1:
         raise ValueError(f"N block {nb} must hold the core's {g.N_per_core} N tiles")
     if g.M_per_core % mb:
