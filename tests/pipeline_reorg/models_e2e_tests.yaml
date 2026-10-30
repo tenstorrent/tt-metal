@@ -1983,6 +1983,9 @@
     # t2v pre-gen -- on 4x8 that chain reloads the encoder over captured traces and wedges (the test
     # documents this at test_pipeline_ltx_distilled.py: "t2v->i2v chain in one process ... wedges").
     export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    # Keep the rendered clip: everything under PIPELINE_DIR is uploaded as the job artifact (the seam check
+    # is intermittent, so a failing clip is the only way to see what it flagged).
+    export LTX_I2V_OUT="${PIPELINE_DIR}/i2v.mp4"
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-fast-i2v
