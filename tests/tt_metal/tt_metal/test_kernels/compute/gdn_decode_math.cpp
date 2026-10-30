@@ -136,13 +136,16 @@ void kernel_main() {
                     const uint32_t nn = (VT - j0 < gdn_decode::kUpdateGroup) ? (VT - j0) : gdn_decode::kUpdateGroup;
                     tile_regs_acquire();
                     copy_init(cb::S);
+                    if constexpr (VARIANT == 6) {
+                        copy_tile(cb::ecol32, 0, 0);
+                        gdn_decode_sfpu::load_scalar(0);
+                    }
                     for (uint32_t jj = 0; jj < nn; jj++) {
                         copy_tile(cb::S, i * VT + j0 + jj, jj);
                     }
                     if constexpr (VARIANT == 6) {
-                        copy_tile(cb::ecol32, 0, gdn_decode::kUpdateGroup);
                         for (uint32_t jj = 0; jj < nn; jj++) {
-                            gdn_decode_sfpu::mul_col_bcast<32>(jj, gdn_decode::kUpdateGroup);
+                            gdn_decode_sfpu::mul_loaded_scalar<32>(jj);
                         }
                     } else {
                         matmul_init(cb::kT16, cb::u16, 0);

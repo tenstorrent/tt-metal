@@ -15,6 +15,11 @@
 //   S_new  = e S_old + k^T u               update pass: exact seed (copy_tile, UnpackToDestFp32), SFPU decay, FPU
 //                                          rank-1
 //
+// The recommended form is decode_token<Kt, Vt, /*FuseReadVector=*/true>: the read and vector passes are one acquire
+// per V tile (the Kt products land in DEST slot 0 and the vector chain runs on them there), bit-identical to the
+// two-pass form and ~400 cycles per token faster. In that form the CBs r16 and ccol32 are never written or read (the
+// factory may stop allocating them); the two-pass form (FuseReadVector = false) uses r16, and nothing uses ccol32.
+//
 // Tile shapes live on the CBs (set_tile_dims / TileDescriptor): qk16, v16, bcol16, r16, craw16, u16, ebc16, out16 are
 // 16x32, kT16 is 32x16, everything else 32x32; all fp32. CBs read by copy_tile (gcol32, v16, bcol16, S, ecol32, r16,
 // ebc16) are UnpackToDestFp32 so the copies are exact. A utd CB cannot be a matmul operand (the jit-build gives it the
@@ -47,8 +52,9 @@ namespace gdn_decode {
 
 // fp32 DEST tiles per acquire with half-sync.
 inline constexpr uint32_t kDstTiles = 4;
-// S tiles per acquire in the update pass; slot kUpdateGroup holds ecol32.
-inline constexpr uint32_t kUpdateGroup = kDstTiles - 1;
+// S tiles per acquire in the update pass: all four slots, since e is parked in an SFPU register (load_scalar) and
+// needs no resident slot.
+inline constexpr uint32_t kUpdateGroup = kDstTiles;
 
 // CB ids of one token (the factory's assignment; see ../fused_recurrent_gdn_cb.hpp).
 struct TokenCbs {
@@ -60,7 +66,7 @@ struct TokenCbs {
     uint32_t bcol16;     // 16x32: column 0 = beta in rows 0-15 (reader, utd)
     uint32_t ones32;     // 32x32 of 1.0 (reader, once)
     uint32_t ecol32;     // 32x32: column 0 = e (compute, utd; only column 0 of faces 0 and 2 is ever read)
-    uint32_t r16;        // Vt x 16x32: row 0 = r_k, row 2 = r_q (compute, utd)
+    uint32_t r16;        // Vt x 16x32: row 0 = r_k, row 2 = r_q (compute, utd); unused in the fused form
     uint32_t craw16;     // 16x32: [0,0] = c (compute)
     uint32_t ccol32;     // 32x32 of c: allocated by the factory but not produced or read by these passes (c goes from
                          // DEST straight into ebc16); kept so the factory's CB plan needs no change
@@ -270,10 +276,12 @@ void read_vector_pass(
     out.push_back(Vt);
 }
 
-// Update pass: S_next[i, j] <- e * S_cur[i, j] + kT16[i] x u16[j], groups of up to kUpdateGroup S tiles per acquire
-// (exact seed by copy_tile from the utd S_cur, decay on the SFPU against ecol32 in slot kUpdateGroup, rank-1 accumulate
-// by matmul_tiles onto the seeded slots). With emit_state every slot is also packed to state_out. cb_s_cur is the utd
-// id of the current state; s_next is the next state's pair (packed through s_next.utd, both ids reserved and pushed).
+// Update pass: S_next[i, j] <- e * S_cur[i, j] + kT16[i] x u16[j], groups of up to kUpdateGroup (= 4) S tiles per
+// acquire: ecol32 is copied into slot 0 and its [0, 0] parked in an SFPU register (load_scalar), the exact seeds are
+// copied from the utd S_cur into slots 0..3, each is decayed by the parked e (mul_loaded_scalar<32>, bit-identical to
+// the column broadcast of a uniform column), then the rank-1 products accumulate onto the seeded slots. With
+// emit_state every slot is also packed to state_out. cb_s_cur is the utd id of the current state; s_next is the next
+// state's pair (packed through s_next.utd, both ids reserved and pushed).
 // The outputs are reserved, packed (indices relative to the reservation; the (i, j) order is sequential) and pushed
 // per acquire group, so a writer can stream the state tiles while the pass runs. Waits kT16 (Kt), u16 (Vt), S_cur
 // (Kt*Vt), ecol32 (1); pushes S_next (Kt*Vt in total) and, with emit_state, state_out (Kt*Vt in total).
@@ -308,13 +316,14 @@ void update_pass(
                 st.reserve_back(nn);
             }
             tile_regs_acquire();
-            copy_init(cb_s_cur);
+            copy_init(cb_s_cur);  // 32x32 utd tiles: ecol32 and S_cur alike
+            copy_tile(cb_ecol32, 0, 0);
+            gdn_decode_sfpu::load_scalar(0);  // e -> SFPU register; slot 0 is free again
             for (uint32_t jj = 0; jj < nn; jj++) {
                 copy_tile(cb_s_cur, i * Vt + j0 + jj, jj);
             }
-            copy_tile(cb_ecol32, 0, kUpdateGroup);
             for (uint32_t jj = 0; jj < nn; jj++) {
-                gdn_decode_sfpu::mul_col_bcast<32>(jj, kUpdateGroup);
+                gdn_decode_sfpu::mul_loaded_scalar<32>(jj);
             }
             matmul_init(cb_kT16, cb_u16, 0);
             for (uint32_t jj = 0; jj < nn; jj++) {
