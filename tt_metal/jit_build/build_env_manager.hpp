@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "build.hpp"
-#include "impl/context/context_types.hpp"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
@@ -47,13 +46,6 @@ public:
     BuildEnvManager& operator=(const BuildEnvManager&) = delete;
     BuildEnvManager(BuildEnvManager&&) = delete;
     BuildEnvManager& operator=(BuildEnvManager&&) = delete;
-
-    // Deprecated: use MetalContext::build_env_manager(). Returns the BuildEnvManager owned by the live MetalContext
-    // for `context_id`; fatal if that context does not exist.
-    static BuildEnvManager& get_instance(ContextId context_id);
-
-    // Deprecated: use MetalContext::build_env_manager(). Equivalent to get_instance(DEFAULT_CONTEXT_ID).
-    static BuildEnvManager& get_instance();
 
     // Add a new build environment for the corresponding device id and device configuration. Also generates the build
     // key and build states.

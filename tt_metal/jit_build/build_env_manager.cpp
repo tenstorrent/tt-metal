@@ -18,7 +18,6 @@
 #include <tt_stl/assert.hpp>
 #include "common/stable_hash.hpp"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/precompiled.hpp"
 #include "jit_build/jit_device_config.hpp"
@@ -26,18 +25,6 @@
 #include "llrt/rtoptions.hpp"
 
 namespace tt::tt_metal {
-
-BuildEnvManager& BuildEnvManager::get_instance(ContextId context_id) {
-    // MetalContext::instance() would implicitly create a default context; the build env of a context that
-    // does not exist (or has already been destroyed) is never what the caller wants.
-    TT_FATAL(
-        MetalContext::instance_exists(context_id),
-        "BuildEnvManager::get_instance({}) called with no live MetalContext for that context id",
-        context_id.get());
-    return MetalContext::instance(context_id).build_env_manager();
-}
-
-BuildEnvManager& BuildEnvManager::get_instance() { return get_instance(DEFAULT_CONTEXT_ID); }
 
 BuildEnvManager::BuildEnvManager(const Hal& hal) {
     uint32_t kernel_index = 0;

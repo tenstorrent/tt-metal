@@ -29,6 +29,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <filesystem>
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -477,9 +478,8 @@ public:
         const auto& kernel = program.impl().get_kernel_by_spec_name(kPrintKernelName.get());
         const int riscv_id = static_cast<int>(kernel->get_kernel_processor_type(0));
 
-        const auto& build_state =
-            tt::tt_metal::BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
-                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        const auto& build_state = mesh_device->impl().metal_context().build_env_manager().get_kernel_build_state(
+            mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         return build_state.get_target_out_path(kernel->get_full_kernel_name());
     }
