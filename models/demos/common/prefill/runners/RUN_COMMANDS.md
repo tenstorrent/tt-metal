@@ -120,11 +120,12 @@ python3 ttnn/ttnn/distributed/ttrun.py \
 Run it on `host0`. The `--host` order is the pipeline order from the prerequisites:
 rank 0 first, each next host one cable further along the ring.
 
-The manifest is the configuration: fabric mode, shared-expert overlap, KV cache
-format, MTP, trace, layer acks, sequence length, user count, chunk timeout. The runner applies it
-with `setdefault`, so any of those variables already set in the environment
-silently wins over the manifest. Leave them unset. The torus fabric with
-`PREFILL_OVERLAP_SHARED_EXPERT=0`, and the `2d` fabric, are not what CI runs.
+The manifest plus the runner defaults are the configuration. The runner applies
+the manifest with `setdefault`, so any `PREFILL_*` variable already set in the
+environment silently wins over both. Leave them unset. In particular,
+`PREFILL_FABRIC_MODE` and `PREFILL_OVERLAP_SHARED_EXPERT` default to
+`2d_torus_xy` and `1`, which is what CI runs; the `2d` fabric, and the torus
+with overlap off, are not.
 
 Set only what is specific to the deployment, in the binding's `global_env`.
 `ttrun` does not forward `PREFILL_*` variables from the launching shell, so an
