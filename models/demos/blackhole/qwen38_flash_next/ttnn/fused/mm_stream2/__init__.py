@@ -497,6 +497,7 @@ SHAPES = {
     (2560, 2304): (3, 10, "rect"),
     (2560, 512): (1, 10, "rect"),
     (2560, 352): (1, 16, "rect"),
+    (768, 2560): (2, 8, "rect"),  # the GDN / QSA out-projection (test table out_proj)
 }
 CALLS: dict = {}
 STOCK_CALLS: dict = {}

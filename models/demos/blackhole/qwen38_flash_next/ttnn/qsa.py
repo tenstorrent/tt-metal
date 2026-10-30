@@ -5246,7 +5246,7 @@ class Qwen38TTNNQSA:
         else:
             attention_ws = ttnn.to_memory_config(local_attention, self.out_act_memory_config)
             _deallocate(local_attention)
-        local_partial_ws = ttnn.linear(
+        local_partial_ws = fused_mm_stream.linear(
             attention_ws,
             self.weights.out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,

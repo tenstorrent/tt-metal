@@ -767,7 +767,7 @@ def test_gdn_gate_product_is_written_in_the_out_projection_layout() -> None:
     assert "to_memory_config(gated" not in source
     out_project = inspect.getsource(gdn_module.Qwen38TTNNGDN._out_project)
     assert "to_memory_config(gated" not in out_project
-    assert "partial_ws = ttnn.linear(\n            gated," in out_project
+    assert "partial_ws = fused_mm_stream.linear(\n            gated," in out_project
 
 
 # --- resident RoPE tables for the position-generic body -------------------------

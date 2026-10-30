@@ -228,7 +228,7 @@ def test_dispatch_ablation(mesh_device):
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 32 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("op", ["router", "gate_up", "gdn_in", "qsa_proj"])
+@pytest.mark.parametrize("op", ["router", "gate_up", "gdn_in", "qsa_proj", "out_proj"])
 def test_linear_entry_l1_output(mesh_device, op):
     """``mm_stream2.linear`` (the model's entry): the stock op's shape / L1 width-sharded memory config, row 0 bitwise equal, on a
     sentinel-filled L1 output (a dirty buffer at the same addresses), fresh activation per call, then under trace capture.

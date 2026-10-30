@@ -2284,7 +2284,7 @@ class Qwen38TTNNGDN:
         return gated
 
     def _out_project(self, gated, full_hidden):
-        partial_ws = ttnn.linear(
+        partial_ws = fused_mm_stream.linear(
             gated,
             self.weights.out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
