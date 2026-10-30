@@ -1542,10 +1542,10 @@ def test_topk_large_indices_metadata_matches_scalar_causal(device, valid_end, ba
 @pytest.mark.parametrize("grid", ["default", "topk108"], ids=["grid_default", "grid_topk108"])
 @pytest.mark.parametrize("valid_end", [256, 896, 2048, 5120], ids=["end256", "end896", "end2048", "end5120"])
 def test_topk_large_indices_metadata_matches_scalar_ties(device, valid_end, grid):
-    """Causal GLM-5.3-shaped logits with bf16 ties (randn rounded to bf16, as the indexer's scores are): does the
-    index ORDER of a row depend on the bound form (metadata vs scalar), i.e. on how the row is split across cores?
-    Reports sets and order separately; sparse attention sums in index order, so either difference changes its
-    output."""
+    """Causal GLM-5.3-shaped logits with bf16 ties (randn rounded to bf16, as the indexer's scores are). The index
+    ORDER of a row must not depend on the bound form (metadata vs scalar) or on the full-chunk bound, which decide
+    whether the row is reduced on one core or split across two: sparse attention sums in index order, so a
+    different order of tied keys changes its output (#63408)."""
     k, n, num_rows = 2048, 5120, 160
     g = torch.Generator().manual_seed(896)
     torch_input = torch.randn(num_rows, n, generator=g)
@@ -1570,6 +1570,7 @@ def test_topk_large_indices_metadata_matches_scalar_ties(device, valid_end, grid
         valid_end_tensor=_make_valid_length_metadata(device, valid_end),
     )
     full = run(valid_length=n)  # the full chunk's bound: what a token computed inside a full chunk gets
+    failures = []
     for label, other in (("metadata", m), ("scalar-full", full)):
         differ = [r for r in range(num_rows) if not torch.equal(s[r], other[r])]
         set_differ = [r for r in differ if not torch.equal(s[r].sort().values, other[r].sort().values)]
@@ -1577,3 +1578,6 @@ def test_topk_large_indices_metadata_matches_scalar_ties(device, valid_end, grid
             f"end={valid_end} grid={grid} scalar vs {label}: {len(differ)} of {num_rows} rows differ "
             f"(first {differ[:1]}, rows >= 108: {sum(r >= 108 for r in differ)}), {len(set_differ)} as sets"
         )
+        if differ:
+            failures.append(f"scalar vs {label}: {len(differ)} rows differ, first {differ[0]}, {len(set_differ)} as sets")
+    assert not failures, f"end={valid_end} grid={grid}: " + "; ".join(failures)
