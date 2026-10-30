@@ -125,6 +125,7 @@ struct PrefetchCase {
 
     std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> pipe_refs() const {
         std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> refs;
+        refs.reserve(pipes.size());
         for (const auto& pipe : pipes) {
             refs.emplace_back(*pipe);
         }
