@@ -2496,7 +2496,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_RingRunsMainProgram) {
     uint32_t paired_cases = 0;
     for (const uint32_t cores : {120U, 130U}) {
         for (const uint32_t St : {1U, 2U, 3U, 4U, 6U, 8U, 16U, 64U, 128U}) {
-            for (const auto [batch, heads] :
+            for (const auto& [batch, heads] :
                  std::vector<std::pair<uint32_t, uint32_t>>{{1U, 1U}, {1U, 8U}, {2U, 32U}, {4U, 32U}}) {
                 const SDPAForwardShape shape = causal_shape(batch, heads, heads, St, 2U);
                 const auto config = ring_program_config(St);
