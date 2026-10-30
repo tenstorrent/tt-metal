@@ -347,6 +347,10 @@ def end_graph_capture_to_file(report_path):
             if _python_stack_traces_auto_for_session:
                 disable_python_stack_traces()
                 _python_stack_traces_auto_for_session = False
+            # Written to the sidecar on success. When the outermost write fails they belong to a report that won't
+            # exist; kept, they would be flushed later along with another session's. A failed nested write leaves
+            # them for the outer capture, which can still write them.
+            reset_comparison_records_data()
     return json.loads(result_str)
 
 

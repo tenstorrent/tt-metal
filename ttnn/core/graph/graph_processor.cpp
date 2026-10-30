@@ -1303,7 +1303,7 @@ nlohmann::json GraphProcessor::end_graph_capture() {
     auto& tracker = tt::tt_metal::GraphTracker::instance();
     TT_FATAL(!tracker.get_processors().empty(), "No active graph capture to end");
     // End the capture even if finalizing it throws; see end_graph_capture_to_file.
-    auto end_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
+    auto pop_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
     return tracker.get_processors().back()->end_capture();
 }
 
@@ -1318,7 +1318,7 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     // End the capture even if writing the report throws (unwritable path, full disk): a capture left active keeps
     // recording the caller's later operations, nests the next begin_graph_capture inside itself, and on a multi-rank
     // run leaves the other ranks waiting for this one.
-    auto end_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
+    auto pop_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
 
     // Finalize the graph, then build the report via the shared get_report() path
     auto graph_json = processor->end_capture();
