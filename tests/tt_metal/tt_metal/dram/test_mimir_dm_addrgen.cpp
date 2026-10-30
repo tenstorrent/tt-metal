@@ -175,7 +175,6 @@ void run_case(const AddrgenCase& addrgen_case) {
 }
 
 class MimirDmAddrgen : public ::testing::TestWithParam<AddrgenCase> {};
-class MimirDmIm2col : public ::testing::TestWithParam<AddrgenCase> {};
 
 TEST_P(MimirDmAddrgen, Pattern) {
     skip_unless_programmable_dram_package();
@@ -183,13 +182,7 @@ TEST_P(MimirDmAddrgen, Pattern) {
     run_case(GetParam());
 }
 
-TEST_P(MimirDmIm2col, Pattern) {
-    skip_unless_programmable_dram_package();
-    MIMIR_SKIP_IF_WATCHER();
-    run_case(GetParam());
-}
-
-// The upstream QuasarAddrgenOps cases, Interleaved_Banking excepted.
+// The upstream QuasarAddrgenOps cases, Interleaved_Banking excepted, then the upstream QuasarIm2ColOps cases.
 INSTANTIATE_TEST_SUITE_P(
     MM8,
     MimirDmAddrgen,
@@ -202,14 +195,7 @@ INSTANTIATE_TEST_SUITE_P(
         AddrgenCase{"Strided2D_Both", abi::kPattern2d, true, true, 16},
         AddrgenCase{"Face_SrcOnly", abi::kPatternFace, true, false, 32},
         AddrgenCase{"Face_DstOnly", abi::kPatternFace, false, true, 32},
-        AddrgenCase{"Face_Both", abi::kPatternFace, true, true, 32}),
-    case_name);
-
-// The upstream QuasarIm2ColOps cases.
-INSTANTIATE_TEST_SUITE_P(
-    MM8,
-    MimirDmIm2col,
-    ::testing::Values(
+        AddrgenCase{"Face_Both", abi::kPatternFace, true, true, 32},
         AddrgenCase{"Im2Col_FullImage", abi::kPatternIm2col, true, true, 81},
         AddrgenCase{"Im2Col_Dilation1", abi::kPatternIm2colDilation1, true, true, 180}),
     case_name);
