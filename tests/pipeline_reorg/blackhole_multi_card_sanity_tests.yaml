@@ -47,6 +47,8 @@
     # the file is a local validation suite and its perf check runs on Galaxy (blaze prefill sdpa_perf).
     pytest tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py -k "production_dimensions or comparison_mode" -svv
     pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_quietbox_ci_perf -q
+    # Gemma4's sliding ring SDPA fork: bit-identical to the shared op on the sliding tests above.
+    pytest tests/ttnn/unit_tests/operations/experimental/gemma4/test_sliding_ring_sdpa.py -k "not perf_check" -svv
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py -svv
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_4d.py -svv
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py -k "full_mesh or sptp" -svv
