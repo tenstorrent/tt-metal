@@ -197,8 +197,55 @@ inline __attribute__((always_inline)) void NOC_CFG_WRITE_REG(uint32_t noc, uint3
     *(volatile uint32_t*)offset = val;
 }
 
+// Tensix NIUs run with the command buffer FIFO enabled (brisc.cc). Ethernet and DRAM tiles keep it off, since their
+// base firmware polls NOC_CMD_CTRL.
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
+#define NOC_CMD_BUF_FIFO_ENABLED
+#endif
+
+#if defined(NOC_CMD_BUF_FIFO_ENABLED)
+constexpr uint32_t NOC_CMD_BUF_FIFO_DEPTH = 16;
+constexpr uint32_t NOC_CMD_BUF_FIFO_AVAIL_MASK = 0x1F;
+
+inline __attribute__((always_inline)) constexpr uint32_t noc_cmd_buf_fifo_avail_field(uint32_t cmd_buf) {
+    return NOC_CMD_BUF_FIFO_AVAIL_MASK << (cmd_buf << 3);
+}
+
+// Command buffers this RISC issues on, as CMD_BUF_AVAIL fields.
+inline __attribute__((always_inline)) constexpr uint32_t noc_cmd_buf_fifo_owned_fields() {
+#if defined(NOC_MODE) && defined(COMPILE_FOR_BRISC)
+    if constexpr (NOC_MODE == DM_DYNAMIC_NOC) {
+        return noc_cmd_buf_fifo_avail_field(DYNAMIC_NOC_BRISC_WR_CMD_BUF) |
+               noc_cmd_buf_fifo_avail_field(DYNAMIC_NOC_BRISC_RD_CMD_BUF);
+    }
+#elif defined(NOC_MODE) && defined(COMPILE_FOR_NCRISC)
+    if constexpr (NOC_MODE == DM_DYNAMIC_NOC) {
+        return noc_cmd_buf_fifo_avail_field(DYNAMIC_NOC_NCRISC_WR_CMD_BUF) |
+               noc_cmd_buf_fifo_avail_field(DYNAMIC_NOC_NCRISC_RD_CMD_BUF);
+    }
+#endif
+    return noc_cmd_buf_fifo_avail_field(0) | noc_cmd_buf_fifo_avail_field(1) | noc_cmd_buf_fifo_avail_field(2) |
+           noc_cmd_buf_fifo_avail_field(3);
+}
+#endif
+
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
+#if defined(NOC_CMD_BUF_FIFO_ENABLED)
+    // With the FIFO on, NOC_CMD_CTRL reads ready as soon as a request is queued, so polling it overflows the FIFO and
+    // drops requests (SYS-838). CMD_BUF_AVAIL holds the free entries of buffer N in bits [8N+4:8N], read from buffer
+    // 0's window.
+    //
+    // The FIFOs drain round-robin, so a request could overtake older requests queued in another buffer, while the NoC
+    // API promises that same-VC requests leave in NOC_CMD_CTRL order. Issuing only once this RISC's other buffers are
+    // empty keeps that order; back-to-back requests on one buffer still queue up to the FIFO depth.
+    constexpr uint32_t all_empty = NOC_CMD_BUF_FIFO_DEPTH * 0x01010101;
+    uint32_t avail = NOC_CMD_BUF_READ_REG(noc, 0, CMD_BUF_AVAIL);
+    uint32_t own_field = noc_cmd_buf_fifo_avail_field(cmd_buf);
+    uint32_t other_fields = noc_cmd_buf_fifo_owned_fields() & ~own_field;
+    return (avail & own_field) != 0 && (avail & other_fields) == (all_empty & other_fields);
+#else
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
+#endif
 }
 
 inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_t noc, uint32_t id_mask) {

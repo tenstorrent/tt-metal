@@ -224,17 +224,30 @@ void device_setup() {
 
     WRITE_REG(RISCV_TDMA_REG_CLK_GATE_EN, 0x3f);  // Enable clock gating
 
+#ifdef ARCH_BLACKHOLE
+    // Queue requests in the command buffer FIFO; noc_cmd_buf_ready polls CMD_BUF_AVAIL to match.
+    constexpr uint32_t niu_cfg0_set = 0x1 | (1 << NIU_CFG_0_CMD_BUFFER_FIFO_EN);
+#else
+    constexpr uint32_t niu_cfg0_set = 0x1;
+#endif
+
     noc_set_active_instance(0);
     uint32_t niu_cfg0 = noc_get_cfg_reg(NIU_CFG_0);
-    noc_set_cfg_reg(NIU_CFG_0, niu_cfg0 | 0x1);
+    noc_set_cfg_reg(NIU_CFG_0, niu_cfg0 | niu_cfg0_set);
     uint32_t router_cfg0 = noc_get_cfg_reg(ROUTER_CFG_0);
     noc_set_cfg_reg(ROUTER_CFG_0, router_cfg0 | 0x1);
+#ifdef ARCH_BLACKHOLE
+    noc_set_cfg_reg(DEBUG_COUNTER_RESET, 1 << CMD_BUFFER_FIFO_OVFL_CLEAR_BIT);
+#endif
 
     noc_set_active_instance(1);
     uint32_t niu_cfg1 = noc_get_cfg_reg(NIU_CFG_0);
-    noc_set_cfg_reg(NIU_CFG_0, niu_cfg1 | 0x1);
+    noc_set_cfg_reg(NIU_CFG_0, niu_cfg1 | niu_cfg0_set);
     uint32_t router_cfg1 = noc_get_cfg_reg(ROUTER_CFG_0);
     noc_set_cfg_reg(ROUTER_CFG_0, router_cfg1 | 0x1);
+#ifdef ARCH_BLACKHOLE
+    noc_set_cfg_reg(DEBUG_COUNTER_RESET, 1 << CMD_BUFFER_FIFO_OVFL_CLEAR_BIT);
+#endif
     noc_set_active_instance(0);
 
     set_deassert_addresses();
