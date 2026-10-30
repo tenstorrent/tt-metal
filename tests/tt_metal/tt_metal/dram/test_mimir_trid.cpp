@@ -5,7 +5,8 @@
 // MM43: Mimir test plan section 4.3 (transaction IDs). Plain hart loads and stores carry no software-visible ID; the
 // only ID point is the per-hart RoCC command buffer driving iDMA, with a 4-bit TR_ID. Every case runs cce_idma_copy
 // with an explicit MIM-407 backend VC, sets the trid per command and waits on each trid's pending count, then on the
-// data (MIM-628: an ack does not prove the data landed). Remote targets are host-verified.
+// data. DuplicateId and BarrierThenDependentWriteAfterRead's read instead check the data once when their trids read 0
+// (kArgCheckAtAck), so an early ack fails. Remote targets are host-verified.
 
 #include <gtest/gtest.h>
 
@@ -65,21 +66,15 @@ inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_ker
 inline constexpr std::chrono::seconds kHostDeadline{300};
 // Offsets of a CCE's GDDR target in its local DRAM view, above DRAM UNRESERVED, clear of MM-8's 0x10000.
 inline constexpr uint64_t kGddrTargetOffset = 0x100000;
-// Scope handshake lines, in the issuer hart's data area after its source block.
+// Observer handshake lines, in the hart's data area after its source block.
 inline constexpr uint64_t kPeerFlagOffsetFromData = 0x8000;
 inline constexpr uint32_t kLeadingGuardTag = 0x900;
 
 // Probe-gated values, set from the probes' results on mimir_2x_package (2026-10-22, every CCE).
-// MimirTridProbe.Scope: "shared or aliased" (an observer hart read the issuer's pending count of the same trid on its
-// own command buffer), so the counters are per CCE and MultiHart gives each hart its own trid.
-inline constexpr bool kTridCountersPerHart = false;
-// MimirTridProbe.PendingVisible: the pending high water it recorded (12); 0 disables the NominalDepth and Saturate
-// asserts.
-inline constexpr uint32_t kPendingVisibleHighWater = 12;
 // MimirCacheProbe.EightHartLaunch: true once all 8 harts of one CCE posted their status (2x, every CCE, 2026-10-22).
 inline constexpr bool kEightHartLaunchPasses = true;
 
-// Hart data area (tl1_data) layout of the MM43 cases, clear of the probes' source block and Scope flag lines.
+// Hart data area (tl1_data) layout of the MM43 cases, clear of the probes' source block and observer flag lines.
 inline constexpr uint64_t kOwnDestinationOffsetFromData = 0x10000;
 inline constexpr uint64_t kTableOffsetFromData = 0x22000;
 inline constexpr uint64_t kTraceOffsetFromData = 0x23000;
@@ -108,6 +103,7 @@ std::string code_name(uint32_t code) {
         case abi::kCodeBadArgs: return "bad_args";
         case abi::kCodePeerTimeout: return "peer_timeout";
         case abi::kCodeStreamBudget: return "stream_budget";
+        case abi::kCodeNotLandedAtAck: return "not_landed_at_ack";
     }
     return fmt::format("unknown_code_0x{:x}", code);
 }
@@ -525,6 +521,7 @@ struct Transfer {
     uint32_t trid_stride = 0;
     bool host_verified = false;
     bool shared_slots = false;
+    bool check_at_ack = false;
 
     // The bytes of each slot.
     uint32_t bytes() const { return shared_slots ? len_bytes : num_commands * len_bytes; }
@@ -636,6 +633,7 @@ public:
     }
 
     void set_host_verified(size_t index) { transfers_.at(index).host_verified = true; }
+    void set_check_at_ack(size_t index) { transfers_.at(index).check_at_ack = true; }
 
     // The words transfer `index` copies, as the model has them when it runs.
     std::vector<uint32_t> copied_words(size_t index) const {
@@ -708,6 +706,7 @@ public:
         args[abi::kArgTrid] = batch.first_trid;
         args[abi::kArgTridStride] = batch.trid_stride;
         args[abi::kArgHostVerified] = batch.host_verified ? 1 : 0;
+        args[abi::kArgCheckAtAck] = batch.check_at_ack ? 1 : 0;
         return args;
     }
 
@@ -787,19 +786,6 @@ public:
             << label << ": guard after " << target_name(target) << " overwritten";
         EXPECT_EQ(read_endpoint(unit_mesh, device, guard_before(region.base), 0, kGuardBytes), leading_guard(target))
             << label << ": guard before " << target_name(target) << " overwritten";
-    }
-
-    // Words of `target` that differ from the model, with no recheck.
-    uint32_t mismatched_words(distributed::MeshDevice& unit_mesh, IDevice* device, Target target) const {
-        const Region& region = regions_.at(target);
-        const std::vector<uint32_t> expected = final_model().at(target);
-        const std::vector<uint32_t> actual =
-            read_endpoint(unit_mesh, device, region.base, 0, static_cast<uint32_t>(expected.size() * 4));
-        uint32_t mismatches = 0;
-        for (size_t word = 0; word < expected.size(); ++word) {
-            mismatches += expected[word] != actual[word] ? 1 : 0;
-        }
-        return mismatches;
     }
 
 private:
@@ -994,193 +980,7 @@ std::optional<std::vector<uint32_t>> run_scenario_table(
     return status;
 }
 
-// "" when the descriptor has one Mimir (no remote legs) or the remote preflight passed.
-std::string remote_legs_skip_reason() {
-    if (topology_from(configured_soc_desc()).num_mimirs < 2) {
-        return "";
-    }
-    return mimir_remote_preflight_result();
-}
-
 bool has_remote_mimir() { return topology_from(configured_soc_desc()).num_mimirs >= 2; }
-
-class MimirTridProbe : public ::testing::TestWithParam<uint32_t> {
-protected:
-    void SetUp() override {
-        skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
-    }
-
-    // Runs one GDDR batch on one hart and checks it landed; returns its status line, empty on the host deadline.
-    std::vector<uint32_t> run_batch(
-        distributed::MeshDevice& unit_mesh,
-        IDevice* device,
-        const GddrBatch& batch,
-        uint32_t tag,
-        const std::string& label) {
-        const metal_SocDescriptor& soc = soc_desc_of(device);
-        const std::vector<uint32_t> source = prepare_batch(unit_mesh, device, soc, batch, tag);
-        log_info(tt::LogTest, "MM43 {}", label);
-        const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-            run_on_cce(device, batch.cce_index, {{batch.hart, batch_args(soc, batch)}});
-        if (!statuses.has_value()) {
-            ADD_FAILURE() << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
-            return {};
-        }
-        const std::vector<uint32_t>& status = statuses->front();
-        log_info(tt::LogTest, "MM43 {}: {}", label, status_detail(status));
-        record_leg("batch", "status", status_detail(status));
-        EXPECT_EQ(status[abi::kStatusCode], abi::kCodeLanded)
-            << label << ": " << status_detail(status) << code_note(status[abi::kStatusCode]);
-        EXPECT_EQ(status[abi::kStatusElementsIssued], batch.num_commands) << label;
-        expect_batch_sample(unit_mesh, soc, batch, source, tag, label);
-        return status;
-    }
-};
-
-// Highest pending count of one trid seen right after each of 16 back-to-back commands. Gates the NominalDepth and
-// Saturate high-water asserts.
-TEST_P(MimirTridProbe, PendingVisible) {
-    const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-    const GddrBatch batch{
-        .cce_index = cce_index, .num_commands = 16, .len_bytes = abi::kMaxBytesInPacket, .first_trid = 3};
-    const std::vector<uint32_t> status = run_batch(
-        device_closer.mesh(),
-        device,
-        batch,
-        1,
-        fmt::format("PendingVisible on CCE{}: 16 x 8 KiB to local GDDR on trid 3", cce_index));
-    if (!status.empty()) {
-        RecordProperty("pending_high_water", static_cast<int>(status[abi::kStatusPendingHighWater]));
-    }
-}
-
-// 32 commands over trids 0-15 twice, so up to 32 outstanding; records the VC-space stall cycles. Non-gating.
-TEST_P(MimirTridProbe, DepthBeyond16) {
-    const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-    const GddrBatch batch{
-        .cce_index = cce_index, .num_commands = 32, .len_bytes = 2048, .first_trid = 0, .trid_stride = 1};
-    const std::vector<uint32_t> status = run_batch(
-        device_closer.mesh(),
-        device,
-        batch,
-        2,
-        fmt::format("DepthBeyond16 on CCE{}: 32 x 2 KiB to local GDDR, trids 0-15 twice", cce_index));
-    if (!status.empty()) {
-        RecordProperty("vc_space_cycles", static_cast<int>(status[abi::kStatusVcSpaceCycles]));
-        RecordProperty("pending_high_water", static_cast<int>(status[abi::kStatusPendingHighWater]));
-    }
-}
-
-// Writes TR_ID 17 and records what the 4-bit field kept and which pending counter the command used. Records only:
-// MIM-539 (TRID[4] dropped) cannot be told apart from the field's truncation through Metal's API.
-TEST_P(MimirTridProbe, Width) {
-    constexpr uint32_t kWideTrid = 17;
-    const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-    const GddrBatch batch{
-        .cce_index = cce_index,
-        .mode = abi::kModeTridWidth,
-        .num_commands = 1,
-        .len_bytes = abi::kMaxBytesInPacket,
-        .first_trid = kWideTrid};
-    const std::vector<uint32_t> status = run_batch(
-        device_closer.mesh(),
-        device,
-        batch,
-        3,
-        fmt::format("Width on CCE{}: TR_ID {} then one 8 KiB command to local GDDR", cce_index, kWideTrid));
-    if (!status.empty()) {
-        const std::string result = fmt::format(
-            "TR_ID read back {} (written {}); pending right after issue: trid {} {}, trid {} {}",
-            status[abi::kStatusProbeFirst],
-            kWideTrid,
-            kWideTrid % abi::kNumTrids,
-            status[abi::kStatusPendingHighWater],
-            kWideTrid,
-            status[abi::kStatusProbeSecond]);
-        log_info(tt::LogTest, "MM43 Width on CCE{}: {}", cce_index, result);
-        RecordProperty("width", result);
-    }
-}
-
-// Hart A issues 16 commands on one trid and, while they are pending, hart B on the same CCE reads that trid's pending
-// count on its own command buffer. B's count 0 while A's is nonzero means the counters are per hart. Inconclusive when
-// A reads 0 at either of its reads. Gates MultiHart's ID partitioning.
-TEST_P(MimirTridProbe, Scope) {
-    constexpr uint32_t kIssuerHart = 0;
-    constexpr uint32_t kObserverHart = 1;
-    constexpr uint32_t kTrid = 5;
-    const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    const metal_SocDescriptor& soc = soc_desc_of(device);
-    record_descriptor_properties(soc);
-
-    const uint64_t peer_flag_offset = tl1_data(kIssuerHart) + kPeerFlagOffsetFromData;
-    const GddrBatch batch{
-        .cce_index = cce_index,
-        .hart = kIssuerHart,
-        .mode = abi::kModeTridScopeIssuer,
-        .num_commands = 16,
-        .len_bytes = abi::kMaxBytesInPacket,
-        .first_trid = kTrid,
-        .peer_flag_offset = peer_flag_offset};
-    const uint32_t tag = 4;
-    const std::vector<uint32_t> source = prepare_batch(device_closer.mesh(), device, soc, batch, tag);
-    write_cce_tl1(
-        device, cce_index, peer_flag_offset, std::vector<uint32_t>(2 * abi::kLineBytes / sizeof(uint32_t), 0));
-    const std::string label = fmt::format(
-        "Scope on CCE{}: hart {} issues 16 x 8 KiB to local GDDR on trid {}, hart {} reads trid {}",
-        cce_index,
-        kIssuerHart,
-        kTrid,
-        kObserverHart,
-        kTrid);
-    log_info(tt::LogTest, "MM43 {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_on_cce(
-        device,
-        cce_index,
-        {{kIssuerHart, batch_args(soc, batch)},
-         {kObserverHart, observer_args(kObserverHart, kTrid, peer_flag_offset)}});
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
-    const std::vector<uint32_t>& issuer = (*statuses)[0];
-    const std::vector<uint32_t>& observer = (*statuses)[1];
-    log_info(tt::LogTest, "MM43 {}: issuer {}; observer {}", label, status_detail(issuer), status_detail(observer));
-    EXPECT_EQ(issuer[abi::kStatusCode], abi::kCodeLanded)
-        << label << ": issuer " << status_detail(issuer) << code_note(issuer[abi::kStatusCode]);
-    EXPECT_EQ(observer[abi::kStatusCode], abi::kCodeAcked) << label << ": observer " << status_detail(observer);
-    expect_batch_sample(device_closer.mesh(), soc, batch, source, tag, label);
-
-    const uint32_t issuer_before = issuer[abi::kStatusProbeFirst];
-    const uint32_t issuer_after = issuer[abi::kStatusProbeSecond];
-    const uint32_t observed = observer[abi::kStatusProbeFirst];
-    std::string scope = "inconclusive (issuer read 0 pending)";
-    if (issuer_before != 0 && issuer_after != 0) {
-        scope = observed == 0 ? "per hart" : "shared or aliased";
-    }
-    const std::string result = fmt::format(
-        "{}: issuer pending {} before and {} after, observer read {}", scope, issuer_before, issuer_after, observed);
-    log_info(tt::LogTest, "MM43 {}: {}", label, result);
-    RecordProperty("trid_scope", result);
-}
-
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 // Opens device 0 for one test and closes it at TearDown, or earlier with close_device().
 class MimirTridTest {
@@ -1288,8 +1088,8 @@ inline constexpr uint32_t kTableCommandBytes = 512;
 // TL1 that is host-verified gets no data poll, so the status store could overlap its landing (MIM-560).
 TEST_P(MimirTridIdma, MixedTargets) {
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
+    if (has_remote_mimir()) {
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
     IDevice* device = open_device();
     const bool remote = has_remote_mimir();
@@ -1348,41 +1148,44 @@ TEST_P(MimirTridIdma, ReuseWrap) {
         device_closer_->mesh(), device, read_scenario, read_batch, fmt::format("ReuseWrap on CCE{}", GetParam()));
 }
 
-// 16 commands outstanding on one trid: trid 9 writing GDDR0, then trid 15 writing the sibling CCE's TL1.
+// 16 commands outstanding on one trid: trid 9 writing GDDR0, then trid 15 writing the sibling CCE's TL1. The trid's
+// pending count must cover more than one command, and every command's data must be in place when it reads 0 (the
+// kernel checks once at that point, kArgCheckAtAck, instead of waiting for the data).
 TEST_P(MimirTridIdma, DuplicateId) {
     IDevice* device = open_device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
+    const std::string label = fmt::format("DuplicateId on CCE{}", GetParam());
     TridScenario gddr_scenario(soc, "DuplicateId_gddr0", GetParam(), kTridHart, 0x58);
     const size_t gddr_batch = gddr_scenario.add(
         Target::OwnSource, Target::Gddr0, kUniqueIdsCommandBytes, kUniqueIdsCommands, /*first_trid=*/9);
-    const std::optional<std::vector<uint32_t>> gddr_status = run_scenario_batch(
-        device_closer_->mesh(), device, gddr_scenario, gddr_batch, fmt::format("DuplicateId on CCE{}", GetParam()));
+    gddr_scenario.set_check_at_ack(gddr_batch);
+    const std::optional<std::vector<uint32_t>> gddr_status =
+        run_scenario_batch(device_closer_->mesh(), device, gddr_scenario, gddr_batch, label);
     if (!gddr_status.has_value()) {
         return;
     }
-    RecordProperty("gddr0_pending_high_water", static_cast<int>((*gddr_status)[abi::kStatusPendingHighWater]));
+    EXPECT_GT((*gddr_status)[abi::kStatusPendingHighWater], 1u)
+        << label << ": trid 9 never counted more than one outstanding command; " << status_detail(*gddr_status);
     TridScenario sibling_scenario(soc, "DuplicateId_sibling", GetParam(), kTridHart, 0x59);
     const size_t sibling_batch = sibling_scenario.add(
         Target::OwnSource, Target::SiblingTl1, kUniqueIdsCommandBytes, kUniqueIdsCommands, /*first_trid=*/15);
-    const std::optional<std::vector<uint32_t>> sibling_status = run_scenario_batch(
-        device_closer_->mesh(),
-        device,
-        sibling_scenario,
-        sibling_batch,
-        fmt::format("DuplicateId on CCE{}", GetParam()));
+    sibling_scenario.set_check_at_ack(sibling_batch);
+    const std::optional<std::vector<uint32_t>> sibling_status =
+        run_scenario_batch(device_closer_->mesh(), device, sibling_scenario, sibling_batch, label);
     if (sibling_status.has_value()) {
-        RecordProperty("sibling_pending_high_water", static_cast<int>((*sibling_status)[abi::kStatusPendingHighWater]));
+        EXPECT_GT((*sibling_status)[abi::kStatusPendingHighWater], 1u)
+            << label << ": trid 15 never counted more than one outstanding command; " << status_detail(*sibling_status);
     }
 }
 
 inline constexpr uint32_t kNominalDepthCommandBytes = 1024;
 
 // 16 trids outstanding back to back in one table: writes and reads alternating over GDDR0 and GDDR1 and, on 2x, writes
-// over D2D to the remote GDDR. Asserts a pending count was seen once MimirTridProbe.PendingVisible showed them.
+// over D2D to the remote GDDR. Asserts a trid read pending right after its issue.
 TEST_P(MimirTridIdma, NominalDepth) {
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
+    if (has_remote_mimir()) {
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
     IDevice* device = open_device();
     const bool remote = has_remote_mimir();
@@ -1410,9 +1213,7 @@ TEST_P(MimirTridIdma, NominalDepth) {
     const uint32_t high_water = (*status)[abi::kStatusPendingHighWater];
     RecordProperty("pending_high_water", static_cast<int>(high_water));
     // Each entry has its own trid, so a trid's count right after its issue is at most 1.
-    if (kPendingVisibleHighWater >= 1) {
-        EXPECT_GE(high_water, 1u) << "no trid read pending right after its issue";
-    }
+    EXPECT_GE(high_water, 1u) << "no trid read pending right after its issue";
 }
 
 inline constexpr uint32_t kSaturateCommands = 32;
@@ -1430,14 +1231,13 @@ std::vector<Target> saturate_destinations(bool remote) {
 // Each write backend with kSaturateCommands 8 KiB commands on one trid, one backend at a time, then every backend in
 // one table of 8 KiB entries, kSaturateCombinedRounds per backend, each backend on its own trid. Commands of a leg
 // share one source and one destination slot, so 8 KiB commands fit the TL1 regions. Small commands to TL1 finish
-// before the next issue (high water 1 with 256 B), so every command is kMaxBytesInPacket. Once
-// MimirTridProbe.PendingVisible saw counts above 1, the per-backend legs assert more than one command pending on their
-// trid and the combined table more than one pending in total across its trids; every leg records its high water and
-// VC space stall cycles. Reads only the hart's own TL1.
+// before the next issue (high water 1 with 256 B), so every command is kMaxBytesInPacket. The per-backend legs assert
+// more than one command pending on their trid and the combined table more than one pending in total across its trids;
+// every leg records its high water and VC space stall cycles. Reads only the hart's own TL1.
 TEST_P(MimirTridIdma, Saturate) {
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
+    if (has_remote_mimir()) {
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
     IDevice* device = open_device();
     const bool remote = has_remote_mimir();
@@ -1450,7 +1250,7 @@ TEST_P(MimirTridIdma, Saturate) {
         const uint32_t high_water = status[abi::kStatusPendingHighWater];
         RecordProperty(leg + "_pending_high_water", static_cast<int>(high_water));
         RecordProperty(leg + "_vc_space_cycles", static_cast<int>(status[abi::kStatusVcSpaceCycles]));
-        if (assert_depth && kPendingVisibleHighWater >= 2) {
+        if (assert_depth) {
             EXPECT_GE(high_water, 2u) << leg << ": never more than one 8 KiB command pending on a trid";
         }
     };
@@ -1492,21 +1292,18 @@ TEST_P(MimirTridIdma, Saturate) {
         const uint32_t largest_issue_gap = (*status)[abi::kStatusProbeFirst];
         RecordProperty("combined_total_pending_high_water", static_cast<int>(total_high_water));
         RecordProperty("combined_largest_issue_gap_cycles", static_cast<int>(largest_issue_gap));
-        if (kPendingVisibleHighWater >= 2) {
-            EXPECT_GE(total_high_water, 2u)
-                << "combined: never more than one 8 KiB command pending across the backends; largest gap between "
-                << "issues " << largest_issue_gap << " cycles";
-        }
+        EXPECT_GE(total_high_water, 2u)
+            << "combined: never more than one 8 KiB command pending across the backends; largest gap between "
+            << "issues " << largest_issue_gap << " cycles";
     }
 }
 
 // BarrierThenDependent: the upstream test_transaction_id intent in two launches, since no kernel mode waits on one trid
-// and then issues within a launch. Both launches are host-verified: a GDDR destination gets only the per-trid ack wait,
-// an own-TL1 destination also the XOR poll. The second launch issues the dependent transfer on the same trids. Gates
-// on the final data; an ack does not prove the data landed (MIM-628).
+// and then issues within a launch. The second launch issues the dependent transfer on the same trids. A host-verified
+// launch to GDDR gets only the per-trid ack wait; one into the hart's own TL1 also the XOR poll.
 
-// Write own TL1 -> GDDR0, then read that GDDR0 slot back. Gates on GDDR0; the read's result is recorded (stale words
-// right after the ack), not gated, and a data timeout on it is recorded as stale.
+// Write own TL1 -> GDDR0, host-verified, then read that GDDR0 slot back into own TL1, host-verified. Gates on GDDR0 and
+// on the read holding what the write wrote.
 TEST_P(MimirTridIdma, BarrierThenDependentReadAfterWrite) {
     IDevice* device = open_device();
     TridScenario scenario(soc_desc_of(device), "ReadAfterWrite", GetParam(), kTridHart, 0x70);
@@ -1545,17 +1342,16 @@ TEST_P(MimirTridIdma, BarrierThenDependentReadAfterWrite) {
     const std::string read_detail = status_detail(*read_status);
     log_info(tt::LogTest, "MM43 {} dependent read: {}{}", label, read_detail, code_note(read_code));
     record_leg("dependent_read", "status", read_detail);
-    EXPECT_TRUE(read_code == abi::kCodeAcked || read_code == abi::kCodeDataTimeout) << label << ": " << read_detail;
+    EXPECT_EQ(read_code, abi::kCodeAcked) << label << ": " << read_detail;
     EXPECT_EQ((*read_status)[abi::kStatusFlags] & abi::kFlagAcked, abi::kFlagAcked) << label << ": " << read_detail;
 
     scenario.expect_region(device_closer_->mesh(), device, Target::Gddr0, label);
-    const uint32_t stale_words = scenario.mismatched_words(device_closer_->mesh(), device, Target::OwnDestination);
-    log_info(tt::LogTest, "MM43 {}: dependent read saw {} stale words", label, stale_words);
-    RecordProperty("dependent_stale_words", static_cast<int>(stale_words));
+    scenario.expect_region(device_closer_->mesh(), device, Target::OwnDestination, label);
     RecordProperty("dependent_data_cycles", static_cast<int>((*read_status)[abi::kStatusDataCycles]));
 }
 
-// Read GDDR0 -> own TL1, then overwrite that GDDR0 slot. Gates on both: the read holds the old data and GDDR0 the new.
+// Read GDDR0 -> own TL1, with the data checked once when its trids read 0 (kArgCheckAtAck), then overwrite that GDDR0
+// slot, host-verified. Gates on both: the read holds the old data and GDDR0 the new.
 TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
     IDevice* device = open_device();
     TridScenario scenario(soc_desc_of(device), "WriteAfterRead", GetParam(), kTridHart, 0x78);
@@ -1566,9 +1362,9 @@ TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
         kUniqueIdsCommands,
         /*first_trid=*/0,
         /*trid_stride=*/1);
-    scenario.set_host_verified(read_batch);
     const size_t write_batch = scenario.add_overwriting_source_of(read_batch);
     scenario.set_host_verified(write_batch);
+    scenario.set_check_at_ack(read_batch);
     scenario.write(device_closer_->mesh(), device);
 
     const std::string label = fmt::format("BarrierThenDependent WriteAfterRead on CCE{}", GetParam());
@@ -1581,7 +1377,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
         device,
         scenario,
         *read_status,
-        abi::kCodeAcked,
+        abi::kCodeLanded,
         kUniqueIdsCommands,
         scenario.transfer(read_batch).used_trids(),
         label + " read");
@@ -1604,8 +1400,8 @@ TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
 inline constexpr uint32_t kMultiHartCommands = 16;
 
 // All 8 harts of one CCE issue at once, each its own GDDR region (even harts GDDR0, odd GDDR1), so no TL1 is written
-// while any hart may store its status (MIM-560). Trids are shared out per hart unless MimirTridProbe.Scope showed the
-// counters are per hart.
+// while any hart may store its status (MIM-560). Each hart gets its own trid, because the pending counters may be
+// shared by every hart of the CCE.
 TEST_P(MimirTridIdma, MultiHart) {
     if (!kEightHartLaunchPasses) {
         GTEST_SKIP() << "Gated on MimirCacheProbe.EightHartLaunch (kEightHartLaunchPasses).";
@@ -1623,12 +1419,11 @@ TEST_P(MimirTridIdma, MultiHart) {
             hart % 2 == 0 ? Target::Gddr0 : Target::Gddr1,
             kUniqueIdsCommandBytes,
             kMultiHartCommands,
-            kTridCountersPerHart ? 0 : 2 * hart,
-            kTridCountersPerHart ? 1 : 0);
+            2 * hart,
+            0);
         scenario.write(device_closer_->mesh(), device);
         launches.push_back(scenario_launch(scenario, scenario.batch_args(0)));
     }
-    RecordProperty("trid_partition", kTridCountersPerHart ? "every hart trids 0-15" : "hart h trid 2h");
     const std::string label = fmt::format("MultiHart on CCE{}", GetParam());
     log_info(tt::LogTest, "MM43 {}", label);
     const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_kernels(device, launches);
@@ -1657,8 +1452,8 @@ inline constexpr uint32_t kFairnessTableEntries = 16;
 // space and ack stalls are recorded. Only GDDR is written, so no CCE's TL1 takes a write while another stores status.
 TEST_P(MimirTridIdma, Fairness) {
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
+    if (has_remote_mimir()) {
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
     IDevice* device = open_device();
     const bool remote = has_remote_mimir();
@@ -1752,8 +1547,8 @@ inline constexpr uint32_t kSoakMaxLines = 8;
 // and records its seed, per-trid use and stalls. Remote targets (2x) are written only, host-verified.
 TEST_P(MimirTridIdma, Soak) {
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
+    if (has_remote_mimir()) {
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
     IDevice* device = open_device();
     const bool remote = has_remote_mimir();
@@ -1869,7 +1664,7 @@ protected:
     void TearDown() override { close_device(); }
 };
 
-// The first session ends with every trid acked. After the reopen, the Scope observer mode with its issuer flag already
+// The first session ends with every trid acked. After the reopen, the observer mode with its issuer flag already
 // set reads one trid's pending count on command buffer 0 without issuing; one launch per trid on the same hart.
 TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
     const uint32_t cce_index = GetParam();

@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // One iDMA copy through command buffer 0, with every poll bounded. Completion is a bounded ack poll on trid 0, then a
-// bounded poll of the destination data (MIM-628: done fires on accept). The status line is written only after the data
-// poll (MIM-560), through the uncached alias. In kModeIdmaCopyHostVerified the kernel loads no remote operand: when the
-// destination is its own TL1 it polls the XOR of the destination against kArgExpectedXor, otherwise there is no data
-// poll; the host checks the data. kModeIdmaStrided issues one command per element from address generator 0. The MM4x
-// modes (kModeTridBatch, kModeAccumulate, kModeTridTable, kModeTridStream, kModeTridScope*, kModeTridWidth) set the
-// trid per command and wait on each trid's pending count, all under one budget. kModeTridBatch and kModeAccumulate run
-// on command buffer 0 or 1; the other modes on command buffer 0.
+// bounded poll of the destination data. The command-buffer ack follows the write response; MIM-628 (done fires on
+// accept) covers only the iDMA sideband done_id, which no mode here uses. The status line is written only after the
+// data poll (MIM-560), through the uncached alias. In kModeIdmaCopyHostVerified the kernel loads no remote operand:
+// when the destination is its own TL1 it polls the XOR of the destination against kArgExpectedXor, otherwise there is
+// no data poll; the host checks the data. kModeIdmaStrided issues one command per element from address generator 0.
+// The MM4x modes (kModeTridBatch, kModeAccumulate, kModeTridTable, kModeTridStream) set the trid per command and wait
+// on each trid's pending count, all under one budget. kModeTridBatch and kModeAccumulate run on command buffer 0 or 1;
+// the other modes on command buffer 0.
 
 #include "cce_idma_copy_abi.h"
 #include "cce_test_common.h"
@@ -80,8 +81,7 @@ static bool data_landed(
 
 // XOR of the destination words against the host's XOR of the source; on a mismatch, `check` holds the two XORs.
 static bool destination_xor_matches(
-    const Operand& destination, uint32_t num_words, uint32_t expected_xor, DataCheck& check) {
-    const volatile uint32_t* destination_words = reinterpret_cast<const volatile uint32_t*>(destination.check_address);
+    const volatile uint32_t* destination_words, uint32_t num_words, uint32_t expected_xor, DataCheck& check) {
     uint32_t observed_xor = 0;
     for (uint32_t word = 0; word < num_words; ++word) {
         observed_xor ^= destination_words[word];
@@ -196,10 +196,9 @@ struct BatchArgs {
     bool accumulate_disable_saturation = false;
     uint32_t expected_lo = 0;
     uint32_t expected_hi = 0;
-    uint32_t dirty_first_line = 0;
-    uint64_t dirty_line_offset = 0;
     uint32_t poll_region_offset = 0;
     uint32_t poll_region_bytes = 0;
+    bool check_at_ack = false;
 };
 
 static uint32_t command_trid(const BatchArgs& batch, uint32_t command) {
@@ -346,7 +345,10 @@ static bool accumulate_result_matches(const Operand& destination, const BatchArg
 }
 
 // Waits for every trid in `used_trids`, then polls the data of every command unless the batch is host-verified with a
-// destination other than the kernel's own TL1. An accumulate batch polls its result against the host's model.
+// destination other than the kernel's own TL1. An accumulate batch polls its result against the host's model. A
+// host-verified batch with a poll region polls the XOR of the region instead of the destination's. With check_at_ack
+// the data is first compared once, right after the trids read 0, so a done that comes before the data is not waited
+// out.
 template <CmdBuf CMDBUF>
 static void complete_batch(
     const BatchArgs& batch,
@@ -360,11 +362,31 @@ static void complete_batch(
     uint32_t* trace,
     Report& report) {
     wait_for_trids<CMDBUF>(used_trids, last_issue_cycles, deadline, success_code, trace, report);
+    if (batch.check_at_ack && (report.flags & abi::kFlagAcked) != 0) {
+        DataCheck at_ack;
+        data_landed(
+            source,
+            destination,
+            batch.len_bytes,
+            batch.num_commands,
+            batch.source_stride_bytes,
+            batch.destination_stride_bytes,
+            at_ack);
+        report.probe_first = at_ack.mismatched_words;
+        if (at_ack.mismatched_words != 0) {
+            record_failure(report, success_code, abi::kCodeNotLandedAtAck);
+        }
+    }
 
     if (batch.host_verified && destination_kind != abi::kKindOwnTl1) {
         return;
     }
-    const uint32_t num_words = batch.num_commands * batch.len_bytes / sizeof(uint32_t);
+    const bool poll_region = batch.poll_region_bytes != 0;
+    const volatile uint32_t* polled_words = poll_region
+                                                ? cce_test::own_tl1_words(batch.poll_region_offset)
+                                                : reinterpret_cast<const volatile uint32_t*>(destination.check_address);
+    const uint32_t num_words =
+        (poll_region ? batch.poll_region_bytes : batch.num_commands * batch.len_bytes) / sizeof(uint32_t);
     report.last_poll = abi::kPollData;
     report.last_poll_ready = poll_until(
         [&] {
@@ -372,7 +394,7 @@ static void complete_batch(
                 return accumulate_result_matches(destination, batch, report.check);
             }
             return batch.host_verified
-                       ? destination_xor_matches(destination, num_words, batch.expected_xor, report.check)
+                       ? destination_xor_matches(polled_words, num_words, batch.expected_xor, report.check)
                        : data_landed(
                              source,
                              destination,
@@ -401,7 +423,7 @@ static void write_trace(uint32_t trace_offset, const uint32_t* trace) {
     }
 }
 
-// kModeTridBatch, kModeAccumulate, kModeTridScopeIssuer and kModeTridWidth.
+// kModeTridBatch and kModeAccumulate.
 template <CmdBuf CMDBUF>
 static Report run_trid_issuer(
     uint32_t mode,
@@ -416,23 +438,21 @@ static Report run_trid_issuer(
     const uint32_t success_code = batch.host_verified ? abi::kCodeAcked : abi::kCodeLanded;
     report.code = success_code;
     const cce_test::WaitDeadline deadline(budget_cycles);
-    const bool width_probe = mode == abi::kModeTridWidth;
-    const bool dirty_line = batch.accumulate && batch.dirty_first_line != 0;
-    if (dirty_line) {
-        volatile uint32_t* cached_line = reinterpret_cast<volatile uint32_t*>(batch.dirty_line_offset);
-        for (uint32_t word = 0; word < abi::kLineBytes / sizeof(uint32_t); ++word) {
-            cached_line[word] = batch.dirty_first_line;
+    setup_batch<CMDBUF>(batch, command_trid(batch, 0));
+
+    if (mode == abi::kModeTridBatch && peer_flag_offset != 0) {
+        const volatile uint32_t* start_flag = cce_test::own_tl1_words(peer_flag_offset);
+        report.last_poll = abi::kPollPeer;
+        uint32_t peer_cycles = 0;
+        report.last_poll_ready = poll_until([start_flag] { return *start_flag != 0; }, deadline, peer_cycles);
+        if (!report.last_poll_ready) {
+            record_failure(report, success_code, abi::kCodePeerTimeout);
         }
-    }
-    setup_batch<CMDBUF>(batch, width_probe ? batch.first_trid : command_trid(batch, 0));
-    if (width_probe) {
-        report.probe_first = static_cast<uint32_t>(
-            __builtin_riscv_ttrocc_cmdbuf_rd_reg(CMDBUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8));
     }
 
     uint32_t used_trids = 0;
-    for (uint32_t command = 0; command < batch.num_commands; ++command) {
-        const uint32_t trid = width_probe ? batch.first_trid : command_trid(batch, command);
+    for (uint32_t command = 0; command < batch.num_commands && report.code == success_code; ++command) {
+        const uint32_t trid = command_trid(batch, command);
         if (!issue_command<CMDBUF>(batch, source, destination, command, trid, deadline, report)) {
             record_failure(report, success_code, abi::kCodeVcSpaceTimeout);
             break;
@@ -440,40 +460,12 @@ static Report run_trid_issuer(
         report.flags |= abi::kFlagVcSpace;
         used_trids |= 1u << (trid % abi::kNumTrids);
         record_pending(pending_count<CMDBUF>(trid % abi::kNumTrids), report);
-        if (width_probe) {
-            report.probe_second = pending_count<CMDBUF>(trid);
-        }
     }
     const uint64_t last_issue_cycles = cce_test::read_cycle_counter();
     if (report.code != success_code) {
         report.flags &= ~abi::kFlagVcSpace;
     }
 
-    if (mode == abi::kModeTridScopeIssuer && report.code == success_code) {
-        report.probe_first = pending_count<CMDBUF>(batch.first_trid);
-        *cce_test::own_tl1_words(peer_flag_offset) = 1;
-        volatile uint32_t* observer_flag = cce_test::own_tl1_words(peer_flag_offset + abi::kLineBytes);
-        report.last_poll = abi::kPollPeer;
-        uint32_t peer_cycles = 0;
-        report.last_poll_ready = poll_until([observer_flag] { return *observer_flag == 1; }, deadline, peer_cycles);
-        if (report.last_poll_ready) {
-            report.probe_second = pending_count<CMDBUF>(batch.first_trid);
-        } else {
-            record_failure(report, success_code, abi::kCodePeerTimeout);
-        }
-    }
-
-    if (width_probe && report.elements_issued != 0) {
-        const uint32_t written_trid = batch.first_trid;
-        uint32_t width_ack_cycles = 0;
-        report.last_poll = abi::kPollAck;
-        report.last_poll_ready =
-            poll_until([written_trid] { return pending_count<CMDBUF>(written_trid) == 0; }, deadline, width_ack_cycles);
-        report.ack_cycles += width_ack_cycles;
-        if (!report.last_poll_ready) {
-            record_failure(report, success_code, abi::kCodeAckTimeout);
-        }
-    }
     if (used_trids != 0) {
         BatchArgs issued = batch;
         issued.num_commands = report.elements_issued;
@@ -488,11 +480,6 @@ static Report run_trid_issuer(
             success_code,
             trace,
             report);
-    }
-    if (dirty_line) {
-        flush_l1_dcache(batch.dirty_line_offset);
-        flush_l2_cache_line(batch.dirty_line_offset);
-        report.probe_first = *cce_test::own_tl1_words(batch.dirty_line_offset);
     }
     return report;
 }
@@ -761,10 +748,9 @@ static void run_mm4x_mode(uint32_t mode, uint32_t status_offset, uint64_t budget
         .accumulate_disable_saturation = get_arg_val<uint32_t>(abi::kArgAccumulateDisableSaturation) != 0,
         .expected_lo = get_arg_val<uint32_t>(abi::kArgExpectedLo),
         .expected_hi = get_arg_val<uint32_t>(abi::kArgExpectedHi),
-        .dirty_first_line = get_arg_val<uint32_t>(abi::kArgDirtyFirstLine),
-        .dirty_line_offset = destination_offset & ~static_cast<uint64_t>(abi::kLineBytes - 1),
         .poll_region_offset = get_arg_val<uint32_t>(abi::kArgPollRegionOffset),
-        .poll_region_bytes = get_arg_val<uint32_t>(abi::kArgPollRegionBytes)};
+        .poll_region_bytes = get_arg_val<uint32_t>(abi::kArgPollRegionBytes),
+        .check_at_ack = get_arg_val<uint32_t>(abi::kArgCheckAtAck) != 0};
     Operand source;
     Operand destination;
     const bool operands_known =
@@ -774,39 +760,37 @@ static void run_mm4x_mode(uint32_t mode, uint32_t status_offset, uint64_t budget
             arg_u64(abi::kArgSrcOffsetLo, abi::kArgSrcOffsetHi),
             source) &&
         resolve_operand(destination_kind, get_arg_val<uint32_t>(abi::kArgDstSelector), destination_offset, destination);
-    const bool commands_valid = mode == abi::kModeTridWidth
-                                    ? batch.num_commands == 1
-                                    : batch.num_commands != 0 && batch.num_commands <= abi::kMaxElements;
+    const bool commands_valid = batch.num_commands != 0 && batch.num_commands <= abi::kMaxElements;
     const bool batch_valid = operands_known && batch.len_bytes != 0 && batch.len_bytes % 4 == 0 &&
                              batch.len_bytes <= abi::kMaxBytesInPacket && commands_valid &&
                              batch.source_stride_bytes % 4 == 0 && batch.destination_stride_bytes % 4 == 0;
     const bool command_buffer_valid =
         mode == abi::kModeTridBatch || accumulate ? command_buffer <= 1 : command_buffer == 0;
-    const bool trid_valid = mode == abi::kModeTridWidth || batch.first_trid < abi::kNumTrids;
+    const bool trid_valid = batch.first_trid < abi::kNumTrids;
+    const bool poll_region_valid =
+        batch.poll_region_bytes == 0 ||
+        (line_offset_valid(batch.poll_region_offset) && batch.poll_region_bytes % abi::kLineBytes == 0 &&
+         (accumulate || (mode == abi::kModeTridBatch && batch.host_verified && destination_kind == abi::kKindOwnTl1)));
+    const bool check_at_ack_valid = !batch.check_at_ack || (mode == abi::kModeTridBatch && !batch.host_verified);
     bool mode_valid = false;
     switch (mode) {
-        case abi::kModeTridBatch: mode_valid = batch_valid; break;
+        case abi::kModeTridBatch:
+            mode_valid = batch_valid && (peer_flag_offset == 0 || line_offset_valid(peer_flag_offset));
+            break;
         case abi::kModeAccumulate:
             mode_valid = batch_valid && destination_kind == abi::kKindOwnTl1 && batch.accumulate_format < 8 &&
-                         batch.accumulate_op < 16 && get_arg_val<uint32_t>(abi::kArgAccumulateDisableSaturation) <= 1 &&
-                         (batch.dirty_first_line == 0 || batch.dirty_line_offset != 0) &&
-                         (batch.poll_region_bytes == 0 || (line_offset_valid(batch.poll_region_offset) &&
-                                                           batch.poll_region_bytes % abi::kLineBytes == 0));
+                         batch.accumulate_op < 16 && get_arg_val<uint32_t>(abi::kArgAccumulateDisableSaturation) <= 1;
             break;
         case abi::kModeTridTable: mode_valid = commands_valid && line_offset_valid(table_offset); break;
         case abi::kModeTridStream:
             mode_valid = batch_valid && destination_kind != abi::kKindOwnTl1 && line_offset_valid(stop_offset) &&
                          line_offset_valid(progress_offset);
             break;
-        case abi::kModeTridScopeIssuer:
-            mode_valid = batch_valid && destination_kind == abi::kKindGddr && line_offset_valid(peer_flag_offset);
-            break;
         case abi::kModeTridScopeObserver: mode_valid = line_offset_valid(peer_flag_offset); break;
-        case abi::kModeTridWidth: mode_valid = batch_valid; break;
         default: break;
     }
-    const bool args_valid =
-        budget_cycles != 0 && trace_offset % abi::kLineBytes == 0 && trid_valid && command_buffer_valid && mode_valid;
+    const bool args_valid = budget_cycles != 0 && trace_offset % abi::kLineBytes == 0 && trid_valid &&
+                            command_buffer_valid && poll_region_valid && check_at_ack_valid && mode_valid;
 
     uint32_t trace[abi::kNumTrids * abi::kTraceWordsPerTrid];
     for (uint32_t& word : trace) {
@@ -877,9 +861,10 @@ void kernel_main() {
     const bool elements_valid =
         strided ? num_elements != 0 && num_elements <= abi::kMaxElements && source_stride_bytes % 4 == 0
                 : num_elements == 1;
-    const bool args_valid = operands_known && budget_cycles != 0 && len_bytes != 0 && len_bytes % 4 == 0 &&
-                            len_bytes <= abi::kMaxBytesInPacket && elements_valid &&
-                            (mode == abi::kModeIdmaCopy || host_verified || strided);
+    const bool args_valid =
+        operands_known && budget_cycles != 0 && len_bytes != 0 && len_bytes % 4 == 0 &&
+        len_bytes <= abi::kMaxBytesInPacket && elements_valid && get_arg_val<uint32_t>(abi::kArgPollRegionBytes) == 0 &&
+        get_arg_val<uint32_t>(abi::kArgCheckAtAck) == 0 && (mode == abi::kModeIdmaCopy || host_verified || strided);
 
     if (!args_valid) {
         code = abi::kCodeBadArgs;
@@ -930,15 +915,20 @@ void kernel_main() {
             if (run_poll(
                     abi::kPollData,
                     [&] {
-                        return host_verified ? destination_xor_matches(destination, num_words, expected_xor, check)
-                                             : data_landed(
-                                                   source,
-                                                   destination,
-                                                   len_bytes,
-                                                   num_elements,
-                                                   source_stride_bytes,
-                                                   len_bytes,
-                                                   check);
+                        return host_verified
+                                   ? destination_xor_matches(
+                                         reinterpret_cast<const volatile uint32_t*>(destination.check_address),
+                                         num_words,
+                                         expected_xor,
+                                         check)
+                                   : data_landed(
+                                         source,
+                                         destination,
+                                         len_bytes,
+                                         num_elements,
+                                         source_stride_bytes,
+                                         len_bytes,
+                                         check);
                     },
                     data_cycles)) {
                 flags |= abi::kFlagLanded;
