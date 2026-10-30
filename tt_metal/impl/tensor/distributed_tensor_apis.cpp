@@ -36,8 +36,14 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
         std::make_shared<distributed::MeshBuffer>(std::move(mesh_buffer)), std::move(spec), std::move(topology));
 }
 
-MeshTensor allocate_mesh_tensor_on_device_with_topology(
-    distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
+namespace {
+
+// Both allocate_mesh_tensor_on_device_with_topology overloads, so a prepared allocation passes the same checks.
+MeshTensor allocate_mesh_tensor_on_device(
+    distributed::MeshDevice& mesh_device,
+    TensorSpec spec,
+    TensorTopology topology,
+    ttsl::optional_reference<const PreparedTensorAllocation> prepared) {
     // Catch-all guard enforced at the device-binding boundary so any path that produces an FP8 tensor on
     // unsupported hardware fails loudly rather than silently generating programs that misbehave later.
     // Gate on the data-format capability (the same predicate used in data_format.cpp / program_spec.cpp)
@@ -48,8 +54,28 @@ MeshTensor allocate_mesh_tensor_on_device_with_topology(
             "FP8_E4M3 is not supported on arch {}",
             mesh_device.arch());
     }
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
+    auto mesh_buffer = prepared.has_value()
+                           ? tensor_impl::allocate_device_buffer(
+                                 &mesh_device, prepared->replicated_config(), prepared->device_local_config())
+                           : tensor_impl::allocate_device_buffer(&mesh_device, spec);
     return mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology));
+}
+
+}  // namespace
+
+MeshTensor allocate_mesh_tensor_on_device_with_topology(
+    distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
+    return allocate_mesh_tensor_on_device(mesh_device, std::move(spec), std::move(topology), std::nullopt);
+}
+
+PreparedTensorAllocation::PreparedTensorAllocation(TensorSpec spec) :
+    spec_(std::move(spec)),
+    device_local_config_(tensor_impl::compute_device_local_buffer_config(spec_)),
+    replicated_config_(tensor_impl::compute_replicated_buffer_config(spec_)) {}
+
+MeshTensor allocate_mesh_tensor_on_device_with_topology(
+    distributed::MeshDevice& mesh_device, const PreparedTensorAllocation& prepared, TensorTopology topology) {
+    return allocate_mesh_tensor_on_device(mesh_device, prepared.tensor_spec(), std::move(topology), prepared);
 }
 
 // ======================================================================================

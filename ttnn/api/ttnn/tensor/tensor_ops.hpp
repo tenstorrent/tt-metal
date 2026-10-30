@@ -17,6 +17,10 @@ class MeshDevice;
 class MeshCommandQueue;
 }  // namespace tt::tt_metal::distributed
 
+namespace tt::tt_metal {
+class PreparedTensorAllocation;
+}  // namespace tt::tt_metal
+
 namespace ttnn {
 class Tensor;
 }  // namespace ttnn
@@ -29,6 +33,12 @@ Tensor allocate_tensor_on_host(
     const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* mesh_device);
 Tensor create_device_tensor(
     const tt::tt_metal::TensorSpec& tensor_spec,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
+// Same as above for prepared.tensor_spec(), but allocates from the buffer configs prepared already holds instead of
+// computing them. For a caller that allocates the same spec repeatedly; see PreparedTensorAllocation.
+Tensor create_device_tensor(
+    const tt::tt_metal::PreparedTensorAllocation& prepared,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 

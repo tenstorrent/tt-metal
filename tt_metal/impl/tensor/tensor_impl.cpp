@@ -37,23 +37,35 @@ LocalHostShards select_local_host_shards(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
-    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+distributed::DeviceLocalBufferConfig compute_device_local_buffer_config(const TensorSpec& tensor_spec) {
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
 
-    distributed::DeviceLocalBufferConfig device_local_buffer_config{
+    return distributed::DeviceLocalBufferConfig{
         .page_size = tensor_spec.compute_page_size_bytes(),
         .buffer_type = memory_config.buffer_type(),
         .sharding_args = tensor_spec.compute_buffer_sharding_args(),
     };
+}
 
+distributed::ReplicatedBufferConfig compute_replicated_buffer_config(const TensorSpec& tensor_spec) {
     // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
     // This is required for the time being, as TTNN has rich multi-device sharding implementation.
-    const distributed::ReplicatedBufferConfig replicated_buffer_config{
+    return distributed::ReplicatedBufferConfig{
         .size = tensor_spec.compute_packed_buffer_size_bytes(),
     };
+}
 
-    return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
+    distributed::MeshDevice* mesh_device,
+    const distributed::ReplicatedBufferConfig& replicated_config,
+    const distributed::DeviceLocalBufferConfig& device_local_config) {
+    return distributed::MeshBuffer::create(replicated_config, device_local_config, mesh_device);
+}
+
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    return allocate_device_buffer(
+        mesh_device, compute_replicated_buffer_config(tensor_spec), compute_device_local_buffer_config(tensor_spec));
 }
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {

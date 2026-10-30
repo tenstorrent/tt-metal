@@ -22,6 +22,14 @@ namespace tt::tt_metal::tensor_impl {
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
+// The buffer configs a device allocation of tensor_spec uses; allocate_device_buffer builds its buffer from them.
+distributed::DeviceLocalBufferConfig compute_device_local_buffer_config(const TensorSpec& tensor_spec);
+distributed::ReplicatedBufferConfig compute_replicated_buffer_config(const TensorSpec& tensor_spec);
+
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
+    distributed::MeshDevice* mesh_device,
+    const distributed::ReplicatedBufferConfig& replicated_config,
+    const distributed::DeviceLocalBufferConfig& device_local_config);
 std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 

@@ -71,6 +71,40 @@ TensorTopology replicated_over_mesh(const tt::tt_metal::distributed::MeshShape& 
     return TensorTopology{mesh_shape, std::move(placements), std::move(coordinates)};
 }
 
+// Both create_device_tensor overloads, so a prepared allocation is tracked and labelled the same.
+Tensor create_device_tensor_impl(
+    const TensorSpec& tensor_spec,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<TensorTopology> tensor_topology,
+    ttsl::optional_reference<const tt::tt_metal::PreparedTensorAllocation> prepared) {
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.allocate_tensor_on_device");
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::create_device_tensor",
+        tensor_spec.logical_shape(),
+        tensor_spec.tensor_layout().get_data_type(),
+        tensor_spec.tensor_layout().get_layout(),
+        mesh_device,
+        tensor_spec.tensor_layout().get_memory_config());
+
+    Tensor output;
+    auto topology = std::invoke([&]() {
+        if (tensor_topology.has_value()) {
+            return std::move(*tensor_topology);
+        }
+        return replicated_over_mesh(mesh_device->shape());
+    });
+
+    output = Tensor(
+        prepared.has_value()
+            ? allocate_mesh_tensor_on_device_with_topology(*mesh_device, *prepared, std::move(topology))
+            : allocate_mesh_tensor_on_device_with_topology(*mesh_device, tensor_spec, std::move(topology)));
+    output = ttnn::set_tensor_id(output);
+
+    GraphTracker::instance().track_function_end(output);
+
+    return output;
+}
+
 }  // namespace
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
@@ -101,29 +135,14 @@ Tensor create_device_tensor(
     const TensorSpec& tensor_spec,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<TensorTopology> tensor_topology) {
-    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.allocate_tensor_on_device");
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::create_device_tensor",
-        tensor_spec.logical_shape(),
-        tensor_spec.tensor_layout().get_data_type(),
-        tensor_spec.tensor_layout().get_layout(),
-        mesh_device,
-        tensor_spec.tensor_layout().get_memory_config());
+    return create_device_tensor_impl(tensor_spec, mesh_device, std::move(tensor_topology), std::nullopt);
+}
 
-    Tensor output;
-    auto topology = std::invoke([&]() {
-        if (tensor_topology.has_value()) {
-            return std::move(*tensor_topology);
-        }
-        return replicated_over_mesh(mesh_device->shape());
-    });
-
-    output = Tensor(allocate_mesh_tensor_on_device_with_topology(*mesh_device, tensor_spec, topology));
-    output = ttnn::set_tensor_id(output);
-
-    GraphTracker::instance().track_function_end(output);
-
-    return output;
+Tensor create_device_tensor(
+    const tt::tt_metal::PreparedTensorAllocation& prepared,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<TensorTopology> tensor_topology) {
+    return create_device_tensor_impl(prepared.tensor_spec(), mesh_device, std::move(tensor_topology), prepared);
 }
 
 }  // namespace ttnn
