@@ -2650,7 +2650,8 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
 
 
 def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):
-    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0, trial_steps=1), 5)
+    # a one-step trial charges two replays: 2 x (30 - 20) / (3 x 20) = 0.33 within a 0.4 overhead at the 4th decision
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
     row = _row([0.4] * 5)  # (16,1): 1.4 tokens at 1.5x = 0.93x, the cheapest record and above min_gain / 4
     kinds = []
     for _ in range(8):
@@ -2662,7 +2663,9 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     # a longer trial holds its record for trial_steps steps; a step whose rows must reseed (every candidate
     # carries an entry: the replay was overtaken by a plain step the runner had in flight, contract s.4d) holds
     # the cheapest candidate, entry included, and an overtaken step does not age the trial
-    held = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=1.0, probe_steps=0, trial_steps=2), 5)
+    held = SpecPolicy(
+        SpecPolicyConfig(retry_steps=1, retry_overhead=2.0, probe_steps=0, trial_steps=2), 5
+    )  # 3 replays a trial
     assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None
     assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry" and held.trial_age == 1
     held.note_overtaken()
@@ -2674,16 +2677,19 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "trial_steps held: the gain decides"
     held.note_overtaken()
     assert held.trial_age == 0 and not held.trial, "nothing to un-age once declined"
-    # the overhead gate: (30 - 20) / (N x 20) <= 0.03 needs 17 plain steps, whatever retry_steps says, so the
-    # retry is the 18th decision
+    # the overhead gate charges the whole trial cycle (1 + trial_steps replays): 2 x (30 - 20) / (N x 20) <= 0.03
+    # needs 34 plain steps, whatever retry_steps says, so the retry is the 35th decision
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
-    first = next(i for i in range(1, 40) if policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None)
-    assert first == 18
-    # a reseed is part of the overhead: (900 + 30 - 20) / (N x 20) <= 0.2 needs 228 plain steps
-    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0, trial_steps=1), 5)
+    first = next(i for i in range(1, 60) if policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None)
+    assert first == 35
+    # a reseed is part of the overhead: 2 x (900 + 30 - 20) / (N x 20) <= 0.4 needs 228 plain steps
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
     reseeding = [RecordCandidate(s, 1024, ms, 900.0) for s, ms in _COSTS.items()]
-    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(228))
+    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(227))
     assert policy.decide(reseeding, [row], _PLAIN, 5).reason == "retry"
+    # a three-step trial charges four replays: (30 - 20) x 4 / (N x 20) <= 0.03 needs 67 plain steps
+    longer = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=3), 5)
+    assert next(i for i in range(1, 90) if longer.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None) == 68
     # a record the statistics rule out (gain below min_gain / 4) is never retried
     hopeless = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
     assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))

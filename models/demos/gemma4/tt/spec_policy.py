@@ -1050,7 +1050,12 @@ class SpecPolicy:
         cheapest = _cheapest(ranked)
         if cheapest.gain < cfg.min_gain * RETRY_MIN_GAIN_FRACTION:
             return None
-        overhead = (cheapest.entry_ms + cheapest.cost_ms - float(plain_ms)) / (self.declined * float(plain_ms))
+        # A retry is a whole trial, not one step: under asynchronous scheduling its first replay is overtaken by
+        # the plain step in flight (reseed + record for one token), the next replay reseeds again when the first
+        # draft missed, and ``trial_steps`` record steps follow before the gain decides. Charged as one step, the
+        # cadence cost the 26B QB2 8-9 % at 128K/256K random prompts against a 3 % bound (2026-10-30).
+        cycle = 1 + int(cfg.trial_steps)
+        overhead = cycle * (cheapest.entry_ms + cheapest.cost_ms - float(plain_ms)) / (self.declined * float(plain_ms))
         if overhead > cfg.retry_overhead:
             return None
         return dataclasses.replace(cheapest, reason="retry")

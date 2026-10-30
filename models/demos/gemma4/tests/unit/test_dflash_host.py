@@ -3387,10 +3387,10 @@ def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
 
 
 def _costed(adapter, monkeypatch):
-    """A contract model with the CI leg's costs, a three-step retry at a 0.6 overhead and no probe."""
+    """A contract model with the CI leg's costs, a three-step retry at a 1.2 overhead (two replays a trial) and no probe."""
     env = {
         "GEMMA4_SPEC_RETRY_STEPS": "3",
-        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.6",
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "1.2",  # the gate charges the whole one-step trial (two replays)
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",  # the pinned sequences read the scripted table
         "GEMMA4_SPEC_MIN_GAIN": "1.10",  # the band mechanics below are written at the 1.10 bar (the default is 1.25)
@@ -3647,11 +3647,11 @@ MTP_STEP_MS = {(1, 5): 50.0, (5, 5): 50.0, (8, 3): 35.0, (16, 1): 30.0}
 
 
 def _mtp_adaptive(adapter, monkeypatch, env=None):
-    """A model with the scripted cost table, a three-step retry at a 0.2 overhead and no probe."""
+    """A model with the scripted cost table, a three-step retry at a 0.4 overhead (two replays a trial) and no probe."""
     # the pinned sequences read the scripted table: the host walls never calibrate a mode
     env = {
         "GEMMA4_SPEC_RETRY_STEPS": "3",
-        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.2",
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.4",  # the gate charges the whole one-step trial (two replays)
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",
         "GEMMA4_SPEC_TRIAL_STEPS": "1",  # the scenarios describe one-step trials and retries
