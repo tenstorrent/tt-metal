@@ -103,7 +103,7 @@ struct RemoteGddrEndpointEntry {
     uint32_t entry_index;
 };
 
-// ATT endpoints for remote DRAM in the MMK package: Mimir 0 reaches Mimir 1 over D2D1, Mimir 1 reaches 0 over D2D0.
+// ATT endpoints for remote DRAM in a two-Mimir package: Mimir 0 reaches Mimir 1 over D2D1, Mimir 1 reaches 0 over D2D0.
 inline constexpr RemoteGddrEndpointEntry kRemoteGddrEndpointEntries[] = {
     {0, 1, 113},
     {1, 0, 96},
@@ -522,7 +522,7 @@ std::string identity_result() {
         "D2D setup readback mismatch: ", expected_d2d_config(soc), read_d2d_config(cluster, soc, 0));
 }
 
-// Remote suites, before CreateDevice: identity, then SS_BAR, ATT and interleave. No DMRISC registers.
+// Remote suites, before the device is opened: identity, then SS_BAR, ATT and interleave. No DMRISC registers.
 std::string preflight_result() {
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(0);
@@ -534,7 +534,7 @@ std::string preflight_result() {
         "D2D setup readback mismatch: ", expected_d2d_setup_config(soc), read_d2d_setup_config(cluster, soc, 0));
 }
 
-// Remote suites, after CreateDevice: the DMRISC remap against UMD's values.
+// Remote suites, after the device is opened: the DMRISC remap against UMD's values.
 std::string remap_result() {
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(0);

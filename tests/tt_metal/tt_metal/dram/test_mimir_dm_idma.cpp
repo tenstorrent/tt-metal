@@ -111,7 +111,7 @@ bool is_remote_case(IdmaCase idma_case) {
            idma_case == IdmaCase::RemoteTl1KernelVerified;
 }
 
-// Remote cases run from CCE 0's sibling to the first CCE on the next Mimir (CCE 1 to CCE 2 on MMK).
+// Remote cases run from CCE 0's sibling to the first CCE on the next Mimir (CCE 1 to CCE 2 with two CCEs per Mimir).
 uint32_t remote_source_cce() { return sibling_cce(0); }
 uint32_t remote_destination_cce() { return next_mimir_cce(0); }
 

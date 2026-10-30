@@ -280,7 +280,6 @@ static OpResult increment(
     return cas_add(doubleword, address, value, deadline, previous, attempts, failures, cas_tries);
 }
 
-// Every flag line from `first_index` for `count` participants reads at least `value`.
 static bool flags_reach(uint32_t flag_offset, uint32_t first_index, uint32_t count, uint32_t value, uint32_t& seen) {
     seen = 0;
     for (uint32_t index = first_index; index < first_index + count; ++index) {

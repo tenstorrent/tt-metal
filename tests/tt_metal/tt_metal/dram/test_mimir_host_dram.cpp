@@ -439,7 +439,7 @@ TEST(MimirHostDram, HostSideRejections) {
         kView,
         0,
         make_guard(kRejectSentinelTag, 2),
-        "DRAM offset 0 untouched by the misaligned and 8 GiB/64 GiB offset rejections"));
+        "DRAM offset 0 untouched by the misaligned and out-of-window offset rejections"));
     EXPECT_TRUE(read_and_compare(
         cluster,
         soc,

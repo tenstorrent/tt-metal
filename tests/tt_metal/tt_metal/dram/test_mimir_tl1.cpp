@@ -97,7 +97,6 @@ std::string local_pair_name(const ::testing::TestParamInfo<LocalPair>& info) {
 
 std::string remote_pair_name(const ::testing::TestParamInfo<RemotePair>& info) { return remote_pair_label(info.param); }
 
-// Each CCE to the next CCE on its Mimir.
 std::vector<LocalPair> same_chiplet_pairs() {
     if (mimir_contract::selected_soc_desc_path() == nullptr) {
         return {{0, 0}};
@@ -129,7 +128,7 @@ std::string local_skip_reason(const LocalPair& pair) {
 std::string remote_skip_reason(const RemotePair& pair) {
     const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_mimirs < 2) {
-        return "Remote TL1 tests need a 2x descriptor (two Mimirs).";
+        return "Remote TL1 tests need a descriptor with two Mimirs.";
     }
     const uint32_t cces_per_mimir = locations_per_channel(configured_soc_desc());
     const uint32_t highest_location = std::max(pair.source_location, pair.destination_location);
@@ -214,7 +213,7 @@ std::vector<std::string> debug_last_changes(
     return changes;
 }
 
-// A launch that throws is reported with its transfer records, then the test body returns.
+// A launch that throws is reported with its transfer records, then the caller returns.
 void report_launch_exception(
     IDevice* device, const std::exception& error, const std::vector<MimirTransferRecord>& records) {
     dump_debug_last(MetalContext::instance().get_cluster(), soc_desc_of(device), device->id());
@@ -565,7 +564,6 @@ void run_remote_host_init_read(IDevice* device, const RemotePair& pair) {
     }
 }
 
-// Every size and offset pair, one transfer per hart in each launch.
 void run_remote_size_alignment(IDevice* device, const RemotePair& pair) {
     constexpr size_t combination_count = kSizeAlignmentSizesBytes.size() * kSizeAlignmentOffsetsBytes.size();
     for (size_t first = 0; first < combination_count; first += cce_hart_count()) {
@@ -700,7 +698,6 @@ TEST_P(MimirRemoteTl1Routed, SizeAlignment) {
 
 INSTANTIATE_TEST_SUITE_P(MM5, MimirRemoteTl1Routed, ::testing::ValuesIn(routed_remote_pairs()), remote_pair_name);
 
-// Both direct directions in one program: M0.CCE1 -> M1.CCE0 and M1.CCE0 -> M0.CCE1.
 class MimirRemoteTl1Bidir : public ::testing::Test {};
 
 TEST_F(MimirRemoteTl1Bidir, Concurrent) {

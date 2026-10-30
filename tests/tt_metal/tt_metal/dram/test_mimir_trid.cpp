@@ -74,7 +74,7 @@ inline constexpr uint64_t kPeerFlagOffsetFromData = 0x8000;
 // MimirCacheProbe.EightHartLaunch: true once all 8 harts of one CCE posted their status (2x, every CCE, 2026-10-22).
 inline constexpr bool kEightHartLaunchPasses = true;
 
-// Hart data area (tl1_data) layout of the MM43 cases, clear of the probes' source block and observer flag lines.
+// Hart data area (tl1_data) layout of the MM43 cases, clear of the observer flag lines.
 inline constexpr uint64_t kOwnDestinationOffsetFromData = 0x10000;
 inline constexpr uint64_t kTableOffsetFromData = 0x22000;
 inline constexpr uint64_t kTraceOffsetFromData = 0x23000;
@@ -84,7 +84,7 @@ inline constexpr uint64_t kOwnSourceOffsetFromData = 0x24000;
 inline constexpr uint32_t kOwnRegionCapacity = 0x10000 - 2 * kGuardBytes;
 // Sibling and remote TL1 regions sit in the issuing CCE's and hart's remote landing slot of the target CCE.
 inline constexpr uint32_t kLandingRegionCapacity = static_cast<uint32_t>(kTl1RemoteLandingSlotBytes) - 2 * kGuardBytes;
-// GDDR regions above DRAM UNRESERVED, one per issuing CCE and hart, clear of the probes' 0x100000 block.
+// GDDR regions above DRAM UNRESERVED, one per issuing CCE and hart.
 inline constexpr uint64_t kGddrRegionBase = 0x400000;
 inline constexpr uint64_t kGddrRegionCceStride = 0x100000;
 inline constexpr uint64_t kGddrRegionHartStride = 0x20000;
@@ -410,7 +410,6 @@ struct Transfer {
     bool shared_slots = false;
     bool check_at_ack = false;
 
-    // The bytes of each slot.
     uint32_t bytes() const { return shared_slots ? len_bytes : num_commands * len_bytes; }
     uint32_t trid(uint32_t command) const { return (first_trid + command * trid_stride) % abi::kNumTrids; }
     uint32_t used_trids() const {
@@ -534,7 +533,6 @@ public:
             source.begin() + copied.source_slot / 4, source.begin() + (copied.source_slot + copied.bytes()) / 4);
     }
 
-    // Seeds every region, writes its guards and records the configuration.
     void write(distributed::MeshDevice& unit_mesh, IDevice* device) const {
         for (const auto& [target, region] : regions_) {
             write_endpoint(unit_mesh, device, region.base, region.words);
@@ -566,7 +564,6 @@ public:
             described.host_verified ? " host-verified" : "");
     }
 
-    // kModeTridBatch args for transfer `index`.
     std::vector<uint32_t> batch_args(size_t index) const {
         const Transfer& batch = transfers_.at(index);
         std::vector<uint32_t> args = common_args(abi::kModeTridBatch);
@@ -597,7 +594,6 @@ public:
         return args;
     }
 
-    // kModeTridTable args; every transfer is one entry.
     std::vector<uint32_t> table_args() const {
         std::vector<uint32_t> args = common_args(abi::kModeTridTable);
         args[abi::kArgNumElements] = static_cast<uint32_t>(transfers_.size());
@@ -1286,7 +1282,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
 
 inline constexpr uint32_t kMultiHartCommands = 16;
 
-// All 8 harts of one CCE issue at once, each its own GDDR region (even harts GDDR0, odd GDDR1), so no TL1 is written
+// All harts of one CCE issue at once, each its own GDDR region (even harts GDDR0, odd GDDR1), so no TL1 is written
 // while any hart may store its status (MIM-560). Each hart gets its own trid, because the pending counters may be
 // shared by every hart of the CCE.
 TEST_P(MimirTridIdma, MultiHart) {

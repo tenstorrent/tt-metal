@@ -6,7 +6,8 @@
 
 #include <stdint.h>
 
-// cce_idma_copy kernel ABI. The kernel (cce_idma_copy.cpp) and the host (dram/test_mimir_dm_idma.cpp) both include it.
+// cce_idma_copy kernel ABI. The kernels (cce_idma_copy.cpp, cce_idma_gddr_round_trip.cpp) and the host tests that run
+// them (dram/test_mimir_{atomics,dm_cache,dm_idma,local_dram,trid}.cpp, context/test_mimir_emu.cpp) include it.
 // Args, modes, kinds, polls, codes and status words are append-only: a later stage adds entries after the last one and
 // never renumbers.
 namespace cce_idma_copy_abi {

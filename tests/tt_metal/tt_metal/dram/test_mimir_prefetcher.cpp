@@ -345,7 +345,6 @@ void expect_gcb_layout_ranges_disjoint(
                second_receiver_end);
 }
 
-// The message the DRAM-receiver factory throws, or empty when it does not throw.
 std::string gcb_layout_creation_error(
     distributed::MeshDevice& mesh, const BankToDramReceivers& bank_to_dram_receivers) {
     try {
@@ -453,7 +452,6 @@ TEST(MimirPrefetcher, MM7GcbLayoutRejectsConflictingReceivers) {
     const CoreCoord sender_logical = mesh->impl().dram_sender_logical_cores(device, 0).front();
     const CoreCoord sender_translated = soc_desc.get_physical_dram_core_from_logical(sender_logical);
 
-    // Every logical DRAM coord, grouped by the CCE it names.
     std::map<std::pair<size_t, size_t>, std::vector<CoreCoord>> logical_by_translated;
     for (uint32_t view = 0; view < soc_desc.get_num_dram_views(); ++view) {
         for (uint32_t endpoint = 0; endpoint < locations_per_channel(soc_desc); ++endpoint) {
@@ -674,7 +672,6 @@ public:
                 receiver_schedule)};
     }
 
-    // Runs the smoke sender to completion and returns its status.
     std::vector<uint32_t> run_sender(uint64_t budget_cycles, const std::vector<GcbSmokeRequest>& schedule) {
         const CceKernelLaunch sender{
             .cce_index = sender_cce_,
@@ -704,7 +701,6 @@ public:
         return status;
     }
 
-    // Polls the stalling receiver's holding line until it reads `pages` or kGcbSmokeHostWaitLimit passes.
     ::testing::AssertionResult wait_for_holding(uint32_t slot, uint32_t pages) const {
         const uint32_t receiver_cce = receiver_cces_.at(slot);
         const uint64_t holding_address = block_->addr() + gcb_abi::kHoldingLineOffset;
@@ -1240,7 +1236,6 @@ private:
     bool active_ = false;
 };
 
-// Status of the CCE sender on `cce_index`, from its TL1 control block.
 CceSenderStatus lifecycle_sender_status(distributed::MeshDevice& mesh, uint32_t cce_index) {
     const std::vector<uint32_t> words = read_cce_tl1(
         mesh.get_devices().front(),
@@ -1286,7 +1281,6 @@ std::vector<uint32_t> fill_lifecycle_control_block(distributed::MeshDevice& mesh
     return pattern;
 }
 
-// A bank other than 0 whose sender is another CCE than bank 0's.
 std::optional<uint32_t> lifecycle_other_sender_bank(distributed::MeshDevice& mesh) {
     IDevice* device = mesh.get_devices().front();
     const uint32_t bank_zero_sender_cce = gcb_layout_sender_cce(device, mesh, 0);
@@ -1298,7 +1292,6 @@ std::optional<uint32_t> lifecycle_other_sender_bank(distributed::MeshDevice& mes
     return std::nullopt;
 }
 
-// The message `action` throws, or "did not throw".
 template <typename Action>
 std::string lifecycle_error(Action action) {
     try {
@@ -1598,7 +1591,6 @@ inline constexpr uint32_t kT1Sessions = 2;
 // One PREFETCH page, then Stop's DRAIN and STOP.
 inline constexpr uint32_t kRequestsForOnePrefetch = 3;
 
-// The DRAM bank whose prefetcher sender is CCE `cce_index`, if any.
 std::optional<uint32_t> bank_with_sender_cce(distributed::MeshDevice& mesh, uint32_t cce_index) {
     IDevice* device = mesh.get_devices().front();
     for (uint32_t bank = 0; bank < soc_desc_of(device).get_num_dram_views(); ++bank) {
@@ -1781,7 +1773,6 @@ TEST(MimirPrefetcher, MM7T1D2d3To1) {
     run_t1_route(3, 1);
 }
 
-// The validator Program of `smoke`'s receiver table slot `slot` for `schedule`.
 CceKernelLaunch validator_launch(const GcbSmoke& smoke, uint32_t slot, const std::vector<GcbSmokeRequest>& schedule) {
     return smoke.receiver_launch(
         slot, kGcbValidatorReceiverKernel, mimir_test_seed(), 0, 0, kGcbSmokeWaitBudgetCycles, schedule);
@@ -1795,8 +1786,9 @@ void queue_tensor(distributed::MeshDevice& mesh, const GcbSmoke& smoke, const Me
         {experimental::TensorPrefetcherInput{.tensor = tensor, .block_count = blocks}});
 }
 
-// T2: one sender to several receivers, and two senders to one receiver CCE, on 2x routes. Each slab is two one-tile
-// blocks against a one-tile FIFO, so the sender's second round waits for every receiver of the GCB to ack the first.
+// T2: one sender to several receivers, and two senders to one receiver CCE, on routes over CCEs 0-3. Each slab is two
+// one-tile blocks against a one-tile FIFO, so the sender's second round waits for every receiver of the GCB to ack the
+// first.
 
 inline constexpr uint32_t kT2BlocksPerSlab = 2;
 inline constexpr uint32_t kT2FanOutTensorId = 40;
@@ -2269,10 +2261,8 @@ TEST(MimirPrefetcher, MM7T3FenceLocal0To1) {
 
 inline constexpr uint32_t kT4FailureTensorId = 20;
 inline constexpr uint32_t kT4RecoveryTensorId = 21;
-// One page more than the FIFO holds.
 inline constexpr uint32_t kT4OverflowPages = (kGcbSmokeFifoBytes / kUint32TilePageBytes) + 1;
 
-// The credit units one T1 page puts on a fresh GCB.
 uint32_t t4_one_page_credit_units() {
     return expected_gcb_fifo_end_state(
                {{.tensor_id = kT4FailureTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}},
@@ -2280,7 +2270,6 @@ uint32_t t4_one_page_credit_units() {
         .credit_units;
 }
 
-// A stalling receiver that holds the first page it gets until released.
 CceKernelLaunch t4_stalling_receiver(const GcbSmoke& smoke) {
     return smoke.receiver_launch(
         0,

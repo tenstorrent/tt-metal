@@ -325,7 +325,6 @@ GuardOutcome add_guard(
     return GuardOutcome::Placed;
 }
 
-// A guard just outside a traffic window.
 void add_window_guard(
     const std::string& owner,
     const std::string& label,
@@ -651,7 +650,6 @@ RunOutcome write_from_tl1_anchor(
     return ok ? RunOutcome::Passed : RunOutcome::Failed;
 }
 
-// The host writes remote DRAM and every hart copies it into its own TL1 window.
 RunOutcome read_to_tl1_anchor(
     const RemoteDramRun& run, const MimirAnchor& anchor, uint32_t anchor_index, uint32_t& next_guard_tag) {
     std::vector<HartTransfer> transfers = plan_hart_transfers(run, anchor, anchor_index, kTestKindReadToTl1);
@@ -956,10 +954,10 @@ struct MixedTransfer {
 };
 
 // Per CCE: hart 1 local DRAM, hart 2 remote DRAM, hart 3 remote TL1 into the other Mimir's CCE with the same location.
-// Every DRAM region is inside the first anchor of its view: offsets are below 100 KiB from UNRESERVED. Local DRAM
-// slots are kMixedSlotBytes apart by location. Remote DRAM slots start after them and are kMixedRemoteSlotBytes apart
-// by source Mimir and location, so remote writes from different Mimirs never share an offset and the "source Mimir
-// same offset" decoy of one sender is not another sender's destination.
+// Every DRAM region is inside the first anchor of its view: offsets stay within kAnchorBytes of UNRESERVED, which holds
+// for two locations per Mimir. Local DRAM slots are kMixedSlotBytes apart by location. Remote DRAM slots start after
+// them and are kMixedRemoteSlotBytes apart by source Mimir and location, so remote writes from different Mimirs never
+// share an offset and the "source Mimir same offset" decoy of one sender is not another sender's destination.
 std::vector<MixedTransfer> plan_mixed_transfers(
     const metal_SocDescriptor& soc,
     const std::vector<CceSpaRoutes>& routes_by_cce,

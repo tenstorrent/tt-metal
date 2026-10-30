@@ -182,8 +182,8 @@ void zero_firmware_windows(const tt::Cluster& cluster) {
     }
 }
 
-// Defined first so that it is the first device open of its invocation: a later CreateDevice in the same process does
-// not reload firmware.
+// Defined first so that it is the first device open of its invocation: a later device open in the same process does not
+// reload firmware.
 TEST(MimirFwLoad, LoadAndReachInitDone) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();

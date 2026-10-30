@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared by the MM-8 data-movement tests on Mimir CCEs (test_mimir_dm_*.cpp).
+// Shared by the Mimir CCE data-movement tests: test_mimir_dm_*.cpp, test_mimir_atomics.cpp, test_mimir_local_dram.cpp
+// and test_mimir_trid.cpp.
 
 #pragma once
 
