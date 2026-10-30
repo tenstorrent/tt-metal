@@ -622,6 +622,47 @@ class Gemma4Model:
                 layer.self_attn.kv_cache = kv_cache
             self.layers.append(layer)
 
+        # GEMMA4_SDPA_DECODE_SPLITFREE ("1": the global layers, "2": the sliding layers too): the
+        # split-independent paged decode SDPA (custom_ops/sdpa_decode_splitfree) keeps its fp32 unit partials in
+        # ONE persistent scratch per model, sized here for 32 padded rows (a decode graph's Q tile) at max_seq_len
+        # over the layer types, allocated with the KV caches before any trace capture (the op allocates nothing),
+        # and attached to every attention layer (decode.py reads it as ``sdpa_scratch``).
+        self.sdpa_splitfree_scratch = None
+        splitfree_mode = decode_flag("GEMMA4_SDPA_DECODE_SPLITFREE")
+        if create_kv_cache and paged_attention_config is not None and splitfree_mode in ("1", "2"):
+            from models.demos.gemma4.custom_ops.sdpa_decode_splitfree import SdpaDecodeSplitfree
+
+            _tp = max(1, int(getattr(mesh_config, "tp", 1)))
+            specs = set()
+            for i in range(n_layers):
+                cfg = Gemma4AttentionConfig(hf_config, i)
+                if cfg.is_sliding and splitfree_mode != "2":
+                    continue
+                nkv_local = 1 if cfg.num_key_value_heads < _tp else cfg.num_key_value_heads // _tp
+                hq_local = max(1, cfg.num_attention_heads // _tp)
+                specs.add(
+                    (
+                        nkv_local,
+                        hq_local // nkv_local,
+                        int(cfg.head_dim),
+                        cfg.sliding_window if cfg.is_sliding else None,
+                    )
+                )
+            tiles = SdpaDecodeSplitfree.scratch_tiles(
+                mesh_device,
+                32,
+                sorted(specs, key=str),
+                max_seq_len,
+                kv_dtype=(ttnn.bfloat8_b if gemma4_kv_bfp8_enabled() else ttnn.bfloat16),
+            )
+            self.sdpa_splitfree_scratch = SdpaDecodeSplitfree.allocate_scratch(mesh_device, tiles)
+            for layer in self.layers:
+                layer.self_attn.sdpa_scratch = self.sdpa_splitfree_scratch
+            logger.info(
+                f"GEMMA4_SDPA_DECODE_SPLITFREE={splitfree_mode}: decode SDPA scratch {tiles} fp32 tiles "
+                f"({tiles * 4096 / 2**20:.1f} MiB) for 32 rows at {max_seq_len} over {sorted(specs, key=str)}"
+            )
+
         # Extract KV caches for external access (Generator interface)
         # Shared layers point to their source layer's cache
         self.tt_kv_cache = []
