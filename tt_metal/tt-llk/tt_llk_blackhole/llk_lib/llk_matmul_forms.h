@@ -652,6 +652,14 @@ inline constexpr matmul_grid_main_cell matmul_unfused_post_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1, 0, false, 1},
 };
 
+// The 1x2 block of one K tile at LoFi from a Float32 in1 (the A key) and a Bfp8_b in0 (the B key) to Float16_b of full tiles: the per-tile pack reads 0.7 cycles ahead of the block run.
+constexpr bool matmul_pack_per_tile_cell(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                         const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32)
+{
+    return fidelity == MathFidelity::LoFi && half_sync && throttle == 0 && in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out == DataFormat::Float16_b && rt == 1 && ct == 2 &&
+           kt == 1 && r0 == 32 && c1 == 32;
+}
+
 // Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write (the fused post and the skipped base write read slower).
 inline constexpr matmul_grid_main_cell matmul_main_flip_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 8, 0, false, 1},

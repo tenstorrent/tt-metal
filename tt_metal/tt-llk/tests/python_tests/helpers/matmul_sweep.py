@@ -104,6 +104,20 @@ def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     ]
 
 
+def matmul_pack_per_tile_cell(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, throttle=0, in0_tile_r_dim=32, in1_tile_c_dim=32) -> bool:
+    """The 1x2 block of one K tile at LoFi from a Float32 A and a Bfp8_b B to Float16_b of full tiles: the per-tile pack reads 0.7 cycles ahead of the block run
+    (matmul_pack_per_tile_cell in llk_matmul_forms.h)."""
+    return (
+        dest_sync == DestSync.Half
+        and throttle == 0
+        and math_fidelity == MathFidelity.LoFi
+        and (rt_dim, ct_dim, kt_dim) == (1, 2, 1)
+        and in0_tile_r_dim == 32
+        and in1_tile_c_dim == 32
+        and (formats.input_format, formats.input_format_B, formats.output_format) == (DataFormat.Float32, DataFormat.Bfp8_b, DataFormat.Float16_b)
+    )
+
+
 def matmul_pack_form(
     formats: FormatConfig,
     dest_sync: DestSync,
@@ -126,14 +140,7 @@ def matmul_pack_form(
         return 0
     if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full):
         return 0
-    # the 1x2 block of one K tile at LoFi from a Float32 in0 and a Bfp8_b in1 to Float16_b: the per-tile pack reads 0.7 cycles ahead of the block run
-    if (
-        dest_sync == DestSync.Half
-        and throttle == 0
-        and math_fidelity == MathFidelity.LoFi
-        and (rt_dim, ct_dim, kt_dim) == (1, 2, 1)
-        and (formats.input_format, formats.input_format_B, formats.output_format) == (DataFormat.Float32, DataFormat.Bfp8_b, DataFormat.Float16_b)
-    ):
+    if matmul_pack_per_tile_cell(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, throttle, in0_tile_r_dim, in1_tile_c_dim):
         return 0
     if (
         dest_sync == DestSync.Half

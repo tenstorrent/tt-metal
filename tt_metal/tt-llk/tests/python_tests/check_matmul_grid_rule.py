@@ -10,7 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from helpers.format_config import DataFormat
-from helpers.llk_params import MathFidelity
+from helpers.llk_params import DestSync, MathFidelity
+from helpers.matmul_sweep import matmul_pack_per_tile_cell
 from helpers.matmul_prod_keys import grid_main_cell, grid_main_flip_cell, grid_unfused_post_cell, tiny_main_cell
 import perf_matmul_grid as grid
 import perf_matmul_grid2 as grid2
@@ -53,6 +54,48 @@ def check_tiny() -> int:
     return bad or len(cpp) != len(py)
 
 
+def check_pack() -> int:
+    """The pack form rule's per-tile cell: python matmul_pack_per_tile_cell against the C++ matmul_pack_per_tile_cell over the grid, grid2 and tiny rows."""
+    from types import SimpleNamespace
+
+    rows = [(a, b, o, sy, fi, h, w, kt, thr, 32, 32) for a, b, o, acc, sy, fi, h, w, kt, thr, l1 in grid._grid()]
+    rows += [(a, b, o, sy, fi, h, w, kt, thr, 32, 32) for a, b, o, acc, sy, fi, h, w, kt, thr, l1, nb in grid2._grid2()]
+    rows += [(a, b, o, sy, fi, rt, ct, kt, 0, r0, c1) for a, b, o, acc, sy, fi, r0, c1, rt, ct, kt in grid2._tiny_rows()]
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "llk_defs.h").write_text(STUB)
+        (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
+        body = ",\n".join(
+            "{MathFidelity::%s,%s,%d,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d,%d}"
+            % (fi, "true" if sy == "H" else "false", thr, NAME[a], NAME[b], NAME[o], rt, ct, kt, r0, c1)
+            for a, b, o, sy, fi, rt, ct, kt, thr, r0, c1 in rows
+        )
+        (Path(d) / "t.cpp").write_text(
+            '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool h;int th;DataFormat i1,i0,o;int rt,ct,kt,r0,c1;};\n'
+            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows)putchar(matmul_pack_per_tile_cell(r.f,r.h,r.th,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.r0,r.c1)?'1':'0');}}\n"
+        )
+        subprocess.run(["g++", "-std=c++20", "-O1", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
+        cpp = subprocess.run([str(Path(d) / "t")], check=True, capture_output=True, text=True).stdout
+    py = "".join(
+        "1"
+        if matmul_pack_per_tile_cell(
+            SimpleNamespace(input_format=getattr(DataFormat, NAME[a]), input_format_B=getattr(DataFormat, NAME[b]), output_format=getattr(DataFormat, NAME[o])),
+            DestSync.Half if sy == "H" else DestSync.Full,
+            getattr(MathFidelity, fi),
+            rt,
+            ct,
+            kt,
+            thr,
+            r0,
+            c1,
+        )
+        else "0"
+        for a, b, o, sy, fi, rt, ct, kt, thr, r0, c1 in rows
+    )
+    bad = sum(x != y for x, y in zip(cpp, py))
+    print(f"{len(rows)} grid, grid2 and tiny rows, per-tile pack cell: C++ {cpp.count('1')}, python {py.count('1')}, {bad} differ")
+    return bad or len(cpp) != len(py)
+
+
 def main() -> int:
     rows = [(*r, 1) for r in grid._grid()] + list(grid2._grid2())
     with tempfile.TemporaryDirectory() as d:
@@ -75,7 +118,7 @@ def main() -> int:
         py += ("1" if grid_main_cell(*args) else "0") + ("1" if grid_unfused_post_cell(*args) else "0") + ("1" if grid_main_flip_cell(*args) else "0")
     bad = sum(x != y for x, y in zip(cpp, py))
     print(f"{len(rows)} grid rows, main's form: C++ {cpp[0::3].count('1')} python {py[0::3].count('1')}; separate post: C++ {cpp[1::3].count('1')} python {py[1::3].count('1')}; main flip: C++ {cpp[2::3].count('1')} python {py[2::3].count('1')}; {bad} differ")
-    return 1 if bad or len(cpp) != len(py) or check_tiny() else 0
+    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() else 0
 
 
 if __name__ == "__main__":
