@@ -1014,11 +1014,12 @@ class GLM53FlashForCausalLM:
                     f"GLM53 vLLM APC: {want} snapshot entries requested, the planner fits {fit}: using {entries}"
                 )
             if entries == 0:
-                store, entries = "host", 1
+                store, entries = "host", (want or 1)  # host RAM holds the requested entries (1.1 GiB each per slot)
                 logger.warning(
                     "GLM53 vLLM APC: no DRAM for a KDA snapshot ring at this profile (planner spare "
                     f"{plan.spare(users_per_row, max_seq_len) / 2**20:.0f} MiB per chip, one entry = "
-                    f"{plan.snapshot_bytes(users_per_row, 1) / 2**20:.0f} MiB per chip): host store, 1 entry per slot"
+                    f"{plan.snapshot_bytes(users_per_row, 1) / 2**20:.0f} MiB per chip): host store, {entries} "
+                    "entries per slot"
                 )
         logger.info(
             f"GLM53 vLLM APC: {entries} KDA snapshot entries per slot in the {store} store "
