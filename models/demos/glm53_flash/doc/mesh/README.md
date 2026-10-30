@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 08:00: the 32 x 1 M capstone starved its waves; the prefill budget is the lever
+
+`served_8x4_needle1m_32_r1` (32 prompts of 1 038 673 tokens at once) prefilled its first four prompts on the
+sequence-parallel path (a slot index free on every row; two prompts chunk-interleaved at ~7.6 s per 16 K, ~2.1 K
+tok/s), then the remaining 28 through waves of only TWO members (rows 1 and 2, 2048 rows per member per ~7.2 s,
+~570 tok/s): vLLM admits `max_num_batched_tokens / long_prefill_token_threshold` = 32 K / 16 K = 2 partial prefills
+per step, and the wave planner can only wave what the step scheduled. At that rate the rest needed ~14 h against
+the 6.7 h budget, so the run was stopped at 1 h 17 min (SIGTERM to the wrapper, the smoke's SIGINT to the server).
+vLLM 0.30 has no partial-prefill count knob; the lever is the budget: `max_num_batched_tokens` 131072 = 8 x 16 K
+per step, so every wave carries 8 members (~2.2 K tok/s, the harness's 8 x 2048 wave at 7.1 s). A/B first at
+8 x 64 K (`needle64k_8_bt128k` vs `needle64k_8_ctl`), then the capstone again. The interleave was inactive in r1
+as well: the smoke's tt_config override reached only the spec JSON, which the TIS launcher re-derives from the
+catalog; the fix renders it into `vllm_args["additional_config"]` as the launcher's own CLI override does.
+
 ### 2026-10-30 06:40: served decode parity closed at 32 users; the capstone runs with the interleave
 
 The harness at the served context closes the parity question: the traced step is 48.36 ms at max_seq_len 256 and
