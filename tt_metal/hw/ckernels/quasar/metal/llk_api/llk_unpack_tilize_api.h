@@ -47,26 +47,20 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
-    LLK_ASSERT(
-        tensor_shape.total_num_faces() == NUM_FACES ||
-            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
-        "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
-
     if constexpr (UnpackToDestEn) {
         LLK_ASSERT(
             tensor_shape.total_num_faces() == NUM_FACES, "unpack-to-dest tilize supports only 32x32 tiles on Quasar");
         const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
         _llk_unpack_tilize_to_dest_init_(bfd_id, full_ct_dim, 1 /*block_ct_dim*/, tensor_shape);
-    } else if (tensor_shape.total_num_faces() == NUM_FACES) {
-        const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+    } else {
+        // Strided unpack tilize (every tile shape but 32x32) needs a buffer descriptor that indexes L1 rows.
+        const std::uint8_t bfd_id =
+            _llk_unpack_tilize_is_strided_(tensor_shape)
+                ? llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
+                      operand_id)
+                : llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
         _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
             bfd_id, full_ct_dim, llk_unpack_tilize_run_tiles(full_ct_dim) /*block_ct_dim*/, tensor_shape);
-    } else {
-        const std::uint8_t bfd_id =
-            llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
-                operand_id);
-        _llk_unpack_tilize_strided_init_small_faces_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
-            bfd_id, tensor_shape, full_ct_dim, llk_unpack_tilize_run_tiles(full_ct_dim) /*block_ct_dim*/);
     }
 }
 
@@ -95,11 +89,6 @@ inline void llk_unpack_tilize_block(
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
-    LLK_ASSERT(
-        tensor_shape.total_num_faces() == NUM_FACES ||
-            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
-        "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
-
     const LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].cursor_entry_idx;
 
@@ -122,23 +111,10 @@ inline void llk_unpack_tilize_block(
             _llk_unpack_tilize_to_dest_(t + offset, 0 /*dst_tile_idx*/);
             llk_unpack_dest_section_done<DST_ACCUM_MODE>();
         }
-    } else if (tensor_shape.total_num_faces() == NUM_FACES) {
-        // The MOP walks the row through the source Z counter, so the last tile has to stay within the 11 bits the src
-        // face index carries, the bound the per-tile loop used to assert on every tile.
-        LLK_ASSERT(
-            offset + block_c_tiles <= ckernel::trisc::FACE_SEL_IDX_LIMIT,
-            "tile row exceeds the 11 bits the src face index can carry");
-        // The previous row's run may still be reading TILIZE_SRC_ADDR_OFFSET: drain UNPACK0 before rewriting it.
-        _llk_stall_cfg_on_<p_stall::UNPACK0>();
-        _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);
-        const std::uint32_t run_tiles = llk_unpack_tilize_run_tiles(block_c_tiles);
-        for (std::uint32_t x = 0; x < block_c_tiles; x += run_tiles) {
-            _llk_unpack_tilize_<p_unpacr::UNP_A>(x + offset);
-        }
     } else {
         const std::uint32_t run_tiles = llk_unpack_tilize_run_tiles(block_c_tiles);
         for (std::uint32_t x = 0; x < block_c_tiles; x += run_tiles) {
-            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + x + offset);
+            _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + x + offset, tensor_shape);
         }
     }
 }

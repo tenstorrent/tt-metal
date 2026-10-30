@@ -198,7 +198,6 @@ UNPACKER_MAP = {
             NO_TRANSPOSE,
             _block_full_width,
             NO_UNPACK_TO_DEST,
-            require_src_a_tiles((32, 32)),
         ],
     ),
     "UnpackerAB": (

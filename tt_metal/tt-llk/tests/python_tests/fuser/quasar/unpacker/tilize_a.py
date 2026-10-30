@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.tilize_a import tilize_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdResource, L1AccessMode
 from helpers.llk_params import DestAccumulation
 
 
@@ -54,8 +54,13 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        mode = (
+            L1AccessMode.CONTINUOUS
+            if compute_unit.src_a.tile_shape.total_num_faces() == 4
+            else L1AccessMode.STRIDED
+        )
         bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0, result_name="bfd_id"
+            BfdResource.UNP0, mode, result_name="bfd_id"
         )
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
@@ -82,11 +87,7 @@ class UnpackerTilizeA(Unpacker):
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         l1_row_idx = f"{block.tile_id_src_a} * {num_faces_r_dim} * {face_r_dim}"
 
-        return (
-            f"_llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>"
-            f"({tensor_shape}, {l1_row_idx});\n"
-            f"_llk_unpack_tilize_<p_unpacr::UNP_A>(0);\n"
-        )
+        return f"_llk_unpack_tilize_<p_unpacr::UNP_A>({l1_row_idx}, {tensor_shape});\n"
 
     def uninit(
         self,

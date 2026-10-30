@@ -113,8 +113,8 @@ def generate_unpack_tilize_combinations(
             for dest_sync in dest_sync_modes:
                 for unpacker_sel in unpacker_engines:
                     # Dest accumulation (32-bit dest) is only supported on SrcA
-                    # (UNP_A); see the static_assert in
-                    # _llk_unpack_tilize_strided_mop_config_small_faces_.
+                    # (UNP_A); see the assert in
+                    # _llk_unpack_tilize_strided_mop_config_.
                     if (
                         dest_acc == DestAccumulation.Yes
                         and unpacker_sel == UnpackerEngine.UnpB

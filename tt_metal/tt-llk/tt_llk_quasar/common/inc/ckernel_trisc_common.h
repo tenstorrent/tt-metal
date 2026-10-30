@@ -49,6 +49,10 @@ static constexpr std::uint32_t NUM_TILES = 1;
 // index aliases back to an earlier tile.
 constexpr std::uint32_t FACE_SEL_IDX_LIMIT = 1u << 11;
 
+// SET_SRC/DST_TILE_FACE_ROW_IDX under TILE_SEL load all 18 bits of the value into the tile counter, and the counter
+// wraps modulo 2^18, so INC_SRC/DST_TILE_FACE_ROW_IDX can step it back by adding the 18-bit two's complement.
+constexpr std::uint32_t TILE_SEL_IDX_LIMIT = 1u << 18;
+
 // Number of rows that can fit into Dest
 static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
 static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;

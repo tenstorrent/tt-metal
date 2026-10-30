@@ -74,8 +74,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
         constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BfdResource::Unp1 : ckernel::trisc::BfdResource::Unp0;
         std::uint8_t bfd_unpack;
-        if (tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS)
+        if (_llk_unpack_tilize_is_strided_(tensor_shape))
         {
+            // UNPACR_STRIDE quirk: non-32x32 tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
             bfd_unpack = ckernel::trisc::bfd_alloc_and_program<unp_res, ckernel::trisc::L1AccessMode::Strided>(tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
         else
@@ -98,10 +99,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_dest_init_();
             _llk_unpack_tilize_to_dest_init_(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
-        }
-        else if (tensor_shape.face_r_dim < FACE_R_DIM)
-        {
-            _llk_unpack_tilize_strided_init_small_faces_<SRC_SEL, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
         }
         else
         {
@@ -159,22 +156,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
                     }
                 }
-                else if (tensor_shape.face_r_dim < FACE_R_DIM)
-                {
-                    for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
-                    {
-                        _llk_unpack_tilize_strided_small_faces_<SRC_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
-                    }
-                }
                 else
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_set_src_offset_<SRC_SEL>(tensor_shape, y * y_stride_external);
                         // A row of FULL_CT_DIM tiles in runs of BLOCK_CT_DIM, a divisor of FULL_CT_DIM.
                         for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
                         {
-                            _llk_unpack_tilize_<SRC_SEL>(x /*l1_tile_idx*/);
+                            _llk_unpack_tilize_<SRC_SEL>(y * y_stride_external + x /*l1_tile_idx*/, tensor_shape);
                         }
                     }
                 }
