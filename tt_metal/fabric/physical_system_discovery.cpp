@@ -307,6 +307,17 @@ void validate_eth_fw_versions(
         peer_ethernet_firmware_version.to_string());
 }
 
+bool skip_fw_bundle_version_check() {
+    // The equality includes the patch, so 19.16.0 next to 19.16.1 aborts discovery.
+    // Skip while a point release shares the cluster. Set
+    // TT_METAL_SKIP_FW_BUNDLE_VERSION_CHECK=0 to make a mismatch fatal again.
+    const char* value = std::getenv("TT_METAL_SKIP_FW_BUNDLE_VERSION_CHECK");
+    if (value == nullptr || value[0] == '\0') {
+        return true;
+    }
+    return !(value[0] == '0' && value[1] == '\0');
+}
+
 void validate_fw_bundle_versions(
     PhysicalSystemDescriptor& psd,
     const std::optional<tt::umd::FirmwareBundleVersion>& peer_firmware_bundle_version,
@@ -332,6 +343,19 @@ void validate_fw_bundle_versions(
         psd.get_firmware_bundle_version()->to_string(),
         peer_host_name,
         peer_firmware_bundle_version->to_string());
+
+    if (peer_firmware_bundle_version.value() != psd.get_firmware_bundle_version().value() &&
+        skip_fw_bundle_version_check()) {
+        log_warning(
+            tt::LogMetal,
+            "Firmware bundle versions differ between {} ({}) and {} ({}). Skipping the check. Set "
+            "TT_METAL_SKIP_FW_BUNDLE_VERSION_CHECK=0 to make this fatal.",
+            my_host_name,
+            psd.get_firmware_bundle_version()->to_string(),
+            peer_host_name,
+            peer_firmware_bundle_version->to_string());
+        return;
+    }
 
     TT_FATAL(
         peer_firmware_bundle_version.value() == psd.get_firmware_bundle_version().value(),
