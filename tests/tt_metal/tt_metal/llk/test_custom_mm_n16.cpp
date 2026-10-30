@@ -84,8 +84,9 @@ void run_custom_mm_n16(
             .compile_args = {
                 kt, ct, static_cast<std::uint32_t>(transpose), static_cast<std::uint32_t>(split_acc), rows, api}});
 
-    // A in {0, 1, 2} and B in {-1, 0, 1}: |sums| stay within 2 * K <= 256, exact in bf16.
-    auto a_value = [](std::uint32_t m, std::uint32_t k) { return static_cast<float>((m + 3 * k) % 3); };
+    // A in {0, 1, 2} and B in {-1, 0, 1}: |sums| stay within 2 * K <= 256, exact in bf16. Both vary along K with a
+    // period of 3, which divides neither a face (16) nor a tile (32), so reading the wrong in0 face or tile shows.
+    auto a_value = [](std::uint32_t m, std::uint32_t k) { return static_cast<float>((m + k) % 3); };
     auto b_value = [](std::uint32_t k, std::uint32_t n) { return static_cast<float>((k * 5 + n * 7) % 3) - 1.0f; };
 
     // in0: kt [rows, 32] tiles, each two dense [rows, 16] faces along K.
