@@ -102,6 +102,9 @@ void write_binary_to_address(
 // Decode a raw eth_fw_stage value into a short human-readable label.
 std::string eth_fw_stage_to_string(uint32_t stage);
 
+// Index of the eth firmware stage slot written by a processor of core_type: the physical erisc it runs on.
+uint32_t eth_fw_stage_slot(const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, uint32_t processor);
+
 // Read the eth firmware stage breadcrumb of every processor running Metal FW on an ethernet core via UMD,
 // indexed by logical processor (as in get_hw_thread_idx()) and taken from the slot of the physical erisc that
 // processor runs on. Empty when core_type doesn't map the breadcrumb.

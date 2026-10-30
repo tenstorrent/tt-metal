@@ -345,6 +345,13 @@ std::string eth_fw_stage_to_string(uint32_t stage) {
     return fmt::format("0x{:08x} ('{}')", stage, ascii);
 }
 
+uint32_t eth_fw_stage_slot(const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, uint32_t processor) {
+    // On active eth a logical processor need not run on the erisc of the same index: in single-erisc mode it
+    // runs on erisc1, and slot 0 belongs to base FW on erisc0.
+    return core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH ? hal.get_active_eth_physical_erisc(processor)
+                                                                      : processor;
+}
+
 std::vector<uint32_t> read_eth_fw_stages(
     const tt_metal::Hal& hal,
     const tt::Cluster& cluster,
@@ -361,13 +368,9 @@ std::vector<uint32_t> read_eth_fw_stages(
         num_slots * sizeof(uint32_t),
         tt_cxy_pair(device_id, virtual_core),
         hal.get_dev_noc_addr(core_type, tt_metal::HalL1MemAddrType::FW_STAGE));
-    // Slots are indexed by physical erisc. On active eth a logical processor need not run on the erisc of the
-    // same index: in single-erisc mode it runs on erisc1, and slot 0 belongs to base FW on erisc0.
     std::vector<uint32_t> stages;
     for (uint32_t processor = 0; processor < hal.get_num_risc_processors(core_type); processor++) {
-        const uint32_t slot = core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-                                  ? hal.get_active_eth_physical_erisc(processor)
-                                  : processor;
+        const uint32_t slot = eth_fw_stage_slot(hal, core_type, processor);
         if (slot < num_slots) {
             stages.push_back(slots[slot]);
         }
