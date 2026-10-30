@@ -25,9 +25,10 @@ namespace tt::tt_metal::experimental {
 // live. Zero for worker-sender GCBs.
 DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
 
-// Worker-L1 offset (inside the receiver's config buffer page) where the receiver's
-// local pages_sent counter lives. Zero for worker-sender GCBs.
-DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
+// Receiver-L1 offset where the receiver's local pages_sent counter lives: inside the config buffer page in
+// worker L1 for worker receivers, the credit line of the receiver config page in DRISC L1 for DRAM receivers.
+// Zero for worker-sender GCBs.
+DeviceAddr pages_sent_receiver_l1_base(const GlobalCircularBuffer& gcb);
 
 // DRISC L1 base of the per-GCB "sender state block" — the RemoteSenderCBInterface
 // bytes (including the fifo_wr_ptr that persists across requests), the sender config

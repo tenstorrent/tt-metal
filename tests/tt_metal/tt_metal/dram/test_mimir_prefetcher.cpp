@@ -267,7 +267,7 @@ experimental::GlobalCircularBuffer expect_dram_receiver_gcb_layout(
     EXPECT_EQ(state_base, pages_sent_base + dram_receiver_sender_counters_bytes(max_receivers));
     EXPECT_EQ(config_address, arena.receiver_zone_base());
     EXPECT_EQ(buffer_address, config_address + kDramReceiverConfigPageBytes);
-    EXPECT_EQ(experimental::pages_sent_worker_l1_base(gcb), config_address + kDramReceiverCreditLineOffset);
+    EXPECT_EQ(experimental::pages_sent_receiver_l1_base(gcb), config_address + kDramReceiverCreditLineOffset);
     std::vector<std::vector<CoreCoord>> expected_receivers_per_sender;
     for (const auto& [bank, receivers] : bank_to_dram_receivers) {
         expected_receivers_per_sender.push_back(receivers);

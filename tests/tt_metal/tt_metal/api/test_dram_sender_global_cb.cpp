@@ -278,7 +278,7 @@ void run_one_sender_smoke(distributed::MeshDevice* mesh_device, const CoreRangeS
         data_addr,
         kGcbSize,
         static_cast<uint32_t>(gcb.buffer_address()),
-        static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
+        static_cast<uint32_t>(experimental::pages_sent_receiver_l1_base(gcb)),
     };
     KernelHandle sender_kernel_id = CreateKernel(
         program,
@@ -420,7 +420,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
         data_addr,
         kGcbSize,
         static_cast<uint32_t>(gcb.buffer_address()),
-        static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
+        static_cast<uint32_t>(experimental::pages_sent_receiver_l1_base(gcb)),
     };
     KernelHandle sender_kernel_id = CreateKernel(
         sender_program,
@@ -563,7 +563,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
             data_addr,
             kGcbSize,
             static_cast<uint32_t>(gcb.buffer_address()),
-            static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
+            static_cast<uint32_t>(experimental::pages_sent_receiver_l1_base(gcb)),
         };
         KernelHandle sender_kernel_id = CreateKernel(
             program,

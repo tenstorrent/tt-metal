@@ -252,7 +252,7 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
             receiver_zone_size);
         drisc_receiver_alloc_ = mesh_device.impl().drisc_l1_arena().allocate_receiver(
             kDramReceiverConfigPageBytes + size_, kDramReceiverLineBytes);
-        pages_sent_worker_l1_base_ = drisc_receiver_alloc_->addr() + kDramReceiverCreditLineOffset;
+        pages_sent_receiver_l1_base_ = drisc_receiver_alloc_->addr() + kDramReceiverCreditLineOffset;
         this->write_dram_receiver_config_pages();
     } else {
         this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
@@ -273,7 +273,7 @@ void GlobalCircularBufferImpl::initialize_dram_sender_state_block(uint32_t max_n
     const uint32_t buffer_address = static_cast<uint32_t>(this->buffer_address());
 
     const uint32_t packed_num_recv_and_remote =
-        remote_cb_pack(max_num_receivers_per_sender, static_cast<uint32_t>(pages_sent_worker_l1_base_));
+        remote_cb_pack(max_num_receivers_per_sender, static_cast<uint32_t>(pages_sent_receiver_l1_base_));
 
     // The fixed header fields are common, while the receiver NOC XY table is composed
     // separately for each (device, sender) pair.
@@ -306,7 +306,7 @@ void GlobalCircularBufferImpl::initialize_dram_sender_state_block(uint32_t max_n
         // Per-sender header fields (the rest of block_bytes is constant across senders).
         hdr->num_receivers = this_num_receivers;
         hdr->num_receivers_and_remote_pages_sent_ptr =
-            remote_cb_pack(this_num_receivers, static_cast<uint32_t>(pages_sent_worker_l1_base_));
+            remote_cb_pack(this_num_receivers, static_cast<uint32_t>(pages_sent_receiver_l1_base_));
 
         for (IDevice* dev : devices) {
             for (uint32_t i = 0; i < max_num_receivers_per_sender; ++i) {
@@ -411,7 +411,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
         // pages_sent_drisc_l1_base_ has already been populated by the DRAM-sender ctor from
         // the per-mesh DriscL1Arena. We just need to expose the worker-local pages_sent base
         // here so the DRISC kernel can NOC-inc pages_sent into the receivers' config pages.
-        pages_sent_worker_l1_base_ = pages_sent_address;
+        pages_sent_receiver_l1_base_ = pages_sent_address;
     }
 
     const auto make_config_host_buffer = [&](IDevice* config_device) {
@@ -640,7 +640,7 @@ struct GlobalCircularBufferDramSenderInternals {
 
     static SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb);
     static DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
-    static DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
+    static DeviceAddr pages_sent_receiver_l1_base(const GlobalCircularBuffer& gcb);
     static DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
     static std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
     static std::shared_ptr<DriscL1Allocation> receiver_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
@@ -671,8 +671,8 @@ DeviceAddr GlobalCircularBufferDramSenderInternals::pages_sent_drisc_l1_base(con
     return gcb.impl().pages_sent_drisc_l1_base_;
 }
 
-DeviceAddr GlobalCircularBufferDramSenderInternals::pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb) {
-    return gcb.impl().pages_sent_worker_l1_base_;
+DeviceAddr GlobalCircularBufferDramSenderInternals::pages_sent_receiver_l1_base(const GlobalCircularBuffer& gcb) {
+    return gcb.impl().pages_sent_receiver_l1_base_;
 }
 
 DeviceAddr GlobalCircularBufferDramSenderInternals::sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb) {
@@ -757,8 +757,9 @@ DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb) {
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::pages_sent_drisc_l1_base(gcb);
 }
 
-DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb) {
-    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::pages_sent_worker_l1_base(gcb);
+DeviceAddr pages_sent_receiver_l1_base(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::pages_sent_receiver_l1_base(
+        gcb);
 }
 
 DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb) {

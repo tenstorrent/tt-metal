@@ -106,7 +106,9 @@ private:
     // Base of the per-receiver pages_sent/pages_acked counters in DRISC L1. Carved
     // from the front of the combined sender-state allocation below.
     DeviceAddr pages_sent_drisc_l1_base_ = 0;
-    DeviceAddr pages_sent_worker_l1_base_ = 0;
+    // Receiver-L1 base of each receiver's pages_sent counter: worker L1 for worker receivers, DRISC L1 for DRAM
+    // receivers.
+    DeviceAddr pages_sent_receiver_l1_base_ = 0;
     // DRISC L1 base of the per-GCB "sender state block" (RemoteSenderCBInterface
     // bytes + sender config block + receiver NOC XY table). Pre-initialized at GCB
     // construction; on each request that targets this GCB the Tensor prefetcher
