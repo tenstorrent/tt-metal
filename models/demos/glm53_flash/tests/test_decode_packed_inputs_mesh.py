@@ -12,7 +12,11 @@ Four passes over the same ladder from the same state: direct eager, packed eager
 traced, direct traced; then the resident chain (``GLM53_RESIDENT_DECODE=1``, ``tt/resident_decode.py``): the
 captured step feeds its greedy ids back and advances the live positions on device, one load at the chain start and
 replays with no upload, bit-identical to the direct eager chain (step k feeds step k-1's greedy ids), every
-device-advanced field equal to the host formulas after each replay, and a parked slot (live 0) keeping its position. The prompts are prefilled ONCE, before any decode step, in ``PREFILL_CHUNK``-token chunks
+device-advanced field equal to the host formulas after each replay, and a parked slot (live 0) keeping its position.
+Pass F (``GLM53_DECODE_SLOT_MASK=1``, the live mask as the ``kda_decode`` write gate): slot 0's prompt prefilled
+in two chunks with masked decode steps of the other slots between them; its KDA carry is byte-identical across
+the parked steps and its chain after the second chunk equals the uninterleaved reference (the interleave's model
+side, doc/mesh/resident_decode.md step 4). The prompts are prefilled ONCE, before any decode step, in ``PREFILL_CHUNK``-token chunks
 (512-row slabs per chip, the chunked prefill the adapter uses) because of the L1 hazard below. Every pass warms
 up / captures at the ladder's first positions (the prompt ends, multiples of 4: the warm-up's latent row and ring
 slot are rewritten by step 0 before anything reads them and no pool completes there) and resets the KDA states
@@ -60,7 +64,7 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import SparseDecodeMeta, dense_exact_max_pos
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 from models.demos.glm53_flash.tt.mesh_model import PACKED_INPUTS_ENV, GLM53MeshModel, PackedDecodeInputs
-from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV, PackedDecodeLayout
+from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV, SLOT_MASK_ENV, PackedDecodeLayout
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
 B = int(os.environ.get("GLM53_MODEL_B", "4"))  # users per row
@@ -396,6 +400,94 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
         f"PERF pass E (resident, traced): {_tok_s(walls_e, U)} (replay only, no per-step upload; the chain-start load "
         f"{load_e * 1e3:.2f} ms); bit-identical to the direct eager chain over {N_STEPS} steps; the live mask holds"
     )
+    # ---- pass F: the decode slot mask (GLM53_DECODE_SLOT_MASK=1 over the resident chain: the live mask is the
+    # kda_decode program's per-user write gate, doc/mesh/resident_decode.md step 4). Slot 0's prompt is prefilled in
+    # two chunks with K masked decode steps of the other slots between them (slot 0 parked at the chunk end with a
+    # pad id, live 0): its KDA carry is byte-identical across the parked steps (the gate), and its decode chain
+    # after the second chunk equals the uninterleaved reference (the DSA row / pool the parked steps wrote at the
+    # chunk end are rewritten by the second chunk, which starts there). Not wired for the user partition.
+    if partition == "0":
+        monkeypatch.setenv(RESIDENT_ENV, "1")
+        monkeypatch.setenv(SLOT_MASK_ENV, "1")
+        model.resident = None  # re-allocated with the gate page by the warm-up's staging (before the capture)
+        model.warmup_decode(ids0, pos0)  # the gated twin program compiles here
+        assert model.supports_slot_mask and model.positions.write_gate is not None
+        trace_id, trace_outs = model.capture(ids0, pos0)
+        n0, c0 = lens[0], PREFILL_CHUNK
+        assert c0 < n0 and n0 % 4 == 0, (c0, n0)
+        prompt0 = _prompt(n0)
+        flat0 = [r * B for r in range(model.mesh.rows)]  # slot index 0 of every row (the rows hold the same prompt)
+        K = 4
+
+        def chunk(start: int, end: int):
+            streams, logits, _ = model.prefill(prompt0[start:end], user=0, start=start)
+            ttnn.deallocate(streams)
+            if logits is not None:
+                ttnn.deallocate(logits)
+
+        def carry0() -> list[tuple[torch.Tensor, torch.Tensor]]:
+            out = []
+            for dec in model.layers:
+                if not dec.is_kda:
+                    continue
+                rec = dec._user_recurrent(dec.kda_batched.recurrent, 0)
+                conv = dec._require_weights().attn.user_conv_state(dec.kda_batched, 0)
+                out.append((ttnn.to_torch(rec).clone(), ttnn.to_torch(conv).clone()))
+                ttnn.deallocate(rec)
+                ttnn.deallocate(conv)
+            return out
+
+        def chain(n_steps: int):
+            model.load_decode_inputs(ids0, pos0, live=[True] * U)
+            out = []
+            for _ in range(n_steps):
+                model.replay(trace_id)
+                out.append(ladder.read(trace_outs))
+                model.advance_positions_host()
+            return out
+
+        # the interleaved run: chunk 1, K parked steps, chunk 2, the chain
+        model.reset_kda_states()
+        chunk(0, c0)
+        before = carry0()
+        live = [u % B != 0 for u in range(U)]
+        ids_f = ids0.clone()
+        ids_f[flat0] = 0
+        pos_f = [c0 if u % B == 0 else pos0[u] for u in range(U)]
+        model.load_decode_inputs(ids_f, pos_f, live=live)
+        for _ in range(K):
+            model.replay(trace_id)
+            model.advance_positions_host()
+        ttnn.synchronize_device(model.device)
+        assert model.positions.host[flat0[0]] == c0, model.positions.host
+        after = carry0()
+        for layer_k, ((ra, ca), (rb, cb)) in enumerate(zip(before, after)):
+            assert torch.equal(ra, rb) and torch.equal(ca, cb), (
+                f"pass F: slot 0's KDA carry of KDA layer #{layer_k} changed across {K} parked steps: recurrent "
+                f"{int((ra != rb).sum())} values, conv {int((ca != cb).sum())} values"
+            )
+        chunk(c0, n0)
+        out_f = chain(N_STEPS)
+        # the reference: the same two chunks with nothing between them, the same chain
+        model.reset_kda_states()
+        chunk(0, c0)
+        chunk(c0, n0)
+        out_r = chain(N_STEPS)
+        for k, ((i_f, l_f), (i_r, l_r)) in enumerate(zip(out_f, out_r)):
+            assert torch.equal(
+                i_f[flat0], i_r[flat0]
+            ), f"pass F: slot 0's greedy ids differ at step {k}: {i_f[flat0].tolist()} vs {i_r[flat0].tolist()}"
+            assert torch.equal(l_f[flat0], l_r[flat0]), (
+                f"pass F: slot 0's logits differ at step {k}: {int((l_f[flat0] != l_r[flat0]).sum())} values, "
+                f"max abs {(l_f[flat0] - l_r[flat0]).abs().max().item():.3g}"
+            )
+        ttnn.release_trace(mesh_device, trace_id)
+        monkeypatch.delenv(SLOT_MASK_ENV, raising=False)
+        monkeypatch.delenv(RESIDENT_ENV, raising=False)
+        logger.info(
+            f"pass F (slot mask): slot 0's KDA carry byte-identical across {K} parked steps in {len(before)} KDA "
+            f"layers; its chain after the second chunk bit-identical to the uninterleaved reference over {N_STEPS} steps"
+        )
     rows_agree = sum(torch.equal(i[: U // 2], i[U // 2 :]) for i, _ in out_a) if model.mesh.rows == 2 else None
     logger.info(
         f"PERF mesh {MESH} layers {len(layers)} users {U} partition {partition}: packed traced {_tok_s(walls_c, U)}; "
