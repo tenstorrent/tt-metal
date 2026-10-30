@@ -91,6 +91,19 @@ std::size_t hash_program_spec(const ProgramSpec& spec) {
             for (const auto& [name, mode] : compute.unpack_modes) {
                 combine(*name, mode);
             }
+            combine(compute.config_1xx.has_value(), compute.config_2xx.has_value());
+            if (compute.config_1xx.has_value()) {
+                combine(compute.config_1xx->bfp_pack_precision_mode);
+            }
+            // The RVV options exist only in newer tt-metal versions.
+            [&](const auto& config) {
+                if constexpr (requires { config.config_2xx->enable_unpack_rvv; }) {
+                    combine(config.config_2xx.has_value() && config.config_2xx->enable_unpack_rvv);
+                }
+                if constexpr (requires { config.config_12x; }) {
+                    combine(config.config_12x.has_value() && config.config_12x->enable_pack_rvv);
+                }
+            }(compute);
         }
     }
     for (const auto& dfb : spec.dataflow_buffers) {

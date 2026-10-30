@@ -59,21 +59,53 @@ std::vector<std::string> from_names(const std::vector<Name>& names) {
     return result;
 }
 
+exp::DataMovementHardwareConfig::DataMovement2XXConfig make_dm_2xx_config(
+    bool disable_dfb_implicit_sync_for_all, const std::vector<std::string>& disable_dfb_implicit_sync_for) {
+    return {
+        .disable_dfb_implicit_sync_for = to_names<exp::DFBSpecName>(disable_dfb_implicit_sync_for),
+        .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all,
+    };
+}
+
+// The RVV options postdate older tt-metal versions (whose Compute2XXConfig is empty and which lack
+// config_12x); there they are rejected if requested, so this file builds against both.
+template <typename Config>
+void set_rvv_options(Config& config, bool enable_unpack_rvv, bool enable_pack_rvv) {
+    config.config_2xx = typename decltype(config.config_2xx)::value_type{};
+    if constexpr (requires { config.config_2xx->enable_unpack_rvv; }) {
+        config.config_2xx->enable_unpack_rvv = enable_unpack_rvv;
+    } else {
+        TT_FATAL(!enable_unpack_rvv, "ComputeHardwareConfig: enable_unpack_rvv needs a newer tt-metal");
+    }
+    if constexpr (requires { config.config_12x; }) {
+        config.config_12x = typename decltype(config.config_12x)::value_type{.enable_pack_rvv = enable_pack_rvv};
+    } else {
+        TT_FATAL(!enable_pack_rvv, "ComputeHardwareConfig: enable_pack_rvv needs a newer tt-metal");
+    }
+}
+
 void bind_hardware_configs(nb::module_& mod) {
     nb::class_<exp::DataMovementHardwareConfig>(mod, "DataMovementHardwareConfig", R"doc(
         Hardware config of a Metal 2.0 data movement kernel.
 
-        ``processor`` and ``noc`` pick the RISC and NoC on Wormhole / Blackhole and are ignored on Quasar,
-        where Metal 2.0 places data movement kernels itself. ``disable_dfb_implicit_sync_for_all`` is
-        Quasar-only: it opts the kernel's dataflow buffers out of implicit-sync credit accounting.
-        Use ``reader()`` / ``writer()`` for the conventional reader / writer placement.
+        ``processor`` and ``noc`` are the Gen1 (Wormhole / Blackhole) part, required there and ignored on Quasar,
+        where Metal 2.0 places data movement kernels itself. Use ``reader()`` / ``writer()`` for the conventional
+        reader / writer placement.
+
+        The Gen2 (Quasar) part, ignored on Wormhole / Blackhole: by default a dataflow buffer's credits are posted
+        implicitly when the kernel's NoC transfers into or out of it complete. ``disable_dfb_implicit_sync_for``
+        (unique_ids of DFBs the kernel binds) or ``disable_dfb_implicit_sync_for_all`` opts the kernel out, so its
+        reserve_back / push_back (or wait_front / pop_front) alone move the credits. Do that for kernels whose NoC
+        transfers do not map one-to-one onto DFB entries, e.g. many sub-entry transfers. All producer (or all
+        consumer) kernels of a DFB must agree.
     )doc")
         .def(
             "__init__",
             [](exp::DataMovementHardwareConfig* self,
                std::optional<tt::tt_metal::DataMovementProcessor> processor,
                std::optional<tt::tt_metal::NOC> noc,
-               bool disable_dfb_implicit_sync_for_all) {
+               bool disable_dfb_implicit_sync_for_all,
+               const std::vector<std::string>& disable_dfb_implicit_sync_for) {
                 TT_FATAL(
                     processor.has_value() == noc.has_value(),
                     "DataMovementHardwareConfig: give both processor and noc, or neither");
@@ -82,31 +114,33 @@ void bind_hardware_configs(nb::module_& mod) {
                     self->config_1xx =
                         exp::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = *processor, .noc = *noc};
                 }
-                self->config_2xx = exp::DataMovementHardwareConfig::DataMovement2XXConfig{
-                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+                self->config_2xx = make_dm_2xx_config(disable_dfb_implicit_sync_for_all, disable_dfb_implicit_sync_for);
             },
             nb::kw_only(),
             nb::arg("processor") = nb::none(),
             nb::arg("noc") = nb::none(),
-            nb::arg("disable_dfb_implicit_sync_for_all") = false)
+            nb::arg("disable_dfb_implicit_sync_for_all") = false,
+            nb::arg("disable_dfb_implicit_sync_for") = std::vector<std::string>{})
         .def_static(
             "reader",
-            [](bool disable_dfb_implicit_sync_for_all) {
+            [](bool disable_dfb_implicit_sync_for_all, const std::vector<std::string>& disable_dfb_implicit_sync_for) {
                 auto hw = exp::CreateReaderDataMovementConfig();
-                hw.config_2xx = exp::DataMovementHardwareConfig::DataMovement2XXConfig{
-                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+                hw.config_2xx = make_dm_2xx_config(disable_dfb_implicit_sync_for_all, disable_dfb_implicit_sync_for);
                 return hw;
             },
-            nb::arg("disable_dfb_implicit_sync_for_all") = false)
+            nb::kw_only(),
+            nb::arg("disable_dfb_implicit_sync_for_all") = false,
+            nb::arg("disable_dfb_implicit_sync_for") = std::vector<std::string>{})
         .def_static(
             "writer",
-            [](bool disable_dfb_implicit_sync_for_all) {
+            [](bool disable_dfb_implicit_sync_for_all, const std::vector<std::string>& disable_dfb_implicit_sync_for) {
                 auto hw = exp::CreateWriterDataMovementConfig();
-                hw.config_2xx = exp::DataMovementHardwareConfig::DataMovement2XXConfig{
-                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+                hw.config_2xx = make_dm_2xx_config(disable_dfb_implicit_sync_for_all, disable_dfb_implicit_sync_for);
                 return hw;
             },
-            nb::arg("disable_dfb_implicit_sync_for_all") = false);
+            nb::kw_only(),
+            nb::arg("disable_dfb_implicit_sync_for_all") = false,
+            nb::arg("disable_dfb_implicit_sync_for") = std::vector<std::string>{});
 
     export_enum<tt::tt_metal::Precision>(mod, "Precision");
     export_enum<tt::tt_metal::UnpackMode>(mod, "UnpackMode");
@@ -123,6 +157,10 @@ void bind_hardware_configs(nb::module_& mod) {
                 Wormhole / Blackhole, a Float32 dataflow buffer read with a 32-bit dest needs an entry.
             bfp_pack_precision_mode (ttnn.Precision): Packer precision for block-float outputs; Wormhole /
                 Blackhole only.
+            enable_unpack_rvv (bool): Compile the Unpack binary with the RISC-V vector extension; Quasar only.
+            enable_pack_rvv (bool): Compile the Pack binary with the RISC-V vector extension; Blackhole only.
+
+        Both the Gen1 and the Gen2 parts are always set; each architecture ignores the other's.
 
         ``from_compute_kernel_config`` converts a ttnn compute kernel config (e.g. ttnn.WormholeComputeKernelConfig).
     )doc")
@@ -134,7 +172,9 @@ void bind_hardware_configs(nb::module_& mod) {
                bool enable_32_bit_dest,
                bool double_buffer_dest,
                const std::map<std::string, tt::tt_metal::UnpackMode>& unpack_modes,
-               tt::tt_metal::Precision bfp_pack_precision_mode) {
+               tt::tt_metal::Precision bfp_pack_precision_mode,
+               bool enable_unpack_rvv,
+               bool enable_pack_rvv) {
                 new (self) exp::ComputeHardwareConfig{
                     .fpu_math_fidelity = math_fidelity,
                     .sfpu_precision_mode = sfpu_precision_mode,
@@ -147,6 +187,7 @@ void bind_hardware_configs(nb::module_& mod) {
                 for (const auto& [dfb_spec_name, mode] : unpack_modes) {
                     self->unpack_modes.emplace(exp::DFBSpecName{dfb_spec_name}, mode);
                 }
+                set_rvv_options(*self, enable_unpack_rvv, enable_pack_rvv);
             },
             nb::kw_only(),
             nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::HiFi4,
@@ -154,10 +195,16 @@ void bind_hardware_configs(nb::module_& mod) {
             nb::arg("enable_32_bit_dest") = false,
             nb::arg("double_buffer_dest") = true,
             nb::arg("unpack_modes") = std::map<std::string, tt::tt_metal::UnpackMode>{},
-            nb::arg("bfp_pack_precision_mode") = tt::tt_metal::Precision::Approximate)
+            nb::arg("bfp_pack_precision_mode") = tt::tt_metal::Precision::Approximate,
+            nb::arg("enable_unpack_rvv") = false,
+            nb::arg("enable_pack_rvv") = false)
         .def_static(
             "from_compute_kernel_config",
-            [](const ttnn::DeviceComputeKernelConfig& config) { return ttnn::to_compute_hardware_config(config); },
+            [](const ttnn::DeviceComputeKernelConfig& config) {
+                auto hw = ttnn::to_compute_hardware_config(config);
+                set_rvv_options(hw, /*enable_unpack_rvv=*/false, /*enable_pack_rvv=*/false);
+                return hw;
+            },
             nb::arg("compute_kernel_config"))
         .def_rw("math_fidelity", &exp::ComputeHardwareConfig::fpu_math_fidelity)
         .def_rw("sfpu_precision_mode", &exp::ComputeHardwareConfig::sfpu_precision_mode)
