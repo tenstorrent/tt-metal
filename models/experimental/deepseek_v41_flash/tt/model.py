@@ -70,10 +70,11 @@ from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41D
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     EngramHostLookup,
+    engram_ram_needed,
     engram_table_nbytes,
     load_engram_table,
 )
-from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
+from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41DeviceSampler, DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt import common as v4_common
@@ -420,6 +421,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._out_socket = None
         self._out_plan = None
         self._out_torch_dtype = None
+        self.device_sampler: Optional[DeepSeekV41DeviceSampler] = None
         self._resident: list[Optional[int]] = []
         self._session_pos: dict[int, int] = {}
         self._max_sessions = 1
@@ -449,7 +451,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ids = self._engram_ids()
         if not ids:
             return
-        need = sum(engram_table_nbytes(self.loader, i) for i in ids)
+        need = engram_ram_needed(self.loader, ids)
         available = _host_mem_available()
         if available < _ENGRAM_RAM_MARGIN * need:
             raise MemoryError(
@@ -481,6 +483,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         total_tokens: int | None = None,
         block_size: int = 32,
         batch: int = 1,
+        device_sampling: bool = False,
     ) -> None:
         """Allocate the traced-decode buffers.
 
@@ -494,9 +497,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``max_seq``). ``batch`` is 1: a step decodes one session. Switching sessions costs no device work:
         every session has its own ring and window slot and its own row of each page table, and the
         step's packet names the slot.
+
+        ``device_sampling`` picks each step's token on the output stage (:attr:`device_sampler`, greedy until its
+        ``set_sampling``): :meth:`read_decoded_output` then returns ``[1, 1, words]`` int32, the token first, and no
+        logits leave the stage.
         """
         if batch != 1:
             raise NotImplementedError(f"V4.1 decode supports batch 1, got batch={batch}")
+        if device_sampling and lm_head is None:
+            raise ValueError("device_sampling samples from the folded-in lm_head; pass lm_head")
+        if device_sampling and self.verify_rows > 1:
+            raise NotImplementedError("the verify blocks read their rows' logits off the decode socket")
         if num_sessions < 1:
             raise ValueError(f"num_sessions must be at least 1, got {num_sessions}")
         if max_seq < 2:
@@ -512,6 +523,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 raise ValueError(f"max_seq ({max_seq}) must be a multiple of compress ratio {ratio}")
         self._decode_batch = batch
         self._lm_head_traced = lm_head
+        self.device_sampler = None
+        if device_sampling:
+            self.device_sampler = DeepSeekV41DeviceSampler(
+                lm_head.device, lm_head.weight.shape[-1], self.system_config.pipeline.pcie_alignment
+            )
         self._decode_max_seq = max_seq
         self._max_sessions = num_sessions
         # One page-table geometry per ratio: every group of a ratio, on every stage, maps a session's
@@ -1513,7 +1529,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             )
             if is_last:
                 hidden = self.norm(self._collapse_streams(streams, pre_mix))
-                if self._lm_head_traced is not None:
+                if self.device_sampler is not None:
+                    hidden = self.device_sampler(self._lm_head_traced.linear(hidden))
+                elif self._lm_head_traced is not None:
                     hidden = self._lm_head_traced(hidden)
                 out = hidden
                 self._send_output(out)
@@ -1920,6 +1938,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
         if self._slotted:
             raise NotImplementedError("speculative decode restores one session's rings: prepare with num_sessions=1")
+        if self.device_sampler is not None:
+            raise NotImplementedError(
+                "speculative decode accepts against the steps' logits: prepare without device_sampling"
+            )
         if self.image_rows:
             raise NotImplementedError("the drafter's token table has no image rows: build without image_rows")
         if self._decode_batch != 1:

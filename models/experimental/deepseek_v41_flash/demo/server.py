@@ -47,7 +47,8 @@ What V4.1 imposes on the serving side:
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
   most 131072 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
-* Engram layers 1 and 14 read host n-gram tables (~101 GB each); the model refuses to build without that RAM free.
+* Engram layers 1 and 14 read host n-gram tables (~101 GB each); the model refuses to build without that RAM free,
+  unless ``tools/stage_engram_tables.py`` has already put them in RAM.
 * Images (``--vision``, on by default). A request's messages may carry up to 64 distinct images, as long as their rows
   fit ``--image-rows`` together (up to 1024 an image, fewer for a small one): an uploaded file (a
   ``file`` part with a ``file_id``) or inline base64 (a ``file`` part's ``file_data`` or an ``image_url``, holding a
