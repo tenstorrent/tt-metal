@@ -753,11 +753,11 @@ public:
         }
         // Nothing below throws: once published, workers hold the job and the job refers to fn.
         job->start();
-        // seq_cst pairs with the workers' check before they park: either the first participant sees the job, or
-        // wake() sees it parked. It wakes the others as it starts; awake workers see the job on their own.
         if (after == AfterFanOut::Park) {
             spin_window_closed_at_.store(job->published(), std::memory_order_relaxed);
         }
+        // seq_cst pairs with the workers' check before they park: either the first participant sees the job, or
+        // wake() sees it parked. It wakes the others as it starts; awake workers see the job on their own.
         published_.store(job->published(), std::memory_order_seq_cst);
         participants[0]->wake();
         // The workers are woken first to last, so take participants from the back. The caller runs the calls of
@@ -840,8 +840,7 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
-    // The published word of the last parallel_for with AfterFanOut::Park: workers that last saw it park without
-    // polling.
+    // Published word of the last parallel_for with AfterFanOut::Park: workers that last saw it park without polling.
     alignas(64) std::atomic<uint64_t> spin_window_closed_at_ = UINT64_MAX;
     // Worker by physical device id; NO_WORKER for a device without one.
     static constexpr uint32_t NO_WORKER = UINT32_MAX;
