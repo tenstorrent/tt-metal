@@ -328,9 +328,9 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
     compressed-KV row and index key the kv source wrote this step, carried to stages that select
     from the group without holding its source. They are ``None`` where no such stage exists.
 
-    ``win_hist_kv`` / ``win_hist_gate`` (speculative decode, ratio > 1 kv sources) are TILE DRAM
-    ``[1, 1, hist, Dh]``: every step's compressor-window row again, at ``pos % hist``, so a
-    rejected draft's write into the window can be undone.
+    Under speculative decode a ratio > 1 kv source's ``win_kv`` / ``win_gate`` are deeper than the ratio
+    (``[1, 1, rows, Dh]``, row ``pos % rows``): a rejected draft's row then lands in a slot of its own, and
+    the next group's pool reads the row before it through ``win_prev`` (see :meth:`DeepSeekV41Attention.decode`).
 
     The candidate source's group, when the context outgrows the candidate pool, also has the
     source's ``cand_blocks`` (INT32 ROW_MAJOR ``[1, candidate_topk_blocks]``) and ``pool_count``
@@ -364,8 +364,6 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         "new_key_row",
         "new_kv_rows",
         "new_key_rows",
-        "win_hist_kv",
-        "win_hist_gate",
         "cand_blocks",
         "pool_count",
         "pool_keys",
@@ -401,8 +399,6 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         self.new_key_row = new_key_row
         self.new_kv_rows = None
         self.new_key_rows = None
-        self.win_hist_kv = None
-        self.win_hist_gate = None
         self.cand_blocks = cand_blocks
         self.pool_count = pool_count
         self.pool_keys = pool_keys
@@ -777,11 +773,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         gate = ttnn.reshape(ttnn.to_memory_config(gate, ttnn.DRAM_MEMORY_CONFIG), [1, 1, m, self.head_dim])
         return kv, gate
 
-    def _latent(self, kv, gate, scache, win_slot, pool: bool, hist_slot=None, win_offset=None):
+    def _latent(self, kv, gate, scache, win_slot, pool: bool, win_prev=None, win_offset=None):
         """Pre-RoPE compressed latent ``[1, 1, 1, Dh]`` of the group this step closes, else ``None``.
 
         ``kv`` / ``gate`` are one row of :meth:`_compressor_rows`.
-        ``hist_slot`` also writes the window rows into ``scache.win_hist_kv`` / ``win_hist_gate``.
+        ``win_prev`` (a window deeper than the ratio) is the one-hot ``[1, 1, 1, rows]`` of the previous
+        position's window slot: the pool pairs that row with this step's own.
         ``win_offset`` (INT32 ``[1]``) is the first window row of the session's slot, already folded
         into ``win_slot``; the pool reads the slot through ``win_view_kv`` / ``win_view_gate``.
         """
@@ -789,49 +786,59 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             kv_row, gate_row = _one_row_per_user(kv), _one_row_per_user(gate)
             _update_cache_at(scache.win_kv, kv_row, win_slot)
             _update_cache_at(scache.win_gate, gate_row, win_slot)
-            if hist_slot is not None:
-                _update_cache_at(scache.win_hist_kv, kv_row, hist_slot)
-                _update_cache_at(scache.win_hist_gate, gate_row, hist_slot)
             if not pool:
                 return None
             windows = (scache.win_kv, scache.win_gate)
-            if win_offset is not None:
-                rows = scache.win_view_kv.shape[2]
-                for view, win in zip((scache.win_view_kv, scache.win_view_gate), windows):
-                    ttnn.fill_cache(view, win, 0, input_row_offset_tensor=win_offset, num_input_rows=rows)
-                windows = (scache.win_view_kv, scache.win_view_gate)
+            if win_prev is not None:
+                # One-hot products are exact.
+                k0, g0 = (ttnn.matmul(win_prev, w, compute_kernel_config=_HIFI4) for w in windows)
+                k1, g1 = (ttnn.to_layout(x, ttnn.TILE_LAYOUT) for x in (kv, gate))
+            else:
+                assert (
+                    win_offset is not None or scache.win_kv.shape[2] == self.compress_ratio
+                ), "a window deeper than the ratio pairs through win_prev"
+                if win_offset is not None:
+                    rows = scache.win_view_kv.shape[2]
+                    for view, win in zip((scache.win_view_kv, scache.win_view_gate), windows):
+                        ttnn.fill_cache(view, win, 0, input_row_offset_tensor=win_offset, num_input_rows=rows)
+                    windows = (scache.win_view_kv, scache.win_view_gate)
+                k0, k1, g0, g1 = (
+                    ttnn.slice(t, [0, 0, j, 0], [1, 1, j + 1, self.head_dim]) for t in windows for j in (0, 1)
+                )
             # softmax over a pair is sigmoid of the difference; a softmax over the 2-row
             # window axis would run into its tile padding.
-            k0, k1, g0, g1 = (
-                ttnn.slice(t, [0, 0, j, 0], [1, 1, j + 1, self.head_dim]) for t in windows for j in (0, 1)
-            )
             w0 = ttnn.sigmoid(ttnn.subtract(g0, g1))
             kv = ttnn.add(k1, ttnn.multiply(w0, ttnn.subtract(k0, k1)))
         return self.comp_norm(kv)
 
-    def _latent_rows(self, kv, gate, scache, win_slot, pool_rows: tuple, hist_slot=None):
+    def _latent_rows(self, kv, gate, scache, win_slot, pool_rows: tuple, win_prev=None):
         """:meth:`_latent` for ``T`` consecutive rows: the pre-RoPE latents ``[1, 1, n, Dh]`` of the ``n``
         groups that rows ``pool_rows`` close, in row order, else ``None``.
 
-        ``kv`` / ``gate`` are :meth:`_compressor_rows` of the ``T`` rows; ``win_slot`` / ``hist_slot`` are
-        ``[T]``. The window ends as ``T`` single-row steps leave it.
+        ``kv`` / ``gate`` are :meth:`_compressor_rows` of the ``T`` rows; ``win_slot`` is ``[T]``. ``win_prev``
+        (a window deeper than the ratio) is the one-hot ``[1, 1, 1, rows]`` of the window slot of the position
+        before row 0. The window ends as ``T`` single-row steps leave it.
         """
         if self.compress_ratio == 1:
             assert pool_rows == tuple(range(kv.shape[-2])), "at ratio 1 every row closes its group"
             return self.comp_norm(kv)
         t, dh = kv.shape[-2], self.head_dim
-        # Row 0 may close the group the previous step opened in window slot 0; read it before the writes.
-        prevs = [
-            ttnn.to_layout(ttnn.slice(w, [0, 0, 0, 0], [1, 1, 1, dh]), ttnn.ROW_MAJOR_LAYOUT)
-            for w in (scache.win_kv, scache.win_gate)
-        ]
+        windows = (scache.win_kv, scache.win_gate)
+        # Row 0 may close the group the previous step opened; read that row before the writes.
+        if win_prev is not None:
+            prevs = [
+                ttnn.to_layout(ttnn.matmul(win_prev, w, compute_kernel_config=_HIFI4), ttnn.ROW_MAJOR_LAYOUT)
+                for w in windows
+            ]
+        else:
+            assert (
+                scache.win_kv.shape[2] == self.compress_ratio
+            ), "a window deeper than the ratio pairs through win_prev"
+            prevs = [ttnn.to_layout(ttnn.slice(w, [0, 0, 0, 0], [1, 1, 1, dh]), ttnn.ROW_MAJOR_LAYOUT) for w in windows]
         rows = [_rows_on_one_core(kv), _rows_on_one_core(gate)]
         # A slot named twice keeps the later row, as the single-row steps would.
-        for win, row in zip((scache.win_kv, scache.win_gate), rows):
+        for win, row in zip(windows, rows):
             ttnn.experimental.paged_update_cache(win, row, update_idxs_tensor=win_slot)
-        if hist_slot is not None:
-            for hist, row in zip((scache.win_hist_kv, scache.win_hist_gate), rows):
-                ttnn.experimental.paged_update_cache(hist, row, update_idxs_tensor=hist_slot)
         for row in rows:
             ttnn.deallocate(row)
         if not pool_rows:
@@ -918,7 +925,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         pool: bool = False,
         select: bool = False,
         received_entry: ttnn.Tensor | None = None,
-        hist_slot: ttnn.Tensor | None = None,
+        win_prev: ttnn.Tensor | None = None,
         candidates: bool = False,
         build_pool: bool = False,
         page_row: ttnn.Tensor | None = None,
@@ -943,8 +950,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ``sin_win`` its RoPE row, ``entry`` its index); ``select`` re-selects the top-k rows. Exactly
         one of ``sdpa_cur_pos`` / ``mask`` bounds the KV axis. ``received_entry`` (an index source on a stage without its kv
         source, on a step the source pooled) writes the rows in ``scache.new_kv_row`` /
-        ``new_key_row`` at that index before selecting. ``hist_slot`` (speculative decode) is
-        where a ratio > 1 kv source keeps this step's window rows (see :class:`DeepSeekV41LayerCache`).
+        ``new_key_row`` at that index before selecting. ``win_prev`` (speculative decode, whose ratio > 1
+        windows are deeper than the ratio, see :class:`DeepSeekV41LayerCache`) is the bf16 one-hot
+        ``[1, 1, 1, rows]`` of the window slot of position ``pos - 1``, which ``win_slot`` (``pos % rows``)
+        no longer implies; a kv source needs it whenever its first row closes a group.
         ``candidates`` makes the select two-level and ``build_pool`` has a consumer build the pool
         first (see :meth:`DeepSeekV41Indexer.select_kv`).
 
@@ -997,9 +1006,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             with _region("COMPRESSOR"):
                 kv, gate = self._compressor_rows(tokens)
                 if s == 1:
-                    latent = self._latent(kv, gate, scache, win_slot, pool, hist_slot, win_offset=win_offset)
+                    latent = self._latent(kv, gate, scache, win_slot, pool, win_prev, win_offset=win_offset)
                 else:
-                    latent = self._latent_rows(kv, gate, scache, win_slot, pool_rows, hist_slot)
+                    latent = self._latent_rows(kv, gate, scache, win_slot, pool_rows, win_prev)
         assert latent is None or select, "a closed group is written by the select that follows it"
         assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         assert select or not candidates, "candidates are a select mode"
