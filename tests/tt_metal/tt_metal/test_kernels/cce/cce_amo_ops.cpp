@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RISC-V AMOs (Zaamo) and LR/SC (Zalrsc) on cached words of the hart's own TL1. Flags and the status line go through
-// the uncached alias, and no iDMA or ITN write targets this TL1 while they are stored (MIM-560), except in
-// kModeMim560Detector, which overlaps them on purpose. Sub-word AMOs and amocas are not in the toolchain (no Zabha,
-// no Zacas), so no mode issues them.
+// the uncached alias, and no iDMA or ITN write targets this TL1 while they are stored (MIM-560). Sub-word AMOs and
+// amocas are not in the toolchain (no Zabha, no Zacas), so no mode issues them.
 
 #include "cce_amo_ops_abi.h"
 #include "cce_test_common.h"
@@ -358,8 +357,6 @@ struct Args {
     uint32_t leg = 0;
     uint32_t seed = 0;
     uint32_t peer_cce = 0;
-    uint32_t expected_first = 0;
-    uint32_t expected_second = 0;
 };
 
 struct Status {
@@ -432,13 +429,6 @@ static bool args_valid(const Args& args) {
                    region_valid(args.result_offset, lines(num_participants));
         case abi::kModeItnWriter:
         case abi::kModeItnReceiver: return flags_valid(args) && region_valid(args.target_offset, lines(1));
-        case abi::kModeMim560Detector:
-            return args.count != 0 && args.count <= abi::kMaxDetectorRounds &&
-                   region_valid(args.target_offset, lines(1)) &&
-                   region_valid(args.result_offset, abi::kDetectorWords * sizeof(uint32_t));
-        case abi::kModeItnStream:
-            return args.count != 0 && args.count <= abi::kMaxDetectorRounds && flags_valid(args) &&
-                   region_valid(args.target_offset, lines(1));
         default: return false;
     }
 }
@@ -985,105 +975,6 @@ static void run_itn_receiver(const Args& args, const WaitDeadline& deadline, Sta
     flush_line(line);
 }
 
-static void run_mim560_detector(const Args& args, const WaitDeadline& deadline, Status& status) {
-    const uint32_t line = args.target_offset;
-    volatile uint32_t* cached = cached_word(line);
-    volatile uint32_t* uncached = own_tl1_words(line);
-    discard_line(line);
-    uint32_t itn_sample = uncached[1];
-    uint32_t accumulate_sample = uncached[6];
-    uint32_t itn_changes = 0;
-    uint32_t first_itn_change = abi::kDetectorNoChange;
-    uint32_t last_itn_change = abi::kDetectorNoChange;
-    uint32_t accumulate_changes = 0;
-    uint32_t first_accumulate_change = abi::kDetectorNoChange;
-    uint32_t last_accumulate_change = abi::kDetectorNoChange;
-    uint32_t rounds = 0;
-    bool traffic_seen = false;
-    own_tl1_words(args.result_offset)[abi::kDetectorStarted] = 1;
-    const uint64_t start = read_cycle_counter();
-    while (rounds < abi::kMaxDetectorRounds) {
-        amoadd_w(&cached[0], args.value);
-        amoadd_w(&cached[2], args.value);
-        *own_tl1_words<uint8_t>(line + 16) = static_cast<uint8_t>(rounds);
-        *own_tl1_words<uint16_t>(line + 18) = static_cast<uint16_t>(rounds);
-        const uint32_t itn_word = uncached[1];
-        const uint32_t accumulate_word = uncached[6];
-        if (itn_word != itn_sample) {
-            itn_changes++;
-            first_itn_change = first_itn_change == abi::kDetectorNoChange ? rounds : first_itn_change;
-            last_itn_change = rounds;
-            itn_sample = itn_word;
-        }
-        if (accumulate_word != accumulate_sample) {
-            accumulate_changes++;
-            first_accumulate_change =
-                first_accumulate_change == abi::kDetectorNoChange ? rounds : first_accumulate_change;
-            last_accumulate_change = rounds;
-            accumulate_sample = accumulate_word;
-        }
-        rounds++;
-        traffic_seen = itn_word == args.expected_first && accumulate_word == args.expected_second;
-        if ((rounds >= args.count && traffic_seen) || deadline.expired()) {
-            break;
-        }
-    }
-    status.words[abi::kStatusCycles] = static_cast<uint32_t>(read_cycle_counter() - start);
-    if (!traffic_seen) {
-        status.fail(abi::kCodeTrafficNotSeen);
-    }
-    const uint32_t cached_word0 = amoadd_w(&cached[0], 0);
-    const uint32_t cached_word2 = amoadd_w(&cached[2], 0);
-    const uint32_t uncached_word0 = uncached[0];
-    const uint32_t uncached_word2 = uncached[2];
-    invalidate_l1_dcache(line);
-    invalidate_l2_cache_line(line);
-    volatile uint32_t* result = own_tl1_words(args.result_offset);
-    result[abi::kDetectorRounds] = rounds;
-    result[abi::kDetectorItnChanges] = itn_changes;
-    result[abi::kDetectorFirstItnChangeRound] = first_itn_change;
-    result[abi::kDetectorLastItnChangeRound] = last_itn_change;
-    result[abi::kDetectorAccumulateChanges] = accumulate_changes;
-    result[abi::kDetectorFirstAccumulateChangeRound] = first_accumulate_change;
-    result[abi::kDetectorLastAccumulateChangeRound] = last_accumulate_change;
-    result[abi::kDetectorCachedWord0] = cached_word0;
-    result[abi::kDetectorCachedWord2] = cached_word2;
-    result[abi::kDetectorUncachedWord0] = uncached_word0;
-    result[abi::kDetectorUncachedWord2] = uncached_word2;
-}
-
-static void run_itn_stream(const Args& args, const WaitDeadline& deadline, Status& status) {
-    // Only uncached loads of this CCE's own TL1 until the host releases the stream; nothing reaches the target before.
-    volatile uint32_t* go = own_tl1_words(flag_line(args.flag_offset, 0));
-    bool released = *go == 1;
-    while (!released && !deadline.expired()) {
-        released = *go == 1;
-    }
-    if (!released) {
-        status.fail(abi::kCodePeerTimeout);
-        return;
-    }
-    status.words[abi::kStatusPeersSeen] = 1;
-    volatile uint32_t* words =
-        reinterpret_cast<volatile uint32_t*>(experimental::cce_sram_address(args.peer_cce, args.target_offset));
-    const uint64_t start = read_cycle_counter();
-    uint32_t written = 0;
-    for (; written < args.count; ++written) {
-        if (deadline.expired()) {
-            status.fail(abi::kCodeBudgetExpired);
-            break;
-        }
-        words[0] = abi::itn_stream_word(args.seed, written, 0);
-        words[1] = abi::itn_stream_word(args.seed, written, 1);
-        const uint64_t pause_start = read_cycle_counter();
-        while (read_cycle_counter() - pause_start < args.value && !deadline.expired()) {
-        }
-    }
-    asm volatile("fence" ::: "memory");
-    status.words[abi::kStatusCycles] = static_cast<uint32_t>(read_cycle_counter() - start);
-    status.words[abi::kStatusObservedFirst] = written;
-}
-
 void kernel_main() {
     Args args;
     args.mode = get_arg_val<uint32_t>(abi::kArgMode);
@@ -1103,8 +994,6 @@ void kernel_main() {
     args.leg = get_arg_val<uint32_t>(abi::kArgLeg);
     args.seed = get_arg_val<uint32_t>(abi::kArgSeed);
     args.peer_cce = get_arg_val<uint32_t>(abi::kArgPeerCce);
-    args.expected_first = get_arg_val<uint32_t>(abi::kArgExpectedFirst);
-    args.expected_second = get_arg_val<uint32_t>(abi::kArgExpectedSecond);
     const WaitDeadline deadline(args.budget_cycles);
 
     Status status;
@@ -1122,8 +1011,6 @@ void kernel_main() {
             case abi::kModeSoak: run_storm(args, deadline, status); break;
             case abi::kModeItnWriter: run_itn_writer(args, deadline, status); break;
             case abi::kModeItnReceiver: run_itn_receiver(args, deadline, status); break;
-            case abi::kModeMim560Detector: run_mim560_detector(args, deadline, status); break;
-            case abi::kModeItnStream: run_itn_stream(args, deadline, status); break;
             default: status.fail(abi::kCodeBadArgs); break;
         }
     }

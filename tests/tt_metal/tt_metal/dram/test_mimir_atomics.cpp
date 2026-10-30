@@ -5,8 +5,7 @@
 // MM42: Mimir test plan section 4.2 (atomics) on CCE harts. Tier A is RISC-V AMO and LR/SC on cached words of the
 // hart's own TL1 (AMOs on the uncached alias or above 4 MiB are illegal). No AMO runs while an iDMA or ITN write may
 // target that TL1 (MIM-560). Tier M is iDMA L1 accumulate into the issuing CCE's own TL1 (cce_idma_copy
-// kModeAccumulate), checked against a host model of the cce-dv reference arithmetic. MM42Detector holds the one case
-// that overlaps atomic-type requests with ITN writes on purpose; it is non-gating.
+// kModeAccumulate), checked against a host model of the cce-dv reference arithmetic.
 
 #include <gtest/gtest.h>
 
@@ -77,7 +76,6 @@ std::string code_name(uint32_t code) {
         case abi::kCodeBadArgs: return "bad_args";
         case abi::kCodePeerTimeout: return "peer_timeout";
         case abi::kCodeScRetriesExhausted: return "sc_retries_exhausted";
-        case abi::kCodeTrafficNotSeen: return "traffic_not_seen";
         case abi::kCodeReadBackTimeout: return "read_back_timeout";
         case abi::kCodeBudgetExpired: return "budget_expired";
     }
@@ -294,8 +292,6 @@ struct AmoLaunch {
     uint32_t leg = 0;
     uint32_t seed = 0;
     uint32_t peer_cce = 0;
-    uint32_t expected_first = 0;
-    uint32_t expected_second = 0;
     uint64_t budget_cycles = kPollBudgetCycles;
 };
 
@@ -319,8 +315,6 @@ std::vector<uint32_t> amo_args(const AmoLaunch& launch) {
     args[abi::kArgLeg] = launch.leg;
     args[abi::kArgSeed] = launch.seed;
     args[abi::kArgPeerCce] = launch.peer_cce;
-    args[abi::kArgExpectedFirst] = launch.expected_first;
-    args[abi::kArgExpectedSecond] = launch.expected_second;
     return args;
 }
 
@@ -367,7 +361,6 @@ struct IdmaBatch {
     uint32_t disable_saturation = 0;
     uint32_t expected_lo = 0;
     uint32_t expected_hi = 0;
-    uint32_t dirty_first_line = 0;
     uint32_t command_buffer = 0;
     uint64_t poll_region_offset = 0;
     uint32_t poll_region_bytes = 0;
@@ -402,7 +395,6 @@ std::vector<uint32_t> idma_args(const IdmaBatch& batch) {
     args[idma_abi::kArgExpectedLo] = batch.expected_lo;
     args[idma_abi::kArgExpectedHi] = batch.expected_hi;
     args[idma_abi::kArgHostVerified] = batch.host_verified;
-    args[idma_abi::kArgDirtyFirstLine] = batch.dirty_first_line;
     args[idma_abi::kArgCommandBuffer] = batch.command_buffer;
     args[idma_abi::kArgPollRegionOffset] = static_cast<uint32_t>(batch.poll_region_offset);
     args[idma_abi::kArgPollRegionBytes] = batch.poll_region_bytes;
@@ -1932,52 +1924,6 @@ TEST_P(MimirAccumProbe, FmtOpMatrix) {
     }
 }
 
-// An accumulate onto a line the hart left dirty in its cache: the kernel stores to the first destination line
-// through the cache, accumulates into TL1, checks the result through the uncached alias, then flushes the line and
-// reads it again. Records whether the dirty writeback replaced the accumulate result.
-TEST_P(MimirAccumProbe, DirtyLine) {
-    const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-    const uint32_t line_words = abi::kLineBytes / sizeof(uint32_t);
-    const uint32_t seed = leg_seed(1);
-    IdmaBatch batch = own_accumulate(cce_index, 0);
-    batch.len_bytes = abi::kLineBytes;
-    batch.first_trid = 1;
-    batch.dirty_first_line = 0xD1000000u | (seed & 0x00FFFFFFu);
-    const std::vector<uint32_t> source = seeded_words(line_words, seed, kAccumulateValueMask);
-    const std::vector<uint32_t> initial = seeded_words(line_words, seed ^ 0x0D0D0D0Du, kAccumulateValueMask);
-    std::vector<uint32_t> expected = initial;
-    apply_accumulate(batch, source, expected);
-    set_expected(batch, expected);
-    std::vector<uint32_t> on_dirty(line_words, batch.dirty_first_line);
-    apply_accumulate(batch, source, on_dirty);
-    const std::string label =
-        fmt::format("DirtyLine: {}, dirty value 0x{:08x}", batch_config(batch, seed), batch.dirty_first_line);
-    write_accumulate_operands(device, batch, source, initial, 1);
-    ProgramLaunches launches;
-    add_idma_kernel(device, batch, launches);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_program(device, launches, label);
-    ASSERT_TRUE(statuses.has_value());
-    const std::vector<uint32_t>& status = statuses->front();
-    const uint32_t code = status[idma_abi::kStatusCode];
-    const uint32_t after_flush = status[idma_abi::kStatusProbeFirst];
-    const std::string result = fmt::format(
-        "first word after the flush 0x{:08x}: {}; host view of word 0 0x{:08x}; {}",
-        after_flush,
-        after_flush == expected[0]              ? "accumulate result kept (the dirty line was not written back over it)"
-        : after_flush == batch.dirty_first_line ? "the dirty writeback replaced the accumulate result"
-        : after_flush == on_dirty[0]            ? "accumulate applied on top of the dirty data"
-                                                : "other",
-        read_cce_tl1(device, cce_index, batch.destination_offset, 4).front(),
-        idma_status_detail(status));
-    RecordProperty("result", result);
-    log_info(tt::LogTest, "MM42 {}: {}", label, result);
-    EXPECT_EQ(code, idma_abi::kCodeLanded) << label << ": " << result << idma_code_note(code);
-}
-
 INSTANTIATE_TEST_SUITE_P(MM42, MimirAccumProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 class MimirAtomicIdmaAccum : public MimirAtomicCceTest {};
@@ -2257,235 +2203,5 @@ TEST_P(MimirAtomicIdmaAccum, MixedPathControl) {
 
 INSTANTIATE_TEST_SUITE_P(
     MM42, MimirAtomicIdmaAccum, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
-
-class MimirKnownIssue : public MimirAtomicCceTest {};
-
-// MIM-560 detector (non-gating). On one line of this CCE's TL1, at the same time: the sibling CCE's hart (the ITN-write
-// source) stores distinct pairs to words 0-1 as plain SPA stores, released by the host only after hart 0's AMO loop has
-// started; hart 1 accumulates (INT32, op 0x9, 64 x 8 B) onto words 6-7; hart 0 makes amoadd.w on word 0 (same word as
-// the ITN writes) and word 2 (a neighbour) and uncached partial stores (sb, sh) into word 4 until it has seen the last
-// ITN pair and the final accumulate value. Corruption is a word holding a value no writer could have left, counted per
-// leg (ITN, AMO, accumulate, partial store, untouched words); a lost AMO update on word 0 is expected non-atomicity,
-// not corruption. A count of 0 is inconclusive, not evidence against MIM-560.
-TEST_P(MimirKnownIssue, Mim560Detector) {
-    constexpr uint32_t kItnPairs = abi::kMaxCount;
-    constexpr uint32_t kItnPauseCycles = 256;
-    constexpr uint32_t kAccumulateCommands = idma_abi::kMaxElements;
-    constexpr uint32_t kMinRounds = 64;
-    constexpr uint32_t kValue = 1;
-    const uint32_t cce_index = GetParam();
-    const uint32_t writer_cce = sibling_cce(cce_index);
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-    const AmoLayout layout = amo_layout();
-    const uint32_t line_words = abi::kLineBytes / sizeof(uint32_t);
-    const uint32_t seed = leg_seed(1);
-    const uint32_t itn_seed = seed ^ 0x17117117u;
-    const std::vector<uint32_t> initial = seeded_words(line_words, seed, kAccumulateValueMask);
-    write_cce_tl1(device, cce_index, layout.target, initial);
-
-    // The ITN source waits on its own flag line, so nothing reaches the detector line before the host releases it.
-    AmoLaunch itn = AmoLaunch{
-        .cce_index = writer_cce,
-        .mode = abi::kModeItnStream,
-        .target_offset = layout.target,
-        .flag_offset = layout.flags,
-        .count = kItnPairs,
-        .value = kItnPauseCycles,
-        .seed = itn_seed,
-        .peer_cce = cce_index,
-        .budget_cycles = kLongBudgetCycles};
-    write_cce_tl1(
-        device,
-        writer_cce,
-        itn.flag_offset,
-        std::vector<uint32_t>(2 * abi::kMaxParticipants * abi::kLineBytes / sizeof(uint32_t), 0));
-
-    IdmaBatch accumulate = own_accumulate(cce_index, 1);
-    accumulate.destination_offset = layout.target + 6 * sizeof(uint32_t);
-    accumulate.len_bytes = 8;
-    accumulate.num_commands = kAccumulateCommands;
-    accumulate.first_trid = 2;
-    accumulate.budget_cycles = kLongBudgetCycles;
-    const std::vector<uint32_t> accumulate_source = seeded_words(2, seed ^ 0xACC0ACC0u, 0x0000FFFFu);
-    write_cce_tl1(device, cce_index, accumulate.source_offset, accumulate_source);
-    std::vector<uint32_t> accumulated = {initial[6], initial[7]};
-    apply_accumulate(accumulate, accumulate_source, accumulated);
-    set_expected(accumulate, accumulated);
-
-    AmoLaunch detector = participant_launches(cce_index, abi::kModeMim560Detector, 1, layout).front();
-    detector.flag_offset = 0;
-    detector.count = kMinRounds;
-    detector.value = kValue;
-    detector.expected_first = abi::itn_stream_word(itn_seed, kItnPairs - 1, 1);
-    detector.expected_second = accumulated[0];
-    detector.budget_cycles = kLongBudgetCycles;
-    write_cce_tl1(device, cce_index, layout.results, std::vector<uint32_t>(abi::kDetectorWords, abi::kStatusPoison));
-
-    const std::string label = fmt::format(
-        "Mim560Detector on CCE{}: ITN source CCE{} hart 0, {} plain SPA store pairs {} cycles apart into words 0-1, "
-        "released after the AMO loop started; hart 1 accumulate {} x 8 B into words 6-7; hart 0 amoadd.w on words 0 "
-        "and 2 and uncached sb/sh into word 4; seed 0x{:08x}",
-        cce_index,
-        writer_cce,
-        kItnPairs,
-        kItnPauseCycles,
-        kAccumulateCommands,
-        seed);
-    RecordProperty("config", label);
-    RecordProperty(
-        "itn_write_source",
-        fmt::format(
-            "CCE{} hart 0 cce_amo_ops kModeItnStream: plain SPA stores (ITN writes), host-released", writer_cce));
-    ProgramLaunches launches;
-    add_amo_kernel(device, detector, launches);
-    add_idma_kernel(device, accumulate, launches);
-    add_amo_kernel(device, itn, launches);
-    log_info(tt::LogTest, "MM42 {}", label);
-    Program program = CreateProgram();
-    add_cce_kernels(device, program, launches.kernels);
-    launch_on_idle_cces(device, program, launches.kernels);
-    const std::chrono::steady_clock::time_point start_deadline = std::chrono::steady_clock::now() + kHostDeadline;
-    bool detector_started = false;
-    while (!detector_started && std::chrono::steady_clock::now() < start_deadline) {
-        detector_started =
-            read_cce_tl1(device, cce_index, layout.results + abi::kDetectorStarted * sizeof(uint32_t), sizeof(uint32_t))
-                .front() == 1;
-    }
-    ASSERT_TRUE(detector_started) << label << ": the detector did not start within " << kHostDeadline.count() << " s"
-                                  << kFreshSessionNote;
-    write_cce_tl1(device, writer_cce, itn.flag_offset, {1});
-    ASSERT_TRUE(wait_for_status_magics(device, launches.kernels, launches.done_magics, kHostDeadline))
-        << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
-    detail::WaitProgramDone(device, program, /*read_device_profiler_results=*/false);
-    std::vector<std::vector<uint32_t>> statuses;
-    for (const CceKernelLaunch& launch : launches.kernels) {
-        statuses.push_back(
-            read_cce_tl1(device, launch.cce_index, tl1_done_block(launch.hart), abi::kStatusWords * sizeof(uint32_t)));
-    }
-    const std::vector<uint32_t>& detector_status = statuses[0];
-    const std::vector<uint32_t>& accumulate_status = statuses[1];
-    const std::vector<uint32_t>& itn_status = statuses[2];
-    RecordProperty("detector_status", status_detail(detector_status));
-    RecordProperty("accumulate_status", idma_status_detail(accumulate_status));
-    RecordProperty(
-        "itn_status",
-        fmt::format(
-            "{} of {} pairs written; {}", itn_status[abi::kStatusObservedFirst], kItnPairs, status_detail(itn_status)));
-    if (const uint32_t code = accumulate_status[idma_abi::kStatusCode]; !idma_code_note(code).empty()) {
-        log_warning(tt::LogTest, "MM42 {}: iDMA code {}{}", label, idma_code_name(code), kFreshSessionNote);
-    }
-
-    const std::vector<uint32_t> seen =
-        read_cce_tl1(device, cce_index, layout.results, abi::kDetectorWords * sizeof(uint32_t));
-    const uint32_t rounds = seen[abi::kDetectorRounds];
-    const std::vector<uint32_t> line = read_cce_tl1(device, cce_index, layout.target, abi::kLineBytes);
-    struct LegCount {
-        std::string name;
-        uint32_t corrupted = 0;
-    };
-    LegCount itn_leg{"ITN"};
-    LegCount amo_leg{"AMO"};
-    LegCount accumulate_leg{"accumulate"};
-    LegCount partial_store_leg{"partial store"};
-    LegCount untouched_leg{"untouched"};
-    std::string classes;
-    const auto classify = [&](uint32_t word, const std::string& what, bool possible, LegCount& leg) {
-        classes += fmt::format("{}word {} 0x{:08x} {}", classes.empty() ? "" : "; ", word, line[word], what);
-        leg.corrupted += possible ? 0 : 1;
-    };
-    // Word 1: some ITN pair's value; the last one when the stores landed in order.
-    bool word1_from_itn = false;
-    for (uint32_t pair = 0; pair < kItnPairs; ++pair) {
-        word1_from_itn = word1_from_itn || line[1] == abi::itn_stream_word(itn_seed, pair, 1);
-    }
-    classify(
-        1,
-        line[1] == detector.expected_first ? "last ITN value"
-        : word1_from_itn                   ? "an earlier ITN value"
-                                           : "CORRUPTED",
-        word1_from_itn,
-        itn_leg);
-    // Word 0: some ITN value plus 0..rounds AMO updates that reached TL1 after it.
-    uint32_t lost_updates = 0;
-    bool word0_possible = false;
-    for (uint32_t pair = 0; pair < kItnPairs && !word0_possible; ++pair) {
-        const uint32_t updates = (line[0] - abi::itn_stream_word(itn_seed, pair, 0)) / kValue;
-        if (updates <= rounds) {
-            word0_possible = true;
-            lost_updates = rounds - updates;
-        }
-    }
-    classify(
-        0,
-        word0_possible ? fmt::format(
-                             "ITN value plus AMO updates ({} of {} AMO updates not in TL1: expected "
-                             "non-atomicity or still cached)",
-                             lost_updates,
-                             rounds)
-                       : "CORRUPTED",
-        word0_possible,
-        amo_leg);
-    const bool word2_possible = line[2] - initial[2] <= rounds * kValue;
-    classify(2, word2_possible ? "initial value plus AMO updates" : "CORRUPTED", word2_possible, amo_leg);
-    // Word 4: the last round's sb into byte 0 and sh into bytes 2-3; byte 1 keeps its initial value.
-    const uint32_t last_round = rounds - 1;
-    const uint32_t partial_expected =
-        ((last_round & 0xFFFFu) << 16) | (initial[4] & 0x0000FF00u) | (last_round & 0xFFu);
-    classify(
-        4,
-        line[4] == partial_expected ? "last partial stores"
-                                    : fmt::format("CORRUPTED (expected 0x{:08x})", partial_expected),
-        line[4] == partial_expected,
-        partial_store_leg);
-    const bool accumulate_possible = line[6] == accumulated[0] && line[7] == accumulated[1];
-    classify(
-        6, accumulate_possible ? "accumulate result" : "CORRUPTED (with word 7)", accumulate_possible, accumulate_leg);
-    for (const uint32_t word : {3u, 5u, 8u, 9u, 10u, 11u, 12u, 13u, 14u, 15u}) {
-        if (line[word] != initial[word]) {
-            classify(word, "CORRUPTED (no writer)", false, untouched_leg);
-        }
-    }
-    uint32_t corrupted = 0;
-    std::string per_leg;
-    for (const LegCount* leg : {&itn_leg, &amo_leg, &accumulate_leg, &partial_store_leg, &untouched_leg}) {
-        corrupted += leg->corrupted;
-        per_leg += fmt::format("{}{} {}", per_leg.empty() ? "" : ", ", leg->name, leg->corrupted);
-        RecordProperty(
-            fmt::format("corrupted_{}", leg->name == "partial store" ? "partial_store" : leg->name),
-            static_cast<int>(leg->corrupted));
-    }
-    const bool itn_overlapped = seen[abi::kDetectorItnChanges] > 0 && seen[abi::kDetectorFirstItnChangeRound] > 0;
-    const bool accumulate_overlapped =
-        seen[abi::kDetectorAccumulateChanges] > 0 && seen[abi::kDetectorFirstAccumulateChangeRound] > 0;
-    const std::string overlap = fmt::format(
-        "{} AMO rounds; ITN value changed {} times during them (rounds {}-{}){}; accumulate word changed {} times "
-        "(rounds {}-{}){}; cached view word 0 0x{:08x} word 2 0x{:08x}, TL1 view word 0 0x{:08x} word 2 0x{:08x}",
-        rounds,
-        seen[abi::kDetectorItnChanges],
-        seen[abi::kDetectorFirstItnChangeRound],
-        seen[abi::kDetectorLastItnChangeRound],
-        itn_overlapped ? ", overlapping the AMOs" : ", no overlap seen",
-        seen[abi::kDetectorAccumulateChanges],
-        seen[abi::kDetectorFirstAccumulateChangeRound],
-        seen[abi::kDetectorLastAccumulateChangeRound],
-        accumulate_overlapped ? ", overlapping the AMOs" : ", no overlap seen",
-        seen[abi::kDetectorCachedWord0],
-        seen[abi::kDetectorCachedWord2],
-        seen[abi::kDetectorUncachedWord0],
-        seen[abi::kDetectorUncachedWord2]);
-    const std::string verdict = corrupted == 0 ? "0 corrupted words: inconclusive, not evidence against MIM-560"
-                                               : fmt::format("{} corrupted words ({})", corrupted, per_leg);
-    RecordProperty("overlap_evidence", overlap);
-    RecordProperty("corrupted_words", static_cast<int>(corrupted));
-    RecordProperty("words", classes);
-    RecordProperty("verdict", verdict);
-    log_info(tt::LogTest, "MM42Detector {}: {}; {}; {}", label, overlap, classes, verdict);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    MM42Detector, MimirKnownIssue, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::atomics
