@@ -3,6 +3,7 @@
 
 from itertools import chain, product
 
+import os
 import pytest
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
@@ -279,7 +280,7 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            LOOP_FACTOR(1024),
+            LOOP_FACTOR(int(os.environ.get("RC_LOOP_FACTOR", "1024"))),
         ],
         variant_stimuli=StimuliConfig(
             None,
