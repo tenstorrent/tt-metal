@@ -22,6 +22,13 @@ changes are its behaviour.
 
 Precision only: none (exact selection).
 
+## Ties
+The same values as the stock op, position by position (`tests/unit/test_stock_identity.py`: randn, 16-level tied,
+causal -inf tails, re-index -inf blocks; 8x4 and 2x2 shapes up to 1M keys). Ids differ only between keys of equal bf16
+score: neither op defines a tie order (neither keeps the lowest or highest tied ids, nor lists a tied run ascending),
+and the fork orders ties by its own row split (MATH / PACK, core pairs). On the 8x4 shapes every k 512 row lists ids in
+another order and 85-100 % of rows hold another tied id; k 2048 differs only on the pair-split rows (40 of 160).
+
 ## Measured
 One p150b, device kernel time, stock -> fork (`tests/ttnn/unit_tests/operations/ds41_topk/test_profile_topk.py`):
 | call (rows x width, k) | stock us | fork us |
@@ -32,6 +39,17 @@ One p150b, device kernel time, stock -> fork (`tests/ttnn/unit_tests/operations/
 | 2x2 candidate blocks 512 x 6912, 2048 | 182 | 138 |
 | 8x4 candidate blocks 160 x 32768, 2048 | 279 | 166 |
 | 512 x 16384, 512 (one segment) | 256 | 196 |
+
+Galaxy 8x4 per chip (one p150b of the Galaxy, `models/demos/deepseek_v41_flash_d_p/tt/perf_topk_op.py`, median of 5
+after a warm call), DeepSeek-V4.1 P.13:
+| call (rows x width, k) | stock us | fork us |
+|---|---|---|
+| index r2 160 x 28160, 512 (ladder last chunk, layers 2 / 8 / 14) | 244 | 110 |
+| candidate blocks 160 x 7040, 2048 (layer 20) | 76 | 51 |
+| index r1 160 x 56320, 512 (layers 20 / 24 / 28 / 32 / 36) | 486 | 219 |
+| index r2 160 x 522240, 512 (1M) | 4491 | 1901 |
+| candidate blocks 160 x 130560, 2048 (1M) | 1098 | 581 |
+| index r1 160 x 1044480, 512 (1M) | 9240 | 3909 |
 DeepSeek-V4.1 scaled 2x2, 8 layers, chunk 53248 -> 55296 (`test_profile.py`, INDEX_TOPK_OP stock -> fork): device
 56.12 -> 54.43 ms a chunk (-3.0 %), the indexers 11.3 -> 9.7 ms; wall unchanged (stock 84.7 / 78.8, fork 82.3 / 79.2 ms,
 host-bound). Accuracy: the 4 indexer component tests and the 8 whole-block swap tests identical to the stock op, line
