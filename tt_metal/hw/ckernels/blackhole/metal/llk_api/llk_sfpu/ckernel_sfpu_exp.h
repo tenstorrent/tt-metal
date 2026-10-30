@@ -394,13 +394,6 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
     return k;
 }
 
-// Compile-time views of a float constant as the SFPLOADI immediates that load it.
-namespace exp_detail {
-constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
-constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
-}  // namespace exp_detail
-
 /*
  * The _sfpu_exp_fp32_accurate_ code is derived from code by Norbert Juffa.
  *
@@ -590,10 +583,10 @@ inline void _sfpu_exp_fp32_load_imm32_() {
  */
 template <bool SCALE_EN, int ITERATIONS>
 inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_factor) {
-    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG4, exp_detail::bits(EXP_FP32_P1)>();
-    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG5, exp_detail::bits(EXP_FP32_C2)>();
-    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG6, exp_detail::bits(EXP_FP32_C3)>();
-    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG7, exp_detail::bits(EXP_FP32_C4)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG4, Converter::as_uint(EXP_FP32_P1)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG5, Converter::as_uint(EXP_FP32_C2)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG6, Converter::as_uint(EXP_FP32_C3)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG7, Converter::as_uint(EXP_FP32_C4)>();
 
     // Instructions the head emits; MUST match the lambda exactly (load_replay_buf does not check the count, and a
     // mismatch misaligns every replay):
@@ -996,16 +989,16 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
         constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(THRESHOLD_scaled));
-        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(THRESHOLD_scaled));
         TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
 #ifndef DISABLE_SFPLOADMACRO
@@ -1172,13 +1165,13 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
 
         // Load constant A into LREG[12]
-        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);
 
         // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, exp_detail::lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, exp_detail::hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);
 
         // Load shift amount (15) into LREG[14] for SFPSHFT2
@@ -1313,11 +1306,11 @@ void exp_init() {
             // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store; LREG12..14 hold 1/ln2 and -ln2 in two
             // parts.
             addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-            _sfpu_load_config32_(p_sfpu::LREG12, exp_detail::hi16(EXP_FP32_LOG2E), exp_detail::lo16(EXP_FP32_LOG2E));
+            _sfpu_load_config32_(p_sfpu::LREG12, Converter::hi16(EXP_FP32_LOG2E), Converter::lo16(EXP_FP32_LOG2E));
             _sfpu_load_config32_(
-                p_sfpu::LREG13, exp_detail::hi16(EXP_FP32_NEG_LN2_HI), exp_detail::lo16(EXP_FP32_NEG_LN2_HI));
+                p_sfpu::LREG13, Converter::hi16(EXP_FP32_NEG_LN2_HI), Converter::lo16(EXP_FP32_NEG_LN2_HI));
             _sfpu_load_config32_(
-                p_sfpu::LREG14, exp_detail::hi16(EXP_FP32_NEG_LN2_LO), exp_detail::lo16(EXP_FP32_NEG_LN2_LO));
+                p_sfpu::LREG14, Converter::hi16(EXP_FP32_NEG_LN2_LO), Converter::lo16(EXP_FP32_NEG_LN2_LO));
 #endif
         }
     }
