@@ -2443,6 +2443,9 @@ void assemble_device_commands(
     // Assemble config buffer
     DeviceCommandCalculator program_config_buffer_calculator(metal_ctx);
 
+    // The semaphore, circular-buffer and dataflow-buffer configs go to the objects' own cores, which
+    // ProgramImpl::determine_sub_device_ids keeps off the cores of other sub-devices. A new write beyond kernel cores
+    // must join that check.
     SemphoreCommandGenerator semaphore_command_generator;
     semaphore_command_generator.size_commands(metal_ctx, program, mesh_device, constants, batched_transfers);
 

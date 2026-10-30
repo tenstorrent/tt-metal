@@ -29,6 +29,7 @@
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "dispatch_test_utils.hpp"
+#include <gmock/gmock.h>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -46,8 +47,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
-// Access to internal API: ProgramImpl::validate_circular_buffer_region
+// Access to internal API: ProgramImpl::validate_circular_buffer_region, legacy dataflow buffers
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -987,6 +991,196 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSwitchFromEveryLaunchSlot
     mesh_device->clear_loaded_sub_device_manager();
     mesh_device->remove_sub_device_manager(manager_a);
     mesh_device->remove_sub_device_manager(manager_b);
+}
+
+// A program's kernels put it on a sub-device. Fast dispatch also writes each of its semaphores' initial values and each
+// circular or dataflow buffer's config into the kernel-config ring of every core the object is placed on, ordered only
+// against the programs of the kernels' sub-device: on another sub-device's cores it would overwrite the configs of a
+// program running there. So the objects must stay off the cores of other sub-devices.
+enum class ProgramObject { semaphore, circular_buffer, dataflow_buffer };
+
+static std::string_view object_name(ProgramObject object) {
+    switch (object) {
+        case ProgramObject::semaphore: return "semaphore";
+        case ProgramObject::circular_buffer: return "circular buffer";
+        case ProgramObject::dataflow_buffer: return "dataflow buffer";
+    }
+    return "";
+}
+
+// A blank kernel on core (0, 0), and `object` on `object_cores`.
+static Program program_with(ProgramObject object, const CoreRangeSet& object_cores) {
+    const CoreRange kernel_core({0, 0}, {0, 0});
+    const std::string blank = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        blank,
+        kernel_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    switch (object) {
+        case ProgramObject::semaphore: CreateSemaphore(program, object_cores, 0); break;
+        case ProgramObject::circular_buffer:
+            CreateCircularBuffer(
+                program,
+                object_cores,
+                CircularBufferConfig(2048, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
+                    .set_page_size(tt::CBIndex::c_0, 2048));
+            break;
+        case ProgramObject::dataflow_buffer: {
+            const KernelHandle consumer = CreateKernel(
+                program,
+                blank,
+                kernel_core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            const uint32_t dfb = experimental::dfb::CreateDataflowBuffer(
+                program, object_cores, experimental::dfb::DataflowBufferConfig{.entry_size = 1024, .num_entries = 2});
+            experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb, kernel, consumer);
+            break;
+        }
+    }
+    return program;
+}
+
+// Sub-device 0 holds (0, 0)-(2, 2) and sub-device 1 holds (3, 3)-(4, 4); (5, 5) lies in neither.
+static SubDeviceManagerId create_split_manager(distributed::MeshDevice& mesh_device) {
+    return mesh_device.create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))}),
+         SubDevice(std::array{CoreRangeSet(CoreRange({3, 3}, {4, 4}))})},
+        k_local_l1_size);
+}
+
+// A program whose objects reach another sub-device is refused each time it would be placed under the manager, before
+// anything of it is written; with no manager loaded it runs. Objects on cores of the kernels' sub-device that run no
+// kernel are fine: every core of a sub-device takes part in each of its programs, so the slot they are written into is
+// the program's own. So are objects on cores in no sub-device, where no program runs while the manager is loaded.
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramObjectsStayOffOtherSubDevices) {
+    using ::testing::AllOf;
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    auto mesh_device = devices_[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    const auto split = create_split_manager(*mesh_device);
+    std::vector<ProgramObject> objects = {ProgramObject::semaphore, ProgramObject::circular_buffer};
+    if (arch_ != tt::ARCH::QUASAR) {  // DFBs do not go through fast dispatch on Quasar yet
+        objects.push_back(ProgramObject::dataflow_buffer);
+    }
+    const CoreRangeSet into_sub_device_1(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({3, 3}, {3, 3})});
+    const auto refused = [](ProgramObject object) {
+        return ThrowsMessage<std::runtime_error>(AllOf(
+            HasSubstr(object_name(object)), HasSubstr("in sub-device 1, outside sub-device 0 where its kernels run")));
+    };
+    for (const ProgramObject object : objects) {
+        SCOPED_TRACE(object_name(object));
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, program_with(object, into_sub_device_1));
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
+        mesh_device->load_sub_device_manager(split);
+        for (int attempt = 0; attempt < 2; ++attempt) {  // a refusal leaves nothing cached
+            EXPECT_THAT([&] { distributed::EnqueueMeshWorkload(cq, workload, false); }, refused(object));
+            EXPECT_THAT(
+                [&] { (void)workload.get_sem_base_addr(mesh_device, CoreCoord{0, 0}, CoreType::WORKER); },
+                refused(object));
+        }
+        mesh_device->clear_loaded_sub_device_manager();
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
+    }
+
+    mesh_device->load_sub_device_manager(split);
+    for (const ProgramObject object : objects) {
+        distributed::MeshWorkload workload;
+        workload.add_program(
+            device_range_,
+            program_with(object, CoreRangeSet(std::vector{CoreRange({0, 0}, {2, 2}), CoreRange({5, 5}, {5, 5})})));
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+    }
+    distributed::Finish(cq);
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(split);
+}
+
+// A program's sub-device is derived again from the program once it is compiled, under every manager: one derived before
+// would let objects added after it skip the check.
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceIdsAreDerivedFromTheCompiledProgram) {
+    auto mesh_device = devices_[0];
+    const auto split = create_split_manager(*mesh_device);
+    const auto whole = mesh_device->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {4, 4}))})}, k_local_l1_size);
+    Program program = create_blank_program(CoreRange({0, 0}, {0, 0}));
+    mesh_device->load_sub_device_manager(split);
+    EXPECT_EQ(program.impl().determine_sub_device_ids(mesh_device.get()), std::vector{SubDeviceId{0}});
+    CreateSemaphore(program, CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({3, 3}, {3, 3})}), 0);
+    mesh_device->load_sub_device_manager(whole);
+    program.impl().compile(mesh_device.get());  // its first compile, under another manager
+    mesh_device->load_sub_device_manager(split);
+    EXPECT_THAT(
+        [&] { program.impl().determine_sub_device_ids(mesh_device.get()); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("outside sub-device 0 where its kernels run")));
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(split);
+    mesh_device->remove_sub_device_manager(whole);
+}
+
+// A Metal 2.0 program is placed when its workload is built, so it is refused then.
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSemaphoreSpecOnAnotherSubDeviceIsRefusedWhenBuilt) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "The kernel below is configured for Wormhole and Blackhole";
+    }
+    auto mesh_device = devices_[0];
+    const auto split = create_split_manager(*mesh_device);
+    const experimental::KernelSpecName kernel{"blank"};
+    const experimental::ProgramSpec spec{
+        .name = "semaphore_in_another_sub_device",
+        .kernels = {experimental::KernelSpec{
+            .unique_id = kernel,
+            .source = experimental::KernelSpec::SourceCode{"void kernel_main() {}"},
+            .num_threads = 1,
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .config_1xx =
+                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}}}},
+        .semaphores = {experimental::SemaphoreSpec{
+            .unique_id = experimental::SemaphoreSpecName{"spilled"},
+            .target_nodes = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({3, 3}, {3, 3})})}},
+        .work_units = {experimental::WorkUnitSpec{
+            .name = "main", .kernels = {kernel}, .target_nodes = experimental::NodeCoord{0, 0}}},
+    };
+    mesh_device->load_sub_device_manager(split);
+    EXPECT_THAT(
+        [&] { (void)experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("in sub-device 1, outside sub-device 0 where its kernels run")));
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(split);
+}
+
+// Kernels on a core in no sub-device have no lane to launch them, so such a program is refused; the refusal names the
+// program and those cores.
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceKernelsInNoSubDeviceAreRefused) {
+    auto mesh_device = devices_[0];
+    const auto split = create_split_manager(*mesh_device);
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({5, 5}, {5, 5})}),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    const ProgramId id = program.impl().get_id();
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+    mesh_device->load_sub_device_manager(split);
+    EXPECT_THAT(
+        [&] { distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Kernel group cores do not match sub device cores for programmable core type TENSIX"),
+            ::testing::HasSubstr("program " + std::to_string(id) + " has kernels on {[5-5 - 5-5]}"),
+            ::testing::HasSubstr("in no sub-device of the loaded sub-device manager"))));
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(split);
 }
 
 }  // namespace tt::tt_metal
