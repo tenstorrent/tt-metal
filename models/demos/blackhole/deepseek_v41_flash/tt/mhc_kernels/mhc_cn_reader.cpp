@@ -14,6 +14,7 @@
 //     rsqrt)
 
 #include <stdint.h>
+#include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -55,6 +56,7 @@ void kernel_main() {
     const auto w_acc = TensorAccessor(w_args, w_addr, TILE);
     experimental::CB cba(cb_a), cbx(cb_x), cbw(cb_w), cbpre(cb_pre), cbp(cb_p), cbslot(cb_slot), cbtot(cb_tot);
 
+    DeviceZoneScopedN("CR_ALL");
     cbslot.reserve_back(1);
     const uint32_t slot_base = cbslot.get_write_ptr();
     volatile tt_l1_ptr uint32_t* slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_base);
@@ -98,6 +100,9 @@ void kernel_main() {
     }
     noc.async_read_barrier();
     {
+        DeviceZoneScopedN("CR_xdone");
+    }
+    {
         volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbpre.get_write_ptr());
         volatile tt_l1_ptr uint32_t* A = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cba.get_write_ptr());
         for (uint32_t t = 0; t < T; ++t) {
@@ -115,6 +120,9 @@ void kernel_main() {
 
     // ---- exchange of the partial sums of squares ----
     cbp.wait_front(1);
+    {
+        DeviceZoneScopedN("CR_gotP");
+    }
     volatile tt_l1_ptr uint32_t* pp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbp.get_read_ptr());
     for (uint32_t t = 0; t < T; ++t) {
         slots[k * SW + t] = pp[RW(t)];
@@ -149,6 +157,9 @@ void kernel_main() {
         }
     }
     cbtot.push_back(1);
+    {
+        DeviceZoneScopedN("CR_exchdone");
+    }
     for (uint32_t kk = 0; kk < NC; ++kk) {
         slots[kk * SW + SW - 1] = 0;
     }

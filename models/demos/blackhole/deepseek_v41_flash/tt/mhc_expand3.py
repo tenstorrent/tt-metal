@@ -36,7 +36,18 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
         cores.pop()
     gpc = nt // len(cores)
     G = (T + 3) // 4
-    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
+    fast = (
+        os.environ.get("DSV41_MHC_EXPAND_FAST", "0") == "1"
+    )  # block matmul per token group + merged core ranges (bit-identical)
+    ranges = fast or os.environ.get("DSV41_MHC_RANGES", "0") == "1"
+    if ranges:  # as few core ranges as possible: the dispatcher writes the program's configuration once per range
+        from models.demos.blackhole.deepseek_v41_flash.tt.mhc_pre import _merged_set
+
+        core_set = _merged_set(cores)
+    else:
+        core_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores]
+        )
     rt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for k, (cx, cy) in enumerate(cores):
         rt[cx][cy] = [k * gpc]
@@ -55,10 +66,10 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
     s_bytes = (G * gpc * 2 * 128) if y_row else (T * gpc * 2 * 128)
     s_pages = max(1, (s_bytes + 4095) // 4096) if y_bf16 else 1
     cbs = [
-        cb(CB_A, T, 4096, ttnn.float32),
+        cb(CB_A, G if fast else T, 4096, ttnn.float32),
         cb(CB_B, G * gpc, 4096, ttnn.float32),
         cb(CB_S, s_pages, 4096, ttnn.float32),
-        cb(CB_O, min(nb, 8), 4096, ttnn.float32),
+        cb(CB_O, min(G * gpc if fast else nb, 8), 4096, ttnn.float32),
         cb(CB_SA, max(1, (T * 512 + 4095) // 4096), 4096, ttnn.float32),
     ]
     acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -75,7 +86,7 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/mhc_expand3_writer.cpp",
+        kernel_source=f"{KDIR}/{'mhc_expand4_writer.cpp' if fast else 'mhc_expand3_writer.cpp'}",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
         compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, int(has_y2)] + acc(out) + acc(comb) + acc(post),
@@ -84,7 +95,7 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
         config=ttnn.WriterConfigDescriptor(),
     )
     compute = ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/mhc_expand2_compute.cpp",
+        kernel_source=f"{KDIR}/{'mhc_expand4_compute.cpp' if fast else 'mhc_expand2_compute.cpp'}",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
         compile_time_args=[CB_A, CB_B, CB_O, T, G, gpc],
@@ -99,6 +110,8 @@ def mhc_expand3(y, x, post, comb, out, y2=None, n_cores=None):
                 n,
                 D,
                 len(cores),
+                fast,
+                ranges,
                 y_row,
                 y_bf16,
                 has_y2,

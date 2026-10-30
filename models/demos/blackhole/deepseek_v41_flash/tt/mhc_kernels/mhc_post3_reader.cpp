@@ -6,6 +6,7 @@
 // each) and the G summation tiles SSEL_g[g*TG + tl, p*TG + tl] = 1 (p < PPT).
 
 #include <stdint.h>
+#include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -32,6 +33,7 @@ void kernel_main() {
     const auto c_acc = TensorAccessor(c_args, c_addr, TILE);
     experimental::CB cbc(cb_consts), cbp(cb_q), cbs(cb_ssel), cbl(cb_log), cbk(cb_skin);
 
+    DeviceZoneScopedN("QR_ALL");
     cbc.reserve_back(NCONST);
     for (uint32_t i = 0; i < NCONST; ++i) {
         noc.async_read(c_acc, cbc, TILE, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = i * TILE});
@@ -62,6 +64,9 @@ void kernel_main() {
         noc_semaphore_set(sem, 0);
     }
     cbp.push_back(NPG);
+    {
+        DeviceZoneScopedN("QR_gotQ");
+    }
 
     // ---- permute the comb logits (token rows [t, e]) into the SFPU layout of mhc_sinkhorn_sfpu.h (element e = dst
     // vector e, lane t):
@@ -83,5 +88,8 @@ void kernel_main() {
         }
     }
     cbk.push_back(1);
+    {
+        DeviceZoneScopedN("QR_permdone");
+    }
     cbl.pop_front(1);
 }

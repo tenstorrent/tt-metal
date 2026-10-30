@@ -1,0 +1,81 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// mHC projection v4 (fused program, DSV41_MHC_PAR_SINKHORN: one post core per token group), writer.  Differs from v3
+// only in where the partial rows go: page pg of the Q CB of the post core of group g. (v3 text:) mHC projection v3
+// (fused program), writer.  (1) builds the constant tiles of the core: ONES (ones in column NCOL) and 5 selection tiles
+// SEL_i[tl, 4*tl + i] = 1 (i < 4), SEL_all[tl, 4*tl + i] = 1 (all i);  (2) writes the TG valid rows (row tl = token
+// tok0+tl) of the partial tile into rows [row0, row0 + TG) of its packed partial page `pg` (two face-half pieces).
+
+#include <stdint.h>
+#include "api/debug/kernel_profiler.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+
+void kernel_main() {
+    constexpr uint32_t cb_ones = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_sel = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_p = get_compile_time_arg_val(2);
+    constexpr uint32_t NCOL = get_compile_time_arg_val(3);
+    constexpr uint32_t TG = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_q =
+        get_compile_time_arg_val(5);  // packed partial pages (same L1 address on every core of the program)
+    constexpr uint32_t SEM = get_compile_time_arg_val(6);
+    constexpr uint32_t NGRP = get_compile_time_arg_val(
+        7);  // token groups handled by this core (1 or 2): one partial tile / one page write each
+    constexpr uint32_t PGPG = get_compile_time_arg_val(8);
+    constexpr uint32_t TILE = 4096;
+
+    const uint32_t pg = get_arg_val<uint32_t>(0);
+    const uint32_t row0 = get_arg_val<uint32_t>(1);
+    // runtime args 2 + 2g, 3 + 2g: NOC coordinates of the post core of token group g (one post core per group)
+
+    Noc noc;
+    experimental::CB cbo(cb_ones), cbs(cb_sel), cbp(cb_p), cbq(cb_q);
+
+    DeviceZoneScopedN("PW_ALL");
+    cbo.reserve_back(1);
+    cbs.reserve_back(5);
+    noc.async_write_zeros(cbo, TILE, {.offset_bytes = 0});
+    noc.async_write_zeros(cbs, 5 * TILE, {.offset_bytes = 0});
+    noc.write_zeros_l1_barrier();
+    {
+        volatile tt_l1_ptr uint32_t* o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbo.get_write_ptr());
+        for (uint32_t r = 0; r < 32; ++r) {
+            const uint32_t face = (r >= 16 ? 2 : 0) + (NCOL >= 16 ? 1 : 0);
+            o[face * 256 + (r % 16) * 16 + (NCOL % 16)] = 0x3F800000u;
+        }
+        volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbs.get_write_ptr());
+        for (uint32_t tl = 0; tl < TG; ++tl) {
+            for (uint32_t i = 0; i < 4; ++i) {
+                const uint32_t c = 4 * tl + i;
+                const uint32_t face = (tl >= 16 ? 2 : 0) + (c >= 16 ? 1 : 0);
+                const uint32_t w = face * 256 + (tl % 16) * 16 + (c % 16);
+                s[i * 1024 + w] = 0x3F800000u;
+                s[4 * 1024 + w] = 0x3F800000u;
+            }
+        }
+    }
+    cbo.push_back(1);
+    cbs.push_back(5);
+    {
+        DeviceZoneScopedN("PW_built");
+    }
+
+    const uint32_t dst_off = ((row0 >> 4) << 11) + ((row0 & 15) << 6);
+    for (uint32_t g = 0; g < NGRP; ++g) {
+        cbp.wait_front(1);
+        const uint32_t src = cbp.get_read_ptr();
+        const uint32_t pnx = get_arg_val<uint32_t>(2 + 2 * g);
+        const uint32_t pny = get_arg_val<uint32_t>(3 + 2 * g);
+        const uint32_t qb =
+            cbq.get_write_ptr() + pg * TILE + dst_off;  // the post core of group g holds only that group's PGPG pages
+        noc_async_write(src, get_noc_addr(pnx, pny, qb), TG * 64);
+        noc_async_write(src + 1024, get_noc_addr(pnx, pny, qb + 1024), TG * 64);
+        noc_async_writes_flushed();
+        noc_semaphore_inc(get_noc_addr(pnx, pny, get_semaphore(SEM)), 1);
+        noc_async_atomic_barrier();
+        noc_async_write_barrier();
+        cbp.pop_front(1);
+    }
+}

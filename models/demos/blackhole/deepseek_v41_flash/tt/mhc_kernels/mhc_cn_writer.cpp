@@ -5,6 +5,7 @@
 // optionally, the bf16 row-major [T,1,1,D] copy).
 
 #include <stdint.h>
+#include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -27,6 +28,7 @@ void kernel_main() {
     const auto m_acc = TensorAccessor(m_args, m_addr, ROWBYTES);
     experimental::CB out(cb_out), rm(cb_rm), ones(cb_ones);
 
+    DeviceZoneScopedN("CW_ALL");
     ones.reserve_back(1);
     {
         volatile tt_l1_ptr uint32_t* o = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones.get_write_ptr());
@@ -38,6 +40,9 @@ void kernel_main() {
 
     const uint32_t ng = GPC;
     out.wait_front(ng);
+    {
+        DeviceZoneScopedN("CW_gotout");
+    }
     for (uint32_t g = 0; g < ng; ++g) {
         noc.async_write(out, o_acc, 2048, {.offset_bytes = g * 2048}, {.page_id = j0 + g, .offset_bytes = 0});
     }

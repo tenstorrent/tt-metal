@@ -9,6 +9,7 @@
 // so that  out_t (rows j = new streams) = A_t @ B_(group, col tile).  Then streams the output tiles to DRAM.
 
 #include <stdint.h>
+#include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -36,6 +37,7 @@ void kernel_main() {
     const auto p_acc = TensorAccessor(p_args, p_addr, TILE);
     experimental::CB out(cb_out), cba(cb_a), csa(cb_sa);
 
+    DeviceZoneScopedN("EW_ALL");
     csa.reserve_back(1);
     cba.reserve_back(T);
     for (uint32_t t = 0; t < T; ++t) {
@@ -63,6 +65,9 @@ void kernel_main() {
         }
     }
     cba.push_back(T);
+    {
+        DeviceZoneScopedN("EW_Adone");
+    }
 
     const uint32_t nb = NG * T;
     constexpr uint32_t CH = 4;

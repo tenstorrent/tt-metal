@@ -10,6 +10,7 @@
 // All DRAM reads are issued up front and waited for with a single barrier.
 
 #include <stdint.h>
+#include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -41,6 +42,7 @@ void kernel_main() {
     const auto y2_acc = TensorAccessor(y2_args, y2_addr, TILE);
     experimental::CB cbb(cb_b), cbs(cb_s);
 
+    DeviceZoneScopedN("ER_ALL");
     cbs.reserve_back(1);
     cbb.reserve_back(G * NG);
 
@@ -140,6 +142,9 @@ void kernel_main() {
         }
     }
     noc.async_read_barrier();
+    {
+        DeviceZoneScopedN("ER_readsdone");
+    }
 
     if constexpr (Y_BF16) {
         volatile tt_l1_ptr uint32_t* B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbb.get_write_ptr());
