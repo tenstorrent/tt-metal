@@ -155,6 +155,8 @@ MODEL_CASES = {
     # output chunks (the block misses L1): 1 x 6 and 3 x 2 chunks on a 1x4 ring
     "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16, ttnn.bfloat16),
     "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16),
+    # fits L1 unchunked only with a 2-tile K-block: the cost model picks 3 x 1 chunks instead
+    "llama_70b_wo_prefill": ((1, 1, 8192, 1024), (1024, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
 
 
