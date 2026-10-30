@@ -666,7 +666,8 @@ models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttn
 models/experimental/tt_transformers_v2 @tenstorrent/metalium-models-maintainers @tenstorrent/codeowner-bypass
 
 models/tt_dit/ @jonathansuTT @cglagovichTT @jamesleeTT @rouzbehTT @nwoodallTT @losullivanTT @rsalmanTT @sosborne-TT @sadesoyeTT @smartonTT @pshahTT @sgutierrezTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/tt_transformers @tenstorrent/metalium-models-maintainers @cglagovichTT @tenstorrent/codeowner-bypass
+models/tt_transformers @adrian-pascual-bernal @yieldthought @mtairum @tenstorrent/codeowner-bypass
+models/ttt_compat @adrian-pascual-bernal @yieldthought @mtairum @tenstorrent/codeowner-bypass
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-models-maintainers @tenstorrent/codeowner-bypass
 models/vllm_test_utils/ @viktorpusTT @tchedaTT @tenstorrent/metalium-models-maintainers @tenstorrent/codeowner-bypass
 

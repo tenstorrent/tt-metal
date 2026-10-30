@@ -19,7 +19,6 @@ per-tile SETRWC(CLR_A, ..., SET_AB) is not holding SrcB across tiles.
 import logging
 
 import pytest
-import torch
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -33,7 +32,6 @@ from helpers.llk_params import (
     DestSync,
     MathFidelity,
     MathOperation,
-    format_dict,
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
@@ -57,7 +55,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, MAX_NUM_FACES, get_tile_params
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -247,12 +245,7 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         face_r_dim=face_r_dim,
     ).flatten()
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

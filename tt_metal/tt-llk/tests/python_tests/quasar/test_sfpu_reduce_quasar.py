@@ -36,7 +36,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 MAX_TILES_16_BIT = 8
 MAX_TILES_32_BIT = 4
@@ -385,7 +385,7 @@ def test_sfpu_reduce_quasar(
 
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if mathop == MathOperation.ReduceColumn:
@@ -475,7 +475,7 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if mathop == MathOperation.ReduceColumn:

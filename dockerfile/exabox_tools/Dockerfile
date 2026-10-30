@@ -92,6 +92,8 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 #   gh, curl, ca-certificates  the tt-syseng-diag download
 #   openssh-server             MPI operator workers; it brings the client that
 #                              generate_rank_bindings.py's multi-host mpirun needs
+#   python3-venv               ensurepip, for callers that make their own venv on top
+#                              (tt-orchestration's health-check job)
 #   socat                      port and socket relays when the image runs as an
 #                              operations container on exabox hosts
 # journalctl (systemd) is left to the pre_reboot launchers, the only tier that reads it.
@@ -114,6 +116,7 @@ RUN apt-get update \
         openssh-server \
         pciutils \
         python3 \
+        python3-venv \
         socat \
         sudo \
     && rm -rf /var/lib/apt/lists/*
@@ -214,7 +217,9 @@ RUN for bin in \
     && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --help > /dev/null \
     && TRACY_NO_INVARIANT_CHECK=1 PYTHONDONTWRITEBYTECODE=1 \
         python3 -c 'import ttnn, pytest_timeout, conftest, tests.didt.op_test_base' \
-    && rm -rf generated build/profiler /home/user/.cache
+    && python3 -m venv --system-site-packages /tmp/venv-smoke \
+    && /tmp/venv-smoke/bin/python3 -m pip --version \
+    && rm -rf /tmp/venv-smoke generated build/profiler /home/user/.cache
 
 # Callers supply the command.
 ENTRYPOINT []
