@@ -149,20 +149,20 @@ struct McastDir {
     uint32_t ndst;            // number of receivers
 };
 
-/** Sender: data already at `addr` from DRAM; wait all receivers ready, mcast the block,
+/** Sender: data already at `cb`'s write pointer from DRAM; wait all receivers ready, mcast the block,
  *  then relay the valid flag into their recv semaphore. Mirrors chain_link. */
 template <uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem>
-inline void mcast_send(Noc noc, const McastDir& d, uint32_t addr, uint32_t bytes) {
+inline void mcast_send(Noc noc, const McastDir& d, const CircularBuffer& cb, uint32_t bytes) {
     Semaphore<> s(send_sem);
     s.wait(d.ndst);  // all receivers reserved their slot and signaled ready
     s.set(0);
     noc.async_write_multicast(
-        CoreLocalMem<uint32_t>(addr),
-        MulticastEndpoint{},
+        CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+        cb,
         bytes,
         d.ndst,
         {},
-        {.noc_x_start = d.xs, .noc_y_start = d.ys, .noc_x_end = d.xe, .noc_y_end = d.ye, .addr = addr},
+        {.noc_x_start = d.xs, .noc_y_start = d.ys, .noc_x_end = d.xe, .noc_y_end = d.ye},
         /*linked=*/true);
     // back-to-back after the linked data write (a flush/barrier between would deadlock)
     Semaphore<>(valid_sem).relay_multicast(
@@ -198,7 +198,7 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     noc.async_read_barrier();
     if constexpr (mcast_on) {
         if (dir.role == iscore::mcast_role_sender) {  // broadcast the block to the rest of the rect
-            mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, addr, bytes);
+            mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, cb, bytes);
         }
     }
     cb.push_back(ntiles);
@@ -305,7 +305,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
         noc.async_read_barrier();
         if constexpr (q_mcast_on) {
             if (q_dir.role == iscore::mcast_role_sender) {  // broadcast this row down the grid row
-                mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, row_addr, row_tiles * q_tile_bytes);
+                mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, cb, row_tiles * q_tile_bytes);
             }
         }
         cb.push_back(row_tiles);
@@ -397,7 +397,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
         }
         noc.async_read_barrier();
         if (q_mcast_on && q_dir.role == iscore::mcast_role_sender) {
-            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, addr, input_tiles * bf16_tile_bytes);
+            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, cb, input_tiles * bf16_tile_bytes);
         }
     }
     if constexpr (stream_heads || fuse_single) {
