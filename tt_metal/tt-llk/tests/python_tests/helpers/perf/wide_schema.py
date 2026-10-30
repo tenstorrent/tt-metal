@@ -124,6 +124,7 @@ DB_SCHEMA = [
     Column("mathop", "string", True, "configuration"),
     Column("matmul_l1_acc", "string", True, "configuration"),
     Column("matmul_nb", "int64", True, "configuration"),
+    Column("matmul_stoch_rnd", "string", True, "configuration"),
     Column("num_blocks", "int64", True, "configuration"),
     Column("num_faces", "int64", True, "configuration"),
     Column("num_faces_A", "int64", True, "configuration"),
