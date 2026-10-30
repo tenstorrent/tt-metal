@@ -47,3 +47,13 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   corrupted by hand fails them.
 - Needed by: deepseek_v41_flash_d_p DS41-151
 - Files: tests/cases.py, tests/reference.py, tests/test_topk_large_indices.py
+
+### Galaxy 8x4 sizes and the stock-op comparison (no op change)
+- What: tests/unit/test_stock_identity.py runs fork and stock on the same input at DeepSeek-V4.1's 8x4 per-chip calls
+  (160 rows: 28160 / 56320 keys k 512, 7040 blocks k 2048, and the 1M widths 522240 / 1044480 / 130560) and the 2x2's:
+  the same values position by position (31 / 31 pass), ids differ only between tied bf16 keys (README "Ties"). The
+  op needed no change at 8x4 sizes. tests/unit on one Galaxy p150b: 217 / 218 pass; the one other is upstream's
+  production perf band (test_upstream_split.py prefill 0.848 ms, band 0.887-0.905: faster than the band).
+- Why: P.13 asked for the 8x4 sizes and a fork-vs-stock selection check.
+- Needed by: deepseek_v41_flash_d_p P.13 (galaxy 8x4)
+- Files: tests/unit/test_stock_identity.py, README.md

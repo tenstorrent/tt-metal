@@ -1,0 +1,57 @@
+{
+ "used": [
+  {
+   "id": "K-42",
+   "how": "fork vs stock judged on the selected values position by position plus set differences only among ties, not positional ids; downstream reads are sets",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-102",
+   "how": "top-k ids compared as sets in the model's checks; positional id differences from tie order are not a regression",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the per-chip top-k call shapes on the 8x4 were only in P.12_ops.json.gz (the op table); no entry lists them",
+  "the DS41 id ranges: the Galaxy's DS41-130..149 is used up and the 2x2 owns 150..169 (ENGRAM_HOST_PATH.md), while knowledge.check prints DS41-150 as next; took DS41-170",
+  "measure --task <perf> (quick) on the 8x4 runs ~600 s, past the agent's 10-minute foreground cap; a cut run rewrites the task's results json, losing the earlier attempt's metrics"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding added; the only pad in the top-k path is the pre-existing -inf pad to k in TtCandidateIndexer._candidates_glue when fewer blocks than k are visible (semantics, unchanged)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "ttnn.bringup.topk_large_indices is a C++ device op with the program cache (topk_large_indices_program_factory.cpp), not a Python-built program; no Python-built op added or touched in P.13"
+  }
+ ],
+ "cited_only": [
+  "DS41-130",
+  "DS41-170"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.13",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T02:27:08",
+  "head": "0b9fd49e26b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.13.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_topk_op.py",
+   "ttnn/ttnn/bringup/topk_large_indices/CHANGELOG.md",
+   "ttnn/ttnn/bringup/topk_large_indices/README.md",
+   "ttnn/ttnn/bringup/topk_large_indices/tests/unit/test_stock_identity.py"
+  ]
+ }
+}
