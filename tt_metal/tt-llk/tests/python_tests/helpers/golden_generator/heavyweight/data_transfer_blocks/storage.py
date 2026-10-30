@@ -185,9 +185,7 @@ def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
     return bool(dest_acc)
 
 
-#: Explicit mantissa bits a 16-bit Dest slot keeps. Mirrors the harness's
-#: ``sfpu_domains._FORMAT_MANTISSA_BITS``, which the lightweight golden uses
-#: for the same purpose. A 32-bit Dest keeps everything and is absent.
+# Explicit mantissa bits a 16-bit Dest slot keeps.
 DEST_MANTISSA_BITS = {
     DataFormat.Float16: SRC_MANT_BITS,
     DataFormat.Float16_b: BF16_MANT_BITS,
@@ -207,9 +205,7 @@ L1_MANTISSA_BITS = {
     DataFormat.Fp8_e4m3: 3,
 }
 
-#: Lowest exponent each of those formats holds as a normal. Below it the
-#: lattice step stops halving and stays fixed, so a relative mantissa width no
-#: longer describes it.
+#: Lowest exponent each of those formats holds as a normal.
 L1_MIN_NORMAL_EXP = {
     DataFormat.Float32: -126,
     DataFormat.Tf32: -126,
@@ -230,10 +226,7 @@ L1_BLOCK_MAGNITUDE_BITS = {
     DataFormat.Bfp2_b: 1,
 }
 
-#: Explicit mantissa bits a src register keeps per format. The ISA documents a
-#: BF16 src datum as overlaid onto Tf32 with the low three mantissa bits
-#: zeroed, which is the 7 below. Quasar overrides it to 10 on the strength of
-#: its own gasket, which that document does not cover. See :mod:`.arch`.
+#: Explicit mantissa bits a src register keeps per format.
 SRC_MANTISSA_BITS = {
     DataFormat.Float16: SRC_MANT_BITS,
     DataFormat.Float16_b: BF16_MANT_BITS,
