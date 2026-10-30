@@ -67,3 +67,5 @@ that use it. Its `CHANGELOG.md` has the source path and SHA and every change.
   Consider instead of: ttnn.typecast to bfloat4_b (truncates in effect) / bfloat8_b (half away) (+ a tile -> row reshuffle); host-side packing. -> ckv_bfp4_ttnn/README.md
 - `ttnn.bringup.rotary_embedding_indexed` (rotary_embedding_indexed): indexed RoPE (the stock op) with opt-in `uniform`: one program for the whole mesh instead of one per chip, for per-chip pre-sliced cos / sin (kv_actual_global 0, no subshard axis); ~101 -> 52 us host a call on 8x4, same bytes.
   Consider instead of: ttnn.experimental.deepseek_prefill.rotary_embedding_indexed (with per-chip pre-sliced cos / sin). -> rotary_embedding_indexed/README.md
+- `ttnn.bringup.topk_large_indices` (topk_large_indices): per-row top-k ids (uint32) of a bf16 ROW_MAJOR tensor, Blackhole; carries upstream's split LLK (#62035 / #62488 / #62411: row split across MATH / PACK and core pairs) with its own LLK copy, plus the K' 512 split segmented body (k 512 rows past 32 x 512: Classic -> fused, 1.8-2.4x).
+  Consider instead of: ttnn.experimental.topk_large_indices. -> topk_large_indices/README.md
