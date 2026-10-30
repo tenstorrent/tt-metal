@@ -122,7 +122,7 @@ class TtHcMixes:
         if self.gather and tp > 1:
             # GLUE_FOLD=on (P.19): ONE all_gather of the chips' fp32 rows over TP -> [1, TP, R, 32]; mhc_pre_xing adds
             # them in mesh-column order on the SFPU (exact fp32: _gather_add's sum; no bf16 RS, no casts)
-            red = ccl.all_gather(row, 1, TP_AXIS)
+            red = ccl.all_gather(row, 1, TP_AXIS, site="mhc.row")  # (HOST_ALLOC: load-time output)
             partials = {"partials": tp}
         else:
             red = tp_sum(self.mesh, row)

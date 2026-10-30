@@ -49,10 +49,54 @@ _DEALLOC = [ttnn.deallocate]
 _PINNED: set = set()  # EXPERTS_XG_PINNED: buffer addresses of persistent tensors dealloc leaves alone
 
 
+_SITES: dict = {}  # HOST_ALLOC=on (P.15): id(mesh) -> (mesh, {(site, shape, dtype, layout): load-time output})
+_PINS: dict = {}  # id(mesh) -> (mesh, [the load-time tensors pinned on it]: held, so their ids stay theirs)
+_KEEP: set = set()  # HOST_ALLOC=on: id() of those tensors (one set lookup in dealloc, no buffer query)
+SITE_MISSES: dict = {}  # site -> gathers whose output spec had no load-time buffer (allocated as before; diagnostic)
+
+
+def pin(mesh, t: ttnn.Tensor) -> None:
+    """A persistent tensor of ``mesh`` that ``dealloc`` leaves alone (HOST_ALLOC's load-time outputs). Callers hand
+    this very object on (never a new wrapper of its buffer: DS41-149)."""
+    hit = _PINS.get(id(mesh))
+    if hit is None or hit[0] is not mesh:
+        if hit is not None:  # (a closed mesh's entry: its tensors are no longer kept)
+            _KEEP.difference_update(id(x) for x in hit[1])
+        hit = _PINS[id(mesh)] = (mesh, [])
+    hit[1].append(t)
+    _KEEP.add(id(t))
+
+
+def reserve(mesh, site: str, shape, dtype, layout) -> ttnn.Tensor:
+    """Load time (HOST_ALLOC=on, tt/host_alloc.reserve_sites): the persistent DRAM output of ``site``'s gathers whose
+    output is ``shape`` / ``dtype`` / ``layout`` (``all_gather(site=)`` writes it; never freed)."""
+    hit = _SITES.get(id(mesh))
+    if hit is None or hit[0] is not mesh:
+        hit = _SITES[id(mesh)] = (mesh, {})
+    key = (site, tuple(int(d) for d in shape), dtype, layout)
+    t = hit[1].get(key)
+    if t is None:
+        t = hit[1][key] = ttnn.allocate_tensor_on_device(ttnn.Shape(list(key[1])), dtype, layout, mesh, DRAM)
+        pin(mesh, t)
+    return t
+
+
+def _site_out(mesh, site: str, shape, dtype, layout):
+    hit = _SITES.get(id(mesh))
+    if hit is None or hit[0] is not mesh:
+        return None
+    t = hit[1].get((site, tuple(shape), dtype, layout))
+    if t is None:
+        SITE_MISSES[site] = SITE_MISSES.get(site, 0) + 1
+    return t
+
+
 def dealloc(t: ttnn.Tensor) -> None:
     """dealloc(t); GLUE_FOLD=on (P.19, set by ``configure`` at model load): the binding itself, without
     ttnn's FastOperation wrapper (its config reads, graph-capture check and try / except: ~1.3 us of ~6 us a call,
     ~1000 calls a chunk). The bring-up profiler's op sequences then skip these calls on both of its runs alike."""
+    if id(t) in _KEEP:  # HOST_ALLOC=on (P.15): a load-time output
+        return
     if _PINNED and t.is_allocated() and t.buffer_address() in _PINNED:
         return
     _DEALLOC[0](t)
@@ -188,21 +232,28 @@ def _fits(t: ttnn.Tensor, dim: int) -> bool:
     return d < rank - 2 or t.shape[d] % 32 == 0
 
 
-def all_gather(t: ttnn.Tensor, dim: int, cluster_axis: int, out: ttnn.Tensor | None = None) -> ttnn.Tensor:
+def all_gather(
+    t: ttnn.Tensor, dim: int, cluster_axis: int, out: ttnn.Tensor | None = None, site: str | None = None
+) -> ttnn.Tensor:
     """ttnn.all_gather(t, dim, cluster_axis) into DRAM (a data move, exact), on fabric_all_gather when CCL_IMPL=fabric
-    and its contract fits. Does not consume ``t``."""
+    and its contract fits. Does not consume ``t``. ``site`` (HOST_ALLOC=on, P.15): the site's load-time output when one
+    was reserved for this output spec (``reserve``; the result is then that buffer, which ``dealloc`` skips)."""
     mesh = t.device()
     if not fabric() or not _fits(t, dim):
         return ttnn.all_gather(t, dim=dim, cluster_axis=cluster_axis, memory_config=DRAM)
     g = mesh.shape[cluster_axis]
     shape = list(t.shape)
     shape[dim % len(shape)] *= g
+    if out is None and site is not None and _SITES:
+        out = _site_out(mesh, site, shape, t.dtype, t.layout)
     if out is None:  # (EXPERTS_XG_PINNED: the caller's persistent output)
         out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), t.dtype, t.layout, mesh, DRAM)
     s0, s1 = _sems(mesh)
-    return ttnn.bringup.fabric_all_gather(
+    res = ttnn.bringup.fabric_all_gather(
         t, dim, out, cluster_axis=cluster_axis, num_links=AG_LINKS, ready_semaphore=s0, data_valid_semaphore=s1
     )
+    # (a load-time output: the op returns a new wrapper of its buffer (DS41-149); hand back the kept object itself)
+    return out if site is not None and id(out) in _KEEP else res
 
 
 def _gather_add(mesh, t: ttnn.Tensor) -> ttnn.Tensor:

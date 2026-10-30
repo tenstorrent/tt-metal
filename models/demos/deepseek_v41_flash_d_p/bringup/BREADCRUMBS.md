@@ -4423,3 +4423,72 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   `PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tt/perf_prepared_all.py -s` (8 min); `python -m
   models.demos.common.bringup.orchestrator measure --task P.14`; old path DS41_PREPARED_ALL=off.
+
+## P.15 (perf, galaxy 8x4): HOST_ALLOC, fewer per-chunk allocations (load-time outputs), the same bytes
+
+- What: setting HOST_ALLOC (tt/settings.py, default on; off = the path before). New tt/host_alloc.py. Every buffer is
+  allocated AT LOAD TIME (`reserve_sites` at the end of TtDS41Model's constructor, `reserve_tail_out` in
+  TtMoEBlockLayer's): never mid-forward (DS41-146), no between-chunk settle. A call whose spec has no load-time buffer
+  allocates as before (counted in ccl.SITE_MISSES: 0 on 8x4). The buffers are pinned by id (`ccl.pin`; ccl.dealloc
+  returns on `id(t) in _KEEP`, one set lookup). Call sites hand back the kept object, never the op's new wrapper
+  (DS41-149).
+  1. Gathers (P.4 retried): `ccl.all_gather(site=)` for the mHC row exchange (`mhc.row` [1, 4, 640, 32] fp32, 80 a
+     chunk), the split-norm stats (`norm.stats` [1, 1, 640, 256] fp32, 40; width from the fork's split_plan rule,
+     host_alloc.norm_stats_width) and the attention window kv over TP (`attn.kv_tp` [1, 1, 640, 512] bf16, 40). The
+     window blocks' SP gathers were already persistent (P.11). Not done: the compressor's 8 gathers (554 / 634) and
+     the engram's 2 (other shapes per ratio; 0.25 ms a chunk).
+  2. Block MoE (moe_block is outside the paths; installed on the built block's instances, `host_alloc.install_moe`):
+     the exchange's `arena_fits` probe (allocate + free of the L1 arena, 181 + 18 us a layer) is kept as the arena its
+     call allocates next (`_alloc_arena_kept`: TtK3TokenSplitMoE.alloc_arena's body with the probe); the fused tail
+     (tt/prepared_tail.ShapeKeyedTailA2A) writes the load-time [1, 1, 640, 1024] bf16 output.
+  3. Attention intermediates (ATTN_SP32 on, 160 query rows): `q_a.xq` (bfp8 typecast), `q_a.p` (projection; the kv
+     step frees it), `attn.xq` (multiply), `attn.qb` (wq_b linear), `attn.oa` (bfp8 typecast), `attn.wo_a` (matmul):
+     output_tensor / optional_output_tensor (mm.linear / mm.matmul / common.cast take `out`; minimal_matmul has none:
+     allocates). One buffer per site shared by all 40 layers: each is read and freed inside its step (queue order on
+     each chip makes the reuse safe). Shapes from a block's weights.
+  4. Slices: the window carry from the served cache (`attn.carry_rows`, `attn.carry_mine`) slice into load-time
+     outputs. No slice count change (153 a chunk) and no per-call host change measured in the model (slice_rows
+     113.6 -> 122.9 us, the carry's owner slice 79.8 -> 79.2: noise; isolated interleaved TILE slice 171 -> 132 us).
+     Not done: folding a slice into its consumer (slice_write takes a whole input; sparse_sdpa reads one blocks
+     tensor), keep_blocks (already output_tensor), engram / compressor slices (28 a chunk, 2-6 layers).
+- Not done, item (2) of the brief (fused head / sparse_all_gather_2d keyed on shape): both hit their address-keyed
+  prepared programs every warm call (P.14 census: 0 builds a warm chunk), and the head's key must keep the arena
+  base (its args hold arena base + offsets, which address patching cannot follow). The 0.74 ms of fused_head._run is
+  run_prepared's own dispatch (40096 patch slots, per-core args over 32 chips, DS41-145), which a shape key does not
+  change. Measured: fused_head._run 28.5 -> 27.5 ms a chunk (cProfile), unchanged.
+- Census (8x4, profile rung's last chunk [51200, 56320), DS41_ENGRAM_TABLE=resident, 3 warm chunks after
+  profile.warm_up, counted from begin_chunk to sync only; plugin /scratch/dnijemcevic/p15/plug/p15census_plugin.py,
+  logs /scratch/dnijemcevic/p15/census_base.log (off) / census_on3.log (on)):
+  - op launches a chunk 2820 -> 2540; allocate_tensor_on_device 372 -> 132 (31.1 -> 22.2 ms; the 132 are L1 now, ~168 us
+    each); deallocate (ttnn op) 160 -> 120; cProfile a chunk: total 374.7 -> 347.6 ms, op dispatch 242.8 -> 221.7 ms,
+    ccl.dealloc 29.4 -> 22.3 ms; linear 11.49 -> 9.46 ms, typecast 6.81 -> 5.86, multiply 6.07 -> 4.77, matmul 3.20 ->
+    2.08, fabric_all_gather 35.8 -> 34.6.
+  - Allocation sites a chunk, off -> on: mhc.py:125 gather 80 -> 0; norm.py:138 40 -> 0; attention.py:745 40 + 2 -> 0;
+    prepared_tail run 40 -> 0; k3 arena_fits probe + alloc_arena 40 + 40 -> 40; se_engine3 realloc_arena (head arena,
+    L1) 40 -> 40; k3 dispatch manifest (L1) 40 -> 40; compressor 554 / 634 4 + 4 -> same; engram 2 + 2 -> same.
+  - Slice sites a chunk (unchanged counts): served.slice_rows (window carry) 40, keep_blocks 40, carry owner slice 40,
+    compressor col 12, engram 16, indexer keys 4, DeviceScalars.at 1.
+  - Plain walls in the census process: off 343.9-359.7 (median 349.0), on 322.5-336.3 (median 329.2) ms.
+- Bit-identical (tt/perf_host_alloc_identity.py, one process, 10 runs alternating on / off, the golden prefix
+  reloaded each run; "off" hides the load-time buffers): final hidden equal on every run, PCC vs golden 0.578422
+  (= P.14). Walls: on 317.6-330.4 (median 326.8), off 341.6-375.1 (median 367.1); on faster in every pair.
+- Host a call (tt/perf_host_alloc.py, 8x4, DS41-172): linear 67.1 -> 30.5 us with optional_output_tensor, typecast
+  52.2 -> 20.5, multiply 89.1 -> 55.6, slice 171.0 -> 131.6; allocate + deallocate [640, 1024] bf16 DRAM 55.7 us.
+- measure --task P.15 (quick, on): the clean wall finished, chunk_wall_ms 330.3 (spread 34.5, loadavg 18.2; P.14's
+  A/B: on 350.9, off 353.8), program_cache_entries 276; the 10-minute shell cap killed it at 596 s before the
+  per-layer accuracy (the safe runner marked the cards dirty). The orchestrator's A/B runs both sides; the bytes are
+  those of off (identity above). Device time and host_overhead_ms not profiled here (same programs, outputs written in
+  place: no device change by construction).
+- Remaining top host items (census on, ms a chunk): fabric_all_gather 294 x 118 us 34.6; fused_head._run 40 x 0.69
+  27.5; allocate (L1 MoE arenas + manifest) 132 x 168 us 22.2; ccl.dealloc 22.3; flat_routed_expert 40 x 474 us 19.0;
+  slice 153 x 96 us 14.6; rms_norm 208 x 66 us 13.8; all_to_all_async_generic 80 x 168 us 13.4; mhc_post 82 x 148 us
+  12.1; to_layout 176 x 67 us 11.8; rotary_embedding_indexed 136 x 83 us 11.3; ckv_bfp4 84 x 134 us 11.3. Next: an
+  output_tensor option on the forks rms_norm / mhc_post / mhc_pre_xing / rotary_embedding_indexed (~500 calls, ~35
+  us each), checking per site that no output is memoized across layers (INDEXER_GLUE's ChunkMemo).
+- OV-3: nothing padded. OV-23: no Python-built op added; the ones touched stay prepared (tail run_prepared, the
+  exchange's zero program through prepared_program.generic_op).
+- Re-run: census `/scratch/dnijemcevic/p15/census.sh <tag> DS41_HOST_ALLOC=on|off` (8 min); identity
+  `PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident DS41_HOST_ALLOC=on scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_host_alloc_identity.py -s` (8 min); per call `...
+  tt/perf_host_alloc.py -s` (1 min); `python -m models.demos.common.bringup.orchestrator measure --task P.15`; old path
+  DS41_HOST_ALLOC=off.

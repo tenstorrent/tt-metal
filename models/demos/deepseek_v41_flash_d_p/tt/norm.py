@@ -135,7 +135,7 @@ class TtDistributedRmsNorm:
         assert window is None, "a column-split norm takes its whole input"
         part = ttnn.bringup.rms_norm(x, stats_out=True, compute_kernel_config=self.ckc, memory_config=DRAM)
         if self.tp > 1:
-            gathered = ccl.all_gather(part, 3, TP_AXIS)
+            gathered = ccl.all_gather(part, 3, TP_AXIS, site="norm.stats")  # (HOST_ALLOC)
             dealloc(part)
         else:
             gathered = part

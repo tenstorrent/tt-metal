@@ -231,29 +231,35 @@ def program_config(x, w, dtype, ckc, batched: bool = False):
     return pc
 
 
-def _run(op, x, w, pc, dtype, ckc, memory_config):
+def _run(op, x, w, pc, dtype, ckc, memory_config, out=None):
+    # ``out`` (HOST_ALLOC=on, P.15): a load-time output the op writes (optional_output_tensor); minimal_matmul has none
+    # (the op returns a new wrapper of out's buffer: hand back ``out`` itself, the object ccl.dealloc keeps, DS41-149)
+    kw = {} if out is None else {"optional_output_tensor": out}
     if pc is None:
-        return op(x, w, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config)
+        r = op(x, w, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config, **kw)
+        return r if out is None else out
     kind, cfg = pc
     if kind == "minimal":
         return ttnn.experimental.minimal_matmul(
             x, w, config=cfg, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config
         )
-    return op(x, w, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config, program_config=cfg)
+    r = op(x, w, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config, program_config=cfg, **kw)
+    return r if out is None else out
 
 
-def linear(x, w, *, dtype, compute_kernel_config, memory_config, site: str = ""):
-    """ttnn.linear(x, w) with the MATMUL_CONFIG config (x [..., M, K], w [1, 1, K, N])."""
+def linear(x, w, *, dtype, compute_kernel_config, memory_config, site: str = "", out=None):
+    """ttnn.linear(x, w) with the MATMUL_CONFIG config (x [..., M, K], w [1, 1, K, N]). ``out``: written in place
+    (HOST_ALLOC=on, P.15; the result is then ``out`` itself)."""
     pc = program_config(x, w, dtype, compute_kernel_config) if tuned() else None
     if RECORD is not None:
         _record("linear", site, x, w, dtype, compute_kernel_config, memory_config, pc)
-    return _run(ttnn.linear, x, w, pc, dtype, compute_kernel_config, memory_config)
+    return _run(ttnn.linear, x, w, pc, dtype, compute_kernel_config, memory_config, out)
 
 
-def matmul(x, w, *, dtype, compute_kernel_config, memory_config, site: str = ""):
-    """ttnn.matmul(x, w) with the MATMUL_CONFIG config (w may carry its own batch: [1, B, K, N])."""
+def matmul(x, w, *, dtype, compute_kernel_config, memory_config, site: str = "", out=None):
+    """ttnn.matmul(x, w) with the MATMUL_CONFIG config (w may carry its own batch: [1, B, K, N]). ``out``: as linear."""
     batched = len(w.shape) >= 3 and math.prod(tuple(w.shape)[:-2]) > 1
     pc = program_config(x, w, dtype, compute_kernel_config, batched=batched) if tuned() else None
     if RECORD is not None:
         _record("matmul", site, x, w, dtype, compute_kernel_config, memory_config, pc)
-    return _run(ttnn.matmul, x, w, pc, dtype, compute_kernel_config, memory_config)
+    return _run(ttnn.matmul, x, w, pc, dtype, compute_kernel_config, memory_config, out)

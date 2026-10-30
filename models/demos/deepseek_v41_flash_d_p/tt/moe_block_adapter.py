@@ -38,7 +38,7 @@ from loguru import logger
 
 import ttnn
 
-from . import ccl
+from . import ccl, host_alloc
 from .ccl import dealloc
 from .common import DRAM, cast
 from .experts import TtExperts
@@ -165,6 +165,7 @@ class TtMoEBlockLayer:
         rows, cols = tuple(mesh.shape)
         self.mesh, self.layer, self.chunk = mesh, int(layer), int(chunk)
         self.fold = ccl.glue_fold()
+        host_alloc.reserve_tail_out(mesh, self.chunk, int(cfg.dim))  # HOST_ALLOC=on (P.15): at load time
         m = self.model = block_model(cfg)
         g = self.g = Geometry.of(mesh, m, self.chunk, LINKS, zigzag=False)
         # (lines or a torus: the block reads the wraps from the open fabric; torus untested on DS41, owner D14)
@@ -237,6 +238,7 @@ class TtMoEBlockLayer:
                 from .prepared_tail import install
 
                 install(blk)
+            host_alloc.install_moe(blk)  # HOST_ALLOC=on (P.15): the exchange's arena probe is the call's arena
             hit = _BLOCKS[key] = (self.mesh, blk)
         return hit[1]
 

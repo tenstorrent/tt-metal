@@ -1,0 +1,80 @@
+{
+ "used": [
+  {
+   "id": "DS41-146",
+   "how": "every HOST_ALLOC buffer (gather outputs, attention intermediates, tail output) is allocated at model load (tt/host_alloc.reserve_sites / reserve_tail_out), never mid-forward; no settle between chunks",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-149",
+   "how": "ops given an output return a new wrapper of its buffer: ccl.all_gather, mm._run, cast and the slice sites hand back the kept object itself, and ccl.dealloc keeps by id(t)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-171",
+   "how": "took the census as the starting point: no Python-built program to prepare; the host is op count, allocations and frees, so the change cuts allocations (372 -> 132) and op outputs allocated by ops",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-145",
+   "how": "the fused head's 0.7 ms is run_prepared's per-core-arg dispatch on 32 chips with 0 rebuilds a warm chunk: shape keying would not lower it, so item (2) was not changed (reported)",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the host cost of an op's own output allocation + the free (~33-37 us a call on 8x4: linear 67 -> 31 us with optional_output_tensor) is not in any entry; DS41-171 counts only explicit allocate_tensor_on_device calls",
+  "L1 sharded allocate_tensor_on_device costs 150-220 us a call on 8x4 (DRAM interleaved ~30 us): the MoE arenas are the top allocation cost",
+  "the brief names the report at bringup/results/knowledge_use/P.15.perf.1.json (a tracked seed file, outside this step's paths); written to ledgers/galaxy_8x4-full/results/knowledge_use/ instead",
+  "the quick measure (model load + clean wall + every layer) does not fit the 10-minute foreground cap on the 8x4 (cut at 596 s after the wall, before accuracy), as P.11-P.14 also found"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the load-time buffers have exactly the shapes the ops write (census: 0 site misses)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added; touched ones stay prepared: the exchange's zero program (prepared_program.generic_op, unchanged), ShapeKeyedTailA2A run_prepared (out now a load-time buffer). Not prepared: none called (P.14 census: 0 ttnn.generic_op)"
+  }
+ ],
+ "cited_only": [
+  "DS41-172"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.15",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T06:56:48",
+  "head": "706d2df55f6",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.15.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_host_alloc_identity.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/prepared_tail.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
