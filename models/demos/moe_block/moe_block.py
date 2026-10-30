@@ -23,6 +23,10 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+# (MOE_EXPERTS_DRISC=0: the routed experts' gate / up weights from Tensix readers, not the DRAM cores' DRISC senders -
+# every default below, MoEOptions.experts_drisc and the MoELayer / RoutedExperts builders)
+_DRISC = os.environ.get("MOE_EXPERTS_DRISC", "1") != "0"
+
 TILE = ttnn.TILE_SIZE
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -165,7 +169,7 @@ class MoEOptions:
     # same picks. For meshes whose chain binds (the Galaxy's N 32); off - the LoudBox meshes' SE path binds
     router_split: bool = False
     # the routed experts' gate / up weight readers: the DRAM cores (DRISC, the default) or Tensix readers (A/B)
-    experts_drisc: bool = True
+    experts_drisc: bool = _DRISC
     # the tail: "fused" one program a chip - latent models: tt/tail_engine.py (the latent all-gather into the engine's
     # L1, rms norm, up projection, + the shared expert; the combine's rows tilized there); else tt/tail_a2a.py (the
     # combine's rows tilized, + the shared expert's owner rows, the TP all-to-all into the output); "ops" its ops;
@@ -353,7 +357,7 @@ class MoELayer:
         weights,
         dtypes: MoEDtypes = MoEDtypes(),
         routed_op=None,
-        drisc=True,
+        drisc=_DRISC,
         layout=None,
     ):
         """weights: MoEWeights, or a callable returning them (read when a head lays them out). routed_op: the layer's
@@ -392,7 +396,7 @@ class MoELayer:
             self._latent = LatentProjections(self.mesh, self.g, self.model, w.latent, self.dtypes)
         return self._latent
 
-    def at(self, mesh, g: Geometry, model: MoEModel, drisc=True):
+    def at(self, mesh, g: Geometry, model: MoEModel, drisc=_DRISC):
         """This layer at another chunk (geometry): its weights shared - the router's top-k and the flat experts' plan
         made for the chunk (FlatRoutedExpert.replanned: the same weight packing)."""
         lay = self.experts.layout_given or RoutedExperts.layout_of(g, model, drisc)
@@ -493,18 +497,31 @@ class MoEBlock(LightweightModule):
             self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes, drisc=options.experts_drisc)
         # (the fused head's planner and the exchange's combine agree on the accumulator count: planned here from the
         # cells the experts' plan leaves free and the combine's ports - the ports-apart mode)
-        acc = None
+        # (the count and the mode: the ports-apart mode where it fits, else the accumulators on the ports' cells - the
+        # ports' cells vary per Galaxy, plan_combine sizes the combine as the exchange will)
+        acc = acc_mode = None
         if self.head_mode == "fused":
-            from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import planned_accumulators
+            from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import plan_combine
 
-            acc = planned_accumulators(mesh_device, self.experts.op.plan, (g.tp_wraps, g.sp_wraps))
+            acc, acc_mode = plan_combine(
+                mesh_device,
+                self.experts.op.plan,
+                g.tokens_per_chip,
+                model.routed_width,
+                (g.tp_wraps, g.sp_wraps),
+                options.experts_during_dispatch,
+            )
+            if acc_mode != "ports apart":
+                from loguru import logger
+
+                logger.info(f"MoEBlock: combine accumulators on the ports' cells ({acc}): ports apart does not fit here")
         self.exchange = TokenExchange(
             mesh_device,
             g,
             model,
             self.experts,
             dispatch_in_program=options.experts_during_dispatch,
-            accumulators=acc,
+            accumulators=(acc, acc_mode) if acc is not None else None,
             combine_snap=options.combine_snap,
             deterministic=options.combine_deterministic,
         )
@@ -1602,7 +1619,7 @@ class RoutedExperts:
         return max(g.chunk_tokens, 256)
 
     @staticmethod
-    def layout_of(g: Geometry, model: MoEModel, drisc=True):
+    def layout_of(g: Geometry, model: MoEModel, drisc=_DRISC):
         # (one x helper: a second one costs ~104 KB of every core's arena, which the exchange's combine needs at the
         # LoudBox's per-chip load - flat_layouts.GLM_FLASH)
         lay = dict(rows_hint=round(g.chunk_tokens * model.top_k / model.num_experts), x_helpers=1)
@@ -1617,7 +1634,7 @@ class RoutedExperts:
         model: MoEModel,
         routed: list | None,
         dtypes: MoEDtypes,
-        drisc=True,
+        drisc=_DRISC,
         op=None,
         layout=None,
     ):

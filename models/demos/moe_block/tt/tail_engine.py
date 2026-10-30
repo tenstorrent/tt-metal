@@ -952,6 +952,15 @@ class TailEngine:
         """Chip coord's program: the engine (every core of the rectangle) and its gather ports."""
         mesh, GX, GY, cx0, RT, PAIRS = self.mesh, self.GX, self.GY, self.cx0, self.RT, self.PAIRS
         ch = self.chips[coord]
+        # (this chip's port cores: the port kernels and CBs go only there - self.port_crs is the union over the chips
+        # (the allocations every chip shares), and a core that is a port on another chip only would run the port
+        # kernels with no runtime args here)
+        pcrs = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
+                for x, y in sorted({(c.x, c.y) for c in ch["ports"].values()})
+            ]
+        )
         order = ch["order"]
         b, off = int(self.arena.buffer_address()), self.off
         wa = int(self.words.buffer_address())
@@ -994,12 +1003,12 @@ class TailEngine:
         # (then the poll word, the group counts (CB 1), the shares' polled words: 16 B a (row tile, column))
         assert PSTAGE * 2048 + 64 + 64 + RT * GX * 16 <= self.arena_bytes
         d = ttnn.cb_descriptor_from_sharded_tensor(
-            0, self.arena, address_offset=0, total_size=PSTAGE * 2048, core_ranges=self.port_crs
+            0, self.arena, address_offset=0, total_size=PSTAGE * 2048, core_ranges=pcrs
         )
         d.format_descriptors = [ttnn.CBFormatDescriptor(0, ttnn.bfloat16, 2048)]
         cbs.append(d)
         d = ttnn.cb_descriptor_from_sharded_tensor(
-            1, self.arena, address_offset=PSTAGE * 2048 + 64, total_size=4 * 16, core_ranges=self.port_crs
+            1, self.arena, address_offset=PSTAGE * 2048 + 64, total_size=4 * 16, core_ranges=pcrs
         )
         d.format_descriptors = [ttnn.CBFormatDescriptor(1, ttnn.uint32, 16)]
         cbs.append(d)
@@ -1159,7 +1168,7 @@ class TailEngine:
             ttnn.KernelDescriptor(
                 kernel_source=self.dbg + _PORT_READER,
                 source_type=st,
-                core_ranges=self.port_crs,
+                core_ranges=pcrs,
                 compile_time_args=pct,
                 runtime_args=pr_rt,
                 config=dm("RISCV_1", ttnn.NOC.NOC_0),
@@ -1167,7 +1176,7 @@ class TailEngine:
             ttnn.KernelDescriptor(
                 kernel_source=self.dbg + f"#define WG {self.WG}\n" + _PORT_SENDER,
                 source_type=st,
-                core_ranges=self.port_crs,
+                core_ranges=pcrs,
                 compile_time_args=pct,
                 runtime_args=ps_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_1),
