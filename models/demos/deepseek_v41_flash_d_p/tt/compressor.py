@@ -235,6 +235,14 @@ class AttnTable:
         prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # (P.7: the program built once, row0 patched)
         return ttnn.bringup.ckv_bfp4(rows_tile, self.buf, g0, rounded=rounded, memory_config=DRAM, prepared=prepared)
 
+    def put_records(self, records: ttnn.Tensor, g0: int) -> None:
+        """CKV_FORMAT=bfp4_rows, CKV_PACK_BEFORE_GATHER=on (P.11): history rows [g0, g0 + n) from gathered row
+        records [1, 1, n, 320] uint8 ROW_MAJOR (replicated; not consumed): one slice_write, the same bytes as
+        ``append_tiles`` of their rows."""
+        n = records.shape[-2]
+        assert self.bfp4 and g0 + n <= self.hist and records.shape[-1] == BFP4_ROW_BYTES, (g0, records.shape, self.hist)
+        ttnn.experimental.slice_write(records, self.buf, [0, 0, g0, 0], [1, 1, g0 + n, BFP4_ROW_BYTES], [1, 1, 1, 1])
+
     def put_window(self, carry: ttnn.Tensor, kv_rm: ttnn.Tensor) -> None:
         """The window region = [carry 128 | chunk S] (device; both bf16 ROW_MAJOR, replicated, not consumed)."""
         assert carry.shape[-2] == WINDOW and kv_rm.shape[-2] == self.rows - self.base - WINDOW, (
@@ -364,6 +372,16 @@ class TtServedRows:
         dealloc(rows)
         if not view:
             dealloc(slab)
+
+    def write_local(self, rows_rm: ttnn.Tensor, start: int, end: int) -> None:
+        """CKV_PACK_BEFORE_GATHER=on (P.11): rows_rm [1, 1, W / r, width] bf16 ROW_MAJOR = the SP row's own block of the
+        chunk's compressed rows (rows of incomplete groups zero), start % S == 0: the server's order of SP row r is
+        then its own block (srv_row(0) picks it), so ``write`` without the gathered rows and the embedding. The
+        attention table is not touched (``AttnTable.put_records``)."""
+        g = self.geo
+        assert start % g.chunk == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end)
+        assert rows_rm.shape[-2] == g.w // self.ratio and rows_rm.shape[-1] == self.width, rows_rm.shape
+        self._put(rows_rm, start, end)
 
     # ------------------------------------------------------------------ harness / serving boundary (host)
     def _owner_shards(self) -> list[torch.Tensor]:
@@ -640,6 +658,9 @@ class TtCompressor:
         valid = end // self.ratio - start // self.ratio  # complete groups of the chunk
         for t, cache in ((ckv, caches.ckv), (k, caches.index_k)):
             table = cache.table
+            if table is not None and table.bfp4 and self.tables.packs("rows", t.shape[-2], start):
+                self._write_packed(t, start, end, valid, cache)  # CKV_PACK_BEFORE_GATHER=on (P.11)
+                continue
             if table is not None and table.bfp4:
                 # CKV_FORMAT=bfp4_rows: the table's records from the gathered tiles; the served cache gets their bf16
                 # values (the rounded rows), so serving and a later host load see what attention reads
@@ -655,6 +676,31 @@ class TtCompressor:
                 rm = self._gathered(t, valid)
                 cache.write(rm, start, end)
             dealloc(rm)
+
+    def _write_packed(self, t: ttnn.Tensor, start: int, end: int, valid: int, cache: TtServedRows) -> None:
+        """CKV_PACK_BEFORE_GATHER=on (P.11; CKV_FORMAT=bfp4_rows, start % S == 0): t [1, 1, W / r, 512] bf16 TILE (the SP
+        row's own compressed rows, TP-replicated; not consumed) -> rows at or past ``valid`` zeroed -> rounded and
+        packed into 320 B records here (ckv_bfp4 compact into the load-time local buffer, the rounded bf16 values
+        returned) -> the served cache written locally from the rounded values -> the records all_gathered over SP
+        and slice_written into the attention table. The same table bytes and served values as the gathered path."""
+        n = t.shape[-2]
+        tables = self.tables
+        masked = tables.mask_local(t, valid)
+        prepared = settings.get("CKV_BFP4_PREPARED") == "on"
+        rounded = ttnn.bringup.ckv_bfp4(
+            masked, tables.packed("rows", n), 0, rounded=True, memory_config=DRAM, prepared=prepared, compact=True
+        )
+        if masked is not t:
+            dealloc(masked)
+        gat = tables.gather_packed("rows", n)  # [1, 1, S / r, 320]
+        cache.table.put_records(gat, start // self.ratio)
+        if not tables.is_kept(gat):
+            dealloc(gat)
+        rm = ttnn.to_layout(rounded, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        if rm is not rounded:
+            dealloc(rounded)
+        cache.write_local(rm, start, end)
+        dealloc(rm)
 
 
 def compressor_weights(ck, layer: int) -> dict[str, torch.Tensor]:

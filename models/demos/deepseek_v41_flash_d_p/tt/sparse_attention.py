@@ -279,14 +279,19 @@ class TtSparseAttention(TtWindowAttention):
         assert table is not None, "STATIC_TABLES=on: the KV source's compressed cache was built without its table"
         cos, sin = self._rope_rows(start, g.chunk)
         # WINDOW_KV_FORMAT=bfp8_blocks: [carry | chunk] into the shared window blocks (tt/attention.WindowTables)
-        carry, kv_rm = self._window_rows(kv, start, end, cache, blocks=self.win8)
-        if self.win8:
+        if self.win8 and self._packs(start):  # CKV_PACK_BEFORE_GATHER=on (P.11): each SP row packs its own rows
             assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_blocks reads the window as kv_window: CKV_FORMAT=bfp4_rows"
+            self._window_packed(kv, start, end, cache)
             window = self.tables.window_blocks()
         else:
-            table.put_window(carry, kv_rm)
-            window = table.win
-        self._release_window(carry, kv_rm, cache, start, end)
+            carry, kv_rm = self._window_rows(kv, start, end, cache, blocks=self.win8)
+            if self.win8:
+                assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_blocks reads the window as kv_window: CKV_FORMAT=bfp4_rows"
+                window = self.tables.window_blocks()
+            else:
+                table.put_window(carry, kv_rm)
+                window = table.win
+            self._release_window(carry, kv_rm, cache, start, end)
         shared = memo is not None and sources is not None
         ikey = (start, id(ckv_cache), ckv_cache.version)
         index = memo.get(("index", sources[1]), ikey) if shared else None
