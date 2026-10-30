@@ -33,6 +33,7 @@ from models.demos.glm53_flash.tt.functional_decoder import DecodePositions
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.packed_inputs import (  # noqa: F401 (RESIDENT_ENV re-exported)
     RESIDENT_ENV,
+    gate_page,
     resident_decode_enabled,
     slot_mask_enabled,
 )
@@ -72,10 +73,9 @@ class ResidentDecodeFeedback:
         self.live_f = self._upload([1.0] * self.total)
         # GLM53_DECODE_SLOT_MASK=1: the live mask as the KDA decode program's per-user write gate (``DecodePositions.
         # write_gate``): one [Bt, 32] int32 ROW_MAJOR page per chip (the row's users; replicated over the TP columns)
+        # (the row's users whatever the DSA cache's user partition: the KDA state per chip holds every user of its row)
         self.gate: ttnn.Tensor | None = None
         if slot_mask_enabled():
-            if self.partition:
-                raise NotImplementedError("the decode slot mask is not wired for the user-partitioned cache")
             self.gate = self.mesh.upload(
                 self._gate_page(self.live_host), ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -99,15 +99,8 @@ class ResidentDecodeFeedback:
         )
 
     def _gate_page(self, live: list[bool]) -> torch.Tensor:
-        """``[rows * Bt, 32]`` int32: mesh row ``r``'s pages (word ``u`` of page ``tb`` = user ``32 tb + u`` of the row,
-        1 = written), split over the rows (``custom_ops.kda_decode`` reads page ``tb`` for tile row ``tb``)."""
-        words = 32
-        B = self.users_per_row
-        Bt = -(-B // words)
-        page = torch.zeros(self.mesh.rows, Bt * words, dtype=torch.int32)
-        flags = torch.tensor([1 if v else 0 for v in live], dtype=torch.int32).reshape(self.mesh.rows, B)
-        page[:, :B] = flags
-        return page.reshape(self.mesh.rows * Bt, words)
+        """``packed_inputs.gate_page`` for this mesh: ``[rows * Bt, 32]`` int32, split over the rows."""
+        return gate_page(live, self.mesh.rows, self.users_per_row)
 
     def _refresh_gate(self, live: list[bool]) -> None:
         host = ttnn.from_torch(

@@ -405,8 +405,8 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
     # two chunks with K masked decode steps of the other slots between them (slot 0 parked at the chunk end with a
     # pad id, live 0): its KDA carry is byte-identical across the parked steps (the gate), and its decode chain
     # after the second chunk equals the uninterleaved reference (the DSA row / pool the parked steps wrote at the
-    # chunk end are rewritten by the second chunk, which starts there). Not wired for the user partition.
-    if partition == "0":
+    # chunk end are rewritten by the second chunk, which starts there). Runs for both cache layouts.
+    if True:  # both cache layouts: the gate page is the row's users either way
         monkeypatch.setenv(RESIDENT_ENV, "1")
         monkeypatch.setenv(SLOT_MASK_ENV, "1")
         model.resident = None  # re-allocated with the gate page by the warm-up's staging (before the capture)
