@@ -357,8 +357,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef MATMUL_PACK_FORM
 #define MATMUL_PACK_FORM 0
 #endif
+#if defined(ARCH_BLACKHOLE)
+#include "llk_matmul_forms.h"
+#ifdef MATMUL_PACK_KEYS
+// the pack form of the block: the LLK decision, which the python mirror (the MATMUL_PACK_FORM define) must equal
+constexpr int matmul_pack_form_v = ckernel::matmul_pack_form_k(
+    MATMUL_PK_FID, MATMUL_PK_HALF, MATMUL_PK_THROTTLE, MATMUL_PK_KT, MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_IN_A, MATMUL_PK_IN_B, MATMUL_PK_OUT, MATMUL_PK_R0, MATMUL_PK_C1, MATMUL_PK_DENSE,
+    MATMUL_PK_L1ACC);
+static_assert(matmul_pack_form_v == MATMUL_PACK_FORM, "the python matmul_pack_form differs from matmul_pack_form_k");
+#else
+constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+#endif
+#else
+constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+#endif
+#line 279
 // The fast block packs need four faces of 16 rows.
-#if MATMUL_PACK_FORM != 0
+#if defined(ARCH_BLACKHOLE)
 #define MATMUL_FAST_PACK_ARG , num_faces == 4 && !PARTIAL_FACE_PACK
 #else
 #define MATMUL_FAST_PACK_ARG
@@ -368,26 +383,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and padded pages), 4 runs small tiles back to back with one close.
 inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] std::uint32_t face_r_dim, [[maybe_unused]] bool fast = false)
 {
-#if MATMUL_PACK_FORM != 0
+#if defined(ARCH_BLACKHOLE)
     // At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
     constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
     constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
-    if (fast && MATMUL_PACK_FORM == 1 && fast_plain)
+    if (fast && matmul_pack_form_v == 1 && fast_plain)
     {
         _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
         return;
     }
-    if (fast && MATMUL_PACK_FORM == 2 && fast_closed)
+    if (fast && matmul_pack_form_v == 2 && fast_closed)
     {
         _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
         return;
     }
 #endif
-    if constexpr (MATMUL_PACK_FORM == 4)
+    if constexpr (matmul_pack_form_v == 4)
     {
         _llk_pack_block_dense_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, face_r_dim, num_faces);
     }
-    else if constexpr (MATMUL_PACK_FORM == 1)
+    else if constexpr (matmul_pack_form_v == 1)
     {
         _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
     }
@@ -431,11 +446,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
             formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM == 4
-        _llk_pack_block_dense_init_(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces);
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (matmul_pack_form_v == 4) { _llk_pack_block_dense_init_(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces); }
 #endif
-#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0 && MATMUL_PACK_FORM != 4
-        if (num_faces == 4 && !PARTIAL_FACE_PACK)
+#if defined(ARCH_BLACKHOLE)
+        if (matmul_pack_form_v != 0 && matmul_pack_form_v != 4 && num_faces == 4 && !PARTIAL_FACE_PACK)
         {
             _llk_pack_block_fast_init_();
         }
@@ -469,7 +484,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_packer_wait_for_math_done_();
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (MATMUL_PACK_FORM != 0)
+                    if constexpr (matmul_pack_form_v != 0)
                     {
                         matmul_pack_out(
                             DST_INDEX,

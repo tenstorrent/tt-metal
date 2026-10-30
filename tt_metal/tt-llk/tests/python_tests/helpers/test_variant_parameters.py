@@ -1646,6 +1646,7 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
 
     def __init__(self, pack_block: int = 0):
         self.matmul_pack_block = int(pack_block)
+        self.pack_keys = getattr(pack_block, "keys", None)
 
     def __repr__(self) -> str:
         return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
@@ -1660,7 +1661,17 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
         return hash(self.matmul_pack_block)
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+        out = f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+        if self.pack_keys is not None:
+            a, b, o, half, fid, rt, ct, kt, r0, c1, thr, dense, l1 = self.pack_keys
+            out += (
+                "\n#define MATMUL_PACK_KEYS"
+                f"\nconstexpr DataFormat MATMUL_PK_IN_A = DataFormat::{a.name}, MATMUL_PK_IN_B = DataFormat::{b.name}, MATMUL_PK_OUT = DataFormat::{o.name};"
+                f"\nconstexpr ckernel::MathFidelity MATMUL_PK_FID = ckernel::MathFidelity::{fid.name};"
+                f"\nconstexpr std::uint32_t MATMUL_PK_RT = {rt}, MATMUL_PK_CT = {ct}, MATMUL_PK_KT = {kt}, MATMUL_PK_R0 = {r0}, MATMUL_PK_C1 = {c1}, MATMUL_PK_THROTTLE = {thr};"
+                f"\nconstexpr bool MATMUL_PK_HALF = {str(half).lower()}, MATMUL_PK_DENSE = {str(dense).lower()}, MATMUL_PK_L1ACC = {str(l1).lower()};"
+            )
+        return out
 
 
 @dataclass

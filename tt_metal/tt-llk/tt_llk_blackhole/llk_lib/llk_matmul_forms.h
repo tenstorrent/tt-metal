@@ -660,6 +660,69 @@ constexpr bool matmul_pack_per_tile_cell(const MathFidelity fidelity, const bool
            kt == 1 && r0 == 32 && c1 == 32;
 }
 
+constexpr bool matmul_format_block_float(const DataFormat f)
+{
+    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
+}
+
+// Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages), 4 the dense run of small tiles (dense_pages only: the perf sweep, where the
+// output address does not change the pack timing). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
+// harness (matmul_pack_form of matmul_sweep.py mirrors it) and of the keyed llk_matmul_block_pack.
+constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
+                                 const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
+                                 const bool l1_acc = false)
+{
+    const bool small = r0 < 32 || c1 < 32;
+    const bool block_float_out = matmul_format_block_float(out);
+    // the packer's L1 accumulate of a Float32 output reads and writes 64 byte rows: at half sync the block run reads slower than the per-tile pack
+    if (l1_acc && half_sync && out == DataFormat::Float32)
+    {
+        return 0;
+    }
+    if (rt * ct < 2 || (fidelity == MathFidelity::LoFi && kt > 1 && half_sync))
+    {
+        return 0;
+    }
+    if (matmul_pack_per_tile_cell(fidelity, half_sync, throttle, in_a, in_b, out, rt, ct, kt, r0, c1))
+    {
+        return 0;
+    }
+    // HiFi2 two-tile blocks of one K tile (not to a block float output), and one-row Bfp8_b blocks of five or more tiles from Float32 operands: the per-tile pack is on the critical path
+    if (half_sync && throttle == 0 && !small && out != DataFormat::Float32 && (in_a == DataFormat::Float16_b || in_a == DataFormat::Float32) && fidelity == MathFidelity::HiFi2 &&
+        ((kt == 1 && rt * ct == 2 && !block_float_out) || (in_a == DataFormat::Float32 && out == DataFormat::Bfp8_b && rt == 1 && ct >= 5)))
+    {
+        return block_float_out ? 2 : 1;
+    }
+    // small tiles packed to Float32 behind Float16_b operands: the closed block beats the per-tile pack at LoFi
+    if (half_sync && throttle == 0 && fidelity == MathFidelity::LoFi && kt == 1 && small && out == DataFormat::Float32 && in_a == DataFormat::Float16_b && ct >= 4)
+    {
+        return 2;
+    }
+    // small tiles packed to Float32 behind Bfp8_b operands: the closed block beats the per-tile pack at LoFi and HiFi2 half sync
+    if (half_sync && throttle == 0 && kt == 1 && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2) && small && in_a == DataFormat::Bfp8_b && out == DataFormat::Float32 &&
+        rt * ct >= 4)
+    {
+        return 2;
+    }
+    // a Bfp4_b output of two or more full tiles takes the closed block pack at half sync too, except against a Float32 operand
+    if (out == DataFormat::Bfp4_b && !small && in_a != DataFormat::Float32 && in_b != DataFormat::Float32)
+    {
+        return 2;
+    }
+    // half sync at HiFi2: one K tile of small tiles, or with a Float32 output, leaves the per-tile pack on the critical path
+    const bool half_block = kt == 1 && fidelity == MathFidelity::HiFi2 && (small || out == DataFormat::Float32);
+    if (half_sync && ((fidelity != MathFidelity::LoFi && !half_block) || throttle >= 4 || (small && out == DataFormat::Float32) ||
+                      ((in_a == DataFormat::Float32 || (in_b == DataFormat::Float32 && out == DataFormat::Bfp4_b)) && out != DataFormat::Float32 && rt * ct >= 3)))
+    {
+        return 0;
+    }
+    if (dense_pages && small && c1 == 32 && !block_float_out)
+    {
+        return (half_sync && rt * ct >= 8) ? 2 : 4;
+    }
+    return (small || block_float_out) ? 2 : 1;
+}
+
 // Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write (the fused post and the skipped base write read slower).
 inline constexpr matmul_grid_main_cell matmul_main_flip_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 8, 0, false, 1},

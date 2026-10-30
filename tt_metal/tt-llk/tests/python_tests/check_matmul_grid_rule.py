@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestSync, MathFidelity
-from helpers.matmul_sweep import matmul_pack_per_tile_cell
+from helpers.matmul_sweep import matmul_pack_form
 from helpers.matmul_prod_keys import grid_main_cell, grid_main_flip_cell, grid_unfused_post_cell, tiny_main_cell
 import perf_matmul_grid as grid
 import perf_matmul_grid2 as grid2
@@ -20,7 +20,7 @@ HEADER = Path(__file__).resolve().parents[2] / "tt_llk_blackhole/llk_lib/llk_mat
 STUB = """#pragma once
 #include <cstdint>
 namespace ckernel {
-enum class DataFormat { Invalid, Float32, Tf32, Float16, Float16_b, Bfp8_b, Bfp4_b, Bfp2, Bfp2_b, Bfp4 };
+enum class DataFormat { Invalid, Float32, Tf32, Float16, Float16_b, Bfp8, Bfp8_b, Bfp4_b, Bfp2, Bfp2_b, Bfp4 };
 enum class MathFidelity { LoFi = 0, HiFi2 = 2, HiFi3 = 3, HiFi4 = 4 };
 enum class DstSync { SyncHalf, SyncFull };
 }
@@ -54,45 +54,46 @@ def check_tiny() -> int:
     return bad or len(cpp) != len(py)
 
 
-def check_pack() -> int:
-    """The pack form rule's per-tile cell: python matmul_pack_per_tile_cell against the C++ matmul_pack_per_tile_cell over the grid, grid2 and tiny rows."""
+def _pack_py(a, b, o, sy, fi, rt, ct, kt, thr, r0, c1, dense, l1) -> str:
     from types import SimpleNamespace
 
-    rows = [(a, b, o, sy, fi, h, w, kt, thr, 32, 32) for a, b, o, acc, sy, fi, h, w, kt, thr, l1 in grid._grid()]
-    rows += [(a, b, o, sy, fi, h, w, kt, thr, 32, 32) for a, b, o, acc, sy, fi, h, w, kt, thr, l1, nb in grid2._grid2()]
-    rows += [(a, b, o, sy, fi, rt, ct, kt, 0, r0, c1) for a, b, o, acc, sy, fi, r0, c1, rt, ct, kt in grid2._tiny_rows()]
+    fm = SimpleNamespace(input_format=getattr(DataFormat, NAME[a]), input_format_B=getattr(DataFormat, NAME[b]), output_format=getattr(DataFormat, NAME[o]))
+    return str(int(matmul_pack_form(fm, DestSync.Half if sy == "H" else DestSync.Full, getattr(MathFidelity, fi), rt, ct, kt, r0, c1, thr, dense, l1)))
+
+
+def check_pack() -> int:
+    """The pack form decision: python matmul_pack_form against the C++ matmul_pack_form_k over the grid, grid2 and tiny rows and an exhaustive cross product of
+    the formats, fidelity, sync, block shape, k, throttle, tile shape, dense pages and packer L1 accumulate."""
+    import itertools
+
+    rows = [(a, b, o, sy, fi, h, w, kt, thr, 32, 32, False, bool(l1)) for a, b, o, acc, sy, fi, h, w, kt, thr, l1 in grid._grid()]
+    rows += [(a, b, o, sy, fi, h, w, kt, thr, 32, 32, False, bool(l1)) for a, b, o, acc, sy, fi, h, w, kt, thr, l1, nb in grid2._grid2()]
+    rows += [(a, b, o, sy, fi, rt, ct, kt, 0, r0, c1, True, False) for a, b, o, acc, sy, fi, r0, c1, rt, ct, kt in grid2._tiny_rows()]
+    fm = ["F16b", "B8", "B4", "F32"]
+    fis = ["LoFi", "HiFi2", "HiFi3", "HiFi4"]
+    dims = (1, 2, 3, 4, 5, 8)
+    shapes = ((32, 32), (4, 32), (16, 32), (32, 16))
+    cross = list(itertools.product(fm, fm, fm, "HF", fis, dims, dims, (1, 2, 8), (0, 4), shapes, (False, True), (False, True)))
+    cross = [(a, b, o, sy, fi, rt, ct, kt, thr, sh[0], sh[1], d, l1) for a, b, o, sy, fi, rt, ct, kt, thr, sh, d, l1 in cross]
+    allrows = rows + cross
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "llk_defs.h").write_text(STUB)
         (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
         body = ",\n".join(
-            "{MathFidelity::%s,%s,%d,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d,%d}"
-            % (fi, "true" if sy == "H" else "false", thr, NAME[a], NAME[b], NAME[o], rt, ct, kt, r0, c1)
-            for a, b, o, sy, fi, rt, ct, kt, thr, r0, c1 in rows
+            "{MathFidelity::%s,%s,%d,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d,%d,%s,%s}"
+            % (fi, "true" if sy == "H" else "false", thr, NAME[a], NAME[b], NAME[o], rt, ct, kt, r0, c1, "true" if dn else "false", "true" if l1 else "false")
+            for a, b, o, sy, fi, rt, ct, kt, thr, r0, c1, dn, l1 in allrows
         )
         (Path(d) / "t.cpp").write_text(
-            '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool h;int th;DataFormat i1,i0,o;int rt,ct,kt,r0,c1;};\n'
-            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows)putchar(matmul_pack_per_tile_cell(r.f,r.h,r.th,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.r0,r.c1)?'1':'0');}}\n"
+            '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool h;int th;DataFormat i1,i0,o;int rt,ct,kt,r0,c1;bool dn,l1;};\n'
+            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows)putchar('0'+matmul_pack_form_k(r.f,r.h,r.th,r.kt,r.rt,r.ct,r.i1,r.i0,r.o,r.r0,r.c1,r.dn,r.l1));}}\n"
         )
-        subprocess.run(["g++", "-std=c++20", "-O1", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
+        subprocess.run(["g++", "-std=c++20", "-O0", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
         cpp = subprocess.run([str(Path(d) / "t")], check=True, capture_output=True, text=True).stdout
-    py = "".join(
-        "1"
-        if matmul_pack_per_tile_cell(
-            SimpleNamespace(input_format=getattr(DataFormat, NAME[a]), input_format_B=getattr(DataFormat, NAME[b]), output_format=getattr(DataFormat, NAME[o])),
-            DestSync.Half if sy == "H" else DestSync.Full,
-            getattr(MathFidelity, fi),
-            rt,
-            ct,
-            kt,
-            thr,
-            r0,
-            c1,
-        )
-        else "0"
-        for a, b, o, sy, fi, rt, ct, kt, thr, r0, c1 in rows
-    )
+    py = "".join(_pack_py(*r) for r in allrows)
     bad = sum(x != y for x, y in zip(cpp, py))
-    print(f"{len(rows)} grid, grid2 and tiny rows, per-tile pack cell: C++ {cpp.count('1')}, python {py.count('1')}, {bad} differ")
+    forms = {k: cpp.count(k) for k in "0124"}
+    print(f"{len(rows)} grid, grid2 and tiny rows + {len(cross)} cross product rows, pack form: C++ {forms}, {bad} differ")
     return bad or len(cpp) != len(py)
 
 

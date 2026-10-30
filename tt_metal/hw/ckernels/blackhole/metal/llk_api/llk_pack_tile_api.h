@@ -174,7 +174,7 @@ inline void llk_matmul_pack(
 // Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full (the pack is not hidden behind
 // the math there, also at LoFi with several K tiles), and half sync at LoFi with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
 // in_format, block_rt and block_ct are optional keys of the caller (Invalid and 0 keep the rule above): the operand format and the output block
-// shape of the half sync cells where the block pack reads faster than the per-tile one; in0_format (optional) names the cells where it reads slower.
+// shape of the half sync cells where the block pack reads faster than the per-tile one; with in0_format given the keyed decision is matmul_pack_form_k (llk_matmul_forms.h).
 template <
     MathFidelity math_fidelity,
     std::uint32_t kt_per_section,
@@ -187,12 +187,16 @@ template <
 constexpr bool llk_matmul_block_pack() {
     constexpr bool keyed = in_format != DataFormat::Invalid && block_rt != 0 && block_ct != 0;
     constexpr DataFormat out_format = static_cast<DataFormat>(pack_dst_format[output]);
-    if constexpr (
-        keyed && matmul_pack_per_tile_cell(
-                     math_fidelity, DST_SYNC_MODE != DstSync::SyncFull, throttle_level, in_format, in0_format, out_format, block_rt, block_ct, kt_per_section,
-                     pack_tile_num_faces[output] == 4 && pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0 ? 32 : 0,
-                     pack_tile_num_faces[output] == 4 && pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0 ? 32 : 0)) {
-        return false;
+    if constexpr (keyed && in0_format != DataFormat::Invalid) {
+        constexpr bool full_tile = pack_tile_num_faces[output] == 4 && pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0;
+#ifdef PACKER_L1_ACC
+        constexpr bool keyed_l1_acc = true;
+#else
+        constexpr bool keyed_l1_acc = false;
+#endif
+        return matmul_pack_form_k(
+                   math_fidelity, DST_SYNC_MODE != DstSync::SyncFull, throttle_level, kt_per_section, block_rt, block_ct, in_format, in0_format, out_format, full_tile ? 32 : 16,
+                   full_tile ? 32 : 16, false, keyed_l1_acc) != 0;
     } else if constexpr (
         keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 &&
         (in_format == DataFormat::Float16_b || in_format == DataFormat::Float32) && kt_per_section == 1 && math_fidelity == MathFidelity::HiFi2 &&

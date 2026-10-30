@@ -118,7 +118,7 @@ def matmul_pack_per_tile_cell(formats, dest_sync, math_fidelity, rt_dim, ct_dim,
     )
 
 
-def matmul_pack_form(
+def _matmul_pack_form_value(
     formats: FormatConfig,
     dest_sync: DestSync,
     math_fidelity: MathFidelity,
@@ -216,6 +216,40 @@ def matmul_pack_form(
         # eight small tiles at half sync hide the pack behind the math: the closed form stays
         return 2 if dest_sync == DestSync.Half and rt_dim * ct_dim >= 8 else 4
     return 2 if small or formats.output_format.is_block_float() else 1
+
+
+class MatmulPackForm(int):
+    """The pack form value with the keys it was decided from: MATMUL_PACK_BLOCK emits them, and the matmul test sources take the form from matmul_pack_form_k
+    (llk_matmul_forms.h), checked equal to this mirror at compile time."""
+
+    def __new__(cls, value: int, keys: tuple):
+        obj = int.__new__(cls, value)
+        obj.keys = keys
+        return obj
+
+
+def matmul_pack_form(
+    formats: FormatConfig,
+    dest_sync: DestSync,
+    math_fidelity: MathFidelity,
+    rt_dim: int,
+    ct_dim: int,
+    kt_dim: int,
+    in0_tile_r_dim: int = 32,
+    in1_tile_c_dim: int = 32,
+    throttle: int = 0,
+    dense_pages: bool = False,
+    l1_acc: bool = False,
+) -> int:
+    """Output pack form of the Blackhole matmul kernels: the python mirror of matmul_pack_form_k in llk_matmul_forms.h (0 per tile, 1 one block run, 2 the closed block, 4 the dense run)."""
+    value = _matmul_pack_form_value(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, in0_tile_r_dim, in1_tile_c_dim, throttle, dense_pages, l1_acc)
+    return MatmulPackForm(
+        value,
+        (
+            formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Half, math_fidelity, rt_dim, ct_dim, kt_dim, in0_tile_r_dim, in1_tile_c_dim,
+            throttle, bool(dense_pages), bool(l1_acc),
+        ),
+    )
 
 
 def unpack_matmul_fits_perf_ring(

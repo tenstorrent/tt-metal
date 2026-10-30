@@ -429,6 +429,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef MATMUL_PACK_FORM
 #define MATMUL_PACK_FORM 0
 #endif
+#if defined(ARCH_BLACKHOLE)
+#include "llk_matmul_forms.h"
+#ifdef MATMUL_PACK_KEYS
+// the pack form of the block: the LLK decision, which the python mirror (the MATMUL_PACK_FORM define) must equal
+constexpr int matmul_pack_form_v = ckernel::matmul_pack_form_k(
+    MATMUL_PK_FID, MATMUL_PK_HALF, MATMUL_PK_THROTTLE, MATMUL_PK_KT, MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_IN_A, MATMUL_PK_IN_B, MATMUL_PK_OUT, MATMUL_PK_R0, MATMUL_PK_C1, MATMUL_PK_DENSE,
+    MATMUL_PK_L1ACC);
+static_assert(matmul_pack_form_v == MATMUL_PACK_FORM, "the python matmul_pack_form differs from matmul_pack_form_k");
+#else
+constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+#endif
+#else
+constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
+#endif
+#line 271
 
 #ifndef MATMUL_L1_ACC
 #define MATMUL_L1_ACC 0
@@ -438,23 +453,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
 inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
 {
-#if MATMUL_PACK_FORM != 0
+#if defined(ARCH_BLACKHOLE)
     // The fast forms need four faces of 16 rows. At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
     constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
     // the closed block pack at full sync issues its destination words before the math wait, as pack_block_prepare does in the ttnn kernels
     constexpr bool fast_closed = false;
-    if (MATMUL_PACK_FORM == 1 && fast_plain)
+    if (matmul_pack_form_v == 1 && fast_plain)
     {
         _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
         return;
     }
-    if (MATMUL_PACK_FORM == 2 && fast_closed)
+    if (matmul_pack_form_v == 2 && fast_closed)
     {
         _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
         return;
     }
 #endif
-    if constexpr (MATMUL_PACK_FORM == 1)
+    if constexpr (matmul_pack_form_v == 1)
     {
         _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
     }
@@ -484,8 +499,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0
-        _llk_pack_block_fast_init_();
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (matmul_pack_form_v != 0) { _llk_pack_block_fast_init_(); }
 #endif
         PROFILER_SYNC();
     }
@@ -506,7 +521,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t tile_index = tile % MAX_TILES_DEST;
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (MATMUL_PACK_FORM != 0)
+                    if constexpr (matmul_pack_form_v != 0)
                     {
                         matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
                         break;
@@ -523,8 +538,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM == 2
-                if constexpr (dest_sync == DstSync::SyncFull)
+#if defined(ARCH_BLACKHOLE)
+                if constexpr (matmul_pack_form_v == 2 && dest_sync == DstSync::SyncFull)
                 {
                     _llk_pack_block_closed_pre_(0, LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[0]));
                 }
@@ -562,14 +577,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
 #if defined(ARCH_BLACKHOLE)
-                    if constexpr (MATMUL_PACK_FORM != 0)
+                    if constexpr (matmul_pack_form_v != 0)
                     {
                         if (LOOP_FACTOR == 1)
                         {
                             LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
                         }
-#if MATMUL_PACK_FORM == 2
-                        if constexpr (dest_sync == DstSync::SyncFull)
+#if defined(ARCH_BLACKHOLE)
+                        if constexpr (matmul_pack_form_v == 2 && dest_sync == DstSync::SyncFull)
                         {
                             _llk_pack_block_closed_run_(CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4);
                             break;
