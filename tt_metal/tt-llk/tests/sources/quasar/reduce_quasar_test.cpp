@@ -47,7 +47,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const auto data_format      = static_cast<DataFormat>(formats.unpack_A_dst);
         const auto scaler_format    = static_cast<DataFormat>(formats.unpack_B_dst);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_in_srcb ? scaler_format : data_format, data_in_srcb ? data_format : scaler_format);
-        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, 1 /*num_tiles_per_unpack*/);
+        const bool data_2x = data_format == DataFormat::MxFp4_2x_A || data_format == DataFormat::MxFp4_2x_B;
+        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, 1 /*num_tiles_per_unpack*/, data_2x /*clear_data_src*/);
         PROFILER_SYNC();
     }
     {

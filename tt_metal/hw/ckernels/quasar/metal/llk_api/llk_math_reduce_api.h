@@ -29,26 +29,18 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
-    // Column reduce is a GAPOOL and row SUM/AVG is a MVMUL (both op-mmul family) and consume MxFp4 SrcA as the
-    // 2x-packed src-register format, exactly like matmul. Derive the effective SrcA format from the L1/src format; the
-    // matching unpacker OUT_DATA_FORMAT override lives in llk_unpack_AB_reduce_init. Only REDUCE_COL and REDUCE_ROW
-    // support 2x (scalar reduce does not), and only GAPOOL/MVMUL (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
     constexpr bool swap_operands = reduce_swaps_operands<pool_type, reduce_dim>();
+    // Only column SUM and AVG read MxFp4 data in SrcA as MxFp4_2x_B, like matmul does.
     const bool srcA_2x = (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
-                         (reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_ROW) &&
+                         (reduce_dim == ReduceDim::REDUCE_COL) &&
                          (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4);
     const DataFormat data_format = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
     const DataFormat scaler_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
     const DataFormat srcA_format = srcA_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? scaler_format : data_format);
     const DataFormat srcB_format = swap_operands ? data_format : scaler_format;
 
-    // When srcA_2x, srcA_format deviates from the op-agnostic unpack_dst_format[] table that kernel
-    // startup (llk_math_hw_configure) already programmed the ALU from and latched as
-    // DataFormatConfigSet::DEFAULT. That latch keys on which config set is active, not on the
-    // formats, so _configure_default_alu_data_format_state_ would early-return and leave the ALU
-    // decoding 2x-packed SrcA as Float16_b. Program the ALU directly in that case; this is still the
-    // DEFAULT config shape (no dest-format override), so the latched
-    // DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
+    // The default path skips the ALU setup when it is already configured, so set the ALU formats directly when they
+    // change.
     if (srcA_2x || swap_operands) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                           _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
@@ -64,7 +56,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
 }
 
 /**
- * @brief Restore the ALU SrcA/SrcB formats after a column/row reduce that consumed an MxFp4 (2x) operand.
+ * @brief Restore the ALU SrcA/SrcB formats after a column reduce that consumed an MxFp4 (2x) operand.
  *
  * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
  *

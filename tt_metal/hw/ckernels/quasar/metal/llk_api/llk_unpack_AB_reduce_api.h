@@ -41,20 +41,17 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
     const std::uint8_t bfd_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
     const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
-    _llk_unpack_reduce_init_<pool_type, reduce_dim>(bfd_a, bfd_b, tensor_shape);
+    // Only column SUM and AVG unpack MxFp4 data into SrcA as MxFp4_2x_B, like matmul does.
+    const bool srcA_2x = (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
+                         reduce_dim == ReduceDim::REDUCE_COL &&
+                         static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4;
 
-    // Column reduce (GAPOOL) and row SUM/AVG (MVMUL) consume MxFp4 SrcA as the 2x-packed src-register format, like
-    // matmul. Override only the unpacker gasket OUT_DATA_FORMAT to MxFp4_2x_B (shadow register; unpacker idle at init
-    // before the first UNPACR; buffer descriptor keyed on the MxFp4 L1 format is unchanged). operandA -> SrcA -> UNP_A.
-    // Only REDUCE_COL and REDUCE_ROW support 2x, and only GAPOOL (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
-    // EN_32BIT_DEST does not affect the MxFp4->MxFp4_2x_B reconfig validity, so pass false.
-    if constexpr (
-        (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
-        (reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_ROW)) {
-        if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
-            _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
-                get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
-        }
+    _llk_unpack_reduce_init_<pool_type, reduce_dim>(
+        bfd_a, bfd_b, tensor_shape, ckernel::trisc::NUM_TILES, srcA_2x /*clear_data_src*/);
+
+    if (srcA_2x) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+            get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
     }
 }
 

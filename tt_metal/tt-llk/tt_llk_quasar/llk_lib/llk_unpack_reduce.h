@@ -25,10 +25,15 @@ using namespace ckernel;
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  * @param num_tiles: Number of tiles to unpack at a time for SrcA; SrcB will only have its first face unpacked.
+ * @param clear_data_src: Clear the data source bank before every face, values = <true/false>
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_mop_config_(
-    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
+    const std::uint32_t buf_desc_id_0,
+    const std::uint32_t buf_desc_id_1,
+    const TensorShape& tensor_shape,
+    const std::uint32_t num_tiles,
+    const bool clear_data_src)
 {
     constexpr bool swap_operands          = reduce_swaps_operands<POOL_TYPE, REDUCE_DIMENSION>();
     constexpr std::uint32_t data_unpacker = swap_operands ? p_unpacr::UNP_B : p_unpacr::UNP_A;
@@ -53,7 +58,7 @@ inline void _llk_unpack_reduce_mop_config_(
             swap_operands ? TT_OP_UNPACR0_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/) : TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
 
-    if (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR || tensor_shape.face_r_dim < MAX_FACE_R_DIM)
+    if (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR || tensor_shape.face_r_dim < MAX_FACE_R_DIM || clear_data_src)
     {
         const std::uint32_t clear_data_bank =
             TT_OP_UNPACR_NOP(data_unpacker, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
@@ -84,12 +89,18 @@ inline void _llk_unpack_reduce_mop_config_(
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  * @param num_tiles: Number of tiles to unpack at a time for SrcA; SrcB will only have its first face unpacked.
+ * @param clear_data_src: Clear the data source bank before every face. Set it when the data unpacks to MxFp4_2x_A or
+ *        MxFp4_2x_B, which do not write every source register bit, so a previous op can leave values that read as NaN.
  * @note On the math thread, pair with @ref _llk_math_reduce_init_ (T1); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_unpack_reduce_ is the matching execute call on this thread.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
-    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
+    const std::uint32_t buf_desc_id_0,
+    const std::uint32_t buf_desc_id_1,
+    const TensorShape tensor_shape,
+    const std::uint32_t num_tiles = NUM_TILES,
+    const bool clear_data_src     = false)
 {
     static_assert(
         POOL_TYPE != PoolType::MIN,
@@ -100,7 +111,7 @@ inline void _llk_unpack_reduce_init_(
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW));
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-    _llk_unpack_reduce_mop_config_<POOL_TYPE, REDUCE_DIMENSION>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles);
+    _llk_unpack_reduce_mop_config_<POOL_TYPE, REDUCE_DIMENSION>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles, clear_data_src);
 }
 
 /**
