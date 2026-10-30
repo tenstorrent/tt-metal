@@ -525,9 +525,16 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
              input_tensor_a.logical_volume() == logical_shape[-2] * logical_shape[-1]);
         if (is_single_nonempty_matrix && is_legacy_2d_layout &&
             operation_attributes.output_mem_config.memory_layout() == input_memory_layout) {
-            // The same-layout writer copies each input shard on its owning core. Keep those shard
-            // boundaries: deriving a smaller shape from idle grid cores would move output regions
-            // without moving their source data.
+            // The same-layout writer copies each input shard on its owning core. Keep boundaries
+            // along sharded axes: deriving a smaller extent from idle grid cores would move output
+            // regions without moving their source data. Derive the unsharded axis from the logical
+            // output, however; retaining its padded input extent makes row-major intermediates
+            // advertise padding as data (for example, HEIGHT_SHARDED concat inputs of width 1).
+            if (input_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                shard_spec.shape[1] = output_shape[-1];
+            } else if (input_memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                shard_spec.shape[0] = fused_height;
+            }
             auto mem_config = tt::tt_metal::MemoryConfig(
                 input_memory_layout, operation_attributes.output_mem_config.buffer_type(), shard_spec);
             return tt::tt_metal::TensorSpec(
