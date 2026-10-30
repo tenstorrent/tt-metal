@@ -195,6 +195,16 @@ def test_situglu_bias_routed_expert(mesh_device, device_params, num_tokens):
 # all < max) so the device-side count bounding is exercised alongside the per-expert bias wiring.
 MULTI_EXPERT_PARAMS = [
     pytest.param([128, 256, 64, 160], id="e4"),
+    # Wave layouts (adaptive_chunk.hpp WavePlanner). max(counts) is a multiple of 32 so every
+    # region starts on a tile row.
+    pytest.param([64, 96, 32, 128, 96, 64, 32, 96], id="e8-eighth"),
+    pytest.param([96, 64, 32, 96, 64], id="e5-partial-eighth"),
+    pytest.param([32, 64, 96, 32, 64, 96, 1], id="e7-partial-eighth"),
+    pytest.param([32, 64, 896, 32, 64, 96, 32], id="e7-hot"),
+    pytest.param([64, 1, 96, 32, 128, 33, 96, 64, 32, 96, 608, 64, 2, 32, 96, 64], id="e16-mixed"),
+    pytest.param([96] * 12, id="e12-eighth-then-tail"),
+    pytest.param([96, 96, 96, 96], id="e4-small"),
+    pytest.param([160, 224, 130, 180, 150, 200, 140, 170, 190], id="e9-quads-pairs"),
 ]
 
 
