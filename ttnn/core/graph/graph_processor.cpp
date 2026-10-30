@@ -7,6 +7,7 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/common/guard.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
