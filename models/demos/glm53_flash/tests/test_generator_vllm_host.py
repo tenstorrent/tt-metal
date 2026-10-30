@@ -1225,6 +1225,46 @@ def test_wave_prefill_walks_chunks_and_switches_sp_to_waves_one_way():
         pair[:1], prompt_lens=[2048], start_pos=torch.tensor([0]), empty_slots=[2], sampling_params=_greedy(1)
     )
     assert c.slots.physical(2).user == 1 and c.slots.physical(2).sp_only  # alone: SP on the next free index
+    # arrivals straggle across steps (four rows here): A arrives alone (SP on slot index 0 of row 0), then B and C
+    # one step apart (fresh 1 + young 1 or 2 < 4 rows: SP on index 1 of row 1, index 2 of row 2), then D arrives with
+    # A's, B's and C's continuations: fresh 1 + young 3 fill a wave of 4, so the young prompts off the wave's index
+    # (B, C) restart at 0 on index 0, A (already on index 0) continues as a member, and the step prefills ONE wave of
+    # four (no SP chunk) instead of fragmenting into a wave of two + two SP chunks (needle64k_8_adaptive 2026-10-30:
+    # waves of 5 + 3 SP chunks per step)
+    d, md = _adapter(rows=4, independent=True, max_seq_len=65536)
+    ids4 = [(torch.arange(4096) % m + 1).to(torch.int32).reshape(1, 4096) for m in (60, 7, 11, 13)]
+    for k in range(3):
+        d.prefill_forward(
+            ids4[k], prompt_lens=[2048], start_pos=torch.tensor([0]), empty_slots=[k], sampling_params=_greedy(1)
+        )
+        assert (d.slots.physical(k).row, d.slots.physical(k).user) == (k, k) and d.slots.physical(k).sp_only
+    assert [d.slots.physical(k).prefilled_to for k in range(3)] == [2048] * 3  # young SP prompts kept: 1 + 2 < 4
+    quad = torch.zeros(4, 4096, dtype=torch.int32)
+    for k in range(4):
+        quad[k] = ids4[k][0]
+    n0 = len(md.calls)
+    d.prefill_forward(
+        quad,
+        prompt_lens=[4096, 4096, 4096, 2048],
+        start_pos=torch.tensor([2048, 2048, 2048, 0]),
+        empty_slots=[0, 1, 2, 3],
+        sampling_params=_greedy(4),
+    )
+    waves = [w for w in md.calls[n0:] if w[0] == "prefill_wave"]
+    assert [w[4] for w in waves] == [
+        [(0, 0, 2048, 4096), (1, 0, 0, 2048), (2, 0, 0, 2048), (3, 0, 0, 2048)],
+        [(1, 0, 2048, 4096), (2, 0, 2048, 4096)],
+    ], waves
+    assert not any(c0[0] == "prefill" for c0 in md.calls[n0:])  # no SP chunk in the step
+    assert [
+        (d.slots.physical(k).row, d.slots.physical(k).user, d.slots.physical(k).prefilled_to) for k in range(4)
+    ] == [
+        (0, 0, 4096),
+        (1, 0, 4096),
+        (2, 0, 4096),
+        (3, 0, 2048),
+    ]
+    assert not any(d.slots.physical(k).sp_only for k in range(4))
 
 
 def test_kv_accounting_hooks():

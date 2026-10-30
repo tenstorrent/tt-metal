@@ -134,6 +134,8 @@ from models.demos.glm53_flash.tt.vllm_config import (
     DENSE_PREFILL_ROWS,
     PREFIX_BUCKET_ENV,
     REPLAY_BLOCKING_ENV,
+    SP_REPLACE_TOKENS_DEFAULT,
+    SP_REPLACE_TOKENS_ENV,
     TILE,
     WAVE_CHUNK_UNIT,
     DecodeRowMap,
@@ -720,6 +722,7 @@ class GLM53FlashForCausalLM:
         # step, so the engine thread builds step N + 1 while the device runs step N; GLM53_DECODE_REPLAY_BLOCKING=1
         # restores the blocking replay (the A/B control: 68.2 vs 59.5 ms ITL at 32 users, 129 vs 108 at 128, 2026-10-30)
         self._replay_blocking = os.environ.get(REPLAY_BLOCKING_ENV, "0").strip().lower() in ("1", "true", "yes", "on")
+        self._sp_replace_tokens = int(os.environ.get(SP_REPLACE_TOKENS_ENV, SP_REPLACE_TOKENS_DEFAULT))
         if self.resident:
             if self.spec is not None:
                 raise NotImplementedError(
@@ -1664,18 +1667,41 @@ class GLM53FlashForCausalLM:
         items = []  # (i, logical, state, start, end, ids, spans): start = the position the device run begins at
         apc = self.apc
         media: dict[int, tuple[list[MMItem], torch.Tensor]] = {}  # row -> (its multimodal items, prefix ids [0, end))
+
         # the step's burst of fresh long prompts (no traced wave holds them, no multimodal payload): the placement
         # prefers the sequence-parallel path only while such a burst cannot fill a wave (``_allocate_slot``)
-        burst = sum(
-            1
-            for i in range(B)
-            if int(starts[i]) == 0
-            and not (has_mm and mm_items(kwargs, i))
-            and self.waves.captured_wave_length(int(ends[i])) is None
-        )
+        def eager_long(i: int) -> bool:
+            return not (has_mm and mm_items(kwargs, i)) and self.waves.captured_wave_length(int(ends[i])) is None
+
+        fresh = [i for i in range(B) if int(starts[i]) == 0 and eager_long(i)]
+        # arrivals straggle across step boundaries: the first step of a burst sees a few prompts and places them
+        # sequence-parallel, and their slot indices would fragment the burst's waves (waves of 5 + 3 SP chunks per
+        # step at 1.6 K tok/s vs waves of 8 at 2.3 K). A young SP prompt (its first chunk written, nothing more) whose
+        # continuation shares this step with fresh prompts that together fill a wave restarts at 0 inside that wave:
+        # one chunk of work dropped, the wave-affine order kept (GLM53_VLLM_SP_REPLACE_TOKENS, 0 = never)
+        restart: set[int] = set()
+        if fresh and self.geometry.rows_independent and self._sp_replace_tokens > 0:
+            young = [
+                i
+                for i in range(B)
+                if int(starts[i]) > 0 and eager_long(i) and self._young_sp(int(empty_slots[i]), int(starts[i]))
+            ]
+            if len(fresh) + len(young) >= self.geometry.rows:
+                # the wave forms on the first slot index with a free row; a young prompt already on that index joins
+                # the wave as a continuing member (mixed starts), the others restart there
+                wave_idx = self.slots.first_open_index()
+                restart = {i for i in young if self.slots.physical(int(empty_slots[i])).user != wave_idx}
+        # the burst that decides SP vs waves: the fresh prompts plus every young prompt joining their wave
+        burst = len(fresh) + (len(young) if restart else 0)
         for i in range(B):
             logical = int(empty_slots[i])
             start, end = starts[i], ends[i]
+            if i in restart:
+                logger.info(
+                    f"GLM53 vLLM: slot {logical} restarts at 0: its {int(start)}-token sequence-parallel prefix is dropped so "
+                    f"the step's {burst} fresh long prompts prefill as waves (wave-affine placement)"
+                )
+                start = 0
             if page_table is not None:
                 self.blocks.check_row(page_table[i], end)
             self.prefill_planner.check_range(start, end)
@@ -1692,7 +1718,7 @@ class GLM53FlashForCausalLM:
                 # With the prefix cache a repeated prompt goes back to the free slot retaining it (the same mesh row:
                 # its greedy text repeats bit-exactly) whether or not vLLM reported a hit: with the confirmer active a
                 # short repeat has no aligned snapshot to confirm and arrives as a plain prefill (async_r3's stage b)
-                at = apc.slot_holding(tokens[i], spans, self.slots) if apc is not None else None
+                at = apc.slot_holding(tokens[i], spans, self.slots) if apc is not None and i not in restart else None
                 state = self._allocate_slot(logical, end, sp_required=bool(row_items), at=at, burst=burst)
             elif state is not None and state.phase == "prefill" and state.prefilled_to == start:
                 pass  # a chunked continuation of this slot's own prompt
@@ -2648,6 +2674,22 @@ class GLM53FlashForCausalLM:
         return 0 if hit is None else int(hit.position)
 
     # ================================================================================= helpers
+    def _young_sp(self, logical: int, start: int) -> bool:
+        """Whether ``logical``'s chunk at ``start`` continues a young sequence-parallel prompt: every chunk so far SP
+        (the prefix replicated on every row), at most ``GLM53_VLLM_SP_REPLACE_TOKENS`` tokens written, not pinned to SP
+        (no multimodal payload) and still SP-eligible; such a prompt may restart at 0 inside a wave (``prefill_forward``).
+        """
+        s = self.slots.physical(logical)
+        return (
+            s is not None
+            and s.phase == "prefill"
+            and s.prefilled_to == start
+            and s.sp_only
+            and not s.sp_required
+            and 0 < start <= self._sp_replace_tokens
+            and self.slots.sp_eligible(logical)
+        )
+
     def _allocate_slot(self, logical: int, end: int = 0, sp_required: bool = False, at=None, burst: int = 1):
         """A fresh prompt's physical slot: the column / row balance, then (APC) a slot without retained content
         before the least recently used resident prefix; a logical slot still mapped (never released) retains first.

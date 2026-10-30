@@ -1581,6 +1581,19 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 17:30: the adaptive placement changed nothing (arrivals straggle); young SP prompts fold into the wave
+
+`served_8x4_needle64k_8_adaptive`: 8/8 needles (key 7398 found here) in 332 s = the SP-first run's TTFT. The first
+engine step saw 4 of the 8 arrivals (the client's requests cross a step boundary), a burst below `rows`, so they went
+sequence-parallel on indices 0-3; the next 4 shared index 0 with the first one and every step ran a wave of 5 + 3 SP
+chunks (~30 s per 16 K of each prompt) as `needle64k_8_bt128k` did. The burst rule cannot see the stragglers, so the
+adapter now folds them in: a young SP prompt (one chunk written, SP-eligible, no multimodal payload) whose continuation
+shares a step with fresh long prompts that together fill a wave restarts at 0 inside that wave when it sits off the
+wave's slot index (the one already on it continues as a member with its own start); one chunk of work dropped, one
+wave of `rows` from then on (`GLM53_VLLM_SP_REPLACE_TOKENS`, default 16384, 0 = never). Host case: four rows, three
+lone arrivals then a fourth with their continuations -> one wave of four, no SP chunk. Served re-run:
+`needle64k_8_adaptive_r2` (expect ~8 x 65 K in ~60 s of wave steps after the first, TTFT well under 332 s).
+
 ### 2026-10-30 17:05: the capstone r4 verdict (31/32 at 32 x 1 M), the decode starvation during others' prefill
 
 `served_8x4_needle1m_32_r4`: 32 distinct 1 038 673-token prompts served in 16 072 s (2.07 K tok/s on the SP path, 4 in

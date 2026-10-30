@@ -396,6 +396,14 @@ class SlotTable:
             return False
         return not any((r, s.user) in self._occupied for r in range(self.g.rows) if r != s.row)
 
+    def first_open_index(self) -> int | None:
+        """The slot index the wave-affine placement fills next: the first of ``wave_user_order`` with a free row
+        (None when every slot is live)."""
+        for user in self.g.wave_user_order():
+            if any((row, user) not in self._occupied for row in range(self.g.rows)):
+                return user
+        return None
+
     def release(self, logical: int) -> None:
         self._check_logical(logical)
         s = self._phys[logical]
@@ -878,6 +886,13 @@ APC_WARMUP_ALLOWANCE_ENV = "GLM53_VLLM_APC_WARMUP_ALLOWANCE_MIB"
 APC_WARMUP_ALLOWANCE_MIB = 768
 # "1": the served adapter records the DRAM footprint after the decode capture and refuses the first APC call site
 # (snapshot save, hit restore, prefill row, release) after which it differs (doc/serving/prefix_caching.md s.6)
+SP_REPLACE_TOKENS_ENV = (
+    "GLM53_VLLM_SP_REPLACE_TOKENS"  # a sequence-parallel prompt with at most this many tokens written
+)
+# restarts at 0 inside a wave when the step's fresh long prompts + such young prompts fill a wave of `rows` (0 = never):
+# arrivals straggle across step boundaries, so the first step of a burst sees a few prompts and places them SP, and
+# their slot indices would fragment the burst's waves (needle64k_8_adaptive 2026-10-30: waves of 5 + 3 SP chunks)
+SP_REPLACE_TOKENS_DEFAULT = 16384
 REPLAY_BLOCKING_ENV = "GLM53_DECODE_REPLAY_BLOCKING"  # "0" (default since 2026-10-30): the served decode replay returns
 # at enqueue and the plugin's async read event (or a blocking read) completes the step, so the engine thread builds
 # step N + 1 while the device runs step N; "1": the replay blocks until the device finished the step (the A/B control)
