@@ -18,7 +18,7 @@ the center channels, scaled to metres.
 
 import ttnn
 from models.experimental.bevformer.model_config import BOX_PRED_PIECES, SCORE_DTYPE
-from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import l1_linear, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 
@@ -34,8 +34,8 @@ class TTBEVFormerHead:
     @staticmethod
     def _cls_branch(x, branch):
         for linear, norm in branch.hidden:
-            x = ttnn.relu(layer_norm(ttnn.linear(x, linear.weight, bias=linear.bias), norm))
-        return ttnn.linear(x, branch.out.weight, bias=branch.out.bias, dtype=SCORE_DTYPE)
+            x = ttnn.relu(layer_norm(l1_linear(x, linear), norm, memory_config=ttnn.L1_MEMORY_CONFIG))
+        return l1_linear(x, branch.out, dtype=SCORE_DTYPE)
 
     def __call__(self, bev_embed):
         """``bev_embed`` is ``(bs, bev_h * bev_w, embed_dims)``.
@@ -67,4 +67,5 @@ class TTBEVFormerHead:
         all_bbox_preds = ttnn.concat([sources[source][..., channels] for source, channels in BOX_PRED_PIECES], dim=-1)
         signpost(header="Head BoxPreds End")
         signpost(header="TTNN Head Forward End")
-        return all_cls_scores, all_bbox_preds
+        # The caller may hold the outputs into the next frame, whose backbone needs the L1.
+        return tuple(ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in (all_cls_scores, all_bbox_preds))
