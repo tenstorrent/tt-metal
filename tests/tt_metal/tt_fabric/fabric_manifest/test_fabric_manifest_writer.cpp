@@ -21,7 +21,7 @@ namespace {
 
 using json = nlohmann::ordered_json;
 
-content::L1 word_at(uint32_t address) { return describe_l1_region<uint32_t>(address); }
+content::L1 word_at(uint32_t address) { return register_l1_region<uint32_t>(address); }
 
 // One mesh, M0, of two chips. C0 is this rank's, with one router, E0, whose link reaches W0 on C1, another rank's chip.
 ManifestFacts make_facts() {
@@ -46,7 +46,7 @@ ManifestFacts make_facts() {
                 Field{
                     .key = "edm_status",
                     .category = FieldCategory::LIFECYCLE,
-                    .content = describe_l1_region<EDMStatus>(0x200)},
+                    .content = register_l1_region<EDMStatus>(0x200)},
                 Field{
                     .key = "retrain_sync",
                     .category = FieldCategory::LIFECYCLE,
@@ -91,7 +91,7 @@ ManifestFacts make_facts() {
             {.arch = tt::ARCH::WORMHOLE_B0,
              .areas =
                  {.heartbeat = {.word = word_at(0x1f80)},
-                  .fabric_telemetry = describe_l1_region<FabricTelemetry>(0x3000),
+                  .fabric_telemetry = register_l1_region<FabricTelemetry>(0x3000),
                   .routing_table = word_at(0x4000)},
              .core_registers =
                  {.soft_reset = 0x1, .reset_masks = {0x800}, .wall_clock_low = 0x2, .wall_clock_high = 0x3}},

@@ -3,7 +3,20 @@
 The router pass (`fabric_manifest_router_pass.cpp`) describes one router while its builder still exists. Each chip's
 `FabricBuilder` runs it on every router when it publishes the chip ([BUILDER_HOOKS.md](BUILDER_HOOKS.md)), and the result, a `manifest::Router`, waits in `PublishedChips` until the manifest is written.
 
-Its input is the router's `ManifestRouterInputs`: the router's ERISC builder, chip-level routinf facts, etc. Plain values are read through the field tables ([FIELD_TABLES.md](FIELD_TABLES.md)). This doc covers the rest: the facts that take logic (computed facts), and the checks that come with them.
+Its input is the router's `ManifestRouterInputs`, which the router builder fills from what only it can see:
+
+| Input | What it is |
+| --- | --- |
+| `erisc_builder` | The router's `FabricEriscDatamoverBuilder`: its config, channel allocator, downstream adapter and trimming profile |
+| `vc_shape` | The router's VCs and how many receiver channels each has |
+| `location` | The router's Ethernet channel, the direction it faces, and whether it's on a dispatch link |
+| `chip_facts` | The chip's routing facts, such as each direction's edge capability |
+| `addresses_to_clear` | The L1 addresses fabric init zeroes before launch (`get_fabric_router_addresses_to_clear()`) |
+| `kernel` | What the router passed to `CreateKernel`: each RISC's processor and named compile-time arguments, and the defines |
+| `hal` | The HAL, for stream register addresses and physical ERISCs |
+
+Plain values are read through the field tables ([FIELD_TABLES.md](FIELD_TABLES.md)). This doc covers the rest: the
+facts that take logic (computed facts), and the checks that come with them.
 
 The router pass knows only this router and its builder. What needs the rest of the chip or the fabric is left for the
 topology pass ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)): the router's key and cores, its link's peer and whether the link
@@ -19,8 +32,8 @@ wraps or crosses hosts, which sibling router each downstream edge lands on, and 
 2. **The router's shape.** It must agree with the number of ERISCs given arguments.
 3. **The channel context.** What every channel needs: the channel allocator, which sender channel is each VC's worker
 
-   channel, whether 2D routing and the channel trimming capture are on, speedy VC0, the trimming profile the
-    builder applied, and the channel buffer size.
+   channel, whether 2D routing and the channel trimming capture are on, speedy VC0, the trimming profile the builder
+    applied, and the channel buffer size.
 4. **Channels**, VC by VC: each sender, then each receiver.
 5. **Downstream edges**, VC by VC.
 6. **Fields**: the router's, then each ERISC's.
@@ -40,6 +53,16 @@ on all of them, so how a value is read says which ERISCs it comes from:
 
 Every reader refuses a name the field tables don't read and the router pass's lists don't name, and fails when the
 argument is missing ([FIELD_TABLES.md](FIELD_TABLES.md)).
+
+## Fields and regions
+
+The router's, each ERISC's, each channel's and each edge's `fields` come from the field tables: FIELD_TABLES.md's
+"Reading a table" says how an entry becomes a field.
+
+The router pass also registers regions of its own, where no single argument gives the location: ring buffers, the
+credit counter arrays, leftover L1, and credits on stream registers. Each is registered with its location from the
+builder (TYPE_REGISTRY.md's "Where regions are registered" lists them), and each L1 region records whether fabric init
+clears it.
 
 ## The router
 
@@ -65,13 +88,14 @@ receivers the kernel doesn't loop over, or leave out ones it does.
 **Credit counters** (`credit_counters`): the router's four L1 arrays of credit counters, from the kernel's
 `TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR`, `TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR`,
 `LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR` and `LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR`. The kernel sends each pair to the peer in one packet, so it relies on the arrays being back to back and the same size, and the size comes from
-that spacing. The router pass fails if they aren't. Each array is `u32`s, one per sender channel, indexed by the
+that spacing. The router pass fails if they aren't. Each array is `uint32_t`s, one per sender channel, indexed by the
 channel's compact index. The `to_sender` arrays count this router's own sender channels, and the `receiver` arrays the
 sender channels of the router on the other end of the link. The writer records which as `indexed_by`.
 
-**Leftover L1** (`leftover_l1`): the L1 from the end of what the router uses (the builder's
-`get_allocated_l1_end_address`) to the end of loadable L1 (`max_l1_loading_size`), as bytes, or null when nothing is
-left.
+**Leftover L1** (`leftover_l1`): the L1 from the end of what the router places (the builder's
+`get_allocated_l1_end_address`) to the end of the L1 the router may load into (`max_l1_loading_size`), as `std::byte`,
+or null when nothing is left. With the streaming profiler on, `LinkSyncL1` sits above `max_l1_loading_size`, so it is
+not leftover.
 
 **ERISCs** (`eriscs`): one per RISC the kernel runs on, in RISC order, each with its processor, its fields, and its
 physical ERISC from the HAL. The physical ERISC is the processor's index, except in Blackhole single-ERISC mode, where
@@ -94,6 +118,7 @@ builder applies them:
 
    `FABRIC_2D_VC1_SERVICED`, and VC2 only under `FABRIC_2D_VC2_SERVICED`.
 2. `mux`: a VC0 sender other than the worker channel, on a router with a tensix extension. The tensix mux carries its
+
    traffic.
 3. `trimmed`: the applied channel trimming profile turned it off (a sender it doesn't use, or a receiver whose data it
 
@@ -106,8 +131,8 @@ channel idle.
 is set, as `erisc<n>`, where `<c>` is the compact index. Empty when the kernel doesn't run the VC.
 
 **Ring buffer** (`ring_buffer`): the channel's packet slots, from the channel allocator, each `CHANNEL_BUFFER_SIZE`
-bytes. Written as bytes, one element per slot, since a slot holds a packet rather than a described struct. Null when
-the channel has no slots.
+bytes. Registered as `std::byte` with one element per slot, so `element_size` is the slot size and the packet in each
+slot is left raw. Null when the channel has no slots.
 
 ### Senders
 
@@ -119,8 +144,9 @@ bubble flow control (first-level acks). How depends on the VC's backing:
 
 - **L1 counters**, when the kernel's `VC<v>_USES_COUNTER_CREDITS` is set: the channel's element of the `to_sender`
 counter array, written as `{array, index}`.
-- **A stream register** otherwise: `TO_SENDER_<c>_PKTS_COMPLETED_ID` or `TO_SENDER_<c>_PKTS_ACKED_ID`, its
-`buf_space_available` register. Null when the builder gave it the unused stream id.
+- **A stream register** otherwise: the `buf_space_available` register of the stream `TO_SENDER_<c>_PKTS_COMPLETED_ID`
+or `TO_SENDER_<c>_PKTS_ACKED_ID` names, with its address from `describe_stream_register`. Null when the builder gave
+it the unused stream id.
 
 The mesh's `credit_transport` says each VC's backing ([DESCRIBE.md](DESCRIBE.md)).
 
@@ -171,7 +197,8 @@ manifest instead of leaving it wrong.
 1. Add the fact to the model (`fabric_manifest_model.hpp`) where it sits.
 2. Compute it here, from `ManifestRouterInputs`. If it reads an argument or define no table reads, add the name to
 
-   `k_router_pass_args` or `k_router_pass_defines`, and remove it from the unrecorded lists if it's there.
+   `k_router_pass_args` or `k_router_pass_defines`, and remove it from the unrecorded lists if it's there. If it's a
+    region, register it with its type ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)).
 3. Write it in the writer (`fabric_manifest.cpp`), and add it to `fabric_manifest_schema.json` and
 
    [FORMAT.md](FORMAT.md).

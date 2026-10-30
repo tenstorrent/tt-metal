@@ -31,8 +31,8 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 | Credits | How a sender channel learns its packets were received (`acked`) or done with (`completed`) |
 | Credit counter | An L1 word counting one sender channel's credits, when credits travel in L1 rather than stream registers |
 | Stream register | One of the Ethernet core's hardware stream registers, which fabric uses as counters and scratch |
-| Region | An L1 range the manifest describes: an address, a size, and a schema |
-| Schema | How to read a value: an integer width, `bytes`, `pad`, or a named type in `types` |
+| Region | Router state the manifest describes: an L1 region, or a stream register. It says where the bytes are and the type they hold |
+| Type name | A registered C++ type's name, such as `EDMStatus`, which decode maps back to the type ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) |
 | Field | One value a router's kernel was fed, keyed by name ([FIELD_TABLES.md](FIELD_TABLES.md)) |
 | Tensix mux | A tensix core that carries VC0 traffic for a router's non-worker sender channels, in mux mode |
 | Channel trimming | A profile that turns off channels a workload doesn't use |
@@ -47,10 +47,8 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
   "manifest_version": 1,
   "file_kind": "fabric_manifest",
   "run":        { host_rank, mpi_rank, world_size, written_at, build: { git_sha, git_dirty } },
-  "fabric":     { config: { ... }, topology, is_2d_routing, packet_header: { size, schema }, ... },
-  "arch":       { name, l1_areas: { ... }, stream_registers: { ... }, core_registers: [ ... ] },
-  "types":      { structs: { <Name>: { size, members: [ ... ] } }, enums: { <Name>: { values: { ... } } },
-                  tagged_unions: { <Name>: { size, tag: { schema }, cases: [ ... ] } } },
+  "fabric":     { config: { ... }, topology, is_2d_routing, packet_header, ... },
+  "arch":       { name, l1_areas: { ... }, core_registers: [ ... ] },
   "vocabulary": { <list name>: [ <name>, ... ] },
   "meshes": {
     "M<mesh>": {
@@ -78,33 +76,26 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
 
 ## Shapes that repeat
 
-**L1 region**: `{ address, size, schema, cleared_by_host }`. An array also has `num_elements` and `size_per_element`.
-`cleared_by_host` means fabric init zeroes the region before launching the routers.
+**L1 region**: `{ address, num_elements, element_size, type, cleared_by_host }`. `num_elements` elements of `type`,
+`element_size` bytes apart from `address`. Element `i` holds a `type` in its first `sizeof(type)` bytes, at
+`address + i * element_size`; the rest of the element, if `element_size` is larger, isn't typed. `cleared_by_host`
+means fabric init zeroes the region before launching the routers.
 
 ```json
-{ "address": 98336, "size": 48, "num_elements": 12, "size_per_element": 4, "schema": "u32", "cleared_by_host": false }
+{ "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int", "cleared_by_host": true }
 ```
 
-**Stream register**: `{ stream_id, register, schema }`. `register` is `buf_space_available` (an increment-on-write
-count) or `remote_src` (a plain read-write register). Its address is
-`base + stream_id * stride + registers[register].offset`, from `arch.stream_registers`, and its value is the word's low `registers[register].bits` bits. The bits above `buf_space_available`'s count can hold other state.
+**Stream register**: `{ stream_id, address, value_bits, type }`. One word at `address`, in stream `stream_id`'s
+registers. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold other state.
 
 ```json
-{ "stream_id": 9, "register": "buf_space_available", "schema": "u32" }
+{ "stream_id": 7, "address": 4290016420, "value_bits": 17, "type": "unsigned int" }
 ```
 
-**Schema**: how to read a value.
-
-| Schema | Read as |
-| --- | --- |
-| `u8` to `u64`, `i8` to `i64` | An unsigned or signed integer, as wide as one element |
-| `enum:<Name>` | An enum, described in `types.enums` |
-| `struct:<Name>` | A struct, described in `types.structs`. A class template instance's name has its arguments as C++ spells them, such as `HybridMeshPacketHeaderT<36>` |
-| `union:<Name>` | A tagged union, described in `types.tagged_unions`: one of several types, picked by the value of the enclosing struct's member named by `tag_member` |
-| `bytes` | Raw bytes, for code that reads them by its own rules, such as a table packed below byte granularity |
-| `pad` | Bytes that mean nothing |
-
-Every `struct:`, `enum:` and `union:` schema names an entry in `types` ([WRITER.md](WRITER.md)).
+**Type name**: the `type` of a region or stream register, or `fabric.packet_header`. It's a registered C++ type's name
+without its namespaces, as the build that wrote the manifest spells it: `EDMStatus`, `HybridMeshPacketHeaderT<36>`,
+`unsigned int` for `uint32_t`, `byte` for `std::byte`. Decode, built from the same commit, maps the name back to the
+type and reads the bytes into it. The manifest doesn't describe a type's members ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)).
 
 **Field**: `{ category, kind, ... }`, keyed by the field's name. `category` is `lifecycle`, `kernel_params`,
 `flow_control`, `control_info` or `diagnostics`.
@@ -112,10 +103,10 @@ Every `struct:`, `enum:` and `union:` schema names an entry in `types` ([WRITER.
 | `kind` | Keys besides `category` and `kind` |
 | --- | --- |
 | `l1` | An L1 region's keys |
-| `stream` | A stream register's keys |
+| `stream_reg` | A stream register's keys |
 | `number` | `value`, an integer |
 | `flag` | `value`, a boolean |
-| `enum` | `value`, an integer, and `schema`, the `enum:<Name>` it's a value of |
+| `enum` | `value`, an integer, and `value_name`, its enumerator's name in lower case |
 
 A field is `null` when the builder didn't allocate what it describes (it fed the kernel address 0, or the unused stream
 id). A field the builder doesn't emit in this configuration, such as a 2D-only field on 1D, is left out.
@@ -146,7 +137,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | `config.router_config.max_packet_payload_size_bytes` | The payload size override, or null for the default |
 | `topology` | The fabric topology, such as `mesh` |
 | `is_2d_routing` | Whether 2D routing is on |
-| `packet_header` | The packet header type the run's routers use: its `size`, and a `struct:` schema naming its layout, such as `struct:LowLatencyPacketHeaderT<0>` |
+| `packet_header` | The type name of the packet header the run's routers use, such as `HybridMeshPacketHeaderT<36>`. Each ring buffer slot starts with one |
 | `max_payload_size_bytes`, `channel_buffer_size_bytes` | Payload and channel buffer sizes |
 | `routing_2d_route_buffer_size` | 2D routing only: the packet header's route buffer size |
 | `routing_1d_extension_words` | 1D routing only: the packet header's extension words |
@@ -160,20 +151,7 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | --- | --- |
 | `name` | The architecture, such as `wormhole_b0` |
 | `l1_areas` | L1 regions the architecture fixes on every router core: `heartbeat` (with its `magic`, `magic_mask` and `period_iters`), `fabric_telemetry`, `routing_table`, `eth_fw_mailbox`, and base firmware's link status words `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up` and `base_fw_postcode`. An area the architecture doesn't have is null |
-| `stream_registers` | `base`, `stride` and `count` of the Ethernet stream registers, and for each register (`buf_space_available`, `remote_src`) its `offset` within a stream and its value's `bits` |
-| `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address`, `size` and `schema`. Reading the low wall clock word latches the high word |
-
-## types
-
-| Key | Value |
-| --- | --- |
-| `structs.<Name>` | `size`, and `members` in order, each with its `name`, `offset`, `size`, `schema`, for an array `num_elements` and `size_per_element`, and for a tagged union `tag_member`. Members cover every byte of the struct |
-| `enums.<Name>` | `values`: each enumerator's lower-case name, and its integer value |
-| `tagged_unions.<Name>` | `size`, `tag.schema` (the `enum:` its tag holds), and `cases`, each a member as in a struct, at offset 0, with the `tag_value` that picks it |
-
-To read a tagged union, read the enclosing struct's `tag_member`, then the case whose `tag_value` names that value.
-
-`types` holds every struct, enum and tagged union a schema names, and every one those name in turn, and nothing else. A reader decodes bytes from these entries without the C++ headers ([STRUCT_LAYOUTS.md](STRUCT_LAYOUTS.md)).
+| `core_registers` | An array, in read order: `soft_reset` (with `reset_masks`, each physical ERISC's reset bit), `wall_clock_low` and `wall_clock_high`, each with its `name`, `address` and `type`. Reading the low wall clock word latches the high word |
 
 ## vocabulary
 
@@ -185,16 +163,15 @@ what the label is:
 | `arch` | `arch.name` |
 | `fabric_config`, `reliability_mode`, `tensix_config`, `udm_mode`, `fabric_manager_mode` | `fabric.config`'s settings |
 | `fabric_topology` | `fabric.topology` |
-| `credit_backing`, `l1_credit_counter_reason` | A mesh's `credit_transport` |
+| `credit_backing` | A mesh's `credit_transport` |
 | `z_port_role` | A chip's `z_port_role` |
 | `edge_capability` | A link's `edge_capability` |
 | `credit_counter_indexed_by` | A credit counter array's `indexed_by` |
-| `stream_register` | A stream register's `register` |
 | `field_category`, `field_kind` | A field's `category` and `kind` |
 | `channel_status` | A channel's `status` |
 | `erisc_processor` | An ERISC's `processor` |
 
-These are names the manifest writes as strings, so nothing appears both here and in `types.enums`.
+An `enum` field isn't a label: it writes its enumerator's name next to its value (`value_name`), so it has no list here.
 
 ## meshes
 
@@ -207,7 +184,7 @@ These are names the manifest writes as strings, so nothing appears both here and
 | `shape` | The mesh's extent in each dimension |
 | `torus` | 2D meshes only: `{ y, x }`, whether each axis wraps |
 | `express_routing` | Whether the mesh has express routing |
-| `credit_transport` | Meshes on this host only: for each VC some router has senders on, `vc<v>: { backing, reasons }`. `backing` is `stream_register` or `l1_counter`, and `reasons` says why counters |
+| `credit_transport` | Meshes on this host only: for each VC some router has senders on, `vc<v>: { backing }`. `backing` is `stream_register` or `l1_counter` |
 | `chips` | Every chip in the mesh, by chip id |
 
 ### Chip
@@ -240,7 +217,7 @@ These are names the manifest writes as strings, so nothing appears both here and
 | `intra_chip_downstream_edges` | Keyed `vc<v>` then `edge<n>`. VCs with no edges are left out |
 | `fields` | The router's fields |
 | `eriscs` | Keyed `erisc<n>`, in RISC order: each with its `processor`, `physical_erisc` and `fields` |
-| `leftover_l1` | The L1 from the end of what the router uses to the end of loadable L1, as `bytes`, or null when there is none |
+| `leftover_l1` | The L1 from the end of what the router places to the end of the L1 the router may load into, as `byte`, or null when there is none |
 
 ### Channels
 
@@ -250,7 +227,7 @@ Both kinds of channel have:
 | --- | --- |
 | `status` | `active`, or why no ERISC runs it: `vc_not_serviced`, `mux` or `trimmed` |
 | `serviced_by` | The ERISCs that run it, as `erisc<n>` |
-| `ring_buffer` | Its packet slots, as `bytes` with one element per slot, or null when it has none |
+| `ring_buffer` | Its packet slots, as `byte` with one element per slot (`element_size` is the slot size), or null when it has none |
 | `fields` | Its fields |
 
 A sender channel also has:
@@ -280,31 +257,37 @@ A receiver channel also has:
 
 ## Excerpt
 
-One router from a 2D mock manifest, trimmed:
+One router from a Blackhole 2D mock manifest, trimmed:
 
 ```json
 "E1": {
-  "identity": { "eth_chan": 0, "logical_core": [0, 0], "virtual_core": [25, 16] },
+  "identity": { "eth_chan": 5, "logical_core": [0, 5], "virtual_core": [25, 25] },
   "link": { "edge_capability": "intramesh_cardinal", "peer": "M0/C1/W1", "cross_host": false, "wrap": false,
-            "dispatch_link": true },
-  "shape": { "num_vcs": 1, "senders_per_vc": [4, 0, 0], "receivers_per_vc": [1, 0, 0], "num_active_eriscs": 1,
+            "dispatch_link": false },
+  "shape": { "num_vcs": 1, "senders_per_vc": [4, 0, 0], "receivers_per_vc": [1, 0, 0], "num_active_eriscs": 2,
              "channel_trimming_overrides_applied": false, "vc0_bubble_flow_control": false,
              "has_tensix_extension": false },
+  "credit_counters": {
+    "to_sender_ack": { "address": 88960, "num_elements": 12, "element_size": 4, "type": "unsigned int",
+                       "cleared_by_host": true, "indexed_by": "own_sender_channel" },
+    ...
+  },
   "channels": {
     "senders": { "vc0": { "ch0": {
       "status": "active", "serviced_by": ["erisc0"], "producer": "worker",
-      "ring_buffer": { "address": 100256, "size": 62272, "num_elements": 14, "size_per_element": 4448,
-                       "schema": "bytes", "cleared_by_host": false },
-      "credits": { "completed": { "stream_id": 9, "register": "buf_space_available", "schema": "u32" } },
+      "ring_buffer": { "address": 90912, "num_elements": 17, "element_size": 4448, "type": "byte",
+                       "cleared_by_host": false },
+      "credits": { "completed": { "array": "credit_counters/to_sender_completion", "index": 0 } },
       "fields": { ... }
     }, ... } },
-    "receivers": { "vc0": { "ch0": { "status": "active", "serviced_by": ["erisc0"], "forwards_on": "vc0", ... } } }
+    "receivers": { "vc0": { "ch0": { "status": "active", "serviced_by": ["erisc1"], "forwards_on": "vc0", ... } } }
   },
   "intra_chip_downstream_edges": { "vc0": { "edge3": {
     "downstream_channel": "M0/C0/S1/channels/senders/vc0/ch1", "through_tensix_mux": false,
-    "fields": { "free_slots": { "category": "flow_control", "kind": "stream", "stream_id": 15,
-                                "register": "buf_space_available", "schema": "u32" }, ... }
+    "fields": { "free_slots": { "category": "flow_control", "kind": "stream_reg", "stream_id": 7,
+                                "address": 4290016420, "value_bits": 17, "type": "unsigned int" }, ... }
   }, ... } },
+  "leftover_l1": { "address": 451200, "num_elements": 4064, "element_size": 1, "type": "byte", "cleared_by_host": false },
   ...
 }
 ```

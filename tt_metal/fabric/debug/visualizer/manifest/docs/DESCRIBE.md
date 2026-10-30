@@ -9,7 +9,10 @@ fabric settings and the architecture. It also describes each mesh's credit trans
 | `describe_run(control_plane)` | `run` | ControlPlane, the MPI context, the clock, the build's version header |
 | `describe_fabric(control_plane)` | `fabric` | ControlPlane, FabricContext, the Metal environment |
 | `describe_arch(hal)` | `arch` | The HAL, UMD, and fabric's heartbeat constants |
-| `describe_credit_transport(builder_context, mesh_id)` | A mesh's `credit_transport` | The builder context's stream assignment for the mesh |
+| `describe_credit_transport(builder_context, mesh_id)` | A mesh's `credit_transport` | The builder context's credit transport plan for the mesh |
+
+Like the topology pass, describe reads each fact from the object that already knows it, and works out nothing fabric
+has already decided.
 
 ## Run
 
@@ -48,7 +51,7 @@ The rest of `fabric` is what FabricContext derived from the settings:
 | --- | --- |
 | `topology` | The fabric topology |
 | `is_2d_routing` | Whether 2D routing is on |
-| `packet_header` | The header type `visit_packet_header_type` (`packet_header_types.hpp`) picks for the routing mode and FabricContext's 1D extension words or 2D route buffer size. Its size, plus the `UDMControlFields` that follow it in UDM mode (`compute_pkt_hdr_size_bytes`), must be FabricContext's header size |
+| `packet_header` | The registered name ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)) of the header type `visit_packet_header_type` (`packet_header_types.hpp`) picks for the routing mode and FabricContext's 1D extension words or 2D route buffer size, such as `HybridMeshPacketHeaderT<36>`. The type's size, plus the `UDMControlFields` that follow it in UDM mode (`compute_pkt_hdr_size_bytes`), must be FabricContext's header size |
 | `max_payload_size_bytes`, `channel_buffer_size_bytes` | The payload and channel buffer sizes |
 | `routing_2d_route_buffer_size` | 2D routing only: the packet header's route buffer size |
 | `routing_1d_extension_words` | 1D routing only: the packet header's extension words |
@@ -58,25 +61,24 @@ The rest of `fabric` is what FabricContext derived from the settings:
 
 `arch` describes what the architecture fixes on every router core, stated once since it's the same on all of them.
 
-**L1 areas** (`arch.l1_areas`), each an address and a schema:
+**L1 areas** (`arch.l1_areas`). Each is an L1 region, registered with the type it holds and its location from the HAL
+or fabric (TYPE_REGISTRY.md's "Where regions are registered"):
 
 | Area | From |
 | --- | --- |
 | `heartbeat` | The word the router writes `magic \| iteration count` to every `period_iters` main-loop iterations, from `fabric_common.h`, with its `magic`, `magic_mask` and `period_iters`. On Blackhole it's base firmware's own heartbeat word, which the router writes over while it runs |
 | `fabric_telemetry` | The HAL's `FABRIC_TELEMETRY` area, as a `FabricTelemetry` |
 | `routing_table` | The HAL's `ROUTING_TABLE` area, as a `routing_l1_info_t` |
-| `eth_fw_mailbox` | The HAL's `ETH_FW_MAILBOX` area, as `u32`s. Null where the HAL has no Ethernet firmware mailbox |
-| `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up`, `base_fw_postcode` | The words base firmware keeps about its Ethernet link, each a `u32` at the address the HAL gives among its Ethernet firmware mailbox values. Null where the HAL gives none, as on Wormhole |
+| `eth_fw_mailbox` | The HAL's `ETH_FW_MAILBOX` area, as `uint32_t`s. Null where the HAL has no Ethernet firmware mailbox |
+| `base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`, `base_fw_rx_link_up`, `base_fw_postcode` | The words base firmware keeps about its Ethernet link, each a `uint32_t` at the address the HAL gives among its Ethernet firmware mailbox values. Null where the HAL gives none, as on Wormhole |
 
-A HAL area must hold a whole number of its type, and becomes an array when it holds more than one.
+A HAL area (`describe_hal_l1_area<T>`) must hold a whole number of its type, and that number is its `num_elements`.
 
-**Stream registers** (`arch.stream_registers`): where each Ethernet stream's registers are, from the HAL: the first
-stream's `base`, the `stride` between streams, and the `count` of streams fabric uses. For each register the manifest
-reads (`buf_space_available` and `remote_src`), its offset within a stream's block and how many low bits hold its value.
-`remote_src` is fabric's scratch register: four 6-bit fields on Wormhole and Blackhole (`fabric_stream_regs.hpp`).
+`arch` doesn't describe stream registers. Each stream register the manifest names carries its own address and value
+width, worked out from the HAL where it's read ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
-**Core registers** (`arch.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a `u32` at its
-HAL address. The array keeps the read order: reading the low word latches the high word. `soft_reset.reset_masks` is
+**Core registers** (`arch.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a `uint32_t` at
+its HAL address, written with its name, address and type. The array keeps the read order: reading the low word latches the high word. `soft_reset.reset_masks` is
 UMD's reset bit for each of the HAL's physical ERISCs on the Ethernet core, one on Wormhole and two on Blackhole,
 whether or not the ERISC mode runs a processor on it. A router's ERISCs say which physical ERISC each runs on
 ([ROUTER_PASS.md](ROUTER_PASS.md)).
@@ -85,22 +87,20 @@ whether or not the ERISC mode runs a processor on it. A router's ERISCs say whic
 
 Each mesh on this host gets a `credit_transport`: for each VC some router in the fabric has senders on, how the
 senders' credits travel. The topology pass calls `describe_credit_transport` for the mesh
-([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)). It reads the builder context's stream assignment for the mesh:
+([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)).
 
-- `backing`: `l1_counter` when the VC's credits travel in L1 counters, and `stream_register` otherwise.
-- `reasons`: why the builder put the VC on counters: `multi_txq` (VC0 and VC1, when senders and receivers use
-separate TX queues), `express` (VC1, when the mesh has express routing), or `no_completion_register` (VC2, whose
-sender sits past the stream register table). Empty for a stream register VC.
+`backing` is `l1_counter` when the VC's credits travel in L1 counters, and `stream_register` otherwise. It's the
+builder's own decision: the credit transport plan the builder context made for the mesh (`CreditTransportPlan`), which
+has one flag per VC (`vc0_uses_counters`, `vc1_uses_counters`, `vc2_uses_counters`).
 
 A sender channel's credits point into the counter arrays or at a stream register to match ([ROUTER_PASS.md](ROUTER_PASS.md)).
 
 ## Adding a fact stated once
 
 1. Add it to the block's model type (`RunInfo`, `FabricInfo`, `FabricSettings` or `Arch` in
-
    `fabric_manifest_model.hpp`).
-2. Read it in the block's `describe_*` here.
+2. Read it in the block's `describe_*` here, from the object that already knows it. If it's an L1 area, register it
+   with its type ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)).
 3. Write it in the writer (`fabric_manifest.cpp`), and add it to `fabric_manifest_schema.json` and
-
    [FORMAT.md](FORMAT.md).
 4. Describe it in this doc.

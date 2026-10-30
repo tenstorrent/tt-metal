@@ -79,7 +79,7 @@ content::L1 describe_hal_l1_area(const tt::tt_metal::Hal& hal, HalL1MemAddrType 
         area_size,
         sizeof(T),
         get_manifest_type_name<T>());
-    return describe_l1_region<T>(get_hal_l1_address(hal, area_id), area_size / sizeof(T));
+    return register_l1_region<T>(get_hal_l1_address(hal, area_id), area_size / sizeof(T));
 }
 
 // A base firmware word, whose address the HAL keeps among its Ethernet firmware mailbox values; null when it is 0.
@@ -88,13 +88,13 @@ std::optional<content::L1> describe_base_fw_word(const tt::tt_metal::Hal& hal, t
     if (address == 0) {
         return std::nullopt;
     }
-    return describe_l1_region<uint32_t>(address);
+    return register_l1_region<uint32_t>(address);
 }
 
 // The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's.
 Heartbeat describe_heartbeat(tt::ARCH arch) {
     return Heartbeat{
-        .word = describe_l1_region<uint32_t>(
+        .word = register_l1_region<uint32_t>(
             arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
                                         : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE),
         .magic = FABRIC_KERNEL_HEARTBEAT_MAGIC,
