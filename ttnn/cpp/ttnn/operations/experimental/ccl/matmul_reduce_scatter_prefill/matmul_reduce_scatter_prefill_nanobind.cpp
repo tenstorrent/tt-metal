@@ -89,6 +89,9 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
                 and full sync are always on. Defaults to HiFi2.
             memory_config (ttnn.MemoryConfig, optional): interleaved output placement. Defaults to DRAM interleaved.
             output_tensor (ttnn.Tensor, optional): preallocated output matching the spec the op would allocate.
+            l1_headroom (int, optional): bytes of each core's L1 the plan leaves free for tensors the op does not
+                own, such as L1 operands or other resident L1 tensors (the planner does not see them). Defaults
+                to 64 KiB.
 
         Returns:
             ttnn.Tensor: bfloat16 TILE output, the scattered dim divided by the group size.
@@ -107,7 +110,8 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("num_links") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("l1_headroom") = nb::none());
 
     mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",

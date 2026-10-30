@@ -26,6 +26,8 @@ namespace ttnn::experimental {
 //   compute_kernel_config  math fidelity and approx mode (fp32 DEST and full sync are forced on); default HiFi2
 //   memory_config          interleaved output placement; default DRAM
 //   output_tensor          preallocated output; must match the spec the op allocates, never an input
+//   l1_headroom            bytes of each core's L1 the plan leaves free for tensors the op does not own (the
+//                          planner does not see them); default 64 KiB
 Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -35,6 +37,7 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<int32_t>& num_links = std::nullopt,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const std::optional<uint32_t>& l1_headroom = std::nullopt);
 
 }  // namespace ttnn::experimental

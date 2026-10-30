@@ -112,7 +112,7 @@ struct PlanInputs {
     uint32_t tA = 0;  // A / W buffer aligned page sizes
     uint32_t tW = 0;
     int32_t scatter_dim = -2;  // canonical: -1 or -2
-    uint64_t budget = 0;       // L1 bank size - L1_HEADROOM
+    uint64_t budget = 0;       // L1 bank size - the call's l1_headroom
 };
 
 // Planner constants the factory needs too.
@@ -120,7 +120,7 @@ constexpr uint32_t kDepthHandoff = 2;        // finished slots per matmul core
 constexpr uint32_t kMailboxStride = 16;      // bytes per matmul core in a port's mailbox
 constexpr uint32_t kPortGroup = 4;           // chunks per port batch (cb::PORT_CHUNKS holds 2 batches)
 constexpr uint32_t kPrefetchSteps = 1;       // K-block windows a sender reads ahead
-constexpr uint32_t kL1Headroom = 64 * 1024;  // bytes kept free per core beyond the footprint
+constexpr uint32_t kL1Headroom = 64 * 1024;  // default l1_headroom: bytes kept free per core beyond the footprint
 
 // The entry's plan: 1x1, else the auto (model) search over chunk_candidates. TT_THROWs when no plan fits L1 or the
 // geometry cannot be laid out. A solved plan is remembered per input, so a repeated call looks it up instead of

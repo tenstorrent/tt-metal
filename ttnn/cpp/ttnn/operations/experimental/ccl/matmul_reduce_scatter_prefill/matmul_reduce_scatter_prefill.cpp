@@ -126,7 +126,8 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<int32_t>& num_links,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<uint32_t>& l1_headroom) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     namespace mrs_detail = ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::detail;
     using tt::constants::TILE_HEIGHT;
@@ -174,6 +175,13 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const uint32_t Kt = K / TILE_WIDTH;
     const uint32_t Nt = N / TILE_WIDTH;
     const CoreCoord grid = mesh->compute_with_storage_grid_size();
+    const uint64_t l1_bank = mesh->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    const uint64_t headroom = l1_headroom.value_or(mrs_detail::kL1Headroom);
+    TT_FATAL(
+        headroom < l1_bank,
+        "matmul_reduce_scatter_prefill: l1_headroom={} must be smaller than the L1 bank size ({} bytes)",
+        headroom,
+        l1_bank);
     const mrs_detail::PlanInputs plan_inputs{
         .G = G,
         .kind = kind,
@@ -188,7 +196,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         .tA = static_cast<uint32_t>(input_tensor.buffer()->aligned_page_size()),
         .tW = static_cast<uint32_t>(weight.buffer()->aligned_page_size()),
         .scatter_dim = canonical_dim,
-        .budget = mesh->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) - mrs_detail::kL1Headroom,
+        .budget = l1_bank - headroom,
     };
 
     MatmulReduceScatterPrefillParams params{

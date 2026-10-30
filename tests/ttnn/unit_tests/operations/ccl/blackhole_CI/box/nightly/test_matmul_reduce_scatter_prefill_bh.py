@@ -112,6 +112,7 @@ def run_case(
     calls=1,
     a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     w_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    l1_headroom=None,
 ):
     mesh_shape = tuple(mesh_device.shape)
     a = random_stacked(mesh_shape, a_shape, seed=0)
@@ -125,6 +126,7 @@ def run_case(
         topology=topology,
         num_links=num_links,
         compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
+        l1_headroom=l1_headroom,
     )
     preallocated = None
     if output_tensor:
@@ -177,29 +179,31 @@ def test_ring_model_shapes(mesh_device, case):
 
 # Operands in L1 interleaved (GLM-5.3 prefill feeds q_a_proj and the indexer projections from an L1 attention norm):
 # the q_a_proj shape and the narrow-N indexer wk with A, W or both in L1, and a chunked plan with A in L1. The planner
-# budgets the whole L1 bank, so an L1 operand must leave room for the plan's buffers: chunked_n's W (32 MiB a chip)
-# does not, and tt-metal refuses that program at dispatch (its circular buffers would overlap the weight).
+# budgets the L1 bank minus l1_headroom (64 KiB by default) and does not see the operands, so an L1 operand larger than
+# that needs a larger l1_headroom: chunked_n's W (32 MiB a chip, ~256 KiB a bank) passes 384 KiB; without it tt-metal
+# refuses the program at dispatch (its circular buffers would overlap the weight).
 L1 = ttnn.L1_MEMORY_CONFIG
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 GLM5_Q_A_PROJ = ((1, 1, 640, 1536), (1536, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b)
 L1_OPERAND_CASES = [
     *(
-        pytest.param(case, a_mem, w_mem, id=f"{name}-{placement}")
+        pytest.param(case, a_mem, w_mem, None, id=f"{name}-{placement}")
         for name, case in [
             ("glm5_q_a_proj", GLM5_Q_A_PROJ),
             ("glm5_indexer_wk_narrow_n", MODEL_CASES["glm5_indexer_wk_narrow_n"]),
         ]
         for placement, a_mem, w_mem in [("l1_a", L1, DRAM), ("l1_w", DRAM, L1), ("l1_a_w", L1, L1)]
     ),
-    pytest.param(MODEL_CASES["chunked_n"], L1, DRAM, id="chunked_n-l1_a"),
+    pytest.param(MODEL_CASES["chunked_n"], L1, DRAM, None, id="chunked_n-l1_a"),
+    pytest.param(MODEL_CASES["chunked_n"], DRAM, L1, 384 * 1024, id="chunked_n-l1_w-headroom_384k"),
 ]
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-@pytest.mark.parametrize("case, a_mem, w_mem", L1_OPERAND_CASES)
-def test_l1_operands(mesh_device, case, a_mem, w_mem):
+@pytest.mark.parametrize("case, a_mem, w_mem, l1_headroom", L1_OPERAND_CASES)
+def test_l1_operands(mesh_device, case, a_mem, w_mem, l1_headroom):
     a_shape, w_shape, scatter_dim, dtype, weight_dtype = case
     run_case(
         mesh_device,
@@ -213,6 +217,7 @@ def test_l1_operands(mesh_device, case, a_mem, w_mem):
         num_links=2,
         a_memory_config=a_mem,
         w_memory_config=w_mem,
+        l1_headroom=l1_headroom,
     )
 
 
@@ -288,8 +293,17 @@ def test_program_cache(mesh_device):
         (dict(weight_dtype=ttnn.float32), "weight_dtype"),
         (dict(w_shape=(1024, 7168)), "K mismatch"),
         (dict(memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG), "sharded"),
+        (dict(l1_headroom=1 << 24), "l1_headroom"),
     ],
-    ids=["scatter_dim", "single_device_axis", "num_links", "fp32_weight", "k_mismatch", "sharded_output"],
+    ids=[
+        "scatter_dim",
+        "single_device_axis",
+        "num_links",
+        "fp32_weight",
+        "k_mismatch",
+        "sharded_output",
+        "l1_headroom",
+    ],
 )
 def test_refusals(mesh_device, expect_error, overrides, message):
     overrides = dict(overrides)  # the parametrized dict is shared across reruns
