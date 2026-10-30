@@ -66,6 +66,7 @@ class Gemma4Generator:
         self.traces = {}
         # Speculative verify traces, keyed by id(CacheState); see spec_decode().
         self.spec_traces = {}
+        self.spec_inputs = {}
         self.spec_timing = {}
         # Table groups for the verify trace; set by the serving adapter when speculation is enabled.
         self.spec_groups = None
@@ -334,6 +335,9 @@ class Gemma4Generator:
         """
         if not 1 <= batch <= 32:
             raise ValueError("Expected batch1..32")
+        # Any reconfiguration (plain or verify) invalidates what a verify last uploaded to the shared sampler.
+        for shared in getattr(self, "spec_inputs", {}).values():
+            shared["last"].pop("params", None)
 
         def rows(value):
             values = list(value) if isinstance(value, (list, tuple)) else [value] * batch
@@ -1359,14 +1363,22 @@ class Gemma4Generator:
     # equals the draft is exactly speculative sampling (acceptance probability p(draft)), so verification is
     # lossless for sampled requests, not only for greedy ones.
     SPEC_MAX_CANDIDATES = int(os.environ.get("GEMMA_SPEC_MAX_CANDIDATES", "8"))
+    # Verify traces are captured for these candidate widths (each splits the K/V write into P update calls per
+    # layer, ~+0.9 ms at P=4 and ~+3 ms at P=8 per step); a step uses the narrowest width that holds its drafts.
+    SPEC_WIDTHS = tuple(sorted({min(4, SPEC_MAX_CANDIDATES), SPEC_MAX_CANDIDATES}))
 
-    def _spec_entry(self, state, groups):
-        """Capture (once per cache state) the 32-row verify model trace and its sampling trace.
+    def _spec_entry(self, state, groups, P=None):
+        """Capture (once per cache state and width P) the 32-row verify model trace and its sampling trace.
 
         groups: list of lists of page-table keys (layer index or layer kind) that share one table; the verify
-        trace reads one [32, W] row table per group, refreshed per step from the host tables.
+        trace reads one [32, W] row table per group. Per-step scalar inputs (positions, RoPE positions and the
+        per-candidate update positions) arrive in one packed int32 upload and are sliced on device in the trace.
         """
-        key = id(state)
+        if P is None:
+            for width in self.SPEC_WIDTHS:
+                self._spec_entry(state, groups, width)
+            return self.spec_traces[(id(state), self.SPEC_WIDTHS[-1])]
+        key = (id(state), P)
         entry = self.spec_traces.get(key)
         cache_ids = tuple(id(t) for pair in state.kv for t in pair)
         if entry is not None:
@@ -1374,35 +1386,46 @@ class Gemma4Generator:
                 raise ValueError("Speculative trace was captured for different cache tensors or table groups")
             return entry
         start = time.perf_counter()
-        P = self.SPEC_MAX_CANDIDATES
         width = state.capacity // 128
-        zeros32 = torch.zeros(32, dtype=torch.int32)
-        entry = {
-            "state": state,
-            "cache_ids": cache_ids,
-            "groups": groups,
-            "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
-            "positions": self._upload(torch.full((32,), -1, dtype=torch.int32)),
-            "rope_positions": self._upload(zeros32),
-            "update_positions": [self._upload(torch.full((32,), -1, dtype=torch.int32)) for _ in range(P)],
-            "group_tables": [self._upload(torch.zeros(32, width, dtype=torch.int32)) for _ in groups],
-            "logits": self.model.tensor(torch.zeros(1, 1, 32, self.model.config.vocab_size), dim=3,
-                                        dtype=ttnn.bfloat16),
-        }
-        tables = {k: entry["group_tables"][g] for g, keys in enumerate(groups) for k in keys}
-        entry["tables"] = tables
+        # Inputs shared by all widths of this state (one set of host uploads per step).
+        shared = self.spec_inputs.get(id(state))
+        if shared is None or shared["groups"] != groups:
+            shared = {
+                "groups": groups,
+                "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
+                # rows: 0 positions, 1 RoPE positions, 2.. update positions of candidate 0..P_max-1
+                "packed": self._upload(torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32)),
+                "group_tables": [self._upload(torch.zeros(32, width, dtype=torch.int32)) for _ in groups],
+                "logits": self.model.tensor(torch.zeros(1, 1, 32, self.model.config.vocab_size), dim=3,
+                                            dtype=ttnn.bfloat16),
+                "last": {},
+            }
+            self.spec_inputs[id(state)] = shared
+        entry = dict(shared, state=state, cache_ids=cache_ids, P=P)
+        tables = {k: shared["group_tables"][g] for g, keys in enumerate(groups) for k in keys}
+        packed = shared["packed"]
+
+        def row(i):
+            return ttnn.reshape(ttnn.slice(packed, [i, 0], [i + 1, 32]), (32,))
 
         def model_step():
+            positions = row(0)
+            rope = row(1)
+            updates = [row(2 + j) for j in range(P)]
             out = self.model.decode_device(
-                entry["tokens"], entry["positions"], page_tables=tables, kv_cache=state.kv, batch=32,
-                rope_positions=entry["rope_positions"], update_positions=entry["update_positions"])
-            ttnn.copy(out, entry["logits"])
+                shared["tokens"], positions, page_tables=tables, kv_cache=state.kv, batch=32,
+                rope_positions=rope, update_positions=updates)
+            ttnn.copy(out, shared["logits"])
 
         def sample_step():
-            self.sampler(entry["logits"], tt_out_tok=entry["tokens"])
+            self.sampler(shared["logits"], tt_out_tok=shared["tokens"])
 
-        # Warm with every row inactive (position -1: no cache write, no attention row), then capture.
-        logger.info("Warming speculative verify trace")
+        # Warm with every row inactive (position -1: no cache write, no attention row), then capture. The packed
+        # inputs are shared by all widths and may still hold the last verify's positions: reset them first, or
+        # the eager warm-up would rewrite committed K/V.
+        self._refresh(torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32), packed,
+                      "position_refreshes")
+        logger.info(f"Warming speculative verify trace P={P}")
         model_step()
         saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
         sample_step()
@@ -1436,20 +1459,21 @@ class Gemma4Generator:
         (-1 = inactive row) with the page-table row of state slot slots[r]; candidates[r] is its candidate index
         (0 = the request's last committed token, j = its j-th draft). host_tables maps every key of `groups` to the
         current host page table [batch, W] (the same tables a plain decode would upload). sampling_params: per-row
-        lists for configure_sampling (top_k/top_p/temperature/seed, length 32). sample=False returns host logits
-        rows [32, V] instead (greedy/host checks only).
+        lists for configure_sampling (top_k/top_p/temperature/seed, length 32); top_k/top_p/temperature are
+        re-uploaded only when they change. sample=False returns host logits rows [32, V] instead.
         """
-        entry = self._spec_entry(state, groups)
         timing = self.spec_timing
         t0 = time.perf_counter()
-        P = len(entry["update_positions"])
         positions = positions.to(torch.int32)
         candidates = candidates.to(torch.int32)
         live = positions >= 0
         if tuple(tokens.shape) != (32,) or tuple(positions.shape) != (32,):
             raise ValueError("Speculative verify takes exactly 32 rows")
-        if bool((candidates[live] >= P).any()) or bool((candidates[live] < 0).any()):
-            raise ValueError(f"Candidate index outside 0..{P - 1}")
+        need = int(candidates[live].max()) + 1 if bool(live.any()) else 1
+        P = next((w for w in self.SPEC_WIDTHS if w >= need), None)
+        if P is None or bool((candidates[live] < 0).any()):
+            raise ValueError(f"Candidate index outside 0..{self.SPEC_MAX_CANDIDATES - 1}")
+        entry = self._spec_entry(state, groups, P)
         if bool((positions >= state.capacity).any()):
             raise ValueError("Verify position beyond the cache capacity")
         self._validate_tokens(tokens[live])
@@ -1457,18 +1481,29 @@ class Gemma4Generator:
         ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
         ids.reshape(-1)[:] = torch.where(live, tokens.to(torch.int32), torch.zeros_like(positions))
         self._refresh(ids, entry["tokens"], "token_refreshes")
-        self._refresh(positions, entry["positions"], "position_refreshes")
-        self._refresh(positions.clamp_min(0), entry["rope_positions"], "rope_refreshes")
+        packed = torch.full((2 + self.SPEC_MAX_CANDIDATES, 32), -1, dtype=torch.int32)
+        packed[0] = positions
+        packed[1] = positions.clamp_min(0)
         for j in range(P):
-            upd = torch.where(live & (candidates == j), positions, torch.full_like(positions, -1))
-            self._refresh(upd, entry["update_positions"][j], "position_refreshes")
+            packed[2 + j] = torch.where(live & (candidates == j), positions, packed[2 + j])
+        self._refresh(packed, entry["packed"], "position_refreshes")
         t1 = time.perf_counter()
+        last = entry["last"]
         for g, keys in enumerate(groups):
-            table = host_tables[keys[0]].to(torch.int32)
-            self._refresh(table[rows].contiguous(), entry["group_tables"][g], "page_table_refreshes")
+            table = host_tables[keys[0]].to(torch.int32)[rows].contiguous()
+            previous = last.get(("table", g))
+            if previous is None or not torch.equal(previous, table):
+                self._refresh(table, entry["group_tables"][g], "page_table_refreshes")
+                last[("table", g)] = table
         t2 = time.perf_counter()
         if sample:
-            self.configure_sampling(batch=32, **sampling_params)
+            params = tuple(tuple(sampling_params[name]) for name in ("top_k", "top_p", "temperature"))
+            if last.get("params") != params:
+                self.configure_sampling(batch=32, **sampling_params)
+                last["params"] = params
+            else:
+                self._refresh(torch.tensor(sampling_params["seed"], dtype=torch.int32), self.sampler.seeds_tt_tensor,
+                              "seed_refreshes")
         t3 = time.perf_counter()
         ttnn.execute_trace(self.mesh, entry["model_trace"], cq_id=0, blocking=False)
         self.counters["model_replays"] += 1
@@ -1483,6 +1518,7 @@ class Gemma4Generator:
                          ("wait_read", t5 - t4)):
             timing[name] = timing.get(name, 0.0) + dt
         timing["steps"] = timing.get("steps", 0) + 1
+        timing[f"P{P}"] = timing.get(f"P{P}", 0) + 1
         return result
 
     def close(self):
