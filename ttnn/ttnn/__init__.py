@@ -319,6 +319,8 @@ from ttnn.types import (
     KernelBuildOptLevel,
     ScratchpadSpec,
     ScratchpadBinding,
+    SemaphoreSpec,
+    SemaphoreBinding,
     merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
     get_cb_address,

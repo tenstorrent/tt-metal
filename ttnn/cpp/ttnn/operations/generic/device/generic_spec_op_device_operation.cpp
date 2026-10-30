@@ -53,6 +53,9 @@ std::size_t hash_program_spec(const ProgramSpec& spec) {
             combine(*binding.dfb_spec_name, binding.accessor_name, binding.endpoint_type, binding.access_pattern);
             combine(binding.block_size);
         }
+        for (const auto& binding : kernel.semaphore_bindings) {
+            combine(*binding.semaphore_spec_name, binding.accessor_name);
+        }
         for (const auto& binding : kernel.scratchpad_bindings) {
             combine(*binding.scratchpad_spec_name, binding.accessor_name);
         }
@@ -96,6 +99,9 @@ std::size_t hash_program_spec(const ProgramSpec& spec) {
         if (dfb.tile_format_metadata.has_value()) {
             combine(dfb.tile_format_metadata->get_height(), dfb.tile_format_metadata->get_width());
         }
+    }
+    for (const auto& semaphore : spec.semaphores) {
+        combine(*semaphore.unique_id, ttsl::hash::hash_objects_with_default_seed(semaphore.target_nodes));
     }
     for (const auto& scratchpad : spec.scratchpads) {
         combine(*scratchpad.unique_id, scratchpad.size_per_node, scratchpad.data_format_metadata);
