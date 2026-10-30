@@ -468,7 +468,7 @@ jobs:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         CCACHE_COMPRESS: "true"
-        CCACHE_COMPRESSLEVEL: "3"
+        CCACHE_COMPRESSLEVEL: "9"
         # Log ccache operations to a file so remote storage errors are visible in CI.
         # Errors (storage helper failures, S3 timeouts) would otherwise be silent.
         CCACHE_LOGFILE: /tmp/ccache.log
