@@ -494,6 +494,9 @@ Program::Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& 
 }
 
 void Program::populate_from_descriptor(const ProgramDescriptor& descriptor) {
+    // The delegated constructor already recorded this Program. Keep the scope alive so
+    // CreateKernel and SetRuntimeArgs below stay at depth > 1 and are not recorded too.
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     ScopedBusyClock build_busy(kProgramBuildBusy);
 
     if (descriptor.reload_table.has_value()) {
