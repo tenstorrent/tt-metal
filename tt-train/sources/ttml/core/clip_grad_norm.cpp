@@ -127,19 +127,51 @@ void reject_duplicates(
     }
 }
 
-// The two groups are reduced differently, so a parameter in the wrong one silently skews the norm. A tensor
-// distributed over a collapsed 1-D shape carries a single placement for the whole mesh.
+// The two groups are reduced differently, so a parameter in the wrong one silently skews the norm. Only
+// `cluster_axis` is reduced, so a parameter sharded on any other mesh axis would leave each device with the norm of
+// its own piece. A tensor distributed over a collapsed 1-D shape carries a single placement for the whole mesh.
 void validate_placements(
-    const serialization::NamedParameters& parameters, uint32_t cluster_axis, bool expect_sharded) {
+    const serialization::NamedParameters& parameters,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    uint32_t cluster_axis,
+    bool expect_sharded) {
+    const auto tp_size = mesh_shape[static_cast<int32_t>(cluster_axis)];
     for (const auto& [name, tensor] : parameters) {
         if (!tensor->get_requires_grad() || !tensor->is_grad_initialized()) {
             continue;
         }
         const auto& placements = tensor->get_value().tensor_topology().placements();
-        const size_t idx = placements.size() == 1U ? 0U : cluster_axis;
-        const bool is_sharded =
-            idx < placements.size() &&
-            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[idx]);
+        const auto is_shard = [&](size_t axis) {
+            return axis < placements.size() &&
+                   std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+        };
+        if (placements.size() == 1U) {
+            if (is_shard(0U) && mesh_shape.mesh_size() != tp_size) {
+                throw std::logic_error(fmt::format(
+                    "clip_grad_norm_tp: parameter '{}' is sharded across all {} devices, but only cluster_axis {} "
+                    "({} devices) is reduced",
+                    name,
+                    mesh_shape.mesh_size(),
+                    cluster_axis,
+                    tp_size));
+            }
+        } else {
+            for (size_t axis = 0; axis < std::min(placements.size(), mesh_shape.dims()); ++axis) {
+                if (axis != cluster_axis && mesh_shape[static_cast<int32_t>(axis)] > 1U && is_shard(axis)) {
+                    throw std::logic_error(fmt::format(
+                        "clip_grad_norm_tp: parameter '{}' is sharded on mesh axis {}, but only cluster_axis {} is "
+                        "reduced",
+                        name,
+                        axis,
+                        cluster_axis));
+                }
+            }
+        }
+        // With one device on cluster_axis, both groups are reduced the same way.
+        if (tp_size == 1U) {
+            continue;
+        }
+        const bool is_sharded = is_shard(placements.size() == 1U ? 0U : cluster_axis);
         if (is_sharded != expect_sharded) {
             throw std::logic_error(fmt::format(
                 "clip_grad_norm_tp: parameter '{}' is passed as {} but is {} on cluster_axis {}",
@@ -192,11 +224,9 @@ autograd::TensorPtr clip_grad_norm_tp(
         throw std::logic_error(fmt::format(
             "clip_grad_norm_tp: cluster_axis {} out of range for mesh with {} dims", cluster_axis, mesh_shape.dims()));
     }
+    validate_placements(sharded, mesh_shape, cluster_axis, /* expect_sharded */ true);
+    validate_placements(replicated, mesh_shape, cluster_axis, /* expect_sharded */ false);
     const auto tp_size = mesh_shape[static_cast<int32_t>(cluster_axis)];
-    if (tp_size > 1U) {
-        validate_placements(sharded, cluster_axis, /* expect_sharded */ true);
-        validate_placements(replicated, cluster_axis, /* expect_sharded */ false);
-    }
 
     // step1/step3 currently ignore this (their factories build a default compute config) and accumulate
     // Sum[|g|^p] in bf16, so the norm is underestimated for gradients of more than ~1k tiles per device (#63505).
