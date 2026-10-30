@@ -104,10 +104,6 @@ DISTINCT_USERS_MAX_PCC = 0.99
 # Traced and eager run the same programs (the traced ones read their scalars on device), so the caches
 # should agree exactly.
 TRACED_PCC = 0.9999
-# User C (_packed_schedule) holds one partial chunk from position 0. On main, such a chunk's sparse attention
-# depends on how the indexer top-k splits rows across cores, which differs between the traced and eager bounds
-# (#63408: tied scores come back in a different order). Its traced-vs-eager comparison is logged only.
-_TRACED_PARTIAL_FIRST_CHUNK_USER = 2
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 MESH_PARAMS = [
@@ -573,18 +569,10 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
 
         kv_slots = _read_user_slots(caches.kvpe, mesh_device, NUM_LAYERS, cache_slots)
         idx_slots = _read_user_slots(caches.index, mesh_device, full_indexer_rank(config, NUM_LAYERS), cache_slots)
-        strict = [u for u in range(num_users) if u != _TRACED_PARTIAL_FIRST_CHUNK_USER]
-        failures = _compare_slots("traced", kv_slots, idx_slots, [(u + num_users, u) for u in strict], TRACED_PCC)
-        # User C's only chunk is partial from position 0, where main's top-k returns tied keys in a different
-        # order for the traced and eager bounds (#63408). Logged, not asserted; once it matches, drop the exemption.
-        u = _TRACED_PARTIAL_FIRST_CHUNK_USER
-        known = _compare_slots("traced #63408", kv_slots, idx_slots, [(u + num_users, u)], TRACED_PCC)
-        if known:
-            logger.warning(f"[traced] user {u} (partial first chunk) differs, known issue #63408:\n" + "\n".join(known))
-        else:
-            logger.warning(
-                f"[traced] user {u} (partial first chunk) now matches: #63408 looks fixed, drop the exemption"
-            )
+        # Every user, including C, whose only chunk is partial from position 0 (#63408, fixed by #63538).
+        failures = _compare_slots(
+            "traced", kv_slots, idx_slots, [(u + num_users, u) for u in range(num_users)], TRACED_PCC
+        )
         cross = _pcc(kv_slots[0][NUM_LAYERS - 1], kv_slots[3][NUM_LAYERS - 1])
         assert cross < DISTINCT_USERS_MAX_PCC, f"users A and D hold the same KV (PCC {cross:.6f})"
         assert not failures, f"[traced] {len(failures)} mismatch(es):\n" + "\n".join(failures)
