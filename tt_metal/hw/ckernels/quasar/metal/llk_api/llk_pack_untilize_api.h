@@ -30,6 +30,7 @@
  * @tparam block_ct_dim  Width of a single block in tiles.
  * @tparam full_ct_dim   Total width of the tensor row in tiles (default = block_ct_dim).
  * @param pack_output    Output DataFlow Buffer identifier.
+ * @note Use a non-MX output format for tiles other than 32x32.
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim>
 inline void llk_pack_untilize_init(std::uint32_t pack_output) {
@@ -38,13 +39,9 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     // PACR_STRIDE cannot pack MX output formats.
-    const DataFormat output_format = static_cast<DataFormat>(pack_dst_format[output_id]);
     LLK_ASSERT(
         !_llk_pack_untilize_is_strided_(tensor_shape) ||
-            (output_format != DataFormat::MxFp8R && output_format != DataFormat::MxFp8P &&
-             output_format != DataFormat::MxFp6R && output_format != DataFormat::MxFp6P &&
-             output_format != DataFormat::MxFp4 && output_format != DataFormat::MxInt8 &&
-             output_format != DataFormat::MxInt4 && output_format != DataFormat::MxInt2),
+            !is_mx_format(static_cast<DataFormat>(pack_dst_format[output_id])),
         "Strided pack untilize does not support MX output formats");
 
     // Strided pack untilize (every tile shape but 32x32) needs a buffer descriptor that indexes L1 rows.

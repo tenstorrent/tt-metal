@@ -287,6 +287,12 @@ constexpr inline bool is_2x_format(DataFormat format) {
            format == DataFormat::UInt8_2x;
 }
 
+constexpr inline bool is_mx_format(DataFormat format) {
+    return format == DataFormat::MxFp8R || format == DataFormat::MxFp8P || format == DataFormat::MxFp6R ||
+           format == DataFormat::MxFp6P || format == DataFormat::MxFp4 || format == DataFormat::MxInt8 ||
+           format == DataFormat::MxInt4 || format == DataFormat::MxInt2;
+}
+
 typedef struct {
     unsigned l1_addr_16B : 20 __attribute__((packed));
     unsigned format : 8 __attribute__((packed));

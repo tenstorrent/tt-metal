@@ -59,18 +59,6 @@ inline void _llk_pack_untilize_mop_config_(const std::uint8_t buf_desc_id)
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
-// Dest/L1 rows one PACR_STRIDE moves.
-constexpr std::uint32_t PACR_STRIDE_ROWS = 4;
-
-// SET_{SRC,DST}_TILE_FACE_ROW_IDX under TILE_SEL loads all 18 bits of its value field into the tile counter.
-constexpr std::uint32_t TILE_SEL_IDX_LIMIT = 1u << 18;
-
-// Dest rows one face of a tile takes; faces shorter than 8 rows are padded to 8 (see tiny_face_stride).
-constexpr std::uint32_t _pack_untilize_strided_face_dest_rows_(const TensorShape& tensor_shape)
-{
-    return tensor_shape.face_r_dim * tiny_face_stride(tensor_shape);
-}
-
 /**
  * @brief Builds the MOP for pack of a row of tiles, using strided reads to untilize.
  *
@@ -83,8 +71,9 @@ constexpr std::uint32_t _pack_untilize_strided_face_dest_rows_(const TensorShape
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void _llk_pack_untilize_strided_mop_config_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
 {
-    const std::uint32_t face_dest_rows      = _pack_untilize_strided_face_dest_rows_(tensor_shape);
-    const std::uint32_t tile_dest_rows      = tensor_shape.total_num_faces() * face_dest_rows;
+    using ckernel::pack::PACR_STRIDE_ROWS;
+    const std::uint32_t face_dest_rows      = padded_face_rows(tensor_shape);
+    const std::uint32_t tile_dest_rows      = padded_tile_rows(tensor_shape);
     const std::uint32_t num_row_groups      = (tensor_shape.face_r_dim + PACR_STRIDE_ROWS - 1) / PACR_STRIDE_ROWS;
     const std::uint32_t l1_row_stride       = tensor_shape.num_faces_c_dim * FULL_CT_DIM;
     const std::uint32_t block_face_columns  = BLOCK_CT_DIM * tensor_shape.num_faces_c_dim;
@@ -94,11 +83,11 @@ inline void _llk_pack_untilize_strided_mop_config_(const std::uint8_t buf_desc_i
         "Strided pack untilize steps into the second face row only when it follows the first in Dest");
     const std::uint32_t num_outer_loops = tensor_shape.num_faces_r_dim * num_row_groups;
 
-    // Packs one 4-row group of a face, then steps the Dest row counter to the next face in the face row and L1 one column right.
-    const auto pack_face_rows = [buf_desc_id](const std::uint32_t next_face_dest_rows)
+    // Packs one 4-row group of a face, then steps L1 one face column right and Dest to the next face along the output row.
+    const auto pack_face_rows = [buf_desc_id](const std::uint32_t dest_rows_to_next_face)
     {
         return TT_OP_PACR_STRIDE(
-            next_face_dest_rows / PACR_STRIDE_ROWS /*Src_Row_Idx_or_Inc_Mul4*/,
+            dest_rows_to_next_face / PACR_STRIDE_ROWS /*Src_Row_Idx_or_Inc_Mul4*/,
             1 /*Src_Row_Idx_Inc*/,
             0 /*L1_Tile_Idx_or_Tile_Idx_Inc, encodes +1*/,
             1 /*Tile_Idx_Inc*/,
@@ -132,7 +121,7 @@ constexpr bool _llk_pack_untilize_is_strided_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Initializes the packer for pack untilize of contiguous tiles.
+ * @brief Initializes the packer for pack untilize.
  *
  * Sets up the cfg registers with tile and tensor shape parameters which inform how TT_OP_PACR_UNTILIZE (32x32 tiles)
  * or TT_OP_PACR_STRIDE (every other tile shape) reads the data, then programs the MOP.
@@ -142,6 +131,7 @@ constexpr bool _llk_pack_untilize_is_strided_(const TensorShape& tensor_shape)
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 16 - 31
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
+ * @note Program buf_desc_id with L1AccessMode::Strided when @ref _llk_pack_untilize_is_strided_ is true.
  * @note The dst register is produced by the datacopy trio: on the unpack thread pair with @ref _llk_unpack_unary_operand_init_ (T0) and on the math thread with
  *       @ref _llk_math_eltwise_unary_datacopy_init_ (T1, A2D).
  * @note @ref _llk_pack_untilize_ is the matching execute call on this thread.
@@ -177,7 +167,7 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
     cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32]  = stride_cfg.val[1];
 
     // Rows of a 4-row group past face_r_dim belong to the next face: mask them and skip their L1 writes.
-    constexpr std::uint32_t row_group_mask = (1u << PACR_STRIDE_ROWS) - 1;
+    constexpr std::uint32_t row_group_mask = (1u << ckernel::pack::PACR_STRIDE_ROWS) - 1;
     const std::uint32_t row_mask           = (row_group_mask << tensor_shape.face_r_dim) & row_group_mask;
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // row k goes to start + k * STRIDE_OFFSET_0
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_COL_MASK_RMW, 0);
@@ -215,11 +205,10 @@ inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_
         return;
     }
 
-    const std::uint32_t tile_dest_rows = tensor_shape.total_num_faces() * _pack_untilize_strided_face_dest_rows_(tensor_shape);
-    const std::uint32_t l1_row_idx     = l1_tile_idx * tensor_shape.num_faces_c_dim;
-    const std::uint32_t dest_row_idx   = dest_idx * tile_dest_rows;
-    LLK_ASSERT(l1_row_idx < TILE_SEL_IDX_LIMIT, "L1 row index exceeds the 18-bit SET_DST_TILE_FACE_ROW_IDX value field");
-    LLK_ASSERT(dest_row_idx < TILE_SEL_IDX_LIMIT, "Dest row index exceeds the 18-bit SET_SRC_TILE_FACE_ROW_IDX value field");
+    const std::uint32_t l1_row_idx   = l1_tile_idx * tensor_shape.num_faces_c_dim;
+    const std::uint32_t dest_row_idx = dest_idx * padded_tile_rows(tensor_shape);
+    LLK_ASSERT(l1_row_idx < ckernel::trisc::TILE_SEL_IDX_LIMIT, "L1 row index exceeds the 18-bit SET_DST_TILE_FACE_ROW_IDX value field");
+    LLK_ASSERT(dest_row_idx < ckernel::trisc::TILE_SEL_IDX_LIMIT, "Dest row index exceeds the 18-bit SET_SRC_TILE_FACE_ROW_IDX value field");
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_row_idx);
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, dest_row_idx);
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

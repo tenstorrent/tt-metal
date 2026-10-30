@@ -9,6 +9,9 @@
 
 namespace ckernel::pack
 {
+// Dest/L1 rows one PACR_STRIDE moves.
+constexpr std::uint32_t PACR_STRIDE_ROWS = 4;
+
 // Pack untilize stride config register struct
 // Covers ADDR32 54-55 (THCON_PACKER0_REG1)
 constexpr std::uint32_t NUM_WORDS_PACK_UNTILIZE_STRIDE_CFG = 2;
