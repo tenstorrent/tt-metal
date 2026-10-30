@@ -95,6 +95,18 @@ per user (the synchronous chain 14.13, the reload path 11.0). The catalog's 1 M 
 (plan 2c: on / off at 128 x 128, minimal warm-ups), and the remaining gap to the 48 ms device step from the
 step-profile arm (`GLM53_VLLM_STEP_PROFILE=60:120`).
 
+### The gap itself (2026-10-30 02:30)
+
+The 68 ms served step against the 48 ms device step is the replay call: `GLM53MeshModel.replay` blocks until the
+device finished (`ttnn.execute_trace(blocking=True)`), so under async scheduling the engine thread builds step
+N + 1 only after step N ran, and the plugin's overlap (499 of 512 bench submissions overlapped an outstanding step)
+covers the read alone. `GLM53_DECODE_REPLAY_BLOCKING=0` (fa459998ede) returns at enqueue; the plugin's read event
+(`read_decode_output(async_read=True)`) completes the step on the output thread. With it the chain's prefix-cache
+token record cannot be written at staging (step N + 1's staging may precede step N's read): it is written when the
+read lands, from the physical slot and position captured at submission. The sibling served models replay with
+`blocking=False` (Gemma 4's generator, drafter and spec paths). A/B: `ab_async_nb_32` / `nb_128` against the
+`on` arms, then the a-e gate `nb_gate_32` before the default flips.
+
 ## Step 4, the prefill / decode interleave: design (2026-10-29 19:30)
 
 Today the adapter refuses a decode step while a slot is mid-prefill (`_stage_rows`: `supports_slot_mask` is unset on

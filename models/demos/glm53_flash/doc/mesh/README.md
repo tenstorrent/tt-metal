@@ -1581,6 +1581,22 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 02:30: the served parity gap is the blocking replay
+
+`served_8x4_ab_async_on_32` (async on, batch 32, 128 x 128, APC on, resident): ITL 68.2 ms mean / 69.1 median
+(14.7 tok/s per user), TTFT 5.57 s, the adapter's perf line 61 ms "host wall incl. readback"; the plugin's overlap
+counters say 499 of the 512 submissions after boot overlapped an outstanding step. Both are true at once because
+`GLM53MeshModel.replay` runs `ttnn.execute_trace(blocking=True)`: the engine thread sits inside the replay for the
+whole device step (48 ms) and the plugin's overlap hides only the read. Fix (fa459998ede): `GLM53_DECODE_REPLAY_BLOCKING=0`
+returns at enqueue and the plugin's read event completes the step, so the engine builds step N + 1 while the device
+runs step N (the explicit sync before a KDA snapshot save already orders the save after the replay). The default
+stays blocking until the A/B verdict (`ab_async_nb_32` / `nb_128`, then the a-e gate `nb_gate_32`). Companion fix:
+the chain step's prefix-cache token record was written at staging from the slot's last read id, which under async
+scheduling (step N + 1 staged before step N's read lands) could be the id of the step before; it is now written
+when the read lands, keyed by the physical slot and position captured at submission (the reads of a chain land in
+submission order; a reload step's host-fed token is still recorded at staging). The host fake drains reads in
+command-queue order and the multi-turn resident case stages two chain steps before reading either.
+
 ### 2026-10-30 02:10: the catalog carries the gate; the async A/B arms; the capstone waiter
 
 The 1 M profile of the TIS catalog (arg/glm53_flash_galaxy 339f128bb) now serves what async_r4 validated:

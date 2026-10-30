@@ -113,6 +113,11 @@ the full profile and ~3 min minimal (to be measured by the first pair). The verd
 user and TTFT next to the adapter's perf line (device step, chain count). Spec decode adds one long-ISL point at
 batch >= 8 when the acceptance depends on the context, still never the 1 M point.
 
+Arms queued 2026-10-30 (runner budget 5400 s each, ~14 min per bench arm): `ab_async_on_32` (ITL 68.2 ms, TTFT
+5.57 s), `ab_async_off_32`, `ab_async_on_128`, `ab_async_off_128`, `profile_step_32` (`GLM53_VLLM_STEP_PROFILE=60:120`),
+`ab_async_nb_32` / `ab_async_nb_128` (`GLM53_DECODE_REPLAY_BLOCKING=0`: the replay no longer blocks the engine
+thread, doc/mesh/resident_decode.md), `nb_gate_32` (the a-e gate under the knob); the capstone follows.
+
 ## 3. Workstream B: the decode step to the roofline floor
 
 `tt/roofline.py` (`tests/test_roofline_host.py`) models the step from measured per-op rows (refreshed 2026-10-29 from the per-layer decode profiles today_8x4_dsa3 / kda4: the stream expert op 264 us, the gather glue 175 + 67 us, the padded reduce-scatter 269 us, the mHC pre-block 82 us; model 64.9 ms vs the 61.5 ms e2e step); floor 29.0 ms at 4
