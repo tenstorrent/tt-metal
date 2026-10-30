@@ -1028,3 +1028,17 @@ line that DRAM holds row records, tiles only in L1).
 - 20:20 OWNER: work autonomously; accept wins (perf or memory) when accuracy meets the bar; no Python-built op stays non-prepared -> note OV-23 to every P/FIX/X agent, and P.14 PREPARED_ALL queued after P.13 (census of the model's Python-built ops + move each onto the prepared path). Order: P.12 -> profile -> P.4 -> P.5 -> P.11 -> merge/rebuild -> P.13 -> P.14 -> profile.
 - 20:25 P.12 A/B: accuracy identical on every metric, gate PASS, wall 379.6 on / 392.8 off (spread 66 / 21), host ~22 -> ~7 ms a chunk (agent cProfile): overseer ACCEPTED (owner delegation: clean win, only removes work).
 - 20:40 Chain armed (tmux chain, /scratch/dnijemcevic/chain_p12_prof_p11.sh): waits for the P.12 orchestrator (gate + commit), then the LOW profile series (device / wall / host), then orchestrator --until P.11 (run_ds41_p11.sh). Then merge lowbit @ 9e5e0556b80 + rebuild, P.13, P.14 (--until P.14), profile again.
+- 22:45 P.12 committed (351d4355952, pushed). Profile series LOW done (20:50-22:18): device 217.0 -> 201.4 ms at 0k, 281.5
+  -> 261.6 at 512k (-8 %, attention 71 -> 62 / 79 -> 67, q_a 9.2 -> 3.4); wall 412 -> 352 at 0k, 422 -> 388 at 512k.
+  Host profile (cProfile, 5 warm chunks at 0k): main thread busy the whole chunk = host-bound; 2,721 ttnn op launches a
+  chunk at ~82 us = 224 ms, dealloc 1,908 x 16 us = 30 ms, fused MoE head _run 40 x 0.7 ms = 28 ms; ckv_bfp4 7 ms and
+  bfp_round 2 ms after P.12. Profile page v3 https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc ; 4-bit page v10 (FIX.14
+  done section). P.4 attempt 3 running since 22:18 (orchestrator --until P.11). Candidate after P.14: fewer op launches
+  (or trace capture of a chunk) - the host is the limit.
+- 23:45 P.4 REJECTED by the overseer: accuracy bit-identical, but no measurable wall gain (A/B 431.0 on / 427.4 off;
+  agent's cProfile -13 ms host a chunk: only 212 of the planned 474 gather sites remain after P.8-P.10 / the fused MoE)
+  and fragile: its persistent buffers, allocated mid-forward, move later tensors so the fused MoE tail's program cache
+  (tail_a2a.py, 16 entries for 40 layers, keyed on ADDRESSES) rebuilds programs (612 vs 426 ms without its settle
+  step; 19-23 misses every other run on a golden-prefix reload). DS41-146. Root cause added to P.14 (key tail_a2a's
+  cache on shape, patch addresses); persistent CCL outputs can be retried after it. Owner told in the morning report.
+- 00:15 P.5 ACCEPTED by the overseer (delegation): RoPE fork ttnn.bringup.rotary_embedding_indexed uniform=True (one program for the mesh when every chip's offset is 0, refused otherwise), 136 calls a chunk, host 101 -> 52 us a call; accuracy identical on all 102 metrics, gate PASS; wall A/B 408.6 on / 421.0 off, agent's in-process 438.6 -> 399.7.

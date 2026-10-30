@@ -1,0 +1,77 @@
+{
+ "upstream_sha": "d2dc8639a5fa9c21c60a52cfd3f01619ceb1d592",
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_metadata_matches_scalar[blackhole-torus-xy-8x4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-repr-KV-non_padded-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-repr-KV-padded_partial-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-repr-Q-non_padded-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-repr-Q-padded_partial-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-small-KV-non_padded-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-small-KV-padded_partial-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-small-Q-non_padded-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_multi_iteration_prefill[blackhole-8x4-small-Q-padded_partial-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_concat_prefix[prefix_memory_config0-0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_concat_prefix[prefix_memory_config1-32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_concat_prefix_rejects_padding[padded_shape0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_concat_prefix_rejects_padding[padded_shape1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_logical_frequency_width[33-33]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_logical_frequency_width[33-64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_logical_frequency_width[64-33]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_padded_default[metadata]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_rotary_embedding_indexed::test_rotary_embedding_indexed_padded_default[scalar]": {
+   "original": "passed",
+   "fork": "passed"
+  }
+ }
+}
