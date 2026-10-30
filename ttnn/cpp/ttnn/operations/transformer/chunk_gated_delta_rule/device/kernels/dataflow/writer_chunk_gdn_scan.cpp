@@ -4,6 +4,7 @@
 // Phase B (scan) writer, value-parallel. This core produced ONE V-block (vb) of head h:
 // columns [vb*Vt, vb*Vt+Vt) of the full V dimension. It writes that slice back into the full
 // tensors o [BH, NC, C, V] and final_state [BH, K, V] using DRAM row stride Vt_full.
+// GDN_O_ON_READER (fused receivers): the reader drains o on the other NoC; this kernel writes only the final state.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -41,6 +42,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cbout(cb_out);
 
+#ifndef GDN_O_ON_READER
     // o [BH, NC, C, V]: scatter this V-block back — row stride Vt_full, column offset vb*Vt.
     for (uint32_t c = 0; c < NC; c++) {
         {
@@ -59,6 +61,10 @@ void kernel_main() {
         noc.async_write_barrier();
         cbout.pop_front(cv);
     }
+#else
+    (void)o_acc;
+    (void)cbout;
+#endif
 
     // final_state [BH, K, V]: same V-block slicing (row stride Vt_full over K rows).
     CircularBuffer cbfs(cb_final);

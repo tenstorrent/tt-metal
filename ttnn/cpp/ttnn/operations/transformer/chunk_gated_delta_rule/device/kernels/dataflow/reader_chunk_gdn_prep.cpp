@@ -6,8 +6,9 @@
 // No initial state — the prep phase is state-independent. Device 2.0 API.
 // The reads of one item are issued as one flight behind a single read barrier: the compute cannot start an
 // item before q and k have landed, and at kickoff every producer of the fused program reads at once, so each
-// extra barrier is a contended round trip. The constants are not read from DRAM: every producer would fetch
-// the same few pages from one bank at kickoff.
+// extra barrier is a contended round trip. The constants are built in L1 (chunk_gdn_prep_constants.hpp): here in
+// the phased prep, by the producer's writer in the fused program (GDN_FUSED_PRODUCER), so a fused producer's first
+// read barrier waits only for its DRAM reads.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -19,30 +20,17 @@
 #endif
 #include "chunk_gdn_handoff.hpp"
 #include "chunk_gdn_gate_read.hpp"
+#if !defined(GDN_FUSED_PRODUCER)
+#include "chunk_gdn_prep_constants.hpp"
+#endif
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
-constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
-// Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
-// Loaded once into the cb_u slot (17), which the stable-form prep no longer uses.
-constexpr uint32_t cb_mask = 17;
-
-// The constants are built in L1 from one face of ones (kernel_main): these two NoC helpers sit out of line because
-// the prep program's binaries run close to the kernel-config budget in watcher builds.
-constexpr uint32_t kFaceWords = 256, kFaceBytes = kFaceWords * 4;
-__attribute__((noinline)) static void zero_cb(const Noc& noc, const CircularBuffer& cb, uint32_t bytes) {
-    noc.async_write_zeros(cb, bytes);
-}
-// Loopback copy of the face at src_addr (this core's L1) to byte offset `offset` of cb's write slot.
-__attribute__((noinline)) static void copy_face(
-    const Noc& noc, uint32_t src_addr, const CircularBuffer& cb, uint32_t offset) {
-    UnicastEndpoint self;
-    const auto src = noc_traits_t<UnicastEndpoint>::src_args_type{
-        .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr};
-    noc.async_read(self, cb, kFaceBytes, src, {.offset_bytes = offset});
-}
-static_assert(cb_mask == gdn_handoff::kCbU, "mask CB index drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
+    // Kernel start on the wall clock: the fused kickoff wait is counted from here.
+    volatile uint32_t tt_reg_ptr* const wall_lo =
+        reinterpret_cast<volatile uint32_t tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    const uint32_t t_start = wall_lo[0];
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);
@@ -197,108 +185,73 @@ void kernel_main() {
         gdn_gate::settle(cb_g, hc / NC, hc % NC, Ct, g_src, tb_f);
         gdn_gate::settle(cb_beta, hc / NC, hc % NC, Ct, b_src, tb_f);
     };
-    auto publish_item = [&]() __attribute__((noinline)) {
+    // q/k/v go out before the gate settle, g/beta after it: the compute waits for the gates only at their first
+    // readers (pp_p1 / pp_decay), so the settle overlaps the q/k norm instead of delaying the item's start.
+    auto publish_qkv = [&]() __attribute__((noinline)) {
         publish(cb_q, ck);
         publish(cb_k, ck);
         publish(cb_v, cv);
+    };
+    auto publish_gates = [&]() __attribute__((noinline)) {
         publish(cb_g, Ct);
         publish(cb_beta, Ct);
     };
 
-    // Constants in L1: eye and tril (diagonal included) [Ct x Ct tiles], ones [Ct x Ct tiles], the quadrant masks
-    // Qtl, Qbr, Q10 (tiles 0, 1, 2). An fp32 tile is four 16x16 faces: (0) rows 0-15 cols 0-15, (1) rows 0-15
-    // cols 16-31, (2) rows 16-31 cols 0-15, (3) rows 16-31 cols 16-31. zero_constants: reserve and zero fill (own
-    // barrier). fill_constants: one face of ones by RISC stores, NoC loopback copies of that face, the diagonal
-    // patterns by RISC stores; the caller ends the copies with a read barrier and pushes the four CBs.
-    constexpr uint32_t kOne = 0x3F800000u;
-    CircularBuffer eye(cb_eye), tril(cb_tril), ones(cb_ones), mask(cb_mask);
-    auto zero_constants = [&]() {
-        eye.reserve_back(cc);
-        tril.reserve_back(cc);
-        ones.reserve_back(cc);
-        mask.reserve_back(3);
-        zero_cb(noc, eye, cc * tb_f);
-        zero_cb(noc, tril, cc * tb_f);
-        zero_cb(noc, mask, 3 * tb_f);
-        noc.write_zeros_l1_barrier();
-    };
-    auto fill_constants = [&]() {
-        const uint32_t ones_face = ones.get_write_ptr();
-        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones_face);
-        for (uint32_t i = 0; i < kFaceWords; i++) {
-            w[i] = kOne;
-        }
-        for (uint32_t t = 0; t < Ct; t++) {
-            volatile tt_l1_ptr uint32_t* e =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr() + (t * Ct + t) * tb_f);
-            volatile tt_l1_ptr uint32_t* l =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tril.get_write_ptr() + (t * Ct + t) * tb_f);
-            for (uint32_t f = 0; f < 4 * kFaceWords; f += 3 * kFaceWords) {  // faces 0 and 3
-                for (uint32_t r = 0; r < 16; r++) {
-                    e[f + r * 17] = kOne;
-                    for (uint32_t q = 0; q <= r; q++) {
-                        l[f + r * 16 + q] = kOne;
-                    }
-                }
-            }
-        }
-        asm volatile("fence");
-        auto copy = [&](const CircularBuffer& cb, uint32_t tile, uint32_t face) {
-            copy_face(noc, ones_face, cb, tile * tb_f + face * kFaceBytes);
-        };
-        for (uint32_t t = 0; t < cc; t++) {
-            for (uint32_t f = (t == 0) ? 1u : 0u; f < 4; f++) {
-                copy(ones, t, f);
-            }
-        }
-        for (uint32_t rt = 0; rt < Ct; rt++) {
-            for (uint32_t ct = 0; ct < rt; ct++) {
-                for (uint32_t f = 0; f < 4; f++) {
-                    copy(tril, rt * Ct + ct, f);
-                }
-            }
-            copy(tril, rt * Ct + rt, 2);
-        }
-        constexpr uint32_t kMaskFaces[3] = {0, 3, 2};  // Qtl, Qbr, Q10: the all-ones quadrant of each mask tile
-        for (uint32_t t = 0; t < 3; t++) {
-            copy(mask, t, kMaskFaces[t]);
-        }
-    };
-    auto publish_constants = [&]() {
-        eye.push_back(cc);
-        tril.push_back(cc);
-        ones.push_back(cc);
-        mask.push_back(3);
-    };
-
-    // Kickoff: the first item's reads in flight while the constants are filled; one barrier for both.
-    zero_constants();
-    if (kickoff_wait_cycles != 0) {
-        riscv_wait(kickoff_wait_cycles);
-    }
+    // Kickoff.
     const uint32_t hc0 = wi_count > 0 ? item_wi(0) : 0;
+#if defined(GDN_FUSED_PRODUCER)
+    // The writer builds the constants. A staggered producer starts its first read kickoff_wait_cycles after the
+    // kernel start (the factory's stagger, measured from the start, not from the end of the constants build).
+    if (kickoff_wait_cycles != 0) {
+        while (wall_lo[0] - t_start < kickoff_wait_cycles) {
+        }
+    }
     {
         DeviceZoneScopedN("rd_kick");
         if (wi_count > 0) {
             issue_item(hc0);
         }
-        fill_constants();
         noc.async_read_barrier();
     }
     if (wi_count > 0) {
+        publish_qkv();
         settle_item(hc0);
-        publish_item();
+        publish_gates();
     }
-    publish_constants();
+#else
+    // The phased prep (no stagger): the first item's DRAM reads go out first and the constants are built while they
+    // are in flight, one barrier for both. Then only the eye goes out ahead of q/k/v; the gates are settled and
+    // published after q/k/v (see publish_qkv), the tril pattern after the gates.
+    (void)kickoff_wait_cycles;
+    (void)t_start;
+    {
+        DeviceZoneScopedN("rd_kick");
+        if (wi_count > 0) {
+            issue_item(hc0);
+        }
+        gdn_const::issue_eye<Ct>(noc);
+        gdn_const::issue_rest<Ct>(noc);
+        noc.async_read_barrier();
+    }
+    gdn_const::finish_eye<Ct>();
+    if (wi_count > 0) {
+        publish_qkv();
+        settle_item(hc0);
+        publish_gates();
+    }
+    gdn_const::finish_rest<Ct>();
+#endif
 
     for (uint32_t i = 1; i < wi_count; i++) {
         const uint32_t hc = item_wi(i);
         {
+            // (The profiler hashes a zone's name, file and line to 16 bits: rd_item sits where it does not collide.)
             DeviceZoneScopedN("rd_item");
             issue_item(hc);
             noc.async_read_barrier();
         }
+        publish_qkv();
         settle_item(hc);
-        publish_item();
+        publish_gates();
     }
 }

@@ -4,11 +4,13 @@
 // Program factory for the fused prep→scan chunk_gdn op: ONE program, two disjoint core sets.
 // PRODUCER cores (NP per head, or one pool of P serving every head) run {unchanged prep reader, unchanged
 // prep compute, fused writer}; per head h, NV RECEIVER cores run {fused-receiver reader variant, unchanged
-// scan compute, unchanged scan writer}. Receiver (h, v) is exactly the phased scan's V-block core — it carries the
+// scan compute, scan writer}. Receiver (h, v) is exactly the phased scan's V-block core — it carries the
 // state slice S[:, v*Vtl : (v+1)*Vtl] and produces that V-slice of o — fed over the NoC instead of from DRAM. Each
 // producer's writer hands the 7 computed intermediates of chunk c straight into the head's NV receivers' CBs: the six
 // V-independent tensors as multicasts to the head's 1xNV row rectangle, v_beta as NV per-receiver slice writes — zero
-// DRAM intermediates.
+// DRAM intermediates. The receiver's reader (NOC_0) also writes its o slices to DRAM, the scan writer (NOC_1) only the
+// final state: NOC_1 routes up then left, so o on NOC_1 would run west along the DRAM-endpoint rows over the hand-off
+// links of the heads in those rows.
 //
 // Geometry (computed by fused_placement() in chunk_gdn_device_operation.cpp, which the host-side
 // geometry tests check per grid). Placement 0 (row-major):
@@ -74,12 +76,23 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
-// Kickoff staggering (cycles at the 1.35 GHz core clock), keeping chunk 0's reads out of one burst: a producer
-// whose first chunk is c waits c * kProducerKickoffStaggerCycles (chunk c is needed c receiver steps after
-// chunk 0); receivers issue their first credits, then hold the initial-state read back by
-// kReceiverKickoffWaitCycles.
-constexpr uint32_t kProducerKickoffStaggerCycles = 4050;  // ~3 us
+// Kickoff staggering (cycles at the 1.35 GHz core clock). Chunk 0's producers read first: a producer whose first
+// chunk is c > 0 waits kProducerKickoffLeadCycles plus (c - 1) * kProducerKickoffStaggerCycles. The lead is shorter
+// than chunk 0's own read (~3.6 us): chunk 0's producers publish q/k/v right after their read barrier and finish the
+// constants behind them, while a staggered producer builds its constants inside the wait, so a ~1 us lead puts
+// chunk 1's VALID about one scan step behind chunk 0's. Chunk c is needed c receiver steps after chunk 0, so the
+// stagger stays below the fastest scan step (~2.1 us): a stagger longer than the step delays the first NP chunks (the
+// chain waits on each one) and, in a production-bound pool, idles the late producers for up to c_first * stagger.
+// Producers carrying the program's maximum item count are never staggered: in a production-bound run (the pool) they
+// bound the op one-for-one and do not wait on credits, so a kickoff wait delays the op by its full length. Every other
+// producer has at least one item (~14 us) of slack, more than its stagger.
+// Receivers issue their first credits, then hold the initial-state read back by kReceiverKickoffWaitCycles.
+constexpr uint32_t kProducerKickoffLeadCycles = 1350;     // ~1 us
+constexpr uint32_t kProducerKickoffStaggerCycles = 2025;  // ~1.5 us
 constexpr uint32_t kReceiverKickoffWaitCycles = 5400;     // ~4 us
+constexpr uint32_t producer_kickoff_wait_cycles(uint32_t c_first, bool busiest) {
+    return (c_first == 0 || busiest) ? 0u : kProducerKickoffLeadCycles + (c_first - 1) * kProducerKickoffStaggerCycles;
+}
 
 // CB index plan — kept in sync with the prep/scan compute + dataflow kernels (post-renumber).
 // Uniquely named (fcb) so it does not ODR-clash with the phased factory's pcb:: under unity builds.
@@ -169,6 +182,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const CoreRangeSet rcv_set(rcv_cores);
     const CoreRangeSet prod_set(prod_cores);
     const CoreRangeSet union_set = rcv_set.merge(prod_set);
+
+    // Hand-off NoC per producer. The writer's NoC (NOC_1 on Blackhole) moves only -x / -y, and the row-local
+    // layout keeps every HOME producer's writes on its own head's row segment. A pool EXTRA that sits in a row
+    // holding receivers (the leftover column east of the row segments) serves every head: on NOC_1 its writes run
+    // west over that row's home links, and to a receiver in a lower row they wrap the torus column. Those extras
+    // hand off on the other NoC instead (their writer and reader swap NoCs, a static per-core choice, no dynamic
+    // mode): its +x / +y routes leave the row on the links the home producers' writes never use. Extras in rows
+    // without receivers keep the writer's NoC (their -x legs stay in the extras' own rows). The predicate is
+    // fused_flip_noc (chunk_gdn_device_operation.cpp): get_dynamic_runtime_args addresses the flipped reader by it.
+    const std::vector<bool> flip_noc = fused_flip_noc(layout, grid.y, BH);
+    std::vector<CoreCoord> prod_main_cores, prod_flip_cores;
+    for (uint32_t p = 0; p < P; p++) {
+        (flip_noc[p] ? prod_flip_cores : prod_main_cores).push_back(prod_cores[p]);
+    }
+    const CoreRangeSet prod_main_set(prod_main_cores);
 
     ProgramDescriptor desc;
     auto add_cb = [&](const CoreRangeSet& on,
@@ -315,11 +343,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // ---- Receiver-side CT args: the phased SCAN layout at the V-slice width, with Vt_full for strides ----
     const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, Vt};
 
-    // Fused-receiver reader: s0 is its ONLY DRAM tensor (chain of one accessor, starting at CT
-    // index 4), then the semaphore ids and the credit-word location as trailing args, and the protocol tag
-    // LAST (the kernel static_asserts on it).
+    // Fused-receiver reader: its DRAM tensors are s0 (read) and o (written: the reader RISC's NOC_0 keeps the o
+    // traffic off the hand-off NoC), a chain of two accessors starting at CT index 4, then the semaphore ids and the
+    // credit-word location as trailing args, and the protocol tag LAST (the kernel static_asserts on it).
     std::vector<uint32_t> receiver_ct = ct_scan;
     TensorAccessorArgs(*in.initial_state.buffer()).append_to(receiver_ct);
+    TensorAccessorArgs(*outputs[0].buffer()).append_to(receiver_ct);
     receiver_ct.push_back(sem_ready_id);
     receiver_ct.push_back(sem_valid_id);
     receiver_ct.push_back(sem_init_id);
@@ -337,7 +366,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     KernelDescriptor prep_reader{
         .kernel_source = kdir + "dataflow/reader_chunk_gdn_prep.cpp",
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
-        .core_ranges = prod_set,
+        .core_ranges = prod_main_set,
         .compile_time_args = prep_reader_ct,
         // The fused producer variant: items from the shared producer map instead of a strided slice.
         .defines = {{"GDN_FUSED_PRODUCER", "1"}},
@@ -380,12 +409,25 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     KernelDescriptor fused_writer{
         .kernel_source = kdir + "dataflow/writer_chunk_gdn_fused.cpp",
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
-        .core_ranges = prod_set,
+        .core_ranges = prod_main_set,
         .compile_time_args = fused_writer_ct,
         .defines = writer_defines,
         .config = WriterConfigDescriptor{},
     };
     fused_writer.runtime_args.reserve(P);
+
+    // The flipped extras (see flip_noc): the same reader and writer with their NoCs swapped, same RISCs.
+    const NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    const NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    KernelDescriptor prep_reader_flip = prep_reader;
+    const CoreRangeSet prod_flip_set = prod_flip_cores.empty() ? CoreRangeSet() : CoreRangeSet(prod_flip_cores);
+    prep_reader_flip.core_ranges = prod_flip_set;
+    prep_reader_flip.config =
+        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = writer_noc};
+    KernelDescriptor fused_writer_flip = fused_writer;
+    fused_writer_flip.core_ranges = prod_flip_set;
+    fused_writer_flip.config =
+        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = reader_noc};
 
     KernelDescriptor receiver_reader{
         .kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp",
@@ -411,6 +453,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = rcv_set,
         .compile_time_args = scan_writer_ct,
+        .defines =
+            {{"GDN_O_ON_READER", "1"}},  // o is drained by the receiver reader; this kernel writes the final state
         .config = WriterConfigDescriptor{},
     };
     scan_writer.runtime_args.reserve(R);
@@ -437,6 +481,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const uint32_t head_words = 1 + (NV + 1) / 2;
     std::vector<uint32_t> producer_table((P + 1) / 2, 0);
     std::vector<uint32_t> head_table(BH * head_words, 0);
+    std::vector<uint32_t> head_table_flip(BH * head_words, 0);  // rectangles ordered for the flipped writers' NoC
     for (uint32_t p = 0; p < P; p++) {
         producer_table[p / 2] |= pack_xy(prod_cores[p]) << (16 * (p % 2));
     }
@@ -466,6 +511,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             }
         }
     }
+    const uint32_t max_items = *std::max_element(n_items.begin(), n_items.end());
     TT_FATAL(
         std::accumulate(n_items.begin(), n_items.end(), 0u) == BH * NC,
         "chunk_gdn_fused: the producer map does not cover the {} items exactly once",
@@ -494,23 +540,38 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         const CoreCoord& l_start = writer_on_noc1 ? l_br : l_tl;  // NOC_1: bottom-right -> top-left
         const CoreCoord& l_end = writer_on_noc1 ? l_tl : l_br;
         head_table[h * head_words] = pack_xy(l_start) | (pack_xy(l_end) << 16);
+        head_table_flip[h * head_words] = pack_xy(l_end) | (pack_xy(l_start) << 16);
         for (uint32_t v = 0; v < NV; v++) {
             head_table[h * head_words + 1 + v / 2] |= pack_xy(rcv_cores[h * NV + v]) << (16 * (v % 2));
+            head_table_flip[h * head_words + 1 + v / 2] |= pack_xy(rcv_cores[h * NV + v]) << (16 * (v % 2));
         }
 
         // Receiver (h, v): its V-slice index, s0 from DRAM, N_INIT (the distinct producers serving this
-        // head, each bumps `init` once), the kickoff hold, the map and the DRAM row offset of its initial
-        // state; the producers' coords are common. The writer takes the DRAM row of its head.
+        // head, each bumps `init` once), the kickoff hold, the map, o's address, the DRAM row offset of its
+        // initial state and its output row of o; the producers' coords are common. The writer takes the DRAM
+        // row of its head for the final state.
         for (uint32_t v = 0; v < NV; v++) {
             const CoreCoord& rc = rcv_cores[h * NV + v];
             std::vector<std::variant<uint32_t, Buffer*>> r_args = {
                 h, v, NC, s0_buf, n_init[h], kReceiverKickoffWaitCycles, BH, map.NPH, map.NX, map.num, map.den};
+            TT_FATAL(
+                r_args.size() == fused_rt::kReceiverOArg,
+                "chunk_gdn_fused: receiver o arg slot moved ({} != {})",
+                r_args.size(),
+                fused_rt::kReceiverOArg);
+            r_args.push_back(o_buf);
             TT_FATAL(
                 r_args.size() == fused_rt::kReceiverHeadOffsetArg,
                 "chunk_gdn_fused: receiver head_offset arg slot moved ({} != {})",
                 r_args.size(),
                 fused_rt::kReceiverHeadOffsetArg);
             r_args.push_back(h0);
+            TT_FATAL(
+                r_args.size() == fused_rt::kReceiverORowArg,
+                "chunk_gdn_fused: receiver o row arg slot moved ({} != {})",
+                r_args.size(),
+                fused_rt::kReceiverORowArg);
+            r_args.push_back(out_row(h));  // o's row: the reader writes o (the scan writer the final state)
             receiver_reader.emplace_runtime_args(rc, r_args);
             scan_compute.emplace_runtime_args(rc, {NC});
             scan_writer.emplace_runtime_args(rc, {out_row(h), v, NC, o_buf, fs_buf});
@@ -538,7 +599,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             attrs.HV,
             attrs.Hk,
             BH,
-            c_first[p] * kProducerKickoffStaggerCycles,
+            producer_kickoff_wait_cycles(c_first[p], n_items[p] == max_items),
             map.NPH,
             map.NX,
             map.num,
@@ -552,16 +613,17 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             p_args.size(),
             fused_rt::kPrepReaderHeadOffsetArg);
         p_args.push_back(h0);
-        prep_reader.emplace_runtime_args(pc, p_args);
+        (flip_noc[p] ? prep_reader_flip : prep_reader).emplace_runtime_args(pc, p_args);
         prep_compute.emplace_runtime_args(pc, {n_items[p]});
         std::vector<std::variant<uint32_t, Buffer*>> w_args = {
             p, n_items[p], BH, NC, map.NPH, map.NX, map.num, map.den};
         for (uint32_t w = 0; w < mask_words; w++) {
             w_args.push_back(head_mask[p * mask_words + w]);
         }
-        fused_writer.emplace_runtime_args(pc, w_args);
+        (flip_noc[p] ? fused_writer_flip : fused_writer).emplace_runtime_args(pc, w_args);
     }
     fused_writer.common_runtime_args = head_table;
+    fused_writer_flip.common_runtime_args = head_table_flip;
 
     // Push order = the kernel indices of fused_rt (get_dynamic_runtime_args addresses them by index).
     TT_FATAL(desc.kernels.size() == fused_rt::kPrepReaderKernel, "chunk_gdn_fused: kernel push order changed");
@@ -573,6 +635,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(scan_compute));
     TT_FATAL(desc.kernels.size() == fused_rt::kScanWriterKernel, "chunk_gdn_fused: kernel push order changed");
     desc.kernels.push_back(std::move(scan_writer));
+    if (!prod_flip_cores.empty()) {
+        TT_FATAL(desc.kernels.size() == fused_rt::kPrepReaderFlipKernel, "chunk_gdn_fused: kernel push order changed");
+        desc.kernels.push_back(std::move(prep_reader_flip));
+        desc.kernels.push_back(std::move(fused_writer_flip));
+    }
     return desc;
 }
 

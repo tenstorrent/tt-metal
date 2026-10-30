@@ -152,8 +152,12 @@ namespace fused_rt {
 constexpr uint32_t kPrepReaderKernel = 0;
 constexpr uint32_t kReceiverReaderKernel = 3;
 constexpr uint32_t kScanWriterKernel = 5;
+// The prep reader of the producers that hand off on the other NoC (fused_flip_noc); pushed only when there are any.
+constexpr uint32_t kPrepReaderFlipKernel = 6;
 using ::fused_rt::kPrepReaderHeadOffsetArg;
 using ::fused_rt::kReceiverHeadOffsetArg;
+using ::fused_rt::kReceiverOArg;
+using ::fused_rt::kReceiverORowArg;
 using ::fused_rt::kScanWriterHeadArg;
 }  // namespace fused_rt
 
@@ -185,7 +189,7 @@ struct ChunkGdnDeviceOperation {
 //   the bump two near-equal bounds cost each other (Vtl <= 2); over (NV | Vt, NP, depth in {2, 3}) with a
 //   feasible layout (the row-major fallback is link-bound), and for a pool of P serving every head
 //   (placement 2) over the extras' share from the balanced NX / P down to 0. Ties -> fewer cores, then
-//   smaller NV, then the shallower ring. T_phased(BH) from the measured table.
+//   smaller NV, then the deeper ring. T_phased(BH) from the measured table.
 // The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth /
 // pool_extra_share the fused program config leaves free, and to decide fused vs phased when no program
 // config is given; test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
@@ -269,6 +273,13 @@ struct FusedPlacement {
 };
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);
+
+// Per producer p of `layout.producers`: whether its hand-off runs on the other NoC. The pool extras that sit in a
+// row holding receivers do (see the fused factory: on the writer's NoC their writes would run west over the home
+// producers' row links and wrap the torus column); home producers and extras in receiver-free rows do not. The
+// factory selects those producers' reader / writer kernels by this, and get_dynamic_runtime_args addresses the
+// flipped reader (fused_rt::kPrepReaderFlipKernel) by it, so the two must agree.
+std::vector<bool> fused_flip_noc(const FusedPlacement& layout, uint32_t grid_y, uint32_t BH);
 
 // The device-level program config: the Mono or Fused alternative of ChunkGdnProgramConfig (the phased
 // alternative launches the two phased prims instead, see chunk_gated_delta_rule.cpp).

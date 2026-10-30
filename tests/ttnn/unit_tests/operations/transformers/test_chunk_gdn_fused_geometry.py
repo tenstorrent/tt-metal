@@ -65,7 +65,15 @@ _DEPTH2_ROUND_TRIP_US = {
     1: 4.1,
     2: 2.9,
 }  # depth 2 exposes the credit -> VALID round trip per step (Vtl 1 / 2, no extras)
-_DEPTHS = (2, 3)  # hand-off depths the model chooses between
+_DEPTHS = (2, 3, 4, 5)  # hand-off depths the model chooses between (>= 3 timed alike; ties go by slice width)
+
+
+def _depth_key(nv, depth):
+    """The tie-break on the ring: the deepest at a slice of <= 2 tiles (the delivery outlasts a step), the
+    shallowest at 4 tiles (one step covers it; deeper measured slower). Mirrors `consider` in the C++ model."""
+    return -depth if VT // nv <= 2 else depth
+
+
 _NV_CANDIDATES = (1, 2, 4, 8)  # receivers per head the model considers (those dividing Vt)
 _HANDOFF_TILES, _PRODUCER_PREP_TILES, _TILE_BYTES, _L1_BUDGET_BYTES = 19, 48, 4096, 1400 * 1024
 # Measured phased device time (prep + scan) at NC=64, interpolated linearly in BH; beyond the table scaled by BH/48.
@@ -216,12 +224,12 @@ def _plan_waves(grid, bh, nc, max_wave=0, fixed_nv=0, fixed_np=0):
 
 
 def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candidates=BOTH, fixed_share=-1.0):
-    """Per-head candidates: over NV | Vt, NP with a feasible row-local layout and depth in {2, 3} (a pinned
+    """Per-head candidates: over NV | Vt, NP with a feasible row-local layout and depth in {2, 3, 4, 5} (a pinned
     depth as is), minimise T_fused; with no row-local layout, fall back to row-major placement (link-bound).
     Pool candidates: the same NV set, P = every core the receivers leave (or the pinned size), at most BH*NC,
     with the extras' share pinned or the best of every share from the balanced NX / P down to 0 (ties -> the
     larger share); a pool with no extras is the per-head geometry (NV, NPH). Ties -> fewer cores in total,
-    then smaller NV, then the shallower ring."""
+    then smaller NV, then the deeper ring."""
     gx, gy = grid
     depths = (fixed_nbuf,) if fixed_nbuf else _DEPTHS
     best = None
@@ -232,7 +240,7 @@ def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candida
         for depth in depths:
             if not fixed_nbuf and not _handoff_fits_l1(VT // nv, depth):
                 continue
-            key = (_t_fused(bh, nc, nv, np_, depth, placement, nph, num, den), cores, nv, depth)
+            key = (_t_fused(bh, nc, nv, np_, depth, placement, nph, num, den), cores, nv, _depth_key(nv, depth))
             if best is None or key < best[0]:
                 best = (key, nv, np_, placement, depth, num if num else 0, den if num else 1)
 
@@ -247,7 +255,7 @@ def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candida
                 t = _t_fused(bh, nc, nv, P, depth, 2, nph, num, P)
                 if t_best is None or t < t_best:
                     t_best, num_best = t, num
-            key = (t_best, bh * nv + P, nv, depth)
+            key = (t_best, bh * nv + P, nv, _depth_key(nv, depth))
             nonlocal best
             if best is None or key < best[0]:
                 best = (key, nv, P, 2, depth, num_best, P)
@@ -329,7 +337,9 @@ def _placement_row_major(gx, gy, bh, nv, np_):
 def _placement_row_local(gx, gy, bh, nv, np_):
     """Placement 1: k = grid_x // (NV+NP) heads per row, each in its own column segment (receivers
     first, producers east of them); heads beyond k*grid_y as vertical blocks in the leftover columns
-    (an rw x rh receiver rectangle on top, the producers row-major below it)."""
+    (an rw x rh receiver rectangle on top, the producers row-major below it). A block whose receiver row is
+    wider than one column uses the column form when it fits the same height: the receivers stacked in the
+    block's first column, producers east of the bottom receiver, then row-major below (no +x hand-off route)."""
     L = nv + np_
     k = gx // L
     rcv = [None] * (bh * nv)
@@ -347,8 +357,17 @@ def _placement_row_local(gx, gy, bh, nv, np_):
         rw = min(nv, wl)
         rh = nv // rw
         block_h = rh + -(-np_ // wl)
+        beside = wl - 1
+        column_form = rw >= 2 and nv + (-(-(np_ - beside) // wl) if np_ > beside else 0) <= block_h
         for kk in range(rem):
             h, y0 = n_row_heads + kk, kk * block_h
+            if column_form:
+                for v in range(nv):
+                    rcv[h * nv + v] = (xl, y0 + v)
+                for j in range(np_):
+                    jj = j - beside
+                    prod[h * np_ + j] = (xl + 1 + j, y0 + nv - 1) if j < beside else (xl + jj % wl, y0 + nv + jj // wl)
+                continue
             for v in range(nv):
                 rcv[h * nv + v] = (xl + v % rw, y0 + v // rw)
             for j in range(np_):
@@ -695,6 +714,35 @@ def test_chosen_layout_shares_no_links(grid, bh):
     assert not bad, f"NV={nv} NP={np_} placement={pl}: {bad[:5]}"
 
 
+@pytest.mark.parametrize("bh", BHS)
+@pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
+def test_leftover_column_form_no_wrap(grid, bh):
+    """NOC_1 routes only -x / -y: a producer west of or above one of its head's receivers wraps around the
+    torus through other heads' links. Every row-local layout whose leftover blocks use the column form has
+    every producer east of / in and below / in all of its head's receivers."""
+    gx, gy = grid
+    checked = 0
+    for nv, np_, pl in _feasible_layouts(gx, gy, bh):
+        if pl != 1:
+            continue
+        L = nv + np_
+        k = gx // L
+        rem, wl = bh - min(bh, k * gy), gx - k * L
+        rw = min(nv, wl) if wl else 0
+        if not rem or rw < 2 or nv + (-(-(np_ - wl + 1) // wl) if np_ > wl - 1 else 0) > nv // rw + -(-np_ // wl):
+            continue
+        rcv, prod = _t.chunk_gdn_fused_placement(gx, gy, bh, nv, np_, pl)
+        rcv, prod = [tuple(c) for c in rcv], [tuple(c) for c in prod]
+        for h in range(k * gy, bh):
+            x0, y0, x1, y1 = _rect(rcv[h * nv : (h + 1) * nv])
+            assert x0 == x1, f"NV={nv} NP={np_}: head {h} receivers not stacked in one column"
+            for px, py in prod[h * np_ : (h + 1) * np_]:
+                assert px >= x1 and py >= y1, f"NV={nv} NP={np_}: head {h} producer {(px, py)} wraps to {(x1, y1)}"
+        checked += 1
+    if not checked:
+        pytest.skip(f"no leftover block in the column form for BH={bh} on {gx}x{gy}")
+
+
 @pytest.mark.parametrize(
     "grid, bh, nv, np_, placement, message",
     [
@@ -780,16 +828,16 @@ def test_fused_model_matches_measurements(bh, nv, np_, depth, placement, meas, t
 
 
 def test_qb2_operating_points():
-    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2 per-head at hand-off depth 3, 7 producers per head
+    """The Qwen3.6-27B TP-4 shape (BH=12) on QB2 picks NV=2 per-head at hand-off depth 5 (the deepest ring of the tie over depths >= 3 at a 2-tile slice; a 4-tile slice takes the shallowest), 7 producers per head
     (measured 210 us; 6 per head 208, the pool 209), ~210 us vs phased 603; BH=4 and 8 the same NV=2 NP=7
     geometry; BH=48 pays with the pool of 62 (one home producer per head + 14 extras, ~827 vs the phased 1908);
     BH=64 needs >= 128 cores, so no fused geometry exists and the op must dispatch phased."""
     nv, np_, pl, nbuf, t_f, t_ph, pays, _ = _t.chunk_gdn_fused_geometry(11, 10, 12, 64, VT)
-    assert (nv, np_, pl, nbuf) == (2, 7, 1, 3) and pays
+    assert (nv, np_, pl, nbuf) == (2, 7, 1, 5) and pays
     assert 205 <= t_f <= 215 and 595 <= t_ph <= 610
     for bh in (4, 8):
         nv, np_, _, nbuf = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT)[:4]
-        assert (nv, np_, nbuf) == (2, 7, 3), (bh, nv, np_, nbuf)
+        assert (nv, np_, nbuf) == (2, 7, 5), (bh, nv, np_, nbuf)
     nv, np_, pl, nbuf, t_f, t_ph, pays48, num = _t.chunk_gdn_fused_geometry(11, 10, 48, 64, VT)
     assert (nv, np_, pl, nbuf, num) == (1, 62, 2, 2, 14) and pays48 and t_f < 0.5 * t_ph, (nv, np_, pl, nbuf, t_f, t_ph)
     nv, _, _, _, _, _, pays, _ = _t.chunk_gdn_fused_geometry(11, 10, 64, 64, VT)
@@ -800,7 +848,9 @@ def test_qb2_operating_points():
 # picks (BH=16: NV=2 P=78, balanced 30/78; 24: NV=1 P=86, 14/86; 32: NV=1 P=78, 14/78; 48: NV=1 P=62, 14/62)
 # and the pools of BH 4-12 at their balanced share. Around the BH=16 optimum (shares 0.32-0.36, 270-272 us) the
 # model steps with the busiest home producer's item count; the staggered first items smooth that in reality.
-# The balanced BH=16 pool at depth 3 runs 11 % over the model (its slowest chains end 35 us late); depth 2 is the pick.
+# The balanced BH=16 pool at depth 3 runs 11 % over the model (its slowest chains end 35 us late; measured before the
+# wrap-free placement and the NOC_0 extras). At the pick (27/78 = 0.34) the depths measure alike and the model ties
+# them; ties take the deeper ring.
 _POOL_MEASUREMENTS = [
     (16, 2, 78, 2, 30 / 78, 277.3, 0.06),
     (16, 2, 78, 3, 30 / 78, 310.8, 0.15),
@@ -864,11 +914,11 @@ def test_qb2_pool_operating_points():
     head + 14, balanced. The pool is the default pick from BH=16 up (16: 262 vs the per-head 330; 24: 341 vs 372;
     32: 455 vs 534; 48: 827 vs 1051) and loses to the per-head geometry at BH <= 12."""
     for bh, nv, P, nph, num, nbuf, wins in (
-        (16, 2, 78, 3, 27, 2, True),
-        (12, 2, 86, 7, 1, 2, False),
-        (8, 2, 94, 9, 22, 2, False),
-        (4, 2, 102, 9, 66, 2, False),
-        (24, 1, 86, 3, 14, 2, True),
+        (16, 2, 78, 3, 27, 5, True),
+        (12, 2, 86, 7, 1, 5, False),
+        (8, 2, 94, 9, 22, 5, False),
+        (4, 2, 102, 9, 66, 5, False),
+        (24, 1, 86, 3, 14, 2, True),  # NV=1 (a 4-tile slice): the shallowest ring of the tie
         (32, 1, 78, 2, 14, 2, True),
         (48, 1, 62, 1, 14, 2, True),
     ):
@@ -888,7 +938,7 @@ def test_qb2_pool_operating_points():
         t_head = _t.chunk_gdn_fused_geometry(11, 10, bh, 64, VT, candidates=PER_HEAD)[4]
         assert (t_pool < t_head) == wins, (bh, t_pool, t_head)
     nv, P, pl, nbuf, t_pool, _, _, num = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, candidates=POOL)
-    assert (nv, P, pl, nbuf, num) == (2, 78, 2, 2, 27) and 257 <= t_pool <= 268, (nv, P, pl, nbuf, num, t_pool)
+    assert (nv, P, pl, nbuf, num) == (2, 78, 2, 5, 27) and 257 <= t_pool <= 268, (nv, P, pl, nbuf, num, t_pool)
     t_head = _t.chunk_gdn_fused_geometry(11, 10, 16, 64, VT, candidates=PER_HEAD)[4]
     assert 325 <= t_head <= 336, t_head
     for bh, expect_pool in (
