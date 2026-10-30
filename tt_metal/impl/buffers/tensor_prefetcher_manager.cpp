@@ -133,11 +133,7 @@ bool benchmark_mpfe_bool(std::string_view suffix, bool fallback, bool benchmark_
     if (value == nullptr) {
         return fallback;
     }
-    TT_FATAL(
-        (value[0] == '0' || value[0] == '1') && value[1] == '\0',
-        "{} must be 0 or 1, got '{}'",
-        name,
-        value);
+    TT_FATAL((value[0] == '0' || value[0] == '1') && value[1] == '\0', "{} must be 0 or 1, got '{}'", name, value);
     const bool parsed = value[0] == '1';
     if (parsed != fallback) {
         log_info(tt::LogMetal, "{}={} overrides configured value {}", name, parsed ? 1 : 0, fallback ? 1 : 0);
@@ -1581,17 +1577,14 @@ void TensorPrefetcherManager::capture(
     captured.requests.insert(captured.requests.end(), requests.begin(), requests.end());
 }
 
-void TensorPrefetcherManager::replay_captured(const CapturedRequests& captured) {
+void TensorPrefetcherManager::replay_captured_nolock(const CapturedRequests& captured) {
     if (captured.requests.empty()) {
         return;
     }
-    {
-        auto lock = lock_api_function_();
-        TT_FATAL(
-            active_ && captured.run_id == run_id_,
-            "This command list records Tensor prefetcher requests, but the Tensor prefetcher they were recorded for "
-            "is no longer running. Rebuild the command list after StartTensorPrefetcher.");
-    }
+    TT_FATAL(
+        active_ && captured.run_id == run_id_,
+        "This command list records Tensor prefetcher requests, but the Tensor prefetcher they were recorded for "
+        "is no longer running. Rebuild the command list after StartTensorPrefetcher.");
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
         // Copy the handles, not the requests, so they survive for the next replay. Pushed in capture order so

@@ -134,8 +134,9 @@ public:
         const std::vector<experimental::TensorPrefetcherInput>& tensors);
 
     // Re-queue `captured` for immediate fan-out, in capture order. No-op if it is empty. TT_FATALs if the
-    // prefetcher run that captured it has stopped.
-    void replay_captured(const CapturedRequests& captured);
+    // prefetcher run that captured it has stopped. Caller holds the API lock, which keeps a concurrent stop()
+    // from slipping in between the run check and the insert.
+    void replay_captured_nolock(const CapturedRequests& captured);
 
     // Make the prefetcher wait until all work currently enqueued on command queue
     // `cq` has landed before it reads DRAM. Bumps a host-side per-CQ counter,

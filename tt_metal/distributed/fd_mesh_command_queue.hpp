@@ -6,6 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
+#include <functional>
 #include <unordered_map>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -298,13 +299,16 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
-    // Enqueue a command list without entering the mesh-trace lifecycle.
+    // Enqueue a command list without entering the mesh-trace lifecycle. `before_submit`, if set, runs under the API
+    // lock after the list is accepted and before its commands are submitted, so work it queues elsewhere is ordered
+    // with these commands against concurrent replays. It must not take the API lock.
     void enqueue_command_list(
         const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
         const std::vector<SubDeviceId>& sub_device_ids,
         const MeshBuffer& buffer,
         SubDeviceManagerId sub_device_manager_id,
-        bool blocking);
+        bool blocking,
+        const std::function<void()>& before_submit);
     // Overwrite parts of a command-list buffer. Ordered after earlier replays, and later replays read the new bytes.
     void enqueue_command_list_patch(const MeshBuffer& buffer, ttsl::Span<const MeshBufferPatch> patches);
     // Wait until this host's queued device work completes.

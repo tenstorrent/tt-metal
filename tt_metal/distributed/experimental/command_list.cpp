@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -537,9 +538,13 @@ void CommandList::Impl::replay(bool blocking, bool check_dram_overlap) const {
         verify_no_dram_overlap();
     }
     // Queued ahead of the commands, as trace replay does, so the prefetcher can start filling the pipes while the
-    // consumers are dispatched.
+    // consumers are dispatched. Queued under the same API lock as the commands, after the list is accepted, so a
+    // rejected list sends nothing and concurrent replays reach the pipes in the order their consumers run.
+    std::function<void()> queue_prefetcher_requests;
     if (!tensor_prefetcher_requests.requests.empty()) {
-        mesh_device->impl().tensor_prefetcher(mesh_device).replay_captured(tensor_prefetcher_requests);
+        queue_prefetcher_requests = [this] {
+            mesh_device->impl().tensor_prefetcher(mesh_device).replay_captured_nolock(tensor_prefetcher_requests);
+        };
     }
     as_fd_queue(mesh_device->mesh_command_queue(bound_cq_id))
         .enqueue_command_list(
@@ -547,7 +552,8 @@ void CommandList::Impl::replay(bool blocking, bool check_dram_overlap) const {
             descriptor.sub_device_ids(),
             *command_buffer,
             sub_device_manager_id,
-            blocking);
+            blocking,
+            queue_prefetcher_requests);
 }
 
 void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking) {

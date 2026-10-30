@@ -190,5 +190,34 @@ TEST_F(CommandListTensorPrefetcherFixture, RecordedRequestsDoNotOutliveThePrefet
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
+TEST_F(CommandListTensorPrefetcherFixture, ReplayUnderAnotherSubDeviceManagerSendsNoRequests) {
+    PrefetchCase prefetch(device_);
+    const auto worker_grid = device_->compute_with_storage_grid_size();
+    const tt::tt_metal::SubDevice full_grid_sub_device(
+        std::array{CoreRangeSet(CoreRange({0, 0}, {worker_grid.x - 1, worker_grid.y - 1}))});
+    const auto other_manager = device_->create_sub_device_manager({full_grid_sub_device}, 3200);
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    {
+        metal_exp::CommandListBuilder builder(*device_);
+        builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
+        auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
+            device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
+        builder.add(validator);
+        auto command_list = builder.build(device_->mesh_command_queue());
+        builder.deallocate();
+
+        device_->load_sub_device_manager(other_manager);
+        EXPECT_ANY_THROW(metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true));
+        device_->clear_loaded_sub_device_manager();
+
+        // Had the rejected replay sent its request, this replay's consumer would read the stale copy, and the copy
+        // it leaves behind would still be in the pipes at stop.
+        metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
+        command_list.deallocate();
+    }
+    metal_exp::StopTensorPrefetcher(*device_);
+    device_->remove_sub_device_manager(other_manager);
+}
+
 }  // namespace
 }  // namespace ttnn::test::command_list_tensor_prefetcher
