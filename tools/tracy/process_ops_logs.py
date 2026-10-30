@@ -272,6 +272,40 @@ def get_op_sub_device_lookup_key(op: OpDict, device_id: int) -> Tuple[int, int, 
     return (op_device_id, runtime_id, trace_id, trace_id_counter)
 
 
+_CSV_CHUNK_ROWS = 2_000_000
+
+
+def _iter_csv_rows(path, **read_kwargs):
+    """Yield ``itertuples()`` rows from a CSV in bounded memory (chunked). Equivalent to
+    ``for row in pd.read_csv(path, **kw).itertuples()`` but never holds the whole file in
+    memory: rows are yielded in the same order, so any order-independent accumulation over
+    them (e.g. building a lookup dict) is unchanged while peak memory stays O(chunk)."""
+    for _chunk in pd.read_csv(path, chunksize=_CSV_CHUNK_ROWS, **read_kwargs):
+        yield from _chunk.itertuples()
+
+
+def _read_op_times_filtered(path):
+    """Memory-bounded read of the tracy op-times log. Only rows matching the two downstream
+    filters are ever used — ``name`` ~ TT_DNN/TT_METAL (host_time) or ``special_parent_text``
+    ~ 'id:' (child-call durations) — and the log is dominated by per-core marker rows that
+    match neither. Stream in chunks, keep only the union of those rows (all columns retained),
+    and concat. Peak memory is O(chunk) regardless of capture size (so it can't OOM the way a
+    whole-file read does on ~4 GB+ logs), and callers re-applying their masks get identical
+    results. The C engine tolerates the logs' ragged rows; pyarrow does not."""
+    kept = []
+    cols = None
+    for _chunk in pd.read_csv(path, low_memory=False, chunksize=_CSV_CHUNK_ROWS):
+        cols = _chunk.columns
+        name = _chunk["name"].astype(str)
+        spt = _chunk["special_parent_text"].astype(str)
+        m = name.str.contains("TT_DNN|TT_METAL", regex=True, na=False) | spt.str.contains("id:", na=False)
+        if m.any():
+            kept.append(_chunk[m])
+    if kept:
+        return pd.concat(kept, ignore_index=True)
+    return pd.DataFrame(columns=cols) if cols is not None else pd.read_csv(path, low_memory=False, nrows=0)
+
+
 def build_sub_device_id_lookup_from_device_csv(
     device_log_path: Path,
 ) -> Dict[Tuple[int, int, int, int], int]:
@@ -282,8 +316,7 @@ def build_sub_device_id_lookup_from_device_csv(
     if not device_log_path.is_file():
         return lookup
 
-    df = pd.read_csv(device_log_path, skiprows=1, header=0, na_filter=False)
-    for row in df.itertuples():
+    for row in _iter_csv_rows(device_log_path, skiprows=1, header=0, na_filter=False):
         meta_data = parse_device_csv_meta_data(row[15])
         if meta_data is None or "sub_device_id" not in meta_data:
             continue
@@ -529,10 +562,7 @@ def import_tracy_op_logs(
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
-    try:
-        df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
-    except (ImportError, ValueError):
-        df = pd.read_csv(tracyOpTimesLog)
+    df = _read_op_times_filtered(tracyOpTimesLog)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor
@@ -681,6 +711,7 @@ def _enrich_ops_from_perf_csv(
 
         enriched_ops = []
         dropped_ops_by_trace: Dict[int, int] = {}
+        ops_missing_device_rows = 0
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -713,6 +744,25 @@ def _enrich_ops_from_perf_csv(
                 # whole report. A trace that the host did replay keeps the assert below, so a
                 # device report that lost every row of a replayed trace is still an error.
                 dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
+                continue
+
+            if not candidates and host_trace_id is None and device_rows:
+                # PARTIAL LOSS IS NOT TOTAL LOSS. The device profiler drops markers under dispatch
+                # pressure -- the per-core marker-buffer overflow the periodic drain exists to limit
+                # -- so on a dense multi-chip capture a handful of ops never land a row while the
+                # rest of the device reports normally. Failing the whole report for one of them
+                # throws away every op that DID land, and it happens at the end, after the full
+                # post-processing cost is already paid: measured on an 8-chip run, 10.6 h over
+                # 35,145,154 device rows discarded because one op of 33,321 was absent.
+                #
+                # Carried the same way an unreplayed trace's ops are carried above: counted, warned
+                # about once per device, and left out of the enriched set rather than hidden.
+                #
+                # DELIBERATELY NARROW. Only a NON-TRACE op, and only when the device reported rows
+                # at all. A replayed trace missing rows and a device missing from the report are
+                # both still errors -- they indicate loss of a whole unit of work rather than a
+                # dropped marker, and each has a test pinning that behaviour.
+                ops_missing_device_rows += 1
                 continue
 
             missing_hint = ""
@@ -753,6 +803,15 @@ def _enrich_ops_from_perf_csv(
                 f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed (no REPLAY marker "
                 f"from the host, no rows in {PROFILER_CPP_DEVICE_PERF_REPORT}); its {dropped_count} host ops get no "
                 f"device data and appear in the report as host-only rows"
+            )
+
+        if ops_missing_device_rows:
+            logger.warning(
+                f"Device {device_id}: {ops_missing_device_rows} non-trace op(s) have no row in "
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT} and are left out of the report; the device dropped their "
+                f"markers (per-core marker-buffer overflow under dispatch pressure). Device totals read from "
+                f"this report are therefore LOW by those ops -- reduce the capture or increase the drain "
+                f"frequency if the count is a meaningful fraction of the run"
             )
 
         host_ops_by_device[device_id] = enriched_ops

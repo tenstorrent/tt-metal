@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "perf-mcp": {
+      "command": "/home/ttuser/tt-metal/python_env/bin/python",
+      "args": ["/home/ttuser/tt-metal/models/experimental/perf_automation/cc_optimize/perf_mcp.py"],
+      "env": {
+        "PERF_MCP_MANIFEST": "/home/ttuser/tt-metal/models/experimental/perf_automation/runs/2026-06-21T10-05-31/manifest.json",
+        "TT_METAL_HOME": "/home/ttuser/tt-metal",
+        "PYTHONPATH": "/home/ttuser/tt-metal",
+        "PATH": "/home/ttuser/tt-metal/python_env/bin:/usr/bin:/bin",
+        "TT_VISIBLE_DEVICES": "0,1",
+        "TT_METAL_VISIBLE_DEVICES": "0,1"
+      }
+    }
+  }
+}

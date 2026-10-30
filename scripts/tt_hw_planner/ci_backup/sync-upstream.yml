@@ -1,0 +1,133 @@
+name: sync-upstream-ttmetal
+
+# Keeps the REMOTE apande-TT:feature/tt-hw-planner branch synced to latest tenstorrent/tt-metal.
+# Cloud-side does ONLY the merge + push (no build) -> runs on any runner, needs no TT hardware and
+# no big build machine. Heavy verification (build + PCC) is done locally on a TT box, because that
+# is the only place with a device. On an unexpected conflict it files an issue and pushes nothing.
+
+on:
+  schedule:
+    # Target is 06:00 Europe/Berlin every day. GitHub cron is UTC-only and DST-blind, so both
+    # candidate hours are scheduled and the `berlin-gate` job drops the wrong twin: 04:00 UTC is
+    # 06:00 CEST (summer), 05:00 UTC is 06:00 CET (winter). Exactly one fires as 06:00 local.
+    - cron: "0 4 * * *"
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  berlin-gate:
+    # DST discriminator: keep whichever cron corresponds to 06:00 Berlin right now, drop the twin.
+    # It keys off WHICH cron fired (github.event.schedule), NOT off the current wall clock --
+    # scheduled runs are best-effort and routinely start hours late (observed: the 06:00 cron ran
+    # at 08:27Z), so a wall-clock hour comparison would skip the sync on every delayed run.
+    # Manual dispatch always proceeds.
+    runs-on: ubuntu-22.04
+    outputs:
+      go: ${{ steps.tz.outputs.go }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Did the 06:00-Europe/Berlin cron fire?
+        id: tz
+        run: |
+          GO=$(.github/scripts/berlin_gate.sh "${{ github.event.schedule }}")
+          echo "go=$GO" >> "$GITHUB_OUTPUT"
+          echo "decision: go=$GO (event=${{ github.event_name }}, cron='${{ github.event.schedule }}')"
+
+  sync-remote:
+    needs: berlin-gate
+    if: needs.berlin-gate.outputs.go == 'true'
+    runs-on: ubuntu-22.04       # merge-only -> no container / no big runner needed
+    env:
+      GH_API: https://api.github.com/repos/${{ github.repository }}
+    steps:
+      - name: Checkout the remote tool branch (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: feature/tt-hw-planner
+          fetch-depth: 0
+
+      - name: Git setup (safe.directory + identity)
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.name  "tt-hw-planner-bot"
+          git config --global user.email "tt-hw-planner-bot@users.noreply.github.com"
+
+      - name: Fetch upstream tenstorrent/tt-metal
+        run: |
+          git remote add upstream https://github.com/tenstorrent/tt-metal.git 2>/dev/null \
+            || git remote set-url upstream https://github.com/tenstorrent/tt-metal.git
+          git fetch upstream main
+
+      - name: Already up to date?
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "uptodate=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "uptodate=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream + push the remote branch (auto-sync)
+        if: steps.check.outputs.uptodate == 'false'
+        id: sync
+        run: |
+          SHA=$(git rev-parse --short upstream/main)
+          set +e
+          git merge --no-commit --no-ff upstream/main
+          # known, recurring core conflicts -> take upstream
+          git checkout --theirs ttnn/ttnn/device.py 2>/dev/null && git add ttnn/ttnn/device.py
+          UMD=$(git rev-parse upstream/main:tt_metal/third_party/umd 2>/dev/null)
+          [ -n "$UMD" ] && git update-index --cacheinfo 160000,"$UMD",tt_metal/third_party/umd
+          UNRESOLVED=$(git diff --name-only --diff-filter=U)
+          set -e
+          if [ -n "$UNRESOLVED" ]; then
+            echo "Unexpected conflicts -- not pushing:"; echo "$UNRESOLVED"
+            { echo "conflicts<<EOF"; echo "$UNRESOLVED"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+            git merge --abort
+            exit 1
+          fi
+          git commit -m "Merge upstream/main ($SHA, latest tt-metal) [auto-sync, tool-only]"
+          git push origin HEAD:feature/tt-hw-planner
+          echo "Pushed feature/tt-hw-planner -> latest tt-metal ($SHA)"
+
+      - name: File an issue on conflict/failure (comment on the open one instead of duplicating)
+        if: failure()
+        run: |
+          BODY="Auto-sync to latest tt-metal could not push (unexpected merge conflict). Conflicts: ${{ steps.sync.outputs.conflicts }}. Resolve manually, then verify build+PCC on a TT box. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          python3 - "$BODY" <<'PY'
+          # A conflict here needs a human, so it persists across days -- and this workflow runs
+          # daily. Filing unconditionally would leave one identical issue per day until someone
+          # resolves it. Reuse the open one and comment, so the issue list counts problems rather
+          # than mornings.
+          import json, os, sys, urllib.request
+
+          API, TOKEN = os.environ["GH_API"], os.environ["TOKEN"]
+          TITLE = "Auto-sync to latest tt-metal needs manual attention"
+          HDRS = {"Authorization": "token %s" % TOKEN, "Accept": "application/vnd.github+json"}
+
+          def call(url, data=None):
+              req = urllib.request.Request(url, data=data, headers=HDRS)
+              with urllib.request.urlopen(req) as r:
+                  return r.status, (json.load(r) if r.length != 0 else None)
+
+          _, issues = call(API + "/issues?state=open&per_page=100")
+          existing = next((i for i in issues if i["title"] == TITLE and "pull_request" not in i), None)
+
+          if existing:
+              status, _ = call(API + "/issues/%d/comments" % existing["number"],
+                               json.dumps({"body": sys.argv[1]}).encode())
+              print("commented on #%d -> %s" % (existing["number"], status))
+          else:
+              status, new = call(API + "/issues", json.dumps({"title": TITLE, "body": sys.argv[1]}).encode())
+              print("opened #%s -> %s" % (new["number"], status))
+          PY
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}

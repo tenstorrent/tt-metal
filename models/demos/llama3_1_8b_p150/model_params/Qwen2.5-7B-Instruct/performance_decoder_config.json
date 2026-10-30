@@ -1,0 +1,116 @@
+{
+    "decoders": {
+        "0": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "1": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "2": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "3": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "4": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "5": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "6": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "7": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "8": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "9": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "10": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "11": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "12": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "13": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "14": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "15": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "16": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "17": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "18": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "19": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "20": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "21": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "22": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "23": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "24": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "25": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "26": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        },
+        "27": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BF16", "WO": "BF16", "KV_CACHE": "BF16", "ACTIVATION": "BF16" },
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI4", "LI_FF2": "HIFI4", "LI_QKV_DECODE": "HIFI4", "SDPA_DECODE": "HIFI4", "LI_O_DECODE": "HIFI4", "LI_QKV_PREFILL": "HIFI4", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "HIFI4" }
+        }
+    }
+}
