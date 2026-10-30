@@ -37,6 +37,8 @@ NO_MEASURE = tuple(
     for p in (
         "orchestrator.py",
         "watch.py",
+        "testing/settings_lint.py",  # F234: checks an agent's diff; no test or measurement reads it
+        "testing/ops_lint.py",
         "overseer.py",
         "agents/*",
         "briefs/*",
@@ -47,7 +49,14 @@ NO_MEASURE = tuple(
         "knowledge/*",
     )
 ) + ("*.md",)
-RECORDS = ("*state.json", "*/results/*", "*BREADCRUMBS.md", "*supervision.md", "*bringup/tasks.yaml")  # F105
+RECORDS = (  # F105; F234: a seeded run's ledger (bringup/ledgers/<box>-<mode>/tasks.yaml) is a record too
+    "*state.json",
+    "*/results/*",
+    "*BREADCRUMBS.md",
+    "*supervision.md",
+    "*bringup/tasks.yaml",
+    "*bringup/ledgers/*/tasks.yaml",
+)
 SKIP = (
     RECORDS
     + NO_MEASURE
