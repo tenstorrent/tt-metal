@@ -22,18 +22,25 @@ write + increment vouches for the rows sent before it on the same link. END(g) =
 hops before leaving; a port emits END(0) after its own rows, END(g) after every input delivered END(g - 1), and is done
 when END(GMAX) is out and every input delivered END(GMAX). Rings hold a whole call (no credits, nothing waits for
 space): ring k holds S entries per origin chip whose trees can reach a ring k of some port (manifest_layout), not N S.
+Every link ends in a ring of the chip it leads to, so a chip's ports are done only after every incoming link's rows
+landed: a link into a chip with no port to continue or turn into (a 1-D line's end chip) carries a terminal stream
+instead - only its END(GMAX), into ring 0 of the receiving port of that link (free there: nothing is behind it), which
+gates that port's completion but not its END order (_wiring).
 """
 
+import os
 import functools
 
 import torch
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 from .fabric_all_gather_py import (
     NOC0,
     NOC1,
     _SEM_CACHE,
+    _worker_nearest_noc0,
     _worker_nearest_noc1,
     allowed_cores,
     eth_noc_coord,
@@ -171,7 +178,9 @@ void kernel_main() {
     const uint32_t ring_offs = get_arg_val<uint32_t>(a++);
     uint32_t cnt_addr[3];
     for (uint32_t k = 0; k < 3; ++k) cnt_addr[k] = get_arg_val<uint32_t>(a++);
-    const uint32_t ring_mask = get_arg_val<uint32_t>(a++);  // which inputs exist
+    // which inputs exist (bit k: ring k); bit 3 + k: ring k is a terminal stream (only the link's END(GMAX): it gates
+    // this port's completion - the link's rows landed - not its END order)
+    const uint32_t ring_mask = get_arg_val<uint32_t>(a++);
     const uint32_t my_r = get_arg_val<uint32_t>(a++);
     const uint32_t my_c = get_arg_val<uint32_t>(a++);
     const uint32_t dir = get_arg_val<uint32_t>(a++);  // 0 X+, 1 X-, 2 Y+, 3 Y-
@@ -250,12 +259,13 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_w)[batch * META_WORDS] = END | (g << 20);
         if (++batch == group) flush();
     };
-    auto inputs_reached = [&](int32_t g) {
+    auto inputs_reached = [&](int32_t g, uint32_t mask) {
         for (uint32_t k = 0; k < 3; ++k) {
-            if (((ring_mask >> k) & 1) && end_in[k] < g) return false;
+            if (((mask >> k) & 1) && end_in[k] < g) return false;
         }
         return true;
     };
+    const uint32_t order_mask = ring_mask & ~(ring_mask >> 3) & 7;  // the inputs END(g) waits on
 
     uint32_t idle = 0;
     bool bailed = false;
@@ -289,11 +299,11 @@ void kernel_main() {
         }
         if (!did && own_t >= S) {
             const int32_t g = end_out + 1;
-            if (g <= static_cast<int32_t>(GMAX) && (g == 0 || inputs_reached(g - 1))) {
+            if (g <= static_cast<int32_t>(GMAX) && (g == 0 || inputs_reached(g - 1, order_mask))) {
                 put_end(g);
                 end_out = g;
                 did = true;
-            } else if (g > static_cast<int32_t>(GMAX) && inputs_reached(GMAX)) {
+            } else if (g > static_cast<int32_t>(GMAX) && inputs_reached(GMAX, ring_mask)) {
                 break;
             }
         }
@@ -464,10 +474,11 @@ void kernel_main() {
                     zok = true;
                 }
 #endif
-                for (uint32_t s = 0; s < 3; ++s) {
-                    if (s_on[s]) stage(s, w0, 0);
+                const bool last = ((w0 >> 20) & 0xF) == GMAX;
+                for (uint32_t s = 0; s < 3; ++s) {  // (s_on 2: a terminal stream - END(GMAX) only)
+                    if (s_on[s] == 1 || (s_on[s] == 2 && last)) stage(s, w0, 0);
                 }
-                if (((w0 >> 20) & 0xF) == GMAX) done = true;
+                if (last) done = true;
                 ++ends;
                 continue;
             }
@@ -504,6 +515,41 @@ void kernel_main() {
 }
 """
 )
+
+
+def _axis_dirs(d):
+    """The other axis's directions (+, -) of direction d."""
+    return ("Y+", "Y-") if d[0] == "X" else ("X+", "X-")
+
+
+def _wiring(chips, nb, coord, d):
+    """Port (coord, d)'s inputs and output streams: (ring_mask, streams). ring_mask bit k: input ring k exists (0: rows
+    continuing in d from the chip behind, its port d; 1 / 2: rows turning into d's axis that arrived moving + / - along
+    the other axis, from the chips on either side, their ports + / -); bit 3 + k: ring k is a terminal stream.
+    streams: per output stream s (0: continue, 1 / 2: turn + / -) (on, target port's direction at the neighbour, ring);
+    on 2 = terminal. A link into a chip that has no port in d nor on the other axis (a 1-D line's end) would deliver no
+    END there, and that chip's dispatch could finish (and its experts read x) before the link's rows land: it carries
+    a terminal stream instead - END(GMAX) only, into ring 0 of the neighbour's port OPP[d] (the port of the same link;
+    its ring 0 is free: no chip is behind it)."""
+    pa, ma = _axis_dirs(d)
+    behind = nb(coord, OPP[d])
+    ring_mask = 0
+    if behind is not None and d in chips[behind]:
+        ring_mask |= 1
+    elif d in chips[coord] and not any(x in chips[coord] for x in (OPP[d], pa, ma)):
+        ring_mask |= 1 | 8  # (the link from the port d's neighbour ends here)
+    src_plus = nb(coord, ma)  # a row moving + arrives from the - side
+    if src_plus is not None and pa in chips[src_plus]:
+        ring_mask |= 2
+    src_minus = nb(coord, pa)
+    if src_minus is not None and ma in chips[src_minus]:
+        ring_mask |= 4
+    peer = chips[coord][d]["peer"]
+    k_turn = 1 if d[1] == "+" else 2  # (ring 1 at the neighbour if this port moves rows +, else ring 2)
+    streams = [(1 if t in chips[peer] else 0, t, k) for t, k in ((d, 0), (pa, k_turn), (ma, k_turn))]
+    if not any(on for on, _, _ in streams):
+        streams[0] = (2, OPP[d], 0)
+    return ring_mask, streams
 
 
 def route_words(N):
@@ -578,6 +624,7 @@ def place_ports(mesh_device, chips, allowed=None):
             )
         ),
         None if allowed is None else tuple(sorted(allowed)),
+        os.environ.get("SPC_PLACE", "noc1"),
     )
     hit = _PORTS_CACHE.get(key)
     if hit is not None and hit[0] is mesh_device:
@@ -594,18 +641,86 @@ def _place_ports(mesh_device, chips, allowed=None):
     }
     eth = probe_ethernet_cores(mesh_device, connections, allowed_cores(mesh_device))  # (a setup-time probe)
     port_core = {}
+    mode = os.environ.get("SPC_PLACE", "noc1")
+    if (
+        mode == "auto"
+    ):  # (probe: the nearest-port placement when it leaves >= 8 cells of `allowed` to the accumulators, else
+        # uniform on NoC0 - the per-chip placement's union of port cells costs the accumulators' cells where cells are few)
+        os.environ["SPC_PLACE"] = "noc1"
+        try:
+            near = _place_ports(mesh_device, chips, allowed)
+        finally:
+            os.environ["SPC_PLACE"] = "auto"
+        left = len(set(allowed) - {(c.x, c.y) for c in near.values()})
+        return near if left >= 8 else _place_ports_uniform(mesh_device, chips, allowed, eth, noc=0)
+    if mode in (
+        "uni0",
+        "uni1",
+    ):  # (probe: one logical cell per (direction, link) on every chip - the fewest NoC hops summed
+        # over the chips, NoC0 / NoC1 - so the ports take 8 cells of the shared cell list, not their union over chips)
+        return _place_ports_uniform(mesh_device, chips, allowed, eth, noc=int(mode[-1]))
     for coord, ports in chips.items():
         taken = set()
         for d, p in ports.items():
             for li, l in enumerate(p["links"]):
                 exy = eth_noc_coord(mesh_device, coord, eth[(coord, p["peer"], l)])
-                core = _worker_nearest_noc1(mesh_device, coord, exy, taken, allowed)
+                # (probe SPC_PLACE=noc0: nearest on NoC0, for the sender on NoC0 - SPC_SNOC=0)
+                near = _worker_nearest_noc0 if os.environ.get("SPC_PLACE", "noc1") == "noc0" else _worker_nearest_noc1
+                core = near(mesh_device, coord, exy, taken, allowed)
                 if core is None:  # (no Ethernet core reported - the mock cluster runs no probe: the first free core)
                     x, y = min((xy for xy in allowed if xy not in taken), key=lambda xy: (xy[1], xy[0]))
                     core = ttnn.CoreCoord(x, y)
                 taken.add((core.x, core.y))
                 port_core[(coord, d, li)] = core
     return port_core
+
+
+def _place_ports_uniform(mesh_device, chips, allowed, eth, noc):
+    from .fabric_all_gather_py import _chip_maps, _noc_grid
+
+    gx, gy = _noc_grid(mesh_device)
+    slots = sorted({(d, li) for ports in chips.values() for d, p in ports.items() for li in range(len(p["links"]))})
+    phys = {}  # (coord, logical cell) -> physical NoC (x, y)
+    for coord in chips:
+        t2p = _chip_maps(mesh_device, coord)[2]
+        for x, y in allowed:
+            v = mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            phys[(coord, (x, y))] = (t2p.get(v.x, v.x), v.y)
+
+    def hops(coord, cell, exy):
+        px, py = phys[(coord, cell)]
+        ex, ey = exy
+        if noc == 0:  # (+X then +Y, wrapping)
+            return (ex - px) % gx + (ey - py) % gy
+        return (py - ey) % gy + (px - ex) % gx  # (NoC1: -Y then -X, wrapping)
+
+    cost = {}
+    for d, li in slots:
+        for cell in allowed:
+            t = 0
+            for coord, ports in chips.items():
+                if d not in ports or li >= len(ports[d]["links"]):
+                    continue
+                exy = eth_noc_coord(mesh_device, coord, eth[(coord, ports[d]["peer"], ports[d]["links"][li])])
+                t += hops(coord, cell, exy)
+            cost[((d, li), cell)] = t
+    taken, pick = set(), {}
+    left = set(slots)
+    while left:  # (greedy: the slot whose best free cell is cheapest first)
+        best = min(
+            ((cost[(sl, cell)], sl, cell) for sl in left for cell in allowed if cell not in taken),
+            key=lambda e: (e[0], e[2][1], e[2][0]),
+        )
+        _, sl, cell = best
+        pick[sl] = cell
+        taken.add(cell)
+        left.discard(sl)
+    return {
+        (coord, d, li): ttnn.CoreCoord(*pick[(d, li)])
+        for coord, ports in chips.items()
+        for d, p in ports.items()
+        for li in range(len(p["links"]))
+    }
 
 
 def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):
@@ -618,7 +733,7 @@ def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
         _SEM_CACHE[key] = (
             mesh_device,
-            tuple(ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(4)),
+            tuple(persist_l1.semaphore(mesh_device, crs, 0) for _ in range(4)),
             None,
         )
     return _SEM_CACHE[key][1]
@@ -735,10 +850,23 @@ def sparse_all_gather_2d(
     Fills every destination's slots; returns output. extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op's
     CBs / kernels appended to each chip's program, on cores off port_cores_all(..) (it runs under the dispatch)."""
     # (the same buffers, options and no merged op: the descriptor of the last such call - its runtime args are these
-    # buffers' addresses; ~2 ms of host per call otherwise)
+    # buffers' addresses; ~2 ms of host per call otherwise. Each buffer by its address and what the descriptor compiled
+    # from it - shape, dtype, layout, page size, memory config (sharding: the accessors' compile-time args): a new
+    # buffer at a freed one's address with another width must not reuse the old row bytes / CB sizes / accessors)
     dkey = None
     if extra is None:
-        a_ = lambda t: None if t is None else int(t.buffer_address())  # noqa: E731
+        a_ = lambda t: (  # noqa: E731
+            None
+            if t is None
+            else (
+                int(t.buffer_address()),
+                tuple(t.shape),
+                t.dtype,
+                t.layout,
+                int(t.buffer_aligned_page_size()),
+                t.memory_config(),
+            )
+        )
         dkey = (
             id(output.device()),
             a_(output),
@@ -802,8 +930,8 @@ def sparse_all_gather_2d(
         ttnn.synchronize_device(mesh_device)
         _SEM_CACHE[key] = (mesh_device, sems, man_t)
     _, sems, man_t = _SEM_CACHE[key]
-    cnt_addrs = [int(ttnn.get_global_semaphore_address(x)) for x in sems[:3]]
-    ready_addr = int(ttnn.get_global_semaphore_address(sems[3]))
+    cnt_addrs = [persist_l1.address(x) for x in sems[:3]]
+    ready_addr = persist_l1.address(sems[3])
     if manifest is not None:
         sh = manifest.memory_config().shard_spec
         assert int(sh.shape[1]) >= man_words and sh.grid == core_set, "manifest: manifest_spec(...) of this call"
@@ -840,9 +968,6 @@ def sparse_all_gather_2d(
         )
     src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
 
-    def axis_dirs(d):
-        return ("Y+", "Y-") if d[0] == "X" else ("X+", "X-")
-
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ports in chips.items():
         r, c = coord
@@ -878,19 +1003,7 @@ def sparse_all_gather_2d(
         ]
         reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for d, li, core in my_ports:
-            # inputs: 0 = rows continuing in d (from the chip behind, its port d); 1 / 2 = rows turning into d's axis
-            # that arrived moving + / - along the other axis (from the chips on either side, their ports + / -)
-            behind = nb(coord, OPP[d])
-            pa, ma = axis_dirs(d)
-            ring_mask = 0
-            if behind is not None and d in chips[behind]:
-                ring_mask |= 1
-            src_plus = nb(coord, ma)  # a row moving + arrives from the - side
-            if src_plus is not None and pa in chips[src_plus]:
-                ring_mask |= 2
-            src_minus = nb(coord, pa)
-            if src_minus is not None and ma in chips[src_minus]:
-                ring_mask |= 4
+            ring_mask, wiring = _wiring(chips, nb, coord, d)
             port_idx = (r * C + c) * 8 + DIRS.index(d) * 2 + li
             reader_rt[core.x][core.y] = (
                 [out_addr, plan_addr, man_addr, ring_offs]
@@ -901,15 +1014,9 @@ def sparse_all_gather_2d(
             rc = virt(port_core[(peer, OPP[d], li)])
             pn = node(peer)
             streams = []
-            # stream 0: the neighbour's port d (ring 0); 1 / 2: its ports + / - of the other axis (ring 1 if this
-            # port moves rows +, else ring 2)
-            k_turn = 1 if d[1] == "+" else 2
-            for target, k in ((d, 0), (pa, k_turn), (ma, k_turn)):
-                if target in chips[peer]:
-                    v = virt(port_core[(peer, target, li)])
-                    streams += [1, v.x, v.y, k]
-                else:
-                    streams += [0, 0, 0, 0]
+            for on, target, k in wiring:
+                v = virt(port_core[(peer, target, li)]) if on else None
+                streams += [on, v.x, v.y, k] if on else [0, 0, 0, 0]
             args = [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_offs]
             args += cnt_addrs + streams + [peer[0], peer[1], DIRS.index(d)]
             args += list(ttnn.setup_fabric_connection(node(coord), pn, ports[d]["links"][li], program, core))
@@ -1030,8 +1137,8 @@ def dispatch_phase(
     off1, off2, man_entries = manifest_layout(R, C, wrap_x, wrap_y, S)
     assert int(manifest.memory_config().shard_spec.shape[1]) >= man_entries * 4, "manifest: too small"
     ring_offs = off1 | off2 << 16
-    cnt_addrs = [int(ttnn.get_global_semaphore_address(x)) for x in sems[:3]]
-    ready_addr = int(ttnn.get_global_semaphore_address(sems[3]))
+    cnt_addrs = [persist_l1.address(x) for x in sems[:3]]
+    ready_addr = persist_l1.address(sems[3])
     man_addr, out_addr, plan_addr = (
         int(manifest.buffer_address()),
         int(output.buffer_address()),
@@ -1062,9 +1169,6 @@ def dispatch_phase(
     rd_ct = [cbs["rows"], cbs["meta"], cbs["plan"], row_bytes, group, plan_bytes] + out_ct + plan_ct + plan_ct
     sd_ct = [cbs["rows"], cbs["meta"], cbs["stage"], row_bytes, group, manifest_batch, pack] + out_ct
 
-    def axis_dirs(d):
-        return ("Y+", "Y-") if d[0] == "X" else ("X+", "X-")
-
     rel = [virt(c) for c in relays]
     out = {}
     for coord, ports in chips.items():
@@ -1087,17 +1191,7 @@ def dispatch_phase(
             sd={},
         )
         for i, (d, li, core) in enumerate(my_ports):
-            behind = nb(coord, OPP[d])
-            pa, ma = axis_dirs(d)
-            ring_mask = 0
-            if behind is not None and d in chips[behind]:
-                ring_mask |= 1
-            src_plus = nb(coord, ma)
-            if src_plus is not None and pa in chips[src_plus]:
-                ring_mask |= 2
-            src_minus = nb(coord, pa)
-            if src_minus is not None and ma in chips[src_minus]:
-                ring_mask |= 4
+            ring_mask, wiring = _wiring(chips, nb, coord, d)
             port_idx = (r * C + c) * 8 + DIRS.index(d) * 2 + li
             inc = 1 + (XREADY_N - len(my_ports) if i == 0 else 0)
             pieces["rd"][(core.x, core.y)] = (
@@ -1110,18 +1204,12 @@ def dispatch_phase(
             peer = ports[d]["peer"]
             rc = virt(port_core[(peer, OPP[d], li)])
             pn = node(peer)
+            # (x landed rests on every link's END reaching a port of the chip it leads to: _wiring's terminal stream
+            # where the link's rows go no further)
             streams = []
-            k_turn = 1 if d[1] == "+" else 2
-            on = 0
-            for target, k in ((d, 0), (pa, k_turn), (ma, k_turn)):
-                if target in chips[peer]:
-                    v = virt(port_core[(peer, target, li)])
-                    streams += [1, v.x, v.y, k]
-                    on += 1
-                else:
-                    streams += [0, 0, 0, 0]
-            # (x landed rests on every link's END reaching a port of the chip it leads to)
-            assert on, f"dispatch phase: port {coord} {d} {li} has no stream into {peer}"
+            for on, target, k in wiring:
+                v = virt(port_core[(peer, target, li)]) if on else None
+                streams += [on, v.x, v.y, k] if on else [0, 0, 0, 0]
             pieces["sd"][(core.x, core.y)] = (
                 [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_offs]
                 + cnt_addrs

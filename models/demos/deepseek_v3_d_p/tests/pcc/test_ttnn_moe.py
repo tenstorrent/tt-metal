@@ -383,6 +383,9 @@ def run_model(
             x = trace_input.reshape(dispatch_group_size, seq_len_per_chip, emb_dim).to(torch.bfloat16)
     if x is None:
         x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
+    if os.environ.get("MOE_X_DUMP"):  # (the input and gate this run used, for running another MoE on exactly them)
+        torch.save({"x": x, "gate": gate_weights}, os.environ["MOE_X_DUMP"])
+        logger.info(f"MOE_X_DUMP: x {tuple(x.shape)}, gate {gate_weights is not None} -> {os.environ['MOE_X_DUMP']}")
     profiler.end("input_creation")
 
     # TtMoe.forward deallocates its input (tt_moe.py:522), so tt_x must be re-uploaded each iter.

@@ -65,4 +65,8 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     const CombineL1& l1,
     std::map<ttnn::MeshCoordinate, CollectorTarget>* collectors);
 
+// Make the mesh's ring semaphores (once; every later build takes them). Call before allocating L1 that a build would
+// otherwise have to fit them beside - the overlapped op's arena takes all free L1.
+void prepare_ring_semaphores(ttnn::MeshDevice* mesh);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine

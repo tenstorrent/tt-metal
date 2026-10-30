@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
 from ttnn.bringup.combine_rf.dispatch_prep import all_chips_route_words, dispatch_prep_prepare, own_rows_copy_prepare
 from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather
@@ -424,19 +425,10 @@ class TtK3TokenSplitMoE:
         self.cells = combine_cells(mesh_device, plan)
         wcores = [tuple(c) for c in plan["down"]] + ([tuple(c) for c in plan["rdn"]] if plan["rdown"] else [])
         wcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in wcores])
-        # (the writers' words first: persistent L1 above the arena, not stranded in the middle when it is freed)
-        self.words = ttnn.from_torch(
-            torch.zeros(len(wcores) * 192, 16, dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(wcrs, [192, 16], ttnn.ShardOrientation.ROW_MAJOR),
-            ),
-            mesh_mapper=rep,
-        )
+        # (the writers' words: 192 rows of 64 B a writer core at the top of the per-call arena, past what the flat op /
+        # combine use - zeroed every call with the arena's runs, so nothing in them outlives a call; persistent L1 here
+        # (12 KB a core, reserved on every core) clashed with the chunked model's attention circular buffers)
+        WR = 192
         # routed_only: the x relays' words, persistent (the fused op otherwise allocates them per call, at an address the
         # program-cache key includes but the caller cannot see: _experts_combine predicts its hits)
         self.relay_words = None
@@ -444,15 +436,16 @@ class TtK3TokenSplitMoE:
             from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import crs_rects
 
             rl = [ttnn.CoreCoord(*c) for c in plan["relays"]]
+            # (512 B a relay: the gate/up cores' freed words, then the x-ready word at X_READY_OFF 496)
             self.relay_words = ttnn.from_torch(  # (zero: the x-ready word counts from it - dispatch_in_program)
-                torch.zeros(len(rl) * 32, 32, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                torch.zeros(len(rl), 128, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
-                    ttnn.ShardSpec(crs_rects(rl), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+                    persist_l1.buffer_type(),
+                    ttnn.ShardSpec(crs_rects(rl), (1, 128), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
@@ -467,7 +460,7 @@ class TtK3TokenSplitMoE:
             pxy = sorted({(c.x, c.y) for c in _pp(mesh_device, chips_d, self.cells).values()})
             pcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in pxy])
             self.disp_cores = pxy
-            self.disp_sems = tuple(ttnn.create_global_semaphore(mesh_device, pcrs, 0) for _ in range(4))
+            self.disp_sems = tuple(persist_l1.semaphore(mesh_device, pcrs, 0) for _ in range(4))
         # the arena: the flat expert's buffers, the combine's state / rings / CBs (~all of L1 on every core). Per call:
         # allocated after the dense ops before the experts, its combine state zeroed on the device, freed after (a
         # persistent one leaves the other ops no L1 for their circular buffers). The dispatch all-gather between the
@@ -553,7 +546,7 @@ class TtK3TokenSplitMoE:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(gcores, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -580,6 +573,7 @@ class TtK3TokenSplitMoE:
                 stat = static_cb_bytes(self.N, S, d.latent, group=grp)
                 reserve = fused_arena_reserve(max(flat_cbs, stat), l1=True) + man_b + 1024
             left = (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32
+            left -= WR  # (the words' rows on top)
             assert a_rows <= left, (
                 f"the flat op's arena {a_rows * 64 >> 10} KB > the L1 left {left * 64 >> 10} KB (less the dispatch's / "
                 f"the flat op's static CBs, {reserve >> 10} KB): their circular buffers would clash with it"
@@ -587,18 +581,20 @@ class TtK3TokenSplitMoE:
             a_rows = left
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
-            ttnn.Shape([grid.x * grid.y * a_rows, 16]),
+            ttnn.Shape([grid.x * grid.y * (a_rows + WR), 16]),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_device,
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(all_cores, [a_rows, 16], ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(all_cores, [a_rows + WR, 16], ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
         self.arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         self.arena_addr = int(self.arena.buffer_address())
+        self.arena_bytes = a_rows * 64  # (a core; the words above it)
+        self.words_addr = self.arena_addr + a_rows * 64
         # the planner's outputs (allocated once) then the combine (its accumulator count sets the planner's A)
         luts, nps = port_luts(mesh_device, 2, self.torus)
         self.rows_cap = rows_cap
@@ -723,7 +719,7 @@ class TtK3TokenSplitMoE:
             cells=self.cells,
             arena=self.arena,
             writers=self.writers,
-            l1=dict(writers=wcores, words=int(self.words.buffer_address())),
+            l1=dict(writers=wcores, words=self.words_addr),
             devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"], dord=probe.outs.get("dord"), top_k=d.K),
             deterministic=deterministic,
             snap_q=combine_snap,
@@ -740,7 +736,7 @@ class TtK3TokenSplitMoE:
                     sems=self.disp_sems,
                     relays=self.relays,
                     words=int(self.relay_words.buffer_address()),
-                    ready_off=2032,
+                    ready_off=496,  # (X_READY_OFF, flat_routed_expert_options.hpp)
                     group=8 if 2 * d.latent <= 7168 else 2,  # (dispatch()'s row group)
                 )
                 if self.dispatch_in_program
@@ -791,7 +787,7 @@ class TtK3TokenSplitMoE:
             c: [(self.arena_addr + o, b, st, n) for o, b, st, n in runs] for c, runs in self.combine.zero_runs.items()
         }
         for c in wcores:
-            zr.setdefault(c, []).append((int(self.words.buffer_address()), 192 * 16 * 4, 0, 1))
+            zr.setdefault(c, []).append((self.words_addr, WR * 64, 0, 1))
         self.zero_desc = l1_zero_program(mesh_device, zr)
         # the arena's per-call zeroing folded into the dispatch (routed_only, the separate dispatch): its kernels on the
         # cells (the dispatch's port cores' runs by other cells), each counting in on the chip's dispatch ports, whose
@@ -808,8 +804,8 @@ class TtK3TokenSplitMoE:
             pcrs = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(busy)]
             )
-            self._zg_sems = [ttnn.create_global_semaphore(mesh_device, pcrs, 0) for _ in range(2)]
-            ctr, ep = (int(ttnn.get_global_semaphore_address(x)) for x in self._zg_sems)
+            self._zg_sems = [persist_l1.semaphore(mesh_device, pcrs, 0) for _ in range(2)]
+            ctr, ep = (persist_l1.address(x) for x in self._zg_sems)
             ports_of = lambda coord: sorted({(v.x, v.y) for (c_, _, _), v in dpc.items() if c_ == coord})  # noqa: E731
             fn, nz = l1_zero_kernels(mesh_device, zr, busy, ports_of, ctr)
             self.zero_gate = dict(key=("zero_gate", ctr, ep, nz, self.arena_addr), ctr=ctr, ep=ep, n=nz, kernels=fn)
@@ -1081,10 +1077,22 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(arena)
         return ok
 
+    def take_arena(self):
+        """The call's arena taken ahead (the MoE block's one L1 allocation a forward: its fused head runs in it first);
+        routed_prepped then runs on it (zeroing the combine's state there, after the head) and frees it."""
+        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        assert (
+            int(arena.buffer_address()) == self.arena_addr
+        ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
+        self._taken = arena
+        return arena
+
     def alloc_arena(self, zero=True):
         """The call's arena (uninitialized) with the combine's state zeroed (zero False: the dispatch's zero gate does
-        it - self.zero_gate)."""
-        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        it - self.zero_gate); take_arena's if taken ahead."""
+        arena, self._taken = getattr(self, "_taken", None), None
+        if arena is None:
+            arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         assert (
             int(arena.buffer_address()) == self.arena_addr
         ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
@@ -1097,7 +1105,7 @@ class TtK3TokenSplitMoE:
             self.desc = self.combine.rebind(arena)
         # (routed_only: rebound only when the experts op will build a program - _experts_combine)
         if zero:
-            prepared_generic_op([arena, self.words], self.zero_desc)
+            prepared_generic_op([arena], self.zero_desc)
         return arena
 
     def experts_combine(self, xg, pl, arena, op=None):
@@ -1545,7 +1553,7 @@ class TtK3TokenSplitMoE:
         if self.desc is None:
             self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena, dict(disp, manifest=self._man))
             self._desc_arena = arena
-        prepared_generic_op([arena, self.words], self.zero_desc)
+        prepared_generic_op([arena], self.zero_desc)
         return arena
 
     def __call__(self, x, keep=False, hook=None):

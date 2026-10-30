@@ -270,11 +270,23 @@ ttnn::Tensor flat_routed_expert_with_program(
     // (the relays' words: the caller's persistent tensor if given - a per-call one can land elsewhere, and its address
     // is part of the program-cache key a caller predicts; launches initialize it)
     ttnn::Tensor words = relay_words ? *relay_words : create_device_tensor(l1_sharded_spec(plan->relays, 32), device);
-    if (relay_words) {
+    if (relay_words) {  // (any L1 / L1_SMALL shards on the relays holding the x-ready word: e.g. 512 B a relay)
+        const auto& mc = relay_words->memory_config();
         TT_FATAL(
-            relay_words->tensor_spec() == l1_sharded_spec(plan->relays, 32),
-            "flat_routed_expert_with_program: relay_words must be l1_sharded_spec(plan relays, 32)");
+            mc.is_sharded() &&
+                (mc.buffer_type() == tt::tt_metal::BufferType::L1 ||
+                 mc.buffer_type() == tt::tt_metal::BufferType::L1_SMALL) &&
+                mc.shard_spec()->grid == rect_ranges(plan->relays) &&
+                relay_words->buffer()->aligned_size_per_bank() >= X_READY_OFF + 4,
+            "flat_routed_expert_with_program: relay_words must be L1 / L1_SMALL shards on the plan's relays, >= {} B "
+            "each",
+            X_READY_OFF + 4);
     }
+    TT_FATAL(
+        layout.x_ready <= 0 || 4 * plan->gu.size() <= X_READY_OFF,
+        "flat_routed_expert_with_program: {} gate/up cores' freed words overrun the x-ready word at {}",
+        plan->gu.size(),
+        X_READY_OFF);
     FlatWithProgramParams p{
         .flat = cfg,
         // (an empty extra: the caller expects a program-cache hit, where the program is reused as is. A non-owning

@@ -19,7 +19,10 @@ Where it runs in the head:
   own chip       on the Y sender if there is one, else on a same-row port: a local write + increment.
 """
 
+import os
+
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.combine_rf.routing_a2a import (
     _PLAN,
     PLAN_WORDS,
@@ -433,7 +436,7 @@ class RoutingStream:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(ycrs, (1, 16), ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -460,7 +463,10 @@ class RoutingStream:
         self.fbase = self.xbase + nx * self.PCAP
         self.flags = flags  # (the forwarding slots' flags: 16 B a slot, zeroed L1)
         nf = max([len(v) for v in self.fwd_plan()[0].values()] + [0])
-        assert al(router.pbuf_sub) + (nx + nf) * self.PCAP <= abytes, "ports: no L1 for the routing buffers"
+        assert al(router.pbuf_sub) + (nx + nf) * self.PCAP <= abytes, (
+            f"ports: no L1 for the routing buffers ({al(router.pbuf_sub)} B logits + {nx} + {nf} slots x {self.PCAP} B = "
+            f"{al(router.pbuf_sub) + (nx + nf) * self.PCAP} B > the arena's {abytes} B)"
+        )
         assert 2 * ny * self.PCAP <= abytes, "the watcher core: no L1 for the Y senders' buffers"
         self.ny = ny
 
@@ -494,7 +500,7 @@ class RoutingStream:
         ports = sorted({(c.x, c.y) for ch in xg.chips.values() for c in ch["ports"].values()})
         senders = ports + [(c.x, c.y) for c in ycores]
         scs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in senders])
-        gs = lambda crs: ttnn.create_global_semaphore(mesh_device, crs, 0)  # noqa: E731
+        gs = lambda crs: persist_l1.semaphore(mesh_device, crs, 0)  # noqa: E731
         self.sems = dict(
             c0=gs(c0),
             c1=gs(c0),
@@ -512,7 +518,7 @@ class RoutingStream:
             ready=gs(scs),
             ready2=gs(scs),  # (the second Y direction's sender's: the planners count each sender apart)
         )
-        self.addr = {k: int(ttnn.get_global_semaphore_address(v)) for k, v in self.sems.items()}
+        self.addr = {k: persist_l1.address(v) for k, v in self.sems.items()}
 
     # ---- the plan of one chip ----
     def _first_hop(self, s, d):
@@ -704,6 +710,7 @@ class RoutingStream:
             ENT_CAP=self.inst_cap,
             WX=int(self.wrap_x),
             WY=int(self.wrap_y),
+            YT=int(os.environ.get("SPC_YTIE") == "1"),  # (the combine's Y tie split: the plan's ports, as routing_a2a)
             DCACHE=1,
             PROBE_NOSTORE=0,
             CT0=ct0,

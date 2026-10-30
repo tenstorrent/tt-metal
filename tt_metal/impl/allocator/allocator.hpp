@@ -100,6 +100,12 @@ public:
     // the core has no bank of this type.
     const std::vector<uint32_t>* find_bank_ids(BufferType buffer_type, const CoreCoord& logical_core) const;
 
+    // Whether every core of `cores` has a bank of buffer_type, remembered for the last few grids asked: a MeshBuffer
+    // builds one Buffer a device, each validating its shard grid, and a sharded buffer over the full worker grid is
+    // then ~a hundred bank lookups a device per allocation (~100 us on a 32-chip mesh). Cores without a bank are
+    // never remembered (the caller's service-core fallback runs every time).
+    bool all_cores_have_bank(BufferType buffer_type, const std::vector<CoreCoord>& cores) const;
+
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
 
     const AllocatorConfig& get_config() const;
@@ -186,6 +192,9 @@ private:
     bool in_corruptible_allocation_scope() const;
 
     mutable std::mutex mutex_;
+    // (all_cores_have_bank's grids known to have a bank on every core, most recent last)
+    mutable std::mutex validated_grids_mutex_;
+    mutable std::vector<std::pair<BufferType, std::vector<CoreCoord>>> validated_grids_;
 
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;

@@ -12,6 +12,7 @@ This module provides shared helper functions used across MoE tests including:
 - Fabric configuration helpers (create_fabric_router_config)
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -40,7 +41,10 @@ def combine_overlap_payload_size(routed_emb_dim: int) -> int:
 
 def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
     """Whether the model opts into TtMoe's routed expert / combine_fabric2d overlap. Off unless the config names
-    ROUTED_EXPERT_COMBINE_OVERLAP = True (Kimi K2.7 and GLM 5.3 today)."""
+    ROUTED_EXPERT_COMBINE_OVERLAP = True (Kimi K2.7 and GLM 5.3 today). TT_MOE_COMBINE_OVERLAP=0 turns it off for every
+    model (the separate ops: what the eager path runs)."""
+    if os.environ.get("TT_MOE_COMBINE_OVERLAP") == "0":
+        return False
     return getattr(model_cfg, "ROUTED_EXPERT_COMBINE_OVERLAP", False)
 
 

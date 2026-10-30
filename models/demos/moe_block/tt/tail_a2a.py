@@ -27,8 +27,12 @@ all_to_all_async_generic in one program, the add and tilize under the sends.
            2D unicast injected toward the other neighbour is not delivered - the first ring run hung on it). A ready
            goes the fabric's way back to its sender: on a tie that need not be the side the data arrives on."""
 
+import os
+
 import torch
 from ttnn.bringup.combine_rf import fabric_all_gather_py as fag
+from ttnn.bringup.combine_rf import persist_l1
+from ttnn.bringup.prepared_program import generic_op as prepared_generic_op
 
 import ttnn
 from models.demos.moe_block.tt.se_engine3 import _ring_pages
@@ -427,7 +431,7 @@ class TailA2A:
         pc = sorted(ports)
         self.port_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in pc])
         self.work_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.workers])
-        self.sems = [ttnn.create_global_semaphore(mesh, self.port_crs, 0) for _ in range(2)]  # (arrival, ready)
+        self.sems = [persist_l1.semaphore(mesh, self.port_crs, 0) for _ in range(2)]  # (arrival, ready)
         # (the z-ready words: a row tile's, 16 B apart, on every port core)
         self.zrw = ttnn.from_torch(
             torch.zeros(len(pc), 4 * self.RT, dtype=torch.int32),
@@ -477,7 +481,7 @@ class TailA2A:
         p = self._pos(coord)
         virt = lambda c: mesh.worker_core_from_logical_core(c)  # noqa: E731
         node = lambda c: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))  # noqa: E731
-        arr, rdy = (int(ttnn.get_global_semaphore_address(s)) for s in self.sems)
+        arr, rdy = (persist_l1.address(s) for s in self.sems)
         zr = int(self.zrw.buffer_address())
         prog = ttnn.ProgramDescriptor()
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
@@ -635,6 +639,12 @@ class TailA2A:
         md, pp = entry
         if pp is not None:
             ttnn.bringup.run_prepared(pp, io)
-        else:
+        elif (
+            os.environ.get("MOE_TAIL_GENERIC") == "1"
+        ):  # (A/B: the descriptor path, re-hashed and re-applied each call)
             ttnn.generic_op(io, md)
+        else:
+            # (prepared dispatch: md is kept per address set above, so each call patches nothing; its runtime args hold
+            # only these tensors' base addresses, its CBs no tensor)
+            prepared_generic_op(io, md)
         return out
