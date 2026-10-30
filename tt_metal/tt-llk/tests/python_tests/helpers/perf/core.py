@@ -784,6 +784,13 @@ def _expand_run_types(text):
     return names
 
 
+_ISOLATE_RUN_TYPES = (
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+)
+
+
 def _selected_run_types(run_types):
     """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
@@ -831,6 +838,15 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
+        # Experiment (be61600d8bb): a run without isolate kernels also warms up the first isolate kernel of the test.
+        self.warmup_configs = list(self.run_configs)
+        if not any(rt in _ISOLATE_RUN_TYPES for _, _, rt in self.run_configs):
+            extra = next((rt for rt in _ISOLATE_RUN_TYPES if rt in run_types), None)
+            if extra is not None and self.run_configs:
+                self.warmup_configs.insert(
+                    0,
+                    (templates.copy() + [PERF_RUN_TYPE(extra)], runtimes.copy(), extra),
+                )
 
         super().__init__(
             test_name,
@@ -986,7 +1002,7 @@ class PerfConfig(TestConfig):
         window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            for templates, runtimes, run_type in self.run_configs:
+            for templates, runtimes, run_type in self.warmup_configs:
                 self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
                 # because we run TestConfig constructor only once
@@ -1006,7 +1022,7 @@ class PerfConfig(TestConfig):
         PerfConfig.TEST_COUNTER += 1
 
         # Experiment: run each kernel once unrecorded, so no measured kernel follows a kernel of another test.
-        for templates, runtimes, run_type in self.run_configs:
+        for templates, runtimes, run_type in self.warmup_configs:
             self.current_run_type = run_type
             if TestConfig.SPEED_OF_LIGHT:
                 self.templates = templates + runtimes
