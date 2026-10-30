@@ -21,7 +21,7 @@ using namespace ckernel::math;
  */
 constexpr std::uint32_t _eltwise_binary_rows_per_face_(const ckernel::TensorShape& tensor_shape)
 {
-    return tensor_shape.face_r_dim * tiny_face_stride(tensor_shape);
+    return tensor_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS : tensor_shape.face_r_dim;
 }
 
 /**
@@ -299,7 +299,8 @@ inline void _llk_math_eltwise_di_binary_addrmod_(const MathFidelitySchedule fide
  * @note @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
  * @note Pass the source register formats: for ELWMUL, init lowers the fidelity to the highest one they can use and skips phases they
  *       cannot use. Run init again whenever either format changes.
- * @note Use full-height faces for destination reuse and for four-face tiles.
+ * @note Use full-height faces for four-face tiles, and for single-face tiles with destination reuse; destination reuse derives its
+ *       per-face dest-to-source moves from the tile shape.
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
@@ -313,9 +314,10 @@ inline void _llk_math_eltwise_binary_init_(
         MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise MUL");
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
-    LLK_ASSERT(
-        reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary destination reuse requires 16-row faces");
     LLK_ASSERT(tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary four-face tiles require 16-row faces");
+    LLK_ASSERT(
+        reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.total_num_faces() != 1 || tensor_shape.face_r_dim == MAX_FACE_R_DIM,
+        "Eltwise binary destination reuse requires 16-row faces for single-face tiles");
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_init_", tensor_shape);
     _set_tile_shape_idx_gpr_(_eltwise_binary_dest_rows_per_tile_(tensor_shape));
 
@@ -362,9 +364,10 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckerne
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {
+        const std::uint32_t face_dest_rows = _eltwise_binary_rows_per_face_(tensor_shape);
         for (std::uint32_t face_num = 0; face_num < tensor_shape.total_num_faces(); face_num++)
         {
-            eltwise_binary_reuse_dest_as_src<reuse_dest>();
+            eltwise_binary_reuse_dest_as_src<reuse_dest>(face_dest_rows);
             ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         }
     }

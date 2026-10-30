@@ -41,19 +41,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A             = params.buffer_A;
     const Operand& buffer_B             = params.buffer_B;
 #endif
-    constexpr bool TRANSPOSE_EN            = false;
-    constexpr bool IS_32B_DEST_EN          = false;
-    constexpr std::uint32_t unp_sel_phase2 = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+    constexpr bool TRANSPOSE_EN             = false;
+    constexpr bool IS_32B_DEST_EN           = false;
+    constexpr std::uint32_t unp_sel_phase2  = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
 
     {
         START_PERF_MEASURE("INIT")
         // Setup data valid scheme
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
@@ -81,21 +80,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Phase 1 and phase 2 share unpack's bank0 instruction
                 // buffer, so select the phase 1 MOP before executing it.
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(
-                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
+                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
-                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, tensor_shape);
                 }
 
                 // Select the reuse-dest phase 2 MOP after phase 1 completes.
                 _llk_unpack_unary_operand_init_<unp_sel_phase2, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(
                     (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>()
                                                                                   : ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    tensor_shape,
                     1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
-                    _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i, tensor_shape);
                 }
             }
         }
@@ -129,6 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
 #endif
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
     {
         START_PERF_MEASURE("INIT")
         // L1_TO_L1 / MATH_ISOLATE keep the math↔pack handshake: set up FPU→PACK dest-dvalid.
@@ -177,7 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(
                     REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : math_format,
                     REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : math_format,
-                    ckernel::DEFAULT_TENSOR_SHAPE);
+                    tensor_shape);
                 for (int block = 0; block < num_blocks; block++)
                 {
                     for (int n = 0; n < num_tiles_accum; n++)
@@ -185,7 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (int tile = 0; tile < tiles_in_block; tile++)
                         {
                             const int global_tile_idx = block * tiles_in_block + tile;
-                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, REUSE_DEST_TYPE>(global_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
+                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, REUSE_DEST_TYPE>(global_tile_idx, tensor_shape);
                         }
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
@@ -221,6 +221,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces                 = params.num_faces;
     const Operand& buffer_Res                     = params.buffer_Res;
 #endif
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
 
     {
         START_PERF_MEASURE("INIT")
@@ -235,10 +236,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {
@@ -258,7 +259,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (int tile = 0; tile < output_tiles_in_block; tile++)
                     {
                         int res_tile_idx = (block * output_tiles_in_block) + tile;
-                        _llk_pack_(res_tile_idx, res_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
+                        _llk_pack_(res_tile_idx, res_tile_idx, tensor_shape);
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
                     {
