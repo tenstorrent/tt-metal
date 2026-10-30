@@ -80,6 +80,7 @@ def _run_case(
     rm_input=False,  # force ROW_MAJOR input even when C % 32 == 0
     tile_input=False,  # force TILE input even when C % 32 != 0 (channels padded to the tile width)
     shard_scheme=None,  # applied_shard_scheme: None = the op's choice | "height" | "width" | "block"
+    config_tensor_in_dram=False,  # halo / reader-index config tensors in DRAM (read per core at runtime)
 ):
     pattern = pattern or PATTERN
     kernel, stride, padding, dilation = list(kernel), list(stride), list(padding), list(dilation)
@@ -190,6 +191,7 @@ def _run_case(
                 if shard_scheme is None
                 else dict(applied_shard_scheme=getattr(ttnn.TensorMemoryLayout, f"{shard_scheme.upper()}_SHARDED"))
             ),
+            **(dict(config_tensor_in_dram=True) if config_tensor_in_dram else {}),
         )
         ttnn.synchronize_device(device)
         return out
@@ -616,3 +618,62 @@ def test_qpool_matrix(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_qpool_unit_cases(device):
     _run_cases(device, UNIT_CASES)
+
+
+# Multi-core so each core must fetch its own config page from DRAM (per-core runtime index).
+CONFIG_IN_DRAM_CASES = [
+    ("max_height_4c", dict(cores=4, config_tensor_in_dram=True)),
+    ("avg_height_4c", dict(pool="avg", padding=(0, 0), cores=4, config_tensor_in_dram=True)),
+    ("max_block_2x2", dict(shard="block", grid_yx=(2, 2), config_tensor_in_dram=True)),
+]
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_qpool_config_tensor_in_dram(device):
+    _run_cases(device, CONFIG_IN_DRAM_CASES)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_qpool_program_cache_ignores_l1_occupancy(device):
+    batch, in_h, in_w, channels = 1, 16, 8, 64
+    x_nhwc = _build_input(PATTERN, batch, in_h, in_w, channels, SEED, 0).to(torch.bfloat16)
+    tensor_height = batch * in_h * in_w
+    num_cores = 4
+    mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, tensor_height // num_cores, channels),
+        core_grid=ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    x = ttnn.from_torch(x_nhwc.reshape(1, 1, tensor_height, channels), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(
+        device, mem_config
+    )
+
+    def run_once():
+        out = ttnn.experimental.quasar.max_pool2d(
+            input_tensor=x,
+            batch_size=batch,
+            input_h=in_h,
+            input_w=in_w,
+            channels=channels,
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+        )
+        ttnn.synchronize_device(device)
+        return ttnn.to_torch(out)
+
+    first = run_once()
+    num_entries = device.num_program_cache_entries()
+    filler = ttnn.from_torch(
+        torch.zeros(1, 1, 256, 1024, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    second = run_once()
+    filler.deallocate()
+    assert device.num_program_cache_entries() == num_entries
+    assert torch.equal(first, second)

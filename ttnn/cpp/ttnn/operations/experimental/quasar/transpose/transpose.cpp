@@ -40,6 +40,10 @@ inline Tensor transpose_(
             // inherit input config so downstream can promote (e.g. N=C=1 → WIDTH_SHARDED).
             const bool user_requested_layout = output_mem_config.has_value() && output_mem_config.value().is_sharded();
             output_mem_constructed = user_requested_layout ? output_mem_config.value() : a.memory_config();
+            // adjust_shard_spec_to_shape preserves the input's sharding style, so its result is only
+            // reusable when the requested layout matches the input's; otherwise synthesize a fresh spec.
+            const bool layouts_match = !user_requested_layout ||
+                                       output_mem_config.value().memory_layout() == a.memory_config().memory_layout();
             // If shard geometry can't scale to a valid output shard, hand back a shard-spec-less
             // sharded MemoryConfig (device op synthesizes via generate_transpose_shard_spec) when
             // the user requested sharded; otherwise fall back to L1 interleaved.
@@ -71,7 +75,7 @@ inline Tensor transpose_(
                     auto output_padded_shape = input_padded_shape;
                     std::swap(output_padded_shape[2], output_padded_shape[3]);
                     auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                    if (!adjusted.has_value() ||
+                    if (!adjusted.has_value() || !layouts_match ||
                         (a.layout() == Layout::TILE && (adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                                                         adjusted->shape[1] % tt::constants::TILE_WIDTH != 0))) {
                         shard_derivation_fallback();
@@ -89,7 +93,7 @@ inline Tensor transpose_(
                 output_padded_shape[1] = a.logical_shape()[2];
                 output_padded_shape[2] = tt::round_up(a.logical_shape()[1], tt::constants::TILE_HEIGHT);
                 auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                if (!adjusted.has_value() || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                if (!adjusted.has_value() || !layouts_match || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                     adjusted->shape[1] % tt::constants::TILE_WIDTH != 0) {
                     shard_derivation_fallback();
                 } else {

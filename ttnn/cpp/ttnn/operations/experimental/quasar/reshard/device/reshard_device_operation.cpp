@@ -88,7 +88,13 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
             }
             return ReshardSameHeightFactory</*local_is_output*/ false>{};
         }
-        return ReshardGenericFactory{};
+        // ReshardGenericFactory's reader issues raw NOC reads against a single shard base address, which
+        // is only valid for L1-sharded buffers; DRAM on either side takes the ND (TensorAccessor) path below.
+        const bool dram_involved = input_tensor.memory_config().buffer_type() == BufferType::DRAM ||
+                                   out_mem_config.buffer_type() == BufferType::DRAM;
+        if (!dram_involved) {
+            return ReshardGenericFactory{};
+        }
     }
     auto input_buffer_type = input_tensor.memory_config().buffer_type();
     auto output_buffer_type = out_mem_config.buffer_type();
@@ -162,6 +168,15 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
                                      : args.output_mem_config;
     if (!out_mem_config.is_sharded()) {
         return {false, "output must be sharded"};
+    }
+
+    // DRAM banks form a 1D grid, so a legacy 2D-grid BLOCK_SHARDED layout collides on bank id. Block-shaped
+    // DRAM shards are expressed via an ND shard spec (ND_SHARDED), which is not caught here.
+    if ((input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+         input_tensor.memory_config().buffer_type() == BufferType::DRAM) ||
+        (out_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+         out_mem_config.buffer_type() == BufferType::DRAM)) {
+        return {false, "We don't support DRAM block sharding"};
     }
 
     // ReshardSameWidthFactory (height↔height) has explicit unaligned handling,

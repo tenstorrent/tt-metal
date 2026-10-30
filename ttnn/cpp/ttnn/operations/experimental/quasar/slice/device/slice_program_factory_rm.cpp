@@ -97,7 +97,8 @@ SliceRmRuntimeArgs get_slice_runtime_args_rm(
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
+    // The reader lands `misalignment` extra leading bytes per stick, so the in-DFB stride must cover them.
+    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes + misalignment, alignment);
 
     // shard_W * elem_size for B/W-sharded (splits row across shards); full row otherwise.
     // Fallback is padded for the reader tensor, unpadded for the writer tensor.
@@ -188,18 +189,15 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
-    auto alignment = single_alignment;
+    const auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     uint32_t begins_bytes = output_tensor_start[-1] * input.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
-    if (misalignment != 0) {
-        alignment *= 2;
-    }
     const uint32_t unpadded_row_size_bytes = output.padded_shape()[-1] * input.element_size();
-    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
-    const uint32_t stick_stride_for_merge = tt::round_up(unpadded_row_size_bytes, single_alignment);
+    // Must match get_slice_runtime_args_rm's stick stride: the reader writes row + misalignment bytes per stick.
+    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes + misalignment, alignment);
+    const uint32_t stick_stride_for_merge = cb_page_size;
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
                                          ? num_sticks_per_core_group_1
                                          : num_sticks_per_core_group_2;

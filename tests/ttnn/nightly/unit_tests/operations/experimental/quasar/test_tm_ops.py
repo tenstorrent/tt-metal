@@ -106,6 +106,21 @@ def test_quasar_slice_row_major_height_sharded_nontile_aligned(shape, begins, en
     _run_quasar_slice(shape, begins, ends, step, imc, omc, device)
 
 
+# Misaligned W-begin with an output row that is already a multiple of 2x the buffer alignment
+# (32 B L1/DRAM on WH, 64 B DRAM on BH): the per-stick staging must still hold row + misalignment bytes.
+@pytest.mark.parametrize(
+    "shape, begins, ends",
+    [
+        ((1, 1, 64, 160), (0, 0, 0, 1), (1, 1, 64, 33)),
+        ((1, 1, 64, 160), (0, 0, 0, 1), (1, 1, 64, 65)),
+        ((1, 2, 40, 160), (0, 0, 0, 3), (1, 2, 40, 131)),
+    ],
+)
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, L1_INTERLEAVED], ids=["dram", "l1"])
+def test_quasar_slice_row_major_misaligned_begin_aligned_row(shape, begins, ends, mem_config, device):
+    _run_quasar_slice(shape, begins, ends, (1, 1, 1, 1), mem_config, mem_config, device)
+
+
 def test_quasar_slice_tile_tensor_args(device):
     shape = (1, 1, 64, 64)
     starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
@@ -553,6 +568,101 @@ def test_quasar_reshape_nd_input_last_dim_change_is_not_a_view(device):
     _assert_reshape(torch_output, actual, ttnn.bfloat16)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf8_b", "bf4_b"])
+@pytest.mark.parametrize("sharded_output", [False, True], ids=["interleaved", "height_sharded"])
+def test_quasar_reshape_block_float_tile(device, dtype, sharded_output):
+    input_shape, output_shape = (1, 1, 64, 64), (1, 1, 32, 128)
+    tt_input = ttnn.from_torch(
+        torch.rand(input_shape, dtype=torch.bfloat16), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    # 16-element shared-exponent groups stay intact for this reshape, so the re-quantization is exact.
+    expected = ttnn.to_torch(tt_input).reshape(output_shape)
+    memory_config = (
+        ttnn.create_sharded_memory_config(
+            output_shape, core_grid=ttnn.CoreGrid(x=1, y=1), strategy=ttnn.ShardStrategy.HEIGHT
+        )
+        if sharded_output
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = ttnn.experimental.quasar.reshape(tt_input, output_shape, memory_config=memory_config)
+    assert tt_output.dtype == dtype
+    assert torch.equal(ttnn.to_torch(tt_output), expected)
+
+
+def _sharded_mc(layout, buffer_type, end_x, end_y, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))})
+    return ttnn.MemoryConfig(layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR))
+
+
+@pytest.mark.parametrize(
+    "shape, in_mc, out_mc",
+    [
+        # L1 width-sharded -> DRAM height-sharded (ND copy-local, local = input): tiles copy page-to-page.
+        (
+            (1, 1, 64, 128),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, 1, 0, (64, 64)),
+            _sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, 1, 0, (32, 128)),
+        ),
+        # DRAM width-sharded -> L1 width-sharded: must not take the L1-only legacy generic reader.
+        (
+            (1, 1, 64, 256),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, 1, 0, (64, 128)),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, 3, 0, (64, 64)),
+        ),
+        # DRAM height-sharded -> L1 width-sharded.
+        (
+            (1, 1, 64, 128),
+            _sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, 1, 0, (32, 128)),
+            _sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, 1, 0, (64, 64)),
+        ),
+    ],
+    ids=["l1_width_to_dram_height", "dram_width_to_l1_width", "dram_height_to_l1_width"],
+)
+def test_quasar_reshard_tile_dram_involved(device, shape, in_mc, out_mc):
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc
+    )
+    tt_output = ttnn.experimental.quasar.reshard(tt_input, out_mc)
+    assert tt_output.memory_config() == out_mc
+    assert torch.equal(ttnn.to_torch(tt_output), torch_input)
+
+
+def test_quasar_reshard_dram_block_sharded_rejected(device, expect_error):
+    shape = (1, 1, 64, 64)
+    in_mc = _sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, 1, 0, (32, 64))
+    out_mc = _sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.DRAM, 1, 0, (64, 32))
+    tt_input = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in_mc,
+    )
+    with expect_error(RuntimeError, "DRAM block sharding"):
+        ttnn.experimental.quasar.reshard(tt_input, out_mc)
+
+
+@pytest.mark.parametrize("input_sharded", [False, True], ids=["from_interleaved", "from_sharded"])
+def test_quasar_to_memory_config_dram_block_sharded_rejected(device, expect_error, input_sharded):
+    shape = (1, 1, 64, 64)
+    in_mc = (
+        _sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, 1, 0, (32, 64))
+        if input_sharded
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_mc = _sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.DRAM, 1, 0, (64, 32))
+    tt_input = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in_mc,
+    )
+    with expect_error(RuntimeError, "DRAM block sharding"):
+        ttnn.experimental.quasar.to_memory_config(tt_input, out_mc)
+
+
 _qsr_prim_fold = ttnn._ttnn.operations.experimental.quasar._prim_fold
 _qsr_is_tile_native_fold_supported = ttnn._ttnn.operations.experimental.quasar._is_tile_native_fold_supported
 
@@ -604,6 +714,79 @@ def test_quasar_pad_rm_sharded_width_only_bfloat16_value(device, pad_value):
 
     expected = torch.nn.functional.pad(torch_input_tensor, (0, pad_to_shape[-1] - input_shape[-1]), value=pad_value)
     assert torch.equal(tt_output, expected)
+
+
+@pytest.mark.parametrize("pad_value", [7, 1000])
+def test_quasar_pad_rm_sharded_width_only_uint16_value(device, pad_value):
+    input_shape, pad_to_shape = (1, 1, 12, 8), (1, 1, 12, 64)
+    core_grid = ttnn.CoreGrid(x=2, y=6)
+    if device.core_grid.x < core_grid.x or device.core_grid.y < core_grid.y:
+        pytest.skip("core grid for this test is not compatible with the device")
+
+    torch_input_tensor = torch.randint(0, 100, input_shape, dtype=torch.int32)
+    mem_config = ttnn.create_sharded_memory_config(input_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.HEIGHT)
+    tt_input = ttnn.interleaved_to_sharded(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        mem_config,
+        keep_l1_aligned=True,
+    )
+    tt_output = ttnn.to_torch(
+        ttnn.to_memory_config(
+            ttnn.experimental.quasar.pad(tt_input, pad_to_shape, (0, 0, 0, 0), pad_value), ttnn.L1_MEMORY_CONFIG
+        )
+    ).to(torch.int32)
+
+    expected = torch.nn.functional.pad(torch_input_tensor, (0, pad_to_shape[-1] - input_shape[-1]), value=pad_value)
+    assert torch.equal(tt_output, expected)
+
+
+@pytest.mark.parametrize(
+    "memory_layout, grid_end, in_shard, out_shard",
+    [
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 0), (64, 32), (64, 64)),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 1), (32, 32), (32, 64)),
+    ],
+)
+def test_quasar_pad_rm_width_or_block_sharded_width_pad_keeps_layout(
+    device, memory_layout, grid_end, in_shard, out_shard
+):
+    input_shape, pad_to_shape, value = (1, 1, 64, 64), (1, 1, 64, 128), 2.0
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))})
+
+    def sharded(shard_shape):
+        shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=sharded(in_shard),
+    )
+    out_mc = sharded(out_shard)
+    tt_output = ttnn.experimental.quasar.pad(tt_input, pad_to_shape, (0, 0, 0, 0), value, memory_config=out_mc)
+    assert tt_output.memory_config() == out_mc
+
+    expected = torch.nn.functional.pad(torch_input_tensor, (0, pad_to_shape[-1] - input_shape[-1]), value=value)
+    assert torch.equal(ttnn.to_torch(tt_output), expected)
+
+
+@pytest.mark.parametrize(
+    "input_shape, pad_to_shape", [((1, 1, 128, 96), (1, 1, 128, 128)), ((1, 1, 30, 64), (1, 2, 32, 96))]
+)
+@pytest.mark.parametrize("value", [1.0, -3.5])
+def test_quasar_pad_rm_interleaved_nonzero_value(device, input_shape, pad_to_shape, value):
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.experimental.quasar.pad(tt_input, pad_to_shape, (0, 0, 0, 0), value)
+
+    torch_padding = []
+    for in_dim, out_dim in zip(reversed(input_shape), reversed(pad_to_shape)):
+        torch_padding += [0, out_dim - in_dim]
+    expected = torch.nn.functional.pad(torch_input_tensor, torch_padding, value=value)
+    assert torch.equal(ttnn.to_torch(tt_output), expected)
 
 
 def test_quasar_pad_tile_rank1(device):
@@ -931,6 +1114,29 @@ def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device, inp
         assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(result.cpu()), ulp_threshold=0)
     finally:
         ttnn.deallocate(resident)
+
+
+# Wt = 481 rows do not fit in L1, so both ops take the block factory. On an 8x8 grid its split gives
+# full blocks of 23 tiles and a cliff-row block of 21 (coprime): one buffer shared across both widths
+# would need LCM = 483 tiles per side, far beyond L1, so each width needs its own buffer pair.
+@pytest.mark.parametrize("op", ["untilize", "untilize_with_unpadding"])
+def test_quasar_untilize_block_coprime_block_widths(device, op):
+    tile_dim, Wt, Ht = 32, 481, 48
+    H, W = Ht * tile_dim, Wt * tile_dim
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, H, W), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    if op == "untilize":
+        result = ttnn.experimental.quasar.untilize(ttnn_in, use_multicore=True)
+        golden = x
+    else:
+        out_h, out_w = H - 5, W - 40
+        result = ttnn.experimental.quasar.untilize_with_unpadding(
+            ttnn_in, (0, 0, out_h - 1, out_w - 1), use_multicore=True
+        )
+        golden = x[..., :out_h, :out_w]
+    assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(result.cpu()), ulp_threshold=0)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
