@@ -89,6 +89,55 @@ def _position_ids(seq_len: int) -> torch.Tensor:
     return torch.stack([c.reshape(-1) for c in coords], dim=-1)[:seq_len]
 
 
+BLOCK = 64  # the sparse op's mask block (block_size)
+
+
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    """PCC over the entries where both are defined (the sliced reference leaves the rest NaN)."""
+    a, b = a.flatten().double(), b.flatten().double()
+    keep = ~(torch.isnan(a) | torch.isnan(b))
+    return torch.corrcoef(torch.stack([a[keep], b[keep]]))[0, 1].item()
+
+
+def _sol_reference_slice(q, k, v, mask, pooled_k, pooled_v, rows, logical_n, scale, heads, shards, chunk=256):
+    """fp64 block-sparse attention on a slice of the output, the semantics sparse_ring_sdpa implements: per (head,
+    64-row Q block) the mask's kept 64-token blocks exactly, every other valid block one pooled entry (mean K, mean V)
+    with weight = its token count. q / k / v [1, H, S*rows, D]; mask [S, H, nb_pad, S*nb_pad] (shard s's local Q
+    blocks); pooled [S, H, S*nb_pad, D] (each SP device's own gathered copy; shard s uses device s's). Only
+    `heads` x `shards` are computed; the rest of the output is NaN."""
+    S = mask.shape[0]
+    nb, nb_pad = -(-rows // BLOCK), mask.shape[2]
+    assert nb_pad == -(-nb // 32) * 32, f"mask rows {nb_pad}: expected one row per {BLOCK}-row Q block (padded to 32)"
+    lens = torch.zeros(S, nb_pad, dtype=torch.int64)
+    for s in range(S):
+        for b in range(nb):
+            start = s * rows + b * BLOCK
+            lens[s, b] = max(0, min(start + BLOCK, (s + 1) * rows, logical_n) - start)
+    lens = lens.reshape(-1)
+    valid = lens > 0
+    log_len = torch.where(valid, lens.clamp(min=1).double().log(), torch.zeros(lens.shape, dtype=torch.float64))
+    tok = torch.arange(S * rows)
+    tok_block = (tok // rows) * nb_pad + (tok % rows) // BLOCK
+    tok_valid = tok < logical_n
+    out = torch.full(q.shape, float("nan"))
+    for h in heads:
+        kh, vh = k[0, h].double(), v[0, h].double()
+        for s in shards:
+            pk, pv = pooled_k[s, h].double(), pooled_v[s, h].double()
+            for r0 in range(0, rows, chunk):
+                r1 = min(r0 + chunk, rows)
+                sl = slice(s * rows + r0, s * rows + r1)
+                qh = q[0, h, sl].double()
+                keep = mask[s, h, torch.arange(r0, r1) // BLOCK] != 0  # [rows, S * nb_pad]
+                le = (qh @ kh.T) * scale
+                le = le.masked_fill(~(keep[:, tok_block] & tok_valid[None, :]), float("-inf"))
+                lp = (qh @ pk.T) * scale + log_len[None, :]
+                lp = lp.masked_fill(keep | ~valid[None, :], float("-inf"))
+                w = torch.softmax(torch.cat([le, lp], dim=1), dim=1)
+                out[0, h, sl] = (w[:, : le.shape[1]] @ vh + w[:, le.shape[1] :] @ pv).float()
+    return out
+
+
 def _timed(fn, mesh_device, reps):
     ttnn.synchronize_device(mesh_device)
     t0 = time.perf_counter()
@@ -175,6 +224,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             tt_model.sol_prefix_mode = prefix
 
         op_times = []
+        checks = {}  # sol under trace: traced vs eager output, and vs the fp64 reference on a slice
         op_name = "sparse_ring_sdpa" if mode == "sol" else "ring_joint_scaled_dot_product_attention"
         orig_ring = getattr(ttnn.transformer, op_name)
 
@@ -206,7 +256,57 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
                 ttnn.synchronize_device(mesh_device)
                 op_times.append((time.perf_counter() - t0) * 1e3)
             ttnn.release_trace(mesh_device, trace_id)
+            if mode == "sol":
+                t_check = time.perf_counter()
+                try:
+                    checks.update(_check_sol(out, args, kwargs))
+                except Exception as e:  # never lose the timings to the check
+                    checks["error"] = f"{type(e).__name__}: {e}"
+                    logger.error(f"[{WORKING_POINTS[seq_local]}] sol output check failed to run: {checks['error']}")
+                checks["check_s"] = time.perf_counter() - t_check  # inside module_ms of this rep; subtract it
             return out
+
+        def _to_host(t, sp_dim, tp_dim):
+            dims = [None, None]
+            dims[sp_axis], dims[tp_axis] = sp_dim, tp_dim
+            composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=dims, mesh_shape=tuple(mesh_device.shape))
+            return ttnn.to_torch(t, mesh_composer=composer)
+
+        def _check_sol(traced_out, args, kwargs):
+            """The traced replays' output against an eager call on the same inputs (a replay that ran ahead of its
+            K / V arrival or reused stale semaphores differs), and against the exact block-sparse reference on the
+            first / last head of the first / last shard, from the pre-pass's own mask and pooled K / V."""
+            q, k, v, mask, pooled_k, pooled_v = args[:6]
+            traced = _to_host(traced_out, 2, 1)  # bf16 [1, H, S*rows, D]
+            eager_out = orig_ring(*args, **kwargs)
+            ttnn.synchronize_device(mesh_device)
+            eager = _to_host(eager_out, 2, 1)
+            ttnn.deallocate(eager_out)
+            # Full-tensor checks stay in bf16 (15 s is 1.5 GB per tensor); PCCs and the reference use two heads.
+            n_heads = traced.shape[1]
+            hs = [0, n_heads - 1]
+            max_diff = float((traced - eager).abs().max())
+            finite = bool(torch.isfinite(traced).all())
+            traced, eager = traced[:, hs].float(), eager[:, hs].float()
+            qh, kh, vh = (_to_host(t, 2, 1)[:, hs].float() for t in (q, k, v))
+            mask_h = _to_host(mask, 0, 1)[:, hs]
+            pk, pv = (_to_host(t, 0, 1)[:, hs].float() for t in (pooled_k, pooled_v))  # [S, 2, S*nb_pad, D]
+            pooled_copies_equal = bool(
+                all(torch.equal(t[0], t[d]) for t in (pk, pv) for d in range(1, t.shape[0]))
+            )
+            ref = _sol_reference_slice(
+                qh, kh, vh, mask_h, pk, pv, seq_local, seq_len, ATTENTION_HEAD_DIM**-0.5, heads=[0, 1],
+                shards=[0, sp_factor - 1],
+            )
+            res = {
+                "pcc_traced_vs_eager": _pcc(traced, eager),
+                "max_diff_traced_vs_eager": max_diff,
+                "pcc_vs_reference": _pcc(ref, traced),
+                "finite": finite,
+                "pooled_copies_equal": pooled_copies_equal,
+            }
+            logger.info(f"[{WORKING_POINTS[seq_local]}] sol output check: {res}")
+            return res
 
         def timed_prefix(self, *args, **kwargs):
             ttnn.synchronize_device(mesh_device)
@@ -298,6 +398,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             "prefix_mode": tt_model.sol_prefix_mode if mode == "sol" else None,
             "block_density": density,
             "block_density_per_rep": densities,
+            "checks": checks,
         }
         results.append(rec)
         prefix_note = (
@@ -321,3 +422,12 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
     with open(out_dir / "results.jsonl", "a") as f:
         for rec in results:
             f.write(json.dumps(rec) + "\n")
+    # Validation of the sol timings, after the results are written.
+    for rec in results:
+        c = rec.get("checks") or {}
+        if c:
+            assert "error" not in c, f"sol output check did not run: {c}"
+            assert c["finite"], f"sol output has non-finite values: {c}"
+            assert c["max_diff_traced_vs_eager"] == 0, f"traced and eager sol outputs differ (all heads): {c}"
+            assert c["pcc_traced_vs_eager"] > 0.9999, f"traced and eager sol outputs differ: {c}"
+            assert c["pcc_vs_reference"] > 0.999, f"sol output disagrees with the block-sparse reference: {c}"
