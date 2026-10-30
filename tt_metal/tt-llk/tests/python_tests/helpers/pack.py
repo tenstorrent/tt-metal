@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import struct
-
 import ml_dtypes
 import numpy as np
 import torch
 
+from .bfp_format_utils import _bf16_sign_exp_mantissa, _bfp8_mantissas_per_block
 from .format_config import (
     FOUR_BIT_INTEGER_RANGE,
     MX_FORMAT_BLOCK_SIZE,
@@ -137,6 +136,8 @@ def pack_uint4(torch_tensor, num_faces=None, face_r_dim=None):
 # BFP (Block Floating-Point) Format Helpers
 # ============================================================================
 
+FP32_QUIET_NAN_BIT = 1 << 22
+
 
 def _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim):
     """Flatten, validate, and trim the input tensor for BFP packing.
@@ -159,74 +160,56 @@ def _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim):
     return flattened_tensor[:elements_to_pack]
 
 
-def _bfp_collect_blocks(flattened_tensor, block_size, float_to_block_fn):
-    """Iterate over BFP blocks, collecting shared exponents and mantissas.
+def _bfp_collect_blocks(flattened_tensor, block_size, magnitude_bits):
+    """Quantize BFP blocks in a batch, collecting shared exponents and mantissas.
 
     Args:
         flattened_tensor: Pre-processed tensor (output of _bfp_prepare_blocks).
         block_size: Elements per block (16 for all current BFP formats).
-        float_to_block_fn: Callable(block) -> (shared_exponent, mantissas).
+        magnitude_bits: Magnitude width (7 for BFP8, 3 for BFP4, 1 for BFP2).
 
     Returns:
         (exponents, all_mantissas) where exponents is padded to at least MIN_BFP_EXPONENTS.
     """
     num_blocks = len(flattened_tensor) // block_size
-    exponents = []
-    all_mantissas = []
-    for i in range(num_blocks):
-        block = flattened_tensor[i * block_size : (i + 1) * block_size]
-        shared_exponent, bfp_mantissas = float_to_block_fn(block)
-        exponents.append(shared_exponent)
-        all_mantissas.extend(bfp_mantissas)
+    if num_blocks == 0:
+        return [0] * MIN_BFP_EXPONENTS, []
+
+    values = (
+        flattened_tensor[: num_blocks * block_size]
+        .detach()
+        .to(device="cpu", dtype=torch.float32)
+        .contiguous()
+    )
+    # Quiet signaling NaNs as the former scalar float conversion did.
+    bits = values.view(torch.int32)
+    values = torch.where(torch.isnan(values), bits | FP32_QUIET_NAN_BIT, bits).view(
+        torch.float32
+    )
+    signs, exps, mants = _bf16_sign_exp_mantissa(values)
+    # Round with the shared BFP8 guard-bit rule before narrowing to BFP4/BFP2.
+    shared_exps, bfp8_mants = _bfp8_mantissas_per_block(
+        mants.reshape(num_blocks, block_size), exps.reshape(num_blocks, block_size)
+    )
+    magnitudes = bfp8_mants >> (7 - magnitude_bits)
+    # Drop the sign of zero magnitudes: a sign-only datum decodes to -inf in hardware.
+    mantissas = torch.where(
+        magnitudes != 0,
+        (signs.reshape(num_blocks, block_size) << magnitude_bits) | magnitudes,
+        0,
+    )
+    exponents = shared_exps.flatten().tolist()
     if len(exponents) < MIN_BFP_EXPONENTS:
         exponents.extend([0] * (MIN_BFP_EXPONENTS - len(exponents)))
-    return exponents, all_mantissas
+    return exponents, mantissas.flatten().tolist()
 
 
 def float_to_bfp8_block(block):
-    def bfloat16_to_binary(value):
-        float_value = struct.unpack("<I", struct.pack("<f", value))[0]
-        bfloat16_value = (float_value & 0xFFFF0000) >> 16
-        return f"{(bfloat16_value >> 8) & 0xFF:08b}{bfloat16_value & 0xFF:08b}"
-
-    exponents = []
-    mantissas = []
-    signs = []
-    max_exponent = -float("inf")
-
-    for value in block:
-        binary_str = bfloat16_to_binary(value)
-        sign = binary_str[0]
-        signs.append(int(sign, 2))
-        exponent = int(binary_str[1:9], 2)
-        mantissa = binary_str[9:-1]  # remove last
-        mantissa = "1" + mantissa  ## add 1
-        exponents.append(exponent)
-        mantissas.append(mantissa)
-        max_exponent = max(max_exponent, exponent)
-
-    shared_exponent = max_exponent
-
-    mantissas_explicit = [int(mantissa, 2) for mantissa in mantissas]
-
-    bfp8_mantissas = []
-    for i in range(len(block)):
-        exponent_delta = shared_exponent - exponents[i]
-        if exponent_delta > 0:
-            # Round-to-nearest, ties away from zero (per ISA spec for BFP8 packing)
-            guard_bit = (mantissas_explicit[i] >> (exponent_delta - 1)) & 1
-            mantissa = (mantissas_explicit[i] >> exponent_delta) + guard_bit
-        else:
-            mantissa = mantissas_explicit[i]
-        mantissa = mantissa & 0x7F
-        # Flush negative-zero to +0: when the magnitude rounds/shifts to 0, drop
-        # the sign bit. The tt-metal host quantizer (convert_u32_to_bfp) does the
-        # same, and the hardware unpacker decodes a sign-only mantissa (0x80) to
-        # -inf, so no valid producer should ever emit it.
-        mantissa = ((signs[i] << 7) | mantissa) if mantissa != 0 else 0
-        bfp8_mantissas.append(mantissa)
-
-    return shared_exponent, bfp8_mantissas
+    """Encode one block using the same quantizer as pack_bfp8_b."""
+    exponents, mantissas = _bfp_collect_blocks(
+        torch.as_tensor(block, dtype=torch.float32), len(block), magnitude_bits=7
+    )
+    return exponents[0], mantissas
 
 
 def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
@@ -248,54 +231,9 @@ def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
     exponents, mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp8_block
+        flattened_tensor, block_size, magnitude_bits=7
     )
     return exponents + mantissas
-
-
-def truncate_bfp8(bfp8_mantissas, magnitude_bits):
-    """Truncate BFP8 mantissas to a narrower BFP format.
-
-    BFP8 mantissas are 8 bits: 1 sign bit + 7 magnitude bits.
-    The output keeps the sign bit and the top ``magnitude_bits`` of the
-    7 magnitude bits, dropping the bottom (7 - magnitude_bits) bits.
-    This matches hardware behavior which uses simple truncation when
-    narrowing BFP8 to BFP4 or BFP2 (per WormholeB0 Packers/FormatConversion.md).
-
-    Args:
-        bfp8_mantissas: List of 8-bit BFP8 mantissa values.
-        magnitude_bits: Number of magnitude bits to keep in the output
-            (3 for BFP4, 1 for BFP2).
-
-    Returns:
-        List of (magnitude_bits + 1)-bit truncated mantissas.
-    """
-    shift = 7 - magnitude_bits
-    mag_mask = (1 << magnitude_bits) - 1
-    out = []
-    for bfp8 in bfp8_mantissas:
-        magnitude = (bfp8 >> shift) & mag_mask
-        sign = (bfp8 >> 7) & 0x1
-        # Flush negative-zero to +0: truncation can drop a small BFP8 magnitude to
-        # 0 while leaving the sign bit set. Emit +0 so the hardware unpacker never
-        # sees a sign-only mantissa (which it decodes to -inf), matching the host
-        # quantizer's behavior.
-        out.append(((sign << magnitude_bits) | magnitude) if magnitude != 0 else 0)
-    return out
-
-
-def float_to_bfp4_block(block):
-    """Pack a 16-element block to BFP4_b format.
-
-    Per hardware spec (WormholeB0 Packers/FormatConversion.md):
-      Step 1: Convert to BFP8 using float_to_bfp8_block (round-to-nearest,
-              one shared 8-bit exponent per 16 datums).
-              BFP8 has 1 sign bit + 7 magnitude bits.
-      Step 2: Truncate BFP8 → BFP4 (keep top 3 of the 7 magnitude bits).
-    """
-    shared_exponent, bfp8_mantissas = float_to_bfp8_block(block)
-    bfp4_mantissas = truncate_bfp8(bfp8_mantissas, magnitude_bits=3)
-    return shared_exponent, bfp4_mantissas
 
 
 def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
@@ -315,30 +253,15 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
     exponents, all_mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp4_block
+        flattened_tensor, block_size, magnitude_bits=3
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 2):
-        low = all_mantissas[i]
-        high = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        packed_mantissas.append((high << 4) | low)
+    mantissas = np.asarray(
+        all_mantissas + [0] * (-len(all_mantissas) % 2), dtype=np.uint8
+    ).reshape(-1, 2)
+    packed_mantissas = (mantissas[:, 0] | (mantissas[:, 1] << 4)).tolist()
 
     return exponents + packed_mantissas
-
-
-def float_to_bfp2_block(block):
-    """Pack a 16-element block to BFP2_b format.
-
-    Per hardware spec (WormholeB0 Packers/FormatConversion.md):
-      Step 1: Convert to BFP8 using float_to_bfp8_block (round-to-nearest,
-              one shared 8-bit exponent per 16 datums).
-              BFP8 has 1 sign bit + 7 magnitude bits.
-      Step 2: Truncate BFP8 → BFP2 (keep top 1 of the 7 magnitude bits).
-    """
-    shared_exponent, bfp8_mantissas = float_to_bfp8_block(block)
-    bfp2_mantissas = truncate_bfp8(bfp8_mantissas, magnitude_bits=1)
-    return shared_exponent, bfp2_mantissas
 
 
 def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
@@ -360,16 +283,18 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
     exponents, all_mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, float_to_bfp2_block
+        flattened_tensor, block_size, magnitude_bits=1
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 4):
-        e0 = all_mantissas[i] if i < len(all_mantissas) else 0
-        e1 = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        e2 = all_mantissas[i + 2] if (i + 2) < len(all_mantissas) else 0
-        e3 = all_mantissas[i + 3] if (i + 3) < len(all_mantissas) else 0
-        packed_mantissas.append((e3 << 6) | (e2 << 4) | (e1 << 2) | e0)
+    mantissas = np.asarray(
+        all_mantissas + [0] * (-len(all_mantissas) % 4), dtype=np.uint8
+    ).reshape(-1, 4)
+    packed_mantissas = (
+        mantissas[:, 0]
+        | (mantissas[:, 1] << 2)
+        | (mantissas[:, 2] << 4)
+        | (mantissas[:, 3] << 6)
+    ).tolist()
 
     return exponents + packed_mantissas
 

@@ -76,7 +76,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import (
     assert_bf16_separates_rne,
     assert_bit_exact,
@@ -2811,7 +2811,9 @@ def _golden_sfpu_binary_bcast(
         b_bcast = b[:, 0].unsqueeze(1).expand_as(b)
 
     golden_rm = op(a, b_bcast.contiguous()).flatten()
-    return tilize(golden_rm, stimuli_format=stimuli_format)
+    return tilize_block(
+        golden_rm, TILE_DIMENSIONS, stimuli_format=stimuli_format
+    ).flatten()
 
 
 def _run_sfpu_binary_bcast(
@@ -2889,9 +2891,9 @@ def _run_sfpu_binary_bcast(
             OUT_ZERO_POINT(0),
         ],
         "variant_stimuli": StimuliConfig(
-            tilize(src_A, stimuli_format=formats.input_format),
+            tilize_block(src_A, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
-            tilize(src_B, stimuli_format=formats.input_format),
+            tilize_block(src_B, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,

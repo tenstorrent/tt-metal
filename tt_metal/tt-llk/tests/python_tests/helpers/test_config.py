@@ -26,7 +26,10 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
+    read_from_device,
     read_word_from_device,
+    write_to_device,
+    write_words_to_device,
 )
 
 from . import device as device_module
@@ -51,7 +54,6 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
-from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
