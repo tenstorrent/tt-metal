@@ -1810,7 +1810,7 @@ def test_moe_compute_precision_is_program_cache_key(mesh_device, mesh_shape, ker
 
 
 # ---- expert rows path ----
-# On Blackhole, moe_compute takes the path its cost model predicts faster. The expert rows path runs the expert rows
+# On Blackhole, moe_compute takes the expert rows path whenever the call fits it. That path runs the expert rows
 # program, then the placement program: outputs 0-2 and the double buffer, and with a combine (SingleDevice) every
 # routed row sent to the combine output. TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path (Wormhole takes the
 # expert rows path only when forced) and TT_METAL_MOE_COMPUTE_ROW_TILES the expert rows path's row tiles per job (more
@@ -2503,9 +2503,8 @@ def test_moe_compute_expert_rows_deterministic(mesh_device, mesh_shape, mode):
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_auto_choice(mesh_device, mesh_shape, monkeypatch):
-    """Unforced, Blackhole runs ComputeOnly on the expert rows path (two programs): with one row tile per job the ring's
-    core per bank is compute-bound, the expert rows path's core groups are not. A call the expert rows path refuses runs
-    the ring (test_moe_compute_expert_rows_top_k_over_max)."""
+    """Unforced, Blackhole runs ComputeOnly on the expert rows path (two programs), as it does every call that path
+    fits. A call the expert rows path refuses runs the ring (test_moe_compute_expert_rows_top_k_over_max)."""
     if mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
         pytest.skip("Wormhole takes the expert rows path only when forced")
     monkeypatch.delenv(_KERNEL_ENV, raising=False)
