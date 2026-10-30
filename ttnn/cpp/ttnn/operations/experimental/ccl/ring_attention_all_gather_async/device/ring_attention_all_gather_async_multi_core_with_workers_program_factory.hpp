@@ -65,7 +65,10 @@ struct RingAttentionRankMapping {
 
 // The kernels' full-mesh rank-mapping compile-time arg (ring_attention_rank_mapping.hpp).
 inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& mapping) {
-    return !mapping.full_mesh ? 0u : (mapping.column_major_ranks ? 2u : 1u);
+    if (!mapping.full_mesh) {
+        return 0u;
+    }
+    return mapping.column_major_ranks ? 2u : 1u;
 }
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
