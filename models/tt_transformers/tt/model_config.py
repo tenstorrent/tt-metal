@@ -3498,7 +3498,61 @@ class ModelArgs:
         two used to encode mesh_shape differently while sharing one filename and format_version,
         so a model reachable from both (gemma3 inherits this class but its demos call the shared
         helper) had each side reject the other's marker and cold-load forever. (#45400 review)"""
-        return _weight_cache_is_complete(self.weight_cache_path(dtype), **self._weight_cache_identity(components))
+        complete = _weight_cache_is_complete(self.weight_cache_path(dtype), **self._weight_cache_identity(components))
+        if complete and not self.lm_head_cache_files_present(dtype):
+            # The marker records the file set of the build that wrote it, but the LM head's cache file
+            # names carry the split width (max_columns_per_device_lm_head). A later run with a different
+            # split width would miss those files, and the warm-cache path feeds ttnn.as_tensor a dataless
+            # placeholder state_dict (torch.empty), so the missing splits would be written to the cache
+            # from garbage and every logit would be garbage. Cold-load the HF state_dict instead.
+            logger.warning(
+                "ttnn weight cache is marked complete but the LM head tensorbins for the current split "
+                f"width ({self.max_columns_per_device_lm_head}) are missing; loading the HF state_dict."
+            )
+            return False
+        return complete
+
+    def lm_head_split_sizes(self):
+        """The LM head's column splits per device, as LMHead.__init__ computes them: one list per mode
+        (0 = DRAM-sharded matmul; 1 = ring matmul, only with a prefetcher), and the vocab shard count."""
+        vocab_shards = self.cluster_shape[0] if (self.is_galaxy and self.prefetcher is None) else self.num_devices
+        size_per_device = self.padded_vocab_size // vocab_shards
+        max_cols = self.max_columns_per_device_lm_head
+
+        def splits(max_cols_mode):
+            num_splits = math.ceil(size_per_device / max_cols_mode)
+            sizes = [min(size_per_device, max_cols_mode)] * (num_splits - 1)
+            sizes.append(size_per_device - sum(sizes))
+            return sizes
+
+        modes = [splits(max_cols)]
+        if self.prefetcher is not None:
+            modes.append(splits(math.ceil(max_cols / 32) * 32))
+        return modes, vocab_shards
+
+    def lm_head_cache_files_present(self, dtype):
+        """Whether every LM head tensorbin LMHead.__init__ would read for the current split width exists."""
+        from models.tt_transformers.tt.lm_head import _lm_head_cache_file_name
+
+        if self.dummy_weights:
+            return True
+        modes, vocab_shards = self.lm_head_split_sizes()
+        galaxy_no_prefetch = self.is_galaxy and self.prefetcher is None
+        for mode, sizes in enumerate(modes):
+            for i, split in enumerate(sizes):
+                stem = _lm_head_cache_file_name(
+                    self.weight_cache_path(dtype),
+                    dummy_weights=False,
+                    num_splits=len(sizes),
+                    shard=i,
+                    width=split * vocab_shards,
+                    mode=mode,
+                    galaxy_2d=galaxy_no_prefetch and mode == 0,
+                    mesh_shape=self.cluster_shape,
+                )
+                if not list(stem.parent.glob(stem.name + "_dtype_*")):
+                    return False
+        return True
 
     def mark_weight_cache_complete(self, dtype, state_dict=None, components=None):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape, components) was
