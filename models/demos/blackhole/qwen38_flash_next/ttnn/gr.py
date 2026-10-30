@@ -504,6 +504,10 @@ class Qwen38TTNNGatedResidual:
             fused_kernels.row_gather.prepare(
                 mesh_device, LOCAL_HIDDEN_SIZE // 32
             )  # the barrier-free gather's landing buffer + semaphores
+        if fused_kernels.enabled("gr_read") and fused_kernels.enabled("gr_recip_last"):
+            fused_kernels.gr_recip_last.prepare_front(
+                mesh_device
+            )  # front v2 / v3 (flag on): the landing buffers of the decode row counts, not at the first warm call
         self._read_fused = None
         if fused_kernels.enabled("gr_read"):
             # gr_fold (on by default) is gr_read's read with its collectives folded into the programs; it needs the mesh's

@@ -23,7 +23,7 @@ def test_sources_and_hook():
     assert init.count("QWEN38_GR_FRONT_V3") == 1 and 'os.environ.get("QWEN38_GR_FRONT_V3") == "1"' in init
     assert front3.ENV == "QWEN38_GR_FRONT_V3" and not front3._STATE3 is None
     src = Path(front3.__file__).read_text()
-    assert "+ 16  # + the call token" in src and "my_tiles_b * pack_tile + 16 >" in src
+    assert "+ 16  # + the call token" in src and "my_tiles * pack_tile + 16 <=" in src
 
 
 def test_token_protocol_text():

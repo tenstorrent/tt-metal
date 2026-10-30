@@ -97,6 +97,38 @@ def _persistent(mesh, slot_bytes: int, cores):
     return _STATE[key][2], _STATE[key][3]
 
 
+def _slot_bytes(tiles: int, rows: int, links: int) -> tuple[int, bool]:
+    """(slot bytes of the partials landing buffer, whether a link's packed tiles fit one fabric packet)."""
+
+    my_tiles = -(-tiles // links)
+    pack_tile = 2 * rows * 64
+    slot = -(-(my_tiles * pack_tile) // 16) * 16
+    return slot, my_tiles * pack_tile <= int(ttnn.get_tt_fabric_max_payload_size_bytes())
+
+
+DECODE_ROWS = (
+    1,
+    2,
+    4,
+    8,
+    16,
+)  # the decode widths (powers of two, as tools/qwen38_batch_decode.row_read_buckets) this front serves
+
+
+def prepare(mesh) -> None:
+    """Create the landing buffers of the decode row counts this front serves, at model construction: made lazily at the
+    first call they land below the temporary L1 tensors of the warm pass and stay low after those are freed.  The same
+    keys as the call path (``_transport_program``), so its ``_persistent`` finds them."""
+
+    links = min(len(gr_fold.TRANSPORT["partials"]), gr_fold.line(mesh).links)
+    cores = gr_fold.TRANSPORT["partials"][:links]
+    for rows in DECODE_ROWS:
+        if fits(rows):
+            slot_b, in_packet = _slot_bytes(gr_read.PARTIAL_TILES, rows, links)
+            if in_packet:
+                _persistent(mesh, slot_b, cores)
+
+
 def _front_reader(cores, streams, consts, runtime, gate, extra, extra_rt):
     """gr_read._reader with front_reader.cpp: ``extra`` compile args after the four accessor sets, ``extra_rt(b)`` runtime
     args after each core's constants (b = the branch the core serves)."""
@@ -148,10 +180,8 @@ def _transport_program(mesh, stats, partials, rows, *, semaphores, cbs, kernels,
     mode_a, slot_a = gr_fold._row_mode(stats, links, 3)
     if mode_a != 3:
         raise RuntimeError("the stats phase does not fit one packed packet")
-    my_tiles_b = -(-partials.tiles // links)
-    pack_tile = 2 * rows * 64
-    slot_b = -(-(my_tiles_b * pack_tile) // 16) * 16
-    if my_tiles_b * pack_tile > int(ttnn.get_tt_fabric_max_payload_size_bytes()):
+    slot_b, in_packet = _slot_bytes(partials.tiles, rows, links)
+    if not in_packet:
         raise RuntimeError("the partials do not fit one packed packet")
     data1, land = _persistent(mesh, slot_b, cores)
     go, done = stats.semaphore_ids[0], stats.semaphore_ids[2]
