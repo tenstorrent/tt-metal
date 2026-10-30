@@ -59,7 +59,11 @@ def check(source, tables, vector_limit=48):
             report.skipped += 1  # the explorer already says this function is incomplete
             continue
         types = [type_info(t) for t, _ in function.parameters]
-        if any(t.pointer or t.bits > 32 for t in types) or function.mangled not in code:
+        # The emulator passes integers in registers: no pointers, wide values or structs.
+        unsupported = any(t.pointer or t.bits > 32 for t in types) or any(
+            sampling.candidates(t) == [None] for t, _ in function.parameters
+        )
+        if unsupported or function.mangled not in code:
             report.skipped += 1
             continue
         for vector in sampling.vectors(context.input_space(), vector_limit):

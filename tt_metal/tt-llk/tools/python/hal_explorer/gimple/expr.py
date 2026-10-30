@@ -83,6 +83,10 @@ def parse_atom(token):
     if re.fullmatch(SSA, token):
         if re.search(r"(_\d+(\(D\))?|\.\d+_\d+)$", token) or "$" in token:
             return Ref(token)
+        if "." in token:
+            return Opaque(
+                token
+            )  # a field of a struct, e.g. a parameter passed by value
         return Symbol(token)
     return Opaque(token)
 

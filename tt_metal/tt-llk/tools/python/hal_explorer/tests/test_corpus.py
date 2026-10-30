@@ -41,9 +41,11 @@ def label(path):
 
 @pytest.mark.parametrize("path", CORPUS, ids=label)
 def test_matches_the_object_file(tables, path):
-    report = harness.check(
-        harness.with_aliases(path.read_text(encoding="utf-8")), tables, VECTORS
-    )
+    source = path.read_text(encoding="utf-8")
+    # The reviewer cases were written against a prelude that declared the HAL aliases.
+    if path.parent.name == "cases":
+        source = harness.with_aliases(source)
+    report = harness.check(source, tables, VECTORS)
     assert not report.mismatches, "\n".join(report.mismatches[:5])
     assert not report.internal, "\n".join(report.internal)
 

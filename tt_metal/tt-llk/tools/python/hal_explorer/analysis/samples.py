@@ -55,7 +55,7 @@ def known_type(text):
 def candidates(type_text):
     """Values to try for one parameter; None means unknown (pointers and references)."""
     info = type_info(type_text)
-    if info.pointer:
+    if info.pointer or re.search(r"\b(struct|class|union)\b", type_text):
         return [None]
     if info.bits == 1:
         return [0, 1]

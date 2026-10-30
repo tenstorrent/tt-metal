@@ -48,7 +48,11 @@ def derived(key):
 
 
 def load_key(text, positions):
-    """(parameter position, byte offset) of a load through a pointer parameter, else None."""
+    """Where a load reads from a parameter: through a pointer (position, byte offset) or a
+    field of a struct passed by value (position, field path); None for anything else."""
+    m = re.match(r"([A-Za-z_]\w*)\.([\w.]+)$", text)
+    if m and m.group(1) in positions:
+        return ("field", positions[m.group(1)], m.group(2))
     m = re.search(r"([A-Za-z_]\w*?)_\d+\(D\)", text)
     if not m or m.group(1) not in positions:
         return None
