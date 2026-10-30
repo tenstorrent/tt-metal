@@ -451,9 +451,6 @@ inline constexpr auto k_erisc_fields = [] {
     };
 }();
 
-// The topology pass reads this sender field to find the channels a sibling must have an edge into.
-inline constexpr std::string_view k_static_connection_key = "static_connection";
-
 inline constexpr auto k_sender_channel_fields = [] {
     using enum FieldCategory;
     return std::array{
@@ -522,7 +519,7 @@ inline constexpr auto k_sender_channel_fields = [] {
                            "spec. Null on the other channels, whose producer keeps none.",
         },
         RouterField{
-            .key = k_static_connection_key,
+            .key = "static_connection",
             .source = NamedArg{"SENDER_CH_{}_WAIT_STATIC_CONNECTION", ArgIndex::COMPACT},
             .category = CONTROL_INFO,
             .content = content::Flag{},

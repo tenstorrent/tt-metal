@@ -122,7 +122,7 @@ counter array, written as `{array, index}`.
 - **A stream register** otherwise: `TO_SENDER_<c>_PKTS_COMPLETED_ID` or `TO_SENDER_<c>_PKTS_ACKED_ID`, its
 `buf_space_available` register. Null when the builder gave it the unused stream id.
 
-The mesh's `credit_transport` says each VC's backing, and why ([DESCRIBE.md](DESCRIBE.md)).
+The mesh's `credit_transport` says each VC's backing ([DESCRIBE.md](DESCRIBE.md)).
 
 ### Receivers
 
@@ -148,9 +148,23 @@ rank among the router's edges, VC0's before VC1's.
 
 The kernel never forwards on VC2, so VC2 has no edges. The checks keep the manifest numbering edges the way the kernel does:
 
-- the adapter must name as many edges as the kernel's `NUM_DOWNSTREAM_SENDERS_VC<v>`;
 - VC1 edges need `FABRIC_2D_VC1_ACTIVE`, which builds them;
 - no two edges may share a slot, and the slots must match the mask the kernel is given.
+
+## Kernel rules the manifest copies
+
+Some facts are decided by the kernel from its inputs, so no builder holds them. The router pass copies the kernel's
+rule for each. Where it can, it checks the result against something the kernel was given, so a kernel change fails the
+manifest instead of leaving it wrong.
+
+| Rule | Check |
+| --- | --- |
+| A channel's status reason, in the builder's order: the VC isn't run, then mux, then trimmed | A channel no ERISC runs, for none of these reasons, fails the router pass |
+| Which receiver channel runs each VC's step: VC0's on channel 0, VC1's on 1, VC2's on 2 when VC1 has senders and on 1 otherwise | A serviced receiver at any other compact index fails the router pass |
+| What a receiver forwards on: its own VC, except VC1 for receiver 0 under `FABRIC_2D_VC0_CROSSOVER_TO_VC1`, and nothing for the speedy steps | None yet |
+| Acked credits come back only on VC0 with bubble flow control | None yet |
+| An edge's slot: the sibling's direction's compact index among this router's other directions | The slots must match the mask the kernel is given |
+| VC1 edges are built only under `FABRIC_2D_VC1_ACTIVE`, and VC2 has none | A VC1 edge without the define fails the router pass |
 
 ## Adding a computed fact
 

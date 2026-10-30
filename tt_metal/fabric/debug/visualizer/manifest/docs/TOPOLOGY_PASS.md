@@ -90,14 +90,13 @@ For each edge:
 - **`through_tensix_mux`** comes from the builder's rule for which builder owns a VC's senders,
   `builder_type_for_vc(vc, has_tensix_extension)` on the sibling's shape: the tensix mux owns VC0 on a router with a
   tensix extension.
-- Only one edge may land on each sibling sender channel.
 
-Each edge that lands on a sender channel, other than through a tensix mux, makes that sibling the channel's
-**producer**. Two checks tie edges and producers together:
+Each edge that doesn't end at a tensix mux makes this router the **producer** of the sibling's sender channel it lands
+on.
 
-- A sender channel fed by the local worker or the tensix mux can't also have a sibling's edge land on it.
-- A sender channel whose `static_connection` field is set waits at startup for a sibling to connect. Some sibling's
-  edge must land on it.
+The topology pass doesn't check the builder's wiring: that each sender channel has at most one edge, that a
+`static_connection` channel has one, or that the worker channel has none. The edges come from the builder, so checking
+them against each other checks the builder against itself, which is fabric's to test.
 
 ## Router paths
 
