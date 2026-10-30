@@ -3,4 +3,4 @@
 # Bump it in an ordinary PR; that PR runs the tt-transformers CI legs.
 # This is a test input, not a dependency. QB2 pins its own runtime copy in
 # models/demos/llama31_8b_qb2/requirements.txt.
-f97f66380d90b96aa400f5aafd7b96a71f933e03
+635be29c167387a69c75136e0d4d0b1c534b826c
