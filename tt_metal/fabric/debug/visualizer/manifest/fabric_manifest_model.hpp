@@ -25,37 +25,40 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
 
 // The fabric manifest's model. The router pass fills in what the router builders know. The topology pass resolves each
 // router's channels against ControlPlane, the cluster and the chip's other routers, and builds the meshes. The
-// describe file fills the run, fabric, arch and types, and the writer turns the whole model into JSON.
+// describe file fills the run, fabric and arch, and the writer turns the whole model into JSON.
 namespace tt::tt_fabric::manifest {
-
-// Which register of a stream a content::Stream reads.
-enum class StreamRegister : uint8_t {
-    // The increment-on-write credit or slot count.
-    BUF_SPACE_AVAILABLE,
-    // A plain read-write register.
-    REMOTE_SRC,
-};
 
 // What a field or a typed member holds.
 namespace content {
 
-// Memory at `address` in L1 where `type` exists.
+// A region of L1 memory.
 struct L1 {
+    // The first byte the region starts at.
     uint32_t address = 0;
-    layout::Type type;
+    // The number of elements with type `type` in the region.
+    uint32_t num_elements = 1;
+    // The number of bytes each element takes up.
+    uint32_t element_size = 0;
+    // The type's registered name (fabric_manifest_type_registry.hpp).
+    std::string_view type;
     // If true, the host zeroes the memory before launch (get_fabric_router_addresses_to_clear()).
     bool cleared_by_host = false;
 };
 
-// A stream register.
-struct Stream {
+// A stream register's word. Its value is the word's low `value_bits` bits, read as `type`; the bits above can hold
+// other state.
+struct StreamReg {
     uint32_t stream_id = 0;
-    StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
-    layout::Type type;
+    uint32_t address = 0;
+    // The number of bits the word's value takes up (useful if the desired value in a stream register is only a certain
+    // number of bits).
+    uint32_t value_bits = 0;
+    // The type's registered name (fabric_manifest_type_registry.hpp).
+    std::string_view type;
 };
 
 struct Number {
@@ -66,16 +69,32 @@ struct Flag {
     bool value = false;
 };
 
-// One of an enum's values, which readers name by its type.
+// A value of a configuration enum the kernel is given, such as a direction. No captured bytes hold it, so its type
+// isn't registered: the manifest writes the value and the name of its enumerator.
 struct Enum {
-    layout::Type type;
+    // The enum's name.
+    std::string_view type;
     uint32_t value = 0;
-    bool (*is_enumerator)(uint32_t value) = nullptr;
+    // The enumerator `value` names.
+    std::string_view value_name;
+    // Made for the field's enum by enum_of<E>: the enumerator `value` names, or nullopt when it names none.
+    std::optional<std::string_view> (*name_value)(uint32_t value) = nullptr;
 };
 
 }  // namespace content
 
-using Content = std::variant<content::L1, content::Stream, content::Number, content::Flag, content::Enum>;
+using Content = std::variant<content::L1, content::StreamReg, content::Number, content::Flag, content::Enum>;
+
+// `num_elements` Ts in L1, `element_size` bytes apart from `address`.
+template <typename T>
+constexpr content::L1 describe_l1_region(
+    uint32_t address = 0, uint32_t num_elements = 1, uint32_t element_size = sizeof(T)) {
+    return {
+        .address = address,
+        .num_elements = num_elements,
+        .element_size = element_size,
+        .type = get_manifest_type_name<T>()};
+}
 
 // One of a router's L1 credit counter arrays (L1CreditCounters).
 enum class CreditCounterArray : uint8_t {
@@ -108,7 +127,7 @@ struct CounterRef {
 
 // Credits are held in a stream register or in an element of an L1 counter array. The register is null when the
 // builder did not allocate one, which the kernel is fed as k_unused_stream_id.
-using CreditRef = std::variant<std::optional<content::Stream>, CounterRef>;
+using CreditRef = std::variant<std::optional<content::StreamReg>, CounterRef>;
 
 // A router on the same chip and routing plane, named by the direction it faces.
 struct SiblingRouterRef {
@@ -318,12 +337,10 @@ struct Chip {
     std::vector<Router> routers;
 };
 
-// What carries one VC's sender credits on a mesh, and why the builder moved it to L1 counters.
+// What carries one VC's sender credits on a mesh.
 struct VcCreditTransport {
     uint32_t vc = 0;
     CreditBacking backing = CreditBacking::STREAM_REGISTER;
-    // Empty when the credits use stream registers.
-    std::vector<L1CreditCounterReason> l1_counter_reasons;
 };
 
 // Which axes of a 2D mesh wrap around.
@@ -367,22 +384,6 @@ struct ArchAreas {
     std::optional<content::L1> base_fw_postcode;
 };
 
-// Where a register is in a stream's block, and how many of its low bits hold its value.
-struct StreamRegisterLayout {
-    // In bytes.
-    uint32_t offset = 0;
-    uint32_t bits = 0;
-};
-
-// Where a router core's stream registers are.
-struct StreamRegisters {
-    uint32_t base = 0;
-    uint32_t stride = 0;
-    // Stream ids are below count.
-    uint32_t count = 0;
-    std::vector<std::pair<StreamRegister, StreamRegisterLayout>> registers;
-};
-
 // The addresses of a router core's soft reset and wall clock registers.
 struct CoreRegisters {
     uint32_t soft_reset = 0;
@@ -397,7 +398,6 @@ struct CoreRegisters {
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
     ArchAreas areas;
-    StreamRegisters stream_registers;
     CoreRegisters core_registers;
 };
 
@@ -430,8 +430,8 @@ struct FabricInfo {
     FabricSettings config;
     Topology topology = Topology::Linear;
     bool is_2d_routing = false;
-    // The packet header type the run's routers use (packet_header_types.hpp).
-    layout::Type packet_header;
+    // The registered name of the packet header type the run's routers use (packet_header_types.hpp).
+    std::string_view packet_header;
     size_t max_payload_size_bytes = 0;
     size_t channel_buffer_size_bytes = 0;
     // 2D routing only.
@@ -471,11 +471,9 @@ inline constexpr std::tuple k_vocabulary_lists{
     VocabularyList<FabricManagerMode>{"fabric_manager_mode"},
     VocabularyList<Topology>{"fabric_topology"},
     VocabularyList<CreditBacking>{"credit_backing"},
-    VocabularyList<L1CreditCounterReason>{"l1_credit_counter_reason"},
     VocabularyList<ZPortRole>{"z_port_role"},
     VocabularyList<EdgeCapability>{"edge_capability"},
     VocabularyList<CreditCounterIndexedBy>{"credit_counter_indexed_by"},
-    VocabularyList<StreamRegister>{"stream_register"},
     VocabularyList<FieldCategory>{"field_category"},
     VocabularyList<Content>{"field_kind"},
     VocabularyList<ChannelStatus>{"channel_status"},

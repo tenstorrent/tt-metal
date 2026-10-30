@@ -11,10 +11,11 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
@@ -28,7 +29,6 @@
 #include "tt_metal/fabric/packet_header_types.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_fabric::manifest {
@@ -68,23 +68,18 @@ uint32_t get_hal_l1_size(const tt::tt_metal::Hal& hal, HalL1MemAddrType area_id)
     return hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, area_id);
 }
 
-// A HAL L1 area holding a whole number of `element_type`s, described from its address as one of them or as an array of
-// as many as the HAL's size holds.
-content::L1 describe_hal_l1_area(
-    const tt::tt_metal::Hal& hal, HalL1MemAddrType area_id, const layout::Type& element_type) {
+// A HAL L1 area holding a whole number of Ts, as many as the HAL's size holds.
+template <typename T>
+content::L1 describe_hal_l1_area(const tt::tt_metal::Hal& hal, HalL1MemAddrType area_id) {
     const uint32_t area_size = get_hal_l1_size(hal, area_id);
     TT_FATAL(
-        element_type.size > 0 && area_size >= element_type.size && area_size % element_type.size == 0,
+        area_size >= sizeof(T) && area_size % sizeof(T) == 0,
         "Fabric manifest: the HAL's {} area is {} bytes, which is not a whole number of its {}-byte {}",
         lower_enum_name(area_id),
         area_size,
-        element_type.size,
-        schema_name(element_type));
-    const uint32_t num_elements = area_size / element_type.size;
-    return {
-        .address = get_hal_l1_address(hal, area_id),
-        .type = num_elements == 1 ? element_type
-                                  : layout::Type{element_type.element, num_elements * element_type.size, num_elements}};
+        sizeof(T),
+        get_manifest_type_name<T>());
+    return describe_l1_region<T>(get_hal_l1_address(hal, area_id), area_size / sizeof(T));
 }
 
 // A base firmware word, whose address the HAL keeps among its Ethernet firmware mailbox values; null when it is 0.
@@ -93,54 +88,19 @@ std::optional<content::L1> describe_base_fw_word(const tt::tt_metal::Hal& hal, t
     if (address == 0) {
         return std::nullopt;
     }
-    return content::L1{.address = address, .type = layout::type_of<uint32_t>()};
+    return describe_l1_region<uint32_t>(address);
 }
 
 // The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's.
 Heartbeat describe_heartbeat(tt::ARCH arch) {
     return Heartbeat{
-        .word =
-            {.address = arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
-                                                    : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE,
-             .type = layout::type_of<uint32_t>()},
+        .word = describe_l1_region<uint32_t>(
+            arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
+                                        : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE),
         .magic = FABRIC_KERNEL_HEARTBEAT_MAGIC,
         .magic_mask = FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK,
         .period_iters = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS,
     };
-}
-
-// Where a stream register is in its stream's block, and how many of its low bits hold its value.
-StreamRegisterLayout describe_stream_register_layout(const tt::tt_metal::Hal& hal, StreamRegister reg) {
-    switch (reg) {
-        case StreamRegister::BUF_SPACE_AVAILABLE:
-            // The bits above the count can hold other state.
-            return {
-                .offset = static_cast<uint32_t>(
-                    hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t)),
-                .bits = hal.get_noc_stream_remote_dest_words_free_width()};
-        case StreamRegister::REMOTE_SRC:
-            // The fabric's scratch register: four 6-bit fields on Wormhole and Blackhole (fabric_stream_regs.hpp).
-            return {
-                .offset = static_cast<uint32_t>(hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t)),
-                .bits = 24};
-    }
-    TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(reg));
-}
-
-StreamRegisters describe_stream_registers(const tt::tt_metal::Hal& hal) {
-    TT_FATAL(
-        hal.has_stream_registers(),
-        "Fabric manifest: the HAL gives no stream register addresses on {}",
-        lower_enum_name(hal.get_arch()));
-    StreamRegisters out{
-        .base = hal.get_noc_overlay_start_addr(),
-        .stride = hal.get_noc_stream_reg_space_size(),
-        .count = StreamRegAssignments::num_eth_stream_registers,
-    };
-    for (const auto reg : enchantum::values<StreamRegister>) {
-        out.registers.emplace_back(reg, describe_stream_register_layout(hal, reg));
-    }
-    return out;
 }
 
 CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
@@ -171,24 +131,36 @@ CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
     return out;
 }
 
-// The packet header type the run's routers use: the one the routing mode and its template argument pick, as
-// FabricContext picked it.
-layout::Type describe_packet_header(const FabricContext& fabric_context, FabricUDMMode udm_mode) {
+// The registered name of the packet header type the run's routers use: the one the routing mode and its template
+// argument pick, as FabricContext picked it.
+std::string_view describe_packet_header(const FabricContext& fabric_context, FabricUDMMode udm_mode) {
     const bool is_2d = fabric_context.is_2D_routing_enabled();
     const PacketHeaderConfig config{
         .is_2d = is_2d,
         .extension_words = is_2d ? 0 : fabric_context.get_1d_pkt_hdr_extension_words(),
         .route_buffer_size = is_2d ? fabric_context.get_2d_pkt_hdr_route_buffer_size() : 0,
     };
-    const layout::Type header = visit_packet_header_type(
-        config, []<typename Header>(std::type_identity<Header>) { return layout::type_of<Header>(); });
-    const size_t header_size_bytes = compute_pkt_hdr_size_bytes(header.size, udm_mode == FabricUDMMode::ENABLED);
+    const auto [header_name, header_type_size] =
+        visit_packet_header_type(config, []<typename Header>(std::type_identity<Header>) {
+            return std::pair{get_manifest_type_name<Header>(), sizeof(Header)};
+        });
+    const size_t header_size_bytes = compute_pkt_hdr_size_bytes(header_type_size, udm_mode == FabricUDMMode::ENABLED);
     TT_FATAL(
         header_size_bytes == fabric_context.get_fabric_packet_header_size_bytes(),
         "Fabric manifest: the packet header the routing mode picks takes {} B, but FabricContext's takes {} B",
         header_size_bytes,
         fabric_context.get_fabric_packet_header_size_bytes());
-    return header;
+    return header_name;
+}
+
+// Whether the builder's credit transport plan moves `vc`'s sender credits to L1 counters.
+bool does_vc_use_counters(const CreditTransportPlan& plan, uint32_t vc) {
+    switch (vc) {
+        case 0: return plan.vc0_uses_counters;
+        case 1: return plan.vc1_uses_counters;
+        case 2: return plan.vc2_uses_counters;
+        default: TT_THROW("Fabric manifest: the credit transport plan has no VC {}", vc);
+    }
 }
 
 }  // namespace
@@ -240,8 +212,7 @@ std::vector<VcCreditTransport> describe_credit_transport(const FabricBuilderCont
         }
         transport.push_back(VcCreditTransport{
             .vc = vc,
-            .backing = plan.vc_uses_counters(vc) ? CreditBacking::L1_COUNTER : CreditBacking::STREAM_REGISTER,
-            .l1_counter_reasons = plan.get_l1_counters_reasons(vc),
+            .backing = does_vc_use_counters(plan, vc) ? CreditBacking::L1_COUNTER : CreditBacking::STREAM_REGISTER,
         });
     }
     return transport;
@@ -253,21 +224,17 @@ Arch describe_arch(const tt::tt_metal::Hal& hal) {
         .areas =
             ArchAreas{
                 .heartbeat = describe_heartbeat(hal.get_arch()),
-                .fabric_telemetry =
-                    describe_hal_l1_area(hal, HalL1MemAddrType::FABRIC_TELEMETRY, layout::type_of<FabricTelemetry>()),
-                .routing_table =
-                    describe_hal_l1_area(hal, HalL1MemAddrType::ROUTING_TABLE, layout::type_of<routing_l1_info_t>()),
-                .eth_fw_mailbox = hal.get_supports_eth_fw_mailbox()
-                                      ? std::optional(describe_hal_l1_area(
-                                            hal, HalL1MemAddrType::ETH_FW_MAILBOX, layout::type_of<uint32_t>()))
-                                      : std::nullopt,
+                .fabric_telemetry = describe_hal_l1_area<FabricTelemetry>(hal, HalL1MemAddrType::FABRIC_TELEMETRY),
+                .routing_table = describe_hal_l1_area<routing_l1_info_t>(hal, HalL1MemAddrType::ROUTING_TABLE),
+                .eth_fw_mailbox = hal.get_supports_eth_fw_mailbox() ? std::optional(describe_hal_l1_area<uint32_t>(
+                                                                          hal, HalL1MemAddrType::ETH_FW_MAILBOX))
+                                                                    : std::nullopt,
                 .base_fw_port_status = describe_base_fw_word(hal, FWMailboxMsg::PORT_STATUS),
                 .base_fw_train_status = describe_base_fw_word(hal, FWMailboxMsg::TRAIN_STATUS),
                 .base_fw_retrain_count = describe_base_fw_word(hal, FWMailboxMsg::RETRAIN_COUNT),
                 .base_fw_rx_link_up = describe_base_fw_word(hal, FWMailboxMsg::RX_LINK_UP),
                 .base_fw_postcode = describe_base_fw_word(hal, FWMailboxMsg::POSTCODE),
             },
-        .stream_registers = describe_stream_registers(hal),
         .core_registers = describe_core_registers(hal),
     };
 }
