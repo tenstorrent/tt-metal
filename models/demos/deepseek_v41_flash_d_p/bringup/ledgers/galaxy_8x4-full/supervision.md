@@ -1166,3 +1166,7 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   added (agents/bringup-engineer.md, both copies). 15:42 OWNER: the P.19 / P.20 A/Bs run at 120 (like for like); the cap
   and the re-tune after: FIX.15 GALAXY_CORE_CAP queued, held until P.20's decision (gate P.17 + K.1: also the overdue
   Paris / contract re-check). Notes OV-29 (P.20 sweeps on 32 cards), OV-31 (P.20 keeps 120). OV-30 closed.
+- 15:50 per-run host-memory attribution: /scratch/dnijemcevic/p16/devmem_watch.py (tmux devmem) -> devmem_runs.jsonl; --summary per kind of run (owner's interactive tt-smi excluded).
+- 16:30 P.19 A/B: bit-identical; q_a -0.42 ms device a chunk (50k and 500k); totals +2.6 / +0.8 ms device, wall +3.8 /
+  +14.3, host -12.5 / +9.9: run-to-run noise (+-2-3 ms device, +-15 ms wall). Overseer held it for the owner: WRONG,
+  it was a delegated clean win (passes, faster, nothing worse); the box idled ~6.5 h. 23:10 accepted by the overseer.

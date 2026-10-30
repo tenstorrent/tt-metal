@@ -4570,3 +4570,46 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
 - The drop's switches and their defaults are listed in the attempt 1 section above (SPC_ACC_PERCHIP=1 on, etc.).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.17 --part quick --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml`.
+
+## P.19 perf (galaxy 8x4, attempt 2): MM_SWEEP_GALAXY, the matmul configs swept for the 8x4 (MATMUL_CONFIG=galaxy)
+
+- (1) Routing: every dense matmul goes through tt/mm_configs. rope.py PairPerm (the one direct ttnn.matmul) now calls
+  `mm.matmul(..., site="rope.pairs", rule=False)`: no config under tuned (as before), table-or-rule under galaxy. It does
+  not run at the shipped settings (ROPE_IMPL=on): neither capture contains it. Other ttnn.linear calls are in perf_*.py
+  probes only, outside the model.
+- (2) Capture on the 8x4 at the shipped settings (SP32 on, ENGRAM_TABLE=resident, DS41_MATMUL_CONFIG=tuned):
+  51200 (attempt 1, generated/ds41_p23/calls_tuned.json, golden prefix) and BRINGUP_POS=512000 (new: test_capture
+  takes BRINGUP_POS like the F230 profile; calls_tuned_p512000.json). Diff: identical: 187 calls, 12 distinct, the same
+  shapes, counts, configs and free L1 (1358 KiB for CBs at every call). No dense matmul shape depends on the context.
+- Sweep on single cards (OV-27): new `test_sweep_card` (1x1 mesh, P23_SHARD=i/12, one call per process, 12 processes
+  in parallel with `--device auto`), `merge_shards(12)` -> sweep.json + galaxy_table.py. The card is opened without
+  fabric: FABRIC_2D on one chip TT_FATALs (DS41-175); no 1D fabric anywhere. A card alone shows the same 12x10 grid;
+  candidates are held to the capture's grid and the filler gives the capture's L1. 12 shards took 29 s-171 s each.
+- (3) tt/mm_configs.GALAXY: 12 entries keyed by table_key (shape, weight shape, dtypes, fp32 DEST, grid 12x10).
+  Acceptance as P.23 (deterministic, L1 fit, within one bf16 rounding of auto: all 12 are bit-identical to auto,
+  error vs float64 not worse than current; replace only when > 1 % faster). MATMUL_CONFIG: galaxy (default) / tuned
+  (the rule, the old path) / auto. Anything not in the table (other chunk lengths, other boxes) takes the rule.
+- (4) Per site and shape (device kernel ms on one card; calls a chunk; current = tuned's rule):
+  | site | shape (per chip) | calls | current ms | galaxy ms | chunk ms current -> galaxy |
+  |---|---|---|---|---|---|
+  | q_a | 160x5120 bfp8 x 5120x1792 bfp8 -> bf16 | 40 | 0.0549 (1D in0) | 0.0450 (2D 12x5 pn5 bw16) | 2.196 -> 1.801 |
+  | engram_kv | 640x6144 bfp8 x 6144x6400 bfp8 -> bf16 | 2 | 0.2728 (minimal M4 K4 N8) | 0.2237 (minimal M4 K16 N8 sb1x4) | 0.546 -> 0.447 |
+  | attn.wo_a | 8x160x4096 x 8x4096x1024 bfp8 -> bfp8 | 40 | 0.2060 | same | 8.240 |
+  | attn.wq_b | 160x1280 x 1280x32768 bfp8 -> bf16 | 40 | 0.1897 | same | 7.587 |
+  | attn.wo_b | 160x8192 x 8192x5120 bfp8 -> bf16 | 40 | 0.1506 | same | 6.024 |
+  | indexer.wq_b | 160x1280 x 1280x4096 bfp8 -> bf16 | 8 | 0.0269 | same | 0.215 |
+  | indexer.weights_proj | 160x5120 x 5120x32 bf16 -> bf16 | 8 | 0.0168 | same | 0.135 |
+  | compressor | 160x5120 x 5120x1024 bf16 -> fp32 | 3 | 0.0431 | same | 0.129 |
+  | compressor | 160x5120 x 5120x512 bf16 -> fp32 | 1 | 0.0293 | same | 0.029 |
+  | compressor | 320x512 x 512x128 bf16 -> bf16 | 3 | 0.0042 | same | 0.013 |
+  | compressor | 640x512 x 512x128 bf16 -> bf16 | 1 | 0.0067 | same | 0.007 |
+  | hc.fn | 640x5120 bf16 x 5120x32 fp32 -> fp32 | 1 | 0.0298 | same | 0.030 |
+  Total 25.15 -> 24.66 ms a chunk (-0.49 ms). The 2x2 rule is within 1 % of the best for 10 of the 12 (wq_b / wo_b
+  / wo_a best candidates 0.1-0.5 % faster: noise, kept). Auto would be 3.2x slower on engram_kv, 3.35x on wo_a.
+- Out of scope (no program config): the flat routed experts (flat_routed_expert), the shared expert engine and the
+  router in the fused MoE head (MOE_HEAD=fused, se_engine3 / moe_grouped_topk), sparse_sdpa, the indexer score.
+- Quick A/B (change on, `measure --task P.19 --part quick`): rc 0, all 102 limits pass, L39 err 0.91435 (limit
+  1.533; the same value as the tuned capture: bit-identical configs), chunk_wall_ms 301.9 (spread 26.5),
+  host_transfers_per_layer 0. Position profiles p51200 / p512000 left to the orchestrator (brief).
+- OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suites run.
+- Re-run: see tests/perf/test_matmul_sweep.py docstring (capture, test_sweep_card shards, merge_shards).

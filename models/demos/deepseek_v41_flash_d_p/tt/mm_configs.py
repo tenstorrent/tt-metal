@@ -32,8 +32,53 @@ RECORD: list | None = None
 _cache: dict = {}
 
 
+def mode() -> str:
+    return settings.get("MATMUL_CONFIG")
+
+
 def tuned() -> bool:
-    return settings.get("MATMUL_CONFIG") == "tuned"
+    """A config is passed (tuned: the rule; galaxy: the 8x4 table, else the rule)."""
+    return mode() in ("tuned", "galaxy")
+
+
+def _dt(d) -> str:
+    return str(d).split(".")[-1]  # DataType.BFLOAT16 -> BFLOAT16
+
+
+def table_key(shape, wshape, a_dt, w_dt, o_dt, fp32: bool, gx: int, gy: int) -> tuple:
+    """The GALAXY key of one call: program_config's cache key with dtype names."""
+    return (tuple(shape), tuple(wshape), _dt(a_dt), _dt(w_dt), _dt(o_dt), bool(fp32), int(gx), int(gy))
+
+
+def build(spec):
+    """(kind, config) of a table / sweep spec: ("2d" | "1d" | "bmm" | "minimal", {params}) or ("auto", None) -> None."""
+    kind, p = spec
+    if kind == "auto":
+        return None
+    if p is None:  # minimal_matmul with its own default blocking
+        return (kind, None)
+    p = dict(p)
+    g = p.pop("grid")
+    grid = ttnn.CoreCoord(g[0], g[1])
+    if kind == "minimal":
+        return ("minimal", ttnn.MinimalMatmulConfig(compute_with_storage_grid_size=grid, **p))
+    if kind == "2d":
+        return (
+            "mm",
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid, fused_activation=None, **p
+            ),
+        )
+    if kind == "1d":
+        return (
+            "mm",
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=grid, fused_activation=None, fuse_batch=True, **p
+            ),
+        )
+    if kind == "bmm":
+        return ("mm", ttnn.MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size=grid, **p))
+    raise ValueError(f"unknown matmul config kind {kind!r}")
 
 
 def _ckc_fp32(ckc) -> bool:
@@ -89,6 +134,196 @@ def _largest_div(n: int, cap: int) -> int:
             return d
     return 1
 
+
+# MATMUL_CONFIG=galaxy (P.19, galaxy_8x4): the best config of every distinct dense matmul call of the shipped model on
+# the 8x4 (SP=32, ENGRAM_TABLE=resident; the capture at 51200 and at 512000 holds the same 187 calls, 12 distinct),
+# keyed by table_key: (input shape, weight shape, input / weight / output dtype, fp32 DEST, grid x, grid y) -> build()
+# spec. Swept on single cards (tests/perf/test_matmul_sweep.py::test_sweep_card, P23_SHARD=i/12, OV-27), every
+# candidate held to the mesh's 12x10 grid and the L1 the model leaves (1358 KiB for CBs); merged by merge_shards into
+# generated/ds41_p23/galaxy_table.py. Acceptance per entry (as P.23): deterministic over 2 runs, CBs within that L1,
+# output equal to auto or within one bf16 rounding (all 12: bit-identical to auto), error vs float64 not worse than
+# the current (tuned) config's; a candidate replaces the current one only when > 1 % faster. Any other call (other
+# chunk lengths, other boxes' shapes or grids) takes the rule. Per-site numbers: BREADCRUMBS P.19 (galaxy_8x4-full).
+GALAXY: dict = {
+    # attn.wo_a x40 a chunk: 0.2060 -> 0.2060 ms (current)
+    ((1, 8, 160, 4096), (1, 8, 4096, 1024), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT8_B", True, 12, 10): (
+        "2d",
+        {
+            "grid": (11, 5),
+            "transpose_mcast": False,
+            "fuse_batch": False,
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "out_block_h": 1,
+            "out_block_w": 3,
+            "per_core_M": 1,
+            "per_core_N": 3,
+        },
+    ),
+    # attn.wo_b x40 a chunk: 0.1506 -> 0.1506 ms (current)
+    ((1, 1, 160, 8192), (1, 1, 8192, 5120), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 12, 10): (
+        "1d",
+        {
+            "grid": (12, 10),
+            "mcast_in0": True,
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 5,
+            "out_block_w": 2,
+            "per_core_M": 5,
+            "per_core_N": 2,
+        },
+    ),
+    # attn.wq_b x40 a chunk: 0.1897 -> 0.1897 ms (current)
+    ((1, 1, 160, 1280), (1, 1, 1280, 32768), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 12, 10): (
+        "1d",
+        {
+            "grid": (12, 10),
+            "mcast_in0": True,
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "out_block_h": 5,
+            "out_block_w": 9,
+            "per_core_M": 5,
+            "per_core_N": 9,
+        },
+    ),
+    # compressor x3 a chunk: 0.0431 -> 0.0431 ms (current)
+    ((1, 1, 160, 5120), (1, 1, 5120, 1024), "BFLOAT16", "BFLOAT16", "FLOAT32", True, 12, 10): (
+        "2d",
+        {
+            "grid": (11, 5),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "out_block_h": 1,
+            "out_block_w": 3,
+            "per_core_M": 1,
+            "per_core_N": 3,
+        },
+    ),
+    # compressor x1 a chunk: 0.0293 -> 0.0293 ms (current)
+    ((1, 1, 160, 5120), (1, 1, 5120, 512), "BFLOAT16", "BFLOAT16", "FLOAT32", True, 12, 10): (
+        "2d",
+        {
+            "grid": (8, 5),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 1,
+            "out_block_w": 2,
+            "per_core_M": 1,
+            "per_core_N": 2,
+        },
+    ),
+    # compressor x3 a chunk: 0.0042 -> 0.0042 ms (current)
+    ((1, 1, 320, 512), (1, 1, 512, 128), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 12, 10): (
+        "2d",
+        {
+            "grid": (4, 10),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+        },
+    ),
+    # compressor x1 a chunk: 0.0067 -> 0.0067 ms (current)
+    ((1, 1, 640, 512), (1, 1, 512, 128), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 12, 10): (
+        "2d",
+        {
+            "grid": (4, 10),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 2,
+            "out_subblock_w": 1,
+            "out_block_h": 2,
+            "out_block_w": 1,
+            "per_core_M": 2,
+            "per_core_N": 1,
+        },
+    ),
+    # engram_kv x2 a chunk: 0.2728 -> 0.2237 ms (minimal M4 K16 N8 sb1x4)
+    ((1, 1, 640, 6144), (1, 1, 6144, 6400), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 12, 10): (
+        "minimal",
+        {"grid": (12, 10), "M_block_size": 4, "K_block_size": 16, "N_block_size": 8, "subblock_h": 1, "subblock_w": 4},
+    ),
+    # hc.fn x1 a chunk: 0.0298 -> 0.0298 ms (current)
+    ((1, 1, 640, 5120), (1, 1, 5120, 32), "BFLOAT16", "FLOAT32", "FLOAT32", True, 12, 10): (
+        "2d",
+        {
+            "grid": (1, 10),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 2,
+            "out_subblock_w": 1,
+            "out_block_h": 2,
+            "out_block_w": 1,
+            "per_core_M": 2,
+            "per_core_N": 1,
+        },
+    ),
+    # indexer.weights_proj x8 a chunk: 0.0168 -> 0.0168 ms (current)
+    ((1, 1, 160, 5120), (1, 1, 5120, 32), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 12, 10): (
+        "2d",
+        {
+            "grid": (1, 5),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+        },
+    ),
+    # indexer.wq_b x8 a chunk: 0.0269 -> 0.0269 ms (current)
+    ((1, 1, 160, 1280), (1, 1, 1280, 4096), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 12, 10): (
+        "1d",
+        {
+            "grid": (12, 10),
+            "mcast_in0": True,
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 5,
+            "out_block_w": 2,
+            "per_core_M": 5,
+            "per_core_N": 2,
+        },
+    ),
+    # q_a x40 a chunk: 0.0549 -> 0.0450 ms (2d 12x5 pm1 pn5 ob1x5 bw16 sb1x1)
+    ((1, 1, 160, 5120), (1, 1, 5120, 1792), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 12, 10): (
+        "2d",
+        {
+            "grid": (12, 5),
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 5,
+            "per_core_M": 1,
+            "per_core_N": 5,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+}
 
 # minimal_matmul blocking (tiles): the sweep's best within 1-2 % on every bf16-output projection of this run
 MIN_BLOCK_M, MIN_BLOCK_K, MIN_BLOCK_N = 4, 4, 8
@@ -211,16 +446,23 @@ def _mcast_1d(Mt, Kt, Nt, a_dt, w_dt, o_dt, fp32, grid, l1_budget):
 
 def program_config(x, w, dtype, ckc, batched: bool = False):
     """The tuned (kind, config) of one call, or None (auto); cached by (M, K, N, batch, dtypes, fp32 DEST, grid).
-    A batched call (attention wo_a) under WO_A_CONFIG=auto: None (P.24's switch; the path before it)."""
+    A batched call (attention wo_a) under WO_A_CONFIG=auto: None (P.24's switch; the path before it).
+    MATMUL_CONFIG=galaxy: the GALAXY entry of the same key when there is one, else the rule."""
     shape, wshape = tuple(x.shape), tuple(w.shape)
     if batched and math.prod(wshape[:-2]) > 1 and settings.get("WO_A_CONFIG") == "auto":
         return None
     dev = x.device()
     grid = dev.compute_with_storage_grid_size()
     fp32 = _ckc_fp32(ckc)
-    key = (shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y)
+    galaxy = mode() == "galaxy"
+    key = (shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y, galaxy)
     if key in _cache:
         return _cache[key]
+    if galaxy:
+        spec = GALAXY.get(table_key(shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y))
+        if spec is not None:
+            _cache[key] = pc = build(spec)
+            return pc
     batch = math.prod(wshape[:-2]) if batched else 1
     if batch > 1 and math.prod(shape[:-2]) != batch:  # a broadcast over per-batch weights: auto
         _cache[key] = None
@@ -240,8 +482,9 @@ def _run(op, x, w, pc, dtype, ckc, memory_config, out=None):
         return r if out is None else out
     kind, cfg = pc
     if kind == "minimal":
+        kw = {} if cfg is None else {"config": cfg}
         return ttnn.experimental.minimal_matmul(
-            x, w, config=cfg, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config
+            x, w, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config, **kw
         )
     r = op(x, w, dtype=dtype, compute_kernel_config=ckc, memory_config=memory_config, program_config=cfg, **kw)
     return r if out is None else out
@@ -256,10 +499,13 @@ def linear(x, w, *, dtype, compute_kernel_config, memory_config, site: str = "",
     return _run(ttnn.linear, x, w, pc, dtype, compute_kernel_config, memory_config, out)
 
 
-def matmul(x, w, *, dtype, compute_kernel_config, memory_config, site: str = "", out=None):
-    """ttnn.matmul(x, w) with the MATMUL_CONFIG config (w may carry its own batch: [1, B, K, N]). ``out``: as linear."""
+def matmul(x, w, *, dtype, compute_kernel_config, memory_config, site: str = "", out=None, rule: bool = True):
+    """ttnn.matmul(x, w) with the MATMUL_CONFIG config (w may carry its own batch: [1, B, K, N]). ``out``: as linear.
+    ``rule`` False: no config under MATMUL_CONFIG=tuned (a site that was not routed here before P.19: rope.pairs),
+    the GALAXY entry or the rule under galaxy."""
     batched = len(w.shape) >= 3 and math.prod(tuple(w.shape)[:-2]) > 1
-    pc = program_config(x, w, dtype, compute_kernel_config, batched=batched) if tuned() else None
+    on = tuned() and (rule or mode() == "galaxy")
+    pc = program_config(x, w, dtype, compute_kernel_config, batched=batched) if on else None
     if RECORD is not None:
         _record("matmul", site, x, w, dtype, compute_kernel_config, memory_config, pc)
     return _run(ttnn.matmul, x, w, pc, dtype, compute_kernel_config, memory_config, out)
