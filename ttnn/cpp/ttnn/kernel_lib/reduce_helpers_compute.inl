@@ -219,8 +219,7 @@ ALWI void reload_accumulator_if_needed(
     uint32_t dest_chunk_size = 1) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
-            auto& accum_dfb = *accumulate.config.accumulator;
-            accum_dfb.wait_front(dest_chunk_size);
+            accumulate.config.wait_front(dest_chunk_size);
             constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
             const uint32_t prev_srca_cb = swap_operands ? scaler_dfb_id : input_dfb_id;
 
@@ -244,7 +243,7 @@ ALWI void reload_accumulator_if_needed(
             for (uint32_t tile = 0; tile < dest_chunk_size; ++tile) {
                 copy_tile(accumulate.config.cb_accumulator, tile, accumulate.config.dst_index + tile);
             }
-            accum_dfb.pop_front(dest_chunk_size);
+            accumulate.config.pop_front(dest_chunk_size);
 
             // CRITICAL: Re-init after copy_tile corrupts SRCA config
             // Use short version since packer config is still valid from initial init
@@ -334,14 +333,13 @@ ALWI void reduce(
         "on the reload pass, which the current copy_tile reload cannot reproduce.");
 #ifdef ARCH_QUASAR
     // The MAX + REDUCE_ROW accumulator reload relies on a within-16x16-face transpose during
-    // copy_tile_to_dst_init_short (see reload_accumulator_if_needed). That transpose is rejected
-    // by copy_tile_to_dst_init_short on Quasar ("Transpose within face not supported on Quasar"),
+    // copy_init (see reload_accumulator_if_needed). That transpose is rejected
+    // by copy_init on Quasar ("Transpose within face not supported on Quasar"),
     // and there is no Quasar-compatible reload that restores the layout GMPOOL expects.
     static_assert(
-        !is_accumulate_v<AccumulateT> ||
-            !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
+        !is_accumulate_v<AccumulateT> || !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
         "Accumulate with PoolType::MAX + REDUCE_ROW is not supported on Quasar: the accumulator "
-        "reload requires a within-16x16-face transpose, which copy_tile_to_dst_init_short asserts "
+        "reload requires a within-16x16-face transpose, which copy_init asserts "
         "against on Quasar.");
 #endif
 
@@ -393,6 +391,11 @@ ALWI void reduce(
     if constexpr (reconfig_output(reconfig_mode)) {
         pack_reconfig_data_format(output_dfb_id);
     }
+#ifdef ARCH_QUASAR
+    // pack_reconfig_data_format reprograms only the packer's format; pack_init points the packer at the
+    // output's L1 ring. Without it the reduced tiles land in whichever buffer the packer last targeted.
+    pack_init(output_dfb_id);
+#endif
     // Initialization
     if constexpr (is_sfpu) {
         // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the

@@ -27,8 +27,12 @@ imported lazily inside the methods that need it, so ``import ...adapters.minimax
 for the H2D producer (which reads only path/trace attributes).
 
 Env the operator sets (mirrors the rest of the M3 ecosystem):
-  HF_MODEL / PREFILL_HF_MODEL   real MiniMax-M3 checkpoint dir (VL-wrapped config + bf16 safetensors)
-  TT_CACHE_PATH                 tilized weight-cache root (default: /mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill if present, else the checkpoint dir)
+  HF_MODEL / PREFILL_HF_MODEL   MiniMax-M3-architecture checkpoint dir (VL-wrapped config + bf16 or MXFP8/NVFP4 safetensors);
+                                default: the selected variant's checkpoint dir (utils/model_variant.py)
+  M3_MODEL_VARIANT              MiniMax-M3 (default) or MiniMax-M3.1 when no checkpoint is given; a given checkpoint's
+                                config decides the variant itself
+  TT_CACHE_PATH                 tilized weight-cache root (default: the variant's weka cache root for its default
+                                checkpoint when present, else the checkpoint dir)
   PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
 """
 
@@ -36,49 +40,76 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
+from models.demos.minimax_m3.utils.model_variant import (
+    DEFAULT_VARIANT,
+    VARIANTS,
+    checkpoint_dir_env,
+    read_checkpoint_text_config,
+    select_variant,
+)
+
+# Golden trace the runner and the block tests default to, under the variant's golden dir.
+DEFAULT_TRACE = "longbook_10240"
 
 
-class MiniMaxM3Config:
-    """Static model-dimension constants the common runner reads: ``NUM_LAYERS`` (its layer-count
-    default, overridable with PREFILL_NUM_LAYERS for a partial-model bring-up) and
-    ``FABRIC_PAYLOAD_SIZE`` (the fabric router's max packet payload, mirrored from the embedding dim as
-    in the DeepSeek config); the rest document M3's dimensions for readers."""
-
-    EMB_SIZE = 6144  # hidden_size
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload (mirrors DeepSeekV3Config convention)
-    NUM_LAYERS = 60
-    NUM_ATTENTION_HEADS = 64
-    NUM_KEY_VALUE_HEADS = 4
-    HEAD_DIM = 128
-    ROTARY_DIM = 64
-    VOCAB_SIZE = 200064
+def model_dims(text_config: dict) -> SimpleNamespace:
+    """Model-dimension constants the common runner reads, from the run's text config: ``NUM_LAYERS`` (its
+    layer-count default, overridable with PREFILL_NUM_LAYERS for a partial-model bring-up) and
+    ``FABRIC_PAYLOAD_SIZE`` (the fabric router's max packet payload, mirrored from the embedding dim as in the
+    DeepSeek config); the rest describe the attention / KV layout."""
+    return SimpleNamespace(
+        EMB_SIZE=text_config["hidden_size"],
+        FABRIC_PAYLOAD_SIZE=text_config["hidden_size"],
+        NUM_LAYERS=text_config["num_hidden_layers"],
+        NUM_ATTENTION_HEADS=text_config["num_attention_heads"],
+        NUM_KEY_VALUE_HEADS=text_config["num_key_value_heads"],
+        HEAD_DIM=text_config["head_dim"],
+        ROTARY_DIM=text_config["rotary_dim"],
+        VOCAB_SIZE=text_config["vocab_size"],
+    )
 
 
 def _model_path() -> str:
-    """Resolve the MiniMax-M3 checkpoint dir: PREFILL_HF_MODEL > HF_MODEL > hf_model_default. This is the
-    dir AutoConfig / the weight loader read, and (absent TT_CACHE_PATH) the legacy tilized-cache root; see model_config.default_weight_cache_root.
-    """
-    return os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL") or MiniMaxM3PrefillAdapter.hf_model_default
+    """Resolve the MiniMax-M3 checkpoint dir: PREFILL_HF_MODEL > HF_MODEL > the selected variant's default dir. This
+    is the dir AutoConfig / the weight loader read, and (absent TT_CACHE_PATH) the legacy tilized-cache root; see
+    model_config.default_weight_cache_root."""
+    return checkpoint_dir_env() or select_variant().weights_dir
 
 
 class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
-    """MiniMax-M3 prefill adapter (GQA + MSA over TtPrefillRuntime, single-rank)."""
+    """MiniMax-M3 prefill adapter (GQA + MSA over TtPrefillRuntime). The model variant (and with it the default
+    checkpoint, golden trace and dimension constants) is resolved when the runner instantiates the adapter."""
 
     # --- identity & runner defaults ---
     name = "minimax_m3"
-    model_config = MiniMaxM3Config
-    # AutoConfig can load M3 only from the full VL checkpoint (it carries the remote config code); the
-    # repo config-only dir does not register model_type=minimax_m3. Operators set HF_MODEL/PREFILL_HF_MODEL.
-    hf_model_default = "/mnt/weka/model-weights/llm/minimax/MiniMax-M3/"
-    ttnn_cache_default = ""  # unused: see model_config.default_weight_cache_root (TT_CACHE_PATH > weka root > ckpt)
+    # Class-level values are the default variant's; __init__ re-targets them to the selected variant.
+    # AutoConfig can load M3 only from the full VL checkpoint (it carries the remote config code); the repo
+    # config-only dir does not register model_type=minimax_m3.
+    model_config = model_dims(VARIANTS[DEFAULT_VARIANT].config)
+    hf_model_default = VARIANTS[DEFAULT_VARIANT].weights_dir + "/"
+    ttnn_cache_default = (
+        ""  # unused: see model_config.default_weight_cache_root (TT_CACHE_PATH > variant weka root > ckpt)
+    )
     default_gate_mode = "DEVICE_FP32"  # unused by M3 (kept for runner contract parity)
-    prefill_trace_default = "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240"
+    prefill_trace_default = f"{VARIANTS[DEFAULT_VARIANT].golden_dir}/{DEFAULT_TRACE}"
+
+    def __init__(self):
+        super().__init__()
+        checkpoint = checkpoint_dir_env()
+        self.variant = select_variant(checkpoint)
+        self.hf_model_default = self.variant.weights_dir + "/"
+        self.prefill_trace_default = f"{self.variant.golden_dir}/{DEFAULT_TRACE}"
+        self.test_prefill_trace_default = self.prefill_trace_default
+        text_config = read_checkpoint_text_config(checkpoint or self.variant.weights_dir) or self.variant.config
+        self.model_config = model_dims(text_config)
+        logger.info(f"[minimax_m3] model variant {self.variant.name}")
 
     # high_bw_all_gather (MSA cache read) parks its semaphores in L1_SMALL; 0 makes it fall back to general
     # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
@@ -101,10 +132,11 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         ``max_seq_len`` on the result afterward."""
         from transformers import AutoConfig
 
+        from models.demos.minimax_m3.utils.checkpoint import text_config_of
+
         model_path = _model_path()
         logger.info(f"Loading HF config for model={self.name!r} from {model_path}")
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        return getattr(cfg, "text_config", cfg)
+        return text_config_of(AutoConfig.from_pretrained(model_path, trust_remote_code=True))
 
     # ------------------------------------------------------------------
     # Weight cache
@@ -173,7 +205,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         else:
             model_path = _model_path()
             logger.warning(
-                f"[minimax_m3] weight cache incomplete at {cache_path}; reading bf16 source from {model_path} "
+                f"[minimax_m3] weight cache incomplete at {cache_path}; reading source weights from {model_path} "
                 f"(slow — populate the cache once to skip this)."
             )
             # Read only the shards for the GLOBAL layer slice this rank builds

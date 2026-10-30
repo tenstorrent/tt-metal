@@ -118,8 +118,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     const bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor buffer is null");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor buffer is null");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor buffer is null");
+    TT_FATAL(output_tensor.is_allocated(), "Output tensor buffer is null");
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
@@ -343,10 +343,6 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
             desc, mesh_device, sender_forward_core_ranges, sender_workers_forward);
     }
 
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
-
     auto map_nd_to_4d = [&]() {
         // Here we do a couple of tricks so that the kernels can handle ND tensors
         // implicitly reshape lower dims so it is treated as 4D
@@ -421,13 +417,18 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
+    // The mux's map goes in program-local L1 rather than at a fixed address, so it stays clear of persistent L1
+    // (PrefetcherPipe rings) on the mux cores. Its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
         0,
         buffer_size_bytes_full_size_channel,
-        mux_base_l1_address);
+        /*base_l1_address=*/0);
+    if (!mux_core_range_set.empty()) {
+        mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set);
+    }
 
     // Create Reader Kernels
     std::vector<uint32_t> sender_reader_compile_args = {

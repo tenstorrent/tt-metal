@@ -22,7 +22,7 @@ void RepeatInterleaveCodegenDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to repeat_interleave (codegen) need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands need to be allocated in buffers on device!");
 
     const uint32_t rep_dim = recover_rep_dim(operation_attributes.rep_dim, input_tensor.logical_shape().rank());
     TT_FATAL(

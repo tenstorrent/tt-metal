@@ -228,15 +228,16 @@ def test_pack_forward_tokens(starts):
 def test_packed_forward_refusals():
     assert packed_forward_refusals(1, supports_packed_forward=False, mtp_levels=2, use_trace=True) == []
     assert packed_forward_refusals(4, supports_packed_forward=True) == []
+    assert packed_forward_refusals(4, supports_packed_forward=False, d2h_acks=True) == []
     reasons = packed_forward_refusals(
         4,
-        supports_packed_forward=False,
+        supports_packed_forward=True,
         mtp_levels=1,
         dflash=True,
         use_trace=True,
         d2h_acks=True,
         indexer_indices=True,
     )
-    assert len(reasons) == 6
-    for knob in ("supports_packed_forward", "MTP", "DFLASH", "USE_TRACE", "LAYER_ACK_D2H", "indexer indices"):
+    assert len(reasons) == 5
+    for knob in ("MTP", "DFLASH", "USE_TRACE", "LAYER_ACK_D2H", "indexer indices"):
         assert any(knob in r for r in reasons), knob
