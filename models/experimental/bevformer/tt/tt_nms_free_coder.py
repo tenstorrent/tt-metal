@@ -40,21 +40,24 @@ from models.experimental.bevformer.model_config import (
 
 # _gather_rows' padded row width, a whole tile.
 _GATHER_WIDTH = ttnn.TILE_SIZE
+# The search's thresholds per round: one tile row, as the round sums their pass flags along it.
+_SEARCH_STEPS = ttnn.TILE_SIZE
 
 
 def _gather_rows(table, rows, columns=None, compute_kernel_config=None):
-    """Each sample's rows ``rows`` ``(bs, 1, 1, k)`` uint32 of ``table`` ``(bs, n, width)``, width at
-    most ``_GATHER_WIDTH``, as ``(bs, k, width)`` in the table's dtype, exactly.
+    """Each sample's rows ``rows`` ``(bs, 1, 1, k)`` uint32 of the float32 ``table`` ``(bs, n,
+    width)``, width at most ``_GATHER_WIDTH``, as ``(bs, k, width)`` float32, exactly.
 
-    ttnn.embedding gathers whole rows in one pass, far faster here than ttnn.gather, but only from a
-    bfloat16 table. So a float32 table goes as three bfloat16 parts, each the next 8 significant
-    bits of its values, whose float32 sum is the table again. Rows are padded to ``_GATHER_WIDTH``.
+    ttnn.embedding gathers whole rows in one pass, but only from a bfloat16 table. So the table
+    goes as three bfloat16 parts, each the next 8 significant bits of its values, whose float32
+    sum is the table again. Rows are padded to ``_GATHER_WIDTH``.
 
     ``columns``, a ``(_GATHER_WIDTH, W)`` bfloat16 0/1 matrix, rearranges the gathered columns:
     each part is multiplied by it, which with ``compute_kernel_config``'s HiFi4 and fp32
     accumulation copies bfloat16 values exactly, and the rows come out ``(bs, k, W)`` float32.
-    Moving columns there costs one small matmul where slicing at columns off a tile boundary costs
-    an untilize, a slice and a tilize each."""
+    Columns moved there need no slicing off a tile boundary, which ttnn runs through ROW_MAJOR."""
+    if table.dtype != ttnn.float32:
+        raise ValueError(f"the table must be float32, got {table.dtype}")
     bs, n, width = table.shape
     k = rows.shape[-1]
     # Whole tiles both ways, so turning the parts to ROW_MAJOR strips no padding.
@@ -84,7 +87,7 @@ def _gather_rows(table, rows, columns=None, compute_kernel_config=None):
             out = out[..., :width]
         samples.append(ttnn.reshape(out, (1, k, out.shape[-1])))
     out = samples[0] if bs == 1 else ttnn.concat(samples, dim=0)
-    return out if table.dtype == ttnn.float32 or columns is not None else ttnn.typecast(out, table.dtype)
+    return out
 
 
 class TTNMSFreeCoder:
@@ -154,9 +157,12 @@ class TTNMSFreeCoder:
             )
             for channels in (BOX_SIZE, BOX_YAW)
         )
-        # 1 .. 32 down dim 1: the search's thresholds, in steps of its bracket.
+        # 1 .. _SEARCH_STEPS down dim 1: the search's thresholds, in steps of its bracket.
         self._search_steps = ttnn.to_device(
-            ttnn.Tensor([float(i) for i in range(1, 33)], [1, 32, 1, 1], SCORE_DTYPE, ttnn.TILE_LAYOUT), device
+            ttnn.Tensor(
+                [float(i) for i in range(1, _SEARCH_STEPS + 1)], [1, _SEARCH_STEPS, 1, 1], SCORE_DTYPE, ttnn.TILE_LAYOUT
+            ),
+            device,
         )
         # _sort_descending's tie order: an element ranks after the equal ones before it.
         padded_k = -(-max_num // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -174,8 +180,8 @@ class TTNMSFreeCoder:
         """The exact k-th largest of ``logits`` ``(bs, 1, 1, n)``, ``(bs, 1, 1, 1)`` float32. A
         bfloat16 top-k gives it rounded, the pivot, as rounding is monotonic. The k-th logit then
         lies in ``[low, low + 2 * half_width)`` around the pivot, and each round splits that bracket
-        into 32 steps and keeps the step holding it: of the thresholds ``low + i * step``, i = 1 ..
-        32, those with at least k logits at or above them come first, and ``low`` moves up by their
+        into ``_SEARCH_STEPS`` steps and keeps the step holding it: of the thresholds
+        ``low + i * step``, i = 1 .. ``_SEARCH_STEPS``, those with at least k logits at or above them come first, and ``low`` moves up by their
         number of steps. The last threshold is the bracket's top, which never has k logits."""
         k = self.max_num
         bs = logits.shape[0]
@@ -185,24 +191,25 @@ class TTNMSFreeCoder:
         half_width = ttnn.add(ttnn.multiply(ttnn.abs(pivot), 2.0**-6), 1e-30)
         low = ttnn.subtract(pivot, half_width)
         # The logits as whole tiles, (n / 32, 32), padded with -inf, which no threshold counts, and
-        # the 32 thresholds down dim 1: a round's count reduces 32 such tile blocks, which spreads
+        # the thresholds down dim 1: a round's count reduces 32 such tile blocks, which spreads
         # over the cores where one row of n logits per threshold runs on one.
         n = logits.shape[-1]
         tile_area = ttnn.TILE_SIZE * ttnn.TILE_SIZE
         padded_n = -(-n // tile_area) * tile_area
         logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, 0), (0, padded_n - n)], float("-inf"))
         logits = ttnn.reshape(logits, (bs, 1, padded_n // ttnn.TILE_SIZE, ttnn.TILE_SIZE))
-        steps = self._search_steps.shape[1]
         for round_ in range(CODER_SEARCH_ROUNDS):
-            # The bracket is 2 * half_width and each round divides it by 32: powers of two, exactly.
-            step = ttnn.multiply(half_width, 2.0 / steps ** (round_ + 1))
+            # The bracket is 2 * half_width and each round divides it by _SEARCH_STEPS, a power of
+            # two, so the steps are exact.
+            step = ttnn.multiply(half_width, 2.0 / _SEARCH_STEPS ** (round_ + 1))
             thresholds = ttnn.add(low, ttnn.multiply(step, self._search_steps))
             count = ttnn.sum(
                 ttnn.ge(logits, thresholds), dim=[-2, -1], keepdim=True, compute_kernel_config=self._count_config
             )
             # The counts fall as the thresholds rise, so the thresholds with enough logits come first.
-            # Reduced along a row of one tile, where a reduction down dim 1 first fills the padding.
-            passed = ttnn.reshape(ttnn.ge(count, float(k)), (bs, 1, 1, steps))
+            # Summed along the last dim, one tile row: summing down dim 1 would first fill the
+            # padding of every (1, 1) tile there.
+            passed = ttnn.reshape(ttnn.ge(count, float(k)), (bs, 1, 1, _SEARCH_STEPS))
             passed = ttnn.sum(passed, dim=-1, keepdim=True, compute_kernel_config=self._count_config)
             low = ttnn.add(low, ttnn.multiply(step, passed))
         return low
@@ -221,8 +228,8 @@ class TTNMSFreeCoder:
         place = ttnn.sum(ahead, dim=-1, keepdim=True, compute_kernel_config=self._count_config)
         place = ttnn.typecast(ttnn.transpose(place, -2, -1)[..., :k], ttnn.uint32)
         # Scatter takes float32 in ROW_MAJOR only. Every place is written once, so the input it
-        # starts from is overwritten whole. The sorted rows stay ROW_MAJOR: tilizing a single row
-        # costs more than the rest of the sort.
+        # starts from is overwritten whole. The sorted rows stay ROW_MAJOR, which the ops after the
+        # sort take; valid() tilizes the scores it compares against thresholds.
         place = ttnn.to_layout(place, ttnn.ROW_MAJOR_LAYOUT)
         return tuple(
             ttnn.scatter(t, -1, place, t) for t in (ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in (values, indexes))
@@ -233,7 +240,7 @@ class TTNMSFreeCoder:
         box predictions, ``TTBEVFormerHead``'s, in ``CENTERS_FIRST`` order, to each sample's top
         ``max_num`` scores, sorted, as device tensors: scores ``(bs, max_num)`` float32, labels
         ``(bs, max_num)`` uint32 and query indexes ``(bs, max_num)`` uint32, all ROW_MAJOR, and
-        boxes ``(bs, max_num, 9)`` in the box predictions' dtype.
+        boxes ``(bs, max_num, 9)`` float32, all in L1.
 
         ttnn.topk ranks float32 on a single core, far slower than bfloat16, whose large k takes
         a multi-core route on Blackhole; bfloat16 alone ties many scores. So the logits, which
@@ -268,9 +275,7 @@ class TTNMSFreeCoder:
         query_index = ttnn.div(ttnn.typecast(indexes, ttnn.int32), num_classes, rounding_mode="floor")
         query_index = ttnn.typecast(query_index, ttnn.uint32)
         boxes = self._decode(_gather_rows(bbox_preds, query_index, self._decode_columns, self._count_config))
-        outputs = tuple(ttnn.reshape(t, (bs, self.max_num)) for t in (scores, labels, query_index)) + (boxes,)
-        # The caller may hold them into the next frame, whose backbone needs the L1.
-        return tuple(ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in outputs)
+        return tuple(ttnn.reshape(t, (bs, self.max_num)) for t in (scores, labels, query_index)) + (boxes,)
 
     def _decode(self, gathered):
         """``_gather_rows``' box codes under ``self._decode_columns`` to ``(cx, cy, cz, w, l, h, yaw,

@@ -6,7 +6,6 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.model_config import CODE_ORDER
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
     assert_topk_close,
@@ -16,16 +15,19 @@ from models.experimental.bevformer.tests.common import (
     to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
-from models.experimental.bevformer.tt.tt_head import TTBEVFormerHead
+from models.experimental.bevformer.tt.tt_head import TTBEVFormerHead, box_preds_to_torch
 from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
 
 CASES = [
-    # (name, bev_shape, batch_size, traced)
-    pytest.param("tiny", BEV_SHAPES["tiny"], 1, False, id="tiny"),
-    pytest.param("tiny-traced", BEV_SHAPES["tiny"], 1, True, id="tiny-traced"),
-    pytest.param("base", BEV_SHAPES["base"], 1, False, id="base"),
+    # (name, bev_shape, batch_size, traced, all_layers)
+    pytest.param("tiny", BEV_SHAPES["tiny"], 1, False, True, id="tiny"),
+    pytest.param("tiny-traced", BEV_SHAPES["tiny"], 1, True, True, id="tiny-traced"),
+    pytest.param("base", BEV_SHAPES["base"], 1, False, True, id="base"),
     # bs=2, so a mix-up in the queries repeated over the batch shows.
-    pytest.param("tiny-bs2", BEV_SHAPES["tiny"], 2, False, id="tiny-bs2"),
+    pytest.param("tiny-bs2", BEV_SHAPES["tiny"], 2, False, True, id="tiny-bs2"),
+    # The last layer alone, as the detector runs the head.
+    pytest.param("tiny-traced-last", BEV_SHAPES["tiny"], 1, True, False, id="tiny-traced-last"),
+    pytest.param("tiny-bs2-last", BEV_SHAPES["tiny"], 2, False, False, id="tiny-bs2-last"),
 ]
 
 # Headroom for the decoder's and branches' recorded commands, not a measured size.
@@ -38,16 +40,16 @@ def _bev_embed(bev_shape, batch_size, seed):
     return random_bev(bev_shape, batch_size, generator).permute(1, 0, 2).contiguous()
 
 
-def _models(bev_shape, device):
+def _models(bev_shape, device, all_layers=False):
     torch_model = build_reference_head(bev_shape)
-    return torch_model, TTBEVFormerHead(create_head_parameters(torch_model, device), device)
+    return torch_model, TTBEVFormerHead(create_head_parameters(torch_model, device), device, all_layers=all_layers)
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("name, bev_shape, batch_size, traced", CASES)
+@pytest.mark.parametrize("name, bev_shape, batch_size, traced, all_layers", CASES)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_head(device, reset_seeds, name, bev_shape, batch_size, traced):
-    torch_model, tt_model = _models(bev_shape, device)
+def test_head(device, reset_seeds, name, bev_shape, batch_size, traced, all_layers):
+    torch_model, tt_model = _models(bev_shape, device, all_layers)
     bev_embed = _bev_embed(bev_shape, batch_size, seed=0)
     tt_bev_embed = to_device(bev_embed, device)
 
@@ -91,6 +93,6 @@ def test_head_detections(device, reset_seeds):
         cls_scores[-1],
         bbox_preds[-1],
         ttnn.to_torch(tt_cls_scores[-1]),
-        ttnn.to_torch(tt_bbox_preds[-1])[..., CODE_ORDER],
+        box_preds_to_torch(tt_bbox_preds[-1]),
         tt_topk,
     )

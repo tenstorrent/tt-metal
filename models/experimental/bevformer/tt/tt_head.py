@@ -6,7 +6,7 @@
 (``models/experimental/uniad/tt/ttnn_head.py``).
 
 Runs the decoder batch-first over the encoder's ``(bs, bev_h * bev_w, embed_dims)`` BEV
-features, then each layer's classification branch. Parameters come from
+features, then the classification branch of every layer, or of the last alone. Parameters come from
 ``model_preprocessing.create_head_parameters``. Forward runs on device only.
 
 The reg branches run once per layer, inside the decoder, which returns their box codes.
@@ -18,21 +18,34 @@ order, whose center channels come first, where the refined centers fill them wit
 """
 
 import ttnn
-from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, CODE_SIZE, GRID_DTYPE, SCORE_DTYPE
+from models.experimental.bevformer.model_config import (
+    CENTERS_FIRST_CENTERS,
+    CODE_ORDER,
+    CODE_SIZE,
+    GRID_DTYPE,
+    SCORE_DTYPE,
+)
 from models.experimental.bevformer.tt.tt_common import l1_linear, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
+
+
+def box_preds_to_torch(bbox_preds):
+    """``TTBEVFormerHead``'s box predictions, a device tensor, on the host in the reference's box
+    code order."""
+    return ttnn.to_torch(bbox_preds)[..., CODE_ORDER]
 
 
 class TTBEVFormerHead:
     """BEVFormer's detection head, batch-first on device."""
 
-    def __init__(self, params, device, all_layers=True):
+    def __init__(self, params, device, all_layers=False):
         """``params`` comes from ``create_head_parameters``, with the reference head's BEV shape
         and the ``pc_range`` corner and size its [0, 1] reference points map to in metres.
 
         ``all_layers`` returns every decoder layer's logits and boxes, as the reference does for
-        its per-layer training losses; without it only the last layer's, the ones the coder reads.
-        The decoder runs every layer either way, as each refines the previous one's points."""
+        its per-layer training losses; without it, the default, only the last layer's, the ones
+        the coder reads. The decoder runs every layer either way, as each refines the previous
+        one's points."""
         self.params = params
         self.all_layers = all_layers
         # The box predictions' center channels, which the refined centers fill.
@@ -45,7 +58,9 @@ class TTBEVFormerHead:
             ),
             device,
         )
-        self.decoder = TTDetectionTransformerDecoder(params.decoder, device, params.bev_shape, batch_first=True)
+        self.decoder = TTDetectionTransformerDecoder(
+            params.decoder, device, params.bev_shape, batch_first=True, all_layers=all_layers
+        )
 
     @staticmethod
     def _cls_branch(x, branch):
@@ -56,10 +71,11 @@ class TTBEVFormerHead:
     def __call__(self, bev_embed):
         """``bev_embed`` is ``(bs, bev_h * bev_w, embed_dims)``.
 
-        Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
-        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
-        the box code in ``model_config.py``'s ``CENTERS_FIRST`` order with cx, cy and cz in metres,
-        which ``CODE_ORDER`` takes to the reference's. Without ``all_layers``, L is 1, the last layer.
+        Returns the class logits ``(L, bs, num_query, num_classes)`` (``SCORE_DTYPE``) and box
+        predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``) in L1, L the number of decoder
+        layers with ``all_layers``, else 1, the last layer. The boxes are the box code in
+        ``model_config.py``'s ``CENTERS_FIRST`` order with cx, cy and cz in metres;
+        ``box_preds_to_torch`` brings them to the host in the reference's order.
         """
         signpost(header="TTNN Head Forward Start")
         p = self.params
@@ -73,11 +89,10 @@ class TTBEVFormerHead:
         signpost(header="Head Decoder Start")
         hs, refined_points, box_codes = self.decoder(query, bev_embed, query_pos, reference_points, p.reg_branches)
         signpost(header="Head Decoder End")
-        layers = range(len(p.cls_branches)) if self.all_layers else [len(p.cls_branches) - 1]
-        if not self.all_layers:
-            refined_points, box_codes = refined_points[layers[0] :], box_codes[layers[0] :]
+        # The decoder returns the last layer alone without all_layers.
+        cls_branches = p.cls_branches if self.all_layers else p.cls_branches[-1:]
         signpost(header="Head ClsBranches Start")
-        all_cls_scores = ttnn.stack([self._cls_branch(hs[lvl], p.cls_branches[lvl]) for lvl in layers], dim=0)
+        all_cls_scores = ttnn.stack([self._cls_branch(hs[i], branch) for i, branch in enumerate(cls_branches)], dim=0)
         signpost(header="Head ClsBranches End")
         signpost(header="Head BoxPreds Start")
 
@@ -86,5 +101,4 @@ class TTBEVFormerHead:
         all_bbox_preds = ttnn.where(self._center_mask, centers, box_codes)
         signpost(header="Head BoxPreds End")
         signpost(header="TTNN Head Forward End")
-        # The caller may hold the outputs into the next frame, whose backbone needs the L1.
-        return tuple(ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in (all_cls_scores, all_bbox_preds))
+        return all_cls_scores, all_bbox_preds

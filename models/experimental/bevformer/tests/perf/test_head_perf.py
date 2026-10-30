@@ -40,7 +40,7 @@ from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
 def test_head_perf(device, reset_seeds):
     bev_shape = BEV_SHAPES["base"]
     torch_model = build_reference_head(bev_shape)
-    tt_model = TTBEVFormerHead(create_head_parameters(torch_model, device), device, all_layers=False)
+    tt_model = TTBEVFormerHead(create_head_parameters(torch_model, device), device)
     coder = TTNMSFreeCoder(device)
 
     generator = torch.Generator().manual_seed(0)

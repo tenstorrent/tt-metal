@@ -11,6 +11,7 @@ activation lives in DRAM runs as a matmul; a spatial conv there runs in a fixed
 number of width slices.
 """
 
+import functools
 import math
 
 import ttnn
@@ -56,11 +57,19 @@ def linear_program_config(device, rows, in_features, out_features, activation=No
     and its rows over the grid's rows: a few hundred rows split by rows alone leave most cores
     idle. A narrower one splits its rows alone, in blocks of up to 4 tile rows."""
     grid = device.compute_with_storage_grid_size()
+    return _linear_program_config((grid.x, grid.y), rows, in_features, out_features, activation)
+
+
+@functools.lru_cache
+def _linear_program_config(grid, rows, in_features, out_features, activation):
+    grid = ttnn.CoreCoord(*grid)
     tile = ttnn.TILE_SIZE
     rows_t = -(-rows // tile)
     in_t, out_t = in_features // tile, -(-out_features // tile)
     in0_block_w = max(w for w in range(1, 9) if in_t % w == 0)
     fused_activation = None if activation is None else ttnn.UnaryWithParam(activation)
+    # A subblock of out_subblock_w tiles, one tile high, sits in DST, which holds 4 tiles with
+    # fp32 accumulation.
     if out_t >= 4:
         columns = max(c for c in range(1, min(8, grid.x) + 1) if out_t % c == 0)
         per_core_m, per_core_n = -(-rows_t // grid.y), out_t // columns
@@ -111,31 +120,31 @@ def l1_linear(x, linear, activation=None, dtype=None):
         dtype=dtype,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         program_config=linear_program_config(x.device(), rows, x.shape[-1], linear.weight.shape[-1], activation),
-        compute_kernel_config=ttnn.init_device_compute_kernel_config(
-            x.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_output,
-            packer_l1_acc=not fp32_output,
-        ),
+        compute_kernel_config=_linear_compute_config(x.device().arch(), fp32_output),
+    )
+
+
+@functools.lru_cache
+def _linear_compute_config(arch, fp32_output):
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_output,
+        packer_l1_acc=not fp32_output,
     )
 
 
 class TTFFN:
-    """The encoder's and decoder's FFN, Linear-ReLU-Linear, without the residual: the layer adds it
-    inside the LayerNorm that follows. ``params`` from ``model_preprocessing.preprocess_ffn_parameters``.
-    With ``l1``, both Linears write to L1 through ``l1_linear``."""
+    """The decoder's FFN, Linear-ReLU-Linear, into L1, without the residual: the layer adds it
+    inside the LayerNorm that follows. ``params`` from ``model_preprocessing.preprocess_ffn_parameters``."""
 
-    def __init__(self, params, l1=False):
+    def __init__(self, params):
         self.params = params
-        self.l1 = l1
 
     def __call__(self, x):
         p = self.params
-        if self.l1:
-            return l1_linear(l1_linear(x, p.linear1, activation=ttnn.UnaryOpType.RELU), p.linear2)
-        y = ttnn.linear(x, p.linear1.weight, bias=p.linear1.bias, activation="relu")
-        return ttnn.linear(y, p.linear2.weight, bias=p.linear2.bias)
+        return l1_linear(l1_linear(x, p.linear1, activation=ttnn.UnaryOpType.RELU), p.linear2)
 
 
 def is_pointwise(conv):
