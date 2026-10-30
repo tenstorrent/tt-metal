@@ -102,11 +102,10 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_state_cb(cb::S, cb::S_mm, kv);
     add_cb(cb::ones32, 1);
     add_cb(cb::zero32, 1);
-    // compute -> compute
+    // compute -> compute (c_10 r16 and c_12 ccol32 are not allocated: the fused read+vector pass keeps r in DEST
+    // and c goes from DEST straight into ebc16)
     add_cb(cb::ecol32, 1);
-    add_cb(cb::r16, Vt);
     add_cb(cb::craw16, 1);
-    add_cb(cb::ccol32, 1);
     add_cb(cb::ebc16, 1);
     add_cb(cb::u16, Vt);
     add_state_cb(cb::s2, cb::s2_mm, kv);
