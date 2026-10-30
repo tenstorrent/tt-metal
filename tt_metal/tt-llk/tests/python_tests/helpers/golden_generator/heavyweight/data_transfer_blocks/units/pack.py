@@ -10,7 +10,7 @@ See `README.md`, "units/pack.py".
 """
 
 import warnings
-from typing import FrozenSet, Mapping, Optional
+from typing import FrozenSet, Mapping, Optional, Tuple
 
 import torch
 from helpers.format_config import DataFormat
@@ -19,7 +19,9 @@ from helpers.llk_params import PackerReluType, StochasticRounding
 from ..l1_support import L1Support
 from ..storage import (
     DEST_32_BIT_FORMATS,
+    round_mantissa_even,
     to_dest_storage,
+    truncate_mantissa,
     truncate_to_l1_lattice,
 )
 from .pack_effects import (
@@ -52,6 +54,7 @@ class Pack:
         promotes_outlier_to_32_bit_dest: bool = True,
         gasket_converts_wide_dest: bool = True,
         truncating_outputs: FrozenSet[DataFormat] = frozenset(),
+        early_conversion: Optional[Mapping[DataFormat, Tuple[int, bool]]] = None,
     ) -> None:
         #: Legal ``Dest -> L1`` pairs, the pack-side counterpart of the
         #: unpacker's table. Empty means unmodelled.
@@ -76,6 +79,14 @@ class Pack:
         #: stimuli rather than to model this conversion, so a format listed
         #: here is quantized before they see it.
         self.truncating_outputs = truncating_outputs
+
+        #: What the early conversion keeps, by output format: the explicit
+        #: mantissa bits, and whether getting there rounds. The packer converts
+        #: in two stages and runs ReLU and the edge mask between them, so a
+        #: datum meets the threshold already narrowed. Keyed by output format
+        #: because that is what the intermediate tracks. An absent format has
+        #: no early conversion, and the effects see Dest.
+        self.early_conversion = early_conversion or {}
 
         self.l1 = l1
 
@@ -177,11 +188,26 @@ class Pack:
         # Normally already at Dest precision (src_to_dest wrote it there), so this
         # is a no-op then, and a safety net for a caller that bypassed Dest.
         values = to_dest_storage(dest_values, dest_format)
+        pack_src = self.pack_src_format(dest_format, l1_format)
+        if pack_src is not dest_format:
+            early = self.early_conversion.get(l1_format)
+            if early is not None:
+                # The early conversion runs first, so a datum a little above the
+                # ReLU threshold that narrows onto it is flushed. Comparing at
+                # Dest's width would keep it.
+                early_bits, stage_rounds = early
+                # A packer that truncates on the way to this output truncates
+                # here too. Rounding early would survive the late stage and move
+                # the bytes on a path with no effect to justify it.
+                if stage_rounds and l1_format not in self.truncating_outputs:
+                    values = round_mantissa_even(values, early_bits)
+                else:
+                    values = truncate_mantissa(values, early_bits)
         values = apply_pack_effects(
             values,
             relu_type=relu_type,
             relu_threshold=relu_threshold,
-            dest_format=self.pack_src_format(dest_format, l1_format),
+            dest_format=pack_src,
             edge_mask=edge_mask,
             edge_mask_masked_when_set=self.edge_mask_masked_when_set,
         )
