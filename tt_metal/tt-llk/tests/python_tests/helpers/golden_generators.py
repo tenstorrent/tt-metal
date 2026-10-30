@@ -6090,10 +6090,14 @@ class SoftmaxKGolden:
         out[r][c] = exp(x[r][c] - m[r]) / sum_{c' < k} exp(x[r][c'] - m[r])   c < k
         out[r][c] = 0                                                        c >= k
 
-    Columns >= k have to be exactly 0.0 in the input: the kernel takes a condition
-    code from |even-column value| before subtracting the max and only re-enables all
-    lanes after the exponential, so those lanes stay 0 and are then multiplied by the
-    reciprocal. Rows outside the processed band come back untouched.
+    On a 16-bit DEST columns >= k have to be exactly 0.0 in the input and valid logits
+    must be non-zero: the kernel takes a condition code from |even-column value| before
+    subtracting the max and only re-enables all lanes after the exponential, so those
+    lanes stay 0 and are then multiplied by the reciprocal. On a 32-bit DEST no
+    condition code is set; every column goes through subtract + exp and the kernel
+    re-zeroes the columns >= k by index afterwards, so neither requirement applies there
+    (a valid 0.0 logit is fine). The golden itself is the plain formula above either way.
+    Rows outside the processed band come back untouched.
 
     The kernel round-trips through Dest three times -- x - max, exp(), and the
     normalized result -- so the golden quantizes at each of those stores to the width
