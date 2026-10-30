@@ -35,7 +35,7 @@ inline constexpr uint64_t kRemapAttrsOffset = 0x18;
 // NOC_SNOOP_TL_MASTER_CFG offset in tt_cluster_ctrl (tt-2.0.0 tt_cluster_ctrl_reg.h, CCE-local 0x03000124).
 inline constexpr uint64_t kSnoopMasterConfigOffset = 0x124;
 
-// Channel 0: the SMC core of the CCE's Mimir already selects the Mimir.
+// Channel 0: the SMC core of the CCE's Mimir already selects the Mimir, so chiplet-local windows.
 uint64_t cce_register_address(uint32_t cce_index, uint64_t register_address) {
     return tt::umd::mimir_local_address_windows(configured_soc_desc())
         .cce_control_address(0, location_for_cce(cce_index), register_address);

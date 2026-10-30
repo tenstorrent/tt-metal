@@ -375,6 +375,7 @@ TEST(MimirHostDram, HostSideRejections) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     MIMIR_HOST_ONLY_PREAMBLE(true);
+    // The suite skips unless mimir_local, so chiplet-local windows.
     const uint64_t mimir_window_bytes = tt::umd::mimir_local_address_windows(soc).dram_stride;
     const uint64_t l1_noc_offset = MetalContext::instance().hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 

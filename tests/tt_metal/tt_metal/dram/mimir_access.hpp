@@ -164,10 +164,9 @@ inline MimirCceL1AddressInfo mimir_cce_l1_address(
         location_translated_core.y);
     info.tl1_offset = tl1_offset;
     info.cluster_address = MetalContext::instance().hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + tl1_offset;
-    const tt::umd::GrendelAddressWindows windows = tt::umd::mimir_local_address_windows(soc);
-    // The resolver EmuTTDevice installs for this descriptor (umd/device/tt_device/emu_tt_device.cpp:91-92). The
-    // device's own instance is a protected member with no accessor (simulation_tt_device.hpp:167), so the test builds
-    // the same one.
+    const tt::umd::GrendelAddressWindows windows = tt::umd::address_windows_for(soc);
+    // The resolver EmuTTDevice installs for this descriptor. The device's own instance is a protected member with no
+    // accessor, so the test builds the same one.
     const tt::umd::GrendelNocAddressResolver resolver(soc, windows);
     info.host_axi_address = resolver.to_flat_address(
         tt::umd::CoreCoord(info.translated_core.x, info.translated_core.y, CoreType::DRAM, CoordSystem::TRANSLATED),
@@ -628,7 +627,7 @@ inline MimirDramAddressInfo mimir_dram_address(
     info.mimir_index = static_cast<uint32_t>(soc.get_channel_for_dram_view(static_cast<int>(view)));
     info.view_offset = view_offset;
     info.chiplet_offset = static_cast<uint64_t>(soc.get_address_offset(static_cast<int>(view))) + view_offset;
-    const tt::umd::GrendelAddressWindows windows = tt::umd::mimir_local_address_windows(soc);
+    const tt::umd::GrendelAddressWindows windows = tt::umd::address_windows_for(soc);
     info.flat_address = windows.dram_address(info.mimir_index, info.chiplet_offset);
     info.first_channel = mimir_channel_location(info.chiplet_offset);
     info.size = size;
@@ -736,6 +735,7 @@ inline MimirTransferRecord make_sram_record(
     record.source = std::move(source);
     record.destination = std::move(destination);
     record.requested_address = mimir_contract::cce_sram_address(issuer_routes, dest_cce, landing_offset);
+    // The address inside the destination Mimir after the DMRISC remap, so chiplet-local windows.
     record.destination_local_address = host_cce_sram_mla_address(
         tt::umd::mimir_local_address_windows(soc), location_for_cce(dest_cce), landing_offset);
     record.predicted_stages = {
