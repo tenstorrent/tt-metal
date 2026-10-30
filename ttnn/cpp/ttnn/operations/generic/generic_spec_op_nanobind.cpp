@@ -1,0 +1,462 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "generic_spec_op_nanobind.hpp"
+
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+
+#include "generic_spec_op.hpp"
+#include "ttnn-nanobind/export_enum.hpp"
+
+namespace ttnn::operations::generic {
+
+namespace {
+
+namespace exp = tt::tt_metal::experimental;
+
+using StringMap = std::map<std::string, std::string>;
+using ArgMap = std::map<std::string, uint32_t>;
+using NodeArgMap = std::map<std::string, std::map<tt::tt_metal::CoreCoord, uint32_t>>;
+using HwConfig = std::variant<exp::DataMovementHardwareConfig, exp::ComputeHardwareConfig>;
+using Nodes = std::variant<tt::tt_metal::CoreCoord, tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>;
+
+template <typename Name>
+std::vector<Name> to_names(const std::vector<std::string>& names) {
+    std::vector<Name> result;
+    result.reserve(names.size());
+    for (const auto& name : names) {
+        result.emplace_back(name);
+    }
+    return result;
+}
+
+template <typename Name>
+std::vector<std::string> from_names(const std::vector<Name>& names) {
+    std::vector<std::string> result;
+    result.reserve(names.size());
+    for (const auto& name : names) {
+        result.push_back(*name);
+    }
+    return result;
+}
+
+void bind_hardware_configs(nb::module_& mod) {
+    nb::class_<exp::DataMovementHardwareConfig>(mod, "DataMovementHardwareConfig", R"doc(
+        Hardware config of a Metal 2.0 data movement kernel.
+
+        ``processor`` and ``noc`` pick the RISC and NoC on Wormhole / Blackhole and are ignored on Quasar,
+        where Metal 2.0 places data movement kernels itself. ``disable_dfb_implicit_sync_for_all`` is
+        Quasar-only: it opts the kernel's dataflow buffers out of implicit-sync credit accounting.
+        Use ``reader()`` / ``writer()`` for the conventional reader / writer placement.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::DataMovementHardwareConfig* self,
+               std::optional<tt::tt_metal::DataMovementProcessor> processor,
+               std::optional<tt::tt_metal::NOC> noc,
+               bool disable_dfb_implicit_sync_for_all) {
+                TT_FATAL(
+                    processor.has_value() == noc.has_value(),
+                    "DataMovementHardwareConfig: give both processor and noc, or neither");
+                new (self) exp::DataMovementHardwareConfig{};
+                if (processor.has_value()) {
+                    self->config_1xx =
+                        exp::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = *processor, .noc = *noc};
+                }
+                self->config_2xx = exp::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+            },
+            nb::kw_only(),
+            nb::arg("processor") = nb::none(),
+            nb::arg("noc") = nb::none(),
+            nb::arg("disable_dfb_implicit_sync_for_all") = false)
+        .def_static(
+            "reader",
+            [](bool disable_dfb_implicit_sync_for_all) {
+                auto hw = exp::CreateReaderDataMovementConfig();
+                hw.config_2xx = exp::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+                return hw;
+            },
+            nb::arg("disable_dfb_implicit_sync_for_all") = false)
+        .def_static(
+            "writer",
+            [](bool disable_dfb_implicit_sync_for_all) {
+                auto hw = exp::CreateWriterDataMovementConfig();
+                hw.config_2xx = exp::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+                return hw;
+            },
+            nb::arg("disable_dfb_implicit_sync_for_all") = false);
+
+    nb::class_<exp::ComputeHardwareConfig>(mod, "ComputeHardwareConfig", R"doc(
+        Hardware config of a Metal 2.0 compute kernel.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::ComputeHardwareConfig* self,
+               tt::tt_metal::MathFidelity math_fidelity,
+               bool enable_32_bit_dest,
+               bool double_buffer_dest) {
+                new (self) exp::ComputeHardwareConfig{
+                    .fpu_math_fidelity = math_fidelity,
+                    .enable_32_bit_dest = enable_32_bit_dest,
+                    .double_buffer_dest = double_buffer_dest,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::HiFi4,
+            nb::arg("enable_32_bit_dest") = false,
+            nb::arg("double_buffer_dest") = true)
+        .def_rw("math_fidelity", &exp::ComputeHardwareConfig::fpu_math_fidelity)
+        .def_rw("enable_32_bit_dest", &exp::ComputeHardwareConfig::enable_32_bit_dest)
+        .def_rw("double_buffer_dest", &exp::ComputeHardwareConfig::double_buffer_dest);
+}
+
+void bind_resources(nb::module_& mod) {
+    nb::class_<exp::DataflowBufferSpec>(mod, "DataflowBufferSpec", R"doc(
+        A Metal 2.0 dataflow buffer (the successor of a circular buffer).
+
+        Args:
+            unique_id (str): Name the kernels' DFBBindings refer to.
+            entry_size (int): Bytes per entry (e.g. one tile).
+            num_entries (int): Number of entries.
+            data_format (ttnn.DataType, optional): Format of the entries, needed when a compute kernel reads or
+                writes the buffer.
+            tile (ttnn.Tile, optional): Tile shape of the entries.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::DataflowBufferSpec* self,
+               const std::string& unique_id,
+               uint32_t entry_size,
+               uint32_t num_entries,
+               std::optional<tt::tt_metal::DataType> data_format,
+               std::optional<tt::tt_metal::Tile> tile) {
+                new (self) exp::DataflowBufferSpec{
+                    .unique_id = exp::DFBSpecName{unique_id},
+                    .entry_size = entry_size,
+                    .num_entries = num_entries,
+                    .data_format_metadata =
+                        data_format.has_value()
+                            ? std::optional(tt::tt_metal::datatype_to_dataformat_converter(*data_format))
+                            : std::nullopt,
+                    .tile_format_metadata = tile,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("unique_id"),
+            nb::arg("entry_size"),
+            nb::arg("num_entries"),
+            nb::arg("data_format") = nb::none(),
+            nb::arg("tile") = nb::none())
+        .def_prop_ro("unique_id", [](const exp::DataflowBufferSpec& self) { return *self.unique_id; })
+        .def_rw("entry_size", &exp::DataflowBufferSpec::entry_size)
+        .def_rw("num_entries", &exp::DataflowBufferSpec::num_entries);
+
+    nb::class_<exp::TensorParameter>(mod, "TensorParameter", R"doc(
+        A tensor the program reads or writes, named so kernels can bind it with a TensorBinding.
+
+        Args:
+            unique_id (str): Name the kernels' TensorBindings refer to.
+            spec (ttnn.TensorSpec): Spec of the tensors bound to this parameter, e.g. ``tensor.spec``.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::TensorParameter* self, const std::string& unique_id, const tt::tt_metal::TensorSpec& spec) {
+                new (self) exp::TensorParameter{.unique_id = exp::TensorParamName{unique_id}, .spec = spec};
+            },
+            nb::kw_only(),
+            nb::arg("unique_id"),
+            nb::arg("spec"))
+        .def_prop_ro("unique_id", [](const exp::TensorParameter& self) { return *self.unique_id; })
+        .def_ro("spec", &exp::TensorParameter::spec);
+}
+
+void bind_kernel_spec(nb::module_& mod) {
+    export_enum<exp::DFBEndpointType>(mod, "DFBEndpointType");
+    export_enum<exp::DFBAccessPattern>(mod, "DFBAccessPattern");
+
+    nb::class_<exp::DFBBinding>(mod, "DFBBinding", R"doc(
+        Binds a DataflowBufferSpec to a kernel. The kernel reaches it as ``dfb::<accessor_name>``.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::DFBBinding* self,
+               const std::string& dfb_spec_name,
+               const std::string& accessor_name,
+               exp::DFBEndpointType endpoint_type,
+               exp::DFBAccessPattern access_pattern,
+               uint32_t block_size) {
+                new (self) exp::DFBBinding{
+                    .dfb_spec_name = exp::DFBSpecName{dfb_spec_name},
+                    .accessor_name = accessor_name,
+                    .endpoint_type = endpoint_type,
+                    .access_pattern = access_pattern,
+                    .block_size = block_size,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("dfb_spec_name"),
+            nb::arg("accessor_name"),
+            nb::arg("endpoint_type"),
+            nb::arg("access_pattern") = exp::DFBAccessPattern::STRIDED,
+            nb::arg("block_size") = 0);
+
+    nb::class_<exp::TensorBinding>(mod, "TensorBinding", R"doc(
+        Binds a TensorParameter to a kernel. The kernel reaches it as ``tensor::<accessor_name>``.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::TensorBinding* self, const std::string& tensor_parameter_name, const std::string& accessor_name) {
+                new (self) exp::TensorBinding{
+                    .tensor_parameter_name = exp::TensorParamName{tensor_parameter_name},
+                    .accessor_name = accessor_name,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("tensor_parameter_name"),
+            nb::arg("accessor_name"));
+
+    nb::class_<exp::KernelSpec>(mod, "KernelSpec", R"doc(
+        A Metal 2.0 kernel.
+
+        Args:
+            unique_id (str): Name the WorkUnitSpecs and KernelRunArgs refer to.
+            source (str, optional): Path of the kernel source file, resolved like any tt-metal kernel path.
+            source_code (str, optional): The kernel source itself. Give exactly one of source and source_code.
+            hw_config (DataMovementHardwareConfig or ComputeHardwareConfig): Picks the kernel type.
+            num_threads (int): Threads per node (Quasar runs several data movement or compute threads).
+            dfb_bindings (List[DFBBinding]): Dataflow buffers the kernel uses (``dfb::<name>``).
+            tensor_bindings (List[TensorBinding]): Tensors the kernel uses (``tensor::<name>``).
+            compile_time_args (Dict[str, int]): Named compile-time args.
+            runtime_arg_names (List[str]): Names of the per-node runtime args (``args::<name>``).
+            common_runtime_arg_names (List[str]): Names of the runtime args shared by all nodes.
+            include_paths (List[str]): Extra ``-I`` paths.
+            defines (Dict[str, str]): Extra ``-D`` defines.
+            opt_level (ttnn.KernelBuildOptLevel): Optimization level.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::KernelSpec* self,
+               const std::string& unique_id,
+               const std::optional<std::string>& source,
+               const std::optional<std::string>& source_code,
+               const HwConfig& hw_config,
+               uint32_t num_threads,
+               const std::vector<exp::DFBBinding>& dfb_bindings,
+               const std::vector<exp::TensorBinding>& tensor_bindings,
+               const ArgMap& compile_time_args,
+               const std::vector<std::string>& runtime_arg_names,
+               const std::vector<std::string>& common_runtime_arg_names,
+               const std::vector<std::string>& include_paths,
+               const StringMap& defines,
+               tt::tt_metal::KernelBuildOptLevel opt_level) {
+                TT_FATAL(
+                    source.has_value() != source_code.has_value(),
+                    "KernelSpec '{}': give exactly one of source (a file path) and source_code",
+                    unique_id);
+                new (self) exp::KernelSpec{
+                    .unique_id = exp::KernelSpecName{unique_id},
+                    .num_threads = num_threads,
+                    .dfb_bindings = dfb_bindings,
+                    .tensor_bindings = tensor_bindings,
+                    .runtime_arg_schema =
+                        {.runtime_arg_names = runtime_arg_names, .common_runtime_arg_names = common_runtime_arg_names},
+                    .hw_config = hw_config,
+                };
+                if (source.has_value()) {
+                    self->source = std::filesystem::path(*source);
+                } else {
+                    self->source = exp::KernelSpec::SourceCode{.code = *source_code};
+                }
+                for (const auto& include_path : include_paths) {
+                    self->compiler_options.include_paths.emplace_back(include_path);
+                }
+                for (const auto& [name, value] : defines) {
+                    self->compiler_options.defines.emplace(name, value);
+                }
+                self->compiler_options.opt_level = opt_level;
+                for (const auto& [name, value] : compile_time_args) {
+                    self->compile_time_args.emplace(name, value);
+                }
+            },
+            nb::kw_only(),
+            nb::arg("unique_id"),
+            nb::arg("source") = nb::none(),
+            nb::arg("source_code") = nb::none(),
+            nb::arg("hw_config"),
+            nb::arg("num_threads") = 1,
+            nb::arg("dfb_bindings") = std::vector<exp::DFBBinding>{},
+            nb::arg("tensor_bindings") = std::vector<exp::TensorBinding>{},
+            nb::arg("compile_time_args") = ArgMap{},
+            nb::arg("runtime_arg_names") = std::vector<std::string>{},
+            nb::arg("common_runtime_arg_names") = std::vector<std::string>{},
+            nb::arg("include_paths") = std::vector<std::string>{},
+            nb::arg("defines") = StringMap{},
+            nb::arg("opt_level") = tt::tt_metal::KernelBuildOptLevel::O2)
+        .def_prop_ro("unique_id", [](const exp::KernelSpec& self) { return *self.unique_id; })
+        .def_prop_ro("is_data_movement_kernel", &exp::KernelSpec::is_data_movement_kernel)
+        .def_prop_ro("is_compute_kernel", &exp::KernelSpec::is_compute_kernel);
+}
+
+void bind_program_spec(nb::module_& mod) {
+    nb::class_<exp::WorkUnitSpec>(mod, "WorkUnitSpec", R"doc(
+        Places a set of kernels on a set of nodes (cores).
+
+        Args:
+            name (str): Name of the work unit.
+            kernels (List[str]): unique_ids of the KernelSpecs that run together on each node.
+            target_nodes (ttnn.CoreCoord, ttnn.CoreRange or ttnn.CoreRangeSet): Nodes to run them on.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::WorkUnitSpec* self,
+               const std::string& name,
+               const std::vector<std::string>& kernels,
+               const Nodes& target_nodes) {
+                new (self) exp::WorkUnitSpec{
+                    .name = name, .kernels = to_names<exp::KernelSpecName>(kernels), .target_nodes = target_nodes};
+            },
+            nb::kw_only(),
+            nb::arg("name"),
+            nb::arg("kernels"),
+            nb::arg("target_nodes"))
+        .def_ro("name", &exp::WorkUnitSpec::name)
+        .def_prop_ro("kernels", [](const exp::WorkUnitSpec& self) { return from_names(self.kernels); });
+
+    nb::class_<exp::ProgramSpec>(mod, "ProgramSpec", R"doc(
+        A Metal 2.0 program, run with ``ttnn.generic_op(io_tensors, program_spec, run_args)``.
+
+        Args:
+            name (str): Name of the program.
+            kernels (List[KernelSpec]): The kernels.
+            dataflow_buffers (List[DataflowBufferSpec]): The dataflow buffers.
+            tensor_parameters (List[TensorParameter]): The tensors the kernels bind.
+            work_units (List[WorkUnitSpec]): Which kernels run on which nodes.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::ProgramSpec* self,
+               const std::string& name,
+               const std::vector<exp::KernelSpec>& kernels,
+               const std::vector<exp::DataflowBufferSpec>& dataflow_buffers,
+               const std::vector<exp::TensorParameter>& tensor_parameters,
+               const std::vector<exp::WorkUnitSpec>& work_units) {
+                new (self) exp::ProgramSpec{
+                    .name = name,
+                    .kernels = kernels,
+                    .dataflow_buffers = dataflow_buffers,
+                    .tensor_parameters = tensor_parameters,
+                    .work_units = work_units,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("name"),
+            nb::arg("kernels"),
+            nb::arg("dataflow_buffers") = std::vector<exp::DataflowBufferSpec>{},
+            nb::arg("tensor_parameters") = std::vector<exp::TensorParameter>{},
+            nb::arg("work_units"))
+        .def_ro("name", &exp::ProgramSpec::name);
+}
+
+void bind_run_args(nb::module_& mod) {
+    nb::class_<exp::KernelRunArgs>(mod, "KernelRunArgs", R"doc(
+        Runtime arg values of one kernel.
+
+        Args:
+            kernel (str): unique_id of the KernelSpec.
+            runtime_arg_values (Dict[str, Dict[ttnn.CoreCoord, int]]): Per-node values of each name in the
+                kernel's runtime_arg_names; every node of the kernel's work units needs a value.
+            common_runtime_arg_values (Dict[str, int]): Values of the kernel's common_runtime_arg_names.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::KernelRunArgs* self,
+               const std::string& kernel,
+               const NodeArgMap& runtime_arg_values,
+               const ArgMap& common_runtime_arg_values) {
+                new (self) exp::KernelRunArgs{.kernel = exp::KernelSpecName{kernel}};
+                for (const auto& [name, values_per_node] : runtime_arg_values) {
+                    for (const auto& [node, value] : values_per_node) {
+                        self->runtime_arg_values[name][node] = value;
+                    }
+                }
+                for (const auto& [name, value] : common_runtime_arg_values) {
+                    self->common_runtime_arg_values.emplace(name, value);
+                }
+            },
+            nb::kw_only(),
+            nb::arg("kernel"),
+            nb::arg("runtime_arg_values") = NodeArgMap{},
+            nb::arg("common_runtime_arg_values") = ArgMap{})
+        .def_prop_ro("kernel", [](const exp::KernelRunArgs& self) { return *self.kernel; })
+        .def(
+            "add_runtime_args_for_node",
+            [](exp::KernelRunArgs& self, const tt::tt_metal::CoreCoord& node, const ArgMap& named_values) {
+                for (const auto& [name, value] : named_values) {
+                    self.runtime_arg_values[name][node] = value;
+                }
+            },
+            nb::arg("node"),
+            nb::arg("named_values"),
+            "Set the runtime arg values {name: value} of one node.");
+
+    nb::class_<ttnn::ProgramSpecRunArgs>(mod, "ProgramSpecRunArgs", R"doc(
+        Run-time arguments of a ProgramSpec passed to ``ttnn.generic_op``.
+
+        Args:
+            kernel_run_args (List[KernelRunArgs]): Runtime arg values, one entry per kernel that has runtime args.
+            tensor_args (Dict[str, ttnn.Tensor]): The tensor bound to each TensorParameter. Every tensor must also
+                be in io_tensors.
+            custom_program_hash (int, optional): Program-cache key to use instead of the ProgramSpec's hash.
+    )doc")
+        .def(
+            "__init__",
+            [](ttnn::ProgramSpecRunArgs* self,
+               const std::vector<exp::KernelRunArgs>& kernel_run_args,
+               const std::map<std::string, Tensor>& tensor_args,
+               std::optional<ttsl::hash::hash_t> custom_program_hash) {
+                new (self) ttnn::ProgramSpecRunArgs{
+                    .kernel_run_args = kernel_run_args,
+                    .tensor_args = {tensor_args.begin(), tensor_args.end()},
+                    .custom_program_hash = custom_program_hash,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("kernel_run_args") = std::vector<exp::KernelRunArgs>{},
+            nb::arg("tensor_args") = std::map<std::string, Tensor>{},
+            nb::arg("custom_program_hash") = nb::none())
+        .def_rw("kernel_run_args", &ttnn::ProgramSpecRunArgs::kernel_run_args)
+        .def_rw("custom_program_hash", &ttnn::ProgramSpecRunArgs::custom_program_hash);
+}
+
+}  // namespace
+
+void bind_program_spec_types(nb::module_& mod) {
+    bind_hardware_configs(mod);
+    bind_resources(mod);
+    bind_kernel_spec(mod);
+    bind_program_spec(mod);
+    bind_run_args(mod);
+}
+
+}  // namespace ttnn::operations::generic
