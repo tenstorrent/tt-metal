@@ -49,12 +49,25 @@ export TT_MESH_GRAPH_DESC_PATH="$TOPO/single_4x4_sp1_mgd.textproto"
 echo "4x4 stage, $HALF half: TT_VISIBLE_DEVICES=$TT_VISIBLE_DEVICES"
 
 T=models/demos/deepseek_v3_d_p/tests
-# Test paths given after -- replace the default suite; bare options (-rA, -x, ...) add to it.
+# Test paths given after -- replace the default suite; bare options (-rA, -x, ...) add to it. pytest keeps
+# only the last -k, so a user's -k is pulled out and put back last: as given with test paths, and merged
+# with the 4x4 filter for the default suite.
 has_paths=false
-for arg in "$@"; do
-  [[ "$arg" == *.py || "$arg" == *.py::* ]] && has_paths=true
+user_k=""
+args=()
+while (($#)); do
+  case "$1" in
+    -k) user_k=$2 && shift ;;
+    -k*) user_k=${1#-k} ;;
+    *.py | *.py::*) has_paths=true && args+=("$1") ;;
+    *) args+=("$1") ;;
+  esac
+  shift
 done
-if ! $has_paths; then
+set -- ${args[@]+"${args[@]}"}
+if $has_paths; then
+  if [[ -n "$user_k" ]]; then set -- "$@" -k "$user_k"; fi
+else
   set -- "$@" \
     "$T/op_unit_tests/test_ttnn_dispatch_combine.py::test_ttnn_dispatch_combine" \
     "$T/op_unit_tests/test_combine_fabric2d.py::test_combine_fabric2d" \
@@ -63,7 +76,7 @@ if ! $has_paths; then
     "$T/pcc/test_ffn.py::test_ffn_pcc" \
     "$T/pcc/test_moe_gate_prefill2d.py::test_forward_pass" \
     "$T/pcc/test_ttnn_moe.py::test_kimi_k3_moe" \
-    -k 4x4
+    -k "4x4${user_k:+ and ($user_k)}"
 fi
 
 exec pytest "$@"

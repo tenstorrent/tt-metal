@@ -1069,12 +1069,7 @@ def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
     Returns:
         ShardTensor2dMesh mapper configured for dispatch inputs
     """
-    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
-    return ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(0, None) if sp_axis == 0 else (None, 0),
-    )
+    return ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=mesh_shard_dims(0, sp_axis))
 
 
 def get_ep_mesh_mapper(mesh_device, sp_axis: int = 0):

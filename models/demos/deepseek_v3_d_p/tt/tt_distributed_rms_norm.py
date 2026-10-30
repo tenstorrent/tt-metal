@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # DeepSeek 671B RMSNorm dimensions
@@ -97,7 +98,7 @@ class TtDistributedRmsNorm(LightweightModule):
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=(None, 2) if cluster_axis == 1 else (2, None),
+            dims=mesh_shard_dims(2, cluster_axis),
         )
 
         cache_file_name = str(cache_path / f"{cache_name_prefix}_weight") if cache_path and cache_name_prefix else None
