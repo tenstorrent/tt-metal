@@ -52,6 +52,7 @@ namespace cbid {
 constexpr uint32_t qk16 = 0, kT16 = 1, qcol32 = 2, v16 = 3, gcol32 = 4, bcol16 = 5, S = 6, ones32 = 7, zero32 = 8;
 constexpr uint32_t ecol32 = 9, r16 = 10, craw16 = 11, ccol32 = 12, u16 = 13, s2 = 14, s3 = 15, out16 = 16;
 constexpr uint32_t state_out = 17;
+constexpr uint32_t ebc16 = 19, S_mm = 20, s2_mm = 21;  // section 8 and the op's fused_recurrent_gdn_cb.hpp
 }  // namespace cbid
 
 enum Variant : uint32_t { kRead = 1, kUpdate = 2, kConstants = 3, kToken = 4 };
@@ -549,7 +550,7 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathReadPass) {
     const GdmInputs x = make_inputs(11);
     const GdmRef ref = reference(x);
     const uint32_t reps = kRepsPass;
-    // s_mode: 0 = S plain, 1 = S utd (the probe), 2 = S utd under c_6 with the matmul on a plain alias id (c_19).
+    // s_mode: 0 = S plain, 1 = S utd (the probe), 2 = S utd under c_6 with the matmul on a plain alias id (c_20).
     auto config = [&](uint32_t rows, float pad, uint32_t s_mode) {
         const GdmTileSpec out_spec{rows, 32};
         GdmRunConfig c{
@@ -561,8 +562,8 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathReadPass) {
                  {.id = cbid::out16, .tile = out_spec, .count = VT * reps}},
             .outs = {{.id = cbid::out16, .ntiles = VT * reps}}};
         if (s_mode == 2) {
-            c.cbs.push_back({.id = 19, .tile = T32, .count = KV, .data = s_tiles(x), .alias_of = cbid::S});
-            c.variant = kRead + 16;  // the kernel reads S through c_19
+            c.cbs.push_back({.id = cbid::S_mm, .tile = T32, .count = KV, .data = s_tiles(x), .alias_of = cbid::S});
+            c.variant = kRead + 16;  // the kernel reads S through c_20
         }
         return c;
     };
@@ -669,8 +670,9 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathUpdatePass) {
         double(twice.stats[1] - twice.stats[0]) / 4);
 }
 
-// (c) constants pass: e within 2 ulp of fp32 std::exp in column 0 of ecol32 (and exp(0) = 1 elsewhere); c within 2e-3
-// relative of the double dot product; ccol32 uniform.
+// (c) constants pass: e within 2 ulp of fp32 std::exp in column 0 of ecol32 (all 32 rows); ebc16 carries e / beta /
+// c in column 0 rows 0-3 / 4-7 / 8-11 and +0.0 everywhere else; c within 2e-3 of the double dot product relative to
+// |q~| |k^|.
 TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathConstantsPass) {
     const GdmInputs x = make_inputs(13);
     const GdmRef ref = reference(x);
@@ -682,25 +684,36 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathConstantsPass) {
             {{.id = cbid::qk16, .tile = T16x32, .count = KT, .data = qk_tiles(x, 16, 0.0f)},
              {.id = cbid::qcol32, .tile = T32, .count = KT, .data = qcol_tiles(x)},
              {.id = cbid::gcol32, .tile = T32, .count = 1, .utd = true, .data = col_tile(x.g, 32)},
+             {.id = cbid::bcol16, .tile = T16x32, .count = 1, .utd = true, .data = col_tile(x.beta, 16)},
              {.id = cbid::ones32, .tile = T32, .count = 1, .data = const_tile(1.0f)},
+             {.id = cbid::ecol32, .tile = T32, .count = 1, .utd = true, .l1_backed = true},
              {.id = cbid::craw16, .tile = T16x32, .count = 1},
-             {.id = cbid::out16, .tile = T32, .count = reps},
-             {.id = cbid::state_out, .tile = T32, .count = reps}},
-        .outs = {{.id = cbid::out16, .ntiles = reps}, {.id = cbid::state_out, .ntiles = reps}}};
+             {.id = cbid::out16, .tile = T16x32, .count = reps}},
+        .outs = {{.id = cbid::out16, .ntiles = reps}}};
     auto res = run(this->devices_.at(0), c);
-    const auto ecol = last_rep(res.out_rm[0], reps), ccol = last_rep(res.out_rm[1], reps);
+    const auto ecol = untilize(res.l1.at(cbid::ecol32).data(), T32);  // the last repetition's ecol32, from L1
+    const auto ebc = last_rep(res.out_rm[0], reps);                   // ebc16, 16x32
     const float e_ref = std::exp(x.g);
     int32_t max_ulp = 0;
-    // The exp runs on faces 0 and 2 only (VectorMode::C): columns 1-15 come out as exp(0) = 1, columns 16-31 keep
-    // the copied zeros. Nothing reads them (mul_col_bcast reads column 0 only); reported, not asserted.
-    bool rest_one = true;
     for (uint32_t r = 0; r < 32; r++) {
         max_ulp = std::max(max_ulp, ulp_distance(ecol[r * 32], e_ref));
-        for (uint32_t col = 1; col < 16; col++) {
-            rest_one &= std::bit_cast<uint32_t>(ecol[r * 32 + col]) == std::bit_cast<uint32_t>(1.0f);
+    }
+    const float c_dev = ebc[8 * 32];
+    bool e_rows = true, b_rows = true, c_rows = true, rest_zero = true;
+    for (uint32_t r = 0; r < 16; r++) {
+        for (uint32_t col = 0; col < 32; col++) {
+            const uint32_t bits = std::bit_cast<uint32_t>(ebc[r * 32 + col]);
+            if (col == 0 && r < 4) {
+                e_rows &= bits == std::bit_cast<uint32_t>(ecol[0]);
+            } else if (col == 0 && r < 8) {
+                b_rows &= bits == std::bit_cast<uint32_t>(x.beta);
+            } else if (col == 0 && r < 12) {
+                c_rows &= bits == std::bit_cast<uint32_t>(c_dev);
+            } else {
+                rest_zero &= bits == 0u;
+            }
         }
     }
-    const float c_dev = ccol[0];
     // c = q~ . k^ of two independent random directions is a heavily cancelling sum (|c| ~ |q~| |k^| / sqrt(K)), so
     // its error relative to |c| is not bounded by the operand precision; the bound that is: |dc| against |q~| |k^|.
     double nq = 0, nk = 0;
@@ -711,33 +724,33 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathConstantsPass) {
     const double c_scale = std::sqrt(nq) * std::sqrt(nk);
     const double c_err = std::fabs(double(c_dev) - ref.c) / std::fabs(ref.c);
     const double c_err_scaled = std::fabs(double(c_dev) - ref.c) / c_scale;
-    bool uniform = true;
-    for (float v : ccol) {
-        uniform &= std::bit_cast<uint32_t>(v) == std::bit_cast<uint32_t>(c_dev);
-    }
     EXPECT_LE(max_ulp, 2) << "e is more than 2 ulp from fp32 std::exp(g)";
+    EXPECT_TRUE(e_rows) << "ebc16 rows 0-3 of column 0 are not e";
+    EXPECT_TRUE(b_rows) << "ebc16 rows 4-7 of column 0 are not beta";
+    EXPECT_TRUE(c_rows) << "ebc16 rows 8-11 of column 0 are not one value c";
+    EXPECT_TRUE(rest_zero) << "ebc16 has non-zero bits outside column 0 rows 0-11";
     EXPECT_LT(c_err_scaled, 2e-3);
-    EXPECT_TRUE(uniform) << "ccol32 is not uniform";
-    EXPECT_TRUE(reps_identical(res.out_words[0], reps) && reps_identical(res.out_words[1], reps))
-        << "constants pass is not bit-identical across repetitions";
+    EXPECT_TRUE(reps_identical(res.out_words[0], reps)) << "constants pass is not bit-identical across repetitions";
     log_info(
         tt::LogTest,
-        "constants pass: g {:.5f} e {:.8f} (std::exp {:.8f}, {} ulp max over 32 rows, columns 1-15 = 1 {}); c {:.7f} "
-        "(double {:.7f}, err {:.2e} relative to c, {:.2e} relative to |q~||k^| = {:.4f}); ccol32 uniform {}; "
-        "identical across {} reps {}; cycles per pass {:.0f} (budget 900)",
+        "constants pass: g {:.5f} e {:.8f} (std::exp {:.8f}, {} ulp max over 32 rows of ecol32); ebc16 column 0: e "
+        "rows 0-3 {}, beta rows 4-7 {}, c rows 8-11 {}, rest +0.0 {}; c {:.7f} (double {:.7f}, err {:.2e} relative "
+        "to c, {:.2e} relative to |q~||k^| = {:.4f}); identical across {} reps {}; cycles per pass {:.0f} (budget 900)",
         x.g,
         ecol[0],
         e_ref,
         max_ulp,
-        rest_one,
+        e_rows,
+        b_rows,
+        c_rows,
+        rest_zero,
         c_dev,
         ref.c,
         c_err,
         c_err_scaled,
         c_scale,
-        uniform,
         reps,
-        reps_identical(res.out_words[0], reps) && reps_identical(res.out_words[1], reps),
+        reps_identical(res.out_words[0], reps),
         double(res.stats[1] - res.stats[0]) / reps);
 }
 
@@ -764,16 +777,16 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
                  {.id = cbid::gcol32, .tile = T32, .count = 1, .utd = true, .data = col_tile(x.g, 32)},
                  {.id = cbid::bcol16, .tile = T16x32, .count = 1, .utd = true, .data = col_tile(x.beta, 16)},
                  {.id = cbid::S, .tile = T32, .count = KV, .utd = true, .data = s_tiles(x)},
-                 {.id = 19, .tile = T32, .count = KV, .data = s_tiles(x), .alias_of = cbid::S},  // S_mm
+                 {.id = cbid::S_mm, .tile = T32, .count = KV, .data = s_tiles(x), .alias_of = cbid::S},
                  {.id = cbid::ones32, .tile = T32, .count = 1, .data = const_tile(1.0f)},
                  {.id = cbid::zero32, .tile = T32, .count = 1, .utd = true, .data = const_tile(0.0f)},
                  {.id = cbid::ecol32, .tile = T32, .count = 1, .utd = true},
                  {.id = cbid::r16, .tile = T16x32, .count = VT, .utd = true},
                  {.id = cbid::craw16, .tile = T16x32, .count = 1},
-                 {.id = cbid::ccol32, .tile = T32, .count = 1, .utd = true},
+                 {.id = cbid::ebc16, .tile = T16x32, .count = 1, .utd = true},
                  {.id = cbid::u16, .tile = T16x32, .count = VT, .l1_backed = true},
                  {.id = cbid::s2, .tile = T32, .count = KV, .utd = true, .l1_backed = true},
-                 {.id = 20, .tile = T32, .count = KV, .alias_of = cbid::s2},  // s2_mm
+                 {.id = cbid::s2_mm, .tile = T32, .count = KV, .alias_of = cbid::s2},
                  {.id = cbid::out16, .tile = T16x32, .count = VT * reps},
                  {.id = cbid::state_out, .tile = T32, .count = KV * reps}},
             .outs = {{.id = cbid::out16, .ntiles = VT * reps}, {.id = cbid::state_out, .ntiles = KV * reps}}};
