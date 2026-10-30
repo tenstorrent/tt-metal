@@ -23,4 +23,8 @@ void py_module_types(nb::module_& mod);
 // AttributeError, as the classes without dynamic_attr do; a Python subclass may set any attribute.
 void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type);
 
+// The attribute in which a Python ProgramRunArgs holds its tensor_args dict. The C++ object refers to the tensors'
+// MeshTensors, so the dict keeps them alive.
+inline constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
+
 }  // namespace ttnn::program_spec

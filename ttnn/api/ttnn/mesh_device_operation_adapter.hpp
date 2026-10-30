@@ -1137,7 +1137,8 @@ public:
             if constexpr (has_override_runtime_arguments()) {
                 const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
                 for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                    auto run_args = WorkloadSpecFactory::override_runtime_arguments(
+                    // A reference, so a factory that returns run args it already holds is not copied on every hit.
+                    const auto& run_args = WorkloadSpecFactory::override_runtime_arguments(
                         attrs, tensor_args, tensor_return_value, coordinate_range);
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
                 }
