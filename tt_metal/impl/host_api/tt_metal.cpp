@@ -47,6 +47,7 @@
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -601,7 +602,7 @@ void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_roo
 Program CreateProgram() { return Program(); }
 
 Program CreateProgram(distributed::MeshDevice& mesh_device) {
-    return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
+    return Program(std::make_shared<detail::ProgramImpl>(mesh_device.impl().get_context_id()));
 }
 
 KernelHandle CreateDataMovementKernel(
