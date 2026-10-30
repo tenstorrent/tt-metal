@@ -48,6 +48,20 @@ DECODE_GEOMETRY = {
 }
 
 
+def spec_wide_enabled():
+    """64-row speculative verify path (needs DRAM-sharded matmuls with per_core_M=2); opt-in GEMMA_SPEC_WIDE=1."""
+    value = os.environ.get("GEMMA_SPEC_WIDE", "0")
+    if value not in ("0", "1"):
+        raise ValueError("Invalid GEMMA_SPEC_WIDE")
+    return value == "1"
+
+
+# Wide (64-row) decode matmul geometry overrides: (input cores, readers per bank, K block). Gate/up keep the shared
+# BF8 shard layout (21 tiles per bank = 3 readers x 7 tiles); full-attention o needs its K block to be a whole in0
+# shard (16 tiles) for per_core_M > 1.
+WIDE_GEOMETRY = {"gate": (56, 3, 3), "up": (56, 3, 3), "o_full": (8, 2, 16)}
+
+
 def share_gate_up_enabled():
     value = os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_GATE_UP", "0")
     if value not in ("0", "1"):
@@ -314,6 +328,20 @@ class Decoder:
         pool = pools[signature]
         assert pool["mesh"] is mesh_device and pool["signature"] == signature
         self.decode_ar_slots = pool["slots"]
+        self.decode_ar_slots_wide = None
+        if spec_wide_enabled():
+            wide_signature = signature + (64,)
+            if wide_signature not in pools:
+                wide_mem = self._mem(self.hidden_size * 4, 28, rows=64)
+                pools[wide_signature] = {
+                    name: {
+                        "scratch": ttnn.empty([1, 1, 64, self.hidden_size * 4], dtype=dtype, layout=ttnn.TILE_LAYOUT,
+                                              device=mesh_device, memory_config=wide_mem),
+                        "semaphore": ttnn.create_global_semaphore(mesh_device, self.ccl.ccl_cores, 0),
+                    }
+                    for name in ("o", "down")
+                }
+            self.decode_ar_slots_wide = pools[wide_signature]
         self.decode_weights = {}
         dg = mesh_device.dram_grid_size()
         banks = dg.x * dg.y
@@ -533,11 +561,11 @@ class Decoder:
         ):
             raise ValueError("Precise BF8 rows require actual 56-core L1 width shards [32,96]")
 
-    def _decode_reduce(self, x, name):
-        memory = self._mem(self.hidden_size, 28)
+    def _decode_reduce(self, x, name, rows=32):
+        memory = self._mem(self.hidden_size, 28, rows=rows)
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, memory)
-        slot = self.decode_ar_slots[name]
+        slot = (self.decode_ar_slots if rows == 32 else self.decode_ar_slots_wide)[name]
         # Sliding rows retain the BF16 completed sum. Full-attention rows retain
         # the measured BF8 sum; both communicate and receive BF8 payloads.
         result = ttnn.experimental.all_reduce_async(
@@ -677,16 +705,19 @@ class Decoder:
 
         return ttnn.reshape(result, [1, 1, packed_rows, result.shape[-1]]) if native_batch else result
 
-    def _dlinear(self, x, name):
+    def _dlinear(self, x, name, rows=32):
         weight = self.decode_weights[name]
         kdim, ndim = weight.shape[-2], weight.shape[-1]
         cores, readers, k_block = DECODE_GEOMETRY[name]
+        if rows > 32:
+            key = "o_full" if (name == "o" and not self.sliding) else name
+            cores, readers, k_block = WIDE_GEOMETRY.get(key, (cores, readers, k_block))
         row = name in ("o", "down")
         staged = row and self.sliding
-        x = ttnn.to_memory_config(x, self._mem(kdim, cores))
+        x = ttnn.to_memory_config(x, self._mem(kdim, cores, rows=rows))
         config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=k_block,
-            per_core_M=1,
+            per_core_M=rows // 32,
             per_core_N=3 if staged else (ndim + cores * 32 - 1) // (cores * 32),
             num_workers_per_dram_bank=readers,
         )
@@ -701,17 +732,19 @@ class Decoder:
         if staged:
             # Keep the BF16 projection in its 56-core owner until the native
             # precise BF8 pack. Direct BF8 matmul output has different rounding.
-            self._validate_precise_bf8_row(y, ttnn.bfloat16)
+            if rows == 32:
+                self._validate_precise_bf8_row(y, ttnn.bfloat16)
             shape, memory = tuple(y.shape), y.memory_config()
             y = ttnn.typecast(y, ttnn.bfloat8_b, memory_config=memory)
-            self._validate_precise_bf8_row(y, ttnn.bfloat8_b)
+            if rows == 32:
+                self._validate_precise_bf8_row(y, ttnn.bfloat8_b)
             if tuple(y.shape) != shape or y.memory_config() != memory:
                 raise ValueError("BF8 packing changed the projection's shape or shard ownership")
         return y
 
-    def _resnorm(self, x, name, decode):
+    def _resnorm(self, x, name, decode, rows=32):
         if decode:
-            return self._dnorm(x, name)
+            return self._dnorm(x, name, rows=rows)
         if x.shape[-1] == self.hidden_size:
             rows = x.padded_shape[-2]
             if rows > 128:
@@ -760,7 +793,7 @@ class Decoder:
             compute_kernel_config=self.compute,
         )
 
-    def _input_norm(self, x, name, decode):
+    def _input_norm(self, x, name, decode, rows=32):
         if not decode and name == "pre_feedforward_layernorm" and x.shape[-1] != self.hidden_size:
             # Place the larger gather output before its temporary local norm
             # output. The latter can then retire into the free tail needed by
@@ -772,7 +805,7 @@ class Decoder:
             )
             n = self._resnorm(x, name, False)
             return self._gather(n, output=output)
-        n = self._resnorm(x, name, decode)
+        n = self._resnorm(x, name, decode, rows=rows)
         return self._gather(n) if x.shape[-1] != self.hidden_size else n
 
     def _prefill_mlp(self, x, *, sequence_hint=None, batch=1):
@@ -795,21 +828,24 @@ class Decoder:
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
         )
 
-    def _decode_finish(self, residual, attention):
-        post = self._resnorm(self._decode_reduce(self._dlinear(attention, "o"), "o"), "post_attention_layernorm", True)
-        mem = self._mem(self.hidden_size, 28)
+    def _decode_finish(self, residual, attention, rows=32):
+        post = self._resnorm(self._decode_reduce(self._dlinear(attention, "o", rows=rows), "o", rows=rows),
+                             "post_attention_layernorm", True, rows=rows)
+        mem = self._mem(self.hidden_size, 28, rows=rows)
         residual = ttnn.to_memory_config(residual, mem)
         x = ttnn.add(residual, post, memory_config=mem, dtype=self.residual_dtype)
-        n = self._input_norm(x, "pre_feedforward_layernorm", True)
+        n = self._input_norm(x, "pre_feedforward_layernorm", True, rows=rows)
         if self.share_gate_up:
-            gate, up = self._dlinear(n, "gate"), self._dlinear(n, "up")
+            gate, up = self._dlinear(n, "gate", rows=rows), self._dlinear(n, "up", rows=rows)
         else:
+            if rows != 32:
+                raise ValueError("The wide verify path requires shared gate/up weights")
             packed = self._dlinear(n, "gate_up")
             gate, up = packed[..., :5376], packed[..., 5376:]
         product = ttnn.multiply(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.GELU_TANH])
         post = self._resnorm(
-            self._decode_reduce(self._dlinear(product, "down"), "down"), "post_feedforward_layernorm", True
-        )
+            self._decode_reduce(self._dlinear(product, "down", rows=rows), "down", rows=rows),
+            "post_feedforward_layernorm", True, rows=rows)
         return ttnn.add(
             x,
             post,
@@ -1446,13 +1482,48 @@ class Decoder:
         assert 1 <= batch <= 32 and page_table.shape[0] == batch and (positions.shape[0] == batch)
         normalized = self._input_norm(x, "input_layernorm", True)
         fused = self._dlinear(normalized, "qkv")
+        ttnn.deallocate(normalized)
+        joined = self._decode_attention(fused, batch, positions=positions, page_table=page_table, kv_cache=kv_cache,
+                                        rope_positions=rope_positions, cyclic_cache=cyclic_cache,
+                                        update_positions=update_positions)
+        return self._decode_finish(x, joined)
+
+    def decode_forward_wide(self, x, *, halves, page_table, kv_cache, cyclic_cache=True):
+        """64-row speculative verify: rows 0-31 are the 32 slots' committed tokens, rows 32-63 their (single) draft
+        tokens, so row r and row 32+r share slot r's page-table row. Matmuls, norms, all-reduces and residual ops run
+        on all 64 rows (DRAM-sharded matmuls at per_core_M=2 read each weight once); attention runs per 32-row half
+        with the plain decode ops. halves: two (positions, rope_positions, update_positions) tuples. The first half
+        writes K/V before the second half attends, so a draft row sees its slot's committed-token K/V."""
+        assert tuple(x.shape) == (1, 1, 64, self.residual_width)
+        normalized = self._input_norm(x, "input_layernorm", True, rows=64)
+        fused = self._dlinear(normalized, "qkv", rows=64)
+        ttnn.deallocate(normalized)
+        spec = fused.memory_config().shard_spec
+        half_mem = ttnn.MemoryConfig(
+            fused.memory_config().memory_layout, ttnn.BufferType.L1,
+            ttnn.ShardSpec(spec.grid, (32, spec.shape[1]), spec.orientation))
+        flat = ttnn.to_memory_config(fused, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(fused)
+        joined = []
+        for h, (positions, rope_positions, update_positions) in enumerate(halves):
+            part = ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, flat.shape[3]])
+            part = ttnn.to_memory_config(part, half_mem)
+            out = self._decode_attention(part, 32, positions=positions, page_table=page_table, kv_cache=kv_cache,
+                                         rope_positions=rope_positions, cyclic_cache=cyclic_cache,
+                                         update_positions=update_positions)
+            joined.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+        attention = ttnn.concat(joined, dim=2)
+        return self._decode_finish(x, attention, rows=64)
+
+    def _decode_attention(self, fused, batch, *, positions, page_table, kv_cache, rope_positions=None,
+                          cyclic_cache=True, update_positions=None):
+        """Decode attention for up to 32 rows from the fused QKV projection; returns the concatenated heads."""
         spec = fused.memory_config().shard_spec
         assert spec.shape[1] * spec.grid.num_cores() == fused.shape[-1], "QKV head reader requires exact output shards"
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             fused, num_heads=8, num_kv_heads=self.kv_heads, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
         ttnn.deallocate(fused)
-        ttnn.deallocate(normalized)
         cache_mem = k.memory_config()
         head_mem = ttnn.L1_MEMORY_CONFIG
         if batch != 1:
@@ -1562,25 +1633,25 @@ class Decoder:
         joined = ttnn.reshape(
             joined, ttnn.Shape([1, 1, batch, joined.shape[3]]), ttnn.Shape([1, 1, 32, joined.shape[3]])
         )
-        return self._decode_finish(x, joined)
+        return joined
 
-    def _mem(self, width, cores):
+    def _mem(self, width, cores, rows=32):
         grid = self.device.compute_with_storage_grid_size()
         # Rectangular grids keep RMSNorm's multicast contract explicit.
         widths = [i for i in range(1, grid.x + 1) if cores % i == 0 and cores // i <= grid.y]
         gx = max(widths) if widths else grid.x
         core_grid = ttnn.CoreGrid(x=gx, y=cores // gx) if widths else ttnn.num_cores_to_corerangeset(cores, grid, True)
         return ttnn.create_sharded_memory_config(
-            (32, ((width + cores * 32 - 1) // (cores * 32)) * 32),
+            (rows, ((width + cores * 32 - 1) // (cores * 32)) * 32),
             core_grid,
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
-    def _dnorm(self, x, name):
+    def _dnorm(self, x, name, rows=32):
         cores = 28
-        mem = self._mem(self.hidden_size, cores)
+        mem = self._mem(self.hidden_size, cores, rows=rows)
         x = ttnn.to_memory_config(x, mem)
         block = self.hidden_size // cores // 32
         sub = max(i for i in range(1, 5) if block % i == 0)
@@ -1588,7 +1659,7 @@ class Decoder:
         cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[grid.x + 1, grid.y + 1],
             subblock_w=sub,
-            block_h=1,
+            block_h=rows // 32,
             block_w=block,
             inplace=False,
         )

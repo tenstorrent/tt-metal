@@ -314,6 +314,26 @@ class Gemma4Model:
             last.append(tile[:, :, index - tile_start : index - tile_start + 1, :])
         return self.terminal(ttnn.concat(last, dim=2))
 
+    def decode_device_wide(self, tokens_a, tokens_b, *, halves, page_tables, kv_cache):
+        """64-row verify (decoder.decode_forward_wide): rows 0-31 committed tokens, rows 32-63 drafts of the same
+        slots. The LM head runs per 32-row half so logits use exactly the plain decode ops. Returns two logits
+        tensors [1,1,32,V/4]."""
+        layer0 = self.layers[0]
+        parts = [ttnn.to_memory_config(self.embed(t, batch=32), ttnn.DRAM_MEMORY_CONFIG) for t in (tokens_a, tokens_b)]
+        x = ttnn.to_memory_config(ttnn.concat(parts, dim=2), layer0._mem(5376, 28, rows=64))
+        for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
+            x = layer.decode_forward_wide(
+                x, halves=halves, page_table=page_tables[i] if i in page_tables else page_tables[layer.kind],
+                kv_cache=cache, cyclic_cache=i not in page_tables)
+        flat = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        shape = ttnn.Shape([1, 1, 32, self.config.vocab_size // 4])
+        outs = []
+        for h in range(2):
+            part = ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, 5376])
+            part = ttnn.to_memory_config(part, layer0._mem(5376, 28))
+            outs.append(ttnn.reshape(self.terminal(part), shape, shape))
+        return outs
+
     def decode_device(
         self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None, update_positions=None
     ):

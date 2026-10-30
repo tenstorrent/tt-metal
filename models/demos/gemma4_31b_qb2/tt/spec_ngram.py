@@ -85,23 +85,100 @@ def propose_one(history, k):
     return draft, int(length[idx])
 
 
-def allocate(proposals, contexts, row_budget=ROW_BUDGET, overhead_ms=VERIFY_OVERHEAD_MS):
-    """proposals: list of (draft list, matched length) per live request (index i). Returns granted k per request.
+# Verify overhead over a plain step with the same rows, by verify trace width (candidates per request), measured in
+# serving (F6: 1 row + 6 drafts cost 55.2 ms vs 47.6 plain, ~0.2 ms of it rows).
+OVERHEAD_P4_MS = float(os.environ.get("GEMMA_SPEC_OVERHEAD_P4_MS", "5.0"))
+OVERHEAD_P8_MS = float(os.environ.get("GEMMA_SPEC_OVERHEAD_P8_MS", "8.0"))
+PRIOR_WEIGHT = float(os.environ.get("GEMMA_SPEC_PRIOR_WEIGHT", "20"))
 
-    Greedy by marginal expected tokens; a draft row is kept only while its expected value (in plain-step ms per
-    token) exceeds its marginal step cost, and the whole verify only if it beats the fixed overhead.
+
+def bucket(m):
+    for b, (mm, _) in enumerate(P_FIRST):
+        if m >= mm:
+            return b
+    return len(P_FIRST) - 1
+
+
+class AcceptanceModel:
+    """Realized acceptance by matched-length bucket and draft depth, with the offline table as prior.
+
+    Acceptance of a deterministic draft token is the event "the sampled token equals it", so comparing a proposal
+    with the tokens the request actually committed afterwards scores it whether or not it was verified.
     """
+
+    def __init__(self, depths=8):
+        self.n = np.zeros((len(P_FIRST), depths))
+        self.s = np.zeros((len(P_FIRST), depths))
+
+    def observe(self, m, draft, committed):
+        b = bucket(m)
+        for j, (d, c) in enumerate(zip(draft, committed)):
+            if j >= self.n.shape[1]:
+                break
+            self.n[b, j] += 1
+            if d != c:
+                break
+            self.s[b, j] += 1
+
+    def q(self, m, j):
+        """P(accept depth j | accepted depths < j), j >= 1."""
+        b = bucket(m)
+        prior = first_token_acceptance(m)
+        k = min(j - 1, self.n.shape[1] - 1)
+        return (self.s[b, k] + PRIOR_WEIGHT * prior) / (self.n[b, k] + PRIOR_WEIGHT)
+
+    def summary(self):
+        return {"attempts": self.n.sum(axis=0).astype(int).tolist(), "accepted": self.s.sum(axis=0).astype(int).tolist()}
+
+
+MODEL = AcceptanceModel()
+
+
+# 64-row verify (decoder.decode_forward_wide, GEMMA_SPEC_WIDE=1): extra ms over a plain 32-row step. Placeholder
+# until measured on the QB2 (spec-decode LOG); the step costs the same whatever the number of drafts.
+WIDE_EXTRA_MS = float(os.environ.get("GEMMA_SPEC_WIDE_EXTRA_MS", "9.0"))
+
+
+def allocate_best(proposals, contexts, wide=False):
+    """Best of the <=32-row plan and (if wide) the one-draft-per-request 64-row plan, by expected net gain."""
+    narrow = allocate(proposals, contexts)
     B = len(proposals)
-    if B == 0:
-        return []
+    if not wide or B <= 16 or B > 32:
+        return narrow
     mean_ctx = float(np.mean(contexts)) if contexts else 4096.0
+    t_plain = step_ms(B, mean_ctx)
+    ms_per_token = t_plain / B
+
+    def gain(take):
+        rows = B + sum(take)
+        exp = 0.0
+        for (d, m), k in zip(proposals, take):
+            v = 1.0
+            for j in range(1, k + 1):
+                v *= MODEL.q(m, j)
+                exp += v
+        over = OVERHEAD_P8_MS if max(take, default=0) > 3 else OVERHEAD_P4_MS
+        if rows <= ROW_BUDGET:
+            cost = (step_ms(rows, mean_ctx) - t_plain + over) if rows > B else 0.0
+        else:
+            cost = step_ms(32, mean_ctx) + WIDE_EXTRA_MS - t_plain + over
+        return exp * ms_per_token - cost
+
+    wide_take = [1 if (d and MODEL.q(m, 1) > 0) else 0 for d, m in proposals]
+    if sum(wide_take) + B <= ROW_BUDGET:
+        return narrow
+    return wide_take if gain(wide_take) > max(0.0, gain(narrow)) else narrow
+
+
+def _plan(proposals, mean_ctx, B, cap, row_budget, model):
     t_plain = step_ms(B, mean_ctx)
     ms_per_token = t_plain / B
     cand = []
     for i, (draft, m) in enumerate(proposals):
-        q = first_token_acceptance(m)
-        for j in range(1, len(draft) + 1):
-            cand.append((q**j, i, j))
+        v = 1.0
+        for j in range(1, min(len(draft), cap) + 1):
+            v *= model.q(m, j)
+            cand.append((v, i, j))
     cand.sort(key=lambda x: -x[0])
     take = [0] * B
     rows = B
@@ -115,13 +192,29 @@ def allocate(proposals, contexts, row_budget=ROW_BUDGET, overhead_ms=VERIFY_OVER
         take[i] = j
         rows += 1
         expected += value
-    cost = step_ms(rows, mean_ctx) - t_plain + overhead_ms
-    if expected * ms_per_token <= cost:
-        return [0] * B
-    return take
+    overhead = OVERHEAD_P8_MS if max(take, default=0) > 3 else OVERHEAD_P4_MS
+    gain = expected * ms_per_token - (step_ms(rows, mean_ctx) - t_plain + overhead)
+    return take, gain
 
 
-def propose(histories, k_max):
+def allocate(proposals, contexts, row_budget=ROW_BUDGET, overhead_ms=None, model=None):
+    """proposals: list of (draft list, matched length) per live request. Returns granted k per request (all zero
+    when verifying is not expected to pay). Plans with at most 3 and at most 7 drafts per request are compared
+    (the 8-candidate verify trace costs more)."""
+    B = len(proposals)
+    if B == 0:
+        return []
+    model = MODEL if model is None else model
+    mean_ctx = float(np.mean(contexts)) if contexts else 4096.0
+    best, best_gain = [0] * B, 0.0
+    for cap in (3, 7):
+        take, gain = _plan(proposals, mean_ctx, B, cap, row_budget, model)
+        if gain > best_gain:
+            best, best_gain = take, gain
+    return best
+
+
+def propose(histories, k_max, wide=False):
     """histories: list (per row) of 1-D int arrays, or None for rows with nothing to draft.
 
     Returns (drafts [rows][k_max] int list padded with 0, num_valid [rows]).
@@ -129,11 +222,15 @@ def propose(histories, k_max):
     k_max = min(k_max, MAX_DRAFT)
     live = [i for i, h in enumerate(histories) if h is not None and len(h) >= 2]
     props = [propose_one(histories[i], k_max) for i in live]
-    take = allocate(props, [len(histories[i]) for i in live])
+    take = allocate_best(props, [len(histories[i]) for i in live], wide=wide)
     drafts = [[0] * k_max for _ in histories]
     valid = [0] * len(histories)
-    for (draft, _), i, k in zip(props, live, take):
+    matched = [0] * len(histories)
+    full = [[] for _ in histories]
+    for (draft, m), i, k in zip(props, live, take):
         k = min(k, len(draft))
         drafts[i][:k] = draft[:k]
         valid[i] = k
-    return drafts, valid
+        matched[i] = m
+        full[i] = list(draft)
+    return drafts, valid, matched, full

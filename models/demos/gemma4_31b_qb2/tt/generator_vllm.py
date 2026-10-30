@@ -579,7 +579,19 @@ class Gemma4ForCausalLM:
                     continue
                 histories[row] = token_history[row]
         t = time.perf_counter()
-        drafts, valid = spec_ngram.propose(histories, int(num_drafts))
+        # Score each row's previous proposal against what that request committed since (acceptance of a
+        # deterministic draft == sampled token equals it, verified or not), then propose with the updated model.
+        prev = getattr(self, "_spec_prev", {})
+        for row, h in enumerate(histories):
+            old = prev.get(row)
+            if h is None or old is None:
+                continue
+            length, matched, full, tail = old
+            if len(h) > length and len(tail) and list(h[length - len(tail):length]) == tail:
+                spec_ngram.MODEL.observe(matched, full, [int(x) for x in h[length:length + len(full)]])
+        drafts, valid, matched, full = spec_ngram.propose(histories, int(num_drafts), wide=self.generator.spec_wide)
+        self._spec_prev = {row: (len(h), matched[row], full[row], [int(x) for x in h[-8:]])
+                           for row, h in enumerate(histories) if h is not None and full[row]}
         self.spec_stats["propose_s"] += time.perf_counter() - t
         self.spec_stats["proposals"] += 1
         self.spec_stats["drafted"] += int(sum(valid))
@@ -608,6 +620,9 @@ class Gemma4ForCausalLM:
         # columns 0..num_valid), so drafts are never dropped: a block wider than 32 rows (requests that joined
         # decode after the proposal) runs as several 32-row passes, each request's candidates kept together.
         need = [(b, 1 + int(num_valid_drafts[b])) for b in range(batch) if int(first[b]) >= 0]
+        if (self.generator.spec_wide and sum(n for _, n in need) > 32 and all(n <= 2 for _, n in need)
+                and batch <= 32):
+            return self._verify_wide(tokens, start_pos, kv_cache, tables, num_valid_drafts, params, need, t)
         passes, current, used = [], [], 0
         for b, n in need:
             if used + n > 32:
@@ -657,8 +672,44 @@ class Gemma4ForCausalLM:
             self._log_spec_stats()
         return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
 
+    def _verify_wide(self, tokens, start_pos, kv_cache, tables, num_valid_drafts, params, need, t):
+        """64-row verify (decoder.decode_forward_wide): rows 0-31 = slots' committed tokens, rows 32-63 = their one
+        draft each. Rows map 1:1 to slots, so the slot page tables are used as in a plain decode."""
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, PLACEHOLDER_TOKEN_ID, VerifyOutput
+
+        batch, width = tokens.shape
+        tok = torch.zeros(32, dtype=torch.int64)
+        dr = torch.zeros(32, dtype=torch.int64)
+        pos = torch.full((32,), -1, dtype=torch.int32)
+        valid = torch.zeros(32, dtype=torch.bool)
+        for b, n in need:
+            tok[b] = int(tokens[b, 0])
+            pos[b] = int(start_pos[b, 0])
+            if n == 2:
+                dr[b] = int(tokens[b, 1])
+                valid[b] = True
+        row_params = {name: list(params[name][:32]) for name in ("top_k", "top_p", "temperature", "seed")}
+        a, d = self.generator.spec_decode_wide(kv_cache, tokens=tok, drafts=dr, positions=pos, draft_valid=valid,
+                                               host_tables=tables, sampling_params=row_params)
+        ids = torch.full((batch, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        for b, n in need:
+            ids[b, 0] = int(a[b])
+            if n == 2:
+                ids[b, 1] = int(d[b])
+        self._spec_dirty = True
+        self.spec_stats["verify_s"] += time.perf_counter() - t
+        self.spec_stats["verifies"] += 1
+        self.spec_stats["wide_verifies"] = self.spec_stats.get("wide_verifies", 0) + 1
+        self.spec_stats["verify_rows"] += sum(n for _, n in need)
+        self.spec_stats["verify_drafts"] = self.spec_stats.get("verify_drafts", 0) + int(valid.sum())
+        if self.spec_stats["verifies"] % 256 == 1:
+            self._log_spec_stats()
+        return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
+
     def _log_spec_stats(self):
-        stats = dict(self.spec_stats, wall_s=time.time())
+        from models.demos.gemma4_31b_qb2.tt import spec_ngram
+
+        stats = dict(self.spec_stats, wall_s=time.time(), acceptance=spec_ngram.MODEL.summary())
         stats.update({"timing_" + k: round(v, 4) if isinstance(v, float) else v
                       for k, v in self.generator.spec_timing.items()})
         print("GEMMA_SPEC_STATS " + json.dumps(stats), flush=True)
