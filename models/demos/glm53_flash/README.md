@@ -153,11 +153,18 @@ tokens before it (depth 0.56) is not and the model loops on its thinking preambl
 retrieval limit measured in the harness. The chunk-end KDA snapshots to the host store cost nothing visible.
 
 The catalogued configuration since 2026-10-30 (async scheduling on, the slot-level prefix cache on with two host
-snapshot entries per slot, resident decode; one smoke run, `async_r4`): `vllm bench` 128 x 128 at 32 concurrent
-requests TTFT 5.4 s mean, **14.6 tok/s per user, 290 tok/s output**; 4 concurrent 65 514-token prompts TTFT 101 s
-mean (69-122 s) and, repeated, **30-40 s** served from the KDA snapshots at 49152 with the 16 K tail prefilled; the
-same four short prompts repeat their greedy texts exactly; the image, the clip and the repeated image are answered
-correctly (TTFT 5.8 / 6.4 / 5.8 s).
+snapshot entries per slot, resident decode, the decode replay non-blocking; one smoke run each): `vllm bench` 128 x 128
+at 32 concurrent requests TTFT 5.4-5.5 s mean, **16.8 tok/s per user (ITL 59.5 ms mean, P99 66 ms), 314 tok/s
+output** (`ab_async_nb_32`; 14.6 tok/s per user with the blocking replay, 13.1 without async scheduling); on the
+128 K profile at 128 concurrent requests **9.2 tok/s per user (ITL 108 ms, P99 116 ms), 507 tok/s output**, TTFT
+18.5 s (`ab_async_nb_128`). 4 concurrent 65 514-token prompts TTFT 101-123 s and, repeated, **30-40 s** served from
+the KDA snapshots at 49152 with the 16 K tail prefilled; the same four short prompts repeat their greedy texts exactly;
+the image, the clip and the repeated image are answered correctly (TTFT 5.8 / 6.4 / 5.8 s, `async_r4`). The served
+decode step at 32 users is within 8 % of the device: the harness's traced step is 54.9 ms at the served 1 M context
+(48.4 ms at a 256-token context: the 1 M-sized index and page structures cost 6.6 ms per step) against the 59.5 ms
+served inter-token latency. The burst TTFT is the prefill rate: one engine step prefills every arrival in traced
+waves of the smallest captured per-row bucket (256 rows x 8 rows = 2048 padded tokens at ~2 K tok/s = ~1 s per
+wave, 4 waves at 32 arrivals); a 128-row bucket measured 3.8 s but its trace is not yet correct at 45 layers.
 
 The 128 K profile served the same way (192 distinct requests = 6 slots per chip under per-row prefill ownership, prefix
 cache off; 2026-10-29 14:58, one smoke run, 0 program-cache misses; 224 = 7 per chip runs out of DRAM at boot): 4 concurrent
