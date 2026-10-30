@@ -21,6 +21,15 @@ _OPS = [
     pytest.param(ttnn.divide, {"fast_and_approximate_mode": True}, False, id="divide_fast"),
     pytest.param(ttnn.eq, {}, True, id="eq"),
     pytest.param(ttnn.gt, {}, True, id="gt"),
+    pytest.param(ttnn.ne, {}, True, id="ne"),
+    pytest.param(ttnn.lt, {}, True, id="lt"),
+    pytest.param(ttnn.ge, {}, True, id="ge"),
+    pytest.param(ttnn.le, {}, True, id="le"),
+    pytest.param(ttnn.logical_and, {}, True, id="logical_and"),
+    pytest.param(ttnn.logical_or, {}, True, id="logical_or"),
+    pytest.param(ttnn.logical_xor, {}, True, id="logical_xor"),
+    pytest.param(ttnn.experimental.quasar.add, {}, False, id="quasar_add"),
+    pytest.param(ttnn.experimental.quasar.subtract, {}, False, id="quasar_subtract"),
 ]
 _NARROW = [
     pytest.param(ttnn.bfloat16, "none", id="bf16-none"),
