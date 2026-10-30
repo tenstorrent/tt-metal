@@ -245,9 +245,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     check_tl1_layout();

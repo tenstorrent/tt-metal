@@ -179,17 +179,13 @@ class MimirDmIm2col : public ::testing::TestWithParam<AddrgenCase> {};
 
 TEST_P(MimirDmAddrgen, Pattern) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     run_case(GetParam());
 }
 
 TEST_P(MimirDmIm2col, Pattern) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     run_case(GetParam());
 }
 

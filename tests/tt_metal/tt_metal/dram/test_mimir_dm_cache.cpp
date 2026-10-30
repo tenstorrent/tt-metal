@@ -249,9 +249,7 @@ class MimirDmCache : public ::testing::TestWithParam<CacheCase> {};
 TEST_P(MimirDmCache, Op) {
     skip_unless_programmable_dram_package();
     const CacheCase cache_case = GetParam();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     check_tl1_layout();
@@ -338,9 +336,7 @@ class MimirDmCachePerf : public ::testing::TestWithParam<WritePath> {};
 
 TEST_P(MimirDmCachePerf, WritePath) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     check_tl1_layout();
@@ -417,23 +413,18 @@ std::vector<uint32_t> probe_args(uint32_t mode, uint32_t hart) {
     return args;
 }
 
-class MimirCacheProbe : public ::testing::TestWithParam<uint32_t> {
+class MimirCacheProbe : public MimirCceTest<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
     }
 };
 
 // Every hart of one CCE runs a kernel and posts its status.
 TEST_P(MimirCacheProbe, EightHartLaunch) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
 
     std::vector<std::pair<uint32_t, std::vector<uint32_t>>> hart_args;
     for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
@@ -465,10 +456,7 @@ TEST_P(MimirCacheProbe, EightHartLaunch) {
 // and the L2 CONFIGURATION fields give 64 B lines and a 128 KiB L2. Both registers are recorded.
 TEST_P(MimirCacheProbe, SnoopConfig) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const Cluster& cluster = MetalContext::instance().get_cluster();
 
     const std::string label = fmt::format("SnoopConfig on CCE{} hart {}", cce_index, kProducerHart);
@@ -821,10 +809,7 @@ class MimirCacheOps : public Mm41CceCase {};
 // no later MM41 case runs in this process.
 TEST_P(MimirCacheOps, FullInvalidate) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
 
     const uint64_t data_offset = tl1_data(kProducerHart);
     const uint32_t discard_tag = 0x45 + cce_index;
@@ -911,10 +896,7 @@ inline constexpr uint32_t kOrderingPasses = 8;
 // pass (cflush.d.l1 x0 then flush_l2_cache_full()); the full invalidate is FullInvalidate's.
 TEST_P(MimirCacheOps, FlushFenceOrdering) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
 
     const uint64_t data_offset = tl1_data(kProducerHart);
     const uint64_t flag_offset = data_offset + kFlagLinesFromData;
@@ -1017,10 +999,7 @@ inline constexpr uint32_t kPartialEvictLines = 6144;
 // exactly old-plus-partial. Lines whose partial bytes reached TL1 before the flush are recorded (dirty eviction).
 TEST_P(MimirCacheOps, DirtyEvictionPartialLine) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
 
     const uint64_t data_offset = tl1_data(kProducerHart);
     const uint64_t sweep_offset = tl1_data(1);
@@ -1065,12 +1044,7 @@ TEST_P(MimirCacheOps, DirtyEvictionPartialLine) {
 // cflush.d.l1 per line (Line) or of the whole L1 D$ (Full), then an uncached read before any L2 operation records
 // whether the L1 flush reached TL1 or stopped in L2 (plan "needs investigation"). Then the line discard and the L2
 // range flush, after which TL1 must hold the stores, as MM-8 Op/L1FlushLine and Op/L1FlushFull on CCE0.
-void run_l1_flush_target(uint32_t cce_index, uint32_t mode, const std::string& name) {
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-
+void run_l1_flush_target(IDevice* device, uint32_t cce_index, uint32_t mode, const std::string& name) {
     const uint64_t data_offset = tl1_data(kProducerHart);
     const uint32_t tag = 0x5C + cce_index;
     const uint32_t value = 0x1F000000u | (mode << 16) | (cce_index << 12);
@@ -1100,11 +1074,11 @@ void run_l1_flush_target(uint32_t cce_index, uint32_t mode, const std::string& n
 }
 
 TEST_P(MimirCacheOps, L1DcacheFlushLine) {
-    run_l1_flush_target(GetParam(), abi::kModeL1FlushLineTarget, "L1DcacheFlushLine");
+    run_l1_flush_target(open_device(), GetParam(), abi::kModeL1FlushLineTarget, "L1DcacheFlushLine");
 }
 
 TEST_P(MimirCacheOps, L1DcacheFlushFull) {
-    run_l1_flush_target(GetParam(), abi::kModeL1FlushFullTarget, "L1DcacheFlushFull");
+    run_l1_flush_target(open_device(), GetParam(), abi::kModeL1FlushFullTarget, "L1DcacheFlushFull");
 }
 
 INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheOps, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
@@ -1137,13 +1111,11 @@ inline constexpr SharedLayout kAdjacentLine{"AdjacentLine", 16, 4, 0, 4, abi::kL
 inline constexpr uint32_t kSharedRegionWords = 8 * kWordsPerLine;
 inline constexpr uint32_t kSharedPasses = 16;
 
-class MimirCacheSharedL2 : public ::testing::TestWithParam<SharedParam> {
+class MimirCacheSharedL2 : public MimirCceTest<SharedParam> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
         if (const std::string skip_reason = fresh_session_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -1160,10 +1132,7 @@ protected:
     void run_layout(const SharedLayout& layout) {
         const uint32_t cce_index = std::get<0>(GetParam());
         const SharedForm form = std::get<1>(GetParam());
-        ScopedDevice device_closer;
-        IDevice* device = device_closer.device();
-        check_tl1_layout();
-        record_descriptor_properties(soc_desc_of(device));
+        IDevice* device = open_device();
 
         const uint64_t region_offset = tl1_data(kProducerHart);
         const uint64_t flag_offset = region_offset + kFlagLinesFromData;
@@ -1469,14 +1438,12 @@ std::vector<uint32_t> idma_source_words(uint32_t value) {
     return pattern_words(value - (kIdmaSourceWords - kExternalWords), kIdmaSourceWords);
 }
 
-class MimirCacheWriterProbe : public ::testing::TestWithParam<WriterParam> {
+class MimirCacheWriterProbe : public MimirCceTest<WriterParam> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
         skip_unless_mimir_local_package();
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
         if (const std::string skip_reason = fresh_session_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -1501,11 +1468,8 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
     const uint32_t cce_index = std::get<0>(GetParam());
     const ExternalWriter writer = std::get<1>(GetParam());
     const SnoopMode mode = std::get<2>(GetParam());
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
+    IDevice* device = open_device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
-    record_descriptor_properties(soc);
     const Cluster& cluster = MetalContext::instance().get_cluster();
 
     const uint64_t data_offset = tl1_data(kReaderHart);
@@ -1559,7 +1523,7 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
                 const uint32_t view = writer == ExternalWriter::LocalGddrIdma
                                           ? local_dram_view_for_cce(soc, cce_index)
                                           : base_dram_view_for_mimir(soc, next_mimir(mimir_index_for_cce(cce_index)));
-                mimir_contract::write_gddr_view(device_closer.mesh(), view, gddr_source_view_offset(), source);
+                mimir_contract::write_gddr_view(device_closer_->mesh(), view, gddr_source_view_offset(), source);
                 batch.source = gddr_operand(soc, view, gddr_source_view_offset());
                 batch.host_verified = true;
                 batch.expected_xor = xor_of(source);
@@ -1766,10 +1730,7 @@ void run_spa_write_invalidate(
 // SPA, and the sibling's SPA stores read by this CCE after an invalidate.
 TEST_P(MimirCacheCoherence, CrossCce) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t sibling = sibling_cce(cce_index);
     RecordProperty("route", fmt::format("CCE{} <-> CCE{}", cce_index, sibling));
     run_flush_remote_read(device, cce_index, sibling, 0x80 + cce_index, "CrossCce");
@@ -1784,10 +1745,7 @@ TEST_P(MimirCacheCoherence, CrossCce) {
 // sibling CCE's iDMA writes, GRENSV-3774, GRENSV-1577), and the read after the invalidate must be fresh.
 TEST_P(MimirCacheCoherence, CrossCceSnoopOn) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t sibling = sibling_cce(cce_index);
 
     const uint64_t region_offset = tl1_data(kReaderHart);
@@ -1859,10 +1817,7 @@ TEST_P(MimirCacheCoherence, CrossD2d) {
     if (const std::string skip_reason = two_mimir_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const uint32_t remote = next_mimir_cce(cce_index);
     RecordProperty("route", fmt::format("CCE{} <-> CCE{} over D2D", cce_index, remote));
     run_flush_remote_read(device, cce_index, remote, 0x8C + cce_index, "CrossD2d");
@@ -1914,14 +1869,12 @@ std::vector<RaceParam> race_params() {
     return params;
 }
 
-class MimirCacheCoherenceRace : public ::testing::TestWithParam<RaceParam> {
+class MimirCacheCoherenceRace : public MimirCceTest<RaceParam> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
         skip_unless_mimir_local_package();
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
         if (const std::string skip_reason = fresh_session_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -1940,10 +1893,7 @@ protected:
 TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
     const uint32_t cce_index = std::get<0>(GetParam());
     const uint32_t config = std::get<1>(GetParam());
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const uint32_t sibling = sibling_cce(cce_index);
 
@@ -2107,10 +2057,7 @@ inline constexpr uint32_t kThrashPasses = 4;
 // Rdcycle per pass is recorded as the hit/miss/refill proxy (no CCE cache counters exist).
 TEST_P(MimirCacheStress, ReuseThrash) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
 
     const uint64_t data_offset = tl1_data(kProducerHart);
     const uint64_t trace_offset = tl1_done_block(kProducerHart) + kTraceFromDoneBlock;
@@ -2307,15 +2254,12 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
 // hit cycles are recorded.
 TEST_P(MimirCacheStress, PreloadChurn) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-    run_churn_leg(device_closer.mesh(), device, cce_index, false);
+    IDevice* device = open_device();
+    run_churn_leg(device_closer_->mesh(), device, cce_index, false);
     if (HasFatalFailure()) {
         return;
     }
-    run_churn_leg(device_closer.mesh(), device, cce_index, true);
+    run_churn_leg(device_closer_->mesh(), device, cce_index, true);
 }
 
 // MM-8 MimirDmCachePerf's write paths past 32 KiB; kStatusCycles is recorded, not gated.
@@ -2323,10 +2267,7 @@ inline constexpr uint32_t kPerfSweepSizesKiB[] = {64, 128, 192};
 
 TEST_P(MimirCacheStress, PerfSweep) {
     const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
+    IDevice* device = open_device();
 
     const uint64_t data_offset = tl1_data(kProducerHart);
     for (const WritePath write_path :
@@ -2388,9 +2329,7 @@ class MimirMm4xCompile : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(MimirMm4xCompile, Kernel) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_SKIP_IF_WATCHER();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     std::vector<CceKernelLaunch> launches;

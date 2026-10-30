@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -152,6 +153,27 @@ inline CceStatuses run_cce_kernels_with_deadline(
     add_cce_kernels(device, program, launches);
     return launch_and_wait_for_statuses(device, program, launches, host_deadline);
 }
+
+// A CCE test whose body opens the device once with open_device(), after SetUp's skips and preflight: an emulator open
+// resets the CCEs, and the RTL simulator trips on a second open. TearDown closes it.
+template <typename Param>
+class MimirCceTest : public ::testing::TestWithParam<Param> {
+protected:
+    void TearDown() override { close_device(); }
+
+    // Opens device 0, checks the TL1 test layout and records the descriptor.
+    IDevice* open_device() {
+        device_closer_ = std::make_unique<ScopedDevice>();
+        IDevice* device = device_closer_->device();
+        check_tl1_layout();
+        record_descriptor_properties(soc_desc_of(device));
+        return device;
+    }
+
+    void close_device() { device_closer_.reset(); }
+
+    std::unique_ptr<ScopedDevice> device_closer_;
+};
 
 // Reads the data with read_words(byte_offset, bytes) and compares it with `expected`. On a mismatch, records the first
 // one as `<leg>_first_mismatch`, waits kRecheckDelay and re-reads that word; if it changed, re-reads all the data

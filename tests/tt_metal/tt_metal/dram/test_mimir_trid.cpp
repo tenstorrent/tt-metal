@@ -797,33 +797,13 @@ std::optional<std::vector<uint32_t>> run_scenario_table(
 
 bool has_remote_mimir() { return topology_from(configured_soc_desc()).num_mimirs >= 2; }
 
-// Opens device 0 for one test and closes it at TearDown, or earlier with close_device().
-class MimirTridTest {
-protected:
-    IDevice* open_device() {
-        device_closer_ = std::make_unique<ScopedDevice>();
-        IDevice* device = device_closer_->device();
-        check_tl1_layout();
-        record_descriptor_properties(soc_desc_of(device));
-        return device;
-    }
-
-    void close_device() { device_closer_.reset(); }
-
-    std::unique_ptr<ScopedDevice> device_closer_;
-};
-
 // One case per CCE of the descriptor; hart kTridHart issues unless a case says otherwise.
-class MimirTridIdma : public ::testing::TestWithParam<uint32_t>, protected MimirTridTest {
+class MimirTridIdma : public MimirCceTest<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
     }
-
-    void TearDown() override { close_device(); }
 };
 
 inline constexpr uint32_t kUniqueIdsCommands = abi::kNumTrids;
@@ -1422,21 +1402,17 @@ std::string remote_route_name(const ::testing::TestParamInfo<uint32_t>& info) {
 
 // 2x only, host-verified: 16 commands on trids 0-15 from the source CCE to the remote target over D2D (backend 3), and
 // back into its own TL1 (backend 5), where the kernel checks the XOR of what landed and never loads a remote address.
-class MimirTridRemote : public ::testing::TestWithParam<uint32_t>, protected MimirTridTest {
+class MimirTridRemote : public MimirCceTest<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
         skip_unless_mimir_local_package();
-        if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
-            GTEST_SKIP() << watcher_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
         if (topology_from(configured_soc_desc()).num_mimirs < 2) {
             GTEST_SKIP() << "Remote trid cases need a 2x descriptor (two Mimirs).";
         }
         MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
-
-    void TearDown() override { close_device(); }
 
     void run_remote(Target target, const std::string& name, uint32_t tag) {
         IDevice* device = open_device();
@@ -1459,19 +1435,15 @@ INSTANTIATE_TEST_SUITE_P(MM43, MimirTridRemote, ::testing::ValuesIn(mimir_contra
 
 // Hart reset and reload with TT_METAL_FORCE_REINIT=1 (as MM2 MimirFwReinit), quiesced first: no trid counter reads
 // pending after the reopen, and every trid 0-15 completes a command again.
-class MimirTridReset : public ::testing::TestWithParam<uint32_t>, protected MimirTridTest {
+class MimirTridReset : public MimirCceTest<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
         if (!MetalContext::instance().rtoptions().get_force_context_reinit()) {
             GTEST_SKIP() << "Set TT_METAL_FORCE_REINIT=1.";
         }
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
     }
-
-    void TearDown() override { close_device(); }
 };
 
 // The first session ends with every trid acked. After the reopen, the observer mode with its issuer flag already
@@ -1637,9 +1609,7 @@ protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
         skip_unless_mimir_local_package();
-        if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
-            GTEST_SKIP() << watcher_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
         const ConcurrentRoute& route = GetParam();
         const uint32_t num_cces = topology_from(configured_soc_desc()).num_cces;
         if (num_cces <= std::max({route.sender_cce, route.receiver_cce, route.stream_cce})) {

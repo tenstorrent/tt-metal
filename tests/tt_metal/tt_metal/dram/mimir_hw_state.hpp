@@ -23,6 +23,14 @@ namespace tt::tt_metal::mimir_test {
 CoreCoord mimir_smc_core(const metal_SocDescriptor& soc, uint32_t mimir_index);
 // Non-empty when the watcher is enabled, since its host NOC sanitizer rejects SMC core reads. Call before any SMC read.
 std::string mimir_watcher_skip_reason();
+// GTEST_SKIP returns from the function that invokes it, so this has to be a macro.
+#define MIMIR_SKIP_IF_WATCHER()                                                                               \
+    do {                                                                                                      \
+        if (const std::string mimir_watcher_reason = ::tt::tt_metal::mimir_test::mimir_watcher_skip_reason(); \
+            !mimir_watcher_reason.empty()) {                                                                  \
+            GTEST_SKIP() << mimir_watcher_reason;                                                             \
+        }                                                                                                     \
+    } while (0)
 
 struct CceResetState {
     uint32_t cce_index = 0;
@@ -90,19 +98,13 @@ const std::string& mimir_identity_result();
 const std::string& mimir_remote_preflight_result();
 // Skip when the watcher is enabled (before any SMC read), then fail the test on a mismatch. Use before any device is
 // opened.
-#define MIMIR_REQUIRE_IDENTITY()                                                                          \
-    if (const std::string mimir_watcher_reason = ::tt::tt_metal::mimir_test::mimir_watcher_skip_reason(); \
-        !mimir_watcher_reason.empty()) {                                                                  \
-        GTEST_SKIP() << mimir_watcher_reason;                                                             \
-    }                                                                                                     \
-    ASSERT_TRUE(::tt::tt_metal::mimir_test::mimir_identity_result().empty())                              \
+#define MIMIR_REQUIRE_IDENTITY()                                             \
+    MIMIR_SKIP_IF_WATCHER();                                                 \
+    ASSERT_TRUE(::tt::tt_metal::mimir_test::mimir_identity_result().empty()) \
         << ::tt::tt_metal::mimir_test::mimir_identity_result()
-#define MIMIR_REQUIRE_REMOTE_PREFLIGHT()                                                                  \
-    if (const std::string mimir_watcher_reason = ::tt::tt_metal::mimir_test::mimir_watcher_skip_reason(); \
-        !mimir_watcher_reason.empty()) {                                                                  \
-        GTEST_SKIP() << mimir_watcher_reason;                                                             \
-    }                                                                                                     \
-    ASSERT_TRUE(::tt::tt_metal::mimir_test::mimir_remote_preflight_result().empty())                      \
+#define MIMIR_REQUIRE_REMOTE_PREFLIGHT()                                             \
+    MIMIR_SKIP_IF_WATCHER();                                                         \
+    ASSERT_TRUE(::tt::tt_metal::mimir_test::mimir_remote_preflight_result().empty()) \
         << ::tt::tt_metal::mimir_test::mimir_remote_preflight_result()
 // Remote suites, after the device is opened. Chippy bring-up programs the DMRISC remap entries and nothing rewrites
 // them. Cached per process. Only valid after the device is opened; call it once mimir_remote_preflight_result() is

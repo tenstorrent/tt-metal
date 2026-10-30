@@ -476,9 +476,7 @@ class MimirCacheScopedLock : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
-            GTEST_SKIP() << skip_reason;
-        }
+        MIMIR_SKIP_IF_WATCHER();
     }
 };
 
