@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/buffers/dram_receiver_config_page.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
@@ -1938,11 +1939,12 @@ inline constexpr uint32_t kUint32TileWords = 32 * 32;
 inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
 // The prefetched tensor: one-tile pages through a one-tile FIFO, so every page waits for the receiver's credit.
 inline constexpr uint32_t kPrefetchTiles = 16;
-// rdcycle budgets of the prefetcher, the receiver and the trid stream; ~200 s of host polling each (MM-7 S5).
-inline constexpr uint64_t kConcurrentBudgetCycles = 1ull << 24;
+// rdcycle budgets of the prefetcher, the receiver and the trid stream; ~400 s of host polling each (MM-7 S5). The
+// stream's covers its first round, the queue and the whole prefetch.
+inline constexpr uint64_t kConcurrentBudgetCycles = 1ull << 25;
 // The trid stream's host deadline: one shared budget, plus launch.
 inline constexpr std::chrono::seconds kStreamHostDeadline{500};
-// How long the host samples both progress counters before it stops the stream.
+// How long the host waits for the stream's first round, and then for the whole prefetch.
 inline constexpr std::chrono::seconds kOverlapWindow{120};
 inline constexpr uint32_t kStreamCommands = 8;
 inline constexpr uint32_t kStreamCommandBytes = 1024;
@@ -2023,8 +2025,8 @@ private:
 // 2x only, no AMOs and no accumulate: the stream CCE runs kModeTridStream rounds into its local GDDR while the
 // prefetcher streams a tensor from the sender CCE's bank to a discard receiver on the other Mimir. The stream CCE is
 // outside the prefetcher's sender and receiver set, so no ITN write lands in its TL1 while it stores progress
-// (MIM-560). The host samples the sender's pages_sent and the stream's progress over kOverlapWindow and asserts both
-// advanced inside it; when either did not, the case records "no overlap" as a skip after its checks.
+// (MIM-560). The prefetch is queued once the stream completed a round, and the stream must complete another round
+// between the sender's first page and its last.
 class MimirTridConcurrent : public ::testing::TestWithParam<ConcurrentRoute> {
 protected:
     void SetUp() override {
@@ -2111,12 +2113,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     stream_args[abi::kArgProgressOffset] = static_cast<uint32_t>(progress_offset);
     std::optional<ConcurrentPrefetcherSession> session;
     session.emplace(*mesh, *sender_bank);
-    experimental::QueueTensorPrefetcherRequest(
-        *mesh,
-        gcb,
-        std::nullopt,
-        {experimental::TensorPrefetcherInput{.tensor = tensor, .block_count = kPrefetchTiles}});
-    // Launched after the queue, so the stream's budget is not spent while the prefetcher starts.
+    // Launched after the prefetcher started, so the stream's budget is not spent while it starts.
     const std::vector<CceKernelLaunch> stream_launch = {scenario_launch(scenario, stream_args)};
     write_cce_tl1(
         device,
@@ -2135,25 +2132,41 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
         return read_cce_tl1(device, route.stream_cce, progress_offset, sizeof(uint32_t)).front();
     };
 
-    // Reads with no sleep, so the emulated clock keeps running, until both counters moved or the window ends.
-    const uint32_t pages_sent_before = pages_sent();
-    const uint32_t rounds_before = stream_rounds();
-    const std::chrono::steady_clock::time_point window_end = std::chrono::steady_clock::now() + kOverlapWindow;
-    uint32_t pages_sent_after = pages_sent_before;
-    uint32_t rounds_after = rounds_before;
-    while (std::chrono::steady_clock::now() < window_end &&
-           (pages_sent_after == pages_sent_before || rounds_after == rounds_before)) {
-        pages_sent_after = pages_sent();
-        rounds_after = stream_rounds();
+    // Reads with no sleep, so the emulated clock keeps running.
+    const std::chrono::steady_clock::time_point first_round_end = std::chrono::steady_clock::now() + kOverlapWindow;
+    uint32_t rounds_at_queue = stream_rounds();
+    while (rounds_at_queue == 0 && std::chrono::steady_clock::now() < first_round_end) {
+        rounds_at_queue = stream_rounds();
     }
+    experimental::QueueTensorPrefetcherRequest(
+        *mesh,
+        gcb,
+        std::nullopt,
+        {experimental::TensorPrefetcherInput{.tensor = tensor, .block_count = kPrefetchTiles}});
+    // pages_sent counts kDramReceiverCreditUnitBytes units.
+    const uint32_t prefetch_units = kPrefetchTiles * kUint32TilePageBytes / kDramReceiverCreditUnitBytes;
+    const std::chrono::steady_clock::time_point prefetch_end = std::chrono::steady_clock::now() + kOverlapWindow;
+    uint32_t units_sent = pages_sent();
+    while (units_sent == 0 && std::chrono::steady_clock::now() < prefetch_end) {
+        units_sent = pages_sent();
+    }
+    const uint32_t rounds_at_first_page = stream_rounds();
+    while (units_sent < prefetch_units && std::chrono::steady_clock::now() < prefetch_end) {
+        units_sent = pages_sent();
+    }
+    const uint32_t rounds_at_last_page = units_sent >= prefetch_units ? stream_rounds() : rounds_at_first_page;
     const std::string overlap = fmt::format(
-        "pages_sent {} -> {}, stream rounds {} -> {}",
-        pages_sent_before,
-        pages_sent_after,
-        rounds_before,
-        rounds_after);
+        "stream rounds {} at the queue, {} at the first page, {} at the last; pages_sent {} of {} units",
+        rounds_at_queue,
+        rounds_at_first_page,
+        rounds_at_last_page,
+        units_sent,
+        prefetch_units);
     log_info(tt::LogTest, "MM43 {}: {}", label, overlap);
     RecordProperty("overlap", overlap);
+    EXPECT_GT(rounds_at_last_page, rounds_at_first_page)
+        << label << ": no stream round completed while the prefetch ran inside " << kOverlapWindow.count()
+        << " s: " << overlap;
 
     write_cce_tl1(device, route.stream_cce, stop_offset, {abi::kStreamStop});
     const bool stream_done = wait_for_status_magics(device, stream_launch, {abi::kDoneMagic}, kStreamHostDeadline);
@@ -2188,10 +2201,6 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
         gcb_abi::kStatusWords * sizeof(uint32_t));
     EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped) << label << ": receiver";
     EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], kPrefetchTiles) << label << ": receiver pages";
-
-    if (pages_sent_after == pages_sent_before || rounds_after == rounds_before) {
-        GTEST_SKIP() << "No overlap inside " << kOverlapWindow.count() << " s: " << overlap;
-    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
