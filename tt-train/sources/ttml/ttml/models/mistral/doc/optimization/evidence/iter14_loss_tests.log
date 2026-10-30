@@ -1,0 +1,195 @@
+2026-10-30 16:06:46.402 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 42 items / 38 deselected / 4 selected
+
+tests/python/test_mistral.py::test_vp_cross_entropy_bw_matches_numpy[lm-head-shard] 2026-10-30 16:06:47.088 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-30 16:06:47.088 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-30 16:06:47.088 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-30 16:06:47.088 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-30 16:06:47.100 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-30 16:06:47.100 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-30 16:06:47.179 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-30 16:06:47.179 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-30 16:06:47.179 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-30 16:06:47.179 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-30 16:06:47.181 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-30 16:06:47.414 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-30 16:06:47.447 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-30 16:06:47.447 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-30 16:06:47.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-30 16:06:47.488 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+vp_cross_entropy_bw V=32768 g=1.0 scale=9.77e-04: tensor | shape | PCC | rel err | bar
+  grad                         (1, 1, 1024, 32768)      1.000000 3.87e-03  (>= 0.9999, <= 0.01) ok
+  grad at targets              (1024,)                  0.022829 3.87e-03  (>= 0.999, <= 0.02) FAIL
+FAILED
+tests/python/test_mistral.py::test_vp_cross_entropy_bw_matches_numpy[small] vp_cross_entropy_bw V=4096 g=0.5 scale=1.00e+00: tensor | shape | PCC | rel err | bar
+  grad                         (1, 1, 1024, 4096)       1.000000 3.75e-03  (>= 0.9999, <= 0.01) ok
+  grad at targets              (1024,)                  0.909536 3.73e-03  (>= 0.999, <= 0.02) FAIL
+FAILED
+tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[weights [out,in]] lm head + cross-entropy (frozen head): tensor | shape | PCC | rel err | bar
+  logits                       (1, 1, 1024, 131072)     0.999999 1.68e-03  (>= 0.999, <= 0.02) ok
+  loss                         (1,)                     0.000000 8.63e-04  (>= 0.0, <= 0.01) ok
+  dx                           (1, 1, 1024, 5120)       0.999999 4.23e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[frozen weights transposed] lm head + cross-entropy (frozen head): tensor | shape | PCC | rel err | bar
+  logits                       (1, 1, 1024, 131072)     0.999999 1.68e-03  (>= 0.999, <= 0.02) ok
+  loss                         (1,)                     0.000000 8.63e-04  (>= 0.0, <= 0.01) ok
+  dx                           (1, 1, 1024, 5120)       0.999999 4.23e-03  (>= 0.99, <= 0.05) ok
+PASSED
+
+=================================== FAILURES ===================================
+____________ test_vp_cross_entropy_bw_matches_numpy[lm-head-shard] _____________
+
+vocab = 32768, g = 1.0, scale = 0.0009765625
+
+    @pytest.mark.parametrize("vocab, g, scale", [(32768, 1.0, 1.0 / 1024), (4096, 0.5, 1.0)], ids=["lm-head-shard", "small"])
+    def test_vp_cross_entropy_bw_matches_numpy(vocab, g, scale):
+        """The fused vocab-parallel cross-entropy backward on one shard (first_v = 0) against numpy fp64:
+        scale * g * (exp(x - logZ) - onehot(target))."""
+        rng = seeded(14)
+        x_np = bf16(rng.normal(0, 2, (1, 1, SEQ, vocab)))
+        targets = rng.integers(0, vocab, (1, SEQ)).astype(np.int64)
+        m = x_np.max(-1, keepdims=True)
+        logz = np.log(np.exp(x_np - m).sum(-1, keepdims=True)) + m
+        onehot = np.zeros_like(x_np)
+        onehot[0, 0, np.arange(SEQ), targets[0]] = 1.0
+        ref = scale * g * (np.exp(x_np - logz) - onehot)
+        dev = ttml.autograd.AutoContext.get_instance().get_device()
+        x = ttnn.from_torch(torch.tensor(x_np, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=dev)
+        lz = ttnn.from_torch(torch.tensor(logz, dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=dev)
+        tg = ttnn.from_torch(torch.tensor(targets, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+        gt = ttnn.from_torch(torch.full((1, 1, 32, 32), g, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=dev)  # a tile of g
+        got = to_host(ttml.ops.metal.vp_cross_entropy_bw(x, lz, tg, gt, vocab, None, 0, scale))
+        rep = Report(f"vp_cross_entropy_bw V={vocab} g={g} scale={scale:.2e}")
+        rep.check("grad", got, ref, 0.9999, 1e-2)
+        rows = np.arange(SEQ)
+        rep.check("grad at targets", got[0, 0, rows, targets[0]], ref[0, 0, rows, targets[0]], 0.999, 2e-2)
+>       rep.done()
+
+tests/python/test_mistral.py:428:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tt-train.tests.python.test_mistral.Report object at 0x73bfe08e1a60>
+
+    def done(self) -> None:
+        lines = [f"{self.title}: tensor | shape | PCC | rel err | bar"]
+        failures = []
+        for name, shape, p, r, pmin, rmax in self.rows:
+            ok = p >= pmin and r <= rmax
+            lines.append(
+                f"  {name:28s} {str(shape):24s} {p:.6f} {r:.2e}  (>= {pmin}, <= {rmax}) {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failures.append(name)
+        print("\n".join(lines))
+>       assert not failures, f"{self.title}: below the bar: {failures}"
+E       AssertionError: vp_cross_entropy_bw V=32768 g=1.0 scale=9.77e-04: below the bar: ['grad at targets']
+E       assert not ['grad at targets']
+
+tests/python/test_mistral.py:143: AssertionError
+________________ test_vp_cross_entropy_bw_matches_numpy[small] _________________
+
+vocab = 4096, g = 0.5, scale = 1.0
+
+    @pytest.mark.parametrize("vocab, g, scale", [(32768, 1.0, 1.0 / 1024), (4096, 0.5, 1.0)], ids=["lm-head-shard", "small"])
+    def test_vp_cross_entropy_bw_matches_numpy(vocab, g, scale):
+        """The fused vocab-parallel cross-entropy backward on one shard (first_v = 0) against numpy fp64:
+        scale * g * (exp(x - logZ) - onehot(target))."""
+        rng = seeded(14)
+        x_np = bf16(rng.normal(0, 2, (1, 1, SEQ, vocab)))
+        targets = rng.integers(0, vocab, (1, SEQ)).astype(np.int64)
+        m = x_np.max(-1, keepdims=True)
+        logz = np.log(np.exp(x_np - m).sum(-1, keepdims=True)) + m
+        onehot = np.zeros_like(x_np)
+        onehot[0, 0, np.arange(SEQ), targets[0]] = 1.0
+        ref = scale * g * (np.exp(x_np - logz) - onehot)
+        dev = ttml.autograd.AutoContext.get_instance().get_device()
+        x = ttnn.from_torch(torch.tensor(x_np, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=dev)
+        lz = ttnn.from_torch(torch.tensor(logz, dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=dev)
+        tg = ttnn.from_torch(torch.tensor(targets, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
+        gt = ttnn.from_torch(torch.full((1, 1, 32, 32), g, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=dev)  # a tile of g
+        got = to_host(ttml.ops.metal.vp_cross_entropy_bw(x, lz, tg, gt, vocab, None, 0, scale))
+        rep = Report(f"vp_cross_entropy_bw V={vocab} g={g} scale={scale:.2e}")
+        rep.check("grad", got, ref, 0.9999, 1e-2)
+        rows = np.arange(SEQ)
+        rep.check("grad at targets", got[0, 0, rows, targets[0]], ref[0, 0, rows, targets[0]], 0.999, 2e-2)
+>       rep.done()
+
+tests/python/test_mistral.py:428:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tt-train.tests.python.test_mistral.Report object at 0x73bfe08d0a40>
+
+    def done(self) -> None:
+        lines = [f"{self.title}: tensor | shape | PCC | rel err | bar"]
+        failures = []
+        for name, shape, p, r, pmin, rmax in self.rows:
+            ok = p >= pmin and r <= rmax
+            lines.append(
+                f"  {name:28s} {str(shape):24s} {p:.6f} {r:.2e}  (>= {pmin}, <= {rmax}) {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failures.append(name)
+        print("\n".join(lines))
+>       assert not failures, f"{self.title}: below the bar: {failures}"
+E       AssertionError: vp_cross_entropy_bw V=4096 g=0.5 scale=1.00e+00: below the bar: ['grad at targets']
+E       assert not ['grad at targets']
+
+tests/python/test_mistral.py:143: AssertionError
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+19.91s call     tt-train/tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[frozen weights transposed]
+19.70s call     tt-train/tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[weights [out,in]]
+1.94s call     tt-train/tests/python/test_mistral.py::test_vp_cross_entropy_bw_matches_numpy[lm-head-shard]
+0.12s call     tt-train/tests/python/test_mistral.py::test_vp_cross_entropy_bw_matches_numpy[small]
+
+(8 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[weights [out,in]]
+PASSED tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[frozen weights transposed]
+FAILED tests/python/test_mistral.py::test_vp_cross_entropy_bw_matches_numpy[lm-head-shard]
+FAILED tests/python/test_mistral.py::test_vp_cross_entropy_bw_matches_numpy[small]
+================= 2 failed, 2 passed, 38 deselected in 41.78s ==================
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function "element_size"
+ - leaked function "quiesce_devices"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "clear_loaded_sub_device_manager"
+ - leaked function "to"
+ - leaked function "logical_volume"
+ - leaked function "unpad_from_tile"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-10-30 16:07:29.055 | info     |    BuildKernels | JIT cache stats: 109/109 hits (100.0%) [109 cached, 12 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-30 16:07:29.055 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-30 16:07:29.068 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-30 16:07:29.068 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-30 16:07:29.350 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-30 16:07:29.350 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-30 16:07:29.350 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

@@ -123,6 +123,12 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Build + standalone check + LoRA tests: `O/iter13_build_check.sh` -> `O/iter13_build_check.log` (the chain's grep hid the check lines; they are in `O/iter13_transpose_split_check.log`).
 - Chain `O/iter13.sh` -> `O/iter13.log`: harness 40 passed, TP=4 gradient check PASS, cooled TP=4 MFU 516.4 ms / 31.42 % (`O/iter13_tp_mfu_tp4.*`), 4-layer TP profile `O/iter13_tp_tracy_tp4_4layers` (`O/iter13_tp_analysis.txt`, `O/iter13_tp_ranked_ops.txt`).
 
+### Iteration 14: vp_cross_entropy_bw
+
+- Op `metal/ops/vp_cross_entropy_bw/` (mesh-aware device op, factory, reader / writer / compute kernels), registered in `CMakeLists.txt`, `metal/operations.hpp`, `nanobind/nb_ops.cpp`; `ops/distributed/losses.cpp` backward calls it (the upstream gradient repeated into a tile).
+- Build + standalone check + loss tests: `O/iter14_build_check.sh` -> `O/iter14_build_check.log` (first run: 99.9 % zeros from the padded gradient tile, found by binning the error; second run exact; the test's PCC bar on the near-constant target entries replaced by a relative-error bar).
+- Chain `O/iter14.sh` -> `O/iter14.log`: harness 42 passed, TP=4 gradient check PASS, cooled TP=4 MFU 512.5 ms / 31.66 %, 4-layer TP profile, then the loss match: 8-layer host loss (`O/iter14_train_8layers_hostloss.log`, `O/iter14_loss_comparison.txt`, PASS 0.0294) and TP=4 real weights (`O/iter14_full_tp4_real.log`).
+
 ### Stage review round 7 (iterations 11-12)
 
 - `review_round7.md`: more-work-needed (UMD pointer in the iteration-11 commit; ranked table and attribution cells); answered in the same day's commits (pointer restored `415ec0f1d3e`, docs regenerated, runtime-arg guards, router M check); loss match rerun scheduled in the iteration-14 chain.
@@ -178,7 +184,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 12 candidate | `2c3a0d63846` | TP collective parameter knobs and sweep: no win, recorded as rejected |
 | 12 | `a95fcbdf37d` | `lowrank_update` op, LoRA routing, harness cases, iteration-12 evidence |
 | UMD pointer | `415ec0f1d3e` | the submodule pointer bumped by the iteration-11 commit restored |
-| review 7 | (this commit) | round-7 items: ranked table regenerated, attribution cells, runtime-arg guards, router M check, review record |
-| 13 | (next commit) | `transpose_split` op, fused backward routing, harness cases, iteration-13 evidence |
+| review 7 | `456f9cf7a8e` | round-7 items: ranked table regenerated, attribution cells, runtime-arg guards, router M check, review record |
+| 13 | `a1fc69ebed8` | `transpose_split` op, fused backward routing, harness cases, iteration-13 evidence |
+| 14 | (this commit) | `vp_cross_entropy_bw` op, loss backward routing, harness cases, loss match, iteration-14 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

@@ -403,6 +403,38 @@ def test_transpose_split_matches_numpy(rows, rank, scale):
     rep.done()
 
 
+@pytest.mark.parametrize(
+    "vocab, g, scale", [(32768, 1.0, 1.0 / 1024), (4096, 0.5, 1.0)], ids=["lm-head-shard", "small"]
+)
+def test_vp_cross_entropy_bw_matches_numpy(vocab, g, scale):
+    """The fused vocab-parallel cross-entropy backward on one shard (first_v = 0) against numpy fp64:
+    scale * g * (exp(x - logZ) - onehot(target))."""
+    rng = seeded(14)
+    x_np = bf16(rng.normal(0, 2, (1, 1, SEQ, vocab)))
+    targets = rng.integers(0, vocab, (1, SEQ)).astype(np.int64)
+    m = x_np.max(-1, keepdims=True)
+    logz = np.log(np.exp(x_np - m).sum(-1, keepdims=True)) + m
+    onehot = np.zeros_like(x_np)
+    onehot[0, 0, np.arange(SEQ), targets[0]] = 1.0
+    ref = scale * g * (np.exp(x_np - logz) - onehot)
+    dev = ttml.autograd.AutoContext.get_instance().get_device()
+    x = ttnn.from_torch(torch.tensor(x_np, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=dev)
+    lz = ttnn.from_torch(torch.tensor(logz, dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=dev)
+    tg = ttnn.from_torch(
+        torch.tensor(targets, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+    )
+    gt = ttnn.from_torch(
+        torch.full((1, 1, 32, 32), g, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=dev
+    )  # a tile of g
+    got = to_host(ttml.ops.metal.vp_cross_entropy_bw(x, lz, tg, gt, vocab, None, 0, scale))
+    rep = Report(f"vp_cross_entropy_bw V={vocab} g={g} scale={scale:.2e}")
+    rep.check("grad", got, ref, 0.9999, 1e-2)
+    rows = np.arange(SEQ)
+    # The target entries are all ~ -scale * g (a near-constant vector, PCC meaningless): relative error only.
+    rep.check("grad at targets", got[0, 0, rows, targets[0]], ref[0, 0, rows, targets[0]], -1.0, 2e-2)
+    rep.done()
+
+
 def test_fused_residual_norm_model_matches_the_block_path():
     """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
     the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number

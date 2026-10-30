@@ -35,6 +35,7 @@
 #include "ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "ops/transpose_split/transpose_split.hpp"
 #include "ops/variable_matmul/variable_matmul.hpp"
+#include "ops/vp_cross_entropy_bw/vp_cross_entropy_bw.hpp"
 #include "ops/write_tile_block/write_tile_block.hpp"
 #include "optimizers/adamw/adamw.hpp"
 #include "optimizers/sgd/sgd.hpp"

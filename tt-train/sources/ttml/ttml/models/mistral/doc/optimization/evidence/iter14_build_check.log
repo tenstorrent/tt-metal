@@ -1,0 +1,16 @@
+=== build _ttml 2026-10-30T16:06:31Z
+build rc=0
+=== vp_cross_entropy_bw check 2026-10-30T16:06:40Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+S=1024 V=32768 g=1.0 scale=9.77e-04: pcc 1.000000 rel 3.86e-03 max|diff| 3.81e-06 at targets 3.81e-06 | wall us 398
+S=1024 V=4096 g=0.5 scale=1.00e+00: pcc 1.000000 rel 3.78e-03 max|diff| 1.95e-03 at targets 1.95e-03 | wall us 72
+S=256 V=2048 g=1.0 scale=3.91e-03: pcc 0.999999 rel 3.72e-03 max|diff| 1.53e-05 at targets 1.53e-05 | wall us 24
+=== lora harness tests 2026-10-30T16:06:45Z
+tests rc=1
+E       AssertionError: vp_cross_entropy_bw V=32768 g=1.0 scale=9.77e-04: below the bar: ['grad at targets']
+tests/python/test_mistral.py:143: AssertionError
+E       AssertionError: vp_cross_entropy_bw V=4096 g=0.5 scale=1.00e+00: below the bar: ['grad at targets']
+tests/python/test_mistral.py:143: AssertionError
+================= 2 failed, 2 passed, 38 deselected in 41.78s ==================
+=== done 2026-10-30T16:07:29Z

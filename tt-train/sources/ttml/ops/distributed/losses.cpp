@@ -14,6 +14,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
+#include "metal/ops/vp_cross_entropy_bw/device/vp_cross_entropy_bw_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
@@ -158,38 +159,24 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // and broadcasts the per-position grad over the local vocab dim for NONE
     // — the same broadcast pattern used by the forward-pass max/exp path.
     // ---------------------------------------------------------------
-    autograd::GradFunction grad_fn = [logits,
-                                      out,
-                                      global_max,
-                                      global_sum,
-                                      targets_raw,
-                                      local_V,
-                                      cluster_axis,
-                                      inv_N]() {
+    // One pass over the local shard (iteration 14 of the Mistral loop): grad = inv_N * g * (exp(x - logZ) - onehot),
+    // in place of subtract+exp (fp32 intermediate), multiply, subtract_at_target and a multiply by g.
+    autograd::GradFunction grad_fn = [logits, out, log_normalizer, targets_raw, local_V, cluster_axis, inv_N]() {
         if (!out->is_grad_initialized()) {
             return;
         }
-        auto scaled_inv_sum = ttnn::multiply(ttnn::reciprocal(global_sum), inv_N);  // [B,1,S,1] FP32
-
-        auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
-        auto scaled_softmax = ttnn::multiply(local_exp, scaled_inv_sum, ttnn::DataType::BFLOAT16);
-        local_exp.deallocate();
-        scaled_inv_sum.deallocate();
-
-        // Single mesh workload — the program factory derives each device's shard window
-        // from its mesh coordinate, mirroring the forward-pass select_target_logit call.
-        ttnn::prim::ttml_subtract_at_target(
-            scaled_softmax,
+        // The kernel multiplies by a full tile of g (its DEST operand is a tile): repeat the [1, 1, 1, 1] gradient.
+        auto g_tile =
+            ttnn::repeat(out->get_grad(), ttnn::Shape{1U, 1U, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+        logits->add_grad(ttnn::prim::ttml_vp_cross_entropy_bw(
+            logits->get_value(),
+            log_normalizer,
             targets_raw,
+            g_tile,
             /*local_V=*/local_V,
             /*cluster_axis=*/cluster_axis,
             /*first_v=*/0U,
-            scaled_softmax,
-            /*subtract_value=*/inv_N);
-
-        // grad = (softmax_k - onehot_k) * scale * upstream, written back into scaled_softmax.
-        ttnn::multiply_(scaled_softmax, out->get_grad());
-        logits->add_grad(scaled_softmax);
+            /*scale=*/inv_N));
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, logits));

@@ -1,0 +1,24 @@
+[0/2] Re-checking globbed directories...
+[1/24] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/vp_cross_entropy_bw/device/vp_cross_entropy_bw_program_factory.cpp.o
+[3/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/vp_cross_entropy_bw/vp_cross_entropy_bw.cpp.o
+[4/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/softmax_backward_op.cpp.o
+[5/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/mla_kv_assemble_op.cpp.o
+[6/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/unary_ops.cpp.o
+[7/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/swiglu_op.cpp.o
+[8/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/layernorm_op.cpp.o
+[9/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw.cpp.o
+[10/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw_full_precision.cpp.o
+[11/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/core/tt_profiler.cpp.o
+[12/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/distributed/losses.cpp.o
+[13/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/rmsnorm_op.cpp.o
+[14/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/scaled_dot_product_attention.cpp.o
+[15/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/losses.cpp.o
+[16/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/sgd.cpp.o
+[17/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/moe_ffn_swiglu_op.cpp.o
+[18/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/qkv_causal_conv1d_silu_op.cpp.o
+[19/22] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/vp_cross_entropy_bw/device/vp_cross_entropy_bw_device_operation.cpp.o
+[20/22] Linking CXX static library tt-train/sources/ttml/libttml.a
+[21/22] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[22/22] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so

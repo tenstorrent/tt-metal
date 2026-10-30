@@ -29,6 +29,7 @@
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "metal/ops/transpose_split/transpose_split.hpp"
+#include "metal/ops/vp_cross_entropy_bw/vp_cross_entropy_bw.hpp"
 #include "metal/ops/write_tile_block/write_tile_block.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
@@ -799,6 +800,19 @@ void py_module(nb::module_& m) {
             nb::arg("tail_scale") = 1.0F,
             "[input[:rows]^T, tail_scale * input[rows:rows + tail_rows]^T] for a [1, 1, R, T] bf16 input in one pass: "
             "the fused LoRA backward's dx and s*dh from its [in + TAIL, T] product.");
+        py_metal.def(
+            "vp_cross_entropy_bw",
+            &ttml::metal::vp_cross_entropy_bw,
+            nb::arg("logits"),
+            nb::arg("log_normalizer"),
+            nb::arg("target"),
+            nb::arg("grad"),
+            nb::arg("local_V"),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("first_v") = 0U,
+            nb::arg("scale") = 1.0F,
+            "scale * g * (exp(logits - log_normalizer) - one_hot(target - first_v)) over a local vocab shard in one "
+            "pass (the vocab-parallel cross-entropy backward).");
         py_metal.def(
             "skinny_matmul",
             &ttml::metal::skinny_matmul,
