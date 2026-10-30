@@ -36,10 +36,10 @@
 #include "tracy/Tracy.hpp"
 #include "tunnels_from_mmio_device.hpp"
 #include <tt-umd/utils/semver.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/firmware/firmware_utils.hpp>
-#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/types/arch.hpp>
