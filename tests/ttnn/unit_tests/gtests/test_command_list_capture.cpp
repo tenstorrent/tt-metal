@@ -7,15 +7,20 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/sub_device.hpp>
 
 #include "command_list_capture_test_ops.hpp"
+#include "ttnn/operations/trace.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
@@ -241,6 +246,199 @@ TEST_F(CommandListCaptureTest, RejectsATensorWithAnotherSpecAndWritesNothing) {
     zero(out);
     list.replay(/*blocking=*/true);
     EXPECT_EQ(out.to_vector<uint32_t>(), expected_after(2));
+}
+
+// New allocations would take the freed input and intermediate if the list did not hold them.
+TEST_F(CommandListCaptureTest, HoldsRecordedTensorsAfterTheCallerDropsThem) {
+    std::optional<CapturedCommandList> list;
+    Tensor out;
+    {
+        const auto input = make_input();
+        CommandListCapture capture(*device_);
+        const auto mid = capture.record<CopyRowsOp>({.num_tile_rows = kCapacity}, {.input = input}, kSharedTileRows);
+        out = capture.record<CopyRowsOp>({.num_tile_rows = kCapacity}, {.input = mid}, kSharedTileRows);
+        list.emplace(capture.build());
+    }
+    const std::vector<uint32_t> junk_values(kCapacity * kElementsPerTileRow, 0xDEADBEEF);
+    std::vector<Tensor> junk;
+    for (int i = 0; i < 4; ++i) {
+        junk.push_back(Tensor::from_vector(junk_values, spec(), device_));
+    }
+
+    zero(out);
+    list->set("tile_rows", 5);
+    list->replay(/*blocking=*/true, /*check_dram_overlap=*/true);
+    EXPECT_EQ(out.to_vector<uint32_t>(), expected_after(5));
+}
+
+TEST_F(CommandListCaptureTest, HoldsThePatchedTensorUntilTheNextPatch) {
+    const auto input = make_input();
+    CommandListCapture capture(*device_);
+    auto out = capture.record<CopyRowsOp>(
+        {.num_tile_rows = kCapacity}, {.input = input}, {{"tile_rows", "tile_rows"}, {"input", "in"}});
+    auto list = capture.build();
+
+    auto tripled = iota_values();
+    for (auto& value : tripled) {
+        value *= 3;
+    }
+    list.update(CommandListPatch{}.set("in", Tensor::from_vector(tripled, spec(), device_)).set("tile_rows", 4));
+    const std::vector<uint32_t> junk_values(kCapacity * kElementsPerTileRow, 0xDEADBEEF);
+    std::vector<Tensor> junk;
+    for (int i = 0; i < 4; ++i) {
+        junk.push_back(Tensor::from_vector(junk_values, spec(), device_));
+    }
+
+    zero(out);
+    list.replay(/*blocking=*/true, /*check_dram_overlap=*/true);
+    std::fill(tripled.begin() + (4 * kElementsPerTileRow), tripled.end(), 0);
+    EXPECT_EQ(out.to_vector<uint32_t>(), tripled);
+}
+
+// Holding a tensor cannot stop a forced deallocate. The overlap check then catches an allocation over its memory.
+TEST_F(CommandListCaptureTest, OverlapCheckCatchesMemoryFreedUnderTheList) {
+    auto input = make_input();
+    CommandListCapture capture(*device_);
+    auto out = capture.record<CopyRowsOp>({.num_tile_rows = kCapacity}, {.input = input}, kSharedTileRows);
+    auto list = capture.build();
+    list.replay(/*blocking=*/true, /*check_dram_overlap=*/true);
+
+    input.deallocate(/*force=*/true);
+    // An allocation exactly filling a recorded range passes as a rebound tensor; half of one is an overlap.
+    const tt::tt_metal::TensorSpec half_spec(
+        ttnn::Shape{1, 1, kCapacity / 2 * TILE_HEIGHT, kWidth},
+        tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
+    const auto squatter = create_device_tensor(half_spec, device_);
+    EXPECT_THAT(
+        [&] { list.replay(/*blocking=*/true, /*check_dram_overlap=*/true); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("overlap")));
+}
+
+// Not a correctness test: prints the host cost of enqueueing, and the time to finish, one iteration of kOps tiny ops.
+// Run with --gtest_also_run_disabled_tests.
+TEST_F(CommandListCaptureTest, DISABLED_TimesReplayAgainstTraceAndEagerLaunches) {
+    constexpr int kOps = 16;
+    constexpr int kIterations = 1000;
+    const auto input = make_input();
+    auto& cq = device_->mesh_command_queue();
+    const auto run_ops = [&] {
+        Tensor current = input;
+        for (int i = 0; i < kOps; ++i) {
+            current = device_operation::launch<CopyRowsOp>({.num_tile_rows = kCapacity}, {.input = current});
+        }
+        return current;
+    };
+    struct Timing {
+        double enqueue_us;
+        double total_us;
+    };
+    const auto time = [&](const std::function<void()>& iteration) {
+        iteration();
+        tt::tt_metal::distributed::Finish(cq);
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < kIterations; ++i) {
+            iteration();
+        }
+        const auto enqueued = std::chrono::steady_clock::now();
+        tt::tt_metal::distributed::Finish(cq);
+        const auto finished = std::chrono::steady_clock::now();
+        const auto per_iteration = [](auto duration) {
+            return std::chrono::duration<double, std::micro>(duration).count() / kIterations;
+        };
+        return Timing{per_iteration(enqueued - start), per_iteration(finished - start)};
+    };
+
+    const auto eager = time([&] { (void)run_ops(); });
+
+    Timing trace{};
+    Timing trace_blocking{};
+    {
+        const auto trace_id = ttnn::operations::trace::begin_trace_capture(device_, ttnn::QueueId(0));
+        const auto traced_out = run_ops();
+        ttnn::operations::trace::end_trace_capture(device_, trace_id, ttnn::QueueId(0));
+        trace = time([&] { ttnn::operations::trace::execute_trace(device_, trace_id, ttnn::QueueId(0), false); });
+        trace_blocking =
+            time([&] { ttnn::operations::trace::execute_trace(device_, trace_id, ttnn::QueueId(0), true); });
+        ttnn::operations::trace::release_trace(device_, trace_id);
+    }
+
+    std::optional<CapturedCommandList> list;
+    {
+        CommandListCapture capture(*device_);
+        Tensor current = input;
+        for (int i = 0; i < kOps; ++i) {
+            const CommandListBindings bindings =
+                i == 0 ? CommandListBindings{{"tile_rows", "tile_rows"}, {"input", "in"}} : kSharedTileRows;
+            current = capture.record<CopyRowsOp>({.num_tile_rows = kCapacity}, {.input = current}, bindings);
+        }
+        list.emplace(capture.build());
+    }
+    const auto other_input = make_input();
+    const auto replay = time([&] { list->replay(); });
+    uint32_t tile_rows = 0;
+    const auto scalar_patch = time([&] {
+        list->set("tile_rows", kCapacity - (tile_rows++ % 2));
+        list->replay();
+    });
+    bool flip = false;
+    const auto two_patches = time([&] {
+        flip = !flip;
+        list->update(CommandListPatch{}.set("in", flip ? other_input : input).set("tile_rows", kCapacity));
+        list->replay();
+    });
+    const auto patch_only = time([&] { list->set("tile_rows", kCapacity - (tile_rows++ % 2)); });
+    const auto tensor_patch_only = time([&] {
+        flip = !flip;
+        list->update(CommandListPatch{}.set("in", flip ? other_input : input));
+    });
+    // With the queue drained before each call, the call's duration is host work only.
+    const auto host_cost = [&](const std::function<void()>& call) {
+        constexpr int kCalls = 200;
+        double total_us = 0;
+        for (int i = 0; i < kCalls; ++i) {
+            tt::tt_metal::distributed::Finish(cq);
+            const auto start = std::chrono::steady_clock::now();
+            call();
+            total_us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+        }
+        tt::tt_metal::distributed::Finish(cq);
+        return total_us / kCalls;
+    };
+    const double scalar_patch_host_us = host_cost([&] { list->set("tile_rows", kCapacity - (tile_rows++ % 2)); });
+    const double tensor_patch_host_us = host_cost([&] {
+        flip = !flip;
+        list->update(CommandListPatch{}.set("in", flip ? other_input : input));
+    });
+    const double replay_host_us = host_cost([&] { list->replay(); });
+    const auto replay_blocking = time([&] { list->replay(/*blocking=*/true); });
+    const auto patch_replay_blocking = time([&] {
+        list->set("tile_rows", kCapacity - (tile_rows++ % 2));
+        list->replay(/*blocking=*/true);
+    });
+
+    const auto report = [](const char* mode, const Timing& timing) {
+        std::printf(
+            "%-36s enqueue %8.2f us/iteration, finished %8.2f us/iteration\n",
+            mode,
+            timing.enqueue_us,
+            timing.total_us);
+    };
+    std::printf("%d CopyRowsOp launches per iteration, %d iterations\n", kOps, kIterations);
+    report("eager launches", eager);
+    report("trace replay", trace);
+    report("command list replay", replay);
+    report("command list 1 scalar patch + replay", scalar_patch);
+    report("command list tensor+scalar + replay", two_patches);
+    report("command list 1 scalar patch only", patch_only);
+    report("command list first-op tensor patch only", tensor_patch_only);
+    report("trace replay, blocking", trace_blocking);
+    report("command list replay, blocking", replay_blocking);
+    report("command list patch + replay, blocking", patch_replay_blocking);
+    std::printf(
+        "host cost per call: 32-word scalar patch %.2f us, first-op tensor patch %.2f us, replay %.2f us\n",
+        scalar_patch_host_us,
+        tensor_patch_host_us,
+        replay_host_us);
 }
 
 TEST_F(CommandListCaptureTest, RejectsLegacyPrograms) {

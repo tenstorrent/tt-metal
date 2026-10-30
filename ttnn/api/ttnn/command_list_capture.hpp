@@ -80,15 +80,20 @@ public:
                 m2::CmdListTensorArgName{name}, m2::ProgramRunArgs::TensorArgument{std::cref(tensor.mesh_tensor())});
         }
         list_.update_args(metal_patch);
+        for (const auto& [name, tensor] : patch.tensors_) {
+            patched_.insert_or_assign(name, tensor);
+        }
     }
 
     void set(const std::string& name, uint32_t value) { update(CommandListPatch{}.set(name, value)); }
 
     uint32_t capacity(const std::string& name) const { return capacities_.at(name); }
 
-    void replay(bool blocking = false) {
+    // check_dram_overlap fails the replay, enqueueing nothing, when a live DRAM allocation other than the bound tensor
+    // overlaps a tensor the list reads or writes. It scans every live allocation, so it is meant for debugging.
+    void replay(bool blocking = false, bool check_dram_overlap = false) {
         auto& cq = list_.device().mesh_command_queue(list_.cq_id());
-        tt::tt_metal::experimental::EnqueueCommandList(cq, list_, blocking);
+        tt::tt_metal::experimental::EnqueueCommandList(cq, list_, blocking, check_dram_overlap);
     }
 
 private:
@@ -96,17 +101,26 @@ private:
     CapturedCommandList(
         tt::tt_metal::experimental::CommandList list,
         std::unordered_map<std::string, uint32_t> capacities,
-        std::unordered_set<std::string> tensors) :
-        list_(std::move(list)), capacities_(std::move(capacities)), tensors_(std::move(tensors)) {}
+        std::unordered_set<std::string> tensors,
+        std::vector<Tensor> recorded) :
+        list_(std::move(list)),
+        capacities_(std::move(capacities)),
+        tensors_(std::move(tensors)),
+        recorded_(std::move(recorded)) {}
 
     tt::tt_metal::experimental::CommandList list_;
     std::unordered_map<std::string, uint32_t> capacities_;
     std::unordered_set<std::string> tensors_;
+    // Holding the tensors keeps their buffers allocated, so dropping the caller's handles cannot hand the memory the
+    // list replays over to a new allocation. A forced deallocate still frees them. Recorded tensors stay held after a
+    // patch replaces them; a patched tensor is held until the next patch of its name.
+    std::vector<Tensor> recorded_;
+    std::unordered_map<std::string, Tensor> patched_;
 };
 
 // Records device operations without dispatching them. Each record() call compiles on a program-cache miss and reuses
 // the cached program on a hit, exactly like launch(). Only Metal 2.0 (ProgramSpec) programs can be recorded. The
-// list replays the raw addresses of the recorded tensors, so the caller keeps inputs and outputs alive.
+// list holds every tensor it was recorded or patched with, so the caller may drop its handles.
 class CommandListCapture {
 public:
     explicit CommandListCapture(ttnn::MeshDevice& device) : builder_(device) {}
@@ -191,17 +205,21 @@ public:
                 tensors_.insert(list_name);
             }
         }
+        recorded_.insert(recorded_.end(), input_tensors.begin(), input_tensors.end());
+        ttsl::reflection::visit_object_of_type<Tensor>([this](const Tensor& t) { recorded_.push_back(t); }, outputs);
         return outputs;
     }
 
     CapturedCommandList build(uint8_t cq_id = 0) const {
-        return CapturedCommandList(builder_.build(builder_.device().mesh_command_queue(cq_id)), capacities_, tensors_);
+        return CapturedCommandList(
+            builder_.build(builder_.device().mesh_command_queue(cq_id)), capacities_, tensors_, recorded_);
     }
 
 private:
     tt::tt_metal::experimental::CommandListBuilder builder_;
     std::unordered_map<std::string, uint32_t> capacities_;
     std::unordered_set<std::string> tensors_;
+    std::vector<Tensor> recorded_;
 };
 
 }  // namespace ttnn::experimental
