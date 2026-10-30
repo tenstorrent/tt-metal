@@ -183,6 +183,13 @@ _WH_BH_EARLY_CONVERSION = {
     DataFormat.Bfp2_b: (E8M6_MANT_BITS, False),
 }
 
+# The multiplier's phase split, as (srcA, srcB) mantissa bits per phase, with
+# srcA reaching only 9 of the 10 the register holds. That dropped bit is why no
+# fidelity here is exact, unlike Quasar, where all four phases rebuild the
+# operands. Public in the ISA documentation for the src registers.
+_WH_BH_MANTISSA_SPLIT = (4, 6)
+_WH_BH_MULTIPLIER_SRCA_BITS = 9
+
 _WORMHOLE_L1 = L1Support(
     name="Wormhole",
     formats=BLOCK_FLOAT_FORMATS
@@ -218,7 +225,11 @@ class WormholeArch(ArchGolden):
     # Deliberately unset. The evidence for ties away from zero covers the
     # matmul path, not the add and subtract one modelled here, and ties to
     # even is no safer a guess. Unset means a write landing on a tie warns.
-    fpu = Fpu(_WORMHOLE_L1)
+    fpu = Fpu(
+        _WORMHOLE_L1,
+        mantissa_split=_WH_BH_MANTISSA_SPLIT,
+        multiplier_srcA_bits=_WH_BH_MULTIPLIER_SRCA_BITS,
+    )
     pack = Pack(_WORMHOLE_L1, early_conversion=_WH_BH_EARLY_CONVERSION)
 
 
@@ -250,7 +261,12 @@ class BlackholeArch(ArchGolden):
     # A 16-bit Dest write rounds ties away from zero here, not to even.
     # Measured on a card: Float16_b elwadd and elwsub match on 8192/8192 that
     # way, against 1292 and 876 wrong with ties to even.
-    fpu = Fpu(_BLACKHOLE_L1, dest_ties_away=True)
+    fpu = Fpu(
+        _BLACKHOLE_L1,
+        mantissa_split=_WH_BH_MANTISSA_SPLIT,
+        multiplier_srcA_bits=_WH_BH_MULTIPLIER_SRCA_BITS,
+        dest_ties_away=True,
+    )
     # The packer truncates these on the card where the stimuli codecs round.
     # The three block floats come along because they leave by the same
     # conversion: their lattice is a shared block exponent rather than a
