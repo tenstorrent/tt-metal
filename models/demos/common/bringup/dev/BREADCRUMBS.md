@@ -2424,3 +2424,12 @@ a state over its limit with a waiver `state.<name>` is printed WAIVED with the r
 `<metric>_waived = 1`, which core/gate.py already reports as WAIVED; every other state, and the same state without a
 waiver, still fails. Limits unchanged. Selftest: test_e2e_limits.py::
 test_a_state_over_its_limit_passes_only_with_its_owner_waiver_and_is_reported.
+
+## F228: an A/B side whose run did not finish is never reused (DeepSeek-V4.1 P.16, 2026-10-30)
+
+The P.16 'on' side was SIGKILLed at model load (host RAM, rc 1, no metric); `decide --rerun` then reused it as "same
+code and switch" (the stamp matched) and the report showed nothing for the change. Fix: `ab_measure` reuses a kept run
+only when `ab_finished(result)`: it passed, or it recorded a measurement or a failed check; a run killed before any
+test ran is measured again, the finished side stays reused. (The 09:55 "F229" was not a bug: the second resume
+correctly waited, the rerun decision having been consumed by the first.) Selftest: test_perf_ab.py::
+test_a_side_killed_before_any_test_is_measured_again_on_rerun.

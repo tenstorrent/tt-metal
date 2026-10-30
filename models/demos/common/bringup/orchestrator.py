@@ -500,6 +500,15 @@ class CommitPending(Exception):
         self.tid, self.text = tid, text
 
 
+def ab_finished(result: dict) -> bool:
+    """F228: a kept A/B run is reused only if it finished: it passed, or it recorded a measurement or a failed check.
+    A run killed before any test ran (DeepSeek-V4.1 P.16, 2026-10-30: the 'on' side SIGKILLed at model load, rc 1, no
+    metric) is run again by `decide --rerun`, never reused as 'same code and switch'."""
+    if result.get("rc") == 0 or result.get("checks"):
+        return True
+    return any(v is not None for k, v in result.items() if k not in ("rc", "limits", "checks"))
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -1644,7 +1653,7 @@ class Orchestrator:
                 continue
             stamp = {"code": code, "env": env, "cmd": cmd, "extra": extra}
             label = f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: {name}"
-            if (items.get(name) or {}).get("stamp") == stamp:
+            if (items.get(name) or {}).get("stamp") == stamp and ab_finished(items[name]["result"]):
                 out[name] = items[name]["result"]
                 self.echo(f"{label} reused (same code and switch)")
                 continue

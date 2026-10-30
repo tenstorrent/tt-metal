@@ -1118,3 +1118,7 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   device + host at 50k -> 55k and 500k -> 505k. Plan: baseline posprof 51200 + 512000 after P.16 commits (tag P16), merge
   the drop (merge-tree: 0 conflicts, no overlap with P.16's files), rebuild, box test, accuracy through the framework,
   posprof again (tag MOE), before/after table; revert if it loses.
+- 11:52 P.16 ACCEPTED by the overseer (owner delegation, clean win): quick A/B accuracy identical on every metric, gate
+  PASS; wall 315.1 on / 327.3 off (off from 09:32, under host-RAM pressure), spread 14.9 / 43.8. Committed 3e42e5211db.
+  Host RAM during the on side: MemAvailable >= ~300 GiB, unaccounted 3.9 GiB (no leak seen).
+- 11:53 profile P16 (tmux prof: series_tag.sh, POSITIONS 51200 512000): device, warm wall, host cProfile.
