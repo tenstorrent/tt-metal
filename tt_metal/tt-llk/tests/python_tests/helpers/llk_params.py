@@ -312,10 +312,26 @@ class MathOperation(Enum):
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
+    SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
     SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
     SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
     SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)
+    # The 8-bit quant entry points of quantization.h: uint8 / int8 output and int8 input.
+    # Named after the compute-API *_tile_init wrapper each one mirrors.
+    SfpuQuantUint8 = OpSpec("QUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuQuantInt8 = OpSpec("QUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantUint8 = OpSpec("REQUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8 = OpSpec("REQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8In = OpSpec("REQUANT_INT8_IN", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8InUint8Out = OpSpec(
+        "REQUANT_INT8_IN_UINT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuRequantInt8InInt8Out = OpSpec(
+        "REQUANT_INT8_IN_INT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuDequantInt8 = OpSpec("DEQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuFloatToInt32Positive = OpSpec("FLOAT_TO_INT32_POSITIVE", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.
@@ -452,6 +468,9 @@ class DestAccumulation(Enum):
         return str(self.value).lower()
 
 
+DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+
+
 class L1Accumulation(Enum):
     Yes = 1
     No = 0
@@ -523,13 +542,11 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
-class SfpuSrcsImpl(Enum):
-    LoadMacro = True
-    Sfpi = False
+class SfpuImpl(Enum):
+    """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
 
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
 
 
 class DstRoundingMode(Enum):
@@ -564,6 +581,14 @@ class MathFidelity(Enum):
         return f"ckernel::MathFidelity::{self.name}"
 
 
+ALL_MATH_FIDELITIES = [
+    MathFidelity.LoFi,
+    MathFidelity.HiFi2,
+    MathFidelity.HiFi3,
+    MathFidelity.HiFi4,
+]
+
+
 class DestSync(Enum):
     Half = "SyncHalf"
     Full = "SyncFull"
@@ -571,6 +596,30 @@ class DestSync(Enum):
     @property
     def cpp_enum_value(self):
         return f"DstSync::{self.value}"
+
+
+class CustomMmDestLayout(Enum):
+    """Where custom_mm puts its output tiles in DEST; the values of ckernel::CustomMmDestLayout."""
+
+    Default = 0
+    DefaultSplitAcc = 1
+    Dense = 2
+    DenseSplitAcc = 3
+    Compact = 4
+
+    @property
+    def split_acc(self):
+        return self in (
+            CustomMmDestLayout.DefaultSplitAcc,
+            CustomMmDestLayout.DenseSplitAcc,
+        )
+
+    @property
+    def tile_rows(self):
+        """DEST rows from one output tile to the next, as custom_mm_tile_rows."""
+        if self in (CustomMmDestLayout.Dense, CustomMmDestLayout.DenseSplitAcc):
+            return 32
+        return 16 if self == CustomMmDestLayout.Compact else 64
 
 
 class NarrowTile(Enum):
@@ -894,6 +943,7 @@ class TopKXLSortMode(Enum):
     Dispatch = 0
     Generic = 1
     EarlyExitK64 = 2
+    Columns = 3
 
 
 class VectorMode(Enum):

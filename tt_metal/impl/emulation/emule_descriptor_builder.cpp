@@ -37,6 +37,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id
 
@@ -414,11 +415,16 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             k.process_tensor_binding_handles([&kd](
                                                  const std::string& name,
                                                  uint32_t cta_off,
-                                                 uint32_t addr_crta_off,
+                                                 bool is_per_node,
+                                                 uint32_t addr_offset,
                                                  uint32_t /*num_rt*/,
                                                  const LLKMetadata& llk) {
+                TT_FATAL(
+                    !is_per_node,
+                    "Tensor binding '{}' is bound to a per-node tensor, which emulation does not support yet",
+                    name);
                 // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
-                kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
+                kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_offset, serialize_llk_metadata(llk)});
             });
             k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
                 kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
@@ -432,6 +438,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
             });
             kd.bindings.crta_vararg_offset = k.get_crta_layout().vararg_section_offset;
+            k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
+                kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
+            });
+            kd.bindings.compile_time_vararg_count = k.get_compile_time_vararg_count();
             for (const auto& r : k.core_range_set().ranges()) {
                 kd.core_ranges.push_back(
                     {static_cast<uint32_t>(r.start_coord.x),

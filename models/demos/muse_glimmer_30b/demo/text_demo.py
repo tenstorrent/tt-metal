@@ -27,7 +27,7 @@ _MAX_NEW_TOKENS = 128
 _MAX_SEQ_LEN = 4096
 _TOP_P = {"temperature": 1.0, "top_p": 0.95, "top_k": 32}
 _MAX_CONTEXT = 131072
-_SAMPLE_PROMPTS = os.path.join(os.path.dirname(__file__), "..", "..", "..", "tt_transformers", "demo", "sample_prompts")
+_SAMPLE_PROMPTS = os.path.join(os.path.dirname(__file__), "..", "..", "..", "ttt_compat", "demo", "sample_prompts")
 # Same per-ISL inputs as the Gemma4 demo: nominal ISL -> tt_transformers sample prompt file.
 _ISL_PROMPTS = {
     128: "input_data_questions_prefill_128.json",

@@ -490,7 +490,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         if (!used_directions.insert(direction.value()).second) {
             continue;
         }
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, peer_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh_device, src_fabric_node_id, peer_node);
         TT_FATAL(
             !links.empty(),
             "No forwarding links from attn_res_gather_softmax source {} to peer {}",

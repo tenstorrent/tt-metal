@@ -74,7 +74,7 @@ auto compute_kernel = CreateKernel(
         .compile_args = compute_args,
         .defines = compute_defines});
 ```
-This will allow `cb_id` to be unpacked directly into dest without going through the truncation of moving through srcA/B when `copy_tile()` is invoked on that CB (`copy_tile_init(cb_id)` must be called before `copy_tile()`).  <span style="color: red;">Note that this means that `cb_id` can not be used in operations that use the srcA/B registers (e.g. `add_tiles()`).</span> The results must be copied to a CB that is able to use srcA/B operations.
+This will allow `cb_id` to be unpacked directly into dest without going through the truncation of moving through srcA/B when `copy_tile()` is invoked on that CB (`copy_init(cb_id)` must be called before `copy_tile()`).  <span style="color: red;">Note that this means that `cb_id` can not be used in operations that use the srcA/B registers (e.g. `add_tiles()`).</span> The results must be copied to a CB that is able to use srcA/B operations.
 
 Failing to configure the accumulator for FP32 accumulation can lead to large, noisy errors as seen in the following plots of 90th percentile ULP error vs. tensor width for LayerNorm. At ~W=2500, the compute kernel switches from one that doesn't use an intermediate accumulator to one that does.
 

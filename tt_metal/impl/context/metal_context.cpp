@@ -33,7 +33,7 @@
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
@@ -48,8 +48,8 @@
 #include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>
@@ -104,32 +104,12 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
 }  // namespace
 
 ContextId extract_context_id(const IDevice* device) {
-    // get_mesh_device is not const
-    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
-        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
-        return mesh_device->impl().get_context_id();
+    if (const auto* device_concrete = dynamic_cast<const Device*>(device)) {
+        return device_concrete->get_context_id();  // Its mesh's, without locking the mesh.
     }
-    // Must be a Device if not MeshDevice
-    const auto* device_concrete = dynamic_cast<const Device*>(device);
-    TT_ASSERT(device_concrete != nullptr, "Device is not a Device");
-    return device_concrete->get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
+    const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();  // get_mesh_device is not const
+    TT_ASSERT(mesh_device != nullptr, "Device is neither a Device nor part of a MeshDevice");
     return mesh_device->impl().get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device) {
-    ContextId context_id = DEFAULT_CONTEXT_ID;
-    if (mesh_device != nullptr) {
-        context_id = extract_context_id(mesh_device);
-    } else if (device != nullptr) {
-        context_id = extract_context_id(device);
-    } else {
-        TT_FATAL(false, "Both MeshDevice and Device are nullptr");
-    }
-    return context_id;
 }
 
 void MetalContext::initialize_device_manager(
@@ -260,7 +240,6 @@ void MetalContext::initialize(
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
-        rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
     // Emulated devices have no firmware for the watcher to poll; skip it. A null
@@ -369,7 +348,6 @@ void MetalContext::teardown() {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
-        rtoptions().set_disable_dma_ops(false);
     }
 
     if (!get_cluster().is_mock_or_emulated()) {

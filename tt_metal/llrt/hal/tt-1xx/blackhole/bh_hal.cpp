@@ -247,9 +247,7 @@ public:
     }
 
     std::string rvv_compile_flags(const Params& params) const override {
-        // Only the pack TRISC (TRISC2) fronts the Tensix vector unit on Blackhole.
-        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
-              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id == 2)) {
+        if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
         // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
@@ -528,6 +526,9 @@ void Hal::initialize_bh(
     this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
     this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
     this->supports_64_bit_pcie_addressing_ = true;
+    // The top 512 MiB of the PCIe tile's NoC address space is its SerDes, PCIe controller and NIU configuration
+    // (same document as above).
+    this->pcie_tile_local_noc_addr_base_ = 0xFFFF'FFFF'E000'0000ULL;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),

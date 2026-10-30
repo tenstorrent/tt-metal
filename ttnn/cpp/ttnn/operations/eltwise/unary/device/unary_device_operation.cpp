@@ -10,15 +10,20 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <bit>
+#include <cstdint>
+#include <variant>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
 namespace {
 
-// is_integer_dtype doesn't include INT8 as of now because no unary op has native INT8 implementation yet.
+// No unary op has a native INT8 implementation yet, so INT8 is accepted only by the dtype-agnostic
+// copy/typecast ops in unary_op_supports_integer_dtype.
 bool is_integer_dtype(DataType dtype) {
     return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
-           dtype == DataType::UINT8;
+           dtype == DataType::UINT8 || dtype == DataType::INT8;
 }
 
 bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
@@ -112,8 +117,21 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
 }  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
-    return ttsl::hash::hash_objects_with_default_seed(
-        op_chain,
+    // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0.
+    auto hash = ttsl::hash::hash_objects_with_default_seed(op_chain.size());
+    for (const auto& op : op_chain) {
+        hash = ttsl::hash::hash_objects(hash, op.type(), op.base.index());
+        std::visit(
+            [&hash](auto params) {
+                hash = ttsl::hash::hash_objects(hash, params.size());
+                for (const auto param : params) {
+                    hash = ttsl::hash::hash_objects(hash, std::bit_cast<std::uint32_t>(param));
+                }
+            },
+            op.get_params());
+    }
+    return ttsl::hash::hash_objects(
+        hash,
         output_dtype,
         memory_config,
         fp32_dest_acc_en,
@@ -139,8 +157,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
-        "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+        input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
