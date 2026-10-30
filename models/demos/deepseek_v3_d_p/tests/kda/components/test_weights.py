@@ -39,12 +39,17 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
         pytest.param((1, 8), 1, id="tp8-1d"),
         pytest.param((2, 4), 0, id="tp2-axis0"),
         pytest.param((2, 4), 1, id="tp4-axis1"),
+        # Local verification only: the full Galaxy mesh, run with the fabric2d device params below.
+        pytest.param((8, 4), 1, id="tp4-8x4"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [
+        pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="device_params0"),
+        pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_2D}, id="fabric2d"),
+    ],
     indirect=True,
 )
 # A bounded gate (Kimi-K3) folds the per-head decay scale into the decay projection and bias at load.

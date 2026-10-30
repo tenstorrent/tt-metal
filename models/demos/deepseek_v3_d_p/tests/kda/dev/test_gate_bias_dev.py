@@ -23,7 +23,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FirstLayerInput
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _L1_SMALL_SIZE
@@ -100,7 +100,15 @@ def _metrics(gate: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
             torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
-        )
+        ),
+        # Local verification only: Fabric2D on a Galaxy without the x wrap cabled.
+        pytest.param(
+            (8, 4),
+            1,
+            fabric2d_device_params(l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-fabric2d",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
