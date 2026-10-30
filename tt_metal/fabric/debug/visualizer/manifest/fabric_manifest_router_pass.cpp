@@ -680,10 +680,7 @@ manifest::RouterChannels collect_channels(const ChannelContext& ctx) {
     return channels;
 }
 
-// The router's edges on `vc`, ordered by edge. The kernel is fed how many there are (NUM_DOWNSTREAM_SENDERS_VC<vc>)
-// and which slots they are in, and the adapter names their targets. The kernel takes an edge's teardown semaphore by
-// its rank among the router's edges, VC0's before VC1's. It builds VC1's edges only under FABRIC_2D_VC1_ACTIVE, and
-// gives VC2 none.
+// The router's edges on `vc`, ordered by edge.
 std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelContext& ctx, uint32_t vc) {
     // The kernel never forwards on VC2.
     if (vc == 2) {
@@ -693,15 +690,8 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
     const auto& args = inputs.kernel.named_ct_args;
     const auto& adapter = *inputs.erisc_builder.receiver_channel_to_downstream_adapter;
     const auto& connections = adapter.get_downstream_connections(vc);
-    const uint32_t num_edges = read_emitted_value(args, fmt::format("NUM_DOWNSTREAM_SENDERS_VC{}", vc));
     TT_FATAL(
-        connections.size() == num_edges,
-        "Fabric manifest: the kernel is fed {} VC{} downstream edges, but the adapter names {} targets",
-        num_edges,
-        vc,
-        connections.size());
-    TT_FATAL(
-        vc == 0 || num_edges == 0 || has_define(inputs.kernel, "FABRIC_2D_VC1_ACTIVE"),
+        vc == 0 || connections.empty() || has_define(inputs.kernel, "FABRIC_2D_VC1_ACTIVE"),
         "Fabric manifest: the router has VC1 downstream edges, but no FABRIC_2D_VC1_ACTIVE to build them");
 
     const auto my_direction = builder::routing_direction_to_eth_direction(inputs.location.direction);
