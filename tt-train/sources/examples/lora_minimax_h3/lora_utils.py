@@ -16,7 +16,7 @@ import ttml
 from safetensors.numpy import load_file, save_file
 from ttml.modules import LoraConfig, LoraModel
 
-from ttml.models.minimax_h3 import H3Config, H3Inputs
+from ttml.models.minimax_h3 import H3Config, H3Inputs, upload
 from ttml.models.minimax_h3.weights import interleave_halves_per_shard, permute_qk_rows, unpermute_qk_rows
 
 LORA_WEIGHT_NAME = "pytorch_lora_weights.safetensors"
@@ -214,8 +214,8 @@ def clip_grad_norm(lora: LoraModel, max_norm: float) -> float:
 class Ema:
     """fp32 shadow copies of the LoRA weights on device; `decay = min(max_decay, (1 + step) / (10 + step))`.
 
-    The shadows must not be bf16: near decay 0.999 the update `(1 - decay) * (p - s)` is below half a bf16 ulp
-    of `s` for any realistic step-to-step change, so a bf16 shadow rounds back to itself and freezes."""
+    fp32 because bf16 shadows stop moving near decay 0.999; the lerp weight is a device tensor because a new
+    Python float every step would recompile the kernel."""
 
     def __init__(self, lora: LoraModel, max_decay: float) -> None:
         self.max_decay = max_decay
@@ -226,10 +226,10 @@ class Ema:
 
     def update(self, step: int) -> float:
         decay = min(self.max_decay, (1 + step) / (10 + step))
+        weight = upload(np.full((1, 1, 1, 1), 1.0 - decay), ttnn.DataType.FLOAT32).get_value()
         for name, tensor in named_lora(self._lora):
             s = self.shadows[name]
-            p = ttnn.typecast(tensor.get_value(), ttnn.DataType.FLOAT32)
-            self.shadows[name] = ttnn.add(s, ttnn.multiply(ttnn.subtract(p, s), 1.0 - decay))
+            ttnn.lerp(s, ttnn.typecast(tensor.get_value(), ttnn.DataType.FLOAT32), weight, output_tensor=s)
         return decay
 
 
