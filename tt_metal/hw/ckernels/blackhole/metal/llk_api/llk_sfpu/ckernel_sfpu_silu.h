@@ -22,16 +22,22 @@ inline void calculate_silu() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // silu(x) = x * sigmoid(x); for x <= -88.5f (including -inf), exp(-x)
-        // overflows to +inf so sigmoid(x) == 0.0f and (-inf) * 0.0f would yield NaN.
-        sfpi::vFloat result;
-        v_if(x <= -88.5f) {
-            result = 0.0f;
-        }
-        v_else {
-            result = x * _sfpu_sigmoid_prgm_<is_fp32_dest_acc_en>(x, c0, c1, c2, neg_ln2_hi, p0, p1);
-        }
-        v_endif;
+        // silu(x) = x * sigmoid(x). For x <= -88.5f (including -inf), exp(-x)
+        // overflows so sigmoid(x) underflows to 0 and the product would be
+        // (-inf) * 0.0f = NaN.
+        //
+        // Clamping the input is enough, because the NaN needs an *infinite*
+        // x: with x finite, x * 0.0f is -0.0f, not NaN. For x = -88.5f,
+        // sigmoid is ~3.7e-39 and the product is ~-3.3e-37, which rounds to
+        // zero in every destination format — and if exp underflows all the
+        // way to 0 the product is -0.0f, which is equally correct.
+        //
+        // Branchless on purpose: a v_if/v_else here measured ~130 cycles/tile
+        // slower on Blackhole and it costs a live value in an arm that, per
+        // the note above, only has LRegs for two of its three exp constants.
+        // sfpi::max is the same guard expm1_cw_clamped uses.
+        const sfpi::vFloat xc = sfpi::max(x, -88.5f);
+        sfpi::vFloat result = xc * _sfpu_sigmoid_prgm_<is_fp32_dest_acc_en>(xc, c0, c1, c2, neg_ln2_hi, p0, p1);
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
