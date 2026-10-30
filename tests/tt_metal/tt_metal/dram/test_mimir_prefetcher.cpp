@@ -2316,18 +2316,13 @@ void expect_t4_recovery(
     EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
 }
 
-// Trace capture and replay of prefetch requests needs fast dispatch, and Mimir runs slow dispatch only.
-TEST(MimirPrefetcher, MM7T5TraceCaptureReplay) { GTEST_SKIP(); }
-
 // The validator recomputes the page with a wrong seed: it reports MISMATCH and keeps acking, so the sender stops OK.
 // The hash is a bijection, so every word of the page differs, and the first word it read must be the tensor's: a sender
 // that delivered other bytes fails these checks too, not just the recovery's.
 TEST(MimirPrefetcher, MM7T4MismatchD2d2To0) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({2, 0}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({2, 0});
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
