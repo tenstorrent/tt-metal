@@ -6,7 +6,8 @@
 
 #include <enchantum/enchantum.hpp>
 #include <string>
-#include <string_view>
+
+#include "autograd/auto_context.hpp"
 
 namespace ttml::core {
 
@@ -16,26 +17,29 @@ bool is_float_dtype(ttnn::DataType dtype) {
     return dtype == ttnn::DataType::BFLOAT16 || dtype == ttnn::DataType::FLOAT32;
 }
 
-ttnn::DataType parse_param_dtype(std::string_view name) {
-    if (name == "bfloat16") {
-        return ttnn::DataType::BFLOAT16;
-    }
-    TT_FATAL(name == "float32", "precision.param_dtype must be \"bfloat16\" or \"float32\", got \"{}\"", name);
-    return ttnn::DataType::FLOAT32;
-}
-
-std::optional<ttnn::DataType> param_dtype_from_config(const YAML::Node& training_config) {
+// The dtype training_config.precision.<key> names: "bfloat16" or "float32", any other name is a TT_FATAL. Unset, or set
+// to null, gives nullopt.
+std::optional<ttnn::DataType> precision_dtype_from_config(const YAML::Node& training_config, const char* key) {
     if (!training_config || !training_config["precision"]) {
         return std::nullopt;
     }
-    const auto name = training_config["precision"]["param_dtype"];
-    if (!name || name.IsNull()) {
+    const auto node = training_config["precision"][key];
+    if (!node || node.IsNull()) {
         return std::nullopt;
     }
-    return parse_param_dtype(name.as<std::string>());
+    const auto name = node.as<std::string>();
+    if (name == "bfloat16") {
+        return ttnn::DataType::BFLOAT16;
+    }
+    TT_FATAL(name == "float32", "precision.{} must be \"bfloat16\" or \"float32\", got \"{}\"", key, name);
+    return ttnn::DataType::FLOAT32;
 }
 
 }  // namespace
+
+std::optional<ttnn::DataType> reduce_dtype_from_config(const YAML::Node& training_config) {
+    return precision_dtype_from_config(training_config, "reduce_dtype");
+}
 
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype) {
     TT_FATAL(
@@ -57,9 +61,14 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
-    const auto param_dtype = param_dtype_from_config(training_config);
+    // Both names are read before anything changes, so a wrong one leaves the parameters and the default as they were.
+    const auto param_dtype = precision_dtype_from_config(training_config, "param_dtype");
+    const auto reduce_dtype = reduce_dtype_from_config(training_config);
     if (param_dtype) {
         store_trainable_parameters_as(parameters, *param_dtype);
+    }
+    if (reduce_dtype) {
+        autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
     }
     return param_dtype;
 }

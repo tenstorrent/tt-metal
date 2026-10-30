@@ -58,6 +58,7 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `precision.param_dtype` | str | unset | Dtype trainable parameters are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; see [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
+| `precision.reduce_dtype` | str | unset | Dtype gradients are summed in when they are averaged across devices: `"bfloat16"` or `"float32"`. `"float32"` sums and averages each gradient in fp32 and casts the mean back to the gradient's dtype. It applies to the DDP sync (`ttml.sync_gradients`, `synchronize_gradients`) when the optimizer is created from the whole config, as `precision.param_dtype` does, and to FSDP when the runner passes it to `fully_shard(reduce_dtype=...)`, as `train.py` does. Unset leaves the default as it is (bf16 unless the script set it) |
 
 ### Example
 ```yaml

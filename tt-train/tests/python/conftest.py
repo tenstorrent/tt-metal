@@ -196,6 +196,18 @@ def fresh_device_mesh():
     return _fresh_device_mesh
 
 
+@pytest.fixture
+def strict_ccl_topology():
+    """Promote the CCL topology helper's refusals from warnings to errors (what CI runs), so a refusal surfaces as the
+    helper's reason rather than as a label mismatch."""
+    previous = ttnn.CONFIG.strict_ccl_topology
+    ttnn.CONFIG.strict_ccl_topology = True
+    try:
+        yield
+    finally:
+        ttnn.CONFIG.strict_ccl_topology = previous
+
+
 # ---------------------------------------------------------------------------
 # Shared [1, 2] tensor-parallel mesh
 # ---------------------------------------------------------------------------
@@ -230,8 +242,8 @@ def tp_mesh():
     with _fresh_device_mesh(TP_MESH_SHAPE, ("dp", "tp"), what="tp") as mesh:
         ctx = ttml.autograd.AutoContext.get_instance()
         if ctx.is_parallelism_context_initialized():
-            # ParallelismContext is a one-shot singleton with no reset hook, so an
-            # earlier module's may still be installed. It is only usable here if it
+            # close_device clears the ParallelismContext, so one is only installed here
+            # if something initialized it on this mesh already. It is only usable if it
             # describes this same shape -- reusing a mismatched one (a dp-enabled GRPO
             # context, say) silently shards the model for the wrong device count
             # instead of failing.
@@ -240,7 +252,7 @@ def tp_mesh():
             if actual != (dp_expected, tp_expected):
                 raise RuntimeError(
                     f"this process already installed a ParallelismContext for DP={actual[0]}, "
-                    f"TP={actual[1]} and it cannot be reset; needed DP={dp_expected}, TP={tp_expected}"
+                    f"TP={actual[1]} on the open mesh; needed DP={dp_expected}, TP={tp_expected}"
                 )
         else:
             ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))

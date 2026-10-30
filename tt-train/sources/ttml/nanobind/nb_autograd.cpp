@@ -340,6 +340,18 @@ void py_module(nb::module_& m) {
             "is_parallelism_context_initialized",
             &AutoContext::is_parallelism_context_initialized,
             "Check if parallelism context has been initialized");
+
+        // Gradient sync default (training_config.precision.reduce_dtype)
+        py_auto_context.def(
+            "set_gradient_reduce_dtype",
+            &AutoContext::set_gradient_reduce_dtype,
+            nb::arg("dtype").none(),
+            "Set the dtype ttml.sync_gradients and synchronize_gradients sum in when a call passes none: BFLOAT16, "
+            "FLOAT32, or None for each gradient's own dtype. apply_precision_config sets it from the config.");
+        py_auto_context.def(
+            "get_gradient_reduce_dtype",
+            &AutoContext::get_gradient_reduce_dtype,
+            "The dtype the gradient syncs sum in when a call passes none, or None.");
     }
 
     {

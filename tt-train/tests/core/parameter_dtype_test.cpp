@@ -123,3 +123,43 @@ TEST_F(ParameterDtypeTest, RejectsDtypesOtherThanBf16AndFp32) {
         serialization::NamedParameters{{"parameter", parameter}}, ttnn::DataType::UINT32));
     EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::BFLOAT16);
 }
+
+// precision.reduce_dtype takes the same two names; unset or null means "sum as before".
+TEST_F(ParameterDtypeTest, ReadsReduceDtypeFromTheTrainingConfig) {
+    const auto read = [](const char* training_config) {
+        return core::reduce_dtype_from_config(YAML::Load(training_config));
+    };
+    EXPECT_EQ(read("precision: {reduce_dtype: float32}"), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(read("precision: {reduce_dtype: bfloat16}"), ttnn::DataType::BFLOAT16);
+    EXPECT_ANY_THROW(read("precision: {reduce_dtype: float16}"));
+    EXPECT_EQ(read("seed: 5489"), std::nullopt);
+    EXPECT_EQ(read("precision: {param_dtype: float32}"), std::nullopt);
+    EXPECT_EQ(read("precision: {reduce_dtype: ~}"), std::nullopt);
+}
+
+// apply_precision_config sets the context's gradient sync default when the config names one and leaves it otherwise,
+// and closing the device clears it.
+TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
+    const auto apply = [](const char* training_config) {
+        return core::apply_precision_config(YAML::Load(training_config), serialization::NamedParameters{});
+    };
+    (void)apply("precision: {reduce_dtype: float32}");
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
+
+    // A config without the key, or with it null, keeps the default, also one set by hand.
+    (void)apply("precision: {param_dtype: bfloat16}");
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32);
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::BFLOAT16);
+    (void)apply("precision: {reduce_dtype: ~}");
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
+
+    // A wrong name changes nothing.
+    EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float32, param_dtype: float16}"));
+    EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float16}"));
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_ANY_THROW(autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::UINT32));
+
+    autograd::ctx().close_device();
+    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
+    autograd::ctx().open_device();
+}

@@ -82,6 +82,9 @@ void AutoContext::close_device() {
     // from this one would point at addresses the next mesh hands out to other buffers.
     m_ccl_resources.reset();
     m_device_constants.clear();
+    m_gradient_reduce_dtype = std::nullopt;
+    // The parallelism context describes this mesh's axes; the next mesh initializes its own.
+    m_parallelism_context.reset();
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for
@@ -248,6 +251,18 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
         throw std::runtime_error("ParallelismContext is already initialized.");
     }
     m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
+}
+
+void AutoContext::set_gradient_reduce_dtype(std::optional<ttnn::DataType> dtype) {
+    TT_FATAL(
+        !dtype.has_value() || *dtype == ttnn::DataType::BFLOAT16 || *dtype == ttnn::DataType::FLOAT32,
+        "The gradient reduce dtype must be BFLOAT16 or FLOAT32, got {}",
+        *dtype);
+    m_gradient_reduce_dtype = dtype;
+}
+
+std::optional<ttnn::DataType> AutoContext::get_gradient_reduce_dtype() const {
+    return m_gradient_reduce_dtype;
 }
 
 const uint32_t ParallelismContext::get_ddp_size() const {
