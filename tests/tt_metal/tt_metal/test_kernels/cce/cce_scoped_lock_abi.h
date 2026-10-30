@@ -6,12 +6,14 @@
 
 #include <stdint.h>
 
+#include "cce_test_status_abi.h"
+
 // cce_scoped_lock_{producer,consumer} kernel ABI. Both kernels and the host (dram/test_mimir_dm_scoped_lock.cpp)
 // include it. Args, modes, codes, polls and status words are append-only: a later stage adds entries after the last one
 // and never renumbers.
 namespace cce_scoped_lock_abi {
 
-inline constexpr uint32_t kLineBytes = 64;
+using cce_test_status_abi::kLineBytes;
 inline constexpr uint32_t kWordsPerLine = kLineBytes / sizeof(uint32_t);
 
 // The probe region is kNumLines lines of TL1; the first word of each line is its probe word. The host seeds line l's
@@ -81,13 +83,15 @@ inline constexpr uint32_t kResultWarm = 0, kResultCached = 1, kResultUncached = 
 // hart's wait read. On a data timeout the mismatch words describe the last pass. The consumer has no data poll and
 // writes 0 to kStatusPollCycles and the mismatch words, except in kModeRingWrap and kModeNonSnoopingProducer, where
 // they describe its own check. kStatusRounds counts kModeRingWrap's completed rounds.
-inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusFlags = 2, kStatusWaitCycles = 3,
-                          kStatusPollCycles = 4, kStatusLastPoll = 5, kStatusLastPollReady = 6, kStatusFlagObserved = 7,
-                          kStatusMismatchedWords = 8, kStatusFirstMismatchWord = 9, kStatusObserved = 10,
-                          kStatusExpected = 11, kStatusRounds = 12, kStatusWords = 13;
+using cce_test_status_abi::kStatusCode;
+using cce_test_status_abi::kStatusMagic;
+inline constexpr uint32_t kStatusFlags = 2, kStatusWaitCycles = 3, kStatusPollCycles = 4, kStatusLastPoll = 5,
+                          kStatusLastPollReady = 6, kStatusFlagObserved = 7, kStatusMismatchedWords = 8,
+                          kStatusFirstMismatchWord = 9, kStatusObserved = 10, kStatusExpected = 11, kStatusRounds = 12,
+                          kStatusWords = 13;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
-inline constexpr uint32_t kProducerDoneMagic = 0x5C0FE0DEu, kConsumerDoneMagic = 0x5C0C50DEu,
-                          kStatusPoison = 0xBADD0E00u;
+inline constexpr uint32_t kProducerDoneMagic = 0x5C0FE0DEu, kConsumerDoneMagic = 0x5C0C50DEu;
+using cce_test_status_abi::kStatusPoison;
 inline constexpr uint32_t kFlagPeerSignalled = 1u << 0, kFlagLanded = 1u << 1, kFlagLandedAtFirstRead = 1u << 2;
 // kPollPeer: the wait for the other hart's flag. kPollData: the producer's poll of the locked lines (kModeRingWrap: the
 // slot) through the uncached alias after the release flush (kModeFlushOnRelease, kModeMultiConsumer, kModeRingWrap),

@@ -6,12 +6,14 @@
 
 #include <stdint.h>
 
+#include "cce_test_status_abi.h"
+
 // Kernel ABI for the MM-7 GlobalCircularBuffer test kernels: the smoke sender and the discard and validator
 // receivers. The kernels, dram/mimir_prefetcher_common.hpp, dram/test_mimir_prefetcher.cpp and dram/test_mimir_trid.cpp
 // include it.
 namespace cce_gcb_receiver_abi {
 
-inline constexpr uint32_t kLineBytes = 64;
+using cce_test_status_abi::kLineBytes;
 
 // Runtime args, the same layout for every kernel. kArgGcbAddr is the GCB's config page on a receiver and its sender
 // state block on the sender. The budget is rdcycle cycles per wait, 0 = infinite. kArgSeed is unused by the discard
@@ -44,12 +46,14 @@ inline constexpr uint32_t kCommandLineOffset = 0, kStatusLineOffset = kLineBytes
                           kBlockBytes = 3 * kLineBytes;
 inline constexpr uint32_t kCommandRun = 0, kCommandStop = 0x5709u;
 
-inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusRequestsDone = 2, kStatusPagesDone = 3,
-                          kStatusMismatchedWords = 4, kStatusFirstMismatchRequest = 5, kStatusFirstMismatchPage = 6,
-                          kStatusFirstMismatchWord = 7, kStatusObserved = 8, kStatusExpected = 9,
-                          kStatusWaitReceiver = 10, kStatusWaitPagesSent = 11, kStatusWaitPagesAcked = 12,
-                          kStatusRechecked = 13, kStatusWords = 14;
-inline constexpr uint32_t kDoneMagic = 0x6CB0D0E5u, kStatusPoison = 0xBADD0E00u;
+using cce_test_status_abi::kStatusCode;
+using cce_test_status_abi::kStatusMagic;
+inline constexpr uint32_t kStatusRequestsDone = 2, kStatusPagesDone = 3, kStatusMismatchedWords = 4,
+                          kStatusFirstMismatchRequest = 5, kStatusFirstMismatchPage = 6, kStatusFirstMismatchWord = 7,
+                          kStatusObserved = 8, kStatusExpected = 9, kStatusWaitReceiver = 10, kStatusWaitPagesSent = 11,
+                          kStatusWaitPagesAcked = 12, kStatusRechecked = 13, kStatusWords = 14;
+inline constexpr uint32_t kDoneMagic = 0x6CB0D0E5u;
+using cce_test_status_abi::kStatusPoison;
 
 // kCodeCreditTimeout: a sender's free-space wait or a receiver's page wait used its budget; the sender then records
 // the short receiver's table slot and its pages_sent and pages_acked in the kStatusWait* words. kCodeDrainTimeout: the

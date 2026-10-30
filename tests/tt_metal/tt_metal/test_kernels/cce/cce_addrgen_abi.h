@@ -6,11 +6,13 @@
 
 #include <stdint.h>
 
+#include "cce_test_status_abi.h"
+
 // cce_addrgen kernel ABI. The kernel (cce_addrgen.cpp) and the host (dram/test_mimir_dm_addrgen.cpp) both include it.
 // Args, modes, patterns and codes are append-only: a later stage adds fields after the last one and never renumbers.
 namespace cce_addrgen_abi {
 
-inline constexpr uint32_t kLineBytes = 64;
+using cce_test_status_abi::kLineBytes;
 
 // Runtime args. kArgStatusOffset and kArgResultOffset are 64 B aligned offsets in the kernel's own TL1, on separate
 // lines. kArgSrcStrideEnable / kArgDestStrideEnable select whether that side programs its loops (upstream's
@@ -94,9 +96,12 @@ inline constexpr PatternSpec kPatterns[kNumPatterns] = {
 
 // Status line, written once at exit: every field, `fence w, w`, then the magic. kStatusPopCycles is the rdcycle count
 // of the pops.
-inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusPopCycles = 2, kStatusWords = 3;
+using cce_test_status_abi::kStatusCode;
+using cce_test_status_abi::kStatusMagic;
+inline constexpr uint32_t kStatusPopCycles = 2, kStatusWords = 3;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
-inline constexpr uint32_t kDoneMagic = 0xADD6E0DEu, kStatusPoison = 0xBADD0E00u;
+inline constexpr uint32_t kDoneMagic = 0xADD6E0DEu;
+using cce_test_status_abi::kStatusPoison;
 
 inline constexpr uint32_t kCodeDone = 1, kCodeBadArgs = 2;
 

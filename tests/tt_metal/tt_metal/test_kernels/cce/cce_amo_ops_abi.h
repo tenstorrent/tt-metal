@@ -6,12 +6,14 @@
 
 #include <stdint.h>
 
+#include "cce_test_status_abi.h"
+
 // cce_amo_ops kernel ABI. The kernel (cce_amo_ops.cpp) and the host (dram/test_mimir_atomics.cpp) both include it.
 // Args, modes, codes and status words are append-only: a later stage adds entries after the last one and never
 // renumbers.
 namespace cce_amo_ops_abi {
 
-inline constexpr uint32_t kLineBytes = 64;
+using cce_test_status_abi::kLineBytes;
 inline constexpr uint32_t kMaxParticipants = 8;
 
 // Runtime args. kArgStatusOffset is a 64 B aligned offset in the kernel's own TL1. kArgTargetOffset is a 64 B aligned
@@ -214,13 +216,15 @@ static_assert(kStormResultWords * 4 <= kLineBytes);
 // attempts, kStatusMaxRetries is the most attempts one LR/SC increment took. kStatusPeersSeen counts the flags the
 // last wait saw set. kStatusCycles is the rdcycle count of the operations. kStatusReturnedLo to kStatusFirstMismatch
 // are described with the modes that set them.
-inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusAmoFinal = 2, kStatusLrScFinal = 3,
-                          kStatusAmoReturnSum = 4, kStatusLrScReturnSum = 5, kStatusScFailures = 6,
-                          kStatusMaxRetries = 7, kStatusCycles = 8, kStatusPeersSeen = 9, kStatusReturnedLo = 10,
-                          kStatusObservedFirst = 12, kStatusObservedSecond = 13, kStatusMismatches = 14,
-                          kStatusFirstMismatch = 15, kStatusWords = 16;
+using cce_test_status_abi::kStatusCode;
+using cce_test_status_abi::kStatusMagic;
+inline constexpr uint32_t kStatusAmoFinal = 2, kStatusLrScFinal = 3, kStatusAmoReturnSum = 4, kStatusLrScReturnSum = 5,
+                          kStatusScFailures = 6, kStatusMaxRetries = 7, kStatusCycles = 8, kStatusPeersSeen = 9,
+                          kStatusReturnedLo = 10, kStatusObservedFirst = 12, kStatusObservedSecond = 13,
+                          kStatusMismatches = 14, kStatusFirstMismatch = 15, kStatusWords = 16;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
-inline constexpr uint32_t kDoneMagic = 0xA70D0DE0u, kStatusPoison = 0xBADD0E00u;
+inline constexpr uint32_t kDoneMagic = 0xA70D0DE0u;
+using cce_test_status_abi::kStatusPoison;
 
 // kCodeDone: every wait succeeded and every LR/SC increment stored. Otherwise the code names the first failure.
 // kCodeReadBackTimeout: kModeItnWriter's data word never read back as written. kCodeBudgetExpired: the launch's
