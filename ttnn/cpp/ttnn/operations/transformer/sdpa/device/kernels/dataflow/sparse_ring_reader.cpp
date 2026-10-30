@@ -979,9 +979,9 @@ void kernel_main() {
                         TensorTileShape(1, NH, mask_n_blocks_pad / 32, vDHt));
                     SPARSE_ZONE("RD_RES_POOLED");
                     if constexpr (plan_rec_base != 0) {
-                        // The row reads below fill the whole scratch, records included: take the page back first,
-                        // which waits until compute has popped (read) this iteration's plan. Short iterations
-                        // can push every piece before compute starts. The next iteration's reserve returns it.
+                        // The row reads below fill the whole scratch, records included: work in the free plan page
+                        // (compute holds this iteration's page, reading its records in place, until the iteration
+                        // ends). The next iteration's reserve returns the same page.
                         cb_plan.reserve_back(1);
                         scratch = cb_plan.get_write_ptr() + 64;
                     }

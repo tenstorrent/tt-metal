@@ -13,6 +13,7 @@
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
+#include "internal/tt-1xx/cache.h"  // invalidate_l1_cache on every compute thread (plan records read from L1)
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
@@ -203,51 +204,45 @@ static __attribute__((noinline, noclone)) void res_pack_units(
     }
 }
 
-// Members sorted by width (stable insertion sort of an index permutation), then stepped in groups of at most
-// kQkCap scratch tiles (Sq_chunk_t x width per member).
-template <uint32_t kSlots, uint32_t kBlocksPerPiece, uint32_t Sq_chunk_t, uint32_t kQkCap, typename StepFn>
+// Members sorted by width (stable insertion sort of the member rows, in place: the tables are the caller's one
+// shared set, so no copy lands on the compute threads' stack), then stepped in groups of at most kQkCap scratch tiles
+// (Sq_chunk_t x width per member).
+template <uint32_t kRunStride, uint32_t Sq_chunk_t, uint32_t kQkCap, typename StepFn>
 static __attribute__((noinline, noclone)) void res_run_groups(
     StepFn& run_step,
-    const uint8_t* members,
-    const uint8_t* widths,
-    const uint8_t* mruns,
-    const uint8_t* mrunws,
-    const uint8_t* mnruns,
+    uint8_t* members,
+    uint8_t* widths,
+    uint8_t* runs,
+    uint8_t* runws,
+    uint8_t* nruns,
     const uint32_t n,
     const bool apply_col_bias) {
-    uint8_t order[kSlots];
-    for (uint32_t i = 0; i < n; ++i) {
-        uint32_t j = i;
-        while (j > 0 && widths[order[j - 1]] > widths[i]) {
-            order[j] = order[j - 1];
-            --j;
-        }
-        order[j] = static_cast<uint8_t>(i);
-    }
-    uint8_t sg[kSlots];
-    uint8_t sruns[kSlots * kBlocksPerPiece];
-    uint8_t srunws[kSlots * kBlocksPerPiece];
-    uint8_t snr[kSlots];
-    for (uint32_t i = 0; i < n; ++i) {
-        const uint32_t m = order[i];
-        sg[i] = members[m];
-        snr[i] = mnruns[m];
-        for (uint32_t s = 0; s < mnruns[m]; ++s) {
-            sruns[i * kBlocksPerPiece + s] = mruns[m * kBlocksPerPiece + s];
-            srunws[i * kBlocksPerPiece + s] = mrunws[m * kBlocksPerPiece + s];
+    const auto swap8 = [](uint8_t* t, uint32_t a, uint32_t b) {
+        const uint8_t x = t[a];
+        t[a] = t[b];
+        t[b] = x;
+    };
+    for (uint32_t i = 1; i < n; ++i) {
+        for (uint32_t j = i; j > 0 && widths[j - 1] > widths[j]; --j) {
+            swap8(members, j - 1, j);
+            swap8(widths, j - 1, j);
+            swap8(nruns, j - 1, j);
+            for (uint32_t s = 0; s < kRunStride; ++s) {
+                swap8(runs, (j - 1) * kRunStride + s, j * kRunStride + s);
+                swap8(runws, (j - 1) * kRunStride + s, j * kRunStride + s);
+            }
         }
     }
     uint32_t g0 = 0;
     while (g0 < n) {
         uint32_t g1 = g0;
         uint32_t tiles = 0;
-        while (g1 < n && tiles + Sq_chunk_t * widths[order[g1]] <= kQkCap) {
-            tiles += Sq_chunk_t * widths[order[g1]];
+        while (g1 < n && tiles + Sq_chunk_t * widths[g1] <= kQkCap) {
+            tiles += Sq_chunk_t * widths[g1];
             ++g1;
         }
         ASSERT(g1 > g0);  // one member always fits: Sq_chunk_t x Sk_chunk_t <= kQkCap
-        run_step(
-            sg + g0, g1 - g0, sruns + g0 * kBlocksPerPiece, srunws + g0 * kBlocksPerPiece, snr + g0, apply_col_bias);
+        run_step(members + g0, g1 - g0, runs + g0 * kRunStride, runws + g0 * kRunStride, nruns + g0, apply_col_bias);
         g0 = g1;
     }
 }
@@ -1123,50 +1118,51 @@ void sdpa_ring_resident(
     const uint32_t n_res = global_q_end - global_q_start;
     ASSERT(n_res <= resident_slots);
 
-    // Resident chunk i: head, kept-block words and the head chain's kept-piece union (plan words from the reader).
-    uint32_t res_head[resident_slots];
-    uint32_t res_blk[resident_slots][kBW];
-    uint32_t union_lo[resident_slots];
-    uint32_t union_hi[resident_slots];
-    [[maybe_unused]] uint32_t do_pooled = 0;
-    if constexpr (plan_rec_base != 0) {
-        // One plan page per ring iteration: chunk i's record [kBW block words][union lo, hi][do_pooled] at word
-        // rec_base + i * (kBW + 3). Popped once, early, so the reader can push the next iteration's plan while this
-        // iteration's pieces are still being computed.
-        constexpr uint32_t kRec = kBW + 3;
+    // Chunk i's plan record: [kBW kept-block words][union lo, hi][do_pooled]. With one plan page per ring iteration
+    // (plan_rec_base != 0) the records are read in place, from L1, for the whole iteration: the page is popped at the
+    // end of this call, and the plan CB holds two pages so the reader fills the next iteration's meanwhile. Copying
+    // them to the stack (kBW + 3 words per slot) overflowed the unpack and pack threads' stack, which shares 4 KB with
+    // their globals, at 14 slots. With a page per chunk (plan_rec_base == 0: a one-shard ring) each record is copied
+    // and its page popped at once.
+    constexpr uint32_t kRec = kBW + 3;
+    constexpr bool kPlanInL1 = plan_rec_base != 0;
+    [[maybe_unused]] uint32_t plan_copy[kPlanInL1 ? 1 : resident_slots * kRec];
+    [[maybe_unused]] const volatile uint32_t* plan_l1 = nullptr;
+    if constexpr (kPlanInL1) {
         CircularBuffer(cb_sparse_plan).wait_front(1);
-        for (uint32_t i = 0; i < n_res; ++i) {
-            const uint32_t flat = global_q_start + i;
-            res_head[i] = (flat / num_q_chunks) % NH;
-            const uint32_t r = plan_rec_base + i * kRec;
-            for (uint32_t w = 0; w < kBW; ++w) {
-                res_blk[i][w] = ckernel::read_tile_value(cb_sparse_plan, 0, r + w);
-            }
-            union_lo[i] = ckernel::read_tile_value(cb_sparse_plan, 0, r + kBW);
-            union_hi[i] = ckernel::read_tile_value(cb_sparse_plan, 0, r + kBW + 1);
-            do_pooled = ckernel::read_tile_value(cb_sparse_plan, 0, r + kBW + 2);
-        }
-        CircularBuffer(cb_sparse_plan).pop_front(1);
+        // UNPACK waited for the page and hands its address to MATH and PACK; every thread then reads it directly. The
+        // fence drops L1 cache lines a thread kept from the page's previous use (Blackhole's RISC L1 cache is not
+        // coherent with NoC writes).
+        plan_l1 =
+            reinterpret_cast<const volatile uint32_t*>(ckernel::get_tile_address(cb_sparse_plan, 0)) + plan_rec_base;
+        invalidate_l1_cache();
     } else {
         for (uint32_t i = 0; i < n_res; ++i) {
-            const uint32_t flat = global_q_start + i;
-            res_head[i] = (flat / num_q_chunks) % NH;
             CircularBuffer(cb_sparse_plan).wait_front(1);
-            for (uint32_t w = 0; w < kBW; ++w) {
-                res_blk[i][w] = ckernel::read_tile_value(cb_sparse_plan, 0, w);
+            for (uint32_t w = 0; w < kRec; ++w) {
+                plan_copy[i * kRec + w] = ckernel::read_tile_value(cb_sparse_plan, 0, w);
             }
-            union_lo[i] = ckernel::read_tile_value(cb_sparse_plan, 0, kBW);
-            union_hi[i] = ckernel::read_tile_value(cb_sparse_plan, 0, kBW + 1);
-            do_pooled = ckernel::read_tile_value(cb_sparse_plan, 0, kBW + 2);
             CircularBuffer(cb_sparse_plan).pop_front(1);
         }
     }
+    const auto plan_word = [&](uint32_t i, uint32_t w) -> uint32_t {
+        if constexpr (kPlanInL1) {
+            return plan_l1[i * kRec + w];
+        } else {
+            return plan_copy[i * kRec + w];
+        }
+    };
+    const auto res_head = [&](uint32_t i) -> uint32_t { return ((global_q_start + i) / num_q_chunks) % NH; };
+    const auto union_lo = [&](uint32_t i) -> uint32_t { return plan_word(i, kBW); };
+    const auto union_hi = [&](uint32_t i) -> uint32_t { return plan_word(i, kBW + 1); };
+    // The same in every record of the iteration.
+    [[maybe_unused]] const uint32_t do_pooled = n_res > 0 ? plan_word(0, kBW + 2) : 0u;
     const auto bit = [](uint32_t lo, uint32_t hi, uint32_t k) -> bool {
         return k < 32 ? ((lo >> k) & 1u) != 0 : ((hi >> (k - 32)) & 1u) != 0;
     };
     // Does resident chunk i keep local block b (of this ring iteration's shard)?
     const auto block_kept = [&](uint32_t i, uint32_t b) -> bool {
-        return b < kBW * 32 && ((res_blk[i][b >> 5] >> (b & 31)) & 1u) != 0;
+        return b < kBW * 32 && ((plan_word(i, b >> 5) >> (b & 31)) & 1u) != 0;
     };
     // Which resident chunks have state in their slot. Carried across ring iterations in initialized_slots: the slots
     // persist in L1 between calls.
@@ -1228,17 +1224,19 @@ void sdpa_ring_resident(
             initialized |= 1u << slots[g];
         }
     };
-    // Members sorted by width and stepped in groups of at most kQkCap scratch tiles (res_run_groups, outlined:
-    // reached from the piece loop and the pooled loop).
-    const auto run_groups = [&](const uint8_t* members,
-                                const uint8_t* widths,
-                                const uint8_t* mruns,
-                                const uint8_t* mrunws,
-                                const uint8_t* mnruns,
-                                const uint32_t n,
-                                const bool apply_col_bias) {
-        res_run_groups<resident_slots, kRunStride, Sq_chunk_t, kQkCap>(
-            run_step, members, widths, mruns, mrunws, mnruns, n, apply_col_bias);
+    // Member tables of the next step group: resident chunk index, kept width, run columns / widths (kRunStride per
+    // member) and run count. One set, shared by the piece loop and the pooled loop and sorted in place by
+    // res_run_groups: the stack holds no per-step or per-group copies (see the plan records above).
+    uint8_t m_chunk[resident_slots];
+    uint8_t m_width[resident_slots];
+    uint8_t m_cols[resident_slots * kRunStride];
+    uint8_t m_ws[resident_slots * kRunStride];
+    uint8_t m_nruns[resident_slots];
+    // The first n members sorted by width (in place) and stepped in groups of at most kQkCap scratch tiles
+    // (res_run_groups, outlined: reached from the piece loop and the pooled loop).
+    const auto run_groups = [&](const uint32_t n, const bool apply_col_bias) {
+        res_run_groups<kRunStride, Sq_chunk_t, kQkCap>(
+            run_step, m_chunk, m_width, m_cols, m_ws, m_nruns, n, apply_col_bias);
     };
     // One K/V entry, after its last step (or untouched: streamed for another chain member only). kv_pos is the K/V
     // CBs' read position in entries, carried across ring iterations and passes: a pair must not wrap the CB end,
@@ -1271,11 +1269,6 @@ void sdpa_ring_resident(
     // the step's columns (piece p's tile t is column p * Sk_chunk_t + t; adjacent kept blocks of one piece merged
     // into one run, never across pieces), stepped up to the scratch capacity; then the entries popped.
     const auto step_pieces = [&](uint32_t head_mask, const uint8_t* ks, uint32_t np) {
-        uint8_t group[resident_slots];
-        uint8_t gwidth[resident_slots];
-        uint8_t runs[resident_slots * kRunStride];
-        uint8_t runws[resident_slots * kRunStride];
-        uint8_t n_runs[resident_slots];
         uint32_t n_group = 0;
         uint32_t group_mask = 0;
         for (uint32_t i = 0; i < n_res; ++i) {
@@ -1293,10 +1286,10 @@ void sdpa_ring_resident(
                         // Kept blocks are full blocks: never in the padded tail of the piece.
                         ASSERT((j + 1) * kBlockTiles <= sk);
                         if (prev_kept) {
-                            runws[n_group * kRunStride + cnt - 1] += kBlockTiles;
+                            m_ws[n_group * kRunStride + cnt - 1] += kBlockTiles;
                         } else {
-                            runs[n_group * kRunStride + cnt] = static_cast<uint8_t>(p * Sk_chunk_t + j * kBlockTiles);
-                            runws[n_group * kRunStride + cnt] = kBlockTiles;
+                            m_cols[n_group * kRunStride + cnt] = static_cast<uint8_t>(p * Sk_chunk_t + j * kBlockTiles);
+                            m_ws[n_group * kRunStride + cnt] = kBlockTiles;
                             ++cnt;
                         }
                         width += kBlockTiles;
@@ -1307,9 +1300,9 @@ void sdpa_ring_resident(
             if (cnt == 0) {
                 continue;
             }
-            group[n_group] = static_cast<uint8_t>(i);
-            gwidth[n_group] = static_cast<uint8_t>(width);
-            n_runs[n_group] = static_cast<uint8_t>(cnt);
+            m_chunk[n_group] = static_cast<uint8_t>(i);
+            m_width[n_group] = static_cast<uint8_t>(width);
+            m_nruns[n_group] = static_cast<uint8_t>(cnt);
             ++n_group;
             group_mask |= 1u << i;
         }
@@ -1319,7 +1312,7 @@ void sdpa_ring_resident(
             ASSERT(ks[0] != 0 || group_mask == head_mask);
             ASSERT(ks[0] == 0 || (initialized & group_mask) == group_mask);
             step_entries = np;
-            run_groups(group, gwidth, runs, runws, n_runs, n_group, false);
+            run_groups(n_group, false);
             step_entries = 1;
         }
         for (uint32_t p = 0; p < np; ++p) {
@@ -1334,7 +1327,7 @@ void sdpa_ring_resident(
     // Local pieces of shard ring_id. Heads are interleaved per k in head order, exactly as the reader streams them.
     bool one_head = true;
     for (uint32_t i = 1; i < n_res; ++i) {
-        one_head = one_head && res_head[i] == res_head[0];
+        one_head = one_head && res_head(i) == res_head(0);
     }
     if (pair_steps && one_head && n_res > 0) {
         // One head, so the reader's entries are this head's streamed pieces in k order. Step them two at a time when
@@ -1343,7 +1336,7 @@ void sdpa_ring_resident(
         uint8_t ks[kMaxPieces];              // bytes: the compute threads' stack shares 4 KB with their globals
         uint32_t n_ks = 0;
         for (uint32_t k = 0; k < num_local_k_chunks && n_ks < kMaxPieces; ++k) {
-            if (piece_live(k) && bit(union_lo[0], union_hi[0], k)) {
+            if (piece_live(k) && bit(union_lo(0), union_hi(0), k)) {
                 ks[n_ks++] = static_cast<uint8_t>(k);
             }
         }
@@ -1368,12 +1361,12 @@ void sdpa_ring_resident(
                 }
                 uint32_t head_mask = 0;
                 for (uint32_t i = i0; i < n_res; ++i) {
-                    if (res_head[i] == res_head[i0]) {
+                    if (res_head(i) == res_head(i0)) {
                         head_mask |= 1u << i;
                     }
                 }
                 heads_done |= head_mask;
-                if (!bit(union_lo[i0], union_hi[i0], k)) {
+                if (!bit(union_lo(i0), union_hi(i0), k)) {
                     continue;  // nobody on this head's chain needs the piece: nothing was pushed
                 }
                 const uint8_t k8 = static_cast<uint8_t>(k);
@@ -1395,33 +1388,29 @@ void sdpa_ring_resident(
                 }
                 uint32_t head_mask = 0;
                 for (uint32_t i = i0; i < n_res; ++i) {
-                    if (res_head[i] == res_head[i0]) {
+                    if (res_head(i) == res_head(i0)) {
                         head_mask |= 1u << i;
                     }
                 }
                 heads_done |= head_mask;
-                uint8_t pgroup[resident_slots];
-                uint8_t pwidth[resident_slots];
-                uint8_t pcols[resident_slots * kRunStride];
-                uint8_t pws[resident_slots * kRunStride];
-                uint8_t pruns[resident_slots];
                 uint32_t n_p = 0;
                 for (uint32_t i = i0; i < n_res; ++i) {
                     if (((head_mask >> i) & 1u) == 0) {
                         continue;
                     }
-                    pgroup[n_p] = static_cast<uint8_t>(i);
-                    pcols[n_p * kRunStride] = 0;  // one run from column 0
-                    pruns[n_p] = 1;
+                    m_chunk[n_p] = static_cast<uint8_t>(i);
+                    m_cols[n_p * kRunStride] = 0;  // one run from column 0
+                    m_nruns[n_p] = 1;
                     ++n_p;
                 }
                 for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
                     const uint32_t active_width = (pc + 1 == pooled_chunks) ? pooled_last_tiles : Sk_chunk_t;
                     for (uint32_t g = 0; g < n_p; ++g) {
-                        pwidth[g] = static_cast<uint8_t>(active_width);
-                        pws[g * kRunStride] = static_cast<uint8_t>(active_width);
+                        m_width[g] = static_cast<uint8_t>(active_width);
+                        m_ws[g * kRunStride] = static_cast<uint8_t>(active_width);
                     }
-                    run_groups(pgroup, pwidth, pcols, pws, pruns, n_p, true);
+                    // Equal widths: the in-place sort keeps the members in Q-chunk order, the reader's bias-row order.
+                    run_groups(n_p, true);
                     pop_kv();
                 }
             }
@@ -1459,5 +1448,9 @@ void sdpa_ring_resident(
         } else {
             sdpa_cb_pop_front_out_of_line(cb_q_in, n_res * q_chunk_tiles);
         }
+    }
+    if constexpr (kPlanInL1) {
+        // The plan records were read in place for the whole iteration.
+        CircularBuffer(cb_sparse_plan).pop_front(1);
     }
 }
