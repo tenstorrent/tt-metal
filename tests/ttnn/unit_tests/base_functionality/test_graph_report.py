@@ -17,6 +17,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -60,6 +61,45 @@ def _make_report(
     if python_io is not None:
         report["python_io"] = python_io
     return report
+
+
+def _minimal_single_op_graph(op_name="ttnn.relu"):
+    """Graph with one top-level operation and nothing else."""
+    return [
+        {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+        {
+            "counter": 1,
+            "node_type": "function_start",
+            "params": {"name": op_name},
+            "connections": [],
+            "input_tensors": [],
+        },
+        {
+            "counter": 2,
+            "node_type": "function_end",
+            "params": {"name": op_name},
+            "connections": [],
+            "duration_ns": 100,
+        },
+        {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+    ]
+
+
+def _write_reports(report_dir, reports):
+    """Write (filename, report dict) pairs as JSON files into report_dir, creating it."""
+    report_dir.mkdir(parents=True, exist_ok=True)
+    for filename, report_dict in reports:
+        with open(report_dir / filename, "w") as f:
+            json.dump(report_dict, f)
+
+
+def _query_db(db_path, sql):
+    """Run one query against an imported DB and return all rows."""
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(sql).fetchall()
+    finally:
+        conn.close()
 
 
 def _import_to_db(report_dict, tmp_path):
@@ -428,42 +468,18 @@ class TestSubDeviceExecutionImport:
 class TestImportReportMultiFileOperationIds:
     """import_report over multiple JSON files: UNIQUE(operation_id, rank) and per-rank file stride."""
 
-    @staticmethod
-    def _minimal_single_op_graph(op_name="ttnn.relu"):
-        return [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": op_name},
-                "connections": [],
-                "input_tensors": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_end",
-                "params": {"name": op_name},
-                "connections": [],
-                "duration_ns": 100,
-            },
-            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
-        ]
-
     def _import_report_dir(self, reports, tmp_path):
         """Write JSON reports into a directory and run import_report on that directory."""
         report_dir = tmp_path / "reports_in"
-        report_dir.mkdir()
-        for filename, report_dict in reports:
-            with open(report_dir / filename, "w") as f:
-                json.dump(report_dict, f)
+        _write_reports(report_dir, reports)
         db_path = graph_report.import_report(report_dir, tmp_path / "output")
         conn = sqlite3.connect(db_path)
         return conn, conn.cursor()
 
     def test_same_numeric_operation_id_for_different_ranks(self, tmp_path):
         """Two captures with different ranks may both assign operation_id 1 (disambiguated by rank)."""
-        r0 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 0})
-        r1 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 1})
+        r0 = _make_report(_minimal_single_op_graph(), metadata={"rank": 0})
+        r1 = _make_report(_minimal_single_op_graph(), metadata={"rank": 1})
         conn, cursor = self._import_report_dir([("first.json", r0), ("second.json", r1)], tmp_path)
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (1, 1)]
@@ -471,8 +487,8 @@ class TestImportReportMultiFileOperationIds:
 
     def test_second_json_same_rank_shifts_operation_ids(self, tmp_path):
         """Two JSON files for the same rank: second file uses base_operation_id = stride (10000)."""
-        r_a = _make_report(self._minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
-        r_b = _make_report(self._minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
+        r_a = _make_report(_minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
+        r_b = _make_report(_minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
         conn, cursor = self._import_report_dir([("a.json", r_a), ("b.json", r_b)], tmp_path)
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY operation_id")
@@ -482,13 +498,300 @@ class TestImportReportMultiFileOperationIds:
 
     def test_mixed_multiple_files_per_rank_and_separate_ranks(self, tmp_path):
         """Rank 0: two files (ids 1 and 10001); rank 1: one file (id 1 again)."""
-        r0a = _make_report(self._minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
-        r0b = _make_report(self._minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
-        r1 = _make_report(self._minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
+        r0a = _make_report(_minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
+        r0b = _make_report(_minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
+        r1 = _make_report(_minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
         conn, cursor = self._import_report_dir([("a.json", r0a), ("b.json", r0b), ("c.json", r1)], tmp_path)
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
+
+
+def _rank_capture(rank, world_size, filename=None):
+    """(filename, report) for 0-based ``rank`` of ``world_size``, named as the pytest fixture names it by default."""
+    report = _make_report(_minimal_single_op_graph(), metadata={"rank": rank, "world_size": world_size})
+    return filename or graph_report._rank_capture_name(rank, world_size), report
+
+
+class TestImportReportRankCompleteness:
+    """import_report over graph_capture_<r>_of_<N>.json: every rank of one run, each exactly once.
+
+    Ranks here are 0-based distributed ranks, as in the capture metadata; file names number them from 1.
+    """
+
+    def test_all_ranks_present_imports_every_rank(self, tmp_path):
+        """With the python_io sidecars real runs write beside each capture, which must not count as captures."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir,
+            [
+                _rank_capture(0, 2),
+                _rank_capture(1, 2),
+                ("graph_capture_1_of_2.python_io.json", []),
+                ("graph_capture_2_of_2.python_io.json", []),
+            ],
+        )
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations ORDER BY rank") == [(0,), (1,)]
+
+    def test_missing_rank_raises_and_names_missing_file(self, tmp_path, expect_error):
+        """Ranks 1 and 3 aren't visible, as when their report directory is local to another host."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 4), _rank_capture(2, 4)])
+        with expect_error(ValueError, r"2 of 4 ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert "graph_capture_2_of_4.json, graph_capture_4_of_4.json" in str(excinfo.value)
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_missing_rank_leaves_an_existing_db_untouched(self, tmp_path, expect_error):
+        """A failed import must not pass off an earlier run's DB as its own, nor change it."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        before = db_path.read_bytes()
+        (report_dir / "graph_capture_2_of_2.json").unlink()
+        with expect_error(ValueError, r"1 of 2 ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    @pytest.mark.parametrize("unlisted", [0, 1, 2])
+    def test_missing_ranks_listed_are_capped(self, tmp_path, expect_error, unlisted):
+        """Missing names are listed up to the cap and counted past it, so a bogus world size in a file name can't
+        build a huge message."""
+        listed = graph_report._MAX_MISSING_CAPTURES_LISTED
+        world_size = 1 + listed + unlisted
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, world_size)])
+        with expect_error(ValueError, rf"{listed + unlisted} of {world_size} ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        message = str(excinfo.value)
+        assert message.count(f"_of_{world_size}.json") == listed
+        assert (f"and {unlisted} more" in message) == (unlisted > 0)
+
+    def test_mixed_world_sizes_raises(self, tmp_path, expect_error):
+        """A stale capture from an earlier run with a different world size is left in the directory."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2), _rank_capture(0, 4)])
+        with expect_error(ValueError, r"different world sizes \[2, 4\]"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    @pytest.mark.parametrize("stray_name", ["graph_capture_3_of_2.json", "graph_capture_0_of_2.json"])
+    def test_rank_outside_the_run_raises(self, tmp_path, expect_error, stray_name):
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2), _rank_capture(1, 2, stray_name)])
+        with expect_error(ValueError, rf"ranks outside 1\.\.2: {stray_name}"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    def test_rank_named_twice_raises(self, tmp_path, expect_error):
+        """graph_capture_01_of_2 and graph_capture_1_of_2 both name rank 0, which would otherwise import it twice."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir,
+            [_rank_capture(0, 2), _rank_capture(0, 2, "graph_capture_01_of_2.json"), _rank_capture(1, 2)],
+        )
+        with expect_error(
+            ValueError, r"same rank more than once: graph_capture_01_of_2\.json and graph_capture_1_of_2\.json"
+        ):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    @pytest.mark.parametrize(
+        "metadata_rank, metadata_world_size",
+        [(0, 2), (1, 4)],
+        ids=["rank_disagrees", "world_size_disagrees"],
+    )
+    def test_metadata_disagreeing_with_file_name_raises(
+        self, tmp_path, expect_error, metadata_rank, metadata_world_size
+    ):
+        """A capture copied or renamed into another rank's file name would otherwise be merged as that rank."""
+        report_dir = tmp_path / "reports_in"
+        copied = _make_report(
+            _minimal_single_op_graph(), metadata={"rank": metadata_rank, "world_size": metadata_world_size}
+        )
+        _write_reports(report_dir, [_rank_capture(0, 2), ("graph_capture_2_of_2.json", copied)])
+        expected_name = f"graph_capture_{metadata_rank + 1}_of_{metadata_world_size}\\.json"
+        with expect_error(
+            ValueError,
+            rf"graph_capture_2_of_2\.json holds the capture of {expected_name} according to its metadata "
+            rf"\(rank {metadata_rank} of world size {metadata_world_size}\)",
+        ):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_failure_during_the_import_leaves_an_existing_db_unchanged(self, tmp_path, expect_error):
+        """The mismatch is found after the import has opened the existing DB and imported the first capture into it;
+        nothing is committed, so the DB is left as it was, and the error says so."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        before = db_path.read_bytes()
+        copied = _make_report(_minimal_single_op_graph("ttnn.other"), metadata={"rank": 0, "world_size": 2})
+        _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+        with expect_error(ValueError, "according to its metadata") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    def test_unsupported_version_of_a_rank_capture_raises(self, tmp_path, expect_error):
+        """Skipping it, as a loose capture is skipped, would leave that rank out of a merge that passed the check."""
+        report_dir = tmp_path / "reports_in"
+        name, report = _rank_capture(1, 2)
+        report["version"] = 99
+        _write_reports(report_dir, [_rank_capture(0, 2), (name, report)])
+        with expect_error(ValueError, r"graph_capture_2_of_2\.json has version 99"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_rank_captures_are_imported_in_numeric_order(self, tmp_path, monkeypatch):
+        """graph_capture_10_of_10 is imported last, not between _1_ and _2_ as a plain string sort would put it.
+
+        The DB keys every row by rank rather than by import order, so the order is only visible from inside the
+        import loop, here through the per-file _report_rank call.
+        """
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(rank, 10) for rank in range(10)])
+        imported_names = []
+        report_rank = graph_report._report_rank
+
+        def _recording_report_rank(report, path):
+            imported_names.append(path.name)
+            return report_rank(report, path)
+
+        monkeypatch.setattr(graph_report, "_report_rank", _recording_report_rank)
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert imported_names == [f"graph_capture_{n}_of_10.json" for n in range(1, 11)]
+
+    def test_single_rank_capture_file_imports_alone(self, tmp_path):
+        """Pointing import_report at one rank's file imports just that rank: only a directory is checked for
+        completeness."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 4)])
+        db_path = graph_report.import_report(report_dir / "graph_capture_1_of_4.json", tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations") == [(0,)]
+
+    def test_files_without_rank_suffix_are_not_checked(self, tmp_path):
+        """Loose *.json captures carry no world size, so there is nothing to check them against."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir, [("graph_capture.json", _make_report(_minimal_single_op_graph(), metadata={"rank": 3}))]
+        )
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations") == [(3,)]
+
+
+class TestGraphReportFixtureMultiRankTeardown:
+    """Teardown of the graph report pytest fixture on a two-rank run, with ttnn's capture and distributed calls
+    replaced by recorders. Every rank must reach both barriers, even when rank 0's import raises."""
+
+    @staticmethod
+    def _stub_ttnn(monkeypatch, tmp_path, rank, world_size, distributed=True):
+        calls = []
+        capture_active = [False]
+
+        def begin_graph_capture(run_mode):
+            capture_active[0] = True
+
+        def end_graph_capture_to_file(path):
+            capture_active[0] = False
+            calls.append(("end", Path(path).name))
+            Path(path).write_text("{}")
+
+        config = SimpleNamespace(
+            enable_graph_report=True,
+            enable_comparison_mode=False,
+            enable_detailed_buffer_report=True,
+            report_path=str(tmp_path / "report"),
+        )
+        monkeypatch.setattr(ttnn, "CONFIG", config)
+        monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: capture_active[0])
+        monkeypatch.setattr(ttnn.graph, "begin_graph_capture", begin_graph_capture)
+        monkeypatch.setattr(ttnn.graph, "end_graph_capture_to_file", end_graph_capture_to_file)
+        monkeypatch.setattr(ttnn.graph, "enable_detailed_buffer_tracing", lambda: calls.append("enable_tracing"))
+        monkeypatch.setattr(ttnn.graph, "disable_detailed_buffer_tracing", lambda: calls.append("disable_tracing"))
+        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: distributed)
+        monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
+        monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: world_size)
+        monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
+        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: calls.append(("config", Path(path).name)))
+        return calls
+
+    @staticmethod
+    def _run_fixture():
+        """Run the fixture's setup, then its teardown, with no test body in between."""
+        request = SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
+        fixture = graph_report._run_pytest_graph_report_fixture(request)
+        next(fixture)
+        next(fixture, None)
+
+    def test_rank_0_import_error_still_releases_the_other_ranks(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+
+        def failing_import_report(report_path, output_dir):
+            calls.append("import")
+            raise ValueError("Graph capture files for 1 of 2 ranks are missing")
+
+        monkeypatch.setattr(graph_report, "import_report", failing_import_report)
+        with expect_error(ValueError, "1 of 2 ranks are missing"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_1_of_2.json"),
+            "barrier",
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_1_of_2.json"),
+        ]
+        # Left for diagnosing the failed import.
+        assert (tmp_path / "report" / "graph_capture_1_of_2.json").exists()
+
+    def test_rank_0_imports_then_removes_the_captures(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+        (tmp_path / "report").mkdir()
+        (tmp_path / "report" / "graph_capture_2_of_2.json").write_text("{}")
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_1_of_2.json"),
+            "barrier",
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_1_of_2.json"),
+        ]
+        assert not list((tmp_path / "report").glob("graph_capture_*_of_*.json"))
+
+    def test_single_process_needs_no_barriers(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=1, distributed=False)
+
+        def failing_import_report(report_path, output_dir):
+            calls.append("import")
+            raise ValueError("import failed")
+
+        monkeypatch.setattr(graph_report, "import_report", failing_import_report)
+        with expect_error(ValueError, "import failed"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture.json"),
+            "import",
+            "disable_tracing",
+            ("config", "config.json"),
+        ]
+
+    def test_other_ranks_skip_the_import_and_reach_both_barriers(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, world_size=2)
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_2_of_2.json"),
+            "barrier",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_2_of_2.json"),
+        ]
 
 
 class TestDeallocateTensorLookup:
@@ -7138,6 +7441,13 @@ def test_multihost_graph_report(request):
     for op_name in op_names:
         expected = {r: 1 for r in range(world_size)}
         assert op_counts[op_name] == expected, f"{op_name} count per rank {op_counts[op_name]}, expected {expected}"
-    # Assumes every rank opens the same number of devices, as each half of the T3K two-rank binding does.
-    expected = {r: mesh_device.get_num_devices() for r in range(world_size)}
-    assert device_counts == expected, f"device count per rank {device_counts}, expected {expected}"
+    # Each rank records only its own local devices: get_num_devices() counts the whole mesh across all ranks, while
+    # get_device_ids() lists this rank's local ones. Assumes every rank owns the same number of devices, as each half
+    # of the T3K two-rank binding does.
+    # TODO(tenstorrent/ttnn-visualizer#2225): the count matches only because the MeshDevice's id 0 collides with chip 0
+    # in the report's devices list. Fixing that adds the mesh as its own entry, and this expectation has to change.
+    expected = {r: len(mesh_device.get_device_ids()) for r in range(world_size)}
+    assert device_counts == expected, (
+        f"device count per rank {device_counts}, expected {expected} "
+        "(if the MeshDevice id collision is fixed, see tenstorrent/ttnn-visualizer#2225)"
+    )

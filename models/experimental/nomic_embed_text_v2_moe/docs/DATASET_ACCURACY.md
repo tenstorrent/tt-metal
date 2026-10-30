@@ -15,6 +15,15 @@ the same 13 splits, nDCG@10 moved by -0.0012 to +0.0005 per split against the pr
 (mean -0.0001), where two runs of the pre-change code differ by up to 0.0022. The numbers below
 are the 2026-09-18 run.
 
+The routed experts of [#60284](https://github.com/tenstorrent/tt-metal/issues/60284) replaced
+the dense expert passes: each token now runs through its two experts only, with their w2 at LoFi.
+Measured again on the same 13 splits on 2026-10-21, nDCG@10 moved by -0.0029 to +0.0008 per split
+against the dense pass (mean -0.0002), and sits -0.0021 to +0.0011 from the reference (mean
+-0.0002). The median 1 - cos per split is 0.65x to 1.07x the dense pass's, and the worst text is
+5.96e-03 against 1.18e-02. With the routed w2 at HiFi2 the median was 0.48x to 0.72x and nDCG@10
+sat -0.0014 to +0.0019 from the reference; LoFi, which makes the routed outputs about 1.1%
+smaller, saves 0.36 ms of an 8x512 forward.
+
 ## 1. What was measured
 
 | Dataset | Split | Content |
