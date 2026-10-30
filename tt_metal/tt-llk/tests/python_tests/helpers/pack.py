@@ -299,6 +299,55 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     return exponents + packed_mantissas
 
 
+def pack_dense_tiles(tensor, tile_count, pack_function, num_faces, face_r_dim):
+    if pack_function not in (
+        pack_bfp8_b,
+        pack_bfp4_b,
+        pack_bfp2_b,
+        pack_bfp16,
+        pack_fp16,
+        pack_fp32,
+    ):
+        return None
+
+    tile_elements = num_faces * face_r_dim * FACE_C_DIM
+    if (
+        not isinstance(tensor, torch.Tensor)
+        or tensor.ndim != 1
+        or tile_count <= 0
+        or tile_elements <= 0
+        or tensor.numel() < tile_count * tile_elements
+    ):
+        return None
+
+    values = tensor[: tile_count * tile_elements]
+    magnitude_bits = {pack_bfp8_b: 7, pack_bfp4_b: 3, pack_bfp2_b: 1}.get(pack_function)
+    if magnitude_bits is None:
+        return pack_function(values)
+
+    exponents, mantissas = _bfp_collect_blocks(values, FACE_C_DIM, magnitude_bits)
+    blocks_per_tile = tile_elements // FACE_C_DIM
+    exponents = np.asarray(
+        exponents[: tile_count * blocks_per_tile], dtype=np.uint8
+    ).reshape(tile_count, blocks_per_tile)
+    mantissas = np.asarray(mantissas, dtype=np.uint8).reshape(tile_count, tile_elements)
+    if magnitude_bits == 3:
+        mantissas = mantissas[:, 0::2] | (mantissas[:, 1::2] << 4)
+    elif magnitude_bits == 1:
+        mantissas = (
+            mantissas[:, 0::4]
+            | (mantissas[:, 1::4] << 2)
+            | (mantissas[:, 2::4] << 4)
+            | (mantissas[:, 3::4] << 6)
+        )
+
+    exponent_bytes = max(MIN_BFP_EXPONENTS, blocks_per_tile)
+    packed = np.zeros((tile_count, exponent_bytes + mantissas.shape[1]), dtype=np.uint8)
+    packed[:, :blocks_per_tile] = exponents
+    packed[:, exponent_bytes:] = mantissas
+    return packed.tobytes()
+
+
 # ============================================================================
 # MX (Microscaling) Format Support - OCP Specification
 # ============================================================================

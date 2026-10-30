@@ -21,6 +21,7 @@ from .pack import (
     pack_bfp4_b,
     pack_bfp8_b,
     pack_bfp16,
+    pack_dense_tiles,
     pack_fp8_e4m3,
     pack_fp16,
     pack_fp32,
@@ -577,6 +578,14 @@ class StimuliConfig:
 
         tile_r, tile_c = tile_dimensions
         tile_elements = tile_r * tile_c  # Dense: use actual tile dimensions
+
+        if not use_srcs and tile_elements == num_faces * face_r_dim * FACE_C_DIM:
+            packed_data = pack_dense_tiles(
+                buffer, tile_count, pack_function, num_faces, face_r_dim
+            )
+            if packed_data is not None and len(packed_data) == tile_count * tile_size:
+                write_to_device(location, base_address, packed_data)
+                return
 
         def _pack_tile(buffer_tile):
             if pack_function in (

@@ -2680,7 +2680,10 @@ class UnarySFPUGolden:
 
         window = slice(start, start + elements_to_process)
         # 16-bit GELU must use scalar erf: SIMD changes its cancellation-tail staircase.
-        scalar_gelu = operation == MathOperation.Gelu and self._work_dtype() in (
+        scalar_gelu = operation in (
+            MathOperation.Gelu,
+            MathOperation.GeluAppx,
+        ) and self._work_dtype() in (
             torch.bfloat16,
             torch.float16,
         )
