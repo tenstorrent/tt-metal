@@ -256,6 +256,7 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gumbel_sample/device/gumbel_sample_program_factory.cpp
 )
 
+include(metal/ops/log_softmax/sources.cmake)
 list(APPEND SOURCES ${METAL_OPS_FILES})
 
 # TT::Metalium must be available (provided by tt-metal parent build)

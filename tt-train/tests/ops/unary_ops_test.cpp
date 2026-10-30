@@ -23,6 +23,7 @@
 #include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/log_softmax/log_softmax.hpp"
 #include "ops/losses.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/core/xmath.hpp"
@@ -332,6 +333,68 @@ TEST_F(UnaryOpsTest, LogSoftmaxTiedMaximumSelection) {
         auto input = core::from_vector(logits, shape, &autograd::ctx().get_device());
         const auto context = ttnn_fixed::log_softmax_with_context(input, -1);
         EXPECT_EQ(core::to_vector(context.max_mask), expected_mask);
+    }
+}
+
+TEST_F(UnaryOpsTest, FusedLogSoftmaxPreservesFp32Upstream) {
+    auto* device = &autograd::ctx().get_device();
+    const ttnn::Shape shape({1, 1, 1, 3});
+    auto input = autograd::create_tensor(core::from_vector({0.F, 0.F, 0.F}, shape, device), true);
+    auto output = log_softmax(input, -1);
+    output->set_grad(core::from_vector<float, ttnn::DataType::FLOAT32>({1.00390625F, -1.F, 0.F}, shape, device));
+    output->backward();
+    const auto grad = core::to_vector(input->get_grad());
+    // Rounding dy to BF16 first would turn sum(dy) into zero and lose this gradient.
+    EXPECT_NEAR(grad[2], -0.00390625 / 3.0, 1e-5);
+    autograd::ctx().reset_graph();
+}
+
+TEST_F(UnaryOpsTest, FusedLogSoftmaxWideRowsAndCacheReuse) {
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    const ttnn::Shape shape({1, 1, 35, 32003});
+    const size_t width = shape[-1];
+    // Keep the first context live while making another same-shape call, so
+    // cache hits must update every address and cannot overwrite saved statistics.
+    for (const auto dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        const auto from = [&](const std::vector<float>& v) {
+            return dtype == ttnn::DataType::FLOAT32
+                       ? core::from_vector<float, ttnn::DataType::FLOAT32>(v, shape, device)
+                       : core::from_vector(v, shape, device);
+        };
+        std::vector<float> logits(shape.volume(), -24.F);
+        std::vector<float> upstream(shape.volume(), 0.F);
+        std::vector<size_t> pivots(shape[2]);
+        for (size_t r = 0; r < shape[2]; ++r) {
+            pivots[r] = (r * 997 + 31999) % width;
+            logits[r * width + pivots[r]] = 0.F;
+            upstream[r * width + pivots[r]] = -1.F;
+        }
+        auto input = from(logits);
+        auto first = metal::log_softmax_fw(input);
+        auto second = metal::log_softmax_fw(from(std::vector<float>(shape.volume(), -1.F)));
+        const auto state = core::to_vector(first[1]);
+        const auto second_state = core::to_vector(second[1]);
+        const auto output = core::to_vector(first[0]);
+        // FP32 upstream with BF16 input must not be rounded before the kernel.
+        auto dy = core::from_vector<float, ttnn::DataType::FLOAT32>(upstream, shape, device);
+        const auto grad = core::to_vector(metal::log_softmax_bw(input, dy, first[1]));
+        const double tail = (width - 1) * std::exp(-24.0);
+        const double norm = std::log1p(tail);
+        const double tolerance = dtype == ttnn::DataType::FLOAT32 ? 3e-5 : 1e-2;
+        for (size_t r = 0; r < shape[2]; ++r) {
+            ASSERT_EQ(state[r * 96 + 32], pivots[r]);
+            ASSERT_EQ(second_state[r * 96 + 32], 0.F);  // Ties exclude exactly the first maximum.
+            EXPECT_NEAR(second_state[r * 96 + 64], std::log(static_cast<double>(width)), 3e-5);
+            EXPECT_NEAR(output[r * width + pivots[r]], -norm, norm * tolerance);
+            EXPECT_NEAR(grad[r * width + pivots[r]], -tail / (1.0 + tail), tail * tolerance);
+            for (size_t c = 0; c < width; ++c) {
+                if (c != pivots[r]) {
+                    EXPECT_NEAR(output[r * width + c], -24.0 - norm, 24.0 * tolerance);
+                    EXPECT_NEAR(grad[r * width + c], std::exp(-24.0) / (1.0 + tail), std::exp(-24.0) * tolerance);
+                }
+            }
+        }
     }
 }
 

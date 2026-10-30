@@ -1,0 +1,564 @@
+{
+  "date": "2026-10-30",
+  "device": "Blackhole P150a, single card",
+  "host": "AMD Ryzen 9 9950X3D",
+  "implementation_branch": "nmaurice/tt-train-fused-log-softmax",
+  "composite_base_commit": "348687a5df3966df958a7582198c26d200ee0192",
+  "available_release_runtime_checkout_head": "e2bf1a08417c9e635965630210e140c96fd273cc",
+  "build_method": "Changed tt-train host objects and benchmark rebuilt and relinked against the available Release TTNN/Metal libraries; kernels JIT compiled. Host sources additionally syntax checked against the fused worktree headers. No clean whole-repository rebuild.",
+  "method": "C++ steady_clock; eager dispatch with explicit device synchronization after warmup and each timed sample; three variants rotate order; BF16 uniform logits/upstream seeds 2026/2027; graph allocation capture outside timed regions; input/upstream allocated before capture.",
+  "correctness": {
+    "existing_selected_tests": 43,
+    "new_tests": 2,
+    "passed": 45,
+    "failed": 0
+  },
+  "cases": [
+    {
+      "shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dim": 3,
+      "timings_us": {
+        "original_forward": {
+          "median": 52.336,
+          "min": 51.691,
+          "max": 53.811
+        },
+        "composite_forward": {
+          "median": 154.033,
+          "min": 153.104,
+          "max": 172.006
+        },
+        "fused_forward": {
+          "median": 43.091,
+          "min": 42.955,
+          "max": 44.143
+        },
+        "original_backward": {
+          "median": 38.045,
+          "min": 37.496,
+          "max": 40.796
+        },
+        "composite_backward": {
+          "median": 93.356,
+          "min": 92.29,
+          "max": 94.046
+        },
+        "fused_backward": {
+          "median": 54.648,
+          "min": 54.585,
+          "max": 54.738
+        },
+        "original_forward_backward": {
+          "median": 91.129,
+          "min": 89.451,
+          "max": 92.86
+        },
+        "composite_forward_backward": {
+          "median": 258.632,
+          "min": 253.404,
+          "max": 262.246
+        },
+        "fused_forward_backward": {
+          "median": 97.069,
+          "min": 96.869,
+          "max": 97.399
+        }
+      },
+      "memory_bytes": {
+        "original": {
+          "forward_peak": 30720,
+          "forward_retained": 8192,
+          "step_peak": 34816
+        },
+        "composite": {
+          "forward_peak": 110720,
+          "forward_retained": 40960,
+          "step_peak": 126976
+        },
+        "fused": {
+          "forward_peak": 20480,
+          "forward_retained": 20480,
+          "step_peak": 28672
+        }
+      },
+      "measurement": {
+        "warmup": 5,
+        "iterations": 20,
+        "samples": 7
+      }
+    },
+    {
+      "shape": [
+        1,
+        1,
+        128,
+        1024
+      ],
+      "dim": 3,
+      "timings_us": {
+        "original_forward": {
+          "median": 60.061,
+          "min": 59.382,
+          "max": 61.098
+        },
+        "composite_forward": {
+          "median": 506.425,
+          "min": 506.268,
+          "max": 507.664
+        },
+        "fused_forward": {
+          "median": 181.171,
+          "min": 181.141,
+          "max": 181.307
+        },
+        "original_backward": {
+          "median": 45.328,
+          "min": 45.069,
+          "max": 45.719
+        },
+        "composite_backward": {
+          "median": 110.531,
+          "min": 109.914,
+          "max": 111.502
+        },
+        "fused_backward": {
+          "median": 286.863,
+          "min": 286.729,
+          "max": 287.069
+        },
+        "original_forward_backward": {
+          "median": 105.458,
+          "min": 105.013,
+          "max": 106.992
+        },
+        "composite_forward_backward": {
+          "median": 569.773,
+          "min": 569.258,
+          "max": 569.943
+        },
+        "fused_forward_backward": {
+          "median": 467.113,
+          "min": 466.854,
+          "max": 467.423
+        }
+      },
+      "memory_bytes": {
+        "original": {
+          "forward_peak": 811008,
+          "forward_retained": 262144,
+          "step_peak": 1056768
+        },
+        "composite": {
+          "forward_peak": 2802176,
+          "forward_retained": 1310720,
+          "step_peak": 3948544
+        },
+        "fused": {
+          "forward_peak": 311296,
+          "forward_retained": 311296,
+          "step_peak": 573440
+        }
+      },
+      "measurement": {
+        "warmup": 5,
+        "iterations": 20,
+        "samples": 7
+      }
+    },
+    {
+      "shape": [
+        1,
+        1,
+        1024,
+        4096
+      ],
+      "dim": 3,
+      "timings_us": {
+        "original_forward": {
+          "median": 239.657,
+          "min": 239.152,
+          "max": 243.544
+        },
+        "composite_forward": {
+          "median": 5498.703,
+          "min": 5493.348,
+          "max": 5501.606
+        },
+        "fused_forward": {
+          "median": 654.426,
+          "min": 653.539,
+          "max": 654.819
+        },
+        "original_backward": {
+          "median": 230.296,
+          "min": 229.632,
+          "max": 233.632
+        },
+        "composite_backward": {
+          "median": 881.591,
+          "min": 880.094,
+          "max": 883.437
+        },
+        "fused_backward": {
+          "median": 1085.248,
+          "min": 1084.495,
+          "max": 1086.606
+        },
+        "original_forward_backward": {
+          "median": 470.459,
+          "min": 466.987,
+          "max": 471.98
+        },
+        "composite_forward_backward": {
+          "median": 6375.217,
+          "min": 6372.912,
+          "max": 6377.985
+        },
+        "fused_forward_backward": {
+          "median": 1739.396,
+          "min": 1739.11,
+          "max": 1740.397
+        }
+      },
+      "memory_bytes": {
+        "original": {
+          "forward_peak": 25362432,
+          "forward_retained": 8388608,
+          "step_peak": 33619968
+        },
+        "composite": {
+          "forward_peak": 84807680,
+          "forward_retained": 41943040,
+          "step_peak": 125960192
+        },
+        "fused": {
+          "forward_peak": 8781824,
+          "forward_retained": 8781824,
+          "step_peak": 17170432
+        }
+      },
+      "measurement": {
+        "warmup": 5,
+        "iterations": 20,
+        "samples": 7
+      }
+    },
+    {
+      "shape": [
+        1,
+        1,
+        32,
+        32000
+      ],
+      "dim": 3,
+      "timings_us": {
+        "original_forward": {
+          "median": 600.12,
+          "min": 599.545,
+          "max": 600.359
+        },
+        "composite_forward": {
+          "median": 1121.576,
+          "min": 1120.938,
+          "max": 1122.519
+        },
+        "fused_forward": {
+          "median": 4933.758,
+          "min": 4933.17,
+          "max": 4935.522
+        },
+        "original_backward": {
+          "median": 479.986,
+          "min": 476.561,
+          "max": 480.54
+        },
+        "composite_backward": {
+          "median": 731.509,
+          "min": 728.853,
+          "max": 733.475
+        },
+        "fused_backward": {
+          "median": 8321.359,
+          "min": 8311.515,
+          "max": 8324.575
+        },
+        "original_forward_backward": {
+          "median": 1074.344,
+          "min": 1073.851,
+          "max": 1074.422
+        },
+        "composite_forward_backward": {
+          "median": 1847.255,
+          "min": 1846.57,
+          "max": 1848.345
+        },
+        "fused_forward_backward": {
+          "median": 13243.896,
+          "min": 13239.075,
+          "max": 13262.162
+        }
+      },
+      "memory_bytes": {
+        "original": {
+          "forward_peak": 6150144,
+          "forward_retained": 2048000,
+          "step_peak": 8194048
+        },
+        "composite": {
+          "forward_peak": 24588416,
+          "forward_retained": 10240000,
+          "step_peak": 30724096
+        },
+        "fused": {
+          "forward_peak": 2060288,
+          "forward_retained": 2060288,
+          "step_peak": 4108288
+        }
+      },
+      "measurement": {
+        "warmup": 5,
+        "iterations": 20,
+        "samples": 7
+      }
+    },
+    {
+      "shape": [
+        1,
+        1,
+        256,
+        32000
+      ],
+      "dim": 3,
+      "timings_us": {
+        "original_forward": {
+          "median": 818.548,
+          "min": 815.615,
+          "max": 821.241
+        },
+        "composite_forward": {
+          "median": 4746.436,
+          "min": 4745.048,
+          "max": 4756.644
+        },
+        "fused_forward": {
+          "median": 4933.044,
+          "min": 4932.802,
+          "max": 4934.676
+        },
+        "original_backward": {
+          "median": 706.027,
+          "min": 701.484,
+          "max": 709.584
+        },
+        "composite_backward": {
+          "median": 1840.469,
+          "min": 1837.249,
+          "max": 1841.454
+        },
+        "fused_backward": {
+          "median": 8318.703,
+          "min": 8315.458,
+          "max": 8322.641
+        },
+        "original_forward_backward": {
+          "median": 1517.594,
+          "min": 1515.962,
+          "max": 1518.392
+        },
+        "composite_forward_backward": {
+          "median": 6585.823,
+          "min": 6581.515,
+          "max": 6587.395
+        },
+        "fused_forward_backward": {
+          "median": 13255.853,
+          "min": 13247.023,
+          "max": 13258.892
+        }
+      },
+      "memory_bytes": {
+        "original": {
+          "forward_peak": 49201152,
+          "forward_retained": 16384000,
+          "step_peak": 65552384
+        },
+        "composite": {
+          "forward_peak": 168035328,
+          "forward_retained": 81920000,
+          "step_peak": 245792768
+        },
+        "fused": {
+          "forward_peak": 16482304,
+          "forward_retained": 16482304,
+          "step_peak": 32866304
+        }
+      },
+      "measurement": {
+        "warmup": 5,
+        "iterations": 20,
+        "samples": 7
+      }
+    },
+    {
+      "shape": [
+        1,
+        1,
+        1024,
+        4096
+      ],
+      "dim": 2,
+      "timings_us": {
+        "original_forward": {
+          "median": 237.032,
+          "min": 236.253,
+          "max": 237.682
+        },
+        "composite_forward": {
+          "median": 79368.502,
+          "min": 79367.358,
+          "max": 79372.101
+        },
+        "fused_forward": {
+          "median": 297.784,
+          "min": 297.171,
+          "max": 298.443
+        },
+        "original_backward": {
+          "median": 212.783,
+          "min": 211.813,
+          "max": 213.181
+        },
+        "composite_backward": {
+          "median": 926.225,
+          "min": 925.471,
+          "max": 926.671
+        },
+        "fused_backward": {
+          "median": 418.179,
+          "min": 417.793,
+          "max": 418.815
+        },
+        "original_forward_backward": {
+          "median": 446.83,
+          "min": 446.144,
+          "max": 447.403
+        },
+        "composite_forward_backward": {
+          "median": 80292.823,
+          "min": 80291.99,
+          "max": 80294.21
+        },
+        "fused_forward_backward": {
+          "median": 715.542,
+          "min": 715.046,
+          "max": 717.277
+        }
+      },
+      "memory_bytes": {
+        "original": {
+          "forward_peak": 25952256,
+          "forward_retained": 8388608,
+          "step_peak": 33816576
+        },
+        "composite": {
+          "forward_peak": 85606400,
+          "forward_retained": 41943040,
+          "step_peak": 126353408
+        },
+        "fused": {
+          "forward_peak": 26738688,
+          "forward_retained": 18350080,
+          "step_peak": 43515904
+        }
+      },
+      "measurement": {
+        "warmup": 5,
+        "iterations": 20,
+        "samples": 7
+      }
+    },
+    {
+      "shape": [
+        64,
+        1,
+        256,
+        32000
+      ],
+      "dim": 3,
+      "timings_us": {
+        "original_forward": {
+          "median": 19517.011,
+          "min": 19513.002,
+          "max": 19537.351
+        },
+        "composite_forward": {
+          "median": 291104.028,
+          "min": 291035.461,
+          "max": 291128.129
+        },
+        "fused_forward": {
+          "median": 21237.786,
+          "min": 21121.307,
+          "max": 21252.026
+        },
+        "original_backward": {
+          "median": 19359.743,
+          "min": 19346.594,
+          "max": 19361.273
+        },
+        "composite_backward": {
+          "median": 86618.939,
+          "min": 86574.88,
+          "max": 86639.699
+        },
+        "fused_backward": {
+          "median": 34669.904,
+          "min": 34642.654,
+          "max": 34705.463
+        },
+        "original_forward_backward": {
+          "median": 38805.256,
+          "min": 38798.236,
+          "max": 38863.106
+        },
+        "composite_forward_backward": {
+          "median": 377721.045,
+          "min": 377564.838,
+          "max": 377744.239
+        },
+        "fused_forward_backward": {
+          "median": 55788.742,
+          "min": 55741.952,
+          "max": 55810.601
+        }
+      },
+      "memory_bytes": {
+        "original": {
+          "forward_peak": 3148873728,
+          "forward_retained": 1048576000,
+          "step_peak": 4195352576
+        },
+        "composite": {
+          "forward_peak": 10496212992,
+          "forward_retained": 5242880000,
+          "step_peak": 15730737152
+        },
+        "fused": {
+          "forward_peak": 1054867456,
+          "forward_retained": 1054867456,
+          "step_peak": 2103443456
+        }
+      },
+      "measurement": {
+        "warmup": 1,
+        "iterations": 1,
+        "samples": 3
+      }
+    }
+  ]
+}

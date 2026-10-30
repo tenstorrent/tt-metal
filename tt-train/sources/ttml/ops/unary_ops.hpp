@@ -22,6 +22,8 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
 // Computes in FP32 from the native input; output and input gradient retain the native dtype.
 // Sec. 3's teacher/student cancellation fix requires a loss accepting both sets of logits.
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim);
+// Corrected composite reference, retained for comparison with the fused path.
+autograd::TensorPtr log_softmax_composite(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr exp(const autograd::TensorPtr& tensor);
 autograd::TensorPtr clip(const autograd::TensorPtr& tensor, float lo, float hi);

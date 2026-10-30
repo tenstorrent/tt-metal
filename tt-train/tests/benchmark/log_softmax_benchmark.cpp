@@ -40,7 +40,7 @@ constexpr int kIterations = 20;
 constexpr int kSamples = 7;
 
 // Frozen pre-fix composite implementation, including its BF16 intermediates and
-// approximate log. Run both versions against the same runtime and input buffers.
+// approximate log. Run all versions against the same runtime and input buffers.
 TensorPtr baseline_log_softmax(const TensorPtr& input, int dim) {
     auto maximum = ttnn::max(input->get_value(), dim, true);
     auto shifted = ttnn::subtract(input->get_value(), maximum);
@@ -165,8 +165,9 @@ void run_case(benchmark::State& state) {
         ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.F, 1.F, 2026U), shape, device);
     auto dy = ttml::core::from_vector(
         ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.F, 1.F, 2027U), shape, device);
-    constexpr std::array<Forward, 2> forwards = {baseline_log_softmax, ttml::ops::log_softmax};
-    constexpr std::array<std::string_view, 2> names = {"before", "after"};
+    constexpr std::array<Forward, 3> forwards = {
+        baseline_log_softmax, ttml::ops::log_softmax_composite, ttml::ops::log_softmax};
+    constexpr std::array<std::string_view, 3> names = {"original", "composite", "fused"};
     fmt::print(
         "LOG_SOFTMAX_CONFIG,{},{},{},{},{},warmup={},iterations={},samples={}\n",
         shape[0],
@@ -180,11 +181,11 @@ void run_case(benchmark::State& state) {
     std::fflush(stdout);
     for ([[maybe_unused]] auto _ : state) {
         for (size_t phase = 0; phase < kPhases.size(); ++phase) {
-            std::array<std::vector<double>, 2> samples;
+            std::array<std::vector<double>, 3> samples;
             for (int sample = 0; sample < test_case.samples; ++sample) {
-                // Alternate order to reduce systematic clock/temperature bias.
-                for (int order = 0; order < 2; ++order) {
-                    const int variant = (sample + order) % 2;
+                // Rotate order to reduce systematic clock/temperature bias.
+                for (int order = 0; order < 3; ++order) {
+                    const int variant = (sample + order) % 3;
                     samples[variant].push_back(measure(forwards[variant], kPhases[phase], value, dy, test_case));
                 }
             }
@@ -204,7 +205,7 @@ void run_case(benchmark::State& state) {
                     median,
                     times.front(),
                     times.back());
-                if (phase == 2 && variant == 1) {
+                if (phase == 2 && variant == 2) {
                     state.SetIterationTime(median / 1e6);
                 }
             }
@@ -280,7 +281,8 @@ int main(int argc, char** argv) {
         ttml::autograd::ctx().open_device();
         ttml::autograd::ctx().get_device().enable_program_cache();
         fmt::print(
-            "BF16 eager composite log_softmax; defaults: warmup={}, iterations={}, samples={}; timings in us\n",
+            "BF16 eager log_softmax: original/composite/fused; defaults: warmup={}, iterations={}, samples={}; timings "
+            "in us\n",
             kWarmup,
             kIterations,
             kSamples);
