@@ -206,7 +206,9 @@ def test_minmax_special_values(device, ttnn_op, is_max):
     NaN, in both operand orders and for either NaN sign. The bfloat16 store packs a NaN as
     an infinity. On Blackhole the binary kernel emits the canonical +NaN, so -NaN (0xFFC0)
     comes back as +inf too; on Wormhole the kernel keeps the operand NaN, whose sign the inf
-    follows, so there only the infinity is checked. torch returns NaN for every such row.
+    follows (x with +NaN gives +inf and x with -NaN gives -inf in either order; a +NaN, -NaN
+    pair gives -inf for maximum and +inf for minimum), so there only the infinity is checked.
+    torch returns NaN for every such row.
 
     Dest packing also drops the zero sign bit: every zero result is +0, e.g.
     minimum(1, -0) and min(+0, -0) give +0 where IEEE gives -0.
