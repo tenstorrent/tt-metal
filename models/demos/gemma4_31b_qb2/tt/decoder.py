@@ -1428,8 +1428,19 @@ class Decoder:
         result = ttnn.concat(users, dim=0) if batch > 1 else users[0]
         return (result, next_history) if return_history else result
 
-    def decode_forward(self, x, *, positions, page_table, kv_cache, rope_positions=None, cyclic_cache=True):
-        """One token per user; all runtime data inputs and outputs are device tensors."""
+    def decode_forward(
+        self, x, *, positions, page_table, kv_cache, rope_positions=None, cyclic_cache=True, update_positions=None
+    ):
+        """One token per row; all runtime data inputs and outputs are device tensors.
+
+        Speculative verify (update_positions given): several rows may belong to one request (its committed token
+        and draft candidates at consecutive positions, each row with a copy of the request's page-table row).
+        Rows of one request write K/V into the same cache tile, so the cache update runs once per candidate index
+        j with update_positions[j] holding only the rows of candidate j (-1 elsewhere): within one update call
+        every written tile has a single writer. All writes precede attention, so candidate j attends to the
+        candidates before it. SDPA itself is unchanged: each row reads its request's history up to its own
+        position (the K/V of a request is read once per candidate row).
+        """
         batch = x.shape[2]
         assert x.shape[0] == x.shape[1] == 1 and x.shape[3] == self.residual_width
         assert 1 <= batch <= 32 and page_table.shape[0] == batch and (positions.shape[0] == batch)
@@ -1484,21 +1495,22 @@ class Decoder:
         v = ttnn.to_memory_config(v, vmem)
         bounded = cyclic_cache and self.sliding and page_table.padded_shape[1] > kv_cache[0].shape[0]
         modulo = {"cache_position_modulo": self.SLIDING_WINDOW_PAGES * self.PAGE_SIZE} if bounded else {}
-        if bounded or kv_cache[0].dtype != kv_cache[1].dtype:
-            # Mixed precision cannot share the fused factory data format.
-            # Fused update still enforces logical pages <= physical pages.
-            # Native separate updates support a bounded pool explicitly. The
-            # documented cyclic table repeats its first nine private pages.
-            ttnn.experimental.paged_update_cache(
-                kv_cache[0], k, update_idxs_tensor=positions, page_table=page_table, **modulo
-            )
-            ttnn.experimental.paged_update_cache(
-                kv_cache[1], v, update_idxs_tensor=positions, page_table=page_table, **modulo
-            )
-        else:
-            ttnn.experimental.paged_fused_update_cache(
-                kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=positions, page_table=page_table
-            )
+        for update_idxs in [positions] if update_positions is None else update_positions:
+            if bounded or kv_cache[0].dtype != kv_cache[1].dtype:
+                # Mixed precision cannot share the fused factory data format.
+                # Fused update still enforces logical pages <= physical pages.
+                # Native separate updates support a bounded pool explicitly. The
+                # documented cyclic table repeats its first nine private pages.
+                ttnn.experimental.paged_update_cache(
+                    kv_cache[0], k, update_idxs_tensor=update_idxs, page_table=page_table, **modulo
+                )
+                ttnn.experimental.paged_update_cache(
+                    kv_cache[1], v, update_idxs_tensor=update_idxs, page_table=page_table, **modulo
+                )
+            else:
+                ttnn.experimental.paged_fused_update_cache(
+                    kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=update_idxs, page_table=page_table
+                )
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)

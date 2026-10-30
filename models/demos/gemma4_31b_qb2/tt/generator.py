@@ -64,6 +64,8 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
+        # Speculative verify traces, keyed by id(CacheState); see spec_decode().
+        self.spec_traces = {}
         # Keep explicit decode/sampler IO across conservative trace retirement.
         # The next capture gets a new entry object, so old handles stay invalid.
         self._entry_storage = None
@@ -1332,13 +1334,137 @@ class Gemma4Generator:
     def _retire_traces(self):
         if self._prepared_prefill_state is not None:
             raise RuntimeError("Prepared trace retention forbids implicit retirement; close explicitly")
-        if self.traces:
+        if self.traces or self.spec_traces:
             ttnn.synchronize_device(self.mesh)
             self.counters["synchronizations"] += 1
-        for entry in self.traces.values():
+        for entry in list(self.traces.values()) + list(self.spec_traces.values()):
             for name in ("model_trace", "sampling_trace"):
                 ttnn.release_trace(self.mesh, entry[name])
         self.traces.clear()
+        self.spec_traces.clear()
+
+    # ------------------------------------------------------------------ speculative verify
+    # A verify step decodes 32 token rows like a plain step, but several rows can belong to one request: its last
+    # committed token (candidate 0) and up to SPEC_MAX_CANDIDATES-1 draft tokens at the following positions. Each
+    # row carries a copy of its request's page-table row and its own position, so attention, RoPE and sampling are
+    # the plain per-row operations. Only the K/V write is split by candidate index (decoder.decode_forward).
+    # Every row is sampled with its request's own top-k/top-p/temperature and a seed of request-seed + position, the
+    # same per-position seed a plain decode uses. With deterministic drafts, accepting while the sampled token
+    # equals the draft is exactly speculative sampling (acceptance probability p(draft)), so verification is
+    # lossless for sampled requests, not only for greedy ones.
+    SPEC_MAX_CANDIDATES = int(os.environ.get("GEMMA_SPEC_MAX_CANDIDATES", "8"))
+
+    def _spec_entry(self, state, groups):
+        """Capture (once per cache state) the 32-row verify model trace and its sampling trace.
+
+        groups: list of lists of page-table keys (layer index or layer kind) that share one table; the verify
+        trace reads one [32, W] row table per group, refreshed per step from the host tables.
+        """
+        key = id(state)
+        entry = self.spec_traces.get(key)
+        cache_ids = tuple(id(t) for pair in state.kv for t in pair)
+        if entry is not None:
+            if entry["cache_ids"] != cache_ids or entry["groups"] != groups:
+                raise ValueError("Speculative trace was captured for different cache tensors or table groups")
+            return entry
+        start = time.perf_counter()
+        P = self.SPEC_MAX_CANDIDATES
+        width = state.capacity // 128
+        zeros32 = torch.zeros(32, dtype=torch.int32)
+        entry = {
+            "state": state,
+            "cache_ids": cache_ids,
+            "groups": groups,
+            "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
+            "positions": self._upload(torch.full((32,), -1, dtype=torch.int32)),
+            "rope_positions": self._upload(zeros32),
+            "update_positions": [self._upload(torch.full((32,), -1, dtype=torch.int32)) for _ in range(P)],
+            "group_tables": [self._upload(torch.zeros(32, width, dtype=torch.int32)) for _ in groups],
+            "logits": self.model.tensor(torch.zeros(1, 1, 32, self.model.config.vocab_size), dim=3,
+                                        dtype=ttnn.bfloat16),
+        }
+        tables = {k: entry["group_tables"][g] for g, keys in enumerate(groups) for k in keys}
+        entry["tables"] = tables
+
+        def model_step():
+            out = self.model.decode_device(
+                entry["tokens"], entry["positions"], page_tables=tables, kv_cache=state.kv, batch=32,
+                rope_positions=entry["rope_positions"], update_positions=entry["update_positions"])
+            ttnn.copy(out, entry["logits"])
+
+        def sample_step():
+            self.sampler(entry["logits"], tt_out_tok=entry["tokens"])
+
+        # Warm with every row inactive (position -1: no cache write, no attention row), then capture.
+        logger.info("Warming speculative verify trace")
+        model_step()
+        saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
+        sample_step()
+        ttnn.copy(saved_seeds, self.sampler.seeds_tt_tensor)
+        ttnn.synchronize_device(self.mesh)
+        ttnn.deallocate(saved_seeds)
+        programs_before = self.mesh.num_program_cache_entries()
+        self.mesh.set_program_cache_misses_allowed(False)
+        try:
+            entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            model_step()
+            ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
+            entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            sample_step()
+            ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
+        finally:
+            self.mesh.set_program_cache_misses_allowed(True)
+        if self.mesh.num_program_cache_entries() != programs_before:
+            raise RuntimeError("Native program cache grew during speculative trace capture")
+        self.spec_traces[key] = entry
+        logger.info("SPEC_TRACE_ENTRY_COST " + json.dumps({"seconds": time.perf_counter() - start, "P": P,
+                                                             "groups": len(groups)}))
+        return entry
+
+    def spec_decode(self, state, *, tokens, positions, slots, candidates, host_tables, groups, sampling_params,
+                    sample=True):
+        """One synchronous verify step over 32 rows; returns the sampled token of every row (host int64 [32]).
+
+        tokens/positions/slots/candidates: int tensors of length 32. Row r feeds tokens[r] at positions[r]
+        (-1 = inactive row) with the page-table row of state slot slots[r]; candidates[r] is its candidate index
+        (0 = the request's last committed token, j = its j-th draft). host_tables maps every key of `groups` to the
+        current host page table [batch, W] (the same tables a plain decode would upload). sampling_params: per-row
+        lists for configure_sampling (top_k/top_p/temperature/seed, length 32). sample=False returns host logits
+        rows [32, V] instead (greedy/host checks only).
+        """
+        entry = self._spec_entry(state, groups)
+        P = len(entry["update_positions"])
+        positions = positions.to(torch.int32)
+        candidates = candidates.to(torch.int32)
+        live = positions >= 0
+        if tuple(tokens.shape) != (32,) or tuple(positions.shape) != (32,):
+            raise ValueError("Speculative verify takes exactly 32 rows")
+        if bool((candidates[live] >= P).any()) or bool((candidates[live] < 0).any()):
+            raise ValueError(f"Candidate index outside 0..{P - 1}")
+        if bool((positions >= state.capacity).any()):
+            raise ValueError("Verify position beyond the cache capacity")
+        self._validate_tokens(tokens[live])
+        rows = slots.to(torch.int64).clamp(0, state.batch - 1)
+        ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
+        ids.reshape(-1)[:] = torch.where(live, tokens.to(torch.int32), torch.zeros_like(positions))
+        self._refresh(ids, entry["tokens"], "token_refreshes")
+        self._refresh(positions, entry["positions"], "position_refreshes")
+        self._refresh(positions.clamp_min(0), entry["rope_positions"], "rope_refreshes")
+        for j in range(P):
+            upd = torch.where(live & (candidates == j), positions, torch.full_like(positions, -1))
+            self._refresh(upd, entry["update_positions"][j], "position_refreshes")
+        for g, keys in enumerate(groups):
+            table = host_tables[keys[0]].to(torch.int32)
+            self._refresh(table[rows].contiguous(), entry["group_tables"][g], "page_table_refreshes")
+        if sample:
+            self.configure_sampling(batch=32, **sampling_params)
+        ttnn.execute_trace(self.mesh, entry["model_trace"], cq_id=0, blocking=False)
+        self.counters["model_replays"] += 1
+        if not sample:
+            return self._host_logits(entry["logits"])[0, 0, :32]
+        ttnn.execute_trace(self.mesh, entry["sampling_trace"], cq_id=0, blocking=False)
+        self.counters["sampling_replays"] += 1
+        return self._read_tokens(entry["tokens"], 32).reshape(-1).to(torch.int64)
 
     def close(self):
         self._serving_prefill_prepared_state = None
