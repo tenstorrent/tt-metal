@@ -13,6 +13,8 @@
 
 namespace abi = cce_cache_ops_abi;
 using cce_test::arg_u64;
+using cce_test::kTestAreaBegin;
+using cce_test::kTestAreaEnd;
 using cce_test::read_cycle_counter;
 
 template <typename T>
@@ -989,12 +991,7 @@ static void run_churn_consumer(const Args& args, Report& report) {
     }
 }
 
-// The test TL1 area: from the end of the harts' kernel text (HAL DRAM UNRESERVED before its alignment) to the end of
-// the hart-cacheable port. Every region a mode reads or writes lies inside it, in its own or the target CCE's TL1.
-inline constexpr uint64_t kTestAreaBegin =
-    MEM_CCE_KERNEL_BASE + static_cast<uint64_t>(MEM_CCE_KERNEL_SIZE) * MEM_CCE_LOCAL_HARTS;
-inline constexpr uint64_t kTestAreaEnd = MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE;
-
+// Every region a mode reads or writes lies inside the test area, in its own or the target CCE's TL1.
 static bool in_test_area(uint64_t offset, uint64_t num_bytes) {
     return offset >= kTestAreaBegin && offset <= kTestAreaEnd && num_bytes <= kTestAreaEnd - offset;
 }
