@@ -2,21 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <xtensor/containers/xarray.hpp>
-#include <xtensor/generators/xrandom.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/mesh_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 using namespace ttml;
 
@@ -28,7 +33,8 @@ constexpr int kShardDim = 3;
 constexpr uint32_t kTpSize = 2U;
 
 // Every intermediate (step1 partial sums, their sum, sqrt, the coefficient, the scaled grads) is stored in
-// bf16, so each stage rounds to 2^-8 relative. Five such stages bound the error at ~2e-2.
+// bf16, so each stage rounds to 2^-8 relative. Five such stages bound the error at ~2e-2 for gradients of at most
+// a few hundred tiles per device; beyond that step1's bf16 accumulation dominates (see DISABLED_LargeGradientNorm).
 constexpr float kRtol = 2e-2F;
 constexpr float kAtol = 1e-3F;
 
@@ -50,8 +56,10 @@ uint32_t num_compute_cores() {
 }
 
 // Values are multiples of 1/8 in [-4, 4], exactly representable in bf16, so inputs carry no rounding error.
+// Seeded from the context generator, which the fixtures seed, so each test's data doesn't depend on test order.
 xt::xarray<float> random_bf16_exact(const Shape& shape) {
-    xt::xarray<float> values = xt::random::randint<int>(shape, -32, 33);
+    const auto seed = static_cast<uint32_t>(autograd::ctx().get_generator()());
+    xt::xarray<float> values = test_utils::make_uniform_xarray<int>(shape, -32, 32, seed);
     return values / 8.0F;
 }
 
@@ -62,8 +70,11 @@ struct TpGrads {
     serialization::NamedParameters replicated_params;
 };
 
+// The value is placed like its grad, as in a real TP model, so clip_grad_norm_tp's placement check accepts it.
 autograd::TensorPtr make_param(const ttnn::Tensor& grad) {
-    auto param = autograd::create_tensor(core::zeros(grad.logical_shape(), grad.device()));
+    auto value = core::zeros(grad.logical_shape(), grad.device());
+    value.update_tensor_topology(grad.tensor_topology());
+    auto param = autograd::create_tensor(value);
     param->set_grad(grad);
     param->set_requires_grad(true);
     return param;
@@ -154,6 +165,31 @@ void verify(const TpGrads& grads, const autograd::TensorPtr& norm, float max_nor
     }
 }
 
+// Scales by 8 the grads that step1/step3's second launch handles: those past the first `first_launch` in the map's
+// iteration order, which is the order clip_grad_norm_tp collects them in. Unweighted, losing those few tensors would
+// move the norm by less than kRtol.
+void boost_second_launch(
+    serialization::NamedParameters& params,
+    std::vector<xt::xarray<float>>& host,
+    const std::string& prefix,
+    uint32_t first_launch) {
+    uint32_t position = 0;
+    for (auto& [name, param] : params) {
+        if (position++ < first_launch) {
+            continue;
+        }
+        param->set_grad(ttnn::multiply(param->get_grad(), 8.0F));
+        host[std::stoul(name.substr(prefix.size()))] *= 8.0F;
+    }
+}
+
+// Fills each grad's tile padding with a large value so a leak into the norm would show.
+void poison_padding(serialization::NamedParameters& params) {
+    for (auto& [_, param] : params) {
+        param->set_grad(ttnn::fill_implicit_tile_padding(param->get_grad(), 1000.0F));
+    }
+}
+
 }  // namespace
 
 class ClipGradNormTpTest : public test_utils::Mesh1x2Fixture, public ::testing::WithParamInterface<ClipGradNormTpCase> {
@@ -166,6 +202,10 @@ TEST_P(ClipGradNormTpTest, MatchesHostReference) {
     const auto& param = GetParam();
     const uint32_t extra = param.exceed_cores ? num_compute_cores() + 1U : 0U;
     auto grads = make_grads(param.num_sharded + extra, param.num_replicated + extra);
+    if (param.exceed_cores) {
+        boost_second_launch(grads.sharded_params, grads.sharded_full, "sharded_", num_compute_cores());
+        boost_second_launch(grads.replicated_params, grads.replicated, "replicated_", num_compute_cores());
+    }
     const float max_norm = param.max_norm_ratio * reference_norm(grads, param.p_norm_type);
 
     auto norm = core::clip_grad_norm_tp(
@@ -224,14 +264,47 @@ TEST_F(ClipGradNormTpTest, MixedMultiTileShapes) {
     verify(grads, norm, max_norm);
 }
 
-// Shapes that don't fill whole tiles: the tile padding must not leak into the norm.
+// Shapes that don't fill whole tiles: the tile padding must not leak into the norm. from_xtensor zero-pads, which
+// would hide a leak (|0|^p = 0), so the padding is filled with a large value first.
 TEST_F(ClipGradNormTpTest, UnalignedShapes) {
     auto grads = make_grads({{1U, 1U, 20U, 80U}}, {{1U, 1U, 17U, 40U}, {1U, 3U, 5U, 7U}});
+    poison_padding(grads.sharded_params);
+    poison_padding(grads.replicated_params);
     const float max_norm = 0.5F * reference_norm(grads);
 
     auto norm = core::clip_grad_norm_tp(grads.sharded_params, grads.replicated_params, max_norm, kClusterAxis);
 
     verify(grads, norm, max_norm);
+}
+
+// Column-parallel (dim 2) and row-parallel (dim 3) grads are clipped in one step3 launch, which relabels its outputs
+// with the union of its inputs' placements; each grad must keep its own label.
+TEST_F(ClipGradNormTpTest, PreservesGradTopology) {
+    auto* device = &autograd::ctx().get_device();
+    auto shard_on = [&](const xt::xarray<float>& values, int dim) {
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, dim, kClusterAxis);
+        return core::from_xtensor(values, device, ttnn::Layout::TILE, mapper.get());
+    };
+    serialization::NamedParameters sharded;
+    sharded["dim2"] = make_param(shard_on(random_bf16_exact({1U, 1U, 32U * kTpSize, 32U}), 2));
+    sharded["dim3"] = make_param(shard_on(random_bf16_exact({1U, 1U, 32U, 32U * kTpSize}), 3));
+    serialization::NamedParameters replicated;
+    replicated["replicated"] = make_param(replicate(random_bf16_exact({1U, 1U, 32U, 32U})));
+
+    std::unordered_map<std::string, std::string> before;
+    for (const auto* params : {&sharded, &replicated}) {
+        for (const auto& [name, param] : *params) {
+            before[name] = fmt::format("{}", param->get_grad().tensor_topology().placements());
+        }
+    }
+
+    core::clip_grad_norm_tp(sharded, replicated, 1.0F, kClusterAxis);
+
+    for (const auto* params : {&sharded, &replicated}) {
+        for (const auto& [name, param] : *params) {
+            EXPECT_EQ(fmt::format("{}", param->get_grad().tensor_topology().placements()), before.at(name)) << name;
+        }
+    }
 }
 
 // A zero norm hits the 1e-6 guard: the coefficient clamps to 1 and the gradients stay zero instead of NaN.
@@ -296,6 +369,21 @@ TEST_F(ClipGradNormTpTest, RejectsInvalidArguments) {
     xt::xarray<float> values_2d = xt::reshape_view(values, {32U, 32U});
     with_2d["2d"] = make_param(core::from_xtensor(values_2d, device, ttnn::Layout::TILE, mapper.get()));
     EXPECT_THROW(core::clip_grad_norm_tp(sharded, with_2d, 1.0F, kClusterAxis), std::logic_error) << "2D grad";
+
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    EXPECT_THAT(
+        [&] { core::clip_grad_norm_tp(replicated, {}, 1.0F, kClusterAxis); },
+        ThrowsMessage<std::logic_error>(HasSubstr("is passed as sharded but is replicated")));
+    EXPECT_THAT(
+        [&] { core::clip_grad_norm_tp({}, sharded, 1.0F, kClusterAxis); },
+        ThrowsMessage<std::logic_error>(HasSubstr("is passed as replicated but is sharded")));
+
+    auto with_duplicate = replicated;
+    with_duplicate["duplicate"] = sharded.begin()->second;
+    EXPECT_THAT(
+        [&] { core::clip_grad_norm_tp(sharded, with_duplicate, 1.0F, kClusterAxis); },
+        ThrowsMessage<std::logic_error>(HasSubstr("is in both sharded and replicated")));
 }
 
 // Single device: with everything replicated and a TP group of one, the result must match clip_grad_norm.
@@ -336,4 +424,24 @@ TEST_F(ClipGradNormTpSingleDeviceTest, MatchesClipGradNorm) {
             core::to_xtensor(ref_params[std::to_string(i)]->get_grad()),
             std::to_string(i));
     }
+}
+
+// step1 accumulates each gradient's Sum[|g|^p] in bf16, so the norm drifts low as gradients grow: about 0.6x the
+// true norm at 4096 tiles. TODO(tstepanovic): enable once step1 accumulates in fp32 (#63505).
+TEST_F(ClipGradNormTpSingleDeviceTest, DISABLED_LargeGradientNorm) {
+    auto* device = &autograd::ctx().get_device();
+    const auto values = test_utils::make_uniform_xarray<float>(Shape{1U, 1U, 32U * 4096U, 32U}, -1.0F, 1.0F, 42U);
+    serialization::NamedParameters params;
+    params["large"] = make_param(core::from_xtensor(values, device));
+
+    // fp64 reference over the bf16-rounded values the device holds.
+    double pow_sum = 0.0;
+    for (const float v : core::to_xtensor(params["large"]->get_grad())) {
+        pow_sum += static_cast<double>(v) * v;
+    }
+    const double expected = std::sqrt(pow_sum);
+
+    auto norm = core::clip_grad_norm_tp({}, params, 1.0F, /*cluster_axis=*/0U);
+
+    EXPECT_NEAR(core::to_vector(norm->get_value()).front(), expected, kRtol * expected);
 }

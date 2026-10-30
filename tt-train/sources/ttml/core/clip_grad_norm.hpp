@@ -23,8 +23,12 @@ autograd::TensorPtr clip_grad_norm(
     bool error_if_nonfinite = true);
 
 // Tensor-parallel clip_grad_norm. `sharded` gradients are split along mesh axis `cluster_axis`
-// (their Sum[|g|^p] is all-reduced across it); `replicated` ones are identical on that axis and
-// counted once. Clips in place; returns the pre-clip norm on device without a host sync.
+// (their Sum[|g|^p] is all-reduced across it); `replicated` ones are counted once and must be
+// identical on every device of that axis, so all-reduce partial-sum grads (e.g. Qwen3 QK-norm) first.
+// Each parameter's placement on `cluster_axis` must match its group. Call after DDP gradient sync.
+// Clips in place; returns the pre-clip norm on device without a host sync. Per-gradient sums
+// accumulate in bf16 (moreh step1), so the norm is underestimated for gradients of more than ~1k
+// tiles per device (#63505).
 autograd::TensorPtr clip_grad_norm_tp(
     const serialization::NamedParameters& sharded,
     const serialization::NamedParameters& replicated,
