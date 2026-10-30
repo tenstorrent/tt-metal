@@ -368,7 +368,8 @@ class StrandsDecider:
     def evaluate_batch(self, requests: list[tuple[str, dict]]) -> list[dict]:
         """evaluate() for several (state, questions) requests; all their questions share the batched forwards."""
         encoded = [
-            encode_request(self.tokenizer, state, questions, self.config.max_length) for state, questions in requests
+            encode_request(self.tokenizer, state, questions, min(self.config.max_length, self.max_seq_len))
+            for state, questions in requests
         ]
         flat = [q for qs in encoded for q in qs]
         logits = iter(self.question_logits_batch(flat))
