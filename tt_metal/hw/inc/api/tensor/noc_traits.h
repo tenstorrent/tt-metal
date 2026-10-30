@@ -175,6 +175,44 @@ struct noc_traits_t<TensorAccessor<DSpecT>> : tensor_accessor::detail::PushIssue
         }
         return noc_addr;
     }
+
+    // Multicast: offset_bytes into the tensor's region on every node of the rectangle (corners as for
+    // get_noc_multicast_addr). With Watcher, a sharded tensor's rectangle is checked against its nodes; buffers
+    // described by a 2D ShardSpecBuffer carry no node set and are not checked.
+    struct dst_args_mcast_type {
+        uint32_t noc_x_start{};
+        uint32_t noc_y_start{};
+        uint32_t noc_x_end{};
+        uint32_t noc_y_end{};
+        uint32_t offset_bytes = 0;
+    };
+    template <Noc::AddressType address_type>
+    static uint64_t dst_addr_mcast(const TensorAccessor<DSpecT>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        static_assert(!DSpecT::is_dram, "A DRAM tensor cannot be a multicast destination");
+        static_assert(
+            !DSpecT::is_interleaved,
+            "An interleaved tensor cannot be a multicast destination: its accessor carries no node set, so Watcher "
+            "could not check the rectangle");
+        // No l1_cached_view: a tensor's base address comes from the host allocator, never the uncached L1 alias.
+        const uint64_t noc_addr = ::get_noc_multicast_addr(
+            args.noc_x_start,
+            args.noc_y_start,
+            args.noc_x_end,
+            args.noc_y_end,
+            tensor_accessor::detail::TransferAccess::bank_base(dst) + args.offset_bytes,
+            noc.get_noc_id());
+        DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(
+            noc.get_noc_id(),
+            noc_addr,
+            args.noc_x_start,
+            args.noc_y_start,
+            args.noc_x_end,
+            args.noc_y_end,
+            &dst.dspec().packed_xy_coords()[0],
+            dst.dspec().num_banks());
+        return noc_addr;
+    }
 };
 
 template <typename Accessor>

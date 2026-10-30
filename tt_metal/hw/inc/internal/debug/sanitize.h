@@ -1106,6 +1106,75 @@ inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
 }
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid) debug_sanitize_noc_txn_id(noc_id, trid)
 
+// Multicast into a sharded tensor: every worker node of the rectangle must be one of the tensor's nodes, given as
+// num_nodes packed bank coordinates (x in bits 8-15, y in bits 0-7).
+//
+// Takes the nodes as a pointer and count, not a template over the accessor, so Watcher builds carry one copy.
+void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
+    uint8_t noc_id,
+    uint64_t noc_addr,
+    uint32_t x_start,
+    uint32_t y_start,
+    uint32_t x_end,
+    uint32_t y_end,
+    const uint16_t* packed_xy_coords,
+    uint32_t num_nodes) {
+    // NoC 0 runs from the start corner up to the end corner and NoC 1 down; corners given the other way round wrap
+    // around the grid edge.
+    const uint32_t x_min = noc_id == 0 ? x_start : x_end;
+    const uint32_t x_max = noc_id == 0 ? x_end : x_start;
+    const uint32_t y_min = noc_id == 0 ? y_start : y_end;
+    const uint32_t y_max = noc_id == 0 ? y_end : y_start;
+    // Under ATT the coordinates are in the map's frame, so a worker is what the map resolves, as in the generic check.
+    auto is_worker = [noc_id](uint32_t x, uint32_t y) {
+#if defined(NOC_ATT_ENABLED)
+        return noc_att::resolve(ACTIVE_ATT_MAP, noc_att::Address::worker(x, y, 0)).valid;
+#else
+        bool is_virtual_coord = false;
+        return get_core_type(noc_id, x, y, is_virtual_coord) == AddressableCoreType::TENSIX;
+#endif
+    };
+    bool covered = false;  // A wrapping rectangle is reported: the check does not model the torus.
+    if (x_min <= x_max && y_min <= y_max) {
+        if (!is_worker(x_min, y_min)) {
+            return;  // left to the generic multicast check
+        }
+        // Assumes the tensor's nodes are distinct, or a duplicate inside the rectangle can hide a missing one. A
+        // BufferDistributionSpec built from a CoreRangeSet satisfies this; one built from a core list is not checked.
+        uint32_t num_inside = 0;
+        for (uint32_t i = 0; i < num_nodes; ++i) {
+            const uint32_t x = (packed_xy_coords[i] >> 8) & 0xFF;
+            const uint32_t y = packed_xy_coords[i] & 0xFF;
+            num_inside += x >= x_min && x <= x_max && y >= y_min && y <= y_max;
+        }
+        // Count worker nodes rather than take the area: worker coordinates have gaps (Blackhole's non-worker columns,
+        // harvested rows or columns). Non-worker nodes come in whole rows and columns, so the count is the worker
+        // columns along the first row times the worker rows along the first column.
+        uint32_t num_worker_cols = 0;
+        for (uint32_t x = x_min; x <= x_max; ++x) {
+            num_worker_cols += is_worker(x, y_min);
+        }
+        uint32_t num_worker_rows = 0;
+        for (uint32_t y = y_min; y <= y_max; ++y) {
+            num_worker_rows += is_worker(x_min, y);
+        }
+        covered = num_inside == num_worker_cols * num_worker_rows;
+    }
+    if (!covered) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            0,
+            0,
+            DEBUG_SANITIZE_NOC_MULTICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeNocMulticastOutsideNodeSet);
+    }
+}
+#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n) \
+    debug_sanitize_noc_multicast_rect_in_node_set(noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n)
+
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
@@ -1158,5 +1227,6 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_L1_ADDR(addr, l)
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l)
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
+#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n)
 
 #endif  // WATCHER_ENABLED
