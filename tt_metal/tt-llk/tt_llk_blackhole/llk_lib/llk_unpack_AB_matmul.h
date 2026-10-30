@@ -348,8 +348,10 @@ inline void _llk_unpack_AB_matmul_(
 
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    const bool reuse_a        = ct_dim >= rt_dim;
-    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    const bool reuse_a            = ct_dim >= rt_dim;
+    const std::uint32_t t_dim     = reuse_a ? rt_dim : ct_dim;
+    const std::uint32_t mop_count = reuse_a ? ct_dim : rt_dim;
+    LLK_ASSERT(mop_count <= 32, "Matmul MOP zmask selects the context replay for at most 32 iterations");
 
     if (!reuse_a)
     {
@@ -418,7 +420,8 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
+        // zmask bit i set -> iteration i runs skipA (context-1 replay); the mask spans MOP_CFG (hi16) + MOP (lo16).
+        ckernel_unpack_template::run(mop_count, unp_cfg_context == 0 ? 0 : 0xFFFFFFFF);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);

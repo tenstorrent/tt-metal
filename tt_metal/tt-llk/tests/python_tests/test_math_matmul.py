@@ -21,8 +21,9 @@ from helpers.llk_params import (
     Transpose,
     format_dict,
 )
-from helpers.logger import logger
 from helpers.matmul_sweep import (
+    MOP_ZMASK_KT_DIMS,
+    MOP_ZMASK_RT_CT,
     ODD_REUSE_KT_DIMS,
     ODD_REUSE_RT_CT,
     MatmulConfig,
@@ -31,7 +32,7 @@ from helpers.matmul_sweep import (
     sweep_matmul,
     sweep_tiny_tiles_matmul,
 )
-from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
+from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
 from helpers.test_config import TestConfig
@@ -132,7 +133,7 @@ ODD_REUSE_FIDELITY_THROTTLE = (
 )
 
 
-def odd_reuse_matmul_params():
+def full_dest_matmul_params(label, rt_ct_dims, kt_dims, fidelity_throttle):
     fmt = next(
         f
         for f in MATMUL_FORMATS
@@ -141,8 +142,8 @@ def odd_reuse_matmul_params():
     )
     face_layout = generate_face_layout_config_sweep(math_matmul=True)[0]
     params = []
-    for rt_dim, ct_dim in ODD_REUSE_RT_CT:
-        for kt_dim in ODD_REUSE_KT_DIMS:
+    for rt_dim, ct_dim in rt_ct_dims:
+        for kt_dim in kt_dims:
             config = MatmulConfig(
                 tile_dimensions=generate_tile_dims(
                     (
@@ -157,13 +158,13 @@ def odd_reuse_matmul_params():
                 dest_sync=DestSync.Full,
                 dest_acc=DestAccumulation.No,
             )
-            for fidelity, throttle in ODD_REUSE_FIDELITY_THROTTLE:
+            for fidelity, throttle in fidelity_throttle:
                 params.append(
                     pytest.param(
                         fidelity,
                         config,
                         throttle,
-                        id=f"odd_reuse-rt{rt_dim}-ct{ct_dim}-kt{kt_dim}-{fidelity.name}-throttle{throttle}",
+                        id=f"{label}-rt{rt_dim}-ct{ct_dim}-kt{kt_dim}-{fidelity.name}-throttle{throttle}",
                     )
                 )
     return params
@@ -204,7 +205,19 @@ ALL_TEST_PARAMS = list(
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
         ),
         # Odd t_dim on the full-dest blocks the sweep cannot reach.
-        odd_reuse_matmul_params(),
+        full_dest_matmul_params(
+            "odd_reuse",
+            ODD_REUSE_RT_CT,
+            ODD_REUSE_KT_DIMS,
+            ODD_REUSE_FIDELITY_THROTTLE,
+        ),
+        # Full-tile unpack MOP of 16 iterations on both reuse branches, under both unpack contexts.
+        full_dest_matmul_params(
+            "mop_zmask",
+            MOP_ZMASK_RT_CT,
+            MOP_ZMASK_KT_DIMS,
+            ((MathFidelity.LoFi, 0),),
+        ),
     )
 )
 
@@ -298,30 +311,9 @@ def test_math_matmul(
     # Matmul sweep shapes deliberately fit one destination section. Repeat the
     # complete matmul block four times so the same test also validates section
     # hand-off without changing the operation's RT/CT/KT contract.
-    #
-    # SyncFull + 16-bit dest (dest_acc=No) holds 16 tiles. Pack CLR_ALL after a
-    # tiny-tile section whose dest window straddles the half-sync boundary
-    # leaves packer dest addressing stuck at that tile on the next section
-    # (1x32 through 16x32). Skip the 4-block handoff for those windows;
-    # restore num_blocks=4 after #53500. Windows that stay in one half,
-    # SyncHalf, dest_acc=Yes, and full 32x32 tiles still cover the handoff.
     num_tiles_in_block = matmul_config.tile_dimensions.tile_cnt
     dst_index = matmul_config.dst_index
-    half_dest_tiles = DEST_SYNC_TILE_LIMITS[DestSync.Half]
-    dest_straddles_half = (
-        matmul_config.dest_sync == DestSync.Full
-        and matmul_config.dest_acc == DestAccumulation.No
-        and matmul_config.tile_dimensions.in0_tile_r_dim < TILE_DIM
-        and dst_index < half_dest_tiles < dst_index + num_tiles_in_block
-    )
-    if dest_straddles_half:
-        logger.warning(
-            "Skipping 4-block dest section handoff for tiny-tile matmul "
-            "(dst_index={}, num_tiles_in_block={}); restore num_blocks=4 after #53500",
-            dst_index,
-            num_tiles_in_block,
-        )
-    num_blocks = 1 if dest_straddles_half else 4
+    num_blocks = 4
 
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
