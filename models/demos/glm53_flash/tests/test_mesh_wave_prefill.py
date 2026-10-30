@@ -282,17 +282,22 @@ def test_wave_first_token_vs_hf(mesh_device):
     )
     assert first_sp == hf_first, "the SP first token must match HF"
     assert all(v == hf_first for v in firsts.values()) and row0[0][0] == hf_first and p_rows > bar and p_sp > bar
-    model.capture_waves([256])
-    traced = _timed(
-        "traced wave (256 per row)",
-        lambda: model.prefill_traced_wave(_wave(model, {r: (prompt, 0) for r in range(rows)}, user=0)),
-    )
-    p_tr = pcc(traced[0][1], all_rows[0][1])
-    logger.info(
-        f"traced wave first tokens {[traced[r][0] for r in range(rows)]}, row 0 vs the eager wave pcc {p_tr:.6f} (equal {torch.equal(traced[0][1], all_rows[0][1])})"
-    )
-    assert all(traced[r][0] == hf_first for r in range(rows)) and p_tr > 0.9999
-    model.release_wave_traces()
+    # the captured waves at 128 and 256 rows per row: the served 2026-10-30 gate found the 128-row trace giving a wrong
+    # first token for this very prompt (102021 vs 102647) while the eager 128-row wave above and the 256-row trace are
+    # right, so both lengths are gated here, one capture at a time (the smallest captured length serves a prompt)
+    for T_wave in (128, 256):
+        model.capture_waves([T_wave])
+        traced = _timed(
+            f"traced wave ({T_wave} per row)",
+            lambda: model.prefill_traced_wave(_wave(model, {r: (prompt, 0) for r in range(rows)}, user=0)),
+        )
+        p_tr = pcc(traced[0][1], all_rows[0][1])
+        logger.info(
+            f"traced wave ({T_wave} per row) first tokens {[traced[r][0] for r in range(rows)]}, row 0 vs the eager wave "
+            f"pcc {p_tr:.6f} (equal {torch.equal(traced[0][1], all_rows[0][1])})"
+        )
+        assert all(traced[r][0] == hf_first for r in range(rows)) and p_tr > 0.9999, f"the {T_wave}-row wave trace"
+        model.release_wave_traces()
     # throughput: rows x T_big-token prompts in one wave vs the SP prefill of one rows x T_big chunk
     torch.manual_seed(2)
     big = [torch.randint(1000, 20000, (T_big,), dtype=torch.long) for _ in range(rows)]
