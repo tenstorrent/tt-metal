@@ -535,6 +535,11 @@ class TtV41BatchDecoder(TtV41Decoder):
         # as the join does, the whole bucket restored (its rows past the prefix are stale and unread), so no
         # eager collective runs between the captured steps' replays; 0: every restore eager
         self.restore_traced = os.environ.get("TT_V41_RESTORE_TRACE", "0") == "1"
+        # TT_V41_RESTORE_TRACE_MAX_WIDTH (tokens, default every width): the widest bucket captured; the wider ones
+        # restore eagerly. A capture's trace bytes grow with its pieces (192 MB for 8 slots x 9 widths,
+        # the 256K to 1M buckets 45 of the 51 pieces a slot), and the served region holds ~0.9 GB beside the
+        # decode, join and prefill captures
+        self.restore_trace_max_width = int(os.environ.get("TT_V41_RESTORE_TRACE_MAX_WIDTH", "0")) or None
         self.restore_traces: dict[tuple[int, int, int], SubDeviceTraceController] = {}
 
     @property
@@ -663,7 +668,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         captures. Nothing is uploaded per restore: the ops read the slot and the parking buffers only."""
         if width is None:
             for w in self.join_widths:
-                self.capture_restore(state, slot, w)
+                if self.restore_trace_max_width is None or w <= self.restore_trace_max_width:
+                    self.capture_restore(state, slot, w)
             return
         key = (id(state), slot, width)
         if key in self.restore_traces:
