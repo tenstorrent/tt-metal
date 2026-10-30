@@ -158,8 +158,8 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
         raise ValueError("gdn_step takes three older ring slots and four taps")
     mesh = projected.device()
     if (
-        os.environ.get("QWEN38_GDN_CONV_SPLIT", "2") in ("1", "2", "3", "4") and debug is None
-    ):  # default stage 2 (x34 A/Bs)
+        os.environ.get("QWEN38_GDN_CONV_SPLIT", "4") in ("1", "2", "3", "4") and debug is None
+    ):  # default split 4 at rows=1 (e2e A/B 14.849/14.754 -> 14.577/14.324 ms), split 2 for other rows
         from . import conv_split
 
         if conv_split.admits(rows, mesh):

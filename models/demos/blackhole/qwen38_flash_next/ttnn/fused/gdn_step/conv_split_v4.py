@@ -39,7 +39,7 @@ CB_QROW, CB_KROW, CB_BETA, CB_DECAY = 15, 16, 18, 19
 
 
 def active() -> bool:
-    return os.environ.get(v.SPLIT_ENV, "2") == "4"
+    return os.environ.get(v.SPLIT_ENV, "4") == "4"
 
 
 def admits(rows: int, grid_x: int, grid_y: int) -> bool:

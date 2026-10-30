@@ -36,7 +36,7 @@ HEAD_ONLY_CBS_DROPPED = (0, 1, 2)  # the conv inputs live on the conv cores
 
 
 def enabled() -> bool:
-    return os.environ.get(ENV, "2") in ("1", "2", "3", "4")
+    return os.environ.get(ENV, "4") in ("1", "2", "3", "4")
 
 
 def grid_fits(grid_x: int, grid_y: int, rows: int) -> bool:
@@ -86,11 +86,11 @@ def run_cs(m, projected, older, newest, taps, constants, norm, recurrent, out):
 
     rows = fp.rows_of(projected)
     mesh = projected.device()
-    if os.environ.get(ENV, "2") in (
+    if os.environ.get(ENV, "4") in (
         "2",
         "3",
         "4",
-    ):  # stage 2 (V split, the default; 3 = early reader) where its layout fits
+    ):  # stage 2 (V split; 3 = early reader; 4 = norm/gate cores at rows=1, the default) where its layout fits
         from . import conv_split_v
 
         if conv_split_v.admits(rows, mesh):

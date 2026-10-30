@@ -46,7 +46,7 @@ def early_reader() -> bool:
     """Split 3: the same program as split 2 with ``reader_vb3.cpp`` (all reads in one batch, the scaler and mask tiles
     read from DRAM instead of built with word loops) and the decay-first compute order."""
 
-    return os.environ.get(SPLIT_ENV, "2") == "3"
+    return os.environ.get(SPLIT_ENV, "4") == "3"
 
 
 def face_element(row: int, col: int) -> int:
@@ -153,7 +153,7 @@ def run_vb(m, projected, older, newest, taps, constants, norm, recurrent, out):
     rows = fp.rows_of(projected)
     mesh = projected.device()
     grid = mesh.compute_with_storage_grid_size()
-    if os.environ.get(SPLIT_ENV, "2") == "4":
+    if os.environ.get(SPLIT_ENV, "4") == "4":
         # split 4 (helper cores for the gates and the l2 norms) at rows 1; rows 2 and 4 run split 2 (the helper rectangles
         # would overlap the head rectangle)
         from . import conv_split_v4
