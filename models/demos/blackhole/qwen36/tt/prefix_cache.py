@@ -498,12 +498,15 @@ class GdnPrefixStateCache:
                 return k
         return None
 
-    def save(self, tokens, pos, low_prio=False, protect=False):
+    def save(self, tokens, pos, low_prio=False, protect=False, copy_fn=None):
         """Snapshot the currently bound GDN state (the state AFTER tokens[:pos]) into a slot. ``low_prio``: a new key is
         evicted before normal ones (an existing normal key is never downgraded; a normal save upgrades a low key).
         ``protect``: an end-of-prompt checkpoint (kept longer under QWEN36_PREFIX_CACHE_VALUE_EVICT). Eviction
         skips pinned snapshots; when no slot is free and none is evictable the save is skipped (counted, debug log). The
         evicted snapshot moves to the host tier when it is on and the snapshot qualifies (_spill_ok).
+        ``copy_fn(dn, rec_dst, carry_dst)`` (QWEN36_PREFILL_INTRACE_SNAP; None = copy the bound state): writes the
+        state after tokens[:pos] of GDN layer dn into the slot's tensors from another source, an in-replay snapshot
+        (Qwen36Model.gdn_snap_copy_fn). Same keys, eviction and accounting either way.
         Returns True when the snapshot is in the cache afterwards."""
         buf = _tokens_np(tokens)
         key = (int(pos), self._digest(buf, int(pos)))
@@ -542,6 +545,9 @@ class GdnPrefixStateCache:
         # the same state may sit in the host tier: it moves back to this device slot (one tier per key)
         self._host_tier().pop(key, None)
         for dn, (rec, carry) in zip(self._dns, self._slots[slot]):
+            if copy_fn is not None:
+                copy_fn(dn, rec, carry)
+                continue
             ttnn.copy(dn.rec_state, rec)
             ttnn.copy(dn.conv_carry, carry)
         self._lru[key] = slot

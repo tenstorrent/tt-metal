@@ -240,6 +240,8 @@ def kda_conv_prefill(
     xin_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     conv_sel=None,
     emit_state=True,
+    snap_rows=None,
+    snap_out=None,
 ):
     """Depthwise causal conv (K=4) + SiLU + q/k/v split in ONE program (ttnn.experimental.kda.qkv_causal_conv1d_silu).
 
@@ -257,6 +259,11 @@ def kda_conv_prefill(
     Returns q [1,T,Q], k [1,T,K], v [1,T,V] bf16 TILE DRAM, and new_state [1, 3, C] bf16 TILE DRAM: the chunk's
     last three INPUT rows, i.e. the next chunk's history (the op does not emit it).
     emit_state=False skips new_state (returned as None), for callers that keep their own carry (the spec verify).
+    snap_rows / snap_out (QWEN36_PREFILL_INTRACE_SNAP; both or neither): snap_rows is a persistent [1, R] uint32 row
+                  index tensor, snap_out a persistent [1, R, C] bf16 ROW_MAJOR buffer; the R conv-input rows snap_rows
+                  names are gathered out of the row-major copy (one embedding, an exact row copy) into snap_out: the
+                  three rows before each in-chunk snapshot position, i.e. the cross-chunk carry a chunk ending there
+                  would keep (rows 3k..3k+2 = snapshot k, see prefill_plan.snap_index_words).
     """
     C = qkv.shape[-1]
     n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
@@ -279,6 +286,10 @@ def kda_conv_prefill(
     )
     if hist is not history:
         ttnn.deallocate(hist)
+    if snap_rows is not None:
+        rows = ttnn.embedding(snap_rows, ttnn.reshape(xin, (T, C)), layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+        ttnn.copy(rows, snap_out)
+        ttnn.deallocate(rows)
     if not emit_state:
         ttnn.deallocate(xin)
         return q, k, v, None
@@ -1064,16 +1075,57 @@ class TPGatedDeltaNet:
                 mesh_mapper=rep_map,
             )
 
-    def _kda_conv_prefill(self, qkv, T, conv_state, conv_sel=None):
+    def _kda_conv_prefill(self, qkv, T, conv_state, conv_sel=None, snap=None):
         """kda_conv_prefill on this layer's taps and widths. conv_state: the previous chunk's carry
         [1, K-1, C] TILE, or None from scratch. conv_sel: optional persistent one-hot [1, K-1, T] selector of the last
-        real rows (traced masked bucket, from-scratch only). Returns (q, k, v, new_state), see kda_conv_prefill."""
+        real rows (traced masked bucket, from-scratch only). snap (QWEN36_PREFILL_INTRACE_SNAP): the model's snapshot
+        row index tensor; the gathered conv rows land in this layer's _snap_conv_rm. Returns (q, k, v, new_state), see
+        kda_conv_prefill."""
         self._ensure_kda_consts()
         history = conv_state if conv_state is not None else self._kda_zero_history
         kd, vd = self.key_dim_tp, self.value_dim_tp
+        snap_kw = {} if snap is None else dict(snap_rows=snap["conv_idx"], snap_out=self._snap_conv_rm)
         return kda_conv_prefill(
-            qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start, conv_sel=conv_sel
+            qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start, conv_sel=conv_sel, **snap_kw
         )
+
+    def alloc_snapshot_buffers(self, slots, conv_rows):
+        """QWEN36_PREFILL_INTRACE_SNAP: this layer's persistent in-replay snapshot buffers (zeros; host writes, so before
+        any trace capture): _snap_rec [slots, Nv_tp, Dk, Dv] fp32 TILE, the chunk op's snapshot_state (slot k = the
+        carried state after the k-th staged chunk), and _snap_conv_rm [1, conv_rows, qkv_dim_tp] bf16 ROW_MAJOR, the
+        conv-input rows the KDA conv gathers (rows 3k..3k+2 = snapshot k's cross-chunk carry). B=1 prefill shapes."""
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        self._snap_rec = ttnn.from_torch(
+            torch.zeros(slots, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=rep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._snap_conv_rm = ttnn.from_torch(
+            torch.zeros(1, conv_rows, self.qkv_dim_tp, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=rep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def copy_snapshot_to(self, k, rec_dst, carry_dst):
+        """Copy in-replay snapshot k (after the replay that took it) into a prefix-cache slot: the state slice of
+        _snap_rec straight into rec_dst [1, Nv, Dk, Dv] (one slice into the preallocated slot, exact fp32 tiles) and rows
+        3k..3k+2 of _snap_conv_rm, tilized, into carry_dst [1, K-1, C] TILE (the slice + to_layout a chunk end's
+        conv_new_state takes). Eager, enqueued behind the replay."""
+        ttnn.slice(self._snap_rec, [k, 0, 0, 0], [k + 1, self.Nv, self.Dk, self.Dv], output_tensor=rec_dst)
+        n = self.K - 1
+        rows = ttnn.slice(
+            self._snap_conv_rm, [0, n * k, 0], [1, n * k + n, self.qkv_dim_tp], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        t = ttnn.to_layout(rows, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(rows)
+        ttnn.copy(t, carry_dst)
+        ttnn.deallocate(t)
 
     # ------------------------------------------------------------------ #
     # Fused single-user decode: conv history (_conv_hist_rm) + its handoff from prefill.
@@ -2102,7 +2154,14 @@ class TPGatedDeltaNet:
         return qkv, z, a, b
 
     def forward_prefill(
-        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, prefill_masks=None
+        self,
+        x,
+        chunk_size=128,
+        valid_len=None,
+        capture_state=False,
+        return_state=False,
+        prefill_masks=None,
+        snap=None,
     ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
@@ -2117,6 +2176,10 @@ class TPGatedDeltaNet:
         tensors the caller rewrites per request): dict with "bg" [1,T,1] fp32 TILE (1 for t < valid_len; multiplied
         into beta/g), "conv_sel" [1,K-1,T] bf16 TILE one-hot of the last K-1 real conv-input rows (conv_new_state),
         and optionally "qkv" (q/k/v mask, parity only). Requires the KDA conv and a from-scratch (zeroed) carry.
+        snap (QWEN36_PREFILL_INTRACE_SNAP; traced prefill bodies only): {"rec_idx", "conv_idx"}, the model's persistent
+        snapshot index tensors; the chunk op copies the carried state after the staged chunks into _snap_rec and the KDA
+        conv gathers the rows before them into _snap_conv_rm (alloc_snapshot_buffers). Needs the KDA conv and the fused
+        chunk op. None: the unchanged calls.
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
@@ -2150,7 +2213,11 @@ class TPGatedDeltaNet:
             # KDA op: conv + SiLU + q/k/v split in one program; its outputs are already the three
             # token-major tensors the flat-qkv path wants (masked buckets keep the MAC FIR below).
             q, k, v, conv_new_state = self._kda_conv_prefill(
-                qkv, T, _cstate, conv_sel=None if prefill_masks is None else prefill_masks["conv_sel"]
+                qkv,
+                T,
+                _cstate,
+                conv_sel=None if prefill_masks is None else prefill_masks["conv_sel"],
+                **({} if snap is None else {"snap": snap}),
             )
             ttnn.deallocate(qkv)
             if self._gdn_flat_qkv:
@@ -2162,6 +2229,7 @@ class TPGatedDeltaNet:
                 _qkv_head_dims = None
         else:
             assert prefill_masks is None, "persistent prefill_masks need the KDA conv (QWEN_GDN_CONV=kda, K=4)"
+            assert snap is None, "in-replay snapshots need the KDA conv (QWEN_GDN_CONV=kda, K=4)"
             # The MAC FIR: masked buckets (their one-hot new_state selection) and QWEN_GDN_CONV=fir.
             conv, conv_new_state = _causal_conv1d_fir(
                 qkv,
@@ -2216,6 +2284,9 @@ class TPGatedDeltaNet:
         if prefill_masks is not None:
             assert _use_fused, "persistent prefill_masks need the fused chunk op"
             _extra["masks"] = (prefill_masks["bg"], prefill_masks.get("qkv"))
+        if snap is not None:
+            assert _use_fused, "in-replay snapshots need the fused chunk op"
+            _extra["snapshot"] = (snap["rec_idx"], self._snap_rec)
         o, final_state = _delta_fn(
             q,
             k,

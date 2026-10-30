@@ -28,7 +28,11 @@ from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
 from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.demos.blackhole.qwen36.tt.tp_common import (
+    GDN_SNAP_SLOTS,
     pack_u32_rows,
+    prefill_intrace_snap_enabled,
+    prefill_intrace_snap_min_rows,
+    prefill_masked_big_enabled,
     rope_row_index,
     spec_hostfix_enabled,
     spec_hostset_enabled,
@@ -461,6 +465,12 @@ class Qwen36Model:
         self._slot_rope_delta = torch.zeros(max(int(args.max_batch_size), 1), dtype=torch.int64)
         # True while the short-trace init buffers (dn._prefill_init_*) hold a carried state instead of zeros.
         self._prefill_init_dirty = False
+        # QWEN36_PREFILL_INTRACE_SNAP: the snapshot index tensors every traced prefill body hands its GDN layers
+        # ({"rec_idx", "conv_idx"}, allocated with the B=1 scratch, see _alloc_gdn_snap) and the in-replay snapshot rows
+        # staged in them now (() = none: the chunk op copies nothing). None = off (every trace body unchanged).
+        self._gdn_snap = None
+        self._snap_staged = ()
+        self._snap_min_rows = 0  # QWEN36_PREFILL_INTRACE_SNAP_MIN_ROWS: bodies of fewer rows carry no snapshot ops
 
         # Optional vision tower (DropInVisionTransformer), attached lazily by
         # init_vision_model() for the multimodal serving path. None on the text-only path.
@@ -3647,6 +3657,7 @@ class Qwen36Model:
         gdn_masks: persistent device masks of the short trace (see _ShortPrefillTrace); None = full chunk.
         Returns hidden [1,1,chunk_size,dim]."""
         chunk_size = seq_len if seq_len is not None else self._chunked_chunk_size
+        gdn_snap = self._gdn_snap_for_body(chunk_size)
         x = self.embd(token_buf)
         x = ttnn.reshape(x, (1, 1, chunk_size, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -3667,8 +3678,14 @@ class Qwen36Model:
                 )
             else:
                 # valid_len=None: no GDN mask; trace-safe static conv capture (matches valid_len==chunk_size).
+                # gdn_snap (QWEN36_PREFILL_INTRACE_SNAP): the in-replay snapshot index tensors (None: unchanged call).
                 x_new = layer.forward(
-                    x, mode="prefill", chunk_size=self.args.gdn_chunk_size, valid_len=None, gdn_masks=gdn_masks
+                    x,
+                    mode="prefill",
+                    chunk_size=self.args.gdn_chunk_size,
+                    valid_len=None,
+                    gdn_masks=gdn_masks,
+                    **({} if gdn_snap is None else {"gdn_snap": gdn_snap}),
                 )
             ttnn.deallocate(x)
             x = x_new
@@ -4008,17 +4025,39 @@ class Qwen36Model:
         """The GDN state tensors currently bound on every GDN layer (a short trace bakes their addresses)."""
         return tuple(l.attention.rec_state for l in self.layers if not l.is_full_attention)
 
-    def _short_trace_for(self, length, chunk_size=2048):
+    _MASKED_BIG_BUCKETS = (4096, 8192)  # QWEN36_PREFILL_MASKED_BIG, spec short path only (see masked_big_buckets)
+
+    def masked_big_buckets(self, page_table):
+        """Masked short-trace buckets beyond 2048 for the spec fast prefill (QWEN36_PREFILL_MASKED_BIG=1 with
+        QWEN36_PREFILL_BIG_CHUNK=8192 and the big set prepared): (4096, 8192) limited to what the page table holds, else
+        (). Passed to prepare_prefill_traces_short(spec=True) with the default buckets."""
+        if not prefill_masked_big_enabled() or self._prefill_big_chunk != 8192 or "big" not in self._chunk_sets:
+            return ()
+        cap = page_table.shape[-1] * get_block_size(self._paged_kv_caches)
+        return tuple(b for b in self._MASKED_BIG_BUCKETS if cap >= b)
+
+    def _short_trace_for(self, length, chunk_size=2048, bucket=None):
         """The captured trace serving a `length`-token prompt, or None (flag off, length >= chunk_size, bucket not
         captured, or the GDN state bound now is not the one the trace was captured against, e.g. the decode buffers
-        vs the batched prefill scratch -> the caller falls back to the eager masked-bucket path)."""
+        vs the batched prefill scratch -> the caller falls back to the eager masked-bucket path).
+        ``bucket`` (QWEN36_PREFILL_MASKED_BIG only; 4096 or 8192): the masked big bucket the spec fast prefill chose for a
+        remainder of `length` <= bucket rows (3 <= length: the carried GDN conv history). None = the default lookup."""
         if not self._short_traces or not self.short_prefill_trace_enabled():
             return None
-        if not (1 <= length < chunk_size):
-            return None
-        tr = self._short_traces.get(self._mask_bucket_for(length))
-        if tr is None or (length != tr.bucket and not tr.masked):
-            return None
+        if bucket is not None:
+            if not prefill_masked_big_enabled() or bucket not in self._MASKED_BIG_BUCKETS:
+                return None
+            if not (3 <= length <= bucket):
+                return None
+            tr = self._short_traces.get(bucket)
+            if tr is None or not tr.masked or not tr.spec:
+                return None
+        else:
+            if not (1 <= length < chunk_size):
+                return None
+            tr = self._short_traces.get(self._mask_bucket_for(length))
+            if tr is None or (length != tr.bucket and not tr.masked):
+                return None
         refs = self._gdn_binding_refs()
         if len(refs) != len(tr.gdn_refs) or any(a is not b for a, b in zip(refs, tr.gdn_refs)):
             if not getattr(self, "_short_trace_binding_warned", False):
@@ -4381,6 +4420,8 @@ class Qwen36Model:
         carry_gdn=False,
         spec_inputs=None,
         vis_row_offset=0,
+        bucket=None,
+        snap_rows=(),
     ):
         """Stage every per-request input of the bucket trace serving `actual_len` tokens, replay it, drain.
         Returns the _ShortPrefillTrace (outputs readable) or None when no trace serves this request (strict=False
@@ -4397,8 +4438,12 @@ class Qwen36Model:
         zeros (resumed segment; needs actual_len >= 3 so the conv history of the next step comes from this segment).
 
         vis_row_offset (default 0): image/video placeholder tokens before this segment (a segment with chunk_start > 0
-        of a multimodal prompt splices vision_tokens[vis_row_offset : ...]; see _vis_row_offset_for)."""
-        tr = self._short_trace_for(actual_len)
+        of a multimodal prompt splices vision_tokens[vis_row_offset : ...]; see _vis_row_offset_for).
+
+        bucket (default None): the masked big bucket (4096 / 8192, QWEN36_PREFILL_MASKED_BIG) serving `actual_len` rows.
+        snap_rows (QWEN36_PREFILL_INTRACE_SNAP): row offsets inside this replay whose GDN state the trace snapshots (the
+        caller saves them after the drained replay); () clears the staged rows."""
+        tr = self._short_trace_for(actual_len) if bucket is None else self._short_trace_for(actual_len, bucket=bucket)
         if tr is None:
             return None
         assert token_ids.shape[0] == 1 and token_ids.shape[1] >= actual_len, "short traced prefill is B=1"
@@ -4545,6 +4590,11 @@ class Qwen36Model:
             raise ValueError(f"bucket {tr.bucket} is not a spec short trace, but spec_inputs were given")
         # Vision-splice mask (host->device copy only; clears it for text-only requests).
         self._set_vision_merge(toks, vision_tokens, vis_row_offset)
+        if self.snap_rows_ok(tr.bucket):  # QWEN36_PREFILL_INTRACE_SNAP: this replay's in-replay snapshot rows
+            assert all(3 <= int(r) <= actual_len - 3 for r in snap_rows), (snap_rows, actual_len)
+            host_refs.extend(self._snap_stage(snap_rows))
+        else:
+            assert not snap_rows, f"in-replay snapshot rows for a {tr.bucket}-row body without snapshot ops"
 
         ttnn.execute_trace(self.device, tr.trace_id, cq_id=0, blocking=False)
         # Drain before reading (and before releasing the host tensors the staging copies read from).
@@ -4687,6 +4737,104 @@ class Qwen36Model:
                 dn._zero_rec,
             ) = saved
         self._gdn_prefill_scratch = scratch
+        self._alloc_gdn_snap()
+
+    def _alloc_gdn_snap(self):
+        """QWEN36_PREFILL_INTRACE_SNAP: allocate the in-replay snapshot buffers with the B=1 scratch (before any trace
+        capture; host writes): per GDN layer alloc_snapshot_buffers, plus the two index tensors every traced prefill
+        body reads, rec_idx [1, 8] uint32 (the chunk op's snapshot_index page: all "end of list" = no snapshot) and
+        conv_idx [1, 4 * GDN_SNAP_SLOTS] uint32 (the conv-row gather). No-op when off, single device, or a GDN layer
+        lacks the KDA conv (the traced FIR conv has no row-major input to gather from)."""
+        if self._gdn_snap is not None or not prefill_intrace_snap_enabled() or self.num_devices <= 1:
+            return
+        if not self._short_trace_masks_supported():
+            logger.warning("QWEN36_PREFILL_INTRACE_SNAP needs the KDA conv in every GDN layer: off")
+            return
+        from models.demos.blackhole.qwen36.tt.prefill_plan import snap_index_words
+
+        rec, conv = snap_index_words([], GDN_SNAP_SLOTS)
+        rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+        def _idx(words):
+            return ttnn.from_torch(
+                torch.tensor([words], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=rep,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.alloc_snapshot_buffers(GDN_SNAP_SLOTS, len(conv))
+        self._gdn_snap = {"rec_idx": _idx(rec), "conv_idx": _idx(conv)}
+        self._snap_staged = ()
+        self._snap_min_rows = prefill_intrace_snap_min_rows()
+        logger.info(
+            f"In-replay GDN snapshots (QWEN36_PREFILL_INTRACE_SNAP): {GDN_SNAP_SLOTS} slots per replay, buffers on "
+            f"{sum(1 for l in self.layers if not l.is_full_attention)} GDN layers, trace bodies of >= "
+            f"{self._snap_min_rows} rows"
+        )
+
+    def snap_rows_ok(self, rows):
+        """Whether a traced prefill body of `rows` rows carries the in-replay snapshot ops (flag on, buffers allocated,
+        rows >= QWEN36_PREFILL_INTRACE_SNAP_MIN_ROWS)."""
+        return self._gdn_snap is not None and int(rows) >= self._snap_min_rows
+
+    def _gdn_snap_for_body(self, rows=None):
+        """The snapshot index tensors a prefill trace body of `rows` rows hands its GDN layers
+        (QWEN36_PREFILL_INTRACE_SNAP), or None: off, a body below QWEN36_PREFILL_INTRACE_SNAP_MIN_ROWS, or the GDN layers
+        are not bound to a B=1 state (the snapshot buffers are B=1 shaped)."""
+        if self._gdn_snap is None:
+            return None
+        if rows is not None and int(rows) < self._snap_min_rows:
+            return None
+        if any(l.attention.B != 1 for l in self.layers if not l.is_full_attention):
+            return None
+        return self._gdn_snap
+
+    def gdn_snap_active(self):
+        """True when the prefill traces carry in-replay snapshots (QWEN36_PREFILL_INTRACE_SNAP, buffers allocated)."""
+        return self._gdn_snap is not None
+
+    def _snap_stage(self, rel_rows):
+        """Stage the in-replay snapshot rows of the NEXT prefill replay (row offsets inside it, sorted, 128-aligned): the
+        chunk op's index page and the conv-row gather. Host tensors are returned for the caller to keep alive until the
+        copies are done (they are enqueued non-blocking on cq 0, before the replay). Nothing is copied when the staged
+        rows do not change (the common case: no snapshot in this replay and none in the previous one). No-op (returns
+        []) when off."""
+        if self._gdn_snap is None:
+            return []
+        rel_rows = tuple(int(r) for r in rel_rows)
+        if rel_rows == self._snap_staged:
+            return []
+        from models.demos.blackhole.qwen36.tt.prefill_plan import snap_index_words
+
+        rec, conv = snap_index_words(rel_rows, GDN_SNAP_SLOTS)
+        rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        refs = []
+        for words, dev in ((rec, self._gdn_snap["rec_idx"]), (conv, self._gdn_snap["conv_idx"])):
+            h = ttnn.from_torch(
+                torch.tensor([words], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(h, dev)
+            refs.append(h)
+        self._snap_staged = rel_rows
+        return refs
+
+    def gdn_snap_copy_fn(self, k):
+        """GdnPrefixStateCache.save copy function for in-replay snapshot k of the last replay (see
+        TPGatedDeltaNet.copy_snapshot_to)."""
+
+        def _copy(dn, rec_dst, carry_dst):
+            dn.copy_snapshot_to(k, rec_dst, carry_dst)
+
+        return _copy
 
     def _bind_gdn_prefill_scratch(self):
         """Bind the persistent B=1 prefill scratch onto every GDN layer (prefill runs B=1); returns the
@@ -4998,10 +5146,12 @@ class Qwen36Model:
                 ttnn.copy_host_to_device_tensor(cpt_host, self._bucket_page_table_buf)
 
                 # chunk_start=0 and cos/sin for [0, bucket) are baked in; no per-replay DMA needed.
+                snap_refs = self._snap_stage(())  # QWEN36_PREFILL_INTRACE_SNAP: no in-replay snapshot here
                 ttnn.execute_trace(self.device, self._bucket_trace_id, cq_id=0, blocking=False)
                 # Sync before reading this user's state/logit: the trace writes hidden/rec_state/
                 # conv_states in place and the next replay would overwrite them.
                 ttnn.synchronize_device(self.device)
+                del snap_refs
 
                 # Gather this replay's B=1 GDN state for assembly after the loop. The next replay
                 # resets the scratch IN PLACE, so snapshot now via host to_torch (see comment above).
@@ -6474,10 +6624,25 @@ class Qwen36Model:
         return logits
 
     def _replay_chunks(
-        self, token_ids, page_table, pt_host, start, n_chunks, chunk_size, vision_tokens, save_cb, on_chunk
+        self,
+        token_ids,
+        page_table,
+        pt_host,
+        start,
+        n_chunks,
+        chunk_size,
+        vision_tokens,
+        save_cb,
+        on_chunk,
+        snap=None,
     ):
         """Replay the ACTIVE chunk set's trace for n_chunks chunks of chunk_size rows from absolute position start;
-        returns (trace output, chunk_size) of the last replayed chunk, or None when n_chunks == 0."""
+        returns (trace output, chunk_size) of the last replayed chunk, or None when n_chunks == 0.
+
+        snap (QWEN36_PREFILL_INTRACE_SNAP, the spec planner's _SnapRun): snap.inside(cs, rows) = the in-replay snapshot
+        rows of the chunk at cs, staged with its other inputs; snap.after(cs, rows, inside) runs right after its replay
+        (saves those snapshots and a point at the chunk end). With the flag on and no snap, the staged rows are cleared
+        (no replay of a snapshot-capable trace copies a stale position)."""
         if n_chunks == 0:
             return None
         block_size = get_block_size(self._paged_kv_caches)
@@ -6546,8 +6711,14 @@ class Qwen36Model:
             self._set_vision_merge(
                 token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
             )
+            _inside = ()
+            if self.snap_rows_ok(chunk_size):  # QWEN36_PREFILL_INTRACE_SNAP: this chunk's in-replay snapshot rows
+                _inside = snap.inside(cs, chunk_size) if snap is not None else ()
+                _host_refs += self._snap_stage([p - cs for p in _inside])
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
+            if snap is not None:
+                snap.after(cs, chunk_size, _inside)  # device-side saves, ordered after this chunk's trace on cq 0
             if save_cb is not None:
                 save_cb(cs + chunk_size)  # device-side snapshot, ordered after this chunk's trace on cq 0
             if on_chunk is not None:
@@ -6585,6 +6756,7 @@ class Qwen36Model:
         run_tail=True,
         on_chunk=None,
         allow_big=False,
+        snap=None,
     ):
         """TP traced chunk-outer prefill: replay the captured per-chunk trace
         (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
@@ -6603,7 +6775,9 @@ class Qwen36Model:
 
         allow_big: the full blocks of big_chunk_rows() rows (QWEN36_PREFILL_BIG_CHUNK) replay the big chunk trace
         first, then the rest the 2048 one; same rows covered, so the tail is unchanged. self._last_chunk names the last
-        replayed chunk (output, rows) for callers that read its output."""
+        replayed chunk (output, rows) for callers that read its output.
+
+        snap: QWEN36_PREFILL_INTRACE_SNAP in-replay snapshots of the replayed chunks (see _replay_chunks); None = none."""
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         # Re-zero GDN once; carries across replays + tail (chunk_start>0 skips reset).
@@ -6630,10 +6804,11 @@ class Qwen36Model:
         big = self.big_chunk_rows() if allow_big else 0
         n_big = rows // big if big else 0
         last = None
+        snap_kw = {} if snap is None else {"snap": snap}
         if n_big:
             with self._big_chunk_set():
                 last = self._replay_chunks(
-                    token_ids, page_table, pt_host, start, n_big, big, vision_tokens, save_cb, on_chunk
+                    token_ids, page_table, pt_host, start, n_big, big, vision_tokens, save_cb, on_chunk, **snap_kw
                 )
         n_small = (rows - n_big * big) // chunk_size
         last = (
@@ -6647,6 +6822,7 @@ class Qwen36Model:
                 vision_tokens,
                 save_cb,
                 on_chunk,
+                **snap_kw,
             )
             or last
         )

@@ -108,6 +108,9 @@ def chunk_gated_delta_rule_fused_adapter(
     # Used INSTEAD of the host-built masks (whose ttnn.from_torch uploads are illegal under trace capture).
     wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / FORWARD_SUBSTITUTION / AUTO: the WY-inverse arithmetic. None = the
     # op's AUTO (the forward-substitution solve on Blackhole at chunk 32, Horner elsewhere).
+    snapshot=None,  # (snapshot_index, snapshot_state) of QWEN36_PREFILL_INTRACE_SNAP: the op copies the carried state after
+    # the staged 32-row chunks into the [S, B*Nv, Dk, Dv] buffer (see ttnn.transformer.chunk_gated_delta_rule). None = the
+    # unchanged call.
 ):
     global _logged_path
     if not _logged_path:
@@ -213,6 +216,7 @@ def chunk_gated_delta_rule_fused_adapter(
         ones=_ones,
         masks=_masks,
         **({"wy_inverse": wy_inverse} if wy_inverse is not None else {}),
+        **({} if snapshot is None else {"snapshot_index": snapshot[0], "snapshot_state": snapshot[1]}),
     )
 
     if return_o_bh:
