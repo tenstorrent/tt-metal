@@ -533,6 +533,7 @@ class GLM53MeshModel:
             out = dec.prefill_wave_forward(streams, user=int(call.user), wave=info)
             ttnn.deallocate(streams)
             streams = out
+        self.mesh.release_transients()  # constants built under live traces live for this wave only (GLMMesh.lazy)
         res: dict[int, tuple[int, torch.Tensor]] = {}
         if self.head is not None:
             logits = self.head.last_token_logits_rows(streams, valids)  # [1,1,1,V] per chip: row r's on row r

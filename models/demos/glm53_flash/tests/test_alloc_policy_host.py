@@ -12,6 +12,7 @@ device constant is cached before the first capture and a chunk transient after i
 from __future__ import annotations
 
 import dataclasses
+import pathlib
 from types import SimpleNamespace
 
 from models.demos.glm53_flash.tt import mesh as mesh_mod
@@ -73,3 +74,20 @@ def test_frozen_flag_and_transients_are_shared_per_device(monkeypatch):
     v = lazy_const(None, plain_cache, "q", make)
     assert plain_cache["q"] is v and lazy_const(None, plain_cache, "q", make) is v
     assert lazy_const(b, plain_cache, "q", make) is v, "a cached entry is served frozen or not"
+    # every eager step of GLM53MeshModel releases the transients it built: the chunk (prefill_streams), the decode
+    # step and the wave (prefill_wave; its omission grew the DRAM 0.34 MiB per bank per 2048-row wave on the 1 M
+    # direct run of 2026-10-30, ~16 geometry constants x 11 DSA layers never freed -> OOM at 555 K per row)
+    import ast
+
+    from models.demos.glm53_flash import tt as tt_pkg
+
+    tree = ast.parse(pathlib.Path(tt_pkg.__path__[0], "mesh_model.py").read_text())
+    model = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GLM53MeshModel")
+    steps = {n.name: n for n in model.body if isinstance(n, ast.FunctionDef)}
+    for name in ("prefill_streams", "decode_step", "prefill_wave"):
+        calls = [
+            n
+            for n in ast.walk(steps[name])
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "release_transients"
+        ]
+        assert calls, f"GLM53MeshModel.{name} must release the transients GLMMesh.lazy built under live traces"
