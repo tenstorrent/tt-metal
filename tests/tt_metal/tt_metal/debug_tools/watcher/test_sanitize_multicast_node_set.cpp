@@ -55,15 +55,15 @@ TensorSpec MakeTileShardedSpec(const NodeRangeSet& nodes) {
             }));
 }
 
-// The sender multicasts its one-tile `source` over the rectangle from logical node (start_x,0) to (end_x,0) on `noc`. A
-// sender inside the rectangle is skipped by the multicast.
+// The sender multicasts its one-tile `source` over the rectangle from logical node (start_x,0) to (end_x,0) on `noc`.
 void RunMulticastNodeSetTest(
     distributed::MeshDevice& mesh_device,
     NodeCoord sender,
     uint32_t start_x,
     uint32_t end_x,
     NOC noc,
-    bool expect_error) {
+    bool expect_error,
+    bool includes_sender = false) {
     if (MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
         GTEST_SKIP();
     }
@@ -93,11 +93,11 @@ void RunMulticastNodeSetTest(
     // edge.
     const CoreCoord rect_start = mesh_device.worker_core_from_logical_core({start_x, 0});
     const CoreCoord rect_end = mesh_device.worker_core_from_logical_core({end_x, 0});
-    // The rectangle's nodes, less a sender inside it, which the multicast skips. A wrapping rectangle stops in the
-    // check before the multicast is issued.
+    // The rectangle's nodes, less a sender inside it unless the multicast is a loopback one. A wrapping rectangle stops
+    // in the check before the multicast is issued.
     const uint32_t first_x = std::min(start_x, end_x);
     const uint32_t last_x = std::max(start_x, end_x);
-    const bool skips_sender = sender.y == 0 && sender.x >= first_x && sender.x <= last_x;
+    const bool skips_sender = !includes_sender && sender.y == 0 && sender.x >= first_x && sender.x <= last_x;
     const uint32_t num_targets = last_x - first_x + 1 - (skips_sender ? 1u : 0u);
     const experimental::KernelSpecName kernel_name{"multicast_writer"};
     Program program = experimental::MakeProgramFromSpec(
@@ -120,6 +120,8 @@ void RunMulticastNodeSetTest(
                         {"noc_y_end", static_cast<uint32_t>(rect_end.y)},
                         {"num_targets", num_targets},
                         {"size_bytes", static_cast<uint32_t>(source_spec.compute_page_size_bytes())},
+                        // A sender inside the rectangle is skipped unless this makes the multicast a loopback one.
+                        {"includes_sender", static_cast<uint32_t>(includes_sender)},
                     },
                 .hw_config =
                     experimental::DataMovementHardwareConfig{
@@ -195,4 +197,16 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSenderInsideRectang
     // The sender on (2,0) holds no tile of `target`, but the multicast skips it.
     RunMulticastNodeSetTest(
         *this->devices_[0], /*sender=*/{2, 0}, /*start_x=*/0, /*end_x=*/2, NOC::NOC_0, /*expect_error=*/false);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastLoopbackSenderInsideRectangle) {
+    // As above, but the loopback multicast also writes the sender, which holds no tile of `target`.
+    RunMulticastNodeSetTest(
+        *this->devices_[0],
+        /*sender=*/{2, 0},
+        /*start_x=*/0,
+        /*end_x=*/2,
+        NOC::NOC_0,
+        /*expect_error=*/true,
+        /*includes_sender=*/true);
 }

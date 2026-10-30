@@ -195,13 +195,21 @@ struct noc_traits_t<TensorAccessor<DSpecT>> : tensor_accessor::detail::PushIssue
             "An interleaved tensor cannot be a multicast destination: its accessor carries no node set, so Watcher "
             "could not check the rectangle");
         // No l1_cached_view: a tensor's base address comes from the host allocator, never the uncached L1 alias.
-        const uint64_t noc_addr = ::get_noc_multicast_addr(
+        return ::get_noc_multicast_addr(
             args.noc_x_start,
             args.noc_y_start,
             args.noc_x_end,
             args.noc_y_end,
             tensor_accessor::detail::TransferAccess::bank_base(dst) + args.offset_bytes,
             noc.get_noc_id());
+    }
+    // Called by Noc::async_write_multicast, which knows whether the multicast includes the sender.
+    static void sanitize_dst_mcast(
+        const TensorAccessor<DSpecT>& dst,
+        const Noc& noc,
+        const dst_args_mcast_type& args,
+        uint64_t noc_addr,
+        bool includes_sender) {
         DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(
             noc.get_noc_id(),
             noc_addr,
@@ -210,8 +218,8 @@ struct noc_traits_t<TensorAccessor<DSpecT>> : tensor_accessor::detail::PushIssue
             args.noc_x_end,
             args.noc_y_end,
             &dst.dspec().packed_xy_coords()[0],
-            dst.dspec().num_banks());
-        return noc_addr;
+            dst.dspec().num_banks(),
+            includes_sender);
     }
 };
 

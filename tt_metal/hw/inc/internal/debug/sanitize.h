@@ -1118,7 +1118,8 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
     uint32_t x_end,
     uint32_t y_end,
     const uint16_t* packed_xy_coords,
-    uint32_t num_nodes) {
+    uint32_t num_nodes,
+    bool includes_sender) {
     // NoC 0 runs from the start corner up to the end corner and NoC 1 down; corners given the other way round wrap
     // around the grid edge.
     const uint32_t x_min = noc_id == 0 ? x_start : x_end;
@@ -1157,11 +1158,10 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
             num_inside += x >= x_min && x <= x_max && y >= y_min && y <= y_max;
             is_sender_node |= x == sender_x && y == sender_y;
         }
-        // A plain multicast skips the sender, so a sender inside the rectangle need not hold the tensor; only a worker
-        // sender is among the counted nodes. The check can't see a loopback multicast (MCAST_INCL_SRC), so a loopback
-        // into a sender without the tensor goes unreported.
-        num_inside += !is_sender_node && sender_x >= x_min && sender_x <= x_max && sender_y >= y_min &&
-                      sender_y <= y_max && is_worker(sender_x, sender_y);
+        // A plain multicast skips the sender, so a sender inside the rectangle need not hold the tensor; a loopback
+        // multicast (MCAST_INCL_SRC) writes it, so it must. Only a worker sender is among the counted nodes.
+        num_inside += !includes_sender && !is_sender_node && sender_x >= x_min && sender_x <= x_max &&
+                      sender_y >= y_min && sender_y <= y_max && is_worker(sender_x, sender_y);
         // Count worker nodes rather than take the area: worker coordinates have gaps (Blackhole's non-worker columns,
         // harvested rows or columns). Non-worker nodes come in whole rows and columns, so the count is the worker
         // columns along the first row times the worker rows along the first column.
@@ -1187,8 +1187,10 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
             DebugSanitizeNocMulticastOutsideNodeSet);
     }
 }
-#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n) \
-    debug_sanitize_noc_multicast_rect_in_node_set(noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n)
+#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(                         \
+    noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n, includes_sender) \
+    debug_sanitize_noc_multicast_rect_in_node_set(                             \
+        noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n, includes_sender)
 
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
@@ -1242,6 +1244,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_L1_ADDR(addr, l)
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l)
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
-#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n)
+#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET( \
+    noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n, includes_sender)
 
 #endif  // WATCHER_ENABLED
