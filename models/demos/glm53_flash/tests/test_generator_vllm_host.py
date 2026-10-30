@@ -1207,6 +1207,25 @@ def test_wave_prefill_walks_chunks_and_switches_sp_to_waves_one_way():
             torch.tensor([[1], [0], [0], [0]], dtype=torch.int32), torch.tensor([L, -1, -1, -1]), **_decode_kw()
         )
 
+    # a burst of fresh long prompts that fills a wave (``rows`` of them in one step) takes the wave-affine order even
+    # though slot indices are free on every row: both land on slot index 0 of rows 0 and 1 and prefill as ONE wave of
+    # two members (the 32 x 1 M capstone r2 vs r3: SP-taken slot indices fragmented the waves at 1.15 K tok/s, the
+    # wave-affine order ran waves of 8 at 2.28 K tok/s); a lone long prompt still takes the sequence-parallel path
+    c, mc = _adapter(independent=True, max_seq_len=65536)
+    pair = torch.zeros(2, 2048, dtype=torch.int32)
+    pair[0] = torch.arange(2048) % 60
+    pair[1] = torch.arange(2048) % 7 + 1
+    c.prefill_forward(
+        pair, prompt_lens=[2048, 2048], start_pos=torch.tensor([0, 0]), empty_slots=[0, 1], sampling_params=_greedy(2)
+    )
+    assert [(c.slots.physical(k).row, c.slots.physical(k).user) for k in (0, 1)] == [(0, 0), (1, 0)]
+    assert [w[4] for w in mc.calls if w[0] == "prefill_wave"][-1] == [(0, 0, 0, 2048), (1, 0, 0, 2048)]
+    assert not any(c.slots.physical(k).sp_only for k in (0, 1))
+    c.prefill_forward(
+        pair[:1], prompt_lens=[2048], start_pos=torch.tensor([0]), empty_slots=[2], sampling_params=_greedy(1)
+    )
+    assert c.slots.physical(2).user == 1 and c.slots.physical(2).sp_only  # alone: SP on the next free index
+
 
 def test_kv_accounting_hooks():
     a, _ = _adapter()

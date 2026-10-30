@@ -1664,6 +1664,15 @@ class GLM53FlashForCausalLM:
         items = []  # (i, logical, state, start, end, ids, spans): start = the position the device run begins at
         apc = self.apc
         media: dict[int, tuple[list[MMItem], torch.Tensor]] = {}  # row -> (its multimodal items, prefix ids [0, end))
+        # the step's burst of fresh long prompts (no traced wave holds them, no multimodal payload): the placement
+        # prefers the sequence-parallel path only while such a burst cannot fill a wave (``_allocate_slot``)
+        burst = sum(
+            1
+            for i in range(B)
+            if int(starts[i]) == 0
+            and not (has_mm and mm_items(kwargs, i))
+            and self.waves.captured_wave_length(int(ends[i])) is None
+        )
         for i in range(B):
             logical = int(empty_slots[i])
             start, end = starts[i], ends[i]
@@ -1684,7 +1693,7 @@ class GLM53FlashForCausalLM:
                 # its greedy text repeats bit-exactly) whether or not vLLM reported a hit: with the confirmer active a
                 # short repeat has no aligned snapshot to confirm and arrives as a plain prefill (async_r3's stage b)
                 at = apc.slot_holding(tokens[i], spans, self.slots) if apc is not None else None
-                state = self._allocate_slot(logical, end, sp_required=bool(row_items), at=at)
+                state = self._allocate_slot(logical, end, sp_required=bool(row_items), at=at, burst=burst)
             elif state is not None and state.phase == "prefill" and state.prefilled_to == start:
                 pass  # a chunked continuation of this slot's own prompt
             elif state is None and apc is not None:
@@ -2639,7 +2648,7 @@ class GLM53FlashForCausalLM:
         return 0 if hit is None else int(hit.position)
 
     # ================================================================================= helpers
-    def _allocate_slot(self, logical: int, end: int = 0, sp_required: bool = False, at=None):
+    def _allocate_slot(self, logical: int, end: int = 0, sp_required: bool = False, at=None, burst: int = 1):
         """A fresh prompt's physical slot: the column / row balance, then (APC) a slot without retained content
         before the least recently used resident prefix; a logical slot still mapped (never released) retains first.
         ``end``: the first chunk's end; under per-row ownership a prompt no traced wave holds (it prefills eagerly)
@@ -2647,9 +2656,13 @@ class GLM53FlashForCausalLM:
         ``sp_required`` (a multimodal prompt) marks the slot so the planner never routes it through a wave. ``at``
         (APC): the free slot whose retained content is this very prompt (``SlotPrefixCache.slot_holding``): the
         prompt re-prefills there, on the same mesh row, so a repeated greedy request repeats its text (rows differ
-        in the last ulp; the smoke's stage b)."""
+        in the last ulp; the smoke's stage b). ``burst``: the fresh long prompts of this step; once they can fill a
+        wave of ``rows`` members the wave-affine order wins: a 2048-row wave of ``rows`` members costs what one 16 K
+        sequence-parallel chunk costs, so ``rows`` prompts prefill ``rows`` times faster in waves than as sequential
+        SP chunks, while a smaller burst keeps the SP path's short TTFT (the 32 x 1 M capstone, 2026-10-30: waves
+        fragmented by SP-taken slot indices at 1.15 K tok/s vs waves of 8 at 2.28 K tok/s)."""
         prefer_sp = self.geometry.rows_independent and (
-            sp_required or self.waves.captured_wave_length(int(end)) is None
+            sp_required or (self.waves.captured_wave_length(int(end)) is None and int(burst) < self.geometry.rows)
         )
         if self.apc is None:
             state = self.slots.allocate(logical, prefer_sp=prefer_sp)
