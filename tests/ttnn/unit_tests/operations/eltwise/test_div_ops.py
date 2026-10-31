@@ -413,6 +413,294 @@ def test_fmod_nan(testing_dtype, device):
     assert torch.equal(torch.isnan(golden), torch.isnan(output_tensor))
 
 
+_QUASAR_MODULO_SKIP = "The Quasar remainder and fmod kernels have not received these float fixes yet"
+
+
+def _skip_on_quasar(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip(_QUASAR_MODULO_SKIP)
+
+
+def _opposite_sign_exact_multiples(torch_dtype, count, seed=0):
+    """Pairs (a, b) with a = n * |b| exactly representable in torch_dtype and
+    sign(a) != sign(b), so remainder(a, b) is exactly 0. Deterministic (seeded).
+    n is drawn first and b gets at most (precision - n.bit_length()) significant
+    bits, so n * b always fits the dtype's significand and every draw is exact."""
+    precision, max_n = (24, 4096) if torch_dtype == torch.float32 else (8, 64)
+    gen = torch.Generator().manual_seed(seed)
+    n = torch.randint(2, max_n, (count,), generator=gen)
+    exponent = torch.randint(-3, 18, (count,), generator=gen)
+    a_vals, b_vals = [], []
+    for i in range(count):
+        b_bits = precision - int(n[i]).bit_length()
+        significand = int(torch.randint(2 ** (b_bits - 1), 2**b_bits, (1,), generator=gen).item())
+        b = significand * 2.0 ** (int(exponent[i]) - b_bits + 1)
+        a = int(n[i]) * b
+        if i % 2 == 0:
+            a_vals.append(a)
+            b_vals.append(-b)
+        else:
+            a_vals.append(-a)
+            b_vals.append(b)
+    a_tensor = torch.tensor(a_vals, dtype=torch_dtype)
+    b_tensor = torch.tensor(b_vals, dtype=torch_dtype)
+    assert torch.equal(a_tensor.double(), torch.tensor(a_vals, dtype=torch.float64))
+    assert torch.equal(b_tensor.double(), torch.tensor(b_vals, dtype=torch.float64))
+    return a_tensor, b_tensor
+
+
+# remainder(a, b) must be exactly 0 when a is an exact multiple of b. The kernel computes
+# a - floor(a * (1/b)) * b with an approximate reciprocal; when the quotient lands just below the
+# true integer the floor steps one past it and the raw result is b itself (or, at large magnitudes,
+# b plus the rounding of that product). The kernel repairs that overshoot for same-sign operands but
+# used to skip the repair when a and b differ in sign, so e.g. remainder(91.0, -13.0) came back as
+# -13.0 instead of 0.0.
+@pytest.mark.parametrize(
+    "testing_dtype, pairs",
+    [
+        (
+            "float32",
+            [
+                (91.0, -13.0),
+                (-91.0, 13.0),
+                (829680.6875, -462.991455078125),
+                (424466.4375, -421.09765625),
+                (20978266.0, -42988.25),
+                (-1234226.25, 3214.130859375),
+                (14056288.0, -5818.0),
+                (63853748.0, -149191.0),
+            ],
+        ),
+        ("bfloat16", [(-1512.0, 63.0), (-390.0, 13.0), (41.25, -1.875), (675840.0, -3840.0), (2.328125, -1.1640625)]),
+    ],
+)
+def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
+    _skip_on_quasar(device)
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    explicit_a = torch.tensor([a for a, _ in pairs], dtype=torch_dtype)
+    explicit_b = torch.tensor([b for _, b in pairs], dtype=torch_dtype)
+    random_a, random_b = _opposite_sign_exact_multiples(torch_dtype, 1024 - len(pairs))
+    torch_input_a = torch.cat([explicit_a, random_a]).reshape(32, 32)
+    torch_input_b = torch.cat([explicit_b, random_b]).reshape(32, 32)
+    # Every pair is an exact multiple in this dtype, so the whole golden is 0.
+    assert torch.all(torch_input_a.double() % torch_input_b.double() == 0)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    assert torch.all(golden == 0)
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    mismatch = output_tensor != golden
+    assert not mismatch.any(), (
+        f"{int(mismatch.sum())} of {mismatch.numel()} exact multiples gave a non-zero remainder; first: "
+        f"remainder({torch_input_a[mismatch][0].item()}, {torch_input_b[mismatch][0].item()}) = "
+        f"{output_tensor[mismatch][0].item()}"
+    )
+
+
+# Quotients of 2^24 and above: floor(a / b) can no longer be stepped by one in float, so the
+# overshoot correction has to fall back to subtracting b from the raw result. The non-multiple
+# pairs are the ones the kernel resolves at this magnitude on Wormhole, where the reciprocal of 25
+# rounds down so a / b lands just below the true quotient, leaving |result| >= |b| once;
+# remainder(419430432.0, 25.0) returned 32.0 instead of 7.0 without the fallback. Blackhole seeds
+# its reciprocal differently and was not run locally; if its reciprocal of 25 rounds up these two
+# pairs land one above the quotient instead and Blackhole CI decides whether they hold there.
+@pytest.mark.parametrize(
+    "testing_dtype, pairs",
+    [
+        (
+            "float32",
+            [
+                (419430432.0, 25.0),
+                (-419430432.0, -25.0),
+                (419430400.0, 25.0),
+                (419430400.0, -25.0),
+                (-419430400.0, 25.0),
+                (-838860800.0, -25.0),
+                (50331648.0, -3.0),
+                (-50331648.0, 3.0),
+                (125829120.0, 7.5),
+                (-251658240.0, 7.5),
+            ],
+        ),
+        (
+            "bfloat16",
+            [
+                (419430400.0, 25.0),
+                (419430400.0, -25.0),
+                (-524288000.0, 25.0),
+                (-838860800.0, -25.0),
+                (402653184.0, -3.0),
+                (-402653184.0, 24.0),
+            ],
+        ),
+    ],
+)
+def test_remainder_large_quotient(testing_dtype, pairs, device):
+    _skip_on_quasar(device)
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([a for a, _ in pairs], dtype=torch_dtype)
+    torch_input_b = torch.tensor([b for _, b in pairs], dtype=torch_dtype)
+    assert torch.all(torch_input_a.abs() / torch_input_b.abs() >= 2.0**24)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert torch.equal(output_tensor, golden), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+
+
+# Small quotients whose correctly rounded remainder equals the divisor: a = -1, b = 2^26 gives
+# floor(a / b) = -1 and a - (-1) * b = 2^26 - 1, which rounds to b itself in float32 (torch returns
+# b too). The remainder must be left alone: a |result| >= |b| repair applied here returned 0. The
+# last pair is an exact multiple of a divisor whose approximate reciprocal can be far off (2^126 on
+# Blackhole, where the hardware seed returns 0 for |b| >= 2^126); the floor then lands two above
+# the true quotient and a single sign correction leaves -b. Blackhole is not run locally.
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_remainder_result_equal_to_divisor(testing_dtype, device):
+    _skip_on_quasar(device)
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([-1.0, 1.0, -(2.0**-25), 2.0**-25, -(2.0**127), 2.0**127], dtype=torch_dtype)
+    torch_input_b = torch.tensor([2.0**26, -(2.0**26), 1.0, -1.0, 2.0**126, -(2.0**126)], dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    assert torch.equal(golden, torch.tensor([2.0**26, -(2.0**26), 1.0, -1.0, 0.0, 0.0], dtype=torch_dtype))
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert torch.equal(output_tensor, golden), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+
+
+_INF = float("inf")
+
+
+def _negative_nan(torch_dtype):
+    """A quiet NaN with the sign bit set (0xFFC00000 / 0xFFC0)."""
+    if torch_dtype == torch.bfloat16:
+        return torch.tensor([-0x40], dtype=torch.int16).view(torch.bfloat16)
+    return torch.tensor([-0x400000], dtype=torch.int32).view(torch.float32)
+
+
+def _assert_nan_lanes(testing_dtype, output_lanes):
+    if testing_dtype == "bfloat16":
+        # NaN is packed as inf for ttnn.bfloat16; either way the lane must not be a finite number.
+        assert not torch.isfinite(output_lanes).any(), f"device {output_lanes.tolist()}"
+    else:
+        assert torch.isnan(output_lanes).all(), f"device {output_lanes.tolist()}"
+
+
+# remainder(a, +-inf) for finite a is a when a is zero or has the divisor's sign, else the
+# divisor itself (torch semantics). The kernel's floor(a * (1/b)) * b term is 0 * inf for an
+# infinite divisor, which used to leave NaN in every such lane.
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_remainder_inf_divisor(testing_dtype, device):
+    _skip_on_quasar(device)
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor(
+        [5.0, -5.0, 5.0, -5.0, 0.0, 0.0, 2.5, -2.5, _INF, -_INF, _INF, -_INF, 0.0, 0.0], dtype=torch_dtype
+    )
+    torch_input_b = torch.tensor(
+        [_INF, _INF, -_INF, -_INF, _INF, -_INF, _INF, -_INF, _INF, _INF, -_INF, -_INF, _INF, -_INF],
+        dtype=torch_dtype,
+    )
+    # A NaN dividend with the sign bit set (0xFFC00000): SFPABS keeps that sign, so a magnitude
+    # test built on it would classify the lane as finite and negative, and return the divisor.
+    torch_input_a[12:] = _negative_nan(torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    # An infinite or NaN dividend stays NaN whatever the divisor's sign.
+    nan_lanes = torch.isnan(golden)
+    assert torch.equal(nan_lanes, ~torch.isfinite(torch_input_a))
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert torch.equal(
+        output_tensor[~nan_lanes], golden[~nan_lanes]
+    ), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+    _assert_nan_lanes(testing_dtype, output_tensor[nan_lanes])
+
+
+# fmod(a, +-inf) is a for finite a and NaN for an infinite a (torch semantics). The kernel's
+# trunc(a * (1/b)) * b term is 0 * inf for an infinite divisor, which used to leave NaN in the
+# finite-a lanes, while the a == b special case zeroed inf/inf.
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_fmod_inf_divisor(testing_dtype, device):
+    _skip_on_quasar(device)
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor(
+        [5.0, -5.0, 5.0, -5.0, 0.0, 2.5, _INF, -_INF, _INF, -_INF, 0.0, 0.0], dtype=torch_dtype
+    )
+    torch_input_b = torch.tensor(
+        [_INF, _INF, -_INF, -_INF, _INF, -_INF, _INF, -_INF, -_INF, _INF, _INF, -_INF], dtype=torch_dtype
+    )
+    # A NaN dividend with the sign bit set (0xFFC00000), which SFPABS leaves sign-set.
+    torch_input_a[10:] = _negative_nan(torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.fmod)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    finite_a = torch.isfinite(torch_input_a)
+    assert torch.equal(torch.isnan(golden), ~finite_a)
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.fmod(tt_in_a, tt_in_b))
+
+    assert torch.equal(
+        output_tensor[finite_a], golden[finite_a]
+    ), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+    _assert_nan_lanes(testing_dtype, output_tensor[~finite_a])
+
+
+# The scalar-divisor forms route to the unary kernels (ckernel_sfpu_remainder.h / ckernel_sfpu_fmod.h),
+# which receive a host reciprocal of 0 for an infinite divisor and used to return NaN where the
+# tensor-tensor path returns the torch value.
+@pytest.mark.parametrize("ttnn_op", [ttnn.remainder, ttnn.fmod])
+@pytest.mark.parametrize("scalar", [_INF, -_INF])
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_modulo_inf_scalar_divisor(ttnn_op, scalar, testing_dtype, device):
+    _skip_on_quasar(device)
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([5.0, -5.0, 0.0, 2.5, -2.5, _INF, -_INF, 0.0], dtype=torch_dtype)
+    torch_input_a[7:] = _negative_nan(torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(torch_input_a, scalar, device=device)
+    nan_lanes = torch.isnan(golden)
+    assert torch.equal(nan_lanes, ~torch.isfinite(torch_input_a))
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn_op(tt_in_a, scalar))
+
+    assert torch.equal(
+        output_tensor[~nan_lanes], golden[~nan_lanes]
+    ), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+    _assert_nan_lanes(testing_dtype, output_tensor[nan_lanes])
+
+
 def test_optional_output_tensor_remainder(device):
     torch.manual_seed(0)
 
