@@ -24,7 +24,18 @@ constexpr uint32_t kDerivedLogicalLt = 7;
 constexpr uint32_t kDerivedJointLPartialCol = 8;
 constexpr uint32_t kDerivedSlotCount = 9;
 
-// Common-runtime-arg layout: the metadata block (when present) precedes the logical-length pair.
+// Common-runtime-arg layout: the tensor addresses first, then the metadata block (when present), then the
+// logical-length pair.
+// Reader addresses: Q, K, V, gathered K, gathered V, attention sink; then joint Q, K, V when the kernel has joint
+// inputs; then gathered joint K, V on the sharded-joint path.
+constexpr uint32_t kReaderBaseAddressCommonArgCount = 6;
+constexpr uint32_t kReaderJointAddressCommonArgCount = 3;
+constexpr uint32_t kReaderGatheredJointAddressCommonArgCount = 2;
+constexpr uint32_t reader_address_common_arg_count(bool has_joint_inputs, bool has_gathered_joint_k) {
+    return kReaderBaseAddressCommonArgCount + (has_joint_inputs ? kReaderJointAddressCommonArgCount : 0) +
+           (has_gathered_joint_k ? kReaderGatheredJointAddressCommonArgCount : 0);
+}
+constexpr uint32_t kWriterAddressCommonArgCount = 3;  // out, joint out, stats addrs
 // slot_id addr, num_layers, layer_idx, batch count, kv_actual_isl addr
 constexpr uint32_t kReaderMetadataCommonArgCount = 5;
 constexpr uint32_t kWriterMetadataCommonArgCount = 1;  // kv_actual_isl addr
