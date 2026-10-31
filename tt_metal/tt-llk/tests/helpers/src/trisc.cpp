@@ -94,7 +94,16 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
-    llk_profiler::reset();
+    // RC memset knock-out a: staggered clear. Unpack (port 2) and math clear first, the pack TRISC only after the
+    // barrier, so math and pack never write the profiler buffers to L1 port 3 at the same time.
+    llk_profiler::reset_state();
+#if !defined(LLK_TRISC_PACK)
+    llk_profiler::clear_buffer();
+#endif
+    llk_profiler::sync_threads();
+#if defined(LLK_TRISC_PACK)
+    llk_profiler::clear_buffer();
+#endif
     llk_profiler::sync_threads();
 #endif
 
