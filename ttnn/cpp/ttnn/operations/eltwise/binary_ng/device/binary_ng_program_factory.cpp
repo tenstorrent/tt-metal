@@ -341,6 +341,8 @@ bool hits_bh_col_bcast_bf16_to_fp32_hang(
 // Row broadcast: widest column group, and the tiles per core that select it. A one-column walk whose row stride
 // shares a factor with the DRAM bank count keeps each core on a few banks, so it switches earlier.
 constexpr uint32_t kMaxColGroup = 4;
+// L1 bytes held for the row-major row-broadcast page (8192 bf16 or 4096 fp32 elements per row).
+constexpr uint32_t kRmRowBcastCacheBytes = 16384;
 constexpr uint32_t kColGroupMinTiles = 128;
 constexpr uint32_t kColGroupFewBanksMinTiles = 48;
 
@@ -1340,6 +1342,25 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
                 .data_format = b_data_format,
                 .page_size = slot_bytes,
+            }}},
+        });
+    }
+
+    // Row-major row broadcast: the broadcast operand is a single page that every row block re-reads. Hold that page in
+    // L1 (c_7), read once per core and (nd, d, n, c), instead of fetching it from one DRAM bank for every row. Pages
+    // above the capacity keep reading from DRAM. The size is a constant because the program is shared across shapes.
+    if (inputs_row_major && b.has_value() &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B)) {
+        reader_defines["ROW_BCAST_CACHE"] = "1";
+        reader_defines["ROW_BCAST_CACHE_BYTES"] = std::to_string(CMAKE_UNIQUE_NAMESPACE::kRmRowBcastCacheBytes);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = CMAKE_UNIQUE_NAMESPACE::kRmRowBcastCacheBytes,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+                .data_format = tt::DataFormat::UInt8,
+                .page_size = CMAKE_UNIQUE_NAMESPACE::kRmRowBcastCacheBytes,
             }}},
         });
     }
