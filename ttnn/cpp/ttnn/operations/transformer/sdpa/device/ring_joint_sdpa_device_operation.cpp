@@ -293,12 +293,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 
     if (args.kv_stripe_split > 1) {
-        const uint64_t capacity = static_cast<uint64_t>(tensor_args.local_kv_seq_len()) * args.ring_size;
-        TT_FATAL(
-            args.logical_n <= capacity,
-            "logical_n must not exceed input KV capacity (local KV seq * ring_size). Got logical_n={}, capacity={}",
-            args.logical_n,
-            capacity);
+        // logical_n against logical_n_capacity is checked by dynamic_axes.
         if (!kv_pad_rotation_active(args, tensor_args)) {
             const uint64_t chunk = static_cast<uint64_t>(tensor_args.input_q.logical_shape()[2]) * args.q_ring_size();
             TT_FATAL(
@@ -312,7 +307,6 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
     if (args.has_kv_pad_rotation()) {
         const auto N_local_q = tensor_args.input_q.logical_shape()[2];
-        const auto N_local_kv = tensor_args.local_kv_seq_len();
         const auto kv_actual_isl = args.kv_actual_isl.value();
         TT_FATAL(
             args.logical_n >= kv_actual_isl,
@@ -321,7 +315,6 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             kv_actual_isl);
         const auto new_actual_isl = args.logical_n - kv_actual_isl;
         const auto chunk_capacity = N_local_q * args.q_ring_size();
-        const auto cache_capacity = N_local_kv * args.ring_size;
         TT_FATAL(
             kv_actual_isl % tt::constants::TILE_HEIGHT == 0 && new_actual_isl % tt::constants::TILE_HEIGHT == 0,
             "KV-pad-aware rotation currently requires tile-aligned lengths. Got kv_actual_isl={}, "
@@ -340,17 +333,11 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             // keeps only the newest chunk-group slabs (chunk group g in local slab g % n_slabs).
             // Whole slabs are already required by the rotation checks; the per-dispatch alignment
             // (logical_n on a ring-group boundary, one group per chunk) by the chunked sliding block.
+            // The non-circular logical_n <= physical capacity bound is logical_n_capacity, checked by dynamic_axes.
             TT_FATAL(
                 tensor_args.kv_slab_count() >= 2,
                 "circular_kv_cache needs >= 2 slabs (current chunk + predecessor window slab). Got {}",
                 tensor_args.kv_slab_count());
-        } else {
-            TT_FATAL(
-                args.logical_n <= cache_capacity,
-                "KV-pad-aware rotation logical_n exceeds physical K/V cache capacity. Got logical_n={}, "
-                "cache capacity={}",
-                args.logical_n,
-                cache_capacity);
         }
         TT_FATAL(
             new_actual_isl <= chunk_capacity,
@@ -483,29 +470,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
         "metadata tensors slot_id and kv_actual_isl must be supplied together, or neither supplied");
 
-    // Kernels read element 0 as a raw 32-bit word. Check dtype, on-device, and volume 1;
-    // the live length value is the caller's contract.
-    for (const auto& [logical_tensor, name] : {
-             std::pair{&tensor_args.logical_n_tensor, "logical_n"},
-             std::pair{&tensor_args.logical_l_tensor, "logical_l"},
-         }) {
-        if (!logical_tensor->has_value()) {
-            continue;
-        }
-        const auto& t = logical_tensor->value();
-        TT_FATAL(
-            t.dtype() == DataType::UINT32 || t.dtype() == DataType::INT32,
-            "{} tensor must be UINT32 or INT32 (the kernels read element 0 as a raw 32-bit word). Got {}",
-            name,
-            t.dtype());
-        TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} tensor must be on device", name);
-        TT_FATAL(t.is_allocated(), "{} tensor must be allocated on device", name);
-        TT_FATAL(
-            t.logical_volume() == 1,
-            "{} tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
-            name,
-            t.logical_volume());
-    }
+    // The length tensors themselves and logical_n / logical_l against their capacities are checked by
+    // dynamic_axes, on cache hits as well as misses.
     if (tensor_args.has_logical_n_tensor()) {
         // These bake logical_n into host-computed structure (KV-pad Q mapping, sliding halo plan, chunked
         // q_start_idx) and already have their own trace-safe transport via the metadata path.
@@ -972,15 +938,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // Bounded circular sliding KV keeps only the newest slabs, so logical_n legitimately exceeds
-    // the physical global extent; its geometry is checked in validate_runtime_patched_scalars.
-    TT_FATAL(
-        args.circular_kv_cache || args.logical_n <= N_global,
-        "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
-        "{}, global sequence length: {}",
-        args.logical_n,
-        N_global);
-
     if (has_joint_tensors) {
         TT_FATAL(
             joint_k_shape[2] == L && joint_v_shape[2] == L,
@@ -1007,13 +964,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "joint shard seq ({}) must be tile-aligned (TILE_HEIGHT={})",
             L,
             tt::constants::TILE_HEIGHT);
-        TT_FATAL(
-            args.logical_l <= padded_L,
-            "logical_l ({}) must be <= the padded joint length (per-shard {} * ring_size {} = {})",
-            args.logical_l,
-            L,
-            args.ring_size,
-            padded_L);
         TT_FATAL(
             tensor_args.gathered_joint_k->logical_shape()[2] == padded_L,
             "gathered joint K seq ({}) must equal the padded joint length ({})",
@@ -1128,6 +1078,34 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     validate_metadata_tensors(tensor_args, args.kv_stripe_split);
     validate_runtime_patched_scalars(args, tensor_args);
+}
+
+std::vector<ttnn::dynamic_length::DynamicAxis> RingJointSDPADeviceOperation::dynamic_axes(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    using ttnn::dynamic_length::DynamicAxis;
+    std::vector<DynamicAxis> axes;
+
+    // Bounded circular sliding KV keeps only the newest slabs, so logical_n legitimately exceeds
+    // the physical global extent; its geometry is checked in validate_runtime_patched_scalars.
+    axes.push_back(DynamicAxis{
+        .name = "logical_n",
+        .capacity = logical_n_capacity(args, tensor_args),
+        .value = args.logical_n,
+        .tensor = tensor_args.logical_n_tensor ? &*tensor_args.logical_n_tensor : nullptr,
+    });
+
+    // Without the sharded-joint path logical_l has no padded extent; the miss validation rejects a tensor there.
+    std::size_t l_capacity = DynamicAxis::kUnbounded;
+    if (tensor_args.joint_is_sharded() && tensor_args.joint_q.has_value()) {
+        l_capacity = static_cast<std::size_t>(tensor_args.joint_q->logical_shape()[2]) * args.ring_size;
+    }
+    axes.push_back(DynamicAxis{
+        .name = "logical_l",
+        .capacity = l_capacity,
+        .value = args.logical_l,
+        .tensor = tensor_args.logical_l_tensor ? &*tensor_args.logical_l_tensor : nullptr,
+    });
+    return axes;
 }
 
 RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(

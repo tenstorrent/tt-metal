@@ -13,6 +13,7 @@ set(TTNN_CORE_SRCS
     core/core.cpp
     core/device.cpp
     core/device_operation_detail.cpp
+    core/dynamic_length.cpp
     cpp/tools/profiler/op_profiler_json.cpp
     core/distributed/api.cpp
     core/distributed/distributed_tensor.cpp
@@ -209,6 +210,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/distributed/mpi_socket.hpp
     api/ttnn/distributed/tensor_topology.hpp
     api/ttnn/distributed/types.hpp
+    api/ttnn/dynamic_length.hpp
     api/ttnn/events.hpp
     api/ttnn/global_circular_buffer.hpp
     api/ttnn/global_semaphore.hpp

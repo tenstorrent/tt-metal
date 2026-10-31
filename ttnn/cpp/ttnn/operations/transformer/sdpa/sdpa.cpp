@@ -257,16 +257,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
     const std::size_t padded_ring_l =
         joint_k.has_value() ? static_cast<std::size_t>(joint_k->logical_shape()[2]) * ring_size : 0;
-    const auto split_logical_length =
-        [](const LogicalLength& length,
-           std::size_t placeholder) -> std::pair<std::size_t, std::optional<ttnn::Tensor>> {
-        if (const auto* scalar = std::get_if<std::size_t>(&length)) {
-            return {*scalar, std::nullopt};
-        }
-        return {placeholder, std::get<ttnn::Tensor>(length)};
-    };
-    const auto [logical_n_scalar, logical_n_tensor] = split_logical_length(logical_n, padded_ring_n);
-    const auto [logical_l_scalar, logical_l_tensor] = split_logical_length(logical_l, padded_ring_l);
+    const auto [logical_n_scalar, logical_n_tensor] = ttnn::dynamic_length::split(logical_n, padded_ring_n);
+    const auto [logical_l_scalar, logical_l_tensor] = ttnn::dynamic_length::split(logical_l, padded_ring_l);
 
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
@@ -423,13 +415,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const std::size_t ring_size =
         (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
     const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
-    std::size_t logical_n_scalar = padded_ring_n;
-    std::optional<ttnn::Tensor> logical_n_tensor;
-    if (const auto* scalar = std::get_if<std::size_t>(&logical_n)) {
-        logical_n_scalar = *scalar;
-    } else {
-        logical_n_tensor = std::get<ttnn::Tensor>(logical_n);
-    }
+    const auto [logical_n_scalar, logical_n_tensor] = ttnn::dynamic_length::split(logical_n, padded_ring_n);
 
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
         input_tensor_q,

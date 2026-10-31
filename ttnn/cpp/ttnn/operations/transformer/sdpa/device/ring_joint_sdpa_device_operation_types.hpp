@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ttnn/core.hpp"
+#include "ttnn/dynamic_length.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation_types.hpp"
@@ -239,6 +240,19 @@ struct RingJointSDPAInputs {
     // Derived from buffer presence so the flag and the buffer cannot drift out of sync.
     bool joint_is_sharded() const { return gathered_joint_k.has_value(); }
 };
+
+// Capacity of logical_n: unbounded for a circular cache (the live length may exceed the physical buffer), the
+// gathered ring extent for sliding-window and split-KV, otherwise the gathered K sequence. One definition for
+// dynamic_axes and for anything that used to repeat the bound.
+inline std::size_t logical_n_capacity(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    if (args.circular_kv_cache) {
+        return ttnn::dynamic_length::DynamicAxis::kUnbounded;
+    }
+    if (args.has_sliding_window() || args.kv_stripe_split > 1) {
+        return static_cast<std::size_t>(tensor_args.local_kv_seq_len()) * args.ring_size;
+    }
+    return static_cast<std::size_t>(tensor_args.gathered_k.logical_shape()[2]);
+}
 
 // KV-pad rotation: the host passes kv_actual_isl, or the chunked metadata path derives it on-device. Program hash,
 // compile-time zeroing and validation all go through this rule so they cannot disagree. The all-gather bound

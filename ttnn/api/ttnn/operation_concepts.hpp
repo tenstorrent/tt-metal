@@ -17,8 +17,10 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <cstdint>
+#include <vector>
 
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/dynamic_length.hpp"
 
 namespace ttnn::device_operation {
 
@@ -165,6 +167,18 @@ concept HasComputeOutputSpecs = requires(
     {
         op.compute_output_specs(operation_attributes, tensor_args)
     } -> std::same_as<typename device_operation_t::spec_return_value_t>;
+};
+
+// Opt-in: the framework validates the declared axes on every launch, on program cache hits as well as misses,
+// because an op whose hash drops a length can be handed a cached program sized for a smaller capacity.
+// Such an op must also implement validate_on_program_cache_hit; the miss validator is not run in its place.
+template <typename device_operation_t>
+concept HasDynamicAxes = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::dynamic_axes(attrs, tensor_args)
+    } -> std::convertible_to<std::vector<dynamic_length::DynamicAxis>>;
 };
 
 // Detect if operation provides custom cache-hit validation.
