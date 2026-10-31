@@ -2083,7 +2083,10 @@ class MiMoV2ForCausalLM:
         ``async_read`` (returns the per-lane host tensors and their read events), or its logit rows (host sampling;
         read now, returned with no events). A verify's output is on the host already (the plugin unwraps its mode's
         tensor, or passes a fused_sample VerifyOutput whole): returned as it is, with no events. A deferred verify's
-        handle (VerifyHandle; any thread, blocking on its step's events) returns its FusedReadout."""
+        handle (VerifyHandle; any thread, blocking on its step's events) returns its FusedReadout. A device grammar
+        step's output with its draws pending (``sample_deferred_decode``) is read behind them: blocking, the draws are
+        enqueued first; ``async_read``, the reads are left to the flush and come back with no events
+        (``process_decode_output_host`` waits for theirs)."""
         if kwargs.get("sample_rows") is not None:
             raise ValueError("MiMo declares no selective host readback; got sample_rows")
         if isinstance(out, VerifyHandle):
@@ -2134,7 +2137,8 @@ class MiMoV2ForCausalLM:
     def process_decode_output_host(self, out, is_tokens=False, **kwargs):
         """Host output of ``read_decode_output``: greedy tokens int32 [B] in slot order (``is_tokens``; idle slots
         0), else the logits it read. A device-sampled step's output that nobody read (``sample_deferred_decode``'s:
-        the plugin finalizes it without ``read_decode_output``) is read here, blocking."""
+        the plugin finalizes it without ``read_decode_output``) is read here, blocking; an async read left to the flush
+        of its step's draws is enqueued with them (now, unless the next step's work already did) and waited for."""
         if kwargs.get("sample_rows") is not None:
             raise ValueError("MiMo declares no compact host logits; got sample_rows")
         if not is_tokens:
@@ -2175,9 +2179,9 @@ class MiMoV2ForCausalLM:
         """Samples the deferred step ``payload`` (``decode_forward(defer_device_sampling=True)``) with the rows'
         ``sampling_params`` and ``grammar_bitmask``: vLLM's packed mask, int32 [rows, ceil(vocab / 32)] in decode row
         order (lane after lane, rows past it and rows without a grammar allowed everything). Returns what a
-        device-sampled ``decode_forward(..., read_from_device=False)`` returns. Checks everything before the sampling
-        starts (a failed check leaves the step pending); once it started, a failure is final (every later decode
-        raises)."""
+        device-sampled ``decode_forward(..., read_from_device=False)`` returns, its draws pending until the adapter's
+        next device work (``_flush_draws``). Checks everything before the sampling starts (a failed check leaves the
+        step pending); once it started, a failure is final (every later decode raises)."""
         if self._grammar_failure is not None:
             raise RuntimeError(
                 f"MiMo device grammar sampling failed after a decode submission: {self._grammar_failure}"
