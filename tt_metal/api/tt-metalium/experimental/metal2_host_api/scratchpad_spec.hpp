@@ -35,7 +35,9 @@ namespace tt::tt_metal::experimental {
 //   scratchpad must be DM kernels; Gen1 (WH/BH) also permits compute kernels to share.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
-//   execution lifetime, alongside DFBs (and from the same region of L1).
+//   execution lifetime, alongside DFBs (and from the same region of SRAM).
+//   Advanced users may override storage allocation through
+//   ScratchpadAdvancedOptions::allocation_override.
 //
 // INSTANCING: Like KernelSpec, a ScratchpadSpec is a *per-node template*. One
 //   independent scratchpad instance is allocated per node where its bound kernel

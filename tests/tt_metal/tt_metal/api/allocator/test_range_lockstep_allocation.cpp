@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include "impl/context/metal_context.hpp"
@@ -120,6 +121,26 @@ BufferShardingArgs shard_spec_args(const CoreCoord& core) {
 BufferShardingArgs distribution_spec_args(const CoreCoord& core) {
     return BufferShardingArgs(BufferDistributionSpec(Shape({1, 1}), Shape({1, 1}), std::vector<CoreCoord>{core}));
 }
+
+// Test-only: a page-aligned size over half of the largest free L1 block, so two of them cannot share one address
+// range on any bank.
+uint32_t size_over_half_of_largest_free_l1_block(distributed::MeshDevice& mesh_device) {
+    const auto stats = mesh_device.allocator()->get_statistics(BufferType::L1);
+    return static_cast<uint32_t>(
+        (stats.largest_free_block_bytes * 6 / 10) / HYBRID_TEST_PAGE_SIZE * HYBRID_TEST_PAGE_SIZE);
+}
+
+// Test-only: a per-core L1 MeshBuffer of `size` bytes on `node` alone, placed from the top of L1.
+std::shared_ptr<distributed::MeshBuffer> allocate_per_core_l1_mesh_buffer_on_node(
+    distributed::MeshDevice& mesh_device, const CoreCoord& node, uint32_t size) {
+    auto args = shard_spec_args(node);
+    per_core::set_per_core_allocation(args, true);
+    return distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = size},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = size, .buffer_type = BufferType::L1, .sharding_args = args, .bottom_up = false},
+        &mesh_device);
+}
 }  // namespace
 
 // The next three are one scenario with the opt-in on and off. Without it the chip-wide scan
@@ -149,6 +170,20 @@ TEST_F(HybridAllocatorTest, PlacesBesideAPerCoreHogWhenScopedByADistributionSpec
 
 TEST_F(HybridAllocatorTest, RefusesToPlaceBesideAPerCoreHogWhenNotScoped) {
     run_lockstep_beside_per_core_hog(this->devices_[0], shard_spec_args, /*expect_range_lockstep=*/false);
+}
+
+TEST_F(HybridAllocatorTest, PlacesRangeLockstepSRAMArenaBesideAPerCoreHog) {
+    // A range-lockstep SRAMArena fits on its own node while another node's L1 is mostly held by a per-core buffer.
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "Run this binary with TT_METAL_ALLOCATOR_MODE_HYBRID=1";
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh_device = this->devices_[0];
+    const uint32_t per_bank_size = size_over_half_of_largest_free_l1_block(*mesh_device);
+    std::shared_ptr<distributed::MeshBuffer> per_core_hog =
+        allocate_per_core_l1_mesh_buffer_on_node(*mesh_device, CoreCoord(0, 0), per_bank_size);
+    const experimental::RangeLockstepSRAMArenaProperties properties{
+        .banks_to_be_allocated_on = CoreRangeSet(CoreCoord(1, 0)), .per_bank_size = per_bank_size};
+    EXPECT_NO_THROW((void)experimental::SRAMArena::allocate(*mesh_device, properties));
 }
 
 // The mesh path and the direct path learn about per-core allocations through different

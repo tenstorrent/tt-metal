@@ -1,0 +1,268 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <tt_stl/fmt.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+
+#include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
+
+namespace tt::tt_metal::experimental {
+namespace {
+
+using test_helpers::MakeMinimalGen2DMKernel;
+using test_helpers::MakeMinimalValidProgramSpec;
+using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestQuasar;
+
+// Test-only: builds a ProgramSpec whose ScratchpadSpec "scratch" is bound by one Gen2 DM kernel per node.
+// Kernels appear in spec.kernels in the order of binder_nodes.
+ProgramSpec MakeSpecWithOneScratchpadBinderPerNodeForTest(
+    const std::vector<NodeCoord>& binder_nodes, uint32_t size_per_node) {
+    ProgramSpec spec;
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = size_per_node}};
+    for (const NodeCoord& node : binder_nodes) {
+        const std::string kernel_name = fmt::format("binder_{}", spec.kernels.size());
+        spec.kernels.push_back(MakeMinimalGen2DMKernel(kernel_name));
+        spec.kernels.back().scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+        spec.work_units.push_back(MakeMinimalWorkUnit(kernel_name + "_work", node, {kernel_name}));
+    }
+    return spec;
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtZeroOffset) {
+    // A scratchpad may occupy the allocation’s entire per-node extent.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtNonzeroOffset) {
+    // An aligned offset is allowed, and the scratchpad may end exactly at the allocation boundary.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 3 * alignment,
+            },
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExtraAllocationNodes) {
+    // The allocation may cover more nodes than the scratchpad occupies.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingOccupiedNode) {
+    // The allocation must cover every node occupied by the scratchpad.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+    spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ScratchpadSpec 'scratch' allocates from SRAMArenaParameter 'arena', which does not "
+                                 "cover every occupied node.")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExceedsCapacity) {
+    // The scratchpad’s per-node size cannot exceed the allocation’s per-node capacity.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment - 1,
+            },
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "ScratchpadSpec 'scratch' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
+            "per_bank_size {}.",
+            0,
+            2 * alignment,
+            2 * alignment - 1))));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadOffsetCausesOverrun) {
+    // The capacity check includes the offset, even when the scratchpad’s size alone fits.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 3 * alignment - 1,
+            },
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "ScratchpadSpec 'scratch' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
+            "per_bank_size {}.",
+            alignment,
+            2 * alignment,
+            3 * alignment - 1))));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMisalignedOffset) {
+    // The allocation offset must satisfy L1 alignment, even when capacity is sufficient.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    ASSERT_GT(alignment, 1u);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 4 * alignment,
+            },
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 1};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "ScratchpadSpec 'scratch' allocation offset 1 must be a multiple of L1 alignment {}.", alignment))));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadAllBankLockstep) {
+    // Scratchpad borrowing accepts the all-bank property alternative as well as range-lockstep.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties = LockstepSRAMArenaProperties{.per_bank_size = 2 * alignment},
+    }};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingMiddleBinderNode) {
+    // The allocation must cover the nodes of every kernel that binds the scratchpad, not only the first or last one.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    ProgramSpec spec =
+        MakeSpecWithOneScratchpadBinderPerNodeForTest({NodeCoord{0, 0}, NodeCoord{2, 0}, NodeCoord{1, 0}}, alignment);
+    const RangeLockstepSRAMArenaProperties arena_properties{
+        .banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {1, 0})}, .per_bank_size = alignment};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = arena_properties}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("which does not cover every occupied node.")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadOffsetNearUint32MaxCausesOverrun) {
+    // The capacity check rejects an offset whose sum with size_per_node reaches 2^32.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    const uint32_t offset_near_uint32_max = std::numeric_limits<uint32_t>::max() - alignment + 1;
+    ProgramSpec spec = MakeSpecWithOneScratchpadBinderPerNodeForTest({NodeCoord{0, 0}}, alignment);
+    const LockstepSRAMArenaProperties arena_properties{.per_bank_size = 2 * alignment};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = arena_properties}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = offset_near_uint32_max};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds SRAMArenaParameter 'arena'")));
+}
+
+}  // namespace
+}  // namespace tt::tt_metal::experimental

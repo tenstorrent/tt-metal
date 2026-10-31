@@ -900,6 +900,32 @@ std::size_t Kernel::logical_common_runtime_arg_count() const {
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
+void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& binding, DeviceAddr address) {
+    TT_FATAL(
+        address != 0,
+        "Internal error: scratchpad '{}' on kernel '{}' "
+        "has a 0 allocated address (allocation failed or was skipped).",
+        binding.accessor_name,
+        kernel.name());
+
+    binding.allocated_address = static_cast<uint32_t>(address);
+
+    // Patch the allocated address into the kernel's CRTA buffer if it exists.
+    // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
+    // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
+    // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+    // handle.allocated_address into the scratchpad section when it builds the buffer.
+    // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
+    //
+    // Usage of the CRTA buffer:
+    //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+    //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+    if (!kernel.common_runtime_args().empty()) {
+        RuntimeArgsData& crta = kernel.common_runtime_args_data();
+        crta[binding.addr_crta_word] = binding.allocated_address;
+    }
+}
+
 // Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
 // max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
 // payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet

@@ -20,9 +20,13 @@
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
+#include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
+#include "tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
@@ -44,6 +48,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
@@ -289,6 +294,8 @@ public:
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
+    // Reject arena scratchpads whose storage has not been bound before execution. Mock devices are exempt.
+    void validate_scratchpad_bindings() const;
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -617,6 +624,24 @@ public:
     void register_tensor_parameter(
         const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
 
+    // Describes the required properties and device of an SRAMArena argument.
+    struct RegisteredSRAMArenaParameter {
+        experimental::SRAMArenaProperties properties;
+        // invariant: The device outlives the program.
+        std::reference_wrapper<const distributed::MeshDevice> device;
+    };
+
+    // Declare the required properties and device for a named allocation argument.
+    // precondition: device outlives the program.
+    // side-effect: Add the declaration to the program's runtime argument schema.
+    void register_sram_arena_parameter(
+        const std::string& name,
+        const experimental::SRAMArenaProperties& properties,
+        const distributed::MeshDevice& device);
+
+    // Return the program's SRAMArena parameter declarations.
+    const std::unordered_map<std::string, RegisteredSRAMArenaParameter>& get_sram_arena_parameters() const;
+
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
     uint32_t get_dfb_handle(const std::string& name) const;
@@ -632,10 +657,16 @@ public:
     void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
     const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
-    // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
-    // bound to `tensor_parameter_name`.
-    void register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name);
-    const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
+    // Identifies the tensor storage or SRAM arena allocation used by a DFB.
+    struct DFBStorageBinding {
+        uint32_t dfb_id;
+        std::variant<experimental::TensorParamName, SRAMArenaSource> source;
+    };
+
+    // Register the tensor storage or SRAM arena allocation used by a DFB.
+    void register_dfb_storage_binding(DFBStorageBinding binding);
+    // Return the program's DFB storage bindings.
+    const std::vector<DFBStorageBinding>& get_dfb_storage_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
@@ -761,9 +792,9 @@ private:
             std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
+        std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
 
-        // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
-        std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
+        std::vector<DFBStorageBinding> dfb_storage_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 

@@ -647,7 +647,9 @@ KernelHandle detail::ProgramImpl::add_kernel(
         }
     }
 
-    if (!kernel->scratchpad_binding_handles().empty()) {
+    if (std::ranges::any_of(kernel->scratchpad_binding_handles(), [](const auto& binding) {
+            return !binding.allocation_override.has_value();
+        })) {
         register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
 
@@ -854,6 +856,24 @@ void ProgramImpl::register_tensor_parameter(
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
+void ProgramImpl::register_sram_arena_parameter(
+    const std::string& name,
+    const experimental::SRAMArenaProperties& properties,
+    const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->sram_arena_parameters.try_emplace(
+        name, RegisteredSRAMArenaParameter{properties, std::cref(device)});
+    TT_FATAL(inserted, "Duplicate SRAM arena parameter name: {}", name);
+}
+
+const std::unordered_map<std::string, ProgramImpl::RegisteredSRAMArenaParameter>&
+ProgramImpl::get_sram_arena_parameters() const {
+    static const std::unordered_map<std::string, RegisteredSRAMArenaParameter> empty;
+    return metal2_registry_ ? metal2_registry_->sram_arena_parameters : empty;
+}
+
 const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
     if (!metal2_registry_) {
         return nullptr;
@@ -918,19 +938,19 @@ const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(cons
     return &*it->second.bound;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+void ProgramImpl::register_dfb_storage_binding(DFBStorageBinding binding) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+    metal2_registry_->dfb_storage_bindings.push_back(std::move(binding));
 }
 
-const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<std::pair<uint32_t, std::string>> empty;
+const std::vector<ProgramImpl::DFBStorageBinding>& ProgramImpl::get_dfb_storage_bindings() const {
+    static const std::vector<DFBStorageBinding> empty;
     if (!metal2_registry_) {
         return empty;
     }
-    return metal2_registry_->dfb_borrowed_bindings;
+    return metal2_registry_->dfb_storage_bindings;
 }
 // ============================================================================
 
@@ -2231,7 +2251,7 @@ void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     for (const auto& kernels_of_core_type : this->kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
             for (const auto& handle : kernel->scratchpad_binding_handles()) {
-                if (handle.shared_allocation_identifier) {
+                if (handle.shared_allocation_identifier && !handle.allocation_override) {
                     auto& cores = shared_cores[*handle.shared_allocation_identifier];
                     cores = cores.merge(kernel->core_range_set());
                 }
@@ -2255,33 +2275,6 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
 
-    // Set address to a given scratchpad binding handle and it's kernel
-    auto set_address_on_scratchpad = [](DeviceAddr addr, ScratchpadBindingHandle& handle, Kernel& kernel) {
-        TT_FATAL(
-            addr != 0,
-            "Internal error: scratchpad '{}' on kernel '{}' "
-            "has a 0 allocated address (allocation failed or was skipped).",
-            handle.accessor_name,
-            kernel.name());
-
-        handle.allocated_address = static_cast<uint32_t>(addr);
-
-        // Patch the allocated address into the kernel's CRTA buffer if it exists.
-        // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-        // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-        // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-        // handle.allocated_address into the scratchpad section when it builds the buffer.
-        // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-        //
-        // Usage of the CRTA buffer:
-        //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-        //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-        if (!kernel.common_runtime_args().empty()) {
-            RuntimeArgsData& crta = kernel.common_runtime_args_data();
-            crta[handle.addr_crta_word] = handle.allocated_address;
-        }
-    };
-
     // Backticks needed to set a binding handle's address
     struct ScratchpadBindingRef {
         ScratchpadBindingHandle& handle;
@@ -2304,6 +2297,9 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
             for (auto& handle : scratchpad_handles) {
+                if (handle.allocation_override) {
+                    continue;
+                }
                 // Multi-binded scratchpad, let's collect it and deal with it later
                 if (auto id = handle.shared_allocation_identifier) {
                     multi_binded_scratchpads[*id].emplace_back(handle, *kernel);
@@ -2312,7 +2308,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
                 DeviceAddr addr =
                     allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
-                set_address_on_scratchpad(addr, handle, *kernel);
+                SetScratchpadBindingAddress(*kernel, handle, addr);
             }
         }
     }
@@ -2328,11 +2324,33 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
         DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
         for (auto& handle : refs) {
-            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
+            SetScratchpadBindingAddress(handle.kernel, handle.handle, addr);
         }
     }
 
     this->scratchpads_allocated_ = true;
+}
+
+void detail::ProgramImpl::validate_scratchpad_bindings() const {
+    // Mock devices are exempt, as for borrowed-memory DFBs: nothing they serialize reaches hardware (issue #57022).
+    if (MetalContext::instance(this->context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (const auto& binding : kernel->scratchpad_binding_handles()) {
+                if (binding.allocation_override) {
+                    TT_FATAL(
+                        binding.allocated_address != 0,
+                        "Scratchpad '{}' on kernel '{}' has no bound SRAMArena '{}'. "
+                        "Supply its arena argument through SetProgramRunArgs before dispatch.",
+                        binding.accessor_name,
+                        kernel->name(),
+                        binding.allocation_override->arena);
+                }
+            }
+        }
+    }
 }
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {

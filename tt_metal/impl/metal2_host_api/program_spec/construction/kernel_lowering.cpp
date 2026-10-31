@@ -448,7 +448,7 @@ LoweredKernel LowerKernel(
 
     // Attach the resolved scratchpad bindings to the kernel (set post-construction: their sizes are
     // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
-    // will later fill each handle's allocated_address.
+    // or SRAMArena argument binding will later fill each handle's allocated_address.
     kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
     // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).

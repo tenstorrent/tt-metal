@@ -14,6 +14,7 @@ Put a test here only if a mock device cannot cover it. Put it elsewhere when:
 |---|---|
 | `binding_loopbacks.cpp` | Resource bindings: DFB, semaphore and tensor accessor names |
 | `kernel_args_loopbacks.cpp` | Kernel arguments: named args, varargs, TT_KERNEL kernels and CRTA sections |
+| `sram_arena.cpp` | SRAM arena allocation overrides for scratchpads and DFBs |
 | `scratchpad.cpp` | Scratchpads under slow dispatch |
 | `scratchpad_fast_dispatch.cpp` | Scratchpads under fast dispatch |
 | `compute_semaphore.cpp` | Compute-kernel semaphores (Blackhole) |

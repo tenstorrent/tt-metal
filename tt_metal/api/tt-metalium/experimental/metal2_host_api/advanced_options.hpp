@@ -6,24 +6,16 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt_stl/strong_type.hpp>
-
-// The PrefetcherPipe host handle (tt-metalium/experimental/prefetcher_pipe.hpp). Only referenced
-// here, so the pipe implementation is not a dependency of the core Metal 2.0 spec headers.
-// NOTE: PrefetcherPipe stays experimental when the Metal 2.0 host API graduates. This declaration
-//       and its fully qualified use in AdvancedProgramRunArgs must keep the experimental namespace.
-namespace tt::tt_metal::experimental {
-class PrefetcherPipe;
-}  // namespace tt::tt_metal::experimental
-
-namespace tt::tt_metal::experimental {
 
 // ============================================================================
 // Advanced options for Metal 2.0 specs
@@ -46,11 +38,50 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
+// Handles to experimental user-managed resource objects.
+// NOTE: These will remain experimental when the Metal 2.0 host API graduates.
+//       These class names will need to retain an explicit experimental:: name scope.
+namespace tt::tt_metal::experimental {
+class PrefetcherPipe;
+struct SRAMArena;
+}  // namespace tt::tt_metal::experimental
+
+namespace tt::tt_metal::experimental {
+
 // Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 // NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
 //       re-declared here for use in AdvancedOptions to avoid circular dependency.
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
+
+struct ProgramAdvancedOptions {
+    ////////////////////////////////////////////////////////////////////////////////
+    // SRAMArena parameters (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // An SRAMArena is a user-managed resource that simply reserves a region of
+    // device memory, with no specific semantics beyond allocation / reservation.
+    // Advanced users can manually allocate Program-scope resources from within an
+    // SRAMArena, rather than rely on the runtime's default allocation behavior.
+    //
+    // SRAMArena parameters specify the properties of the SRAMArena the
+    // Program expects; a matching SRAMArena object must be provided at runtime.
+    Group<SRAMArenaParameter> sram_arena_parameters;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // PrefetcherPipe parameters (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A PrefetcherPipe is a user-managed resource that facilitates prefetching of
+    // data from external memory into the SRAM memory.
+    //
+    // PrefetcherPipeParameters name the geometry (receivers, ring size, entry size)
+    // of each durable PrefetcherPipe the Program's kernels use.
+    // The actual PrefetcherPipe objects are supplied via
+    // AdvancedProgramRunArgs::prefetcher_pipe_args. A kernel's sender/receiver role is
+    // derived from its WorkUnitSpec node coverage; see prefetcher_pipe_parameter.hpp.
+    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+};
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -191,6 +222,15 @@ struct KernelAdvancedOptions {
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
 };
 
+// Describes a resource allocation within a program's SRAM arena parameter.
+struct SRAMArenaAllocation {
+    // Invariant: arena identifies a parameter declared in ProgramAdvancedOptions::sram_arena_parameters.
+    SRAMArenaParamName arena;
+    // Byte offset from the arena's base address.
+    // Invariant: offset is a multiple of the SRAM alignment.
+    uint32_t offset = 0;
+};
+
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // Aliased DFBs
@@ -209,6 +249,7 @@ struct DFBAdvancedOptions {
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
+    //   - If any member overrides allocation, all members must use the same arena parameter and byte offset.
     Group<DFBSpecName> alias_with;
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -245,6 +286,25 @@ struct DFBAdvancedOptions {
     bool allow_instance_multi_binding = false;
 
     ////////////////////////////////////////////////////////////////////////////////
+    // Allocation override (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Override default DFB storage allocation with an allocation in an SRAM arena.
+    // The DFB is placed at the arena's base address plus allocation_override->offset.
+    // The actual arena is supplied at runtime through ProgramRunArgs.
+    // The DFB owns its assigned region for its active lifetime; the arena owns the backing reservation.
+    // When omitted, the DFB uses default allocation unless tensor storage or a pipe relay is specified.
+    //
+    // Invariants:
+    //  - The arena covers every node occupied by the DFB.
+    //  - The offset plus entry_size * num_entries does not exceed the arena's declared per-bank size.
+    //  - An override is mutually exclusive with DataflowBufferSpec::borrowed_from and prefetcher_pipe_relays.
+    //
+    // The runtime does not check for overlap with other DFBs or scratchpads in the arena.
+    // The caller must ensure that resources with overlapping regions have non-overlapping active lifetimes.
+    std::optional<SRAMArenaAllocation> allocation_override = std::nullopt;
+
+    ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe relay (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
@@ -255,7 +315,7 @@ struct DFBAdvancedOptions {
     // pipe), the compute kernel is its CONSUMER. Empty = ordinary local DFB.
     //
     // Requirements (validated at MakeProgramFromSpec):
-    //  - mutually exclusive with borrowed_from
+    //  - mutually exclusive with DataflowBufferSpec::borrowed_from and allocation_override
     //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
     //    named pipe (all named pipes share ring_size and entry_size)
     //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
@@ -297,18 +357,25 @@ struct ScratchpadAdvancedOptions {
     // DM cores and Compute cores have cache coherency misalignment that currently
     // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
-};
 
-struct ProgramAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
-    // PrefetcherPipe parameters (experimental)
+    // Allocation override (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Names the geometry (receivers, ring size, entry size) of each durable PrefetcherPipe the
-    // Program's kernels take part in. The actual PrefetcherPipe objects are supplied via
-    // AdvancedProgramRunArgs::prefetcher_pipe_args. A kernel's sender/receiver role is derived
-    // from its WorkUnitSpec node coverage; see prefetcher_pipe_parameter.hpp.
-    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+    // Override default scratchpad storage allocation with an allocation in an SRAM arena.
+    // The scratchpad is placed at the arena's base address plus allocation_override->offset.
+    // The actual arena is supplied at runtime through ProgramRunArgs.
+    // The scratchpad owns its assigned region for its active lifetime; the arena owns the backing reservation.
+    // When omitted, the runtime allocates scratchpad storage using its default behavior.
+    //
+    // Invariants:
+    //  - The arena covers every node occupied by the scratchpad.
+    //  - The offset plus size_per_node does not exceed the arena's declared per-bank size.
+    //
+    // The runtime does not check for overlap with other DFBs or scratchpads in the arena.
+    // The caller must ensure that resources with overlapping regions have non-overlapping active lifetimes.
+    // To use a tensor's local shard as working memory, use a TensorBinding and LocalTensorAccessor.
+    std::optional<SRAMArenaAllocation> allocation_override = std::nullopt;
 };
 
 struct AdvancedKernelRunArgs {
@@ -331,6 +398,30 @@ struct AdvancedKernelRunArgs {
 };
 
 struct AdvancedProgramRunArgs {
+    ////////////////////////////////////////////////////////////////////////////////
+    // SRAMArena arguments (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // The actual SRAMArena argument. (Non-owning reference.)
+    using SRAMArenaArgument = std::reference_wrapper<const tt::tt_metal::experimental::SRAMArena>;
+
+    // An SRAMArenaArgument must be specified:
+    //  For EVERY SRAMArenaParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  For any SUBSET of SRAMArenaParameters, when calling UpdateProgramRunArgs.
+    //
+    // The supplied SRAMArena MUST live on the MeshDevice the Program was built for, and its
+    // properties MUST match the SRAMArenaParameter's (see sram_arena_parameter.hpp).
+    //
+    // A different SRAMArena may be supplied for each Program execution. Every DFB and
+    // scratchpad whose allocation_override names the parameter is placed at the new arena's
+    // base address plus its allocation_override->offset.
+    //
+    // CAUTION: SRAMArena is an RAII object. The user is responsible for keeping it alive until
+    //          the last Program execution that uses it has completed on the device. A stale binding
+    //          to a destroyed SRAMArena (e.g. one retained by an UpdateProgramRunArgs call that
+    //          omits it) will produce undefined behavior.
+    Table<SRAMArenaParamName, SRAMArenaArgument> sram_arena_args;
+
     ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe arguments (experimental)
     ////////////////////////////////////////////////////////////////////////////////
@@ -402,5 +493,6 @@ struct SemaphoreAdvancedOptions {
 
 using PrefetcherPipeBinding = KernelAdvancedOptions::PrefetcherPipeBinding;
 using PrefetcherPipeArgument = AdvancedProgramRunArgs::PrefetcherPipeArgument;
+using SRAMArenaArgument = AdvancedProgramRunArgs::SRAMArenaArgument;
 
 }  // namespace tt::tt_metal::experimental

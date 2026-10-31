@@ -207,7 +207,7 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
 //  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
 //    each binding's absolute CRTA word index (and thus addr_crta_word) is fixed at codegen time
 //    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
-// The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
+// The address stays 0 until local allocation or SRAMArena argument binding.
 struct ScratchpadBindingsForKernel {
     std::vector<ScratchpadBindingHandle> handles;
     uint32_t section_words = 0;  // == number of scratchpad bindings

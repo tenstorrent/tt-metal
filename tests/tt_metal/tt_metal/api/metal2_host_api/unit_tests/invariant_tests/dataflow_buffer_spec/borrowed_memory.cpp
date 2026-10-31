@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Local invariants of DataflowBufferSpec::borrowed_from (dataflow_buffer_spec.hpp): the TensorParameter it names is
-// L1-resident, not per-node allocated, and large enough to hold the DFB.
+// Local invariants of tensor borrowing and SRAM arena allocation: L1 tensor backing without
+// per-node allocation, node coverage, capacity, and offsets.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -12,12 +12,16 @@
 #include <string>
 #include <vector>
 
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
+
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
+#include "metal2_host_api/program_spec/validation/validate_spec.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -126,6 +130,194 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNdShardLargerThanWholeTensorS
         tensor_spec.compute_packed_buffer_size_bytes());
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExactFitAtZeroOffset) {
+    // `entry_size * num_entries` may equal the allocation’s per-node capacity.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExactFitAtNonzeroOffset) {
+    // An aligned offset is allowed, and `offset + entry_size * num_entries` may equal capacity.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 3 * alignment,
+            },
+    }};
+
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExtraAllocationNodes) {
+    // The allocation may cover more nodes than the DFB occupies.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBMissingOccupiedNode) {
+    // The allocation must cover every node occupied by the DFB.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+    spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "DFB 'dfb' allocates from SRAMArenaParameter 'arena', which does not cover every occupied node.")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExceedsCapacity) {
+    // Capacity must accommodate all entries, rather than just one entry.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment - 1,
+            },
+    }};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "DFB 'dfb' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' per_bank_size {}.",
+            0,
+            2 * alignment,
+            2 * alignment - 1))));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBOffsetCausesOverrun) {
+    // The capacity check includes the offset, even when all entries fit without it.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 3 * alignment - 1,
+            },
+    }};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "DFB 'dfb' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' per_bank_size {}.",
+            alignment,
+            2 * alignment,
+            3 * alignment - 1))));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBMisalignedOffset) {
+    // The allocation offset must satisfy L1 alignment, even when capacity is sufficient.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    ASSERT_GT(alignment, 1u);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 1};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties =
+            RangeLockstepSRAMArenaProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 4 * alignment,
+            },
+    }};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            fmt::format("DFB 'dfb' allocation offset 1 must be a multiple of L1 alignment {}.", alignment))));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBAllBankLockstep) {
+    // DFB borrowing accepts the all-bank property alternative as well as range-lockstep.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
+        .unique_id = SRAMArenaParamName{"arena"},
+        .properties = LockstepSRAMArenaProperties{.per_bank_size = 2 * alignment},
+    }};
+
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
 }
 
 }  // namespace

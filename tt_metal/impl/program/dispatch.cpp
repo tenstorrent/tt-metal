@@ -2771,6 +2771,7 @@ void update_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
+    program.validate_scratchpad_bindings();
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
@@ -3246,6 +3247,7 @@ void write_program_command_sequence(
 
 TraceNode create_trace_node(
     ProgramImpl& program, distributed::MeshDevice* mesh_device, uint32_t num_workers, bool use_prefetcher_cache) {
+    program.validate_scratchpad_bindings();
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(mesh_device)};
     program.generate_trace_dispatch_commands(mesh_device, use_prefetcher_cache);
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();

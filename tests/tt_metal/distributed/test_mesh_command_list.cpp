@@ -26,6 +26,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -263,6 +264,35 @@ m2::ProgramSpec make_loopback_spec(const std::string& name, const TensorSpec& te
             },
         .work_units = {MakeMinimalWorkUnit("main", kNode, {"producer", "consumer"})},
     };
+}
+
+// The loopback, with its DFB allocated at offset 0 of SRAMArenaParameter `arena_name`.
+m2::ProgramSpec make_loopback_spec_with_arena_dfb(
+    const std::string& name,
+    const TensorSpec& tensor_spec,
+    const m2::SRAMArenaParamName& arena_name,
+    const m2::LockstepSRAMArenaProperties& properties) {
+    auto spec = make_loopback_spec(name, tensor_spec);
+    spec.advanced_options.sram_arena_parameters = {{.unique_id = arena_name, .properties = properties}};
+    spec.dataflow_buffers.at(0).advanced_options.allocation_override = m2::SRAMArenaAllocation{.arena = arena_name};
+    return spec;
+}
+
+// A minimal kernel on kNode whose scratchpad "pad" is allocated from SRAMArenaParameter "arena".
+m2::ProgramSpec make_arena_scratchpad_spec(const std::string& name) {
+    auto kernel = MakeMinimalGen1DMKernel(kKernelName, DataMovementProcessor::RISCV_0);
+    kernel.scratchpad_bindings = {{.scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    m2::ProgramSpec spec{
+        .name = name,
+        .kernels = {kernel},
+        .scratchpads = {{.unique_id = m2::ScratchpadSpecName{"pad"}, .size_per_node = 1024}},
+        .work_units = {MakeMinimalWorkUnit("main", kNode, {kKernelName})},
+    };
+    spec.scratchpads[0].advanced_options.allocation_override =
+        m2::SRAMArenaAllocation{.arena = m2::SRAMArenaParamName{"arena"}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = m2::SRAMArenaParamName{"arena"}, .properties = m2::LockstepSRAMArenaProperties{4096}}};
+    return spec;
 }
 
 m2::ProgramRunArgs loopback_run_args(const MeshTensor& input, const MeshTensor& output) {
@@ -1403,6 +1433,31 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
     EXPECT_THAT(
         [&] { (void)builder.build(cq); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot build an empty CommandList")));
+}
+
+TEST_F(CommandListTest, PatchesTensorParameterOfProgramWithArenaAllocatedDFB) {
+    // A TensorParameter stays patchable when the program's DFB is allocated from an SRAM arena of the same name.
+    const auto dram_spec = dram_tensor_spec(2);
+    MeshTensor input = MeshTensor::allocate_on_device(*mesh_device_, dram_spec);
+    MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, dram_spec);
+    const m2::LockstepSRAMArenaProperties properties{.per_bank_size = 2 * kPageSize};
+    m2::SRAMArena arena = m2::SRAMArena::allocate(*mesh_device_, properties);
+    const m2::SRAMArenaParamName arena_name{"input_tensor"};
+    auto workload = m2::MakeMeshWorkloadFromSpec(
+        *mesh_device_, make_loopback_spec_with_arena_dfb("arena_dfb", dram_spec, arena_name, properties));
+    auto& program = workload.get_programs().begin()->second;
+    auto args = loopback_run_args(input, output);
+    args.advanced_options.sram_arena_args = {{arena_name, std::cref(arena)}};
+    m2::SetProgramRunArgs(program, args);
+    CommandListBuilder builder(*mesh_device_);
+    EXPECT_NO_THROW(builder.add(workload, patchable_input(program, CmdListTensorArgName{"input"})));
+}
+
+TEST_F(CommandListTest, RejectsWorkloadWithUnboundArenaScratchpad) {
+    // Recording a workload whose arena scratchpad has no bound SRAMArena is rejected.
+    auto workload = m2::MakeMeshWorkloadFromSpec(*mesh_device_, make_arena_scratchpad_spec("unbound_arena_scratchpad"));
+    CommandListBuilder builder(*mesh_device_);
+    EXPECT_THAT([&] { builder.add(workload); }, ThrowsMessage<std::runtime_error>(HasSubstr("has no bound SRAMArena")));
 }
 
 TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {

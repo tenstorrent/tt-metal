@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <type_traits>
+#include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt_stl/reflection.hpp>
@@ -81,6 +82,9 @@ static_assert(
 // Per-spec advanced options
 static_assert(hashable_v<ScratchpadAdvancedOptions>, "ScratchpadAdvancedOptions must be hashable via ttsl reflection");
 static_assert(std::is_aggregate_v<ScratchpadAdvancedOptions>, "ScratchpadAdvancedOptions must remain an aggregate");
+static_assert(std::is_aggregate_v<SRAMArenaAllocation>);
+static_assert(hashable_v<SRAMArenaAllocation>);
+static_assert(std::is_same_v<decltype(DataflowBufferSpec{}.borrowed_from), std::optional<TensorParamName>>);
 static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
@@ -218,7 +222,8 @@ TEST(AggregateSpecTypes, CPU_DataflowBufferSpecDesignatedInitializers) {
         .borrowed_from = TensorParamName{"input_tensor"},
     };
 
-    EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParamName>{TensorParamName{"input_tensor"}});
+    ASSERT_TRUE(borrowed_dfb.borrowed_from.has_value());
+    EXPECT_EQ(*borrowed_dfb.borrowed_from, TensorParamName{"input_tensor"});
 }
 
 TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {
