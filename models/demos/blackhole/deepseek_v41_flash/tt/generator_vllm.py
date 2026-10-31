@@ -1832,6 +1832,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         gpk = None
         if grammar_bitmask is not None:
             gpk = self._grammar_for_runner(grammar_bitmask, runner, rows, nv_l, B, n)
+            if gpk is not None:
+                self.spec_stats["masked_rounds"] = self.spec_stats.get("masked_rounds", 0) + 1
         t0 = time.perf_counter()
         runner.sample_cfg = cfg  # None = greedy rows (the traced sampler then holds / gets greedy parameters)
         runner.grammar_packed = gpk  # None = the unmasked rounds; else the masked trace S (DSV41_STRUCTURED_SPEC=1)
@@ -1898,7 +1900,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             ss = self.spec_stats
             logger.info(
                 f"DSV4.1 spec stats over {st['n']} rounds: round {1e3 * st['t'] / st['n']:.1f} ms, between rounds {1e3 * st['g'] / st['n']:.1f} ms (adapter: verify pre {1e3 * st['pre'] / st['n']:.2f} + post {1e3 * st['post'] / st['n']:.2f}, propose {1e3 * st['prop'] / st['n']:.2f} ms per round; plugin: verify-return -> propose {1e3 * st['rp'] / st['n']:.2f}, propose-end -> next verify {1e3 * st['pv'] / st['n']:.2f} ms per round), "
-                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K if self.spec_adapt is None else 'adaptive k rounds ' + str(dict(sorted(self.spec.k_hist.items()))) + ' chosen ' + str(dict(sorted(self.choose_hist.items())))}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)})"
+                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K if self.spec_adapt is None else 'adaptive k rounds ' + str(dict(sorted(self.spec.k_hist.items()))) + ' chosen ' + str(dict(sorted(self.choose_hist.items())))}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)}, masked (grammar) rounds {ss.get('masked_rounds', 0)})"
             )
             st.update(n=0, t=0.0, g=0.0, pre=0.0, post=0.0, prop=0.0, rp=0.0, pv=0.0)
         out = torch.zeros(W, n, dtype=torch.int32)
