@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
+// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
+// RUN: %{blackhole_compare_codegen} %t.dump
 
+// Compare each HAL function with its adjacent reference_ function. Disable
+// identical-code folding so both bodies are emitted independently.
 // LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
 
 #include "hal/sync.h"
@@ -19,12 +22,13 @@ extern "C" __attribute__((noinline, used)) void acquire_release_physical()
     sync::mutex::release<sync::Mutex::M4>();
 }
 
-// CHECK-LABEL: <acquire_release_physical>:
-// CHECK-NEXT: ttatgetm 0
-// CHECK-NEXT: ttatgetm 2
-// CHECK-NEXT: ttatrelm 3
-// CHECK-NEXT: ttatrelm 4
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_acquire_release_physical()
+{
+    TTI_ATGETM(0 /*mutex_index*/);
+    TTI_ATGETM(2 /*mutex_index*/);
+    TTI_ATRELM(3 /*mutex_index*/);
+    TTI_ATRELM(4 /*mutex_index*/);
+}
 
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
@@ -32,44 +36,30 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
     TTI_INSN(sync::mutex::release_operation<sync::Mutex::M0>());
 }
 
-// CHECK-LABEL: <issue_encoded_operations>:
-// CHECK-NEXT: ttatgetm 4
-// CHECK-NEXT: ttatrelm 0
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_issue_encoded_operations()
+{
+    TTI_ATGETM(4 /*mutex_index*/);
+    TTI_ATRELM(0 /*mutex_index*/);
+}
 
-// Runtime forms add the mutex index to the opcode word (ATGETM 0xa0, ATRELM 0xa1)
-// and push it through the instruction buffer.
+// Runtime forms push the mutex index through the instruction buffer.
 
 extern "C" __attribute__((noinline, used)) void acquire_runtime(const sync::Mutex mutex)
 {
     sync::mutex::acquire(mutex);
 }
 
-// CHECK-LABEL: <acquire_runtime>:
-// CHECK-NEXT: lui [[OP:a[0-7]]],0xa0000
-// CHECK-NEXT: lui [[BUF:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a0,a0,[[OP]]
-// CHECK-NEXT: mv [[BUF]],[[BUF]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a0,0([[BUF]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_acquire_runtime(const sync::Mutex mutex)
+{
+    TT_ATGETM(hal::to_underlying(mutex));
+}
 
 extern "C" __attribute__((noinline, used)) void release_runtime(const sync::Mutex mutex)
 {
     sync::mutex::release(mutex);
 }
 
-// CHECK-LABEL: <release_runtime>:
-// CHECK-NEXT: lui [[OP:a[0-7]]],0xa1000
-// CHECK-NEXT: lui [[BUF:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a0,a0,[[OP]]
-// CHECK-NEXT: mv [[BUF]],[[BUF]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a0,0([[BUF]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_release_runtime(const sync::Mutex mutex)
+{
+    TT_ATRELM(hal::to_underlying(mutex));
+}
