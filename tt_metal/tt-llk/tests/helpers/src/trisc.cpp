@@ -60,6 +60,9 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 
 int main(void)
 {
+#if defined(LLK_PROFILER)
+    const std::uint64_t rc_t_main = ckernel::read_wall_clock(); // RC experiment: timeline marker
+#endif
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
 #if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
     mailbox_t mailbox_base = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start);
@@ -95,7 +98,9 @@ int main(void)
 
 #if defined(LLK_PROFILER)
     llk_profiler::reset();
+    TIMESTAMP_DATA("RC_MAIN", rc_t_main) // RC experiment: stamp = memset end, data = main entry
     llk_profiler::sync_threads();
+    TIMESTAMP_DATA("RC_SYNC", 0) // RC experiment: after the start rendezvous
 #endif
 
     {
@@ -106,6 +111,9 @@ int main(void)
         run_kernel(temp_args);
 
         ckernel::fence_compiler();
+#if defined(LLK_PROFILER)
+        TIMESTAMP_DATA("RC_RUN_END", 0) // RC experiment: run_kernel returned
+#endif
 
         ckernel::tensix_sync();
     }

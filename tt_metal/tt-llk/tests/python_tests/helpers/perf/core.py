@@ -1102,6 +1102,10 @@ class PerfConfig(TestConfig):
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
                 assert_zones_dont_overlap(profiler_data)
+                if os.environ.get("RC_TL_DUMP"):  # RC experiment: raw per-thread profiler entries
+                    profiler_data.raw().to_csv(
+                        f"{os.environ['RC_TL_DUMP']}.{run_type.name}.r{run_index}.csv", index=False
+                    )
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     try:

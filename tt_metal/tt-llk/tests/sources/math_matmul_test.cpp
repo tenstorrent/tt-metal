@@ -93,6 +93,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
@@ -183,6 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_math_wait_for_dest_available_<dest_sync>();
@@ -268,6 +270,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_packer_wait_for_math_done_();
