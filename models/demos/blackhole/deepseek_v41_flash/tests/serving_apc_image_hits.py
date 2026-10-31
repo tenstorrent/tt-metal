@@ -125,6 +125,7 @@ for pad in (700, 1200, 6000):
         num,
         f"if{pad}-{RUN}",
         4,
+        want_hit_after_first=pad > 700,  # (< 1152 tokens: no snapshot deeper than the first piece, 512)
     )
 num = str(random.Random(1).randrange(1000, 9999))
 case(

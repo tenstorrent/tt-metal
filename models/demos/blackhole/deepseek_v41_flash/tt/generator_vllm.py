@@ -883,7 +883,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 )
         if max(lens) + 1 > self.max_seq_len:
             raise ValueError(f"prompt of {max(lens)} tokens does not fit max_model_len {self.max_seq_len}")
-        mm = {k: kwargs.get(k) for k in ("pixel_values", "image_grid_thw")}
+        mm = {k: kwargs.get(k) for k in ("pixel_values", "image_grid_thw", "mm_cache_salt")}
         if self.interleave:
             return self._prefill_interleaved(
                 tokens,
