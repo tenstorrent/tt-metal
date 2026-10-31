@@ -1187,3 +1187,4 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   job would tt-smi -r the box. Asked the owner how to reset. Lesson (skill + agent rule, after the box is back): no
   single-card device job on a Galaxy whose mesh a run depends on, or only without the per-card reset.
 - 05:06 owner reset the boards; dirty marks cleared; box test PASS (13 s); note OV-34 (FIX.15: mesh-only, rule 19); resumed --until FIX.15.
+- 07:45 FIX.15 PASS a3ba02c5615 (110-core cap: device +3.4 ms a chunk, wall within noise; K.1 incl. Paris through tt-d-gen PASS: first since 10-29). DS41-175 out of date (rule 19): note OV-35. Queued P.18 WINDOW_TILES (owner, after FIX.15; gate = ladder + profile + K.1); run --until P.18.
