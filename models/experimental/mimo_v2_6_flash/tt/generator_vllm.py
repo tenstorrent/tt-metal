@@ -58,16 +58,20 @@ eagerly in chunks of up to 4096 tokens, between the replays. A program first com
 ``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
 padded length and the alignment of its start (attention.py), a bounded set.
 
-Structured output (``supports_device_grammar``, the plugin's docs/DEVICE_GRAMMAR_CONTRACT.md; it needs
-``--no-async-scheduling``): vLLM builds a step's grammar bitmask after the step is submitted, so a decode step with a
+Structured output (``supports_device_grammar``, the plugin's docs/DEVICE_GRAMMAR_CONTRACT.md; with or without
+async scheduling): vLLM builds a step's grammar bitmask after the step is submitted, so a decode step with a
 structured request comes as ``decode_forward(defer_device_sampling=True)``, which replays every active lane's greedy
 decode trace at once (DeferredDecode), then ``sample_deferred_decode`` with the rows' sampling parameters and the packed
 mask: each lane queues its parameters and mask rows behind its forward, and a lane with a sampled or constrained row
 then replays the sampler trace (TtMiMoModel.sample_enqueue) over the greedy tokens, whose sampler sets the logits a
 row's mask disallows below every other before it draws (DeviceSampler.set_grammar), greedy rows included. vLLM builds
-the mask, and the lanes upload it, while the forward runs. Structured prefill (the first token) samples on host. A
-replica with more than MAX_USERS decode users has no device sampler: such a launch keeps host grammar
-(``enable_device_grammar``).
+the mask, and the lanes upload it, while the forward runs. The sampler trace replays on an empty queue, so its drain
+waits for the forward; ``sample_deferred_decode`` leaves the draws pending (PendingDraws) and the adapter's next device
+work enqueues them first (``_flush_draws``: the next step's decode or prefill, or the read of the step's tokens). Under
+async scheduling the host then builds the next step while this one's forward runs, instead of waiting for it in
+``sample_deferred_decode``; the device queue holds the same work in the same order either way. Structured prefill
+(the first token) samples on host. A replica with more than MAX_USERS decode users has no device sampler: such a launch
+keeps host grammar (``enable_device_grammar``).
 
 Speculative decoding (MIMO_SPEC_DECODE=mtp; the plugin's model-owned drafter contract, docs/SPEC_DECODE_CONTRACT.md,
 with ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter",
@@ -408,6 +412,18 @@ class DeferredDecode:
         self.positions, self.forward, self.reload = positions, forward, reload
 
 
+class PendingDraws:
+    """The sampler draws of a sampled deferred step, enqueued by the adapter's next device work (``_flush_draws``).
+    ``out``: the step's output, whose drawing lanes' handles get the sampler's tokens then; ``draws``: per drawing
+    lane, (its index in ``out["handles"]``, its active rows, whether a mask constrains it); ``read``: the host output
+    of a ``read_decode_output(out, async_read=True)`` before the flush, whose token reads the flush enqueues."""
+
+    def __init__(self, out, draws):
+        self.out, self.draws = out, draws
+        self.read = None
+        self.done = False
+
+
 class MiMoV2ForCausalLM:
     model_capabilities = {
         "supports_chunked_prefill": True,
@@ -479,6 +495,10 @@ class MiMoV2ForCausalLM:
         self._deferred = None
         self.lane_grammar = [False] * self.dp
         self._grammar_failure = None
+        # The draws of the last sampled deferred step until the next device work enqueues them (PendingDraws), and the
+        # lock that makes one caller enqueue them: the plugin may read a step's tokens on another thread.
+        self._draws = None
+        self._draws_lock = threading.Lock()
         # Per lane: where the last step left its requests' committed tokens (reference.spec_decode.DraftSource), one
         # per draft group, none when that step ran no request or more than DRAFT_GROUPS; propose_draft_tokens drafts
         # from them.
@@ -829,6 +849,7 @@ class MiMoV2ForCausalLM:
         verify afterwards, and a lane taking a prompt restarts its MTP ring (its drafter serves one request)."""
         if sampling_params is not None:
             raise ValueError("MiMo samples on the host; got device sampling_params")
+        self._flush_draws()
         tables = self._layer_tables(page_table, page_tables_per_layer)
         rows = tokens.shape[0]
         starts = np.asarray(start_pos).reshape(-1).astype(np.int64)
@@ -1033,6 +1054,7 @@ class MiMoV2ForCausalLM:
             )
         if self._deferred is not None:
             raise RuntimeError("a deferred decode step is pending: sample_deferred_decode must run it first")
+        self._flush_draws()
         if "reset_batch" in kwargs:
             raise ValueError("MiMo implements decode_input_update_contract 1; got the legacy reset_batch keyword")
         defer = bool(kwargs.pop("defer_device_sampling", False))
@@ -1611,6 +1633,7 @@ class MiMoV2ForCausalLM:
         whose propose returns the drafts its pages carry (``_propose_deferred``)."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
+        self._flush_draws()
         if isinstance(hidden, VerifyHandle):
             return self._propose_deferred(hidden, num_drafts, committed_tokens, committed_positions, accepted_counts)
         t0 = time.perf_counter()
@@ -2072,6 +2095,22 @@ class MiMoV2ForCausalLM:
         if not out["tokens"]:
             logits = self._read_logits(out)
             return (logits, []) if async_read else logits
+        draws = out.get("draws")
+        if draws is not None and async_read:
+            with self._draws_lock:
+                if not draws.done:
+                    # The reads queue behind the draws, at the flush; process_decode_output_host waits for them.
+                    draws.read = {"rows": out["rows"], "reads": None, "events": None, "draws": draws}
+                    return draws.read, []
+        elif draws is not None:
+            self._flush_draws()
+        reads, events = self._enqueue_reads(out, async_read)
+        host = {"rows": out["rows"], "reads": reads}
+        return (host, events) if async_read else host
+
+    def _enqueue_reads(self, out, async_read):
+        """Reads of a device-sampled step's tokens, per lane that ran: without blocking when ``async_read`` (with the
+        read events), else blocking."""
         reads, events = [], []
         for entry in out["handles"]:
             if entry is None:
@@ -2080,8 +2119,7 @@ class MiMoV2ForCausalLM:
             reads.append((lane, n, handle["next_tokens"].cpu(blocking=not async_read)))
             if async_read:
                 events.append(ttnn.record_event(self.models[lane].mesh_device, 0))
-        host = {"rows": out["rows"], "reads": reads}
-        return (host, events) if async_read else host
+        return reads, events
 
     def _read_logits(self, out):
         vocab = self.gen.cfg.vocab_size
@@ -2105,6 +2143,12 @@ class MiMoV2ForCausalLM:
             return out
         if isinstance(out, dict) and "handles" in out and out["tokens"]:
             out = self.read_decode_output(out)
+        if isinstance(out, dict) and out.get("draws") is not None:
+            # An async read of a step whose draws were pending: the flush (here, unless the next step's already ran)
+            # queued its reads behind them.
+            self._flush_draws()
+            for event in out["events"]:
+                ttnn.event_synchronize(event)
         if isinstance(out, torch.Tensor) or "reads" not in out:
             raise ValueError("device sampling: expected the token reads of read_decode_output")
         tokens = torch.zeros(out["rows"], dtype=torch.int32)
@@ -2161,11 +2205,12 @@ class MiMoV2ForCausalLM:
             raise
 
     def _sample_deferred(self, payload, sampling_params, grammar):
-        """The sampling of a deferred step (checked) on its forward's lanes. Every lane first queues its rows'
-        parameters (a reloading step) and its mask rows (``grammar``: int32 [lanes x per_lane, words], -1 words
-        allowed) behind its forward; then each active lane with a sampled or constrained row draws on the sampler trace,
-        whose drain waits for that lane's forward, and the others keep the greedy tokens."""
-        draws = {}
+        """The sampling of a deferred step (checked) on its forward's lanes. Every lane queues its rows' parameters (a
+        reloading step) and its mask rows (``grammar``: int32 [lanes x per_lane, words], -1 words allowed) behind its
+        forward; each active lane with a sampled or constrained row then draws on the sampler trace, whose drain waits
+        for that lane's forward, at the adapter's next device work (PendingDraws, ``_flush_draws``), and the others
+        keep the greedy tokens."""
+        lanes = {}
         for lane, first, last, pos in payload.forward["lanes"]:
             model = self.models[lane]
             if payload.reload:
@@ -2173,19 +2218,39 @@ class MiMoV2ForCausalLM:
             active = pos >= 0
             if bool(active.any()):
                 masked = self._set_grammar(lane, model, grammar, first, last, active)
-                draws[lane] = (active, masked, self.lane_sampled[lane] or masked)
-        handles = []
-        for entry in payload.forward["handles"]:
-            if entry is not None and draws[entry[0]][2]:
-                lane, n, handle = entry
-                model, (active, masked, _) = self.models[lane], draws[lane]
-                # MIMO_SAMPLER_CHECK's host draw knows no grammar: it checks unconstrained steps only.
-                rng = model.sampler.read_rng() if SAMPLER_CHECK and not masked else None
-                entry = (lane, n, dict(handle, next_tokens=model.sample_enqueue(handle)))
-                if rng is not None:
-                    self._check_sampling(lane, model, entry[2], rng, active)
-            handles.append(entry)
-        return {"rows": payload.forward["rows"], "handles": handles, "tokens": True}
+                lanes[lane] = (active, masked, self.lane_sampled[lane] or masked)
+        handles = list(payload.forward["handles"])
+        out = {"rows": payload.forward["rows"], "handles": handles, "tokens": True}
+        draws = [(i, *lanes[e[0]][:2]) for i, e in enumerate(handles) if e is not None and lanes[e[0]][2]]
+        if draws:
+            self._draws = out["draws"] = PendingDraws(out, draws)
+        return out
+
+    def _flush_draws(self):
+        """Enqueues the pending draws of the last sampled deferred step (``_sample_deferred``), each drawing lane's
+        sampler replay over its greedy tokens, and then the token reads an async ``read_decode_output`` of its output
+        asked for. Every entry point that queues device work calls it first, so the draws keep their place on the
+        queue: right behind the step's forward and uploads. A failure is final, as one in ``sample_deferred_decode``."""
+        with self._draws_lock:
+            pending, self._draws = self._draws, None
+            if pending is None:
+                return
+            try:
+                handles = pending.out["handles"]
+                for i, active, masked in pending.draws:
+                    lane, n, handle = handles[i]
+                    model = self.models[lane]
+                    # MIMO_SAMPLER_CHECK's host draw knows no grammar: it checks unconstrained steps only.
+                    rng = model.sampler.read_rng() if SAMPLER_CHECK and not masked else None
+                    handles[i] = (lane, n, dict(handle, next_tokens=model.sample_enqueue(handle)))
+                    if rng is not None:
+                        self._check_sampling(lane, model, handles[i][2], rng, active)
+                if pending.read is not None:
+                    pending.read["reads"], pending.read["events"] = self._enqueue_reads(pending.out, True)
+                pending.done = True
+            except Exception as e:
+                self._grammar_failure = f"{type(e).__name__}: {e}"
+                raise
 
     # ------------------------------------------------------------------ warmup and lifetime
     def _max_prefill_tokens(self):
@@ -2334,6 +2399,7 @@ class MiMoV2ForCausalLM:
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
 
     def release_persistent_capture(self):
+        self._flush_draws()
         for model in self.models:
             model.release_decode_trace()
             model.release_prefill_traces()

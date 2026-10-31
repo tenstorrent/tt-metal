@@ -7,7 +7,9 @@ on fake lanes (no device): a deferred step runs its forward at submission (each 
 row; one step may be pending; a call that fails its checks leaves the step pending and nothing changed; a failure after
 the submission is final. Per lane, the sampler gets the mask rows of its active constrained rows, every lane's uploads
 queue before the first draw, a lane with a sampled or constrained row draws over its greedy tokens and the others keep
-them, and a lane whose last mask flagged rows has the flags lifted on its next device-sampled step without one."""
+them, and a lane whose last mask flagged rows has the flags lifted on its next device-sampled step without one. The
+draws wait for the adapter's next device work (the next step, or the read of the step's tokens), which enqueues them
+before anything of its own; an async read before then gets its reads queued behind them."""
 
 import copy
 from types import SimpleNamespace
@@ -58,6 +60,7 @@ class FakeLane:
 
     def __init__(self, index, log):
         self.index, self.log = index, log
+        self.mesh_device = index
         self.max_batch = 32
         self.sampler = FakeSampler(index, log)
         self.decode_trace = object()
@@ -147,8 +150,20 @@ def submit(model, positions=None):
 
 @pytest.fixture
 def host_reads(monkeypatch):
-    """``process_decode_output_host`` reads the fake token rows."""
-    monkeypatch.setattr(generator_vllm, "ttnn", SimpleNamespace(get_device_tensors=lambda t: [t], to_torch=lambda t: t))
+    """``process_decode_output_host`` reads the fake token rows; an async read's events are its lane's, waited on in
+    ``waited``."""
+    waited = []
+    monkeypatch.setattr(
+        generator_vllm,
+        "ttnn",
+        SimpleNamespace(
+            get_device_tensors=lambda t: [t],
+            to_torch=lambda t: t,
+            record_event=lambda device, cq: ("event", device),
+            event_synchronize=waited.append,
+        ),
+    )
+    return waited
 
 
 def test_capability_and_enable(adapter):
@@ -269,8 +284,8 @@ def test_lanes_get_their_constrained_rows(adapter):
     assert rows.tolist() == [True, False, True, False]
     assert mask.shape == (PER_LANE, WORDS) and int(mask[0, 0]) == -1 and int(mask[0, 1]) == 0
     assert lane0.grammar == [] and adapter.lane_grammar == [False, True, False, False]
-    assert adapter.models[1].enqueued == [("reload", False), ("draw",)]
-    # Next step: an ordinary device-sampled decode that reloads the parameters.
+    assert adapter.models[1].enqueued == [("reload", False)], "the draw waits for the next device work"
+    # Next step: an ordinary device-sampled decode that reloads the parameters. Its first device work is the draws.
     out = adapter.decode_forward(
         torch.zeros(ROWS, 1, dtype=torch.int32),
         positions + 1,
@@ -281,6 +296,7 @@ def test_lanes_get_their_constrained_rows(adapter):
         reload_sampling_params=True,
     )
     assert out["tokens"] and len(lane1.grammar) == 1 and adapter.lane_grammar == [False] * DP
+    assert adapter.models[1].enqueued == [("reload", False), ("draw",), ("reload", False)]
     assert lane1.params == 2, "the reload uploaded the parameters again, flags off: nothing left to lift"
     count = len(lane1.grammar)
     adapter.decode_forward(
@@ -304,9 +320,9 @@ def test_uploads_queue_before_the_first_draw(adapter, host_reads):
     assert log == [(lane, "forward") for lane in range(DP)]
     out = adapter.sample_deferred_decode(payload, params(temperature=0.0), grammar_bitmask=bitmask([5]))
     after = log[DP:]
-    assert [e for e in after if e[1] == "draw"] == [(1, "draw")] and after[-1] == (1, "draw")
-    assert sorted(after[:-1]) == sorted([(lane, "params") for lane in range(DP)] + [(1, "mask")])
+    assert sorted(after) == sorted([(lane, "params") for lane in range(DP)] + [(1, "mask")])
     tokens = adapter.process_decode_output_host(out, is_tokens=True)
+    assert log[DP + len(after) :] == [(1, "draw")], "the read enqueues the pending draw first"
     lane1 = slice(PER_LANE, 2 * PER_LANE)
     expected = torch.arange(ROWS, dtype=torch.int32) + GREEDY
     expected[lane1] += DRAWN - GREEDY
@@ -325,7 +341,8 @@ def test_steady_mask_without_reload_lifts_the_flags(adapter):
     )
     adapter.sample_deferred_decode(payload, params(), grammar_bitmask=bitmask([]))
     assert lane1.grammar[-1] is None and lane1.params == 1
-    assert adapter.models[1].enqueued[-2:] == [("steady", False), ("draw",)]
+    assert adapter.models[1].enqueued == [("reload", False), ("draw",), ("steady", False)]
+    assert [entry[0] for entry in adapter._draws.draws] == list(range(DP)), "every lane samples: each draws"
 
 
 def test_finalizing_the_deferred_output_reads_it(adapter, host_reads):
@@ -339,3 +356,46 @@ def test_finalizing_the_deferred_output_reads_it(adapter, host_reads):
     assert (
         adapter.process_decode_output_host(adapter.read_decode_output(out), is_tokens=True).tolist() == tokens.tolist()
     )
+
+
+def test_async_read_queues_behind_the_pending_draws(adapter, host_reads):
+    """An async read of a sampled step before its draws ran (the plugin starts it right after
+    ``sample_deferred_decode``) enqueues nothing: the next step's decode enqueues the draws, then the reads, then its
+    own forward; finalizing the read waits for its events and returns the drawn tokens."""
+    log = adapter.models[0].log
+    out = adapter.sample_deferred_decode(submit(adapter), params(temperature=0.0), grammar_bitmask=bitmask([5]))
+    host, events = adapter.read_decode_output(out, async_read=True)
+    assert events == [] and host["reads"] is None
+    count = len(log)
+    adapter.decode_forward(
+        None, None, None, None, read_from_device=False, defer_device_sampling=True, reload_inputs=False
+    )
+    assert log[count:] == [(1, "draw")] + [(lane, "forward") for lane in range(DP)]
+    assert host["events"] == [("event", lane) for lane in range(DP)]
+    tokens = adapter.process_decode_output_host(host, is_tokens=True)
+    assert host_reads == host["events"]
+    expected = torch.arange(ROWS, dtype=torch.int32) + GREEDY
+    expected[PER_LANE : 2 * PER_LANE] += DRAWN - GREEDY
+    assert tokens.tolist() == expected.tolist()
+
+
+def test_async_read_finalized_first_enqueues_the_draws(adapter, host_reads):
+    """A read finalized before the next step (the plugin draining its steps) enqueues the draws and the reads itself."""
+    out = adapter.sample_deferred_decode(submit(adapter), params(), grammar_bitmask=bitmask([5]))
+    host, _ = adapter.read_decode_output(out, async_read=True)
+    tokens = adapter.process_decode_output_host(host, is_tokens=True)
+    assert tokens.tolist() == [DRAWN + r for r in range(ROWS)] and adapter._draws is None
+    assert adapter.models[0].enqueued[-1] == ("draw",)
+
+
+def test_failed_draw_is_final(adapter, monkeypatch, expect_error):
+    out = adapter.sample_deferred_decode(submit(adapter), params(), grammar_bitmask=bitmask([5]))
+
+    def broken(handle):
+        raise RuntimeError("replay failed")
+
+    monkeypatch.setattr(adapter.models[2], "sample_enqueue", broken)
+    with expect_error(RuntimeError, "replay failed"):
+        adapter.read_decode_output(out)
+    with expect_error(RuntimeError, "failed after a decode submission"):
+        submit(adapter)
