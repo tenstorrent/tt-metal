@@ -20,9 +20,10 @@ PLEKV_FLAG = "QWEN38_MM2_PLEKV"  # default "1": the PLE key+value merged linear 
 # (K, N) shapes whose readers sit on the DRAM banks' optimal NOC0 workers when QWEN38_MM2_OPTIMAL is "1" (the default)
 OPTIMAL_SHAPES = frozenset({(2560, 2304)})  # the QSA merged projection
 BALANCE_FLAG = (
-    "QWEN38_MM2_BALANCE"  # default "1": the K blocks of a column spread over all banks (equal bytes per bank)
+    "QWEN38_MM2_BALANCE"  # default "0": the K blocks of a column spread over all banks (equal bytes per bank)
 )
-# (K, N) shapes laid out balanced while QWEN38_MM2_BALANCE is "1" (the default; the other shapes already have equal bytes per bank)
+# (K, N) shapes laid out balanced while QWEN38_MM2_BALANCE is "1" (the other shapes already have equal bytes per bank).
+# Off by default: the reader placement follows the first die's bank workers; e2e -62 us on one 8-chip group, +25 us on another.
 BALANCE_SHAPES = frozenset(
     {(2560, 2112)}
 )  # GDN in-proj: gate_up gains nothing (kernel fixed cost), the others are even
@@ -36,7 +37,7 @@ def enabled() -> bool:
 
 
 def balance_enabled(k: int | None = None, n: int | None = None) -> bool:
-    return os.environ.get(BALANCE_FLAG, "1") == "1" and (k is None or (k, n) in BALANCE_SHAPES)
+    return os.environ.get(BALANCE_FLAG, "0") == "1" and (k is None or (k, n) in BALANCE_SHAPES)
 
 
 def plekv_enabled() -> bool:
