@@ -497,8 +497,8 @@ def path_needs(group: str, model: str) -> list[str]:
     if group == "block-random":
         # Random weights and input: only config.json from the HF model dir.
         return [hf]
-    if group == "block" and model == "glm53":
-        # GLM block feeds random input, so no golden trace.
+    if group == "block":
+        # Without a golden trace the block runs random input and checks determinism only.
         return [hf, ttnn_cache]
     return [hf, ttnn_cache, trace]
 
