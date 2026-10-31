@@ -912,6 +912,13 @@ class Qwen36Model:
                     cos, sin = self.rope.get_prefill_rot_mats(chunk_start, chunk_end - chunk_start)
                     x_chunk = layer.forward(x_chunk, cos=cos, sin=sin, mode="prefill")
                 else:
+                    # The GDN prefill kernels require a tile-aligned sequence; a tail chunk that is
+                    # not a multiple of 32 is padded here and trimmed immediately below, so nothing
+                    # downstream (attention, the concat) ever sees the padding.
+                    _n = x_chunk.shape[-2]
+                    _pad = (-_n) % 32
+                    if _pad:
+                        x_chunk = ttnn.pad(x_chunk, [(0, 0), (0, _pad), (0, 0)], 0.0)
                     x_chunk = layer.forward(
                         x_chunk,
                         cos=None,
@@ -919,6 +926,8 @@ class Qwen36Model:
                         mode="prefill",
                         chunk_size=layer.attention.long_prefill_chunk_size,
                     )
+                    if _pad:
+                        x_chunk = ttnn.slice(x_chunk, (0, 0, 0), (1, _n, x_chunk.shape[-1]))
 
                 chunks_out.append(x_chunk)
 
