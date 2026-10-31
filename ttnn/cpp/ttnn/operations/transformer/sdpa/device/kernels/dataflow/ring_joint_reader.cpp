@@ -776,6 +776,15 @@ void kernel_main() {
     constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
     constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
     constexpr uint32_t v_col_offset_t = v_row_Wt - vDHt;
+    // Packed K/V where V starts inside K's columns (Gemma4 global: [Krot128 | V512], K = cols 0..512, V = cols
+    // 128..640): an injector builds V's first v_from_k_tiles columns from the K tiles it already read and reads
+    // only the rest from DRAM, instead of reading the overlapping columns twice. Only for packed K/V, where V is read
+    // from the K tensor itself (equal row widths, same data format). Packed sources (several ring sources per K chunk)
+    // place K rows by the packed schedule, not by k_slice; the host enables them only with v_shares_k_buffer.
+    constexpr uint32_t v_from_k_tiles = v_col_offset_t < DHt ? DHt - v_col_offset_t : 0;
+    constexpr bool v_overlaps_k = !v_shares_k_buffer && GROUPED_KV_SOURCE_COUNT == 1 && !has_sliding_window &&
+                                  k_row_Wt == v_row_Wt && v_col_offset_t > 0 && v_from_k_tiles > 0 &&
+                                  v_from_k_tiles < vDHt && k_tile_bytes == v_tile_bytes;
     const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, k_row_Wt);
     const auto gathered_k_input_tile_logical =
         TensorTileShape(gathered_kv_batch_dim, NHK, gathered_padded_Nt, k_row_Wt);
@@ -1441,6 +1450,53 @@ void kernel_main() {
                     }
                     if (!received_v_from_chain) {
                         const auto fetch_v = [&](const auto& v_gen) {
+                            if constexpr (v_overlaps_k) {
+                                if (!kv_chunk_is_joint) {
+                                    // Packed K/V row: V's first v_from_k_tiles tile columns are K tile columns
+                                    // v_col_offset_t.. that this core already holds (K^T is [d][sk] raw tiles at
+                                    // stride Sk_chunk_t, as fetch_block writes it for the Sk_chunk_t-row k_slice).
+                                    // Copy them core-locally and read only V's tail from DRAM.
+                                    const Slice v_tail(
+                                        v_slice.d0,
+                                        v_slice.d1,
+                                        v_slice.d2_start,
+                                        v_slice.d2_end,
+                                        DHt,
+                                        v_col_offset_t + vDHt);
+                                    v_gen.issue_reads(
+                                        v_tail,
+                                        end_seq_tile,
+                                        cb_v_in,
+                                        cb_v_start_address + v_from_k_tiles * v_tile_bytes,
+                                        vDHt * v_tile_bytes,
+                                        v_tile_bytes,
+                                        0);
+                                    const uint8_t noc_id = noc.get_noc_id();
+                                    UnicastEndpoint kt_src;
+                                    noc.set_async_read_state<NocOptions::DEFAULT, k_tile_bytes>(
+                                        kt_src,
+                                        k_tile_bytes,
+                                        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = cb_k_start_address});
+                                    for (uint32_t sk = 0; sk < Sk_chunk_t; ++sk) {
+                                        uint32_t v_dst = cb_v_start_address + sk * vDHt * v_tile_bytes;
+                                        uint32_t kt_src_addr =
+                                            cb_k_start_address + (v_col_offset_t * Sk_chunk_t + sk) * k_tile_bytes;
+                                        for (uint32_t vd = 0; vd < v_from_k_tiles; ++vd) {
+                                            noc.async_read_with_state<NocOptions::DEFAULT, k_tile_bytes>(
+                                                kt_src,
+                                                CoreLocalMem<uint32_t>(v_dst),
+                                                k_tile_bytes,
+                                                {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = kt_src_addr},
+                                                {});
+                                            v_dst += v_tile_bytes;
+                                            kt_src_addr += Sk_chunk_t * k_tile_bytes;
+                                        }
+                                    }
+                                    noc.async_read_barrier();
+                                    noc.write_zeros_l1_barrier();
+                                    return;
+                                }
+                            }
                             fetch_block(
                                 v_gen,
                                 v_slice,
