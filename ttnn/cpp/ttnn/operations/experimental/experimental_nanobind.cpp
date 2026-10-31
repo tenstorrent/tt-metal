@@ -118,6 +118,7 @@
 #include "ttnn/operations/experimental/deepseek/fused_lightning_select_kv/fused_lightning_select_kv_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/build_candidate_pool/build_candidate_pool_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/merge_select_kv/merge_select_kv_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/flash_mqa_decode/flash_mqa_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/all_gather_for_matmul/all_gather_for_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/width_sharded_all_reduce/width_sharded_all_reduce_nanobind.hpp"
 
@@ -240,6 +241,7 @@ void py_module(nb::module_& mod) {
     deepseek::detail::bind_fused_lightning_select_kv(mod);
     deepseek::detail::bind_build_candidate_pool(mod);
     deepseek::detail::bind_merge_select_kv(mod);
+    deepseek::detail::bind_flash_mqa_decode(mod);
     deepseek::detail::bind_all_gather_for_matmul(mod);
     deepseek::detail::bind_width_sharded_all_reduce(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
