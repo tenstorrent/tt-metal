@@ -430,8 +430,8 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
         const CoreCoord logical_core(0, 0);
         experimental::dfb::CreateDataflowBuffer(program, logical_core, c.config);
         program.impl().finalize_dataflow_buffer_configs();
-        program.impl().prepare_ephemeral_allocation(this->device().get_devices()[0]);
-        program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+        program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+        program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
         const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
         ASSERT_EQ(dfbs.size(), 1u);
@@ -2599,7 +2599,7 @@ TEST_F(UnitMeshAnyDispatchFixture, TensixDFBConfigFollowsSemaphoresWithoutCBRegi
 
     Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().finalize_offsets(this->device().get_devices()[0]);
+    program.impl().finalize_offsets(this->device().impl().get_devices()[0]);
 
     const auto& hal = MetalContext::instance(program.impl().get_context_id()).hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);

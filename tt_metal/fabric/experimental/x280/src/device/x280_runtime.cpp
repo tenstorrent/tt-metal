@@ -15,6 +15,7 @@
 
 #include <llrt/tt_cluster.hpp>
 #include <mesh_device.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
@@ -656,7 +657,13 @@ TranslatedCoord X280Runtime::virtual_core_from_logical_core(
     if (!scope.is_initialized()) {
         fail("cannot resolve coordinates: the MeshDevice scope is closed");
     }
-    const auto c = resolve_common(scope.get_devices(), logical_coord, core_type);
+    std::vector<tt::tt_metal::IDevice*> devices;
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(scope.shape())) {
+        if (auto* device = tt::tt_metal::internal::get_device(scope, coord)) {
+            devices.push_back(device);
+        }
+    }
+    const auto c = resolve_common(devices, logical_coord, core_type);
     require_device_bound(c, noc, "logical coordinate");
     return TranslatedCoord(static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y));
 }
@@ -670,7 +677,7 @@ TranslatedCoord X280Runtime::virtual_core_from_logical_core(
     if (!scope.is_initialized()) {
         fail("cannot resolve coordinates: the MeshDevice scope is closed");
     }
-    auto* device = scope.get_device(chip);
+    auto* device = tt::tt_metal::internal::get_device(scope, chip);
     if (device == nullptr) {
         fail("cannot resolve coordinates: the scope has no local chip at the requested mesh coordinate");
     }

@@ -503,7 +503,7 @@ bool overlaps_any(const per_core::AddressRanges& ranges, DeviceAddr begin, Devic
 
 TEST_F(PerCoreAllocationTest, OccupiedRangesCoverLockstepAndPerCore) {
     auto& mesh_device = *this->devices_[0];
-    auto* device = mesh_device.get_devices()[0];
+    auto* device = mesh_device.impl().get_devices()[0];
     const distributed::MeshCoordinate coord(0, 0);
     ASSERT_GE(device->compute_with_storage_grid_size().x, 3);
 
@@ -592,7 +592,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1AcrossSubmeshes) 
 
 TEST_F(PerCoreAllocationTest, OccupiedRangesWholeDeviceMatchesPerCore) {
     auto& mesh_device = *this->devices_[0];
-    auto* device = mesh_device.get_devices()[0];
+    auto* device = mesh_device.impl().get_devices()[0];
     const distributed::MeshCoordinate coord(0, 0);
 
     CoreRange core_range(CoreCoord(0, 0), CoreCoord(1, 0));

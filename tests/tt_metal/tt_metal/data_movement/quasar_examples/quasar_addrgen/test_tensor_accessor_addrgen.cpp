@@ -56,6 +56,7 @@
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -437,7 +438,7 @@ ll_api::BufRwInfo query_buf_rw(
     EXPECT_EQ(programs.size(), 1u);
     auto k = programs.begin()->second.impl().get_kernel_by_spec_name(kernel);
     EXPECT_NE(k, nullptr) << "no kernel " << kernel;
-    return k ? k->query_buf_rw(*device.get_devices()[0]) : ll_api::BufRwInfo{};
+    return k ? k->query_buf_rw(*device.impl().get_devices()[0]) : ll_api::BufRwInfo{};
 }
 
 // Which bound tensors a kernel touches, as the notes must record them.

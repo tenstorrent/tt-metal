@@ -116,7 +116,7 @@ GlobalSemaphore CreateGlobalSemaphore(
     uint64_t address,
     uint8_t cq_id) {
     // Validate every destination in its selected SRAM region before any constructor can write.
-    for (auto* local_device : device.get_devices()) {
+    for (auto* local_device : device.impl().get_devices()) {
         const auto& allocator = local_device->allocator_impl();
         const auto footprint = tt::align(sizeof(uint32_t), allocator->get_alignment(BufferType::L1));
         allocator->validate_l1_range(address, footprint, buffer_type);

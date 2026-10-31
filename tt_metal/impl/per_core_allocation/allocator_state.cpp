@@ -30,7 +30,7 @@ std::vector<const AllocatorImpl*> hybrid_allocators(
         root = root->get_parent_mesh().get();
     }
     auto visit = [&](const distributed::MeshDevice& mesh, auto& self) -> void {
-        const auto devices = mesh.get_devices();
+        const auto devices = mesh.impl().get_devices();
         // An uninitialized mesh (e.g. the parent from create_unit_meshes) has no allocator.
         if (mesh.is_initialized() && std::find(devices.begin(), devices.end(), device) != devices.end()) {
             // Sub-device allocators own L1 that none of these allocators reports.
