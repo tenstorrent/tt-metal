@@ -19,6 +19,9 @@
 #include "api/debug/assert.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#ifdef PAD_COLS_NEG_INF
+#include "pad_neg_inf.hpp"
+#endif
 
 // clang-format off
 // 3 Loops in code
@@ -220,6 +223,10 @@ void pad_input(
                 add_init(dfb_in, dfb_mask_padded);
                 dfb_mask_padded_obj.wait_front(1);
                 add_tiles(dfb_in, dfb_mask_padded, cur_dst, 0, cur_dst);
+#ifdef PAD_COLS_NEG_INF
+                softmax_pad_neg_inf_init();
+                softmax_pad_neg_inf_tile<PAD_COLS_NEG_INF>(cur_dst);
+#endif
             } else {
                 copy_tile(dfb_in, cur_dst, cur_dst);
             }
