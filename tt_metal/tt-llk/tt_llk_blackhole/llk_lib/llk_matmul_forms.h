@@ -679,7 +679,17 @@ constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sy
     {
         return 0;
     }
-    if (rt * ct < 2 || (fidelity == MathFidelity::LoFi && kt > 1 && half_sync))
+    if (rt * ct < 2)
+    {
+        return 0;
+    }
+    // LoFi blocks of several K tiles to Bfp8_b from Float16_b by Float16_b or Bfp4_b operands: the closed block reads faster than the per-tile pack
+    if (fidelity == MathFidelity::LoFi && kt > 1 && half_sync && throttle == 0 && !small && out == DataFormat::Bfp8_b &&
+        in_a == DataFormat::Float16_b && (in_b == DataFormat::Float16_b || in_b == DataFormat::Bfp4_b))
+    {
+        return 2;
+    }
+    if (fidelity == MathFidelity::LoFi && kt > 1 && half_sync)
     {
         return 0;
     }

@@ -138,7 +138,21 @@ def _matmul_pack_form_value(
     # the packer's L1 accumulate of a Float32 output reads and writes 64 byte rows: at half sync the block run reads slower than the per-tile pack
     if l1_acc and dest_sync == DestSync.Half and formats.output_format == DataFormat.Float32:
         return 0
-    if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full):
+    if rt_dim * ct_dim < 2:
+        return 0
+    # LoFi blocks of several K tiles to Bfp8_b from Float16_b by Float16_b or Bfp4_b operands: the closed block reads faster than the per-tile pack
+    if (
+        math_fidelity == MathFidelity.LoFi
+        and kt_dim > 1
+        and dest_sync == DestSync.Half
+        and throttle == 0
+        and not small
+        and formats.output_format == DataFormat.Bfp8_b
+        and formats.input_format == DataFormat.Float16_b
+        and formats.input_format_B in (DataFormat.Float16_b, DataFormat.Bfp4_b)
+    ):
+        return 2
+    if math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full:
         return 0
     if matmul_pack_per_tile_cell(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, throttle, in0_tile_r_dim, in1_tile_c_dim):
         return 0
