@@ -9,7 +9,8 @@
 
 namespace ttml::ttnn_fixed {
 
-ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim);
+uint32_t normalize_dim(const ttnn::Shape& shape, int dim);
+ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, int dim);
 ttnn::Tensor sum_over_batch(const ttnn::Tensor& t);
 ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim);
