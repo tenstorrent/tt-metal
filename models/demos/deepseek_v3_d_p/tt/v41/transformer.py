@@ -93,6 +93,19 @@ def prefill_host_batch() -> bool:
     return os.environ.get(PREFILL_HOST_BATCH, "0") == "1"
 
 
+# "1": ``reset_state`` zeroes the window carries and DSpark rings with device-to-device copies from one persistent
+# all-zero device tensor per shape (``ttnn.copy``), instead of uploading ~6 MB of zero pages to every chip from the
+# host. The upload was 9 ms a request as ~40 single copies, 3 ms as
+# one batch on the dispatch workers, and 23 ms as one batch under ``TT_METAL_MESH_WRITE_INLINE=1``
+# (the served catalog now: the batch runs on the calling thread, device after device). Zeros are zeros:
+# bit for bit. Default "0": the host upload (batched or not by TT_V41_PREFILL_HOST_BATCH).
+PREFILL_RESET_DEVICE = "TT_V41_PREFILL_RESET_DEVICE"
+
+
+def prefill_reset_device() -> bool:
+    return os.environ.get(PREFILL_RESET_DEVICE, "0") == "1"
+
+
 def prefill_prefetch() -> int:
     return int(os.environ.get(PREFILL_PREFETCH, "2"))
 
@@ -183,6 +196,7 @@ class TtV41Transformer(LightweightModule):
         # the argument, else ``TT_V41_KV_FORMAT`` (``bf16_rm``, the default, or ``scaled_fp8``)
         self.kv_format = kv_format or MlaKvCacheFormat(os.environ.get("TT_V41_KV_FORMAT", "bf16_rm"))
         self._zero_hosts = {}  # reset_state's zero carries, per spec
+        self._zero_devices: dict = {}  # reset_state's zero carries on device, per spec (TT_V41_PREFILL_RESET_DEVICE)
         assert self.layers == sorted(set(self.layers)), "layers must be in execution order"
         needed = [l for l in self.layers if l in config.ENGRAM_LAYER_IDS]
         self.engram = dict(engram or {})
@@ -648,11 +662,22 @@ class TtV41Transformer(LightweightModule):
         for layer in state.compressor_carry:
             state.compressor_carry[layer] = None
         targets = list(state.window_carry.values()) + list(state.dspark_rings or ())
-        if prefill_host_batch() and targets:
+        if prefill_reset_device():
+            for t in targets:
+                ttnn.copy(self._zeros_device(t), t)
+        elif prefill_host_batch() and targets:
             ttnn.copy_host_to_device_tensors([self._zeros(t) for t in targets], targets)
         else:
             for t in targets:
                 ttnn.copy_host_to_device_tensor(self._zeros(t), t)
+
+    def _zeros_device(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """A persistent all-zero device tensor of ``t``'s shape, dtype, layout and memory config (one per spec,
+        allocated on first use: before any capture, since ``reset_state`` runs for the warm-up's first prompt)."""
+        key = (tuple(t.shape), t.dtype, t.layout, t.memory_config())
+        if key not in self._zero_devices:
+            self._zero_devices[key] = ttnn.to_device(self._zeros(t), self.mesh_device, memory_config=t.memory_config())
+        return self._zero_devices[key]
 
     def _zeros(self, t: ttnn.Tensor) -> ttnn.Tensor:
         """A replicated all-zero host tensor of ``t``'s shape, dtype and layout (cached per spec)."""
