@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the native/legacy shared KvChunkAddressTable for Llama prefill."""
 
-import socket
-
 from .kv_layout import PrefillKVLayout
 
 
 def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     import ttnn
-    from models.demos.common.prefill.runners.migration import get_num_dram_banks
+    from models.demos.common.prefill.runners.migration import _host_tag_int, get_num_dram_banks
     from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as prefill_layout
 
     if tuple(mesh_device.shape) != prefill_layout.mesh_shape or kv_cache.sp != prefill_layout.sp:
@@ -21,7 +19,12 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
         num_banks=get_num_dram_banks(mesh_device),
         chunk_size=chunk_size,
     )
-    shape = (layout.num_slots * layout.num_layers, 1, layout.max_seq_len // layout.sp, layout.head_dim)
+    shape = (
+        layout.num_slots * layout.num_layers * prefill_layout.local_kv_heads,
+        1,
+        layout.max_seq_len // layout.sp,
+        layout.head_dim,
+    )
     for tensor in (kv_cache.k, kv_cache.v):
         spec = tensor.memory_config().nd_shard_spec
         if tuple(tensor.shape) != shape or tensor.dtype != ttnn.bfloat8_b or tensor.layout != ttnn.TILE_LAYOUT:
@@ -47,7 +50,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     }
     api = ttnn.experimental.disaggregation
     base_addresses = tuple(int(t.buffer_address()) for t in (kv_cache.k, kv_cache.v))
-    host_name = socket.gethostname()
+    host_name = f"host-{_host_tag_int():08x}"
     configs = {}
     for name in layout.config_names:
         cfg = api.KvChunkAddressTableConfig()

@@ -298,7 +298,7 @@ def _validate_input(name, tensor, mesh_device):
         raise ValueError(f"{name} input must be a device ttnn.Tensor")
     if tensor.device() != mesh_device:
         raise ValueError(f"{name} input must reside on the cache mesh")
-    expected_shape = (1, 1, layout.local_sequence, Model.HEAD_DIM)
+    expected_shape = (1, layout.local_kv_heads, layout.local_sequence, Model.HEAD_DIM)
     if tuple(tensor.shape) != expected_shape:
         raise ValueError(f"{name} input must have local shape {expected_shape}, got {tuple(tensor.shape)}")
     if tensor.dtype != ttnn.bfloat16:
@@ -345,26 +345,36 @@ def _validate_write(kv_cache, k, v, *, slot_idx, layer_idx, actual_start, actual
 
 def _write_one(cache, tensor, *, slot_idx, layer_idx, actual_start, actual_end):
     staging = tensor if tensor.dtype == cache.dtype else ttnn.typecast(tensor, cache.dtype)
-    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-        cache,
-        staging,
-        slot_idx=slot_idx,
-        layer_idx=layer_idx,
-        num_layers=Model.NUM_LAYERS,
-        kv_actual_global=actual_start,
-        cluster_axis=layout.sp_axis,
-        valid_global=actual_end,
-    )
-    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-        cache,
-        slot_idx=slot_idx,
-        layer_idx=layer_idx,
-        num_layers=Model.NUM_LAYERS,
-        valid_global=actual_end,
-        chunk_size_global=layout.chunk_size,
-        cluster_axis=layout.sp_axis,
-        pad_align=layout.cache_page_size,
-    )
+    heads = layout.local_kv_heads
+    for head in range(heads):
+        # Each head is its own batch row, so a (slot, layer) plane is `heads` consecutive rows.
+        head_tensor = (
+            staging
+            if heads == 1
+            else ttnn.slice(staging, [0, head, 0, 0], [1, head + 1, layout.local_sequence, Model.HEAD_DIM])
+        )
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            head_tensor,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx * heads + head,
+            num_layers=Model.NUM_LAYERS * heads,
+            kv_actual_global=actual_start,
+            cluster_axis=layout.sp_axis,
+            valid_global=actual_end,
+        )
+        ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+            cache,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx * heads + head,
+            num_layers=Model.NUM_LAYERS * heads,
+            valid_global=actual_end,
+            chunk_size_global=layout.chunk_size,
+            cluster_axis=layout.sp_axis,
+            pad_align=layout.cache_page_size,
+        )
+        if head_tensor is not staging:
+            head_tensor.deallocate(True)
     if staging is not tensor:
         staging.deallocate(True)
 
