@@ -553,6 +553,13 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiRawL1Batched) {
          .num_chunks = 4});
 }
 
+// A zero-length zero issues nothing, so the whole region keeps its stamp.
+TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiRawL1ZeroLength) {
+    RunRawL1ZeroTest(
+        this->device(),
+        {.target = RawL1Target::Scratchpad, .region_bytes = 256, .offset_bytes = 32, .window_bytes = 0});
+}
+
 // Zeros streamed to DRAM from a raw L1 handle, with no CB/DFB in the program.
 static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Target target) {
     // The pre-zeroed prefix must cover min(page_size, NOC_MAX_BURST_SIZE) -- the largest single burst

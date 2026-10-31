@@ -29,6 +29,10 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
         "noc.async_write_zeros: unsupported local-L1 destination. Supported: CircularBuffer, "
         "DataflowBuffer, CoreLocalMem, Scratchpad, LocalTensorAccessor. Use the TensorAccessor overload for DRAM.");
 
+    // A zero-length iDMA transfer gets an error response that nothing latches, so issue nothing (as on WH/BH).
+    if (size_bytes == 0) {
+        return;
+    }
     if constexpr (is_scratchpad_v<Dst>) {
         ASSERT(static_cast<uint64_t>(args.offset_bytes) + size_bytes <= dst.size_in_bytes());
     }
