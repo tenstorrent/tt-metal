@@ -621,6 +621,17 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 32, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 8, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 4, 1, 32, 0, false, 1},
+    // LLK-only space (formats and throttles the grid sweep does not reach) where the keyed forms read slower than main's
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp2_b, 4, 2, 3, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp2_b, DataFormat::Bfp4_b, 1, 4, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp2_b, 2, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 2, 1, 8, 2, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 1, 1, 2, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 1, 8, 3, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp2_b, 2, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp2_b, 4, 1, 1, 0, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp8_b, 1, 2, 8, 2, false, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float16, 1, 4, 8, 0, false, 1},
 };
 
 constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
@@ -1079,6 +1090,31 @@ constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sy
         return (half_sync && rt * ct >= 8) ? 2 : 4;
     }
     return (small || block_float_out) ? 2 : 1;
+}
+
+// Half sync single K tile blocks of Float32 output from Bfp8 operands (5-bit exponent) where the half sync end fold of the HiFi phase end reads slower than main's separate phase end.
+inline constexpr matmul_grid_main_cell matmul_end_fold_off_cells[] = {
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 3, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 8, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi3, true, false, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 8, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi4, true, false, DataFormat::Bfp8, DataFormat::Float16, DataFormat::Float32, 1, 8, 1, 0, false, 1},
+};
+
+constexpr bool matmul_end_fold_off(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out, const std::uint32_t rt,
+                                   const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_end_fold_off_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write (the fused post and the skipped base write read slower).

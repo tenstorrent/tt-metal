@@ -585,9 +585,20 @@ _GRID_MAIN_ROWS = (
     ('LoFi', True, True, 'F32', 'F32', 'B8', 3, 1, 32, 0, False, 1),
     ('LoFi', True, True, 'F32', 'F32', 'F32', 4, 1, 8, 0, False, 1),
     ('LoFi', True, True, 'F32', 'F32', 'F32', 4, 1, 32, 0, False, 1),
+    # LLK-only space (formats and throttles the grid sweep does not reach) where the keyed forms read slower than main's
+    ('LoFi', True, False, 'B4', 'F32', 'B2', 4, 2, 3, 0, False, 1),
+    ('LoFi', True, False, 'F32', 'B2', 'B4', 1, 4, 1, 0, False, 1),
+    ('LoFi', True, False, 'F32', 'B8', 'B2', 2, 1, 8, 0, False, 1),
+    ('LoFi', True, False, 'F32', 'B8', 'F32', 2, 1, 8, 2, False, 1),
+    ('LoFi', True, False, 'F32', 'F32', 'B4', 4, 1, 1, 2, False, 1),
+    ('LoFi', True, True, 'B4', 'B8', 'B8', 2, 1, 8, 3, False, 1),
+    ('LoFi', True, True, 'B4', 'F32', 'B2', 2, 1, 8, 0, False, 1),
+    ('LoFi', True, True, 'F32', 'B8', 'B2', 4, 1, 1, 0, False, 1),
+    ('LoFi', True, True, 'F32', 'F16b', 'B8', 1, 2, 8, 2, False, 1),
+    ('LoFi', True, True, 'F32', 'F32', 'F16', 1, 4, 8, 0, False, 1),
 )
 _GRID_MAIN = frozenset(_GRID_MAIN_ROWS)
-_SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32"}
+_SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32", DataFormat.Float16: "F16", DataFormat.Bfp8: "B8x", DataFormat.Bfp2_b: "B2"}
 
 
 def grid_main_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, throttle=0, l1_acc=False, nb=1) -> bool:

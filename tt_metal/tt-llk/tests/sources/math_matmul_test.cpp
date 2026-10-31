@@ -241,7 +241,13 @@ constexpr bool matmul_tile_mop = false;
 #define MATMUL_KEY_IN1 DataFormat::Invalid
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && !defined(MATMUL_FORCE_FORM_CHAR)
+#ifdef MATMUL_PACK_KEYS
+constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT, MATMUL_KEY_IN0, MATMUL_KEY_IN1>() &&
+                                        !matmul_end_fold_off(MATMUL_PK_FID, MATMUL_PK_HALF, is_fp32_dest_acc_en, MATMUL_PK_IN_A, MATMUL_PK_IN_B, MATMUL_PK_OUT, MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_KT, MATMUL_PK_THROTTLE, MATMUL_PK_L1ACC, 1);
+#else
 constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT, MATMUL_KEY_IN0, MATMUL_KEY_IN1>();
+#endif
+#line 164
 #else
 constexpr bool matmul_half_end_fold_k = false;
 #endif

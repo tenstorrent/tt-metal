@@ -25,7 +25,7 @@ enum class MathFidelity { LoFi = 0, HiFi2 = 2, HiFi3 = 3, HiFi4 = 4 };
 enum class DstSync { SyncHalf, SyncFull };
 }
 """
-NAME = {"F16b": "Float16_b", "B8": "Bfp8_b", "B4": "Bfp4_b", "F32": "Float32"}
+NAME = {"F16b": "Float16_b", "B8": "Bfp8_b", "B4": "Bfp4_b", "F32": "Float32", "F16": "Float16", "B8x": "Bfp8", "B2": "Bfp2_b"}
 
 
 def check_tiny() -> int:
@@ -97,6 +97,30 @@ def check_pack() -> int:
     return bad or len(cpp) != len(py)
 
 
+def check_main_table() -> int:
+    """The main form table: every python row is a C++ cell and the two tables have the same size (the cells reach formats and throttles beyond the grid sweep)."""
+    from helpers.matmul_prod_keys import _GRID_MAIN_ROWS
+
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "llk_defs.h").write_text(STUB)
+        (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
+        body = ",\n".join(
+            "{MathFidelity::%s,%s,%s,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d,%s,%d}"
+            % (fi, "true" if h else "false", "true" if a else "false", NAME[i1], NAME[i0], NAME[o], rt, ct, kt, th, "true" if l1 else "false", nb)
+            for fi, h, a, i1, i0, o, rt, ct, kt, th, l1, nb in _GRID_MAIN_ROWS
+        )
+        (Path(d) / "t.cpp").write_text(
+            '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool h,a;DataFormat i1,i0,o;int rt,ct,kt,th;bool l1;int nb;};\n'
+            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows)putchar(matmul_grid_main_form(r.f,r.h,r.a,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.th,r.l1,r.nb)?'1':'0');printf(\" %zu\",sizeof(matmul_grid_main_cells)/sizeof(matmul_grid_main_cells[0]));}}\n"
+        )
+        subprocess.run(["g++", "-std=c++20", "-O1", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
+        out = subprocess.run([str(Path(d) / "t")], check=True, capture_output=True, text=True).stdout
+    flags, size = out.split()
+    bad = flags.count("0") + (int(size) != len(_GRID_MAIN_ROWS)) + (len(set(_GRID_MAIN_ROWS)) != len(_GRID_MAIN_ROWS))
+    print(f"main form table: {len(_GRID_MAIN_ROWS)} python cells, {size} C++ cells, {bad} differ")
+    return bad
+
+
 def main() -> int:
     rows = [(*r, 1) for r in grid._grid()] + list(grid2._grid2())
     with tempfile.TemporaryDirectory() as d:
@@ -119,7 +143,7 @@ def main() -> int:
         py += ("1" if grid_main_cell(*args) else "0") + ("1" if grid_unfused_post_cell(*args) else "0") + ("1" if grid_main_flip_cell(*args) else "0")
     bad = sum(x != y for x, y in zip(cpp, py))
     print(f"{len(rows)} grid rows, main's form: C++ {cpp[0::3].count('1')} python {py[0::3].count('1')}; separate post: C++ {cpp[1::3].count('1')} python {py[1::3].count('1')}; main flip: C++ {cpp[2::3].count('1')} python {py[2::3].count('1')}; {bad} differ")
-    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() else 0
+    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_main_table() else 0
 
 
 if __name__ == "__main__":

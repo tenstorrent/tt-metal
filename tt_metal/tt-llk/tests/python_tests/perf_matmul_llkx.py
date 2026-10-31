@@ -411,11 +411,43 @@ def test_perf_matmul_llkx(
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
 
+    # cells where the keyed forms read slower than main's keep main's form (llk_matmul_forms.h matmul_grid_main_cells), as in the grid modules
+    from helpers.matmul_prod_keys import grid_main_cell
+
+    main_form = grid_main_cell(
+        math_fidelity, dest_sync == DestSync.Half, dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format,
+        dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle, False, 1,
+    )
+    form_keys = [
+        k.with_block(dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_acc, throttle, False)
+        for k in MATMUL_FORM_KEYS.for_block(
+            formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
+            math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
+        )
+    ]
+    if main_form:
+        for k in form_keys:
+            k.keep_flip = False
+            k.unfused_post = False
+            k.force_form = ""
+    pack_block = MATMUL_PACK_BLOCK(
+        matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle)
+    )
+    main_templates = [
+        MATH_FIDELITY(math_fidelity),
+        PACK_SRC_FROM_OUTPUT(),
+        DEST_SYNC(dest_sync),
+        THROTTLE_LEVEL(throttle),
+        *form_keys,
+        pack_block,
+        *([MATMUL_STOCH_RND(stoch)] if stoch is not None else []),
+    ]
+
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
         run_types,
-        templates=[
+        templates=main_templates if main_form else [
             MATH_FIDELITY(math_fidelity),
             PACK_SRC_FROM_OUTPUT(),
             *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
@@ -442,10 +474,7 @@ def test_perf_matmul_llkx(
             *MATMUL_ROW_MOP.for_block(
                 formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim
             ),
-            *MATMUL_FORM_KEYS.for_block(
-                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
-            ),
+            *form_keys,
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(
                     formats,
