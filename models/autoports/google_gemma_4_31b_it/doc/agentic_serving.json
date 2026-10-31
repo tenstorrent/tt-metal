@@ -12,7 +12,7 @@
     32
   ],
   "stage": "06-full-model",
-  "status": "validated; independent clean-pass",
+  "status": "complete; independent clean-pass",
   "context_evidence": "context_contract.json",
   "prefix_state_contract": "full_model/README.md",
   "functional_measurements": [
