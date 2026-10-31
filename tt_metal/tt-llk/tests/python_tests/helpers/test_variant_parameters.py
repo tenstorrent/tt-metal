@@ -735,6 +735,35 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
+class HAL_CFG_THREAD_WRITE_PROBE(TemplateParameter):
+    """Compile-time knobs for ``hal_cfg_thread_write_contract_test.cpp``.
+
+    ``probe_field`` the thread-CFG field the probe writes, as the C++ expression naming
+                  it (``hal::cfg::CfgStateId::StateID`` or an ordinary register).
+    ``spelling``  the public ``hal::cfg::write`` overload the probe goes through:
+                  ``constant`` (compile-time value), ``runtime`` (runtime value),
+                  ``prepacked`` (complete thread word) or ``grouped`` (``set`` batch).
+    """
+
+    probe_field: str
+    spelling: str
+
+    SPELLINGS = ("constant", "runtime", "prepacked", "grouped")
+
+    def convert_to_cpp(self) -> str:
+        if self.spelling not in self.SPELLINGS:
+            raise ValueError(
+                f"unknown HAL write spelling {self.spelling!r}; expected one of {self.SPELLINGS}"
+            )
+        return "\n".join(
+            [
+                f"#define HAL_CFG_PROBE_FIELD {self.probe_field}",
+                f"#define HAL_CFG_PROBE_{self.spelling.upper()}",
+            ]
+        )
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
