@@ -385,23 +385,23 @@ Erfc:
 - {input: Float32, output: Float32, dest: 'No', near_zero_atol: 9.72747802734375e-05, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 5.331427382770926e-05, domains: [{low: -.inf, high: .inf, ulp: 1594}]}
 Erfinv:
-- {input: Float16, output: Float16, dest: 'No', near_zero_atol: 0.0004589557647705078, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
-- {input: Float16, output: Float16, dest: 'Yes', near_zero_atol: 0.0004589557647705078, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
-- {input: Float16, output: Float16_b, dest: 'No', near_zero_atol: 0.0004596710205078125, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float16, output: Float16_b, dest: 'Yes', near_zero_atol: 0.0004596710205078125, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float16, output: Float32, dest: 'No', near_zero_atol: 0.0004589557647705078, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 32768}, {low: 1.0, high: .inf}]}
-- {input: Float16, output: Float32, dest: 'Yes', near_zero_atol: 0.00045892834896221757, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 26944}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float16, dest: 'Yes', near_zero_atol: 0.0004563331604003906, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 3}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 0.00045639282325282693, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 22583}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float16, dest: 'No', near_zero_atol: 0.00045680999755859375, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: -6.103515625e-05, ulp: 4}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float16, dest: 'Yes', near_zero_atol: 0.0004570484161376953, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 0.000457763671875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 0.00045700036571361125, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 27096}, {low: 1.0, high: .inf}]}
+- {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
+- {input: Float16, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 32768}, {low: 1.0, high: .inf}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 26918}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 3}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 22661}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: -6.103515625e-05, ulp: 4}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 4}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 27069}, {low: 1.0, high: .inf}]}
 Exp:
 - {input: Float16, output: Float16, approx: 'No', dest: 'No', domains: [{low: -.inf, high: 16.0, ulp: 7}, {low: 16.0, high: .inf}]}
 - {input: Float16, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: 16.0, ulp: 1}, {low: 16.0, high: .inf}]}
@@ -1976,28 +1976,28 @@ Softsign:
 - {input: Float16, output: Float32, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 - {input: Float16, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 8192}]}
 - {input: Float16, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1712}]}
-- {input: Float16_b, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 14337}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 14337}]}
-- {input: Float16_b, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -4.253529586511731e+37, ulp: 14337}, {low: -4.253529586511731e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 14337}]}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 16129}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 16129}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 0}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -4.253529586511731e+37, ulp: 16129}, {low: -4.253529586511731e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -4.253529586511731e+37, ulp: 16129}, {low: -4.253529586511731e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 1056964609}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 65536}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 1056964609}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 2}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
-- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -4.253529586511731e+37, ulp: 1056964609}, {low: -4.253529586511731e+37, high: 8.507059173023462e+37, ulp: 65536}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
-- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -4.253529586511731e+37, ulp: 1056964609}, {low: -4.253529586511731e+37, high: 8.507059173023462e+37, ulp: 1713}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
+- {input: Float16_b, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
+- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1713}]}
 - {input: Float32, output: Float16, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 1}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 14337}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 14337}]}
+- {input: Float32, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 1}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 14337}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 14337}]}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 16129}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 16129}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -4.253529586511731e+37, ulp: 16129}, {low: -4.253529586511731e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 16129}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1}, {low: 8.507059173023462e+37, high: .inf, ulp: 16129}]}
-- {input: Float32, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 1056964609}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 65536}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
-- {input: Float32, output: Float32, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 1056964609}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 2}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
-- {input: Float32, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -4.253529586511731e+37, ulp: 1056964609}, {low: -4.253529586511731e+37, high: 8.507059173023462e+37, ulp: 65536}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
-- {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: -8.507059173023462e+37, ulp: 1056964609}, {low: -8.507059173023462e+37, high: 8.507059173023462e+37, ulp: 1713}, {low: 8.507059173023462e+37, high: .inf, ulp: 1056964609}]}
+- {input: Float32, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
+- {input: Float32, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1713}]}
 Sqrt:
 - {input: Float16, output: Float16, approx: 'No', dest: 'No', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 4}]}
 - {input: Float16, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 1}]}
