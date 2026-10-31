@@ -29,7 +29,7 @@ LAYERS = os.environ.get("DSV41_PH_LAYERS", "0-23")
 DECODE = int(os.environ.get("DSV41_PH_DECODE", "8"))
 MAXCTX = int(os.environ.get("DSV41_PH_MAXCTX", "16384"))
 # (e, s, donor_e): P has e tokens; the donor shares P[:s] and has donor_e tokens (donor_e - s >= 128 so that a donor block ends at s)
-DEFAULT_CASES = "2688:512:2688,4096:1024:4096,4096:3584:4096,6000:2048:6000,6000:3072:6000,6000:3584:6000,8000:6144:6444,8000:7424:7800,9000:8192:8500"
+DEFAULT_CASES = "2688:512:2688,4096:1024:4096,4096:3584:4096,6000:2048:6000,6000:3072:6000,6000:3584:6000,8000:6144:6444,8000:7168:7800,9000:8192:8500"
 CASES = [tuple(int(x) for x in c.split(":")) for c in os.environ.get("DSV41_PH_CASES", DEFAULT_CASES).split(",")]
 
 
@@ -137,7 +137,9 @@ def test_hit_equals_cold(mesh_device):
 
     results = []
     first_case = True
-    for e, s, de in CASES:
+    for e, s, de, *sx in CASES:
+        if sx:  # (a 4th field switches the strict zone rule: halo B valid only for b_zone == p0_new)
+            pa.idx.strict_zone_equal = bool(sx[0])
         P = rnd(e)
         D = torch.cat([P[:s], rnd(de - s)])
         p0 = zone_start(e)
@@ -156,7 +158,7 @@ def test_hit_equals_cold(mesh_device):
         run(2, D, 0, f"donor-{e}-{s}")
         m.release_user(2)  # (the donor request ends; its blocks stay cached)
         plan = pa.idx.plan_hit(f"hit-{e}-{s}", P.numpy(), e)
-        strict = os.environ.get("DSV41_APC_PAGED_ZONE_EQ", "0") == "1"
+        strict = pa.idx.strict_zone_equal
         expect = s
         if strict and de != e and s > p0 and zone_start(de) != p0:
             expect = 0

@@ -2422,6 +2422,10 @@ class Model:
         for b, _, _, _ in items:
             res[b] = self._res[b] if (fin_users is None or b in fin_users) else self._res.get(b, (0, None))
             self.tap_n[b] = ends[b]
+        if pa is not None:
+            pa.calls = getattr(pa, "calls", 0) + 1
+            if hits or pa.calls % int(os.environ.get("DSV41_APC_PAGED_LOG_EVERY", "10")) == 0:
+                self.log(pa.line())
         self.timing = dict(
             pm.timing,
             total=time.perf_counter() - t_start,
