@@ -118,6 +118,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
             ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
             : true;
 
+    TT_FATAL(
+        grid_size.x > 0 && grid_size.y > 0,
+        "compute_with_storage_grid_size must be non-zero, got ({}, {})",
+        grid_size.x,
+        grid_size.y);
     auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
 
