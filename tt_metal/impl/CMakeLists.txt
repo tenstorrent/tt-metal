@@ -81,11 +81,21 @@ GENERATE_PROTO_FILES(
     OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation
 )
 list(APPEND IMPL_SRC ${PROTO_SRCS})
+GENERATE_PROTO_FILES(
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/protobuf/cache_layout_model.proto
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation
+)
+list(APPEND IMPL_SRC ${PROTO_SRCS})
 
 # Serializer free-functions (export_to_protobuf_file / import_from_protobuf_file).
 # protobuf::libprotobuf is already linked below and the generated pb.h include
 # dir is already on this target, so this is the natural home for it.
-list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table_protobuf.cpp)
+list(
+    APPEND
+    IMPL_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/cache_layout_model_protobuf.cpp
+)
 
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)

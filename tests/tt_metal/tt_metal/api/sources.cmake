@@ -87,6 +87,8 @@ set(UNIT_TESTS_API_SOURCES
     test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
     disaggregation/test_kv_chunk_table_cache.cpp
+    disaggregation/test_kv_layout_spec.cpp
+    disaggregation/test_to_chunk_map.cpp
 )
 
 # Metal 2.0 Host API tests. Their source list lives in metal2_host_api/sources.cmake.

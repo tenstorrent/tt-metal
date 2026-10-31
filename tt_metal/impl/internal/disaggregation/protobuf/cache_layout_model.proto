@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package tt.disaggregation.proto;
+
+// A model's KV/state caches as to_chunk_map reads them (CacheLayoutModel in to_chunk_map.hpp): each
+// cache's residence-agnostic spec, mesh distribution, generation policy and buffer address, plus the mesh
+// and geometry they are enumerated over. A consumer derives the model's KvChunkAddressTable from it.
+//
+// Enum-valued tensor facts (dtype, layout, buffer type, shard orientation and distribution, arch) are
+// their tt-metal enumerator names. Readers must reject a schema_version they do not know.
+message CacheLayoutModel {
+    uint32 schema_version = 1;
+    repeated CacheLayoutConfig caches = 2;
+    uint32 mesh_id = 3;
+    repeated uint32 mesh_shape = 4;
+    CacheLayoutGeometry geometry = 5;
+}
+
+message CacheLayoutGeometry {
+    uint32 num_layers = 1;
+    uint32 num_slots = 2;
+    uint32 max_seq_len = 3;
+    uint32 position_step = 4;
+}
+
+message CacheLayoutConfig {
+    string name = 1;
+    CacheTensorLayoutSpec spec = 2;
+    CacheTensorTopology topology = 3;
+    CacheGenerationPolicy policy = 4;
+    uint64 base_addr = 5;
+    // Ascending model layer indices; empty publishes every layer the cache holds.
+    repeated uint32 layers = 6;
+    // The model layers [first_layer, first_layer + num_layers) the cache holds; num_layers 0 => through
+    // the last layer. Caches sharing a name (one per pipeline stage) are one table config.
+    uint32 first_layer = 7;
+    uint32 num_layers = 8;
+    // The mesh the cache lives on; absent => the model's mesh_id.
+    optional uint32 mesh_id = 9;
+    // The one head of a head-sharded cache this config holds; absent => every head, fanned into slots.
+    optional uint32 head = 10;
+    // The cache holds only its published layers, in order (its batch axis is slot x those layers).
+    bool holds_only_published_layers = 11;
+    // Further table layers that publish a held layer's chunks: alias layer -> published layer.
+    map<uint32, uint32> layer_aliases = 12;
+}
+
+message CacheTensorLayoutSpec {
+    CacheTensorSpec tensor = 1;
+    CacheTemporalPolicy temporal = 2;
+    string arch = 3;
+}
+
+// A TensorSpec with the default 32x32 tile.
+message CacheTensorSpec {
+    repeated uint32 logical_shape = 1;
+    string dtype = 2;
+    string layout = 3;
+    string buffer_type = 4;
+    CacheNdShardSpec nd_shard_spec = 5;
+}
+
+message CacheNdShardSpec {
+    repeated uint32 shard_shape = 1;
+    repeated CacheCoreRange grid = 2;
+    string orientation = 3;
+    string shard_distribution_strategy = 4;
+}
+
+message CacheCoreRange {
+    uint32 start_x = 1;
+    uint32 start_y = 2;
+    uint32 end_x = 3;
+    uint32 end_y = 4;
+}
+
+message CacheTemporalPolicy {
+    message Dense {}
+    message Window {
+        uint32 width_tokens = 1;
+    }
+    message BlockLocal {
+        uint32 span_tokens = 1;
+    }
+    message Rolling {}
+    message Static {}
+    // temporal::None — no sequence axis.
+    message NoSequence {}
+
+    oneof policy {
+        Dense dense = 1;
+        Window window = 2;
+        BlockLocal block_local = 3;
+        Rolling rolling = 4;
+        Static static_ = 5;
+        NoSequence no_sequence = 6;
+    }
+}
+
+message CacheTensorTopology {
+    message Placement {
+        message Replicate {}
+        message Shard {
+            int32 dim = 1;
+        }
+        oneof placement {
+            Replicate replicate = 1;
+            Shard shard = 2;
+        }
+    }
+    message MeshCoordinate {
+        repeated uint32 coords = 1;
+    }
+
+    repeated uint32 distribution_shape = 1;
+    repeated Placement placements = 2;
+    repeated MeshCoordinate mesh_coords = 3;
+}
+
+// Values match BankScheme / BankOrder in cache_tensor_layout_spec.hpp.
+enum CacheBankScheme {
+    BANK_SCHEME_NATURAL = 0;
+    BANK_SCHEME_MLA_SHARD = 1;
+    BANK_SCHEME_BLOCK = 2;
+    BANK_SCHEME_CYCLIC = 3;
+    BANK_SCHEME_BLOCK_CYCLIC = 4;
+}
+
+enum CacheBankOrder {
+    BANK_ORDER_IDENTITY = 0;
+    BANK_ORDER_OPTIMAL = 1;
+}
+
+message CacheGenerationPolicy {
+    CacheBankScheme bank_scheme = 1;
+    CacheBankOrder bank_order = 2;
+    uint32 k_chunk_size = 3;
+    optional uint32 device_chunk_size = 4;
+    uint32 banks_per_head = 5;
+    uint32 num_blocks = 6;
+}

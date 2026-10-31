@@ -6,14 +6,18 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <map>
 #include <span>
 
+#include <internal/disaggregation/cache_tensor_layout_spec.hpp>
 #include <internal/disaggregation/kv_chunk_address_table.hpp>
 #include <internal/disaggregation/kv_chunk_table_cache.hpp>
+#include <internal/disaggregation/to_chunk_map.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 #include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
@@ -27,6 +31,9 @@ void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string
 // Deserializers — same TU/target as the exporters above, so they link the same way.
 KvChunkAddressTable import_from_protobuf(const std::string& data);
 KvChunkAddressTable import_from_protobuf_file(const std::string& path);
+// CacheLayoutModel serializers (impl/.../cache_layout_model_protobuf.hpp), linked the same way.
+void export_to_protobuf_file(const CacheLayoutModel& model, const std::string& path);
+CacheLayoutModel import_cache_layout_model_from_protobuf_file(const std::string& path);
 // UMD-backed DRAM read (defined in umd_dram_reader.cpp, links from libtt_metal):
 // reads a chunk over a bare tt::umd::Cluster; chip selected
 // by ASIC unique_id, noc_addr = (dram_view << 32) | local_addr.
@@ -34,6 +41,241 @@ std::vector<uint8_t> read_dram_umd(uint64_t unique_id, uint64_t noc_addr, uint32
 }  // namespace tt::tt_metal::internal::disaggregation
 
 namespace ttnn::disaggregation {
+
+namespace {
+
+// The model-facing cache layout: a model declares each cache as a CacheConfig and derives its
+// KvChunkAddressTable with to_chunk_map, or exports the CacheLayoutModel for a consumer to derive it.
+void bind_cache_layout_api(nb::module_& mod) {
+    using namespace tt::tt_metal::internal::disaggregation;
+
+    nb::class_<temporal::Dense>(mod, "TemporalDense", "Retains [0, prefix_len): full KV, MLA latent.")
+        .def(nb::init<>());
+    nb::class_<temporal::Window>(mod, "TemporalWindow", "Retains [prefix_len - width, prefix_len): SWA.")
+        .def(
+            "__init__",
+            [](temporal::Window* t, uint32_t width_tokens) { new (t) temporal::Window{WindowTokens{width_tokens}}; },
+            nb::arg("width_tokens"))
+        .def_prop_ro("width_tokens", [](const temporal::Window& t) { return t.width.get(); });
+    nb::class_<temporal::BlockLocal>(mod, "TemporalBlockLocal", "Retains the current attention chunk only.")
+        .def(
+            "__init__",
+            [](temporal::BlockLocal* t, uint32_t span_tokens) {
+                new (t) temporal::BlockLocal{BlockLocalSpan{span_tokens}};
+            },
+            nb::arg("span_tokens"))
+        .def_prop_ro("span_tokens", [](const temporal::BlockLocal& t) { return t.span.get(); });
+    nb::class_<temporal::Rolling>(mod, "TemporalRolling", "A conv / token-shift ring; no sequence axis.")
+        .def(nb::init<>());
+    nb::class_<temporal::Static>(mod, "TemporalStatic", "Computed once at prefill and frozen.").def(nb::init<>());
+    nb::class_<temporal::None>(mod, "TemporalNone", "A fixed-size recurrent summary; no sequence axis.")
+        .def(nb::init<>());
+
+    nb::class_<KvLayoutSpec>(mod, "KvLayoutSpec", R"(
+        One cached KV/state tensor: its distributed TensorSpec, how its sequence coordinate is
+        interpreted, and the target arch.
+    )")
+        .def(
+            "__init__",
+            [](KvLayoutSpec* t, const tt::tt_metal::TensorSpec& tensor, const TemporalPolicy& temporal, tt::ARCH arch) {
+                new (t) KvLayoutSpec{.tensor = tensor, .temporal = temporal, .arch = arch};
+            },
+            nb::arg("tensor"),
+            nb::arg("temporal"),
+            nb::arg("arch"))
+        .def_rw("tensor", &KvLayoutSpec::tensor)
+        .def_rw("temporal", &KvLayoutSpec::temporal)
+        .def_rw("arch", &KvLayoutSpec::arch)
+        .def("has_sequence", &KvLayoutSpec::has_sequence)
+        .def("sequence_axis", &KvLayoutSpec::sequence_axis);
+
+    nb::enum_<BankScheme>(mod, "BankScheme", "How a chunk index maps to (bank, per-bank offset).")
+        .value("Natural", BankScheme::Natural)
+        .value("MlaShard", BankScheme::MlaShard)
+        .value("Block", BankScheme::Block)
+        .value("Cyclic", BankScheme::Cyclic)
+        .value("BlockCyclic", BankScheme::BlockCyclic);
+    nb::enum_<BankOrder>(mod, "BankOrder", "The DRAM bank permutation the cache's writer used.")
+        .value("Identity", BankOrder::Identity)
+        .value("Optimal", BankOrder::Optimal);
+
+    nb::class_<GenerationPolicy>(mod, "GenerationPolicy", R"(
+        What the cache's writer decides that its tensor does not carry: the bank scheme and order, the
+        k-chunk size, and the sequence-shard stride (device_chunk_size; None => k_chunk_size * banks).
+    )")
+        .def(
+            "__init__",
+            [](GenerationPolicy* t,
+               BankScheme bank_scheme,
+               BankOrder bank_order,
+               uint32_t k_chunk_size,
+               std::optional<uint32_t> device_chunk_size,
+               uint32_t banks_per_head,
+               uint32_t num_blocks) {
+                new (t) GenerationPolicy{
+                    .bank_scheme = bank_scheme,
+                    .bank_order = bank_order,
+                    .k_chunk_size = KChunkSize{k_chunk_size},
+                    .device_chunk_size = device_chunk_size.has_value()
+                                             ? std::optional<DeviceChunkSize>(DeviceChunkSize{*device_chunk_size})
+                                             : std::nullopt,
+                    .banks_per_head = BanksPerHead{banks_per_head},
+                    .num_blocks = num_blocks};
+            },
+            nb::arg("bank_scheme") = BankScheme::Natural,
+            nb::arg("bank_order") = BankOrder::Optimal,
+            nb::arg("k_chunk_size") = 128,
+            nb::arg("device_chunk_size") = nb::none(),
+            nb::arg("banks_per_head") = 0,
+            nb::arg("num_blocks") = 0)
+        .def_rw("bank_scheme", &GenerationPolicy::bank_scheme)
+        .def_rw("bank_order", &GenerationPolicy::bank_order)
+        .def_prop_ro("k_chunk_size", [](const GenerationPolicy& p) { return p.k_chunk_size.get(); })
+        .def_prop_ro(
+            "device_chunk_size",
+            [](const GenerationPolicy& p) -> std::optional<uint32_t> {
+                return p.device_chunk_size.has_value() ? std::optional<uint32_t>(p.device_chunk_size->get())
+                                                       : std::nullopt;
+            })
+        .def_prop_ro("banks_per_head", [](const GenerationPolicy& p) { return p.banks_per_head.get(); })
+        .def_rw("num_blocks", &GenerationPolicy::num_blocks);
+
+    nb::class_<CacheConfig>(mod, "CacheConfig", R"(
+        One co-resident cache to address: its KvLayoutSpec, the mesh distribution its chunks really have
+        (TensorTopology), its GenerationPolicy and buffer address, its table config name (empty => its
+        index; all empty or all set), the layers it publishes (ascending; empty => every layer it holds),
+        the model layers [first_layer, first_layer + num_layers) it holds (num_layers 0 => through the
+        last), its mesh (None => the model's), and for a head-sharded cache the one head it holds (None =>
+        every head, fanned into slots). Caches sharing a name are one table config, one per pipeline stage.
+        holds_only_published_layers: the cache's batch axis is slot x its published layers only.
+        layer_aliases: {alias layer: published layer}, further table layers that publish a layer's chunks.
+    )")
+        .def(
+            "__init__",
+            [](CacheConfig* t,
+               const KvLayoutSpec& spec,
+               const tt::tt_metal::TensorTopology& topology,
+               const GenerationPolicy& policy,
+               uint64_t base_addr,
+               const std::string& name,
+               const std::vector<uint32_t>& layers,
+               uint32_t first_layer,
+               uint32_t num_layers,
+               std::optional<tt::tt_fabric::MeshId> mesh_id,
+               std::optional<uint32_t> head,
+               bool holds_only_published_layers,
+               const std::map<uint32_t, uint32_t>& layer_aliases) {
+                new (t) CacheConfig{
+                    .spec = spec,
+                    .topology = topology,
+                    .policy = policy,
+                    .base_addr = base_addr,
+                    .name = name,
+                    .layers = layers,
+                    .first_layer = first_layer,
+                    .num_layers = num_layers,
+                    .mesh_id = mesh_id,
+                    .head = head,
+                    .holds_only_published_layers = holds_only_published_layers,
+                    .layer_aliases = layer_aliases};
+            },
+            nb::arg("spec"),
+            nb::arg("topology"),
+            nb::arg("policy"),
+            nb::arg("base_addr"),
+            nb::arg("name") = "",
+            nb::arg("layers") = std::vector<uint32_t>{},
+            nb::arg("first_layer") = 0,
+            nb::arg("num_layers") = 0,
+            nb::arg("mesh_id") = nb::none(),
+            nb::arg("head") = nb::none(),
+            nb::arg("holds_only_published_layers") = false,
+            nb::arg("layer_aliases") = std::map<uint32_t, uint32_t>{})
+        .def_rw("spec", &CacheConfig::spec)
+        .def_rw("topology", &CacheConfig::topology)
+        .def_rw("policy", &CacheConfig::policy)
+        .def_rw("base_addr", &CacheConfig::base_addr)
+        .def_rw("name", &CacheConfig::name)
+        .def_rw("layers", &CacheConfig::layers)
+        .def_rw("first_layer", &CacheConfig::first_layer)
+        .def_rw("num_layers", &CacheConfig::num_layers)
+        .def_rw("mesh_id", &CacheConfig::mesh_id)
+        .def_rw("head", &CacheConfig::head)
+        .def_rw("holds_only_published_layers", &CacheConfig::holds_only_published_layers)
+        .def_rw("layer_aliases", &CacheConfig::layer_aliases);
+
+    nb::class_<MapGeometry>(mod, "MapGeometry", "The (layer, slot, position) grid a table is enumerated over.")
+        .def(
+            "__init__",
+            [](MapGeometry* t, uint32_t num_layers, uint32_t num_slots, uint32_t max_seq_len, uint32_t position_step) {
+                new (t) MapGeometry{
+                    .num_layers = num_layers,
+                    .num_slots = num_slots,
+                    .max_seq_len = max_seq_len,
+                    .position_step = position_step};
+            },
+            nb::arg("num_layers"),
+            nb::arg("num_slots"),
+            nb::arg("max_seq_len"),
+            nb::arg("position_step") = tt::constants::TILE_WIDTH)
+        .def_rw("num_layers", &MapGeometry::num_layers)
+        .def_rw("num_slots", &MapGeometry::num_slots)
+        .def_rw("max_seq_len", &MapGeometry::max_seq_len)
+        .def_rw("position_step", &MapGeometry::position_step);
+
+    nb::class_<CacheLayoutModel>(mod, "CacheLayoutModel", R"(
+        A model's caches and the mesh and geometry they are enumerated over: everything to_chunk_map reads.
+    )")
+        .def(
+            "__init__",
+            [](CacheLayoutModel* t,
+               const std::vector<CacheConfig>& caches,
+               tt::tt_fabric::MeshId mesh_id,
+               const tt::tt_metal::distributed::MeshShape& mesh_shape,
+               const MapGeometry& geometry) {
+                new (t) CacheLayoutModel{
+                    .caches = caches, .mesh_id = mesh_id, .mesh_shape = mesh_shape, .geometry = geometry};
+            },
+            nb::arg("caches"),
+            nb::arg("mesh_id"),
+            nb::arg("mesh_shape"),
+            nb::arg("geometry"))
+        .def_rw("caches", &CacheLayoutModel::caches)
+        .def_rw("mesh_id", &CacheLayoutModel::mesh_id)
+        .def_rw("mesh_shape", &CacheLayoutModel::mesh_shape)
+        .def_rw("geometry", &CacheLayoutModel::geometry);
+
+    mod.def(
+        "to_chunk_map",
+        nb::overload_cast<const CacheLayoutModel&>(&to_chunk_map),
+        nb::arg("model"),
+        "Derive the KvChunkAddressTable of a CacheLayoutModel.");
+    mod.def(
+        "first_table_difference",
+        &first_table_difference,
+        nb::arg("expected"),
+        nb::arg("actual"),
+        nb::arg("only_actual_configs") = false,
+        R"(
+        The first way `actual` differs from `expected` as a description, or None when they agree: the same
+        configs and, at every (config, layer, slot, position), the same address, size, device-group members
+        and members' hosts. Device-group indices are not compared. With only_actual_configs, `actual` may
+        hold just some of `expected`'s configs, each compared to the config of the same name.
+        )");
+    mod.def(
+        "export_cache_layout_model_to_protobuf_file",
+        nb::overload_cast<const CacheLayoutModel&, const std::string&>(&export_to_protobuf_file),
+        nb::arg("model"),
+        nb::arg("path"),
+        "Serialize a CacheLayoutModel to a protobuf file at `path`.");
+    mod.def(
+        "import_cache_layout_model_from_protobuf_file",
+        &import_cache_layout_model_from_protobuf_file,
+        nb::arg("path"),
+        "Deserialize a CacheLayoutModel from a protobuf file at `path`.");
+}
+
+}  // namespace
 
 void bind_disaggregation_api(nb::module_& mod) {
     using namespace tt::tt_metal::internal::disaggregation;
@@ -454,7 +696,7 @@ void bind_disaggregation_api(nb::module_& mod) {
     // migration_worker (SET_TABLE consumes a serialized protobuf file path).
     mod.def(
         "export_to_protobuf_file",
-        &export_to_protobuf_file,
+        nb::overload_cast<const KvChunkAddressTable&, const std::string&>(&export_to_protobuf_file),
         nb::arg("table"),
         nb::arg("path"),
         "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
@@ -516,6 +758,8 @@ void bind_disaggregation_api(nb::module_& mod) {
         view/offset from noc_addr = (dram_view << 32) | local_addr. Mirrors the migration worker's device_io
         read path.
         )");
+
+    bind_cache_layout_api(mod);
 }
 
 }  // namespace ttnn::disaggregation
