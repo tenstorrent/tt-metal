@@ -4,15 +4,21 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
+from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    LOOP_FACTOR,
-    TILE_COUNT,
-    generate_input_dim,
-)
+from test_unpack_tilize import unpack_tilize
+
+_PERF_RUN_TYPES = [
+    PerfRunType.L1_TO_L1,
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+]
+
+
+def _input_dimensions(rt_dim, ct_dim):
+    return [rt_dim * TILE_DIMENSIONS[0], ct_dim * TILE_DIMENSIONS[1]]
 
 
 @pytest.mark.perf
@@ -27,12 +33,18 @@ from helpers.test_variant_parameters import (
     ),
     rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    run_types=[_PERF_RUN_TYPES],
+    loop_factor=[256],
+    is_perf=[True],
 )
 def test_perf_unpack_tilize_float(
     perf_report,
     formats,
     rt_dim,
     ct_dim,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
@@ -45,11 +57,13 @@ def test_perf_unpack_tilize_float(
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
 
-    _perf_unpack_tilize(
-        perf_report,
+    unpack_tilize(
         formats,
-        rt_dim,
-        ct_dim,
+        input_dimensions=_input_dimensions(rt_dim, ct_dim),
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
@@ -58,56 +72,25 @@ def test_perf_unpack_tilize_float(
     formats=input_output_formats([DataFormat.Int32]),
     rt_dim=[1, 2],
     ct_dim=[1, 2],
+    run_types=[_PERF_RUN_TYPES],
+    loop_factor=[256],
+    is_perf=[True],
 )
 def test_perf_unpack_tilize_int(
     perf_report,
     formats,
     rt_dim,
     ct_dim,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
-    _perf_unpack_tilize(
-        perf_report,
+    unpack_tilize(
         formats,
-        rt_dim,
-        ct_dim,
+        unpack_to_dest=True,
+        input_dimensions=_input_dimensions(rt_dim, ct_dim),
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
-
-
-def _perf_unpack_tilize(
-    perf_report,
-    formats,
-    rt_dim,
-    ct_dim,
-):
-    tile_count = rt_dim * ct_dim
-    dimensions = [rt_dim * 32, ct_dim * 32]
-
-    configuration = PerfConfig(
-        "sources/unpack_tilize_perf.cpp",
-        formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
-        templates=[],
-        runtimes=[
-            generate_input_dim(dimensions, dimensions),
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(256),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        unpack_to_dest=formats.input_format == DataFormat.Int32,
-    )
-
-    configuration.run(perf_report)

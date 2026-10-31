@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+import math
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_FACE,
@@ -11,16 +14,18 @@ from helpers.golden_generators import (
     TilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -114,39 +119,70 @@ def unpack_tilize(
     validate_lossless=False,
     dest_acc=None,
     num_faces=4,
+    input_dimensions=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    input_dimensions = [64, 64]
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-    generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(
-        src_A, input_dimensions, formats.output_format, num_faces=num_faces
-    )
+    input_dimensions = input_dimensions or [64, 64]
+    if is_perf:
+        src_A = src_B = None
+        tile_cnt_A = tile_cnt_B = (input_dimensions[0] * input_dimensions[1]) // (
+            TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+        )
+        golden_tensor = None
+    else:
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+        )
+        generate_golden = get_golden_generator(TilizeGolden)
+        golden_tensor = generate_golden(
+            src_A, input_dimensions, formats.output_format, num_faces=num_faces
+        )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-    )
+    if is_perf:
+        configured_dest_acc = dest_acc if dest_acc is not None else DestAccumulation.No
+        configured_dest_acc = effective_dest_acc(
+            formats.input_format,
+            formats.output_format,
+            configured_dest_acc,
+        )
+        num_tiles_in_block = min(
+            tile_cnt_A, max_dest_tiles(configured_dest_acc, DestSync.Half)
+        )
+        num_blocks = math.ceil(tile_cnt_A / num_tiles_in_block)
+    else:
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+        )
 
-    configuration = TestConfig(
-        "sources/unpack_tilize_test.cpp",
-        formats,
-        templates=[],
-        runtimes=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    test_config_kwargs = {
+        "test_name": "sources/unpack_tilize_test.cpp",
+        "formats": formats,
+        "templates": [],
+        "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -156,9 +192,18 @@ def unpack_tilize(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        unpack_to_dest=unpack_to_dest,
+        "unpack_to_dest": unpack_to_dest,
         **({"dest_acc": dest_acc} if dest_acc is not None else {}),
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
