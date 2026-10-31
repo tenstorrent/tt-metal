@@ -534,7 +534,9 @@ uint32_t get_estimated_size_of_cbs(
 }
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    return static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(input_tensor_a.device()));
+    const auto* device = input_tensor_a.device();
+    TT_FATAL(device != nullptr, "input tensor must be allocated on a device");
+    return static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(device));
 }
 
 uint32_t get_static_l1_space(const Tensor& input_tensor_a) {
@@ -562,6 +564,7 @@ uint32_t get_pending_l1_output_reservation(
         return 0;
     }
 
+    TT_FATAL(input_tensor_a.device() != nullptr, "input tensor must be allocated on a device");
     const uint32_t num_banks = input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
     if (num_banks == 0) {
         return 0;
