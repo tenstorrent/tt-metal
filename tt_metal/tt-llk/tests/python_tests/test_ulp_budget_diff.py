@@ -199,6 +199,24 @@ def test_a_declared_tolerance_that_may_loosen_is_a_regression(base_row, head_row
     assert kinds == {Kind.TOLERANCE_WIDENED}
 
 
+@pytest.mark.parametrize(
+    "row",
+    [
+        Row(input=F16, output=F16, metric=TOL, measured=393, nonfinite=3),
+        Row(input=F16, output=F32, metric=TOL, atol=0.2, rtol=0.05),
+        Row(input=F16, output=F32, measured=7),
+        Row(input=F16, output=F32, domains=TANH_DOMAINS),
+    ],
+    ids=["tolerance-with-nonfinite", "declared-bounds", "gated", "list"],
+)
+def test_a_cell_no_row_held_before_is_added_not_loosened(row):
+    """A new op, or a cell enrolled with its kernel, holds what it never held before."""
+    base = _table(Row(input=F16B, output=F16B, measured=1))
+    head = _table(Row(input=F16B, output=F16B, measured=1), row)
+    assert not [c for c in compare(base, head) if c.kind.loosens]
+    assert not [c for c in compare({}, head) if c.kind.loosens]
+
+
 # ── Where a budget binds ──────────────────────────────────────────────────────
 
 
@@ -311,7 +329,18 @@ def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text, capsy
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
     assert main([*argv, "--arch", MEASURED_ARCH.value, "--allow-raises"]) == 2
     # Refused by the loader, not by the architecture check that runs first.
-    assert "cannot tell which architecture" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "cannot tell which architecture" not in out
+    assert f"the head table {head_path}" in out
+
+
+def test_a_base_the_head_cannot_read_is_named_as_the_base(tmp_path, capsys):
+    base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
+    base_path.write_text("Abs: [\n")
+    write_table_file(_BASE, head_path)
+    argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
+    assert main([*argv, "--arch", MEASURED_ARCH.value]) == 2
+    assert f"the base table {base_path}" in capsys.readouterr().out
 
 
 def test_the_guard_imports_no_module_that_loads_the_checked_out_table():

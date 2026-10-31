@@ -70,6 +70,9 @@ env:
   #                                  which installs SFPI and runs the cmd from
   #                                  tt_metal/tt-llk in the LLK CI image. From /work
   #                                  the relative ./tests/run_hardware_free.sh misses.
+  #   llk_sfpu_accuracy_tests.yaml,   run only through llk-sfpu-ulp-sweep.yaml and
+  #   llk_sfpu_ulp_pr_gate_tests.yaml llk-sfpu-ulp-pr-check.yaml, which supply CHIP_ARCH,
+  #                                  and the PR check's picked cells and builds.
   UNSUPPORTED_YAMLS: >-
     vllm_model_tests.yaml
     ttnn_sweep_tests.yaml
@@ -78,6 +81,8 @@ env:
     llk_ttnop_tests.yaml
     llk_sfpu_report_tests.yaml
     llk_hardware_free_tests.yaml
+    llk_sfpu_accuracy_tests.yaml
+    llk_sfpu_ulp_pr_gate_tests.yaml
 
   # TEMPORARY. Unlike UNSUPPORTED_YAMLS, the gate can dispatch these fine -- this is
   # not a compatibility exemption, and an edit to one of these yamls still scopes
