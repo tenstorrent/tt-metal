@@ -513,6 +513,23 @@ class TtWindowCache:
         else:
             dealloc(kv_rm)
 
+    def steady(self, start: int | None) -> None:
+        """FIX.16 (owner 2026-10-31, framework F236 ``steady_state``): timing only. ``start``: the next run at
+        ``start`` takes the path of a chunk that follows a whole previous chunk ending at ``start``: the kept carry
+        is marked as that chunk's tail, in the load-time buffers it would be in (bfp8_tiles: ``rtail``; P.11 pack
+        path: ``_tail_buf``; GLUE_FOLD bf16 rows: the kept rows, when present). The carry's VALUES are whatever
+        those buffers hold (the last run's tail, not positions [start - 128, start)). None: the normal path (every
+        kept tail dropped, the carry read from the served cache)."""
+        if start is None or start < WINDOW:
+            self._drop_tail()
+            return
+        if self.rtail is not None:  # WINDOW_KV_FORMAT=bfp8_tiles: the last chip's send writes it every chunk
+            self.rtail_end = start
+        if self._tail_buf is not None and window_bfp8():  # (keep_blocks' buffer: written by every whole chunk)
+            self._tail_blocks = (start, self._tail_buf)
+        if self._tail is not None:  # (GLUE_FOLD, bf16 table: rows of the forward's own; re-keyed, never allocated)
+            self._tail = (start, self._tail[1])
+
     def _drop_tail(self) -> None:
         self._tail_blocks = None  # (its buffer is the cache's own, kept)
         self.rtail_end = None  # (likewise)
