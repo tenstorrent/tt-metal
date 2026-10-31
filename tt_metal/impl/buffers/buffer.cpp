@@ -287,6 +287,20 @@ void validate_buffer_parameters(
         "buffer size should be divisible by the page size",
         page_size,
         size);
+
+    if (shard_spec.has_value() && !buffer_distribution_spec.has_value()) {
+        const DeviceAddr num_pages = size / page_size;
+        const DeviceAddr num_cores = shard_spec->grid().num_cores();
+        const DeviceAddr max_pages = shard_spec->num_pages() * num_cores;
+        TT_FATAL(
+            num_pages <= max_pages,
+            "Sharded buffer has {} pages but its shard spec holds at most {} ({} pages per shard on {} cores). "
+            "Enlarge the shard shape or the shard grid.",
+            num_pages,
+            max_pages,
+            shard_spec->num_pages(),
+            num_cores);
+    }
 }
 
 std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
