@@ -325,3 +325,44 @@ def test_rms_norm_post_all_gather_2d_grid_taller_than_wide(device):
     if grid.y <= grid.x:
         pytest.skip(f"needs a compute grid taller than wide, got {grid.x}x{grid.y}")
     _run_rms_norm_post_all_gather_2d(device, grid.y)
+
+
+@pytest.mark.parametrize("use_weight", [False, True], ids=["bias_only", "weight_and_bias"])
+@pytest.mark.parametrize(("height", "width"), [(128, 2048), (37, 72)], ids=["h128_w2048", "h37_w72"])
+def test_rms_norm_post_all_gather_applies_bias(device, height, width, use_weight):
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    inp = torch.randn((1, 1, height, width), dtype=torch.bfloat16)
+    gamma = (torch.rand(width) + 0.5).to(torch.bfloat16)
+    beta = (torch.randn(width) + 2.0).to(torch.bfloat16)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_beta = ttnn.from_torch(beta.reshape(1, 1, 1, width), layout=ttnn.TILE_LAYOUT, device=device)
+    tt_gamma = ttnn.from_torch(gamma.reshape(1, 1, 1, width), layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+    tt_out = ttnn.rms_norm_post_all_gather(
+        tt_inp,
+        tt_stats,
+        epsilon=epsilon,
+        weight=tt_gamma if use_weight else None,
+        bias=tt_beta,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    gamma_ref = gamma.to(torch.float32) if use_weight else None
+    expected = reference_layernorm(inp.to(torch.float32), gamma_ref, None, epsilon, is_rmsnorm=True) + beta.to(
+        torch.float32
+    )
+    got = ttnn.to_torch(tt_out).to(torch.float32)
+    passing, pcc = check_with_pcc(expected, got, 0.999)
+    assert passing, pcc
+    torch.testing.assert_close(got, expected, rtol=0.02, atol=0.05)

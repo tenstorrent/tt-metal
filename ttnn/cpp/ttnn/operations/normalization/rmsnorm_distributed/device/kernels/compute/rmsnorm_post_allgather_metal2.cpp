@@ -37,9 +37,9 @@ ALWI void REL() {
 // RMSNorm normalizes x directly, so the un-normalized input doubles as the normalization operand.
 constexpr auto dfb_norm_x_input = dfb::inp;
 
-// The normalized result goes straight to the output unless gamma still has to be applied to it.
+// The normalized result goes straight to the output unless gamma or beta still has to be applied to it.
 // Only the buffers this build binds have handles, so the choice is made at the preprocessor.
-#ifdef FUSE_GAMMA
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
 constexpr auto normed_output_dfb = dfb::x_normed;
 #else
 constexpr auto normed_output_dfb = dfb::out;
@@ -50,6 +50,12 @@ constexpr auto normed_output_dfb = dfb::out;
 constexpr auto dfb_times_gamma_out = dfb::times_gamma_out;
 #else
 constexpr auto dfb_times_gamma_out = dfb::out;
+#endif
+
+#ifdef FUSE_GAMMA
+constexpr auto dfb_in_beta = dfb_times_gamma_out;
+#else
+constexpr auto dfb_in_beta = normed_output_dfb;
 #endif
 
 void kernel_main() {
@@ -76,12 +82,12 @@ void kernel_main() {
 #endif
 #ifdef FUSE_BETA
     DataflowBuffer dfb_beta(dfb::beta);
-#endif
-    // beta is applied only in the company of gamma, so the output buffer is driven directly only on
-    // that combined path. Without gamma the normalized result is already packed into the output, and
-    // dfb_normed_output is the handle for it.
-#if defined(FUSE_GAMMA) && defined(FUSE_BETA)
     DataflowBuffer dfb_out(dfb::out);
+#ifdef FUSE_GAMMA
+    auto& dfb_in_beta_obj = dfb_times_gamma;
+#else
+    auto& dfb_in_beta_obj = dfb_normed_output;
+#endif
 #endif
 
     dfb_reduce.wait_front(1);  // comes from the reader
@@ -159,28 +165,28 @@ void kernel_main() {
             dfb_times_gamma.push_back(blk);
             dfb_normed_output.pop_front(blk);
         }
+#endif
 
 #ifdef FUSE_BETA
         /*
-         * x_normed * gamma + beta
+         * x_normed (* gamma) + beta
          */
-        reconfig_data_format(dfb_times_gamma_out, dfb::beta);
+        reconfig_data_format(dfb_in_beta, dfb::beta);
         pack_reconfig_data_format(dfb::out);
         dfb_beta.wait_front(Wt);
-        add_bcast_rows_init(dfb_times_gamma_out, dfb::beta);
+        add_bcast_rows_init(dfb_in_beta, dfb::beta);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_times_gamma.wait_front(blk);
+            dfb_in_beta_obj.wait_front(blk);
             dfb_out.reserve_back(blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                add_tiles_bcast_rows(dfb_times_gamma_out, dfb::beta, wtr, wt + wtr, wtr);
+                add_tiles_bcast_rows(dfb_in_beta, dfb::beta, wtr, wt + wtr, wtr);
                 pack_tile(wtr, dfb::out);
             }
             REL();
             dfb_out.push_back(blk);
-            dfb_times_gamma.pop_front(blk);
+            dfb_in_beta_obj.pop_front(blk);
         }
-#endif
 #endif
     }
     dfb_eps.pop_front(1);

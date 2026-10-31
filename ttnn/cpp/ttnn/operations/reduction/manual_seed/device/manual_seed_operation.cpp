@@ -59,6 +59,13 @@ void ManualSeedDeviceOperation::validate_on_program_cache_hit(
         !(tensor_args.user_ids.has_value() && operation_attributes.user_ids.has_value()),
         "Either tensor_args.user_ids or operation_attributes.user_ids must be set, but not both.");
 
+    if (tensor_args.user_ids.has_value()) {
+        const auto& user_ids_tensor = tensor_args.user_ids.value();
+        TT_FATAL(user_ids_tensor.dtype() == DataType::UINT32, "User IDs tensor must be of type UINT32.");
+        TT_FATAL(user_ids_tensor.layout() == Layout::ROW_MAJOR, "User IDs tensor must have ROW_MAJOR layout.");
+        TT_FATAL(user_ids_tensor.logical_shape().rank() == 1, "User IDs tensor must be 1-dimensional.");
+    }
+
     // Seeds provided as tensor
     if (tensor_args.seeds.has_value()) {
         const auto& seeds_tensor = tensor_args.seeds.value();
@@ -67,8 +74,6 @@ void ManualSeedDeviceOperation::validate_on_program_cache_hit(
         // If user_ids are provided, they must also be a tensor
         if (tensor_args.user_ids.has_value()) {
             const auto& user_ids_tensor = tensor_args.user_ids.value();
-            TT_FATAL(user_ids_tensor.dtype() == DataType::UINT32, "User IDs tensor must be of type UINT32.");
-            TT_FATAL(user_ids_tensor.layout() == Layout::ROW_MAJOR, "User IDs tensor must have ROW_MAJOR layout.");
             TT_FATAL(
                 seeds_tensor.logical_volume() == user_ids_tensor.logical_volume(),
                 "Seeds tensor and User IDs tensor must have the same number of elements. Got seeds volume: {} and "

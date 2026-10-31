@@ -719,6 +719,39 @@ NON_RECTANGULAR_GRID_IDS = [
     "offset_and_short",
 ]
 
+LINE_GRID_1D_MCAST_CASES = [
+    ((1, 0), (1, 7), 32, 1024, ttnn.ShardOrientation.ROW_MAJOR),
+    ((2, 0), (2, 7), 128, 1024, ttnn.ShardOrientation.ROW_MAJOR),
+    ((0, 0), (7, 0), 32, 2048, ttnn.ShardOrientation.COL_MAJOR),
+    ((0, 0), (3, 0), 64, 1024, ttnn.ShardOrientation.COL_MAJOR),
+    ((0, 1), (1, 7), 224, 1792, ttnn.ShardOrientation.COL_MAJOR),
+]
+LINE_GRID_1D_MCAST_IDS = [
+    "column_x1_row_major",
+    "column_x2_row_major_h128",
+    "row_col_major",
+    "row_col_major_h64",
+    "column_pair_y1_col_major",
+]
+
+
+def line_width_shard_config(device, start, end, h, w, orientation):
+    device_grid = device.compute_with_storage_grid_size()
+    if end[0] >= device_grid.x or end[1] >= device_grid.y:
+        pytest.skip(f"{start}-{end} does not fit a {device_grid.x}x{device_grid.y} device grid")
+    num_cores = (end[0] - start[0] + 1) * (end[1] - start[1] + 1)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end))}),
+        [h, w // num_cores],
+        orientation,
+    )
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    return memory_config, (w // num_cores) // TILE_WIDTH
+
 
 def cores_of(core_range_set):
     """Expand a CoreRangeSet into a set of (x, y) tuples."""
