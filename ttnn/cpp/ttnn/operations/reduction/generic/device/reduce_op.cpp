@@ -215,6 +215,15 @@ Tensor reduce(
     const bool use_sfpu_reduce =
         use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min || use_sfpu_bf16_min;
 
+    ttnn::DeviceComputeKernelConfig row_fold_config = config;
+    if (!use_sfpu_reduce &&
+        (reduce_math == tt::tt_metal::ReduceOpMath::SUM || reduce_math == tt::tt_metal::ReduceOpMath::AVG)) {
+        row_fold_config.fp32_dest_acc_en = true;
+        if (is_wormhole && row_fold_config.math_fidelity == tt::tt_metal::MathFidelity::HiFi4) {
+            row_fold_config.math_fidelity = tt::tt_metal::MathFidelity::HiFi3;
+        }
+    }
+
     // The FPU has no MIN primitive, so remaining MIN lowers to -MAX(-x) via the fused negate kernels:
     // bfloat8_b and fast-mode fp32. Accurate fp32 MIN and bf16 MIN drive the LLK MIN
     // reduce directly (like Int32 MIN) and must skip that lowering.
@@ -326,7 +335,7 @@ Tensor reduce(
             1.0f,
             output_mem_config,
             out_w_dtype,
-            config,
+            row_fold_config,
             sub_core_grids,
             negate,
             /*post_mul_scaler=*/1.0f,
@@ -517,7 +526,7 @@ Tensor reduce(
         reduce_scaler,
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
-        config,
+        (reduce_dim == tt::tt_metal::ReduceOpDim::W && !use_rm_dense_w) ? row_fold_config : config,
         sub_core_grids,
         negate,
         /*post_mul_scaler=*/post_mul,
