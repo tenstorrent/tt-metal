@@ -91,6 +91,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
+            for (std::uint32_t rc_i = (*reinterpret_cast<volatile std::uint32_t*>(0x1FFE8u) >> 0) & 0xFFu; rc_i != 0; --rc_i) // RC experiment: per-thread delay
+            {
+                asm volatile("nop");
+            }
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
@@ -182,6 +186,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
+            for (std::uint32_t rc_i = (*reinterpret_cast<volatile std::uint32_t*>(0x1FFE8u) >> 8) & 0xFFu; rc_i != 0; --rc_i) // RC experiment: per-thread delay
+            {
+                asm volatile("nop");
+            }
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
@@ -268,6 +276,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
+            for (std::uint32_t rc_i = (*reinterpret_cast<volatile std::uint32_t*>(0x1FFE8u) >> 16) & 0xFFu; rc_i != 0; --rc_i) // RC experiment: per-thread delay
+            {
+                asm volatile("nop");
+            }
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
