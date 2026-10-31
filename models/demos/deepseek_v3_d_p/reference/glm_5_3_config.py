@@ -37,7 +37,7 @@ class GLM53Config:
     # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
     # Off while the GLM 5.3 SC4 prefill regression is bisected: it runs dispatch and combine again. Set True to
     # re-enable.
-    MOE_FABRIC2D_TRANSPORT = False
+    MOE_FABRIC2D_TRANSPORT = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
