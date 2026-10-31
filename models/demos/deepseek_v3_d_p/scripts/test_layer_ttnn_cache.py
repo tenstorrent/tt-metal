@@ -144,7 +144,7 @@ def test_parse_layers_rejects(spec):
 def test_parse_args_defaults():
     a = parse_args(["--model", "kimi_k2_7", "--layers", "1"])
     assert a.out_root == "~/ttnn-layer-cache"
-    assert a.keep is False
+    assert a.compare is False and a.remove is False
     assert a.min_free_gb == 40
     assert a.weka_cache is None and a.hf_model is None
 
