@@ -686,3 +686,24 @@ def run_test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, H
 @pytest.mark.parametrize("HW", [[32, 32], [23, 23]])
 def test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, device):
     run_test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, device)
+
+
+def test_moreh_group_norm_backward_gamma_beta_grad_long_sum(device):
+    N, C, num_groups, H, W = 6, 4, 2, 256, 256
+
+    cpu_input = torch.tensor([-1.0, 1.0]).repeat(C // 2).view(1, C, 1, 1).expand(N, C, H, W).contiguous()
+    cpu_input = cpu_input.to(torch.bfloat16)
+    cpu_output_grad = torch.ones(N, C, H, W, dtype=torch.bfloat16)
+    cpu_gamma = torch.ones(C, dtype=torch.bfloat16)
+    cpu_beta = torch.zeros(C, dtype=torch.bfloat16)
+
+    _, expected_gamma_grad, expected_beta_grad = torch_group_norm_backward(
+        cpu_input.float(), cpu_output_grad.float(), num_groups, False, True, True, cpu_gamma.float(), cpu_beta.float()
+    )
+
+    _, actual_gamma_grad, actual_beta_grad = tt_group_norm_backward(
+        cpu_input, cpu_output_grad, num_groups, False, True, True, cpu_gamma, device=device
+    )
+
+    torch.testing.assert_close(actual_beta_grad.float(), expected_beta_grad, rtol=2**-8, atol=0)
+    torch.testing.assert_close(actual_gamma_grad.float(), expected_gamma_grad, rtol=2**-8, atol=0)
