@@ -58,5 +58,6 @@
         "MeshTraceId(2)"
       ]
     }
-  ]
+  ],
+  "provenance_note": "Initial buffering control before head optimization. Final-head B32 tracking, seeded buffered equivalence and watcher acceptance are generator_state_clean_b32.json and watcher_b32.json."
 }

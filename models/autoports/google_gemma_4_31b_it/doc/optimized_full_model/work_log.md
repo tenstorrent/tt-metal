@@ -65,3 +65,7 @@ Reduced profile and CSV export exited0. summarize_full_profile exited0 and gener
 ## Independent acceptance
 
 Fresh xhigh stage-review subagent returned clean-pass with no required work. The reviewer independently rederived profile windows, medians, memory arithmetic and sampler records, inspected generated outputs and runtime precision, and confirmed unchanged decoder source hashes. Report: stage_review.md. No device commands or source edits were performed by the reviewer. All required validation is complete; local stage-owned checkpoint follows.
+
+## Local checkpoint
+
+Repository: tt-metal execution checkout (no remote). Branch: mvasiljevic/gemma4-31b-fresh-pipeline-v0811. Validated implementation/evidence checkpoint: `b66f91f8130256babd5eaf329f174ca27892f5bc`. Commit includes stage-owned model/generator/tests, compact accuracy/performance/state/memory/profile evidence and independent clean-pass report. Raw captures/log dumps and unrelated bringup/references or prior-stage artifacts remain local and excluded. No push. Generated table line endings/trailing whitespace were normalized for repository hooks without changing numerical data; git diff --check passes. This bookkeeping entry is committed separately after the implementation checkpoint.
