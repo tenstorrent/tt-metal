@@ -652,6 +652,76 @@ struct KMcastParams {
     uint32_t mcast_sem_id;  // semaphore ID for synchronization (Semaphore<> takes this)
 };
 
+template <uint32_t tile_bytes>
+FORCE_INLINE void kv_zero_tile_rows_from(const Noc& noc, uint32_t tile_addr, uint32_t first_row) {
+    constexpr bool is_bf16 = tile_bytes == 2048;
+    constexpr bool is_bfp8 = tile_bytes == 1088;
+    constexpr bool is_bfp4 = tile_bytes == 576;
+    if constexpr (is_bf16 || is_bfp8) {
+        constexpr uint32_t row_bytes = is_bfp8 ? 16 : 32;
+        constexpr uint32_t face_bytes = 16 * row_bytes;
+        const uint32_t data = tile_addr + (is_bfp8 ? 64 : 0);
+        if (first_row < 16) {
+            const uint32_t off = first_row * row_bytes;
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(data + off), face_bytes - off);
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(data + face_bytes + off), face_bytes - off);
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(data + 2 * face_bytes), 2 * face_bytes);
+        } else {
+            const uint32_t off = (first_row - 16) * row_bytes;
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(data + 2 * face_bytes + off), face_bytes - off);
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(data + 3 * face_bytes + off), face_bytes - off);
+        }
+        if constexpr (is_bfp8) {
+            volatile tt_l1_ptr uint8_t* exps = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile_addr);
+            for (uint32_t r = first_row; r < 32; ++r) {
+                const uint32_t f = r < 16 ? 0 : 2;
+                exps[f * 16 + (r & 15)] = 0;
+                exps[(f + 1) * 16 + (r & 15)] = 0;
+            }
+        }
+    } else if constexpr (is_bfp4) {
+        volatile tt_l1_ptr uint8_t* t = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile_addr);
+        for (uint32_t r = first_row; r < 32; ++r) {
+            const uint32_t f = r < 16 ? 0 : 2;
+            for (uint32_t ff = f; ff < f + 2; ++ff) {
+                const uint32_t fr = ff * 16 + (r & 15);
+                t[fr] = 0;
+                for (uint32_t b = 0; b < 8; ++b) {
+                    t[64 + fr * 8 + b] = 0;
+                }
+            }
+        }
+    } else {
+        static_assert(tile_bytes == 0, "unsupported KV tile size");
+    }
+}
+
+template <uint32_t tile_bytes>
+FORCE_INLINE void kv_zero_rows_past(
+    const Noc& noc,
+    uint32_t base,
+    uint32_t Sk_chunk_t,
+    uint32_t cols,
+    uint32_t row_stride,
+    uint32_t col_stride,
+    uint32_t valid_rows) {
+    if (valid_rows >= Sk_chunk_t * 32) {
+        return;
+    }
+    for (uint32_t row = valid_rows / 32; row < Sk_chunk_t; ++row) {
+        const uint32_t first_row = row * 32 >= valid_rows ? 0 : valid_rows - row * 32;
+        for (uint32_t col = 0; col < cols; ++col) {
+            const uint32_t addr = base + row * row_stride + col * col_stride;
+            if (first_row == 0) {
+                noc.async_write_zeros(CoreLocalMem<uint32_t>(addr), tile_bytes);
+            } else {
+                kv_zero_tile_rows_from<tile_bytes>(noc, addr, first_row);
+            }
+        }
+    }
+    noc.write_zeros_l1_barrier();
+}
+
 template <
     uint32_t cb_k_in,
     uint32_t DHt,
@@ -672,7 +742,9 @@ uint32_t read_k(
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
-    const KMcastParams& mcast_params = {}) {
+    const KMcastParams& mcast_params = {},
+    uint32_t valid_rows = UINT32_MAX) {
+    const uint32_t read_rows = valid_rows >= Sk_chunk_t_dynamic * 32 ? Sk_chunk_t_dynamic : (valid_rows + 31) / 32;
     Noc noc;
     CircularBuffer cb_k(cb_k_in);
     cb_k.reserve_back(k_chunk_tiles);
@@ -682,7 +754,7 @@ uint32_t read_k(
 
     if constexpr (use_mcast) {
         if (mcast_params.do_mcast) {
-            for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+            for (uint32_t row = 0; row < read_rows; ++row) {
                 uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
                 uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
                 uint32_t physical_k_tile_id =
@@ -714,6 +786,8 @@ uint32_t read_k(
                 }
             }
             noc.async_read_barrier();
+            kv_zero_rows_past<k_tile_bytes>(
+                noc, k_write_ptr, Sk_chunk_t_dynamic, DHt, k_tile_bytes, Sk_chunk_t_dynamic * k_tile_bytes, valid_rows);
             // Multicast the full K^T chunk to all receiver cores at once
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(k_write_ptr),
@@ -752,7 +826,7 @@ uint32_t read_k(
         }
     } else {
         // Non-multicast path: original transposed read
-        for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+        for (uint32_t row = 0; row < read_rows; ++row) {
             uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
             uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
             uint32_t physical_k_tile_id =
@@ -778,6 +852,8 @@ uint32_t read_k(
             }
         }
         noc.async_read_barrier();
+        kv_zero_rows_past<k_tile_bytes>(
+            noc, k_write_ptr, Sk_chunk_t_dynamic, DHt, k_tile_bytes, Sk_chunk_t_dynamic * k_tile_bytes, valid_rows);
         cb_k.push_back(k_chunk_tiles);
     }
     return k_base_read_ptr;
@@ -804,7 +880,8 @@ void read_v(
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
     uint32_t k_base_read_ptr = 0,
-    uint32_t k_tile_bytes = 0) {
+    uint32_t k_tile_bytes = 0,
+    uint32_t valid_rows = UINT32_MAX) {
     Noc noc;
     CircularBuffer cb_v(cb_v_in);
     cb_v.reserve_back(v_chunk_tiles);
@@ -834,7 +911,10 @@ void read_v(
         // Read V chunk in row major order, write in row-major order
         // V is an independent tensor with its own layout (width = vDHt, not DHt)
         barrier_count = 0;
-        for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+        const uint32_t v_base = v_write_ptr;
+        const uint32_t read_rows =
+            valid_rows >= Sk_chunk_t_dynamic * 32 ? Sk_chunk_t_dynamic : (valid_rows + 31) / 32;
+        for (uint32_t row = 0; row < read_rows; ++row) {
             uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
             // Use vDHt for V tensor's width since V is independent
             uint32_t physical_v_tile_id =
@@ -857,6 +937,8 @@ void read_v(
             // No padding to skip - V is an independent tensor with contiguous layout
         }
         noc.async_read_barrier();
+        kv_zero_rows_past<v_tile_bytes>(
+            noc, v_base, Sk_chunk_t_dynamic, vDHt, vDHt * v_tile_bytes, v_tile_bytes, valid_rows);
     }
     cb_v.push_back(v_chunk_tiles);
 }
