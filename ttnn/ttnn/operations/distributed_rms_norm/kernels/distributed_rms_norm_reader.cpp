@@ -37,6 +37,14 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
+
+// Measurement-only per-stage zones (host DRMS_ZONES=1 -> define; never set in production).
+#ifdef DRMS_ZONES
+#define DRMS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define DRMS_ZONE(name)
+#endif
 
 namespace {
 
@@ -133,7 +141,63 @@ FORCE_INLINE void write_faces_0_2(uint32_t src, uint32_t x, uint32_t y, uint32_t
 }
 
 // Word offset of element (r, 0) of a tile (face 0 row r for r < 16, face 2 row r - 16 otherwise).
-FORCE_INLINE uint32_t col0_index(uint32_t r) { return r < FACE_DIM ? r * FACE_DIM : 512 + (r - FACE_DIM) * FACE_DIM; }
+constexpr uint32_t col0_index(uint32_t r) { return r < FACE_DIM ? r * FACE_DIM : 512 + (r - FACE_DIM) * FACE_DIM; }
+
+// Column 0 of a tile <-> one 32-word fp32 record. Loads go through plain pointers in batches of 8 (fully unrolled,
+// constant offsets) so the compiler issues them back to back instead of stalling on every load-use pair; the caller
+// has invalidated the L1 cache after the producer's data landed. Stores stay volatile (an unpacker / NoC consumer).
+// fp32 interm: word (r, 0) <-> rec[r]; Float16_b interm: the bf16 at (r, 0) is the top half of the fp32 word (exact).
+template <bool fp32>
+FORCE_INLINE void tile_col0_to_record(uint32_t tile_addr, uint32_t rec_addr) {
+    volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rec_addr);
+#pragma GCC unroll 4
+    for (uint32_t b = 0; b < TILE_DIM; b += 8) {
+        uint32_t v[8];
+        if constexpr (fp32) {
+            const uint32_t* tile = reinterpret_cast<const uint32_t*>(tile_addr);
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                v[i] = tile[col0_index(b + i)];
+            }
+        } else {
+            const uint16_t* tile = reinterpret_cast<const uint16_t*>(tile_addr);
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                v[i] = static_cast<uint32_t>(tile[col0_index(b + i)]) << 16;
+            }
+        }
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < 8; ++i) {
+            rec[b + i] = v[i];
+        }
+    }
+}
+
+template <bool fp32>
+FORCE_INLINE void record_to_tile_col0(uint32_t rec_addr, uint32_t tile_addr) {
+    const uint32_t* rec = reinterpret_cast<const uint32_t*>(rec_addr);
+#pragma GCC unroll 4
+    for (uint32_t b = 0; b < TILE_DIM; b += 8) {
+        uint32_t v[8];
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < 8; ++i) {
+            v[i] = rec[b + i];
+        }
+        if constexpr (fp32) {
+            volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                tile[col0_index(b + i)] = v[i];
+            }
+        } else {
+            volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_addr);
+#pragma GCC unroll 8
+            for (uint32_t i = 0; i < 8; ++i) {
+                tile[col0_index(b + i)] = static_cast<uint16_t>(v[i] >> 16);
+            }
+        }
+    }
+}
 
 }  // namespace
 
@@ -180,6 +244,8 @@ void kernel_main() {
     const uint32_t my_slot = get_arg_val<uint32_t>(a++);
     const uint32_t slot_port_idx = a;  // G packed port coords: where slot q lands on this chip
     a += G;
+    const uint32_t entry_slot_idx = a;  // n_in_fwd + n_in_bwd slot ids: entry i of a direction (landing order)
+    a += n_in_fwd + n_in_bwd;
     const uint32_t member_idx = a;  // G_w - 1 packed member coords (root only)
 
     const auto input_accessor = TensorAccessor(input_args, input_addr, T_in);
@@ -243,6 +309,7 @@ void kernel_main() {
             if (lb >= num_blocks || !x_cb.pages_reservable_at_back(WS)) {
                 return false;
             }
+            DRMS_ZONE("rd_load");
             const uint32_t tile_row = start_tile_row + lb * R + lr;
             x_cb.reserve_back(WS);
             const uint32_t l1 = x_cb.get_write_ptr();
@@ -280,6 +347,7 @@ void kernel_main() {
         if (!partial_cb.pages_available_at_front(n)) {
             return false;
         }
+        DRMS_ZONE("mb_send");
         const uint32_t k = ws % nwpb;
         write_faces_0_2<T_i>(
             partial_cb.get_read_ptr(), root_x, root_y, gather_base + (k * G_w + my_index) * Rw * T_i, n);
@@ -300,6 +368,7 @@ void kernel_main() {
         if (sem_value(SEM_INV) < inv_count + 1 || !inv_cb.pages_reservable_at_back(n)) {
             return false;
         }
+        DRMS_ZONE("mb_recv");
         inv_cb.reserve_back(n);
         inv_cb.push_back(n);
         ++inv_count;
@@ -324,6 +393,7 @@ void kernel_main() {
             sem_value(SEM_GATHER_BASE + k) < gather_count[k] + (G_w - 1)) {
             return false;
         }
+        DRMS_ZONE("rt_gather");
         gather_cb.reserve_back(G_w * Rw);
         noc_async_read(get_noc_addr(partial_cb.get_read_ptr()), gather_cb.get_write_ptr(), n * T_i);
         noc_async_read_barrier();
@@ -346,23 +416,13 @@ void kernel_main() {
         if (wp > 0 && sem_value(SEM_OWN_COUNTED) < n_send * wp) {
             return false;
         }
+        DRMS_ZONE("rt_publish");
         if (n > 0) {
             // column 0 of each device-partial tile -> 32 contiguous fp32 words (bf16: exact widening)
             const uint32_t src = dev_cb.get_read_ptr();
+            invalidate_l1_cache();
             for (uint32_t t = 0; t < n; ++t) {
-                volatile tt_l1_ptr uint32_t* rec =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_staging + t * RECORD_BYTES);
-                if constexpr (interm_fp32) {
-                    volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + t * T_i);
-                    for (uint32_t r = 0; r < TILE_DIM; ++r) {
-                        rec[r] = tile[col0_index(r)];
-                    }
-                } else {
-                    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src + t * T_i);
-                    for (uint32_t r = 0; r < TILE_DIM; ++r) {
-                        rec[r] = static_cast<uint32_t>(tile[col0_index(r)]) << 16;
-                    }
-                }
+                tile_col0_to_record<interm_fp32>(src + t * T_i, own_staging + t * RECORD_BYTES);
             }
             const uint32_t dst = landing + (wp * G + my_slot) * seg_stride + rec_off;
             for (uint32_t i = 0; i < n_send; ++i) {
@@ -380,50 +440,65 @@ void kernel_main() {
         return true;
     };
 
+    // collect, one slot per step (lamp L4): wave wc's cb_stats_gather window is reserved once the root published wc;
+    // the own slot is read at once, every peer slot as soon as its entry is counted on SEM_LANDED_<d> (the ports
+    // notify per landed entry, in (wave, entry) order), so at the last landing one slot is left to read and scatter.
+    // Entries of waves this root does not collect (empty waves) are never read: the cursors jump past them.
     uint32_t wc = 0;
-    auto try_collect = [&]() -> bool {
-        while (wc < own_waves && wave_n(wc) == 0) {
-            ++wc;
-        }
-        if (wc >= own_waves || wc >= wp) {
-            return false;
-        }
-        const uint32_t n = wave_n(wc);
-        if ((n_in_fwd > 0 && sem_value(SEM_LANDED_FWD) < (wc + 1) * n_in_fwd) ||
-            (n_in_bwd > 0 && sem_value(SEM_LANDED_BWD) < (wc + 1) * n_in_bwd) ||
-            !stats_cb.pages_reservable_at_back(G * n)) {
-            return false;
-        }
-        for (uint32_t q = 0; q < G; ++q) {
-            const uint32_t pp = get_arg_val<uint32_t>(slot_port_idx + q);
-            noc_async_read(
-                get_noc_addr(unpack_x(pp), unpack_y(pp), landing + (wc * G + q) * seg_stride + rec_off),
-                staging + q * Rw * RECORD_BYTES,
-                n * RECORD_BYTES);
-        }
+    bool wc_open = false;
+    uint32_t pending = 0;  // slots of wave wc not yet in cb_stats_gather (bit q)
+    uint32_t seen[2] = {0, 0};
+    const uint32_t n_in[2] = {n_in_fwd, n_in_bwd};
+    auto read_slot = [&](uint32_t q, uint32_t n) {
+        DRMS_ZONE("rt_collect");
+        const uint32_t pp = get_arg_val<uint32_t>(slot_port_idx + q);
+        const uint32_t rec = staging + q * Rw * RECORD_BYTES;
+        noc_async_read(
+            get_noc_addr(unpack_x(pp), unpack_y(pp), landing + (wc * G + q) * seg_stride + rec_off),
+            rec,
+            n * RECORD_BYTES);
         noc_async_read_barrier();
-        stats_cb.reserve_back(G * n);
+        invalidate_l1_cache();
         const uint32_t dst = stats_cb.get_write_ptr();
         for (uint32_t t = 0; t < n; ++t) {
-            for (uint32_t q = 0; q < G; ++q) {
-                volatile tt_l1_ptr uint32_t* rec =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging + (q * Rw + t) * RECORD_BYTES);
-                const uint32_t tile_addr = dst + (t * G + q) * T_i;
-                if constexpr (interm_fp32) {
-                    volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
-                    for (uint32_t r = 0; r < TILE_DIM; ++r) {
-                        tile[col0_index(r)] = rec[r];
-                    }
-                } else {
-                    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_addr);
-                    for (uint32_t r = 0; r < TILE_DIM; ++r) {
-                        tile[col0_index(r)] = static_cast<uint16_t>(rec[r] >> 16);
-                    }
+            record_to_tile_col0<interm_fp32>(rec + t * RECORD_BYTES, dst + (t * G + q) * T_i);
+        }
+        pending &= ~(1u << q);
+    };
+    auto try_collect = [&]() -> bool {
+        if (!wc_open) {
+            while (wc < own_waves && wave_n(wc) == 0) {
+                ++wc;
+            }
+            if (wc >= own_waves || wc >= wp || !stats_cb.pages_reservable_at_back(G * wave_n(wc))) {
+                return false;
+            }
+            stats_cb.reserve_back(G * wave_n(wc));
+            wc_open = true;
+            pending = (1u << G) - 1;
+            for (uint32_t d = 0; d < 2; ++d) {
+                seen[d] = seen[d] > wc * n_in[d] ? seen[d] : wc * n_in[d];
+            }
+            read_slot(my_slot, wave_n(wc));  // published (and its write barrier passed) before wp moved past wc
+        } else {
+            bool stepped = false;
+            for (uint32_t d = 0; d < 2 && !stepped; ++d) {
+                if (seen[d] < (wc + 1) * n_in[d] && sem_value(SEM_LANDED_FWD + d) > seen[d]) {
+                    const uint32_t i = seen[d] - wc * n_in[d];
+                    read_slot(get_arg_val<uint32_t>(entry_slot_idx + (d == 0 ? 0 : n_in_fwd) + i), wave_n(wc));
+                    ++seen[d];
+                    stepped = true;
                 }
             }
+            if (!stepped) {
+                return false;
+            }
         }
-        stats_cb.push_back(G * n);
-        ++wc;
+        if (pending == 0) {
+            stats_cb.push_back(G * wave_n(wc));
+            wc_open = false;
+            ++wc;
+        }
         return true;
     };
 
@@ -439,22 +514,24 @@ void kernel_main() {
         if (!rms_root_cb.pages_available_at_front(n) || !inv_cb.pages_reservable_at_back(n)) {
             return false;
         }
+        DRMS_ZONE("rt_distribute");
         const uint32_t k = wd % nwpb;
         const uint32_t src = rms_root_cb.get_read_ptr();
         const uint32_t dst = inv_base + k * Rw * T_i;
+        // Own copy first: this root's compute (the next wave's finalize) is not held behind the member writes.
+        inv_cb.reserve_back(n);
+        noc_async_read(get_noc_addr(src), inv_cb.get_write_ptr(), n * T_i);
+        noc_async_read_barrier();
+        inv_cb.push_back(n);
         for (uint32_t m = 0; m + 1 < G_w; ++m) {
             const uint32_t mm = get_arg_val<uint32_t>(member_idx + m);
             write_faces_0_2<T_i>(src, unpack_x(mm), unpack_y(mm), dst, n);
         }
-        inv_cb.reserve_back(n);
-        noc_async_read(get_noc_addr(src), inv_cb.get_write_ptr(), n * T_i);
-        noc_async_read_barrier();
         noc_async_write_barrier();
         for (uint32_t m = 0; m + 1 < G_w; ++m) {
             const uint32_t mm = get_arg_val<uint32_t>(member_idx + m);
             noc_semaphore_inc(get_noc_addr(unpack_x(mm), unpack_y(mm), get_semaphore(SEM_INV)), 1);
         }
-        inv_cb.push_back(n);
         rms_root_cb.pop_front(n);
         ++wd;
         return true;
@@ -464,13 +541,15 @@ void kernel_main() {
     while (true) {
         invalidate_l1_cache();
         if (is_root) {
-            if constexpr (combine) {
-                try_gather();
-            }
-            try_publish();
-            try_collect();
+            // Downstream first: a ready distribute / collect of wave w is on the critical chain to the output
+            // write, while the next wave's gather / publish only feeds the exchange (which is still in flight).
             if constexpr (combine) {
                 try_distribute();
+            }
+            try_collect();
+            try_publish();
+            if constexpr (combine) {
+                try_gather();
             }
         } else {
             try_send();

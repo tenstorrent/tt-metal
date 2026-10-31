@@ -40,6 +40,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
+
+// Measurement-only per-stage zones (host DRMS_ZONES=1 -> define; never set in production).
+#ifdef DRMS_ZONES
+#define DRMS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define DRMS_ZONE(name)
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -182,6 +190,7 @@ FORCE_INLINE void run(
     // scale_by_gamma of chunk c for the block's R_b rows (x * gamma, gamma row 0 broadcast) -> cb_x_gamma.
     auto scale_by_gamma = [&](uint32_t c, uint32_t rows_in_block) {
         if constexpr (HAS_GAMMA) {
+            DRMS_ZONE("cp_gamma");
             // Resident window: the writer pushes it chunk by chunk, chunk c is pages [c*C, +C) (cumulative wait; a
             // no-op after block 0). Streaming (L1 fallback): the writer pushes chunk c per (block, chunk) step as
             // the front C pages, popped right after this chain.
@@ -220,7 +229,11 @@ FORCE_INLINE void run(
             const uint32_t row0 = k * RW;
             const uint32_t n = wave_n(k);
             const uint32_t xbase = row0 * WS;
-            cb_wait_front(cb_x_tiles, (row0 + n) * WS);
+            {
+                DRMS_ZONE("cp_xwait");
+                cb_wait_front(cb_x_tiles, (row0 + n) * WS);
+            }
+            DRMS_ZONE("cp_reduce");
             if (full_tiles > 0) {
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(n, full_tiles),
@@ -303,8 +316,10 @@ FORCE_INLINE void run(
                 const uint32_t n = wave_n(k);
                 if (c == 0) {
                     if (is_root) {
+                        DRMS_ZONE("cp_fin");
                         finalize_wave<G, cb_finalized>(n, inv_w_bits, eps_bits);
                     }
+                    DRMS_ZONE("cp_invwait");
                     cb_wait_front(cb_inv_rms, row0 + n);
                 }
                 const ckl::StridedTileRange inv_range{row0, 1};

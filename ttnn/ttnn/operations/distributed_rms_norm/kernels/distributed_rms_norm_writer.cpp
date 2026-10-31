@@ -23,6 +23,14 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
+
+// Measurement-only per-stage zones (host DRMS_ZONES=1 -> define; never set in production).
+#ifdef DRMS_ZONES
+#define DRMS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define DRMS_ZONE(name)
+#endif
 
 namespace {
 constexpr uint32_t cb_gamma_tiles = 6;
@@ -96,6 +104,7 @@ void kernel_main() {
     if constexpr (has_gamma) {
         if constexpr (gamma_resident) {
             // One reservation of the whole window, pushed chunk by chunk (compute waits cumulatively, keeps it).
+            DRMS_ZONE("wr_gamma");
             cb_reserve_back(cb_gamma_tiles, Wp);
             const uint32_t base = get_write_ptr(cb_gamma_tiles);
             for (uint32_t c = 0; c < num_w_chunks; ++c) {
@@ -131,6 +140,7 @@ void kernel_main() {
                 const uint32_t valid = left < C ? left : C;
                 for (uint32_t r = 0; r < rb; ++r) {
                     const uint32_t tile_row = start_tile_row + b * R + r;
+                    DRMS_ZONE("wr_store");
                     cb_wait_front(cb_output, C);
                     const uint32_t l1 = get_read_ptr(cb_output);
                     const uint32_t page0 = tile_row * Wt + w0 + first;

@@ -60,6 +60,9 @@ SCALE_BLOCK_TILES = 8
 MIN_BLOCKS_PER_CORE = 1
 GAMMA_RESIDENT = True
 NUM_WAVES = 2
+# Lamp L4: the ports notify the roots per landed entry (True) or once per wave (False). The root collects slot by
+# slot either way; per entry it reads each slot while the next one is still relaying.
+NOTIFY_PER_ENTRY = True
 R3_ROWS_PER_GROUP = 2
 R3_MAX_GROUP_CORES = 24
 R3_MIN_SLICE_TILES = 4
@@ -745,8 +748,16 @@ def _pack(v):
 def _port_defines():
     """Measurement-only defines (never set in production: unset env -> no define, the production hash is unchanged).
     DRMS_ABLATE_EXCHANGE=1: the ports skip the fabric (op_design.md -> Measurement hooks)."""
+    out = []
     if os.environ.get("DRMS_ABLATE_EXCHANGE", "0") not in ("", "0"):
-        return [("DRMS_ABLATE_EXCHANGE", "1")]
+        out.append(("DRMS_ABLATE_EXCHANGE", "1"))
+    return out + _zone_defines()
+
+
+def _zone_defines():
+    """Measurement-only: DRMS_ZONES=1 turns on the per-stage device zones of every kernel (DRMS_ZONE in the kernels)."""
+    if os.environ.get("DRMS_ZONES", "0") not in ("", "0"):
+        return [("DRMS_ZONES", "1")]
     return []
 
 
@@ -981,6 +992,7 @@ def create_mesh_program_descriptor(
             ring,
             cluster_axis,
             sorted(port_set),
+            NOTIFY_PER_ENTRY,
             fp32_acc,
             compute_kernel_config.math_fidelity,
             compute_kernel_config.math_approx_mode,
@@ -1045,6 +1057,7 @@ def create_mesh_program_descriptor(
                 p,
             ]
             args += [_pack(virt(slot_port(q, l))) for q in range(G)]
+            args += list(ch["entries"][FWD]) + list(ch["entries"][BWD])  # slot of entry i per direction
             mem = members[(w.root.x, w.root.y)]
             args += [_pack(mem[i]) if (is_root and i in mem) else 0 for i in range(1, g.G_w)]
             reader_rt[core.x][core.y] = args
@@ -1057,6 +1070,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "distributed_rms_norm_reader.cpp"),
                 core_ranges=compute_crs,
                 compile_time_args=reader_ct,
+                defines=_zone_defines(),
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
@@ -1064,6 +1078,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "distributed_rms_norm_writer.cpp"),
                 core_ranges=compute_crs,
                 compile_time_args=writer_ct,
+                defines=_zone_defines(),
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
             ),
@@ -1071,6 +1086,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "distributed_rms_norm_compute.cpp"),
                 core_ranges=compute_crs,
                 compile_time_args=compute_ct,
+                defines=_zone_defines(),
                 runtime_args=compute_rt,
                 config=compute_cfg,
             ),
@@ -1106,7 +1122,7 @@ def create_mesh_program_descriptor(
                     n_notify,
                     int(has_conn),
                     n_counted,
-                    max(1, len(entries)),  # notify quantum: once per wave
+                    1 if NOTIFY_PER_ENTRY else max(1, len(entries)),  # notify quantum (lamp L4)
                     SEM_LANDED[d],
                 ]
                 args += arrival_addrs[: len(entries)]
