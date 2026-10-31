@@ -1371,8 +1371,8 @@ public:
                     if (min_remote_cb_start_index < max_dfbs) {
                         max_index = std::max(
                             max_index,
-                            remote_offset_index + (max_dfbs - min_remote_cb_start_index) *
-                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                            remote_cb_config_slot(remote_offset_index, max_dfbs, min_remote_cb_start_index) +
+                                UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                     }
                 }
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
@@ -1382,7 +1382,7 @@ public:
                     for (const auto& buffer_index : cb->local_buffer_indices()) {
                         // 1 cmd for all 32 buffer indices, populate with real data for specified indices
                         // cb config payload
-                        const uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                        const uint32_t base_index = local_cb_config_slot(buffer_index);
                         cb_config_payload[base_index] = cb_address;
                         cb_config_payload[base_index + 1] = cb_size;
                         cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
@@ -1390,9 +1390,7 @@ public:
                         max_index = std::max(max_index, base_index + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG);
                     }
                     for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                        const uint32_t base_index =
-                            remote_offset_index +
-                            ((max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                        const uint32_t base_index = remote_cb_config_slot(remote_offset_index, max_dfbs, buffer_index);
                         cb_config_payload[base_index] = cb->config_address();
                         cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
                         max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
@@ -2457,8 +2455,7 @@ void assemble_device_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
 
     PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
-    prefetcher_pipe_command_generator.construct_commands(
-        metal_ctx, mesh_device, constants, program, batched_transfers);
+    prefetcher_pipe_command_generator.construct_commands(metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);
@@ -2493,15 +2490,14 @@ void assemble_device_commands(
             for (const uint32_t buffer_index : circular_buffer->local_buffer_indices()) {
                 local_cb_updates.push_back(
                     {circular_buffer.get(),
-                     payload + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index,
+                     payload + local_cb_config_slot(buffer_index),
                      buffer_index,
                      circular_buffer->config_generation()});
             }
             for (const uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                 remote_cb_updates.push_back(
                     {circular_buffer.get(),
-                     payload + remote_offset_index +
-                         (max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
+                     payload + remote_cb_config_slot(remote_offset_index, max_dfbs, buffer_index),
                      buffer_index,
                      circular_buffer->config_generation()});
             }
@@ -2595,11 +2591,7 @@ void assemble_device_commands(
             tt::LogDispatch,
             "Runtime Args Commands:    {} commands",
             program_command_sequence.runtime_args_command_sequences.size());
-        uint32_t total_rta_size = 0;
-        for (const auto& cmd : program_command_sequence.runtime_args_command_sequences) {
-            total_rta_size += cmd.size_bytes();
-        }
-        log_trace(tt::LogDispatch, "Runtime Args Total Size:  {} bytes", total_rta_size);
+        log_trace(tt::LogDispatch, "Runtime Args Total Size:  {} bytes", program_command_sequence.runtime_args_sizeB);
         log_trace(
             tt::LogDispatch,
             "Program Config Buffer:    {} bytes",
@@ -2616,11 +2608,8 @@ void assemble_device_commands(
             tt::LogDispatch,
             "Go Signal:                {} bytes",
             program_command_sequence.go_msg_command_sequence.size_bytes());
-        uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() + total_rta_size +
-                              program_command_sequence.program_config_buffer_command_sequence.size_bytes() +
-                              program_command_sequence.program_binary_command_sequence.size_bytes() +
-                              program_command_sequence.launch_msg_command_sequence.size_bytes() +
-                              program_command_sequence.go_msg_command_sequence.size_bytes();
+        const uint32_t total_size = program_command_sequence.get_one_shot_fetch_size(
+            /*stall_first=*/false, /*stall_before_program=*/false, /*send_binary=*/true);
         log_trace(tt::LogDispatch, "TOTAL SIZE:               {} bytes", total_size);
         log_trace(tt::LogDispatch, "========== End Device Commands Assembly ==========");
         log_trace(tt::LogDispatch, "");
@@ -3280,19 +3269,20 @@ TraceNode create_trace_node(
                 // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
                 // cb config payload
-                uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                uint32_t base_index = local_cb_config_slot(buffer_index);
                 cb_config_payload[base_index] = cb_address;
                 cb_config_payload[base_index + 1] = cb_size;
                 cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
                 cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
-                first_unused_index = std::max(first_unused_index, base_index + 4);
+                first_unused_index =
+                    std::max(first_unused_index, base_index + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((max_dfbs - 1 - buffer_index) *
-                                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                const uint32_t base_index = remote_cb_config_slot(remote_offset_index, max_dfbs, buffer_index);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
-                first_unused_index = std::max(first_unused_index, base_index + 2);
+                first_unused_index =
+                    std::max(first_unused_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
             }
         }
         cb_config_payload.resize(first_unused_index);

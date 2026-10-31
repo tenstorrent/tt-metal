@@ -5,6 +5,7 @@
 #pragma once
 
 #include <circular_buffer.hpp>
+#include <circular_buffer_constants.h>
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
@@ -45,6 +46,17 @@ class MeshDevice;
 }  // namespace distributed
 
 namespace program_dispatch {
+
+// A CB config payload carries the local configs from the front, indexed by buffer index, and the
+// remote configs from the back, so a remote buffer index counts down from max_dfbs. Both return an
+// offset in uint32 words from the start of the payload. Every writer of the payload, fast and slow
+// dispatch alike, goes through these so that they all fill the slots firmware reads.
+constexpr uint32_t local_cb_config_slot(uint32_t buffer_index) {
+    return UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
+}
+constexpr uint32_t remote_cb_config_slot(uint32_t remote_offset_index, uint32_t max_dfbs, uint32_t buffer_index) {
+    return remote_offset_index + (max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+}
 
 struct ProgramDispatchMetadata {
     std::vector<ConfigBufferEntry> kernel_config_addrs;

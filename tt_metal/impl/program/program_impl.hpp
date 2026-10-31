@@ -349,9 +349,9 @@ public:
 
     void finalize_offsets(IDevice* device);
 
-    // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
-    // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
-    // it.
+    // Helper function to finalize program offsets with custom getters, and mark every program in the span finalized.
+    // Returns the maximum kernel binaries size among all the programs, to determine whether the mesh workload can fit
+    // in the prefetcher cache all of the programs in it.
     // context_id is which context the program and device belong to
     static uint32_t finalize_program_offsets(
         ContextId context_id,
