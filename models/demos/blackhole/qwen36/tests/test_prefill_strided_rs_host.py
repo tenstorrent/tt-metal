@@ -45,8 +45,8 @@ def test_default_floors(monkeypatch):
     assert tpc.prefill_strided_rs_ok("down", 2048, RING)
     assert tpc.prefill_strided_rs_ok("down", 8192, RING)
     assert not tpc.prefill_strided_rs_ok("down", 1024, RING)
-    assert not tpc.prefill_strided_rs_ok("wo", 2048, RING)  # wo is slower strided at 2K
-    assert tpc.prefill_strided_rs_ok("wo", 8192, RING)
+    assert not tpc.prefill_strided_rs_ok("wo", 2048, RING)  # wo is off by default (no gain in the model's chunk)
+    assert not tpc.prefill_strided_rs_ok("wo", 8192, RING)
     assert not tpc.prefill_strided_rs_ok("down", 32, RING)  # decode widths
 
 

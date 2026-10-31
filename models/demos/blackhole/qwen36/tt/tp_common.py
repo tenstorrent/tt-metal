@@ -191,12 +191,13 @@ def prefill_strided_rs_cfg():
     about 55% of the reduced outputs move by 1-2 bf16 ulps (PCC 0.99986 on random data at 2048 rows). Opt-in only after
     an accuracy sign-off.
 
-    Device time per op on the 8-chip ring (prefill-r6 microbench, traced, min of 5): MLP-down 8192 rows 2.90 -> 1.60 ms,
-    2048 rows 0.67 -> 0.47; attention-wo 8192 rows 1.81 -> 1.47, 2048 rows 0.40 -> 0.45 (slower). Hence the default
-    row floors: MLP-down from 2048 rows, attention-wo from 8192 rows.
+    Device time per op on the 8-chip ring (traced op test, min of 5): MLP-down 8192 rows 2.90 -> 1.59 ms, 2048 rows 0.67
+    -> 0.47; attention-wo 8192 rows 1.81 -> 1.47, 2048 rows 0.40 -> 0.45. In the model's 8K chunk trace only the
+    MLP-down arm pays (8K chunk -14..-31 ms, single 16K call -58 ms); the attention-wo arm measured neutral to slower
+    (8K chunk -5..+13 ms), so it is off by default.
 
     Knobs (read once): QWEN36_PREFILL_STRIDED_RS_DOWN_MIN (default 2048), QWEN36_PREFILL_STRIDED_RS_WO_MIN (default
-    8192; a huge value turns an op off), QWEN36_PREFILL_STRIDED_RS_WIN (L1 window blocks, default 2; 0 = DRAM matmul
+    1 << 30 = attention-wo off; 8192 turns it on for the 8K chunk; a huge value turns an op off), QWEN36_PREFILL_STRIDED_RS_WIN (L1 window blocks, default 2; 0 = DRAM matmul
     output), QWEN36_PREFILL_STRIDED_RS_WORKERS (RS workers per link, default 5), QWEN36_PREFILL_STRIDED_RS_LINKS
     (default 2), QWEN36_PREFILL_STRIDED_RS_KB (matmul K block in tiles, default 4), QWEN36_PREFILL_STRIDED_RS_SMALL_M
     ("1": also take 256- and 512-row calls, M block 1 / 2 tiles; accuracy-stress only, not a speed setting)."""
@@ -211,7 +212,7 @@ def prefill_strided_rs_cfg():
         _STRIDED_RS = dict(
             on=env("QWEN36_PREFILL_STRIDED_RS", "0") == "1",
             down_min=_i("QWEN36_PREFILL_STRIDED_RS_DOWN_MIN", 2048),
-            wo_min=_i("QWEN36_PREFILL_STRIDED_RS_WO_MIN", 8192),
+            wo_min=_i("QWEN36_PREFILL_STRIDED_RS_WO_MIN", 1 << 30),
             win=_i("QWEN36_PREFILL_STRIDED_RS_WIN", 2),
             workers=_i("QWEN36_PREFILL_STRIDED_RS_WORKERS", 5),
             links=_i("QWEN36_PREFILL_STRIDED_RS_LINKS", 2),
