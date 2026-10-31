@@ -851,7 +851,20 @@ class DSV41PrefillModel:
 
     # users-per-row bundle of a context (DSV41_PF_UP1_SHORT: a second context with ONE prefill slot per mesh row next to the Up = U one): everything whose shape follows the number of prefill slots
     # and is not already part of the context's own tables. Saved / loaded with the context so that ``use_dyn`` switches the whole model between the two.
-    _UP_PM = ("U", "_bufs", "head_stash", "head_sel", "head_in", "head_pre", "head_fused_out", "active_mask", "cs")
+    _UP_PM = (
+        "U",
+        "_bufs",
+        "_bridge",
+        "head_stash",
+        "head_sel",
+        "head_in",
+        "head_pre",
+        "head_traces",
+        "head_fused_trace",
+        "head_fused_out",
+        "active_mask",
+        "cs",
+    )
     _UP_SINK = ("U", "bufs", "slot_b")
 
     def _up_save(self):
