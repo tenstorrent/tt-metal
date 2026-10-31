@@ -6,20 +6,19 @@ writer, compute of GateUpStream and DownStream) at the speculative-verify shapes
 the device profiler.
 
     TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR=<dir> python moe_zone_profile.py
+    python moe_zone_profile.py --parse <dir>
 
-Runs CALLS eager forward_decode calls per shape on Galaxy row 0, reads the profiler, then prints per program and
-point the time since the program's first kernel start (us; median over the 8 bank cores and the calls after the
-first, and the latest core), and each program's kernel span."""
+The first runs CALLS eager forward_decode calls per shape on Galaxy row 0 (the profiler writes its log as the process
+exits); the second prints per program and point the time since the program's first kernel start (us; median over the
+8 bank cores and the calls after the first, and the latest core), and each program's kernel span."""
 
 import csv
 import os
 import statistics
+import sys
 from collections import defaultdict
 
 import torch
-
-import ttnn
-from models.experimental.mimo_v2_6_flash.tests.perf import moe_decode_common as common
 
 CALLS = 4
 USERS = 8
@@ -27,14 +26,14 @@ SHAPES = ("one_request", "two_requests")
 POINTS = {
     10: "GU reader start",
     11: "GU reader staged",
-    12: "GU reader routed (local users)",
-    13: "GU reader took remote users",
+    12: "GU reader routed (local users; fused: routing table full)",
+    13: "GU reader took remote users (fused: expert list)",
     14: "GU reader stream end",
     20: "GU writer start",
     21: "GU writer x read",
     22: "GU writer staged",
     23: "GU writer routed (own users)",
-    24: "GU writer got local users",
+    24: "GU writer got local users (fused: routing table full)",
     25: "GU writer count pushed",
     26: "GU writer weight tiles pushed",
     27: "GU writer first h written",
@@ -106,8 +105,26 @@ def report(rows, mhz):
     return programs
 
 
+def parse(out_dir):
+    rows, mhz = read_log(os.path.join(out_dir, ".logs", "profile_log_device.csv"))
+    for kind, runs in report(rows, mhz).items():
+        for s, name in enumerate(SHAPES):
+            mine = runs[s * CALLS + 1 : (s + 1) * CALLS]  # the first call of a shape warms
+            spans = [span for _, span in mine]
+            print(f"\n== {kind} {name}: kernel span {statistics.median(spans):.1f} us")
+            for p in sorted({p for pts, _ in mine for p in pts}):
+                med = statistics.median(statistics.median(pts[p]) for pts, _ in mine if p in pts)
+                late = statistics.median(max(pts[p]) for pts, _ in mine if p in pts)
+                print(f"  {p:3d} {POINTS.get(p, '?'):52s} median core {med:7.1f}  latest core {late:7.1f}")
+
+
 def main():
-    out_dir = os.environ["TT_METAL_PROFILER_DIR"]
+    if len(sys.argv) == 3 and sys.argv[1] == "--parse":
+        parse(sys.argv[2])
+        return
+    import ttnn
+    from models.experimental.mimo_v2_6_flash.tests.perf import moe_decode_common as common
+
     torch.manual_seed(0)
     cfg = common.config()
     inputs = common.golden_moe_inputs(cfg, common.checkpoint(cfg))
@@ -125,18 +142,6 @@ def main():
         ttnn.ReadDeviceProfiler(row)
     finally:
         common.close(mesh, row)
-
-    rows, mhz = read_log(os.path.join(out_dir, ".logs", "profile_log_device.csv"))
-    programs = report(rows, mhz)
-    for kind, runs in programs.items():
-        for s, name in enumerate(SHAPES):
-            mine = runs[s * CALLS + 1 : (s + 1) * CALLS]  # the first call of a shape warms
-            spans = [span for _, span in mine]
-            print(f"\n== {kind} {name}: kernel span {statistics.median(spans):.1f} us")
-            for p in sorted({p for pts, _ in mine for p in pts}):
-                med = statistics.median(statistics.median(pts[p]) for pts, _ in mine if p in pts)
-                late = statistics.median(max(pts[p]) for pts, _ in mine if p in pts)
-                print(f"  {p:3d} {POINTS.get(p, '?'):34s} median core {med:7.1f}  latest core {late:7.1f}")
 
 
 if __name__ == "__main__":

@@ -3,9 +3,9 @@
 
 // BRISC (NOC 1) of the deduplicated MoE stream with gate|up and down in one launch (tt/moe_stream.py FusedStream).
 //
-// Gate|up side as moe_gate_up_uniq_writer.cpp: x rows 0..rows-1 as [rows, 32] tiny tiles, routing of users
-// [first_user, users) handed to the reader (cb_sel), the distinct-expert list, its count for compute (cb_cnt) and
-// one routing-weight tile per distinct expert (cb_wt).
+// Gate|up side: x rows 0..rows-1 as [rows, 32] tiny tiles; once every bank core's reader has filled the routing
+// table (route_sem counts banks; see moe_fused_uniq_reader.cpp), the distinct-expert list, its count for compute
+// (cb_cnt) and one routing-weight tile per distinct expert (cb_wt).
 //
 // Then the h exchange: this core's h tile of distinct expert j (h column `bank`) goes into slot j * kt + bank of
 // cb_hall on every bank core (the CB sits at the same L1 address on all of them), so each core ends up with every
@@ -26,51 +26,38 @@ void kernel_main() {
     constexpr uint32_t kt = get_compile_time_arg_val(2);
     constexpr uint32_t num_pairs = get_compile_time_arg_val(3);
     constexpr uint32_t topk = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_stage = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_sel = get_compile_time_arg_val(6);
-    constexpr uint32_t first_user = get_compile_time_arg_val(7);
-    constexpr uint32_t users = get_compile_time_arg_val(8);
-    constexpr uint32_t stage_pages = get_compile_time_arg_val(9);
-    constexpr uint32_t expert_tiles = get_compile_time_arg_val(10);
-    constexpr bool norm = get_compile_time_arg_val(11) == 1;
-    constexpr bool has_scale = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t scale_bits = get_compile_time_arg_val(13);
-    constexpr bool has_mask = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t cb_local = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_cnt = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_wt = get_compile_time_arg_val(17);
-    constexpr uint32_t rows = get_compile_time_arg_val(18);  // the tiny tiles' rows: users <= rows
-    constexpr uint32_t cb_hall = get_compile_time_arg_val(19);
-    constexpr uint32_t h_kt = get_compile_time_arg_val(20);  // h tiles per expert: one per bank core
-    constexpr uint32_t banks = get_compile_time_arg_val(21);
-    constexpr uint32_t ready_sem = get_compile_time_arg_val(22);
-    constexpr uint32_t done_sem = get_compile_time_arg_val(23);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(24);
-    constexpr uint32_t cols = get_compile_time_arg_val(25);  // output tiles per core
-    constexpr uint32_t compact_tiles = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_tbl = get_compile_time_arg_val(5);
+    constexpr uint32_t users = get_compile_time_arg_val(6);
+    constexpr uint32_t route_sem = get_compile_time_arg_val(7);
+    constexpr uint32_t entry_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_cnt = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_wt = get_compile_time_arg_val(10);
+    constexpr uint32_t rows = get_compile_time_arg_val(11);  // the tiny tiles' rows: users <= rows
+    constexpr uint32_t cb_hall = get_compile_time_arg_val(12);
+    constexpr uint32_t h_kt = get_compile_time_arg_val(13);  // h tiles per expert: one per bank core
+    constexpr uint32_t banks = get_compile_time_arg_val(14);
+    constexpr uint32_t ready_sem = get_compile_time_arg_val(15);
+    constexpr uint32_t done_sem = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(17);
+    constexpr uint32_t cols = get_compile_time_arg_val(18);  // output tiles per core
+    constexpr uint32_t compact_tiles = get_compile_time_arg_val(19);
     // > 0: index of runtime args [count, x0, y0, ...]: once the output is written, raise semaphore signal_sem of
     // each of those cores by one (the row all-gather's senders in the same launch wait for every bank core).
-    constexpr uint32_t signal_args_at = get_compile_time_arg_val(27);
-    constexpr uint32_t signal_sem = get_compile_time_arg_val(28);
+    constexpr uint32_t signal_args_at = get_compile_time_arg_val(20);
+    constexpr uint32_t signal_sem = get_compile_time_arg_val(21);
     constexpr uint32_t bf16_tile_bytes = 2048;
     constexpr uint32_t tiny_face_bytes = rows * mimo_moe::kFaceDim * 2;  // rows 0..rows-1 of one face
     constexpr uint32_t tiny_bytes = 2 * tiny_face_bytes;
     constexpr uint32_t row_bytes = mimo_moe::kFaceDim * 2;  // one face row: 32 B
     constexpr uint32_t blocks_per_face = mimo_moe::kBf16FaceBytes / tiny_face_bytes;
-    constexpr uint32_t local_users = first_user;
-    constexpr uint32_t sel_users = users - first_user;
     static_assert(users <= rows && rows <= mimo_moe::kFaceDim);
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t bank = get_arg_val<uint32_t>(2);
-    const uint32_t biased_addr = get_arg_val<uint32_t>(3);
-    const uint32_t scores_addr = get_arg_val<uint32_t>(4);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(5);
-    constexpr uint32_t peers_at = 6;  // [x0, y0, ..., x_{banks-1}, y_{banks-1}]: the bank cores, bank order
+    constexpr uint32_t peers_at = 3;  // [x0, y0, ..., x_{banks-1}, y_{banks-1}]: the bank cores, bank order
 
     MOE_MARK(20);
-    // x and the routing rows in one batch of reads.
     const InterleavedAddrGen<true> x_gen = {.bank_base_address = x_addr, .page_size = bf16_tile_bytes};
     cb_reserve_back(cb_x, kt);
     const uint32_t x_l1 = get_write_ptr(cb_x);
@@ -79,66 +66,27 @@ void kernel_main() {
         noc_async_read(x_gen.get_noc_addr(t, 0), dst, tiny_face_bytes);
         noc_async_read(x_gen.get_noc_addr(t, mimo_moe::kBf16FaceBytes), dst + tiny_face_bytes, tiny_face_bytes);
     }
-    uint32_t stage = 0;
-    if constexpr (sel_users > 0) {
-        cb_reserve_back(cb_stage, stage_pages);
-        stage = get_write_ptr(cb_stage);
-        mimo_moe::stage_route_rows<expert_tiles, has_mask, rows>(biased_addr, scores_addr, mask_addr, stage);
-    }
     noc_async_read_barrier();
     cb_push_back(cb_x, kt);
     MOE_MARK(22);
 
-    // Every user's selection: ids, weight bits, active.
+    // Every user's selection, from the routing table.
+    const uint32_t tbl = get_write_ptr(cb_tbl);
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(route_sem)), banks);
+    MOE_MARK(24);
     uint32_t sel_ids[users][topk];
     uint32_t sel_w[users][topk];
     bool active[users];
-    // [active flag per remote user | ids]
-    cb_reserve_back(cb_sel, 1);
-    volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_sel));
-    for (uint32_t u = first_user; u < users; u++) {
-        active[u] = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, u);
-        if (active[u]) {
-            mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask, rows>(
-                stage, u, sel_ids[u], sel_w[u]);
-        } else {
-            for (uint32_t i = 0; i < topk; i++) {
-                sel_ids[u][i] = 0;
-                sel_w[u][i] = 0;
-            }
-        }
-        sel[u - first_user] = active[u] ? 1 : 0;
-        for (uint32_t i = 0; i < topk; i++) {
-            sel[sel_users + (u - first_user) * topk + i] = sel_ids[u][i];
-        }
-    }
-    cb_push_back(cb_sel, 1);
-    MOE_MARK(23);
-
-    // The reader's users: [active flag per local user | ids | weight bits].
-    cb_wait_front(cb_local, 1);
-    volatile tt_l1_ptr uint32_t* local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_local));
-    for (uint32_t u = 0; u < local_users; u++) {
-        active[u] = local[u] != 0;
-        for (uint32_t i = 0; i < topk; i++) {
-            sel_ids[u][i] = local[local_users + u * topk + i];
-            sel_w[u][i] = local[local_users + local_users * topk + u * topk + i];
-        }
-    }
-    cb_pop_front(cb_local, 1);
-    MOE_MARK(24);
-
-    // The distinct experts, in the reader's order.
-    uint32_t uniq[num_pairs];
-    uint32_t n = 0;
     for (uint32_t u = 0; u < users; u++) {
-        if (active[u]) {
-            n = mimo_moe::append_unique<topk>(uniq, n, sel_ids[u]);
+        volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tbl + u * entry_bytes);
+        active[u] = e[0] != 0;
+        for (uint32_t i = 0; i < topk; i++) {
+            sel_ids[u][i] = e[1 + i];
+            sel_w[u][i] = e[1 + topk + i];
         }
     }
-    if (n == 0) {
-        n = mimo_moe::append_unique<topk>(uniq, 0, sel_ids[0]);
-    }
+    uint32_t uniq[num_pairs];
+    const uint32_t n = mimo_moe::table_experts<topk, users>(tbl, entry_bytes, uniq);
     cb_reserve_back(cb_cnt, 1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_cnt)) = n;
     cb_push_back(cb_cnt, 1);

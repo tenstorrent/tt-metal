@@ -606,7 +606,9 @@ class DownStream:
 class FusedStream:
     """A deduplicated GateUpStream and DownStream in one launch on the bank cores (MIMO_MOE_FUSED=0 turns it off).
 
-    Each bank core streams, back to back from its DRAM bank, the gate|up slice and then the down slice of every
+    Routing is spread over the bank cores: core b selects user b's top-k and weights (one user, ~6 us, instead of the
+    streams' four per RISC) and writes them into every bank core's routing table, so the stream starts ~10 us into the
+    launch instead of ~30-40. Each bank core then streams, back to back from its DRAM bank, the gate|up slice and then the down slice of every
     distinct expert. Its h tile (h column ``bank``) of each expert goes straight into every bank core's L1 (cb_hall),
     so the down matmul starts once the last expert's h lands everywhere, without a second launch or the activation's
     DRAM round trip, and with its weights already prefetched. Down accumulates all of a core's output tiles in fp32
@@ -615,8 +617,9 @@ class FusedStream:
     the compact output are the two streams' (same order, same arithmetic)."""
 
     DOWN_ROWS = 2  # K rows of w_down per block
-    CB_HALL, CB_OUT = 10, 11
-    READY_SEM, DONE_SEM = 0, 1
+    CB_HALL, CB_OUT, CB_TABLE = 10, 11, 12
+    READY_SEM, DONE_SEM, ROUTE_SEM = 0, 1, 2
+    ENTRY_BYTES = 128  # a routing-table entry: [active, ids[topk], weight bits[topk]], 16-byte aligned
 
     def __init__(self, plan, gate_up, down):
         assert gate_up.dedup and down.dedup and gate_up.rows == down.rows
@@ -638,10 +641,21 @@ class FusedStream:
             )
             return ttnn.CBDescriptor(total_size=pages * page, core_ranges=gate_up.core_ranges, format_descriptors=[fmt])
 
-        self.cbs = list(gate_up.cbs) + [cb(self.CB_HALL, gate_up.num_pairs * down.kt), cb(self.CB_OUT, self.cols)]
+        assert gate_up.users <= len(gate_up.cores) and (2 * gate_up.topk + 1) * 4 <= self.ENTRY_BYTES
+        table_bytes = len(gate_up.cores) * self.ENTRY_BYTES
+        table = ttnn.CBDescriptor(
+            total_size=table_bytes,
+            core_ranges=gate_up.core_ranges,
+            format_descriptors=[ttnn.CBFormatDescriptor(self.CB_TABLE, ttnn.uint32, table_bytes)],
+        )
+        self.cbs = list(gate_up.cbs) + [
+            cb(self.CB_HALL, gate_up.num_pairs * down.kt),
+            cb(self.CB_OUT, self.cols),
+            table,
+        ]
         self.semaphores = [
             ttnn.SemaphoreDescriptor(id=i, core_ranges=gate_up.core_ranges, initial_value=0)
-            for i in (self.READY_SEM, self.DONE_SEM)
+            for i in (self.READY_SEM, self.DONE_SEM, self.ROUTE_SEM)
         ]
 
     def __call__(self, x, scores, biased, token_mask, w_gate_up, w_down, out, signal=None, launch=True):
@@ -661,11 +675,11 @@ class FusedStream:
         mask_addr = token_mask.buffer_address() if has_mask else 0
 
         route_ct = [gu.expert_tiles, gu.norm, gu.has_scale, gu.scale_bits, 1 if has_mask else 0]
+        banks = len(gu.cores)
         reader_ct = [
             gu.cb_w,
-            gu.cb_local,
             gu.cb_rstage,
-            gu.cb_sel,
+            self.CB_TABLE,
             gu.num_pairs,
             gu.topk,
             gu.block_bytes,
@@ -676,28 +690,26 @@ class FusedStream:
             gu.expert_bytes,
             gu.NUM_BUFFERS,
             gu.IN_FLIGHT,
-            gu.reader_users,
             gu.stage_pages,
             *route_ct,
             gu.rows,
             self.down_blocks,
             dn.expert_bytes,
+            banks,
+            self.ROUTE_SEM,
+            self.ENTRY_BYTES,
             STREAM_DEBUG,
         ]
-        banks = len(gu.cores)
         writer_ct = [
             gu.cb_x,
             gu.cb_h,
             gu.kt,
             gu.num_pairs,
             gu.topk,
-            gu.cb_wstage,
-            gu.cb_sel,
-            gu.reader_users,
+            self.CB_TABLE,
             gu.users,
-            gu.stage_pages,
-            *route_ct,
-            gu.cb_local,
+            self.ROUTE_SEM,
+            self.ENTRY_BYTES,
             gu.cb_cnt,
             gu.cb_wt,
             gu.rows,
@@ -709,7 +721,7 @@ class FusedStream:
             self.CB_OUT,
             self.cols,
             dn.compact_tiles,
-            6 + 2 * banks if signal else 0,  # signal args follow the writer's other runtime args
+            3 + 2 * banks if signal else 0,  # signal args follow the writer's other runtime args
             0,
         ]
         compute_ct = [
@@ -740,15 +752,8 @@ class FusedStream:
                 scores.buffer_address(),
                 mask_addr,
                 w_down.buffer_address(),
-            ]
-            args = [
-                x.buffer_address(),
-                out.buffer_address(),
-                bank,
-                biased.buffer_address(),
-                scores.buffer_address(),
-                mask_addr,
             ] + peers
+            args = [x.buffer_address(), out.buffer_address(), bank] + peers
             if signal:
                 args += [len(signal)] + [v for c in signal for v in (c.x, c.y)]
             writer_rt[core.x][core.y] = args

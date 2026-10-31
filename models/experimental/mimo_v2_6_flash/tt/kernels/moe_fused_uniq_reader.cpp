@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NCRISC (NOC 0) of the deduplicated MoE stream with gate|up and down in one launch (tt/moe_stream.py FusedStream):
-// routing of users [0, local_users) (the writer routes the rest), then from this core's DRAM bank the gate|up slice
-// of every distinct expert the active users selected, then the down slice of the same experts, one stream.
+// the routing of user `bank` (bank core b routes user b), shared with every bank core through the routing table,
+// then from this core's DRAM bank the gate|up slice of every distinct expert the active users selected, then the
+// down slice of the same experts, one stream.
 //
-// Routing and the expert list are moe_gate_up_uniq_reader.cpp's: the distinct experts in user order (the active
-// users' top-k in order, each expert at its first selection; with no active user, user 0's experts, weighted zero).
+// Routing table (cb_tbl, the same L1 address on every bank core): entry u (entry_bytes apart) = [active, ids[topk],
+// weight bits[topk]] of user u. Core b writes entry b into every bank core's table, then raises their route_sem; a
+// core reads the table once route_sem counts banks. The distinct experts are listed in user order (the active users'
+// top-k in order, each expert at its first selection; with no active user, user 0's experts, weighted zero) by
+// mimo_moe::table_experts, on every bank core and both of its data-movement RISCs alike.
 //
 // w_gate_up [1, E, K, 2 * 8 * 32]: bank b holds gate column b and up column b of every expert, contiguous per
 // expert as [kt][gate, up]. w_down [1, E, I, 8 * cols * 32]: bank b holds expert e as I / 32 rows of cols tiles
@@ -20,35 +24,36 @@
 
 void kernel_main() {
     constexpr uint32_t cb_w = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_local = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_stage = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_sel = get_compile_time_arg_val(3);
-    constexpr uint32_t num_pairs = get_compile_time_arg_val(4);
-    constexpr uint32_t topk = get_compile_time_arg_val(5);
-    constexpr uint32_t block_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t blocks_per_pair = get_compile_time_arg_val(8);
-    constexpr uint32_t packet_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t packets_per_block = get_compile_time_arg_val(10);
-    constexpr uint32_t expert_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t num_buffers = get_compile_time_arg_val(12);
-    constexpr uint32_t in_flight = get_compile_time_arg_val(13);
-    constexpr uint32_t local_users = get_compile_time_arg_val(14);
-    constexpr uint32_t stage_pages = get_compile_time_arg_val(15);
-    constexpr uint32_t expert_tiles = get_compile_time_arg_val(16);
-    constexpr bool norm = get_compile_time_arg_val(17) == 1;
-    constexpr bool has_scale = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t scale_bits = get_compile_time_arg_val(19);
-    constexpr bool has_mask = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t rows = get_compile_time_arg_val(21);         // the user rows of the score tiles: 4 or 8
-    constexpr uint32_t down_blocks = get_compile_time_arg_val(22);  // blocks per expert's down slice
-    constexpr uint32_t down_expert_bytes = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_stage = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_tbl = get_compile_time_arg_val(2);
+    constexpr uint32_t num_pairs = get_compile_time_arg_val(3);
+    constexpr uint32_t topk = get_compile_time_arg_val(4);
+    constexpr uint32_t block_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t block_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t blocks_per_pair = get_compile_time_arg_val(7);
+    constexpr uint32_t packet_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t packets_per_block = get_compile_time_arg_val(9);
+    constexpr uint32_t expert_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t num_buffers = get_compile_time_arg_val(11);
+    constexpr uint32_t in_flight = get_compile_time_arg_val(12);
+    constexpr uint32_t stage_pages = get_compile_time_arg_val(13);
+    constexpr uint32_t expert_tiles = get_compile_time_arg_val(14);
+    constexpr bool norm = get_compile_time_arg_val(15) == 1;
+    constexpr bool has_scale = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t scale_bits = get_compile_time_arg_val(17);
+    constexpr bool has_mask = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t rows = get_compile_time_arg_val(19);         // the user rows of the score tiles: 4 or 8
+    constexpr uint32_t down_blocks = get_compile_time_arg_val(20);  // blocks per expert's down slice
+    constexpr uint32_t down_expert_bytes = get_compile_time_arg_val(21);
+    constexpr uint32_t banks = get_compile_time_arg_val(22);
+    constexpr uint32_t route_sem = get_compile_time_arg_val(23);
+    constexpr uint32_t entry_bytes = get_compile_time_arg_val(24);
     // Timing experiments only (MIMO_MOE_STREAM_DEBUG; wrong results): 1 = no weight reads, the stream only cycles
     // the ring (compute's own rate).
-    constexpr uint32_t debug = get_compile_time_arg_val(24);
+    constexpr uint32_t debug = get_compile_time_arg_val(25);
     constexpr uint32_t users = num_pairs / topk;
-    constexpr uint32_t remote_users = users - local_users;
     static_assert(down_blocks * block_bytes == down_expert_bytes);
+    static_assert(users <= banks && (2 * topk + 1) * 4 <= entry_bytes);
 
     const uint32_t bank_id = get_arg_val<uint32_t>(0);
     const uint32_t vc = get_arg_val<uint32_t>(1);
@@ -57,68 +62,58 @@ void kernel_main() {
     const uint32_t scores_addr = get_arg_val<uint32_t>(4);
     const uint32_t mask_addr = get_arg_val<uint32_t>(5);
     const uint32_t w_down_addr = get_arg_val<uint32_t>(6);
+    constexpr uint32_t peers_at = 7;  // [x0, y0, ..., x_{banks-1}, y_{banks-1}]: the bank cores, bank order
 
     MOE_MARK(10);
+    const uint32_t tbl = get_write_ptr(cb_tbl);
     cb_reserve_back(cb_stage, stage_pages);
     const uint32_t stage = get_write_ptr(cb_stage);
     mimo_moe::stage_route_rows<expert_tiles, has_mask, rows>(biased_addr, scores_addr, mask_addr, stage);
     noc_async_read_barrier();
     MOE_MARK(11);
 
-    // The local users' selections go to the writer (it weights every distinct expert's rows): cb_local page =
-    // [active flag per local user | ids | weight bits], each local_users * topk (flags: local_users) words.
-    uint32_t uniq[num_pairs];
-    uint32_t ids0[topk];
-    uint32_t n = 0;
-    cb_reserve_back(cb_local, 1);
-    volatile tt_l1_ptr uint32_t* local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_local));
-    for (uint32_t u = 0; u < local_users; u++) {
+    // This core's user: its entry into every bank core's table (user 0's ids even when idle: the fallback).
+    if (bank_id < users) {
+        const uint32_t mine = tbl + bank_id * entry_bytes;
+        volatile tt_l1_ptr uint32_t* entry = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mine);
+        const bool active = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, bank_id);
         uint32_t ids[topk];
         uint32_t weights[topk];
-        const bool active = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, u);
-        if (active || u == 0) {  // user 0's experts stand in when no user is active
+        if (active || bank_id == 0) {
             mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask, rows>(
-                stage, u, ids, weights);
+                stage, bank_id, ids, weights);
         } else {
             for (uint32_t i = 0; i < topk; i++) {
                 ids[i] = 0;
                 weights[i] = 0;
             }
         }
-        local[u] = active ? 1 : 0;
+        entry[0] = active ? 1 : 0;
         for (uint32_t i = 0; i < topk; i++) {
-            local[local_users + u * topk + i] = ids[i];
-            local[local_users + local_users * topk + u * topk + i] = weights[i];
-            if (u == 0) {
-                ids0[i] = ids[i];
+            entry[1 + i] = ids[i];
+            entry[1 + topk + i] = weights[i];
+        }
+        for (uint32_t c = 0; c < banks; c++) {
+            if (c != bank_id) {
+                const uint32_t x = get_arg_val<uint32_t>(peers_at + 2 * c);
+                const uint32_t y = get_arg_val<uint32_t>(peers_at + 2 * c + 1);
+                noc_async_write(mine, get_noc_addr(x, y, mine), entry_bytes);
             }
         }
-        if (active) {
-            n = mimo_moe::append_unique<topk>(uniq, n, ids);
-        }
+        noc_async_write_barrier();
     }
-    cb_push_back(cb_local, 1);
+    const uint32_t sem_addr = get_semaphore(route_sem);
+    for (uint32_t c = 0; c < banks; c++) {
+        const uint32_t x = get_arg_val<uint32_t>(peers_at + 2 * c);
+        const uint32_t y = get_arg_val<uint32_t>(peers_at + 2 * c + 1);
+        noc_semaphore_inc(get_noc_addr(x, y, sem_addr), 1);
+    }
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), banks);
     MOE_MARK(12);
 
-    // The writer's users: [active flag per remote user | ids]; taken when the stream reaches the end of the list.
-    auto take_remote = [&]() {
-        cb_wait_front(cb_sel, 1);
-        volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_sel));
-        for (uint32_t r = 0; r < remote_users; r++) {
-            if (sel[r] != 0) {
-                uint32_t ids[topk];
-                for (uint32_t i = 0; i < topk; i++) {
-                    ids[i] = sel[remote_users + r * topk + i];
-                }
-                n = mimo_moe::append_unique<topk>(uniq, n, ids);
-            }
-        }
-        cb_pop_front(cb_sel, 1);
-        if (n == 0) {
-            n = mimo_moe::append_unique<topk>(uniq, 0, ids0);
-        }
-        MOE_MARK(13);
-    };
+    uint32_t uniq[num_pairs];
+    const uint32_t n = mimo_moe::table_experts<topk, users>(tbl, entry_bytes, uniq);
+    MOE_MARK(13);
 
     // Stream: block i goes to CB slot i % num_buffers with trid (i % num_buffers) + 1; at most in_flight blocks
     // are issued but not pushed, and each reserve covers them plus the new block. Blocks [0, gate_up) are gate|up,
@@ -129,19 +124,11 @@ void kernel_main() {
     noc_async_read_one_packet_set_state<true>(get_noc_addr_from_bank_id<true>(bank_id, w_addr), packet_bytes, vc);
     const uint32_t cb_base = get_write_ptr(cb_w);
 
-    uint32_t gate_up = n * blocks_per_pair;
-    bool taken = false;
+    const uint32_t gate_up = n * blocks_per_pair;
+    const uint32_t total = gate_up + n * down_blocks;
     uint32_t issued = 0;
     uint32_t oldest = 0;
-    for (uint32_t i = 0;; i++) {
-        if (i == gate_up && !taken) {
-            take_remote();
-            taken = true;
-            gate_up = n * blocks_per_pair;
-        }
-        if (i == gate_up + n * down_blocks) {
-            break;
-        }
+    for (uint32_t i = 0; i < total; i++) {
         if (issued == in_flight) {
             noc_async_read_barrier_with_trid((oldest % num_buffers) + 1);
             cb_push_back(cb_w, block_tiles);
