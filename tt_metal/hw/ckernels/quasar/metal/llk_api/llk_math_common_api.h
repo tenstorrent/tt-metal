@@ -160,30 +160,82 @@ inline void llk_math_pack_sync_init() {
     }
 }
 
-// Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
-// The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
-// can issue MATH((...)) uniformly across arches.
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
-inline void llk_math_reconfig_data_format_srca(const std::uint32_t /*srca_new_operand*/) {}
+// Implied SrcA/SrcB formats are disabled on Quasar (_llk_math_srcAB_hw_configure_), so the ALU reads its source
+// formats from ALU_FORMAT_SPEC_REG*, not from what the unpacker wrote. hw_configure programs them for the startup
+// operands and the op inits keep them (_configure_default_alu_data_format_state_ returns early once DEFAULT is
+// latched), so a reconfig has to reprogram them here; otherwise e.g. a Tf32 operand is decoded with the startup
+// operand's Float16_b format, and the init's fidelity schedule (derived from Tf32) runs phases a Float16_b SrcA lacks.
+// The ALU format words cannot be read back, so they are rewritten whole: the side that does not change comes from
+// alu_src_format_state, and the result is the DEFAULT config shape (an op that needs a special shape, such as a
+// Dstacc override, re-establishes it at its init).
+namespace llk_math_detail {
+template <bool EN_32BIT_DEST, bool skip_int8>
+inline void set_alu_src_formats(const DataFormat srca_format, const DataFormat srcb_format) {
+    const bool en_int32_dest_format = skip_int8 ? alu_src_format_state.en_int32_dest_format
+                                                : (_is_src_fmt_int32_dest_compatible_(srca_format) &&
+                                                   _is_src_fmt_int32_dest_compatible_(srcb_format) && EN_32BIT_DEST);
+    _configure_alu_formats_<EN_32BIT_DEST>(srca_format, srcb_format, en_int32_dest_format, DataFormat::Invalid);
+    data_format_config_set = DataFormatConfigSet::DEFAULT;
+}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
-inline void llk_math_reconfig_data_format_srcb(const std::uint32_t /*srcb_new_operand*/) {}
+inline DataFormat operand_src_reg_format(const std::uint32_t operand) {
+    return static_cast<DataFormat>(unpack_dst_format[get_operand_id(operand)]);
+}
+}  // namespace llk_math_detail
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
-inline void llk_math_reconfig_data_format(
-    const std::uint32_t /*srca_new_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
+template <bool EN_32BIT_DEST, bool skip_int8 = false>
+inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
+    llk_math_detail::set_alu_src_formats<EN_32BIT_DEST, skip_int8>(
+        llk_math_detail::operand_src_reg_format(srca_new_operand), alu_src_format_state.srcb_format);
+}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
-inline void llk_math_reconfig_data_format(
-    const std::uint32_t /*srca_old_operand*/,
-    const std::uint32_t /*srca_new_operand*/,
-    const std::uint32_t /*srcb_old_operand*/,
-    const std::uint32_t /*srcb_new_operand*/) {}
+template <bool EN_32BIT_DEST, bool skip_int8 = false>
+inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
+    llk_math_detail::set_alu_src_formats<EN_32BIT_DEST, skip_int8>(
+        alu_src_format_state.srca_format, llk_math_detail::operand_src_reg_format(srcb_new_operand));
+}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST, bool skip_int8 = false>
+inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
+    llk_math_detail::set_alu_src_formats<EN_32BIT_DEST, skip_int8>(
+        llk_math_detail::operand_src_reg_format(srca_new_operand),
+        llk_math_detail::operand_src_reg_format(srcb_new_operand));
+}
+
+// The (old, new) overloads skip a side whose old and new operands share a source register format.
+template <bool EN_32BIT_DEST, bool skip_int8 = false>
 inline void llk_math_reconfig_data_format_srca(
-    const std::uint32_t /*srca_old_operand*/, const std::uint32_t /*srca_new_operand*/) {}
+    const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    if (llk_math_detail::operand_src_reg_format(srca_old_operand) !=
+        llk_math_detail::operand_src_reg_format(srca_new_operand)) {
+        llk_math_reconfig_data_format_srca<EN_32BIT_DEST, skip_int8>(srca_new_operand);
+    }
+}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST, bool skip_int8 = false>
 inline void llk_math_reconfig_data_format_srcb(
-    const std::uint32_t /*srcb_old_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
+    const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    if (llk_math_detail::operand_src_reg_format(srcb_old_operand) !=
+        llk_math_detail::operand_src_reg_format(srcb_new_operand)) {
+        llk_math_reconfig_data_format_srcb<EN_32BIT_DEST, skip_int8>(srcb_new_operand);
+    }
+}
+
+template <bool EN_32BIT_DEST, bool skip_int8 = false>
+inline void llk_math_reconfig_data_format(
+    const std::uint32_t srca_old_operand,
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t srcb_old_operand,
+    const std::uint32_t srcb_new_operand) {
+    const bool reconfig_a = llk_math_detail::operand_src_reg_format(srca_old_operand) !=
+                            llk_math_detail::operand_src_reg_format(srca_new_operand);
+    const bool reconfig_b = llk_math_detail::operand_src_reg_format(srcb_old_operand) !=
+                            llk_math_detail::operand_src_reg_format(srcb_new_operand);
+    if (reconfig_a && reconfig_b) {
+        llk_math_reconfig_data_format<EN_32BIT_DEST, skip_int8>(srca_new_operand, srcb_new_operand);
+    } else if (reconfig_a) {
+        llk_math_reconfig_data_format_srca<EN_32BIT_DEST, skip_int8>(srca_new_operand);
+    } else if (reconfig_b) {
+        llk_math_reconfig_data_format_srcb<EN_32BIT_DEST, skip_int8>(srcb_new_operand);
+    }
+}
