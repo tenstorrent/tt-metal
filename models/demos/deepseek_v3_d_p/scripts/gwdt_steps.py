@@ -25,7 +25,11 @@ from gwdt_checks import (
     mla_determinism_reps,
     read_tail,
     row_results,
+    run_to_run_bad_devices,
     stress_result,
+    sweep_bad_devices,
+    sweep_skipped_windows,
+    write_ack_result,
 )
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -193,12 +197,13 @@ def pytest_step(
     ids: list[str],
     opts: list[str] = [],
     details: Callable[[str], list[str]] = lambda log: [],
+    env: dict[str, str] = {},
 ) -> Step:
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
             return run_collect(ctx, key, ids)
         d = step_dir(ctx, key)
-        if model and (failed := reset(ctx, d / "reset.log", state)):
+        if group != "gate" and (failed := reset(ctx, d / "reset.log", state)):
             return failed
         log, csv = d / "log_01", d / "crash_triage_01.csv"
         state.log = str(log)
@@ -211,7 +216,7 @@ def pytest_step(
 
         outer_tick, ctx.tick = ctx.tick, tick
         try:
-            sh(ctx, cmd, log, {**(common_sh(ctx.repo, model)[0] if model else {}), **triage_env(ctx.repo, csv)})
+            sh(ctx, cmd, log, {**(common_sh(ctx.repo, model)[0] if model else {}), **env, **triage_env(ctx.repo, csv)})
         finally:
             ctx.tick = outer_tick
         save_smi(ctx, d)
@@ -416,15 +421,105 @@ def mla_step(key: str, reps: int) -> Step:
     return Step(key, key, "gate", None, True, run, inner.collect)
 
 
-def didt_step() -> Step:
-    ids = ["tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"]
-    opts = ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout", "1200"]
+def nd_outputs(log: str) -> list[str]:
+    return [f"device {d}: {k} non-deterministic outputs" for d, k in sorted(didt_bad_devices(log).items())]
 
-    def bad_devices(log: str) -> list[str]:
-        bad = didt_bad_devices(log)
-        return [f"device {d}: {k} non-deterministic outputs" for d, k in sorted(bad.items())]
 
-    return pytest_step("didt", "didt", "gate", None, ids, opts, bad_devices)
+def run_to_run_cores(log: str) -> list[str]:
+    return [
+        f"device {d}: " + "; ".join(f"{where} {n} elements" for where, n in cores.items())
+        for d, cores in sorted(run_to_run_bad_devices(log).items())
+    ]
+
+
+def sweep_elements(log: str) -> list[str]:
+    return [f"device {d}: {n} elements differ run-to-run" for d, n in sorted(sweep_bad_devices(log).items())]
+
+
+def matmul_step(
+    name: str, ids: list[str], opts: list[str], details: Callable[[str], list[str]], env: dict[str, str] = {}
+) -> Step:
+    """A failure here blocks nothing: every matmul run and every model still runs, each after its own reset."""
+    return pytest_step(f"matmul:{name}", f"matmul {name}", "matmul", None, ids, opts, details, env)
+
+
+SWEEP_GRID = "11x10"
+SINGLE_GALAXY_MGD = "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+
+
+def core_sweep_step() -> Step:
+    """One TT_SWEEP_GRID window at (0,0), GXxGY: 11x10 is the 110-core worker budget of the run-to-run test."""
+    ids = ["tests/didt/scratch_core_sweep.py::test_core_sweep[blackhole-galaxy]"]
+    env = {"TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": SWEEP_GRID}
+    inner = matmul_step("core-sweep", ids, ["-p", "no:randomly", "--timeout=0"], sweep_elements, env)
+
+    def run(ctx: Ctx, state: State) -> Result:
+        r = inner.run(ctx, state)
+        if ctx.mode_co or r.status != Status.PASS:
+            return r
+        # The sweep catches a window's exception, counts it as skipped and still passes.
+        skipped = sweep_skipped_windows(Path(state.log).read_text(errors="replace"))
+        if skipped != 0:
+            return Result(Status.FAIL, f"{SWEEP_GRID} window did not run, skipped windows: {skipped}")
+        return r
+
+    return Step(inner.key, inner.title, inner.group, None, True, run, inner.collect)
+
+
+def write_ack_step() -> Step:
+    """One process per chip, each with its own cold cache and dispatch watchdog; logs land in the step dir via
+    TMPDIR."""
+    key = "matmul:mcast-ack"
+    script = "tests/didt/test_mm_mcast_write_ack_failure.py"
+    cmd = f"python {script}"
+    ids = [f"{script}::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]"]
+
+    def run(ctx: Ctx, state: State) -> Result:
+        if ctx.mode_co:
+            return run_collect(ctx, key, ids)
+        d = step_dir(ctx, key)
+        if failed := reset(ctx, d / "reset.log", state):
+            return failed
+        log = d / "log_01"
+        state.log = str(log)
+        sh(ctx, cmd, log, {"TMPDIR": str(d)}, timeout=1800)
+        save_smi(ctx, d)
+        return write_ack_result(log.read_text(errors="replace"))
+
+    return Step(key, "matmul mcast-ack", "matmul", None, True, run, lambda ctx: ids)
+
+
+def matmul_steps() -> list[Step]:
+    return [
+        matmul_step(
+            "minimal",
+            ["tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"],
+            ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout", "1200"],
+            nd_outputs,
+        ),
+        matmul_step(
+            "ff1",
+            ["tests/didt/test_ff1_matmul.py::test_ff1_matmul[blackhole-galaxy-without_gelu]"],
+            ["--didt-workload-iterations=2000", "--determinism-check-interval=25", "--timeout", "1800"],
+            nd_outputs,
+        ),
+        # Each iteration is 1000 x (matmul + 5 cos) and one more matmul; only that last matmul is compared.
+        matmul_step(
+            "duty-cycle",
+            ["tests/didt/test_duty_cycle.py::test_duty_cycle[blackhole-duty-5-rep-1000x-all]"],
+            ["--didt-workload-iterations=10", "--determinism-check-interval=1", "--timeout", "1800"],
+            nd_outputs,
+            {"TT_MESH_GRAPH_DESC_PATH": SINGLE_GALAXY_MGD},
+        ),
+        matmul_step(
+            "run-to-run",
+            ["tests/didt/test_matmul_run_to_run_determinism.py::test_matmul_run_to_run_determinism[blackhole-galaxy]"],
+            ["-p", "no:randomly", "--timeout=0"],
+            run_to_run_cores,
+        ),
+        core_sweep_step(),
+        write_ack_step(),
+    ]
 
 
 def build_steps(models: list[str]) -> list[Step]:
@@ -489,9 +584,9 @@ def build_steps(models: list[str]) -> list[Step]:
         memory_step(),
         mla_step("mla-smoke", 50),
         mla_step("mla-soak", 2500),
-        didt_step(),
     ]
-    return [paths_step(models), collect_step(hardware + model_steps)] + hardware + model_steps
+    matmul = matmul_steps()
+    return [paths_step(models), collect_step(hardware + matmul + model_steps)] + hardware + matmul + model_steps
 
 
 def path_needs(group: str, model: str) -> list[str]:

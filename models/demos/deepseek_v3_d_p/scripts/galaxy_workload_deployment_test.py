@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""galaxy-workload-deployment-test: hardware gates, then per-model block -> smoke -> soak on a Blackhole Galaxy.
+"""galaxy-workload-deployment-test: gates, matmul ND runs, then per-model block -> smoke -> soak on a Blackhole Galaxy.
 
 Usage: galaxy_workload_deployment_test.py [--co] [--skip KEY[,KEY] | --only KEY[,KEY]] [--models kimi_k2_7,glm53]
 """
@@ -68,6 +68,12 @@ class Screen:
                 f"{i:>2} {s.title:<10} {self.paint(status, status.value, 6)} {took:>8}    {s.state.result.reason}"
             )
             out += [self.gate_detail(s, d) for d in s.state.result.details]
+        matmul = [s for s in self.steps if s.group == "matmul"]
+        if matmul:
+            out += ["", "MATMUL ND"]
+        for s in matmul:
+            out.append(self.model_row(3, s.key.split(":")[1], s.state.result, s.state.start, s.state.end))
+            out += [self.model_row(5, label, r) for label, r in self.sub_rows(s)]
         models = list(dict.fromkeys(s.model for s in self.steps if s.model))
         if models:
             out += ["", "MODELS"]
@@ -109,7 +115,10 @@ class Screen:
         return f"{' ' * indent}{label:<{23 - indent}}{self.paint(r.status, r.status.value, 6)} {took:>8}    {r.reason}".rstrip()
 
     def sub_rows(self, step: Step) -> list[tuple[str, Result]]:
-        """Layer-type rows for pytest steps, loop rows for multi-loop stress steps."""
+        """Layer-type rows for pytest steps, loop rows for multi-loop stress steps, device rows for matmul runs."""
+        if step.group == "matmul":
+            rows = [d.partition(": ") for d in step.state.result.details]
+            return [(label, Result(Status.FAIL, why)) for label, _, why in rows]
         if len(step.state.loops) > 1:
             return [(f"loop {i}/{len(step.state.loops)}", r) for i, r in enumerate(step.state.loops, 1)]
         if step.collect is None or step.group in ("smoke", "soak"):
@@ -171,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--co", action="store_true", help="collect-only mockup: no device work")
     pick = ap.add_mutually_exclusive_group()
-    pick.add_argument("--skip", default="", help="comma-separated step keys, e.g. soak:kimi_k2_7,didt")
+    pick.add_argument("--skip", default="", help="comma-separated step keys, e.g. soak:kimi_k2_7,matmul:ff1")
     pick.add_argument("--only", default="", help="run exactly these step keys, e.g. reset,block:kimi_k2_7")
     ap.add_argument("--models", default=",".join(MODEL_ENV), help="comma-separated: " + ",".join(MODEL_ENV))
     args = ap.parse_args(argv)
