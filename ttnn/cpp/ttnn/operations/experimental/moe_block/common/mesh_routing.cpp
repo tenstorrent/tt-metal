@@ -20,7 +20,6 @@ namespace routing_detail {
 int64_t pmod(int64_t a, int64_t n) { return ((a % n) + n) % n; }
 
 }  // namespace routing_detail
-using namespace routing_detail;
 
 std::string_view dir_name(Dir d) {
     switch (d) {
@@ -51,7 +50,7 @@ std::optional<ChipCoord> MeshTopology::neighbor(ChipCoord ch, Dir d) const {
     if (is_x(d)) {
         int64_t c2 = static_cast<int64_t>(ch.c) + step;
         if (wrap_x) {
-            c2 = pmod(c2, C);
+            c2 = routing_detail::pmod(c2, C);
         }
         if (c2 < 0 || c2 >= static_cast<int64_t>(C)) {
             return std::nullopt;
@@ -60,7 +59,7 @@ std::optional<ChipCoord> MeshTopology::neighbor(ChipCoord ch, Dir d) const {
     }
     int64_t r2 = static_cast<int64_t>(ch.r) + step;
     if (wrap_y) {
-        r2 = pmod(r2, R);
+        r2 = routing_detail::pmod(r2, R);
     }
     if (r2 < 0 || r2 >= static_cast<int64_t>(R)) {
         return std::nullopt;
@@ -72,7 +71,7 @@ std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo, 
     // step(n, a, b, wrap, tie_plus) -> (sign, hops)
     auto step = [](int64_t n, int64_t a, int64_t b, bool wrap, bool tie_plus) -> std::pair<int, int64_t> {
         if (wrap) {
-            const int64_t f = pmod(b - a, n);
+            const int64_t f = routing_detail::pmod(b - a, n);
             const bool plus = f * 2 < n || (f * 2 == n && tie_plus);
             return {plus ? 1 : -1, plus ? f : n - f};
         }
@@ -84,12 +83,12 @@ std::vector<Hop> route(ChipCoord src, ChipCoord home, const MeshTopology& topo, 
     auto [sy, ky] = step(topo.R, r, home.r, topo.wrap_y, parity && r % 2 == 1);
     for (int64_t i = 0; i < ky; ++i) {
         hops.push_back({{r, c}, sy > 0 ? Dir::YPlus : Dir::YMinus});
-        r = static_cast<uint32_t>(pmod(static_cast<int64_t>(r) + sy, topo.R));
+        r = static_cast<uint32_t>(routing_detail::pmod(static_cast<int64_t>(r) + sy, topo.R));
     }
     auto [sx, kx] = step(topo.C, c, home.c, topo.wrap_x, !(parity && c % 2 == 1));
     for (int64_t i = 0; i < kx; ++i) {
         hops.push_back({{r, c}, sx > 0 ? Dir::XPlus : Dir::XMinus});
-        c = static_cast<uint32_t>(pmod(static_cast<int64_t>(c) + sx, topo.C));
+        c = static_cast<uint32_t>(routing_detail::pmod(static_cast<int64_t>(c) + sx, topo.C));
     }
     return hops;
 }
@@ -108,13 +107,13 @@ uint32_t first_hop_idx(uint32_t src, uint32_t dst, const MeshTopology& topo, Fab
     const bool parity = tie == FabricTieRule::SourceParity;
     if (sr != dr) {
         if (topo.wrap_y) {
-            const int64_t f2 = 2 * pmod(dr - sr, R);
+            const int64_t f2 = 2 * routing_detail::pmod(dr - sr, R);
             return (f2 < R || (f2 == R && parity && (sr % 2))) ? 2 : 3;
         }
         return dr > sr ? 2 : 3;
     }
     if (topo.wrap_x) {
-        const int64_t g2 = 2 * pmod(dc - sc, C);
+        const int64_t g2 = 2 * routing_detail::pmod(dc - sc, C);
         return (g2 < C || (g2 == C && !(parity && (sc % 2)))) ? 0 : 1;
     }
     return dc > sc ? 0 : 1;
@@ -124,7 +123,8 @@ uint8_t span_entry(uint32_t n, bool wrap, uint32_t pos, uint32_t tmask, uint32_t
     std::vector<int64_t> offs;
     for (uint32_t x = 0; x < n; ++x) {
         if (((tmask >> x) & 1u) && x != pos) {
-            const int64_t o = wrap ? pmod(static_cast<int64_t>(x) - pos, n) : static_cast<int64_t>(x) - pos;
+            const int64_t o =
+                wrap ? routing_detail::pmod(static_cast<int64_t>(x) - pos, n) : static_cast<int64_t>(x) - pos;
             if (std::find(offs.begin(), offs.end(), o) == offs.end()) {
                 offs.push_back(o);
             }
@@ -220,7 +220,7 @@ ManifestLayout manifest_layout(uint32_t R, uint32_t C, bool wrap_x, bool wrap_y,
     // hops from p to q moving + (fwd) or -, nullopt if that way does not lead there
     auto hops = [](int64_t n, bool wrap, int64_t p, int64_t q, bool fwd) -> std::optional<int64_t> {
         const int64_t d = fwd ? q - p : p - q;
-        const int64_t k = wrap ? pmod(d, n) : d;
+        const int64_t k = wrap ? routing_detail::pmod(d, n) : d;
         return k > 0 ? std::optional<int64_t>(k) : std::nullopt;
     };
     auto reaches = [&](int64_t n,

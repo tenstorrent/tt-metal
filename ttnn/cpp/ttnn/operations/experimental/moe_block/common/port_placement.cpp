@@ -166,11 +166,10 @@ PortCores place_uniform(
 }
 
 }  // namespace placement_detail
-using namespace placement_detail;
 
-std::vector<CoreCoord> all_worker_cores(const MeshDevice& mesh_device) {
+std::vector<tt::tt_metal::CoreCoord> all_worker_cores(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     const auto grid = mesh_device.compute_with_storage_grid_size();
-    std::vector<CoreCoord> cells;
+    std::vector<tt::tt_metal::CoreCoord> cells;
     cells.reserve(grid.x * grid.y);
     for (size_t y = 0; y < grid.y; ++y) {
         for (size_t x = 0; x < grid.x; ++x) {
@@ -181,21 +180,25 @@ std::vector<CoreCoord> all_worker_cores(const MeshDevice& mesh_device) {
 }
 
 PortCores place_ports(
-    MeshDevice& mesh_device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     const MeshPlan& plan,
     PortPlacement mode,
-    const std::optional<std::vector<CoreCoord>>& allowed_in) {
+    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed_in) {
     auto allowed = allowed_in.value_or(all_worker_cores(mesh_device));
-    std::sort(allowed.begin(), allowed.end(), row_major_less);
+    std::sort(allowed.begin(), allowed.end(), placement_detail::row_major_less);
     allowed.erase(std::unique(allowed.begin(), allowed.end()), allowed.end());
     switch (mode) {
-        case PortPlacement::Noc1: return place_nearest(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
-        case PortPlacement::Noc0: return place_nearest(mesh_device, plan, tt::tt_metal::NOC::NOC_0, allowed);
-        case PortPlacement::Uniform0: return place_uniform(mesh_device, plan, tt::tt_metal::NOC::NOC_0, allowed);
-        case PortPlacement::Uniform1: return place_uniform(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
+        case PortPlacement::Noc1:
+            return placement_detail::place_nearest(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
+        case PortPlacement::Noc0:
+            return placement_detail::place_nearest(mesh_device, plan, tt::tt_metal::NOC::NOC_0, allowed);
+        case PortPlacement::Uniform0:
+            return placement_detail::place_uniform(mesh_device, plan, tt::tt_metal::NOC::NOC_0, allowed);
+        case PortPlacement::Uniform1:
+            return placement_detail::place_uniform(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
         case PortPlacement::Auto: {
             // the nearest placement when it leaves >= 8 allowed cells to the accumulators, else uniform on NoC0
-            auto near = place_nearest(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
+            auto near = placement_detail::place_nearest(mesh_device, plan, tt::tt_metal::NOC::NOC_1, allowed);
             std::set<std::pair<size_t, size_t>> used;
             for (const auto& [k, core] : near) {
                 used.insert({core.x, core.y});
@@ -203,7 +206,8 @@ PortCores place_ports(
             const auto in_use = std::count_if(
                 allowed.begin(), allowed.end(), [&](const auto& c) { return used.contains({c.x, c.y}); });
             const size_t left = allowed.size() - static_cast<size_t>(in_use);
-            return left >= 8 ? near : place_uniform(mesh_device, plan, tt::tt_metal::NOC::NOC_0, allowed);
+            return left >= 8 ? near
+                             : placement_detail::place_uniform(mesh_device, plan, tt::tt_metal::NOC::NOC_0, allowed);
         }
     }
     TT_THROW("moe_block: unknown port placement");

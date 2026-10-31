@@ -4,7 +4,8 @@
 """Reference outputs for the MoE block's C++ ops: saved from the Python reference tree (mstaletovic/moe-trim), compared
 bit-exact against the C++ op on the same inputs.
 
-Layout (root: $MOE_BLOCK_REFS, default /data/mstaletovic/jobs/port/refs):
+Layout (root: $MOE_BLOCK_REFS; unset: no reference data - list_cases() is empty and the reference-data tests skip,
+so CI needs no saved cases; the lead's cases are at /data/mstaletovic/jobs/port/refs):
 
     <root>/<op>/<case>/meta.json        what the case is (see save_case)
     <root>/<op>/<case>/chip_<r>_<c>.pt  torch.save({name: torch.Tensor}) of chip (r, c): every input and output of
@@ -14,7 +15,8 @@ Layout (root: $MOE_BLOCK_REFS, default /data/mstaletovic/jobs/port/refs):
 A dump script (run in the reference tree's environment) builds the inputs from a seed, runs the Python op, and calls
 save_case. The C++ op's device test loads the case, puts each chip's inputs on its chip (to_mesh), runs the op and
 compares each output per chip with assert_bit_exact. This module imports neither ttnn nor the reference at import
-time: it runs in both environments.
+time: it runs in both environments. Tests under this directory import it as `import ref_harness` (conftest.py puts this
+directory on sys.path).
 """
 
 from __future__ import annotations
@@ -25,12 +27,24 @@ from pathlib import Path
 
 import torch
 
-REFS_ROOT = Path(os.environ.get("MOE_BLOCK_REFS", "/data/mstaletovic/jobs/port/refs"))
+REFS_ROOT: Path | None = Path(os.environ["MOE_BLOCK_REFS"]) if os.environ.get("MOE_BLOCK_REFS") else None
 REFERENCE_TREE = Path(os.environ.get("MOE_BLOCK_REF_TREE", "/data/mstaletovic/tt-metal-trimb"))
 
 
+def refs_available(root: Path | None = None) -> bool:
+    """True when a reference root is given or $MOE_BLOCK_REFS is set (reference-data tests skip otherwise)."""
+    return (root or REFS_ROOT) is not None
+
+
+def _root(root: Path | None) -> Path:
+    r = root or REFS_ROOT
+    if r is None:
+        raise RuntimeError("no reference root: set MOE_BLOCK_REFS (or pass root=)")
+    return Path(r)
+
+
 def case_dir(op: str, case: str, root: Path | None = None) -> Path:
-    return Path(root or REFS_ROOT) / op / case
+    return _root(root) / op / case
 
 
 def save_case(
@@ -84,7 +98,10 @@ def load_case(op: str, case: str, root: Path | None = None):
 
 
 def list_cases(op: str, root: Path | None = None) -> list[str]:
-    d = Path(root or REFS_ROOT) / op
+    """The saved cases of op; empty without a reference root."""
+    if not refs_available(root):
+        return []
+    d = _root(root) / op
     return sorted(p.name for p in d.iterdir() if (p / "meta.json").exists()) if d.exists() else []
 
 
@@ -129,7 +146,9 @@ def assert_bit_exact(actual: dict, expected: dict, names: list[str] | None = Non
             diff = (ab != eb).nonzero()
             if diff.numel():
                 first = tuple(diff[0].tolist())
-                bad.append(f"chip {ch} {name}: {diff.shape[0]} elements differ, first at {first}: {a[first]} vs {e[first]}")
+                bad.append(
+                    f"chip {ch} {name}: {diff.shape[0]} elements differ, first at {first}: {a[first]} vs {e[first]}"
+                )
     assert not bad, "not bit-exact:\n" + "\n".join(bad)
 
 

@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -26,31 +27,105 @@ bool torus_y_of(tt::tt_fabric::FabricConfig cfg) {
     return cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y || cfg == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
+uint8_t dir_mask(const std::vector<Dir>& dirs) {
+    uint8_t m = 0;
+    for (Dir d : dirs) {
+        m |= static_cast<uint8_t>(1u << static_cast<uint32_t>(d));
+    }
+    return m;
+}
+constexpr uint8_t ALL_DIRS = 0xF;
+
+// The plan with the ports of the directions outside `mask` removed.
+MeshPlan restrict_dirs(const MeshPlan& plan, uint8_t mask) {
+    MeshPlan out = plan;
+    for (auto& [chip, ports] : out.chips) {
+        for (Dir d : kDirs) {
+            if ((mask & (1u << static_cast<uint32_t>(d))) == 0) {
+                ports[static_cast<size_t>(d)].reset();
+            }
+        }
+    }
+    return out;
+}
+
+// The planners route a torus tie (a destination half a ring away) by `tie`; the fabric's routing tables must send it
+// the same way, or a planned link carries rows it was not sized for. Checked on each wrapped even ring, from a source
+// of each parity (the rules differ by parity), by comparing the fabric's first hop toward the tie with its first hop
+// toward the neighbour the rule picks.
+void check_tie_rule(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const MeshTopology& topo, FabricTieRule tie) {
+    const auto node = [&](ChipCoord c) {
+        return mesh_device.get_fabric_node_id(tt::tt_metal::distributed::MeshCoordinate(c.r, c.c));
+    };
+    for (const bool x_axis : {false, true}) {
+        const uint32_t n = x_axis ? topo.C : topo.R;
+        if (!(x_axis ? topo.wrap_x : topo.wrap_y) || n % 2 != 0) {
+            continue;
+        }
+        for (uint32_t pos = 0; pos < 2; ++pos) {
+            const ChipCoord src = x_axis ? ChipCoord{0, pos} : ChipCoord{pos, 0};
+            const ChipCoord dst = x_axis ? ChipCoord{0, pos + n / 2} : ChipCoord{pos + n / 2, 0};
+            const auto want = first_hop(src, dst, topo, tie);
+            TT_FATAL(want.has_value(), "moe_block: no first hop for a tie");
+            const auto peer = topo.neighbor(src, *want);
+            TT_FATAL(peer.has_value(), "moe_block: no neighbour {} of a tie's source", dir_name(*want));
+            const auto fabric_dir = tt::tt_fabric::get_eth_forwarding_direction(node(src), node(dst));
+            const auto rule_dir = tt::tt_fabric::get_eth_forwarding_direction(node(src), node(*peer));
+            if (!fabric_dir || !rule_dir) {
+                continue;  // no fabric route to compare against
+            }
+            TT_FATAL(
+                *fabric_dir == *rule_dir,
+                "moe_block: config.tie_rule = {} disagrees with the fabric: a tie from chip ({}, {}) to ({}, {}) goes "
+                "{} by the rule but the other way on the fabric. Main's routing tables need FabricTieRule::NorthEast; "
+                "SourceParity needs the fabric's tie-break branch.",
+                tie == FabricTieRule::NorthEast ? "NorthEast" : "SourceParity",
+                src.r,
+                src.c,
+                dst.r,
+                dst.c,
+                dir_name(*want));
+        }
+    }
+}
+
 }  // namespace resources_detail
-using namespace resources_detail;
 
 std::shared_ptr<MoEBlockResources> MoEBlockResources::create(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const MoEModelDims& dims, const MoEBlockConfig& config) {
-    return std::shared_ptr<MoEBlockResources>(new MoEBlockResources(mesh_device, dims, config));
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const MoEModelDims& dims,
+    const MoEBlockConfig& config,
+    const MoEDtypes& dtypes) {
+    return std::shared_ptr<MoEBlockResources>(new MoEBlockResources(mesh_device, dims, config, dtypes));
 }
 
 MoEBlockResources::MoEBlockResources(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const MoEModelDims& dims, const MoEBlockConfig& config) :
-    mesh_device_(&mesh_device), dims_(dims), config_(config) {
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const MoEModelDims& dims,
+    const MoEBlockConfig& config,
+    const MoEDtypes& dtypes) :
+    mesh_device_(&mesh_device), dims_(dims), config_(config), dtypes_(dtypes) {
     dims_.validate();
     config_.validate();
     fabric_config_ = tt::tt_fabric::GetFabricConfig();
     max_payload_bytes_ = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    plan_ = moe_block::mesh_plan(mesh_device, config_.num_links, torus_x_of(fabric_config_), torus_y_of(fabric_config_));
+    plan_ = moe_block::mesh_plan(
+        mesh_device,
+        config_.num_links,
+        resources_detail::torus_x_of(fabric_config_),
+        resources_detail::torus_y_of(fabric_config_));
     TT_FATAL(
         dims_.num_experts % plan_.topo.num_chips() == 0,
         "moe_block: {} experts don't divide over {} chips",
         dims_.num_experts,
         plan_.topo.num_chips());
+    resources_detail::check_tie_rule(mesh_device, plan_.topo, config_.tie_rule);
     luts_ = moe_block::port_luts(plan_);
     plan_key_ = ttsl::hash::hash_objects_with_default_seed(
         config_,
         dims_,
+        dtypes_,
         plan_.topo.R,
         plan_.topo.C,
         plan_.topo.wrap_x,
@@ -72,7 +147,15 @@ tt::tt_metal::BufferType MoEBlockResources::persistent_buffer_type() const {
 
 const PortCores& MoEBlockResources::ports(
     std::optional<PortPlacement> mode, const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed) {
+    return ports(std::vector<Dir>(kDirs.begin(), kDirs.end()), mode, allowed);
+}
+
+const PortCores& MoEBlockResources::ports(
+    const std::vector<Dir>& dirs,
+    std::optional<PortPlacement> mode,
+    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed) {
     check_alive();
+    const uint8_t mask = resources_detail::dir_mask(dirs);
     const auto m = mode.value_or(config_.combine_tuning.place);
     std::vector<std::pair<size_t, size_t>> cells;
     if (allowed) {
@@ -82,10 +165,13 @@ const PortCores& MoEBlockResources::ports(
         std::sort(cells.begin(), cells.end());
         cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
     }
-    const auto key = std::make_pair(m, cells);
+    auto key = std::make_tuple(mask, m, std::move(cells));
     auto it = ports_.find(key);
     if (it == ports_.end()) {
-        it = ports_.emplace(key, place_ports(*mesh_device_, plan_, m, allowed)).first;
+        const auto placed = mask == resources_detail::ALL_DIRS
+                                ? place_ports(*mesh_device_, plan_, m, allowed)
+                                : place_ports(*mesh_device_, resources_detail::restrict_dirs(plan_, mask), m, allowed);
+        it = ports_.emplace(std::move(key), placed).first;
     }
     return it->second;
 }
@@ -139,18 +225,20 @@ uint32_t MoEBlockResources::semaphore_address(const std::string& name) {
             ttnn::global_semaphore::get_global_semaphore_address(global_semaphore("sem/" + name, all, 0)));
     }
     if (auto it = packed_slots_.find(name); it != packed_slots_.end()) {
-        return static_cast<uint32_t>(packed_pool_->buffer()->address()) + SEM_BYTES * it->second;
+        return static_cast<uint32_t>(packed_pool_->buffer()->address()) + resources_detail::SEM_BYTES * it->second;
     }
     check_not_frozen(name);
     if (!packed_pool_) {
         const auto grid = mesh_device_->compute_with_storage_grid_size();
         const CoreRangeSet all(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-        packed_pool_ = persistent_words("sem/packed_pool", all, SEM_SLOTS * SEM_BYTES / 4);
+        packed_pool_ =
+            persistent_words("sem/packed_pool", all, resources_detail::SEM_SLOTS * resources_detail::SEM_BYTES / 4);
     }
     const uint32_t slot = packed_slots_.size();
-    TT_FATAL(slot < SEM_SLOTS, "moe_block: all {} packed semaphores taken", SEM_SLOTS);
+    TT_FATAL(
+        slot < resources_detail::SEM_SLOTS, "moe_block: all {} packed semaphores taken", resources_detail::SEM_SLOTS);
     packed_slots_.emplace(name, slot);
-    return static_cast<uint32_t>(packed_pool_->buffer()->address()) + SEM_BYTES * slot;
+    return static_cast<uint32_t>(packed_pool_->buffer()->address()) + resources_detail::SEM_BYTES * slot;
 }
 
 void MoEBlockResources::attach(const std::string& name, std::shared_ptr<void> owner) {

@@ -4,6 +4,8 @@
 
 #include "common_nanobind.hpp"
 
+#include <limits>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/array.h>
@@ -18,6 +20,7 @@
 
 #include "ttnn-nanobind/export_enum.hpp"
 
+#include "l1_budget.hpp"
 #include "mesh_routing.hpp"
 #include "moe_block_config.hpp"
 #include "moe_block_resources.hpp"
@@ -51,6 +54,15 @@ void def_kwargs_init(nb::class_<T>& cls) {
         },
         "Default values; any field can be given as a keyword.");
     cls.def(nb::self == nb::self);
+}
+
+Dir dir_of(const std::string& name) {
+    for (Dir d : kDirs) {
+        if (dir_name(d) == name) {
+            return d;
+        }
+    }
+    throw nb::value_error(("unknown direction '" + name + "' (X+, X-, Y+, Y-)").c_str());
 }
 
 nb::tuple chip_tuple(ChipCoord c) { return nb::make_tuple(c.r, c.c); }
@@ -351,13 +363,17 @@ void bind_resources(nb::module_& mod) {
         get-or-create their "<op>/<name>" slots; freeze() before trace capture.
     )doc")
         .def(
-            nb::new_([](MeshDevice& mesh_device, const MoEModelDims& dims, const MoEBlockConfig& config) {
-                return MoEBlockResources::create(mesh_device, dims, config);
-            }),
+            nb::new_(
+                [](MeshDevice& mesh_device,
+                   const MoEModelDims& dims,
+                   const MoEBlockConfig& config,
+                   const MoEDtypes& dtypes) { return MoEBlockResources::create(mesh_device, dims, config, dtypes); }),
             nb::arg("mesh_device"),
             nb::arg("dims"),
-            nb::arg("config") = MoEBlockConfig{})
+            nb::arg("config") = MoEBlockConfig{},
+            nb::arg("dtypes") = MoEDtypes{})
         .def_prop_ro("config", [](const MoEBlockResources& r) { return r.config(); })
+        .def_prop_ro("dtypes", [](const MoEBlockResources& r) { return r.dtypes(); })
         .def_prop_ro("dims", [](const MoEBlockResources& r) { return r.dims(); })
         .def_prop_ro("plan_key", &MoEBlockResources::plan_key)
         .def_prop_ro("persistent_buffer_type", &MoEBlockResources::persistent_buffer_type)
@@ -378,9 +394,22 @@ void bind_resources(nb::module_& mod) {
             "ports",
             [](MoEBlockResources& r,
                std::optional<PortPlacement> mode,
-               const std::optional<std::vector<CoreCoord>>& allowed) { return ports_dict(r.ports(mode, allowed)); },
+               const std::optional<std::vector<CoreCoord>>& allowed,
+               const std::optional<std::vector<std::string>>& dirs) {
+                if (!dirs) {
+                    return ports_dict(r.ports(mode, allowed));
+                }
+                std::vector<Dir> ds;
+                for (const auto& name : *dirs) {
+                    ds.push_back(dir_of(name));
+                }
+                return ports_dict(r.ports(ds, mode, allowed));
+            },
             nb::arg("mode") = nb::none(),
-            nb::arg("allowed") = nb::none())
+            nb::arg("allowed") = nb::none(),
+            nb::arg("dirs") = nb::none(),
+            "{((r, c), dir, link index): CoreCoord}, memoized. dirs: place only these directions' ports, e.g. "
+            "[\"X+\", \"X-\"] (default: all).")
         .def(
             "persistent_tensor",
             [](MoEBlockResources& r, const std::string& name, const tt::tt_metal::TensorSpec& spec) {
@@ -410,15 +439,25 @@ void bind_resources(nb::module_& mod) {
         .def("freeze", &MoEBlockResources::freeze)
         .def_prop_ro("frozen", &MoEBlockResources::frozen)
         .def("release", &MoEBlockResources::release);
+
+    mod.def(
+        "free_cb_l1_bytes",
+        [](const MeshDevice& mesh_device, uint32_t margin_bytes, uint32_t cap_bytes) {
+            return free_cb_l1_bytes(mesh_device, margin_bytes, cap_bytes);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("margin_bytes") = kL1KeptLater,
+        nb::arg("cap_bytes") = std::numeric_limits<uint32_t>::max(),
+        "L1 bytes left for program CBs on every compute core: the lowest occupied L1 address less the L1 base, less "
+        "margin_bytes, rounded down to 64 B, at most cap_bytes.");
 }
 
 }  // namespace nanobind_detail
-using namespace nanobind_detail;
 
 void bind_common(nb::module_& mod) {
-    bind_config(mod);
-    bind_routing(mod);
-    bind_resources(mod);
+    nanobind_detail::bind_config(mod);
+    nanobind_detail::bind_routing(mod);
+    nanobind_detail::bind_resources(mod);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block

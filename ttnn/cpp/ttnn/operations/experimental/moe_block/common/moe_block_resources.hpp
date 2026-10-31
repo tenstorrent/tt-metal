@@ -6,7 +6,8 @@
 // words, the global semaphores, the port placement, the plans - built once per (mesh, model, config).
 //
 // Ownership and lifetime
-//  * Created by the caller (Python MoEBlock, a test) with MoEBlockResources::create(mesh, dims, config), after the
+//  * Created by the caller (Python MoEBlock, a test) with MoEBlockResources::create(mesh, dims, config, dtypes), after
+//  the
 //    mesh is open and the fabric configured, and BEFORE any per-call allocation (persistent L1 then sits at the top
 //    of the allocator and never fragments a bank under a per-call buffer). Held by std::shared_ptr; Python holds it.
 //  * The resources keep a reference to the mesh device; the caller must drop them (or call release()) before the
@@ -18,6 +19,12 @@
 //  * Trace: every slot must exist before trace capture. Run one forward (or call each op's ensure function), then
 //    freeze(): a get-or-create of a missing slot then throws instead of allocating inside a capture. Persistent
 //    counters are cumulative across calls, so replays need no host-side reset.
+//
+// Sync words: the standard is persistent_words() - a HEIGHT_SHARDED uint32 tensor over the cores that use it, passed
+// to the prim as a tensor arg, so its address binds like any buffer (BufferBinding) and a program-cache hit patches it
+// with no op code. global_semaphore() / semaphore_address() remain for what must be a GlobalSemaphore or one address
+// on every core; they are attributes, not tensors, so an op using them must patch them in override_runtime_arguments
+// (hash-excluded) itself.
 //
 // Per-op slots: each op names its slots "<op>/<name>" and creates them from its own directory (an
 // `ensure_<op>_resources(MoEBlockResources&, ...)` in <op>/<op>.cpp) through the generic API below; nothing
@@ -40,6 +47,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -58,8 +66,12 @@ namespace ttnn::operations::experimental::moe_block {
 
 class MoEBlockResources {
 public:
+    // Throws if config.tie_rule disagrees with how the fabric routes a torus tie.
     static std::shared_ptr<MoEBlockResources> create(
-        tt::tt_metal::distributed::MeshDevice& mesh_device, const MoEModelDims& dims, const MoEBlockConfig& config);
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
+        const MoEModelDims& dims,
+        const MoEBlockConfig& config,
+        const MoEDtypes& dtypes = MoEDtypes{});
 
     MoEBlockResources(const MoEBlockResources&) = delete;
     MoEBlockResources& operator=(const MoEBlockResources&) = delete;
@@ -68,6 +80,7 @@ public:
     tt::tt_metal::distributed::MeshDevice& mesh_device() const;
     const MoEModelDims& dims() const { return dims_; }
     const MoEBlockConfig& config() const { return config_; }
+    const MoEDtypes& dtypes() const { return dtypes_; }
     const MeshTopology& topology() const { return plan_.topo; }
     const MeshPlan& mesh_plan() const { return plan_; }
     const PortLuts& port_luts() const { return luts_; }
@@ -77,8 +90,8 @@ public:
     // L1, or L1_SMALL with config.persist_l1_small.
     tt::tt_metal::BufferType persistent_buffer_type() const;
 
-    // Structural key of everything the resources were built from (config, dims, mesh shape, wrap, fabric config, max
-    // payload). Ops hash it instead of re-hashing the config; it holds no address.
+    // Structural key of everything the resources were built from (config, dims, dtypes, mesh shape, wrap, fabric
+    // config, max payload). Ops hash it instead of re-hashing the config; it holds no address.
     ttsl::hash::hash_t plan_key() const { return plan_key_; }
 
     // Port cores (sparse_all_gather_2d.place_ports), memoized per (mode, allowed cells). Default mode:
@@ -86,30 +99,44 @@ public:
     const PortCores& ports(
         std::optional<PortPlacement> mode = std::nullopt,
         const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed = std::nullopt);
+    // The same, placed for the ports of `dirs` only (e.g. {Dir::XPlus, Dir::XMinus} for an op that uses only its row's
+    // links): the other directions' ports neither get a core nor compete for one. Memoized per (dirs, mode, allowed).
+    const PortCores& ports(
+        const std::vector<Dir>& dirs,
+        std::optional<PortPlacement> mode = std::nullopt,
+        const std::optional<std::vector<tt::tt_metal::CoreCoord>>& allowed = std::nullopt);
 
     // ---- persistent device memory (get-or-create by name; zero-filled at creation; same address for the lifetime)
     // A tensor of exactly this spec (DRAM or L1; replicated over the mesh). A second request under the same name must
     // pass the same spec.
     const Tensor& persistent_tensor(const std::string& name, const tt::tt_metal::TensorSpec& spec);
-    // uint32 words per core: [len(cores), words] HEIGHT_SHARDED over `cores` (row-major), one shard of `words`
-    // (rounded up to 16 B) per core, in persistent_buffer_type().
+    // uint32 words per core (the standard for sync words, see above): [len(cores), words] HEIGHT_SHARDED over `cores`
+    // (row-major), one shard of `words` (rounded up to 16 B) per core, in persistent_buffer_type().
     const Tensor& persistent_words(const std::string& name, const CoreRangeSet& cores, uint32_t words);
-    // A global semaphore on `cores` (persistent_buffer_type()), created at initial_value.
+    // A global semaphore on `cores` (persistent_buffer_type()), created at initial_value. Pass its address as a
+    // hash-excluded attribute and patch it in override_runtime_arguments.
     const GlobalSemaphore& global_semaphore(const std::string& name, const CoreRangeSet& cores, uint32_t initial_value = 0);
     // A 16 B semaphore word on every worker core: a GlobalSemaphore address, or with persist_l1_small a slot of one
-    // packed L1_SMALL pool (persist_l1.PackedSemaphore; zero-initialised). Same address on every core and chip.
+    // packed L1_SMALL pool (persist_l1.PackedSemaphore; zero-initialised). Same address on every core and chip; patch
+    // it in override_runtime_arguments like a global semaphore's.
     uint32_t semaphore_address(const std::string& name);
 
     // ---- host-side plans and owned objects
     // Get-or-create a host plan of type T (computed by `make` on first use).
     template <typename T, typename F>
     const T& plan(const std::string& name, F&& make) {
+        return *plan_ptr<T>(name, std::forward<F>(make));
+    }
+    // The same plan as a shared pointer, for an op that keeps it past the resources' release() (e.g. in a cached
+    // program's shared variables).
+    template <typename T, typename F>
+    std::shared_ptr<const T> plan_ptr(const std::string& name, F&& make) {
         auto it = plans_.find(name);
         if (it == plans_.end()) {
             check_not_frozen(name);
             it = plans_.emplace(name, std::make_shared<const T>(std::forward<F>(make)())).first;
         }
-        return *std::any_cast<std::shared_ptr<const T>>(it->second);
+        return std::any_cast<std::shared_ptr<const T>>(it->second);
     }
     // Keep `owner` alive until release() (e.g. persistent DRISC senders: their destructor stops them).
     void attach(const std::string& name, std::shared_ptr<void> owner);
@@ -125,13 +152,17 @@ public:
 
 private:
     MoEBlockResources(
-        tt::tt_metal::distributed::MeshDevice& mesh_device, const MoEModelDims& dims, const MoEBlockConfig& config);
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
+        const MoEModelDims& dims,
+        const MoEBlockConfig& config,
+        const MoEDtypes& dtypes);
     void check_not_frozen(const std::string& name) const;
     void check_alive() const;
 
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
     MoEModelDims dims_;
     MoEBlockConfig config_;
+    MoEDtypes dtypes_;
     tt::tt_fabric::FabricConfig fabric_config_;
     size_t max_payload_bytes_ = 0;
     MeshPlan plan_;
@@ -139,7 +170,8 @@ private:
     ttsl::hash::hash_t plan_key_ = 0;
     bool frozen_ = false;
 
-    std::map<std::pair<PortPlacement, std::vector<std::pair<size_t, size_t>>>, PortCores> ports_;
+    // (direction mask, mode, allowed cells) -> placement
+    std::map<std::tuple<uint8_t, PortPlacement, std::vector<std::pair<size_t, size_t>>>, PortCores> ports_;
     std::map<std::string, Tensor> tensors_;
     std::map<std::string, tt::tt_metal::TensorSpec> tensor_specs_;
     std::map<std::string, GlobalSemaphore> semaphores_;
