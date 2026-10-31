@@ -131,8 +131,8 @@ int main(void)
 extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_profile_instrument_function)) void kernel_end_tail()
 {
     main();
-#if defined(LLK_TRISC_MATH)
-    constexpr std::uint32_t PACK_MAILBOX_INDEX = 2;
+#if defined(LLK_TRISC_PACK)
+    constexpr std::uint32_t PACK_MAILBOX_INDEX = 1;
     constexpr std::uint64_t SETTLE_CYCLES      = 4096;
 
     mailbox_t pack_mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start) + PACK_MAILBOX_INDEX;
