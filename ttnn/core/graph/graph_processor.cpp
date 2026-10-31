@@ -958,6 +958,8 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     const tt::tt_metal::distributed::MeshBuffer* buffer = nullptr;
     // A lockstep allocation has one address on the whole MeshDevice. A per-node one is placed by each device.
     bool lockstep = false;
+    // A device Buffer of the tensor local to this host. Its allocation is the one recorded for a per-node tensor.
+    const tt::tt_metal::Buffer* local_device_buffer = nullptr;
     nlohmann::json device_tensors_json = nlohmann::json::array();
     if (is_device_tensor(t) && t.is_allocated()) {
         const auto& mesh_buffer = t.mesh_buffer();
@@ -983,6 +985,9 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             }
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
+                if (local_device_buffer == nullptr) {
+                    local_device_buffer = device_buffer;
+                }
                 device_tensors_json.push_back(
                     {{"device_id", device_buffer->device()->id()},
                      {kMeshDeviceId, lockstep ? buffer->device()->id() : device_buffer->device()->id()},
@@ -1041,8 +1046,13 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
                 break;
             case StorageType::HOST: log_debug(tt::LogAlways, "Tensor does not have buffer (on host)"); break;
         }
-    } else {
+    } else if (lockstep) {
         node_id buffer_node_id = add_buffer(*buffer);
+        graph[buffer_node_id].connections.push_back(tensor_counter);
+    } else if (local_device_buffer != nullptr) {
+        // Each device Buffer of a per-node allocation shares the MeshBuffer's ID, and the allocation events carry the
+        // device's own ID. A host without a device Buffer of the tensor recorded no allocation for it.
+        node_id buffer_node_id = add_buffer(local_device_buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);
     }
 
@@ -1056,12 +1066,6 @@ node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
 
 node_id GraphProcessor::add_buffer(const tt::tt_metal::distributed::MeshBuffer& mesh_buffer) {
     const auto& config = mesh_buffer.device_local_config();
-    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config.sharding_args)) {
-        // Match the node track_allocate records from the first device's Buffer, which shares the MeshBuffer's ID.
-        const auto* mesh_device = mesh_buffer.device();
-        return add_buffer(
-            mesh_buffer.get_device_buffer(mesh_device->get_view().get_local_mesh_coord_range().start_coord()));
-    }
     return add_buffer(
         mesh_buffer.unique_id().value(),
         mesh_buffer.device_local_size(),
