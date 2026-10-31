@@ -208,6 +208,7 @@ def test_v41_verify_rows(mesh_device, device_params):
     if fused:
         decoder.attach_drafter(drafter)
     elif live > 1:
+        drafter.gather_sp = decoder.pool.gather_sp  # the served round's one readback (attach_drafter sets it there)
         # the merged index selection's index pages for the live rows' layouts (attach_drafter builds the one-slot ones)
         decoder.prepare_merge(
             [
