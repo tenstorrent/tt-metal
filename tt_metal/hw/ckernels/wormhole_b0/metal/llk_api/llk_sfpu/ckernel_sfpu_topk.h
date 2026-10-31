@@ -1204,6 +1204,22 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
     }
 
+    // One 8-datum group is a fixed instruction sequence per call: load8 / [rank stamp] /
+    // compare-exchange / store8 at immediates 0, ld_dist, 128, 128 + ld_dist, plus INCRWC
+    // Dst += 4. SFPLOAD/SFPSTORE address Imm10 + RWC.Dst, so walking RWC.Dst by the group
+    // stride reaches the same rows the per-group dst_offset used to be folded into every
+    // TT_ encoding on the RISC-V. Record the body once (slots 0..merge_body-1, Exec so the
+    // first group runs while recording) and issue one REPLAY per group; the RISC is left with
+    // the face skip inside a run (+16 rows, two INCRWC) and the run-to-run re-base (the same
+    // SETC16 + SETRWC pair the quadrant step uses). The rank-stamped arm splits the body at
+    // the loads so its per-run rank iota can sit between the index loads and the stamp.
+    constexpr int merge_ldst = FUSED ? 2 : 4;
+    constexpr int merge_cmp = (RANK_STAMPED ? 13 : 0) + (STABLE_SORT ? 6 : 1);
+    constexpr int merge_body = 2 * merge_ldst + merge_cmp + 1;
+    constexpr int merge_ld_win = RANK_STAMPED ? merge_ldst : merge_body;
+    static_assert(merge_body <= 32, "merge replay body exceeds the replay buffer");
+    bool record_body = true;
+
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++)
     {
@@ -1225,7 +1241,12 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             {
                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                 {
-                    bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
+                    if (record_body) {
+                        lltt::record<lltt::Exec>(0, merge_ld_win);
+                        bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
+                    } else {
+                        lltt::replay(0, merge_ld_win);
+                    }
                     if constexpr (RANK_STAMPED)
                     {
                         // Re-key both runs' value lo16 with fresh sign-conditioned local
@@ -1242,66 +1263,98 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                             TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
                             TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
                         }
-                        // largest = !top_min: complement the lanes whose sign matches the
-                        // kept extreme, exactly as the fused-key conditioning does.
-                        constexpr int stamp_cc = top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
-                        // Left run: global direction, lower rank range.
-                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
-                        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-                        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
-                        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-                        TOPK_SFPENCC_ALL_LANES_ON();
-                        // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
-                        // a single XOR because 2K is a power of two and rank < 2K.
-                        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-                        TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
-                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
-                        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
-                        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
-                        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
-                        TOPK_SFPENCC_ALL_LANES_ON();
-                        // Advance to the next 4 run positions.
-                        TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-                    }
-                    if constexpr (STABLE_SORT)
-                    {
-                        // top_min selects the value operand order (which run receives the
-                        // minima), exactly as in the unstable arm below. The tie-break polarity
-                        // comes from TIE_ORDER -- the GLOBAL sort
-                        // order. Anchoring the tie routing to
-                        // the operand order (the index minimum rides with the value minimum or
-                        // maximum per the global mode) makes every merge a comparator on ONE
-                        // fixed total order [value, then index], so callers may issue merges
-                        // with per-block alternating directions (ttnn.sort's bitonic merge
-                        // network, which always binds top_min=false and routes the outputs
-                        // afterwards) or in the global direction (the ttnn topk kernels, which
-                        // bind top_min = !largest; the LLK/quasar test kernels, which bind
-                        // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
-                        // to the pre-existing selection, since they program the runtime mode
-                        // from the same flag they derive top_min from.
-                        if constexpr (top_min)
-                        {
-                            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX, TIE_ORDER>();
-                        }
-                        else
-                        {
-                            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX, TIE_ORDER>();
+                        if (record_body) {
+                            lltt::record<lltt::Exec>(merge_ldst, merge_body - merge_ldst);
+                        } else {
+                            lltt::replay(merge_ldst, merge_body - merge_ldst);
                         }
                     }
-                    else
-                    {
-                        TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                    if (record_body) {
+                        if constexpr (RANK_STAMPED) {
+                            // largest = !top_min: complement the lanes whose sign matches the
+                            // kept extreme, exactly as the fused-key conditioning does.
+                            constexpr int stamp_cc =
+                                top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
+                            // Left run: global direction, lower rank range.
+                            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
+                            TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+                            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
+                            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+                            TOPK_SFPENCC_ALL_LANES_ON();
+                            // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
+                            // a single XOR because 2K is a power of two and rank < 2K.
+                            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+                            TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
+                            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
+                            TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+                            TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
+                            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+                            TOPK_SFPENCC_ALL_LANES_ON();
+                            // Advance to the next 4 run positions.
+                            TTI_SFPIADD(
+                                4,
+                                p_sfpu::LREG2,
+                                p_sfpu::LREG2,
+                                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+                        }
+                        if constexpr (STABLE_SORT) {
+                            // top_min selects the value operand order (which run receives the
+                            // minima), exactly as in the unstable arm below. The tie-break polarity
+                            // comes from TIE_ORDER -- the GLOBAL sort
+                            // order. Anchoring the tie routing to
+                            // the operand order (the index minimum rides with the value minimum or
+                            // maximum per the global mode) makes every merge a comparator on ONE
+                            // fixed total order [value, then index], so callers may issue merges
+                            // with per-block alternating directions (ttnn.sort's bitonic merge
+                            // network, which always binds top_min=false and routes the outputs
+                            // afterwards) or in the global direction (the ttnn topk kernels, which
+                            // bind top_min = !largest; the LLK/quasar test kernels, which bind
+                            // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
+                            // to the pre-existing selection, since they program the runtime mode
+                            // from the same flag they derive top_min from.
+                            if constexpr (top_min) {
+                                topk_cmp_swap_stable_min_to_vd<
+                                    p_sfpu::LREG1,
+                                    p_sfpu::LREG0,
+                                    p_sfpswap::ALL_ROWS_MAX,
+                                    TIE_ORDER>();
+                            } else {
+                                topk_cmp_swap_stable_min_to_vd<
+                                    p_sfpu::LREG0,
+                                    p_sfpu::LREG1,
+                                    p_sfpswap::ALL_ROWS_MAX,
+                                    TIE_ORDER>();
+                            }
+                        } else {
+                            TTI_SFPSWAP(
+                                0,
+                                top_min ? p_sfpu::LREG1 : p_sfpu::LREG0,
+                                top_min ? p_sfpu::LREG0 : p_sfpu::LREG1,
+                                p_sfpswap::ALL_ROWS_MAX);
+                        }
+                        bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
+                        TTI_INCRWC(0, 4, 0, 0);  // next group: Dst += 4 rows
+                        record_body = false;
                     }
-                    bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
                     datums_compared += 8;
                     if (ii == (inner_d - 1))
                     {
                         dst_cr += 2 * dist;
                         dst_offset = dst_cr;
+                        if (datums_compared < total_datums_to_compare) {
+                            // Run-to-run jump: re-base the Dst pointer at the next run's first row.
+                            set_dst_write_addr(dst_addr_offset + (dst_offset & 0xF) + (dst_offset >> 4) * 32);
+                            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                        }
                     }
                     else
                     {
                         dst_offset += 4;
+                        if ((dst_offset & 0xF) == 0) {
+                            // Face skip inside a run: +16 rows beyond the body's +4.
+                            TTI_INCRWC(0, 8, 0, 0);
+                            TTI_INCRWC(0, 8, 0, 0);
+                        }
                     }
                 }
             }
@@ -1311,6 +1364,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         dst_addr_offset = 16;
         set_dst_write_addr(dst_addr_offset);
     }
+    topk_replay_init = 0;  // slots 0..merge_body-1 hold the merge body: the next local sort / rebuild re-records
 }
 
 template <
