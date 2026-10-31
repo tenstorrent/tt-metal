@@ -130,6 +130,12 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BA
 
 using namespace ckernel;
 
+// SrcB dummy valids deferred to the end of the unpack-to-dest section; declared extern thread_local in
+// llk_unpack_common_api.h.
+#if defined(UCK_CHLKC_UNPACK)
+thread_local std::uint32_t unpack_to_dest_deferred_srcb_dummies __attribute__((used)) = 0;
+#endif
+
 // Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
 #if defined(UCK_CHLKC_MATH)
 thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
