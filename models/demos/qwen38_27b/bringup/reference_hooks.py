@@ -9,6 +9,16 @@ The block-graph contract is in reference/_bringup_interface.py (vendored, do not
 the framework (bringup_fw).
 """
 
+import torch
+
+from models.demos.qwen38_27b.reference.qwen38_ref import Qwen38Reference
+
 
 def reference(spec, layers=None, dtype=None):
-    raise NotImplementedError("reference stage: write models/demos/qwen38_27b/reference/ and return it here")
+    return Qwen38Reference(spec, str(spec.hf_dir), layers=layers, dtype=dtype or torch.float32)
+
+
+def hf_layers(model):
+    """Qwen3_5ForConditionalGeneration keeps the decoder layers under model.language_model."""
+    inner = model.model
+    return getattr(inner, "language_model", inner).layers
