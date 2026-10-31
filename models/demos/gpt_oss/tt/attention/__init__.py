@@ -5,6 +5,7 @@ import ttnn
 
 from models.demos.gpt_oss.config import MeshConfig
 
+from .. import opt_switches
 from .config import AttentionConfig, ProgramConfig
 from .decode import decode_forward
 from .kv_cache import get_kv_memory_config, init_kv_cache
@@ -112,6 +113,19 @@ class Attention:
         self.head_dim = config.head_dim
         self.scaling = config.scaling
 
+        # GPT_OSS_OPT_DECODE_DSMM: one-token decode QKV and o_proj as the DRAM-sharded
+        # matmuls of the batched decode path (batched_decode.BatchedQKV / BatchedOProj: the weight resharded once,
+        # on device, over the DRAM banks; o_proj unpadded with its bias and BF8 output), for the 120B generic decode.
+        self.dsmm_qkv = None
+        self.dsmm_oproj = None
+        if opt_switches.on("DECODE_DSMM") and not fused_decode and mesh_config.decode.tp > 1:
+            from ..batched_decode import BatchedOProj, BatchedQKV
+
+            self.dsmm_qkv = BatchedQKV(mesh_device, self.weights.wqkv, config.head_dim)
+            self.dsmm_oproj = BatchedOProj(
+                mesh_device, self.weights.o_proj, self.weights.o_proj_bias, config.hidden_size
+            )
+
     def __call__(
         self,
         hidden_states,
@@ -170,6 +184,11 @@ class Attention:
                 return_partial=getattr(self, "decode_returns_partial", False),
                 batched_qkv=getattr(self, "batched_qkv", None),
                 batched_oproj=getattr(self, "batched_oproj", None),
+                **(
+                    {"dsmm": (self.dsmm_qkv, self.dsmm_oproj)}
+                    if self.dsmm_qkv is not None and opt_switches.on("DECODE_DSMM")
+                    else {}
+                ),
             )
         else:
             return prefill_forward(

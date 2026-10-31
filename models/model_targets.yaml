@@ -677,12 +677,20 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          # e2e demo combo (b1, short prompt).
           - batch_size: 1
             seq_len: 74
-            status: TODO
-            perf: {}
+            status: active
+            perf:
+              decode_t/s/u: 80.9519
+              decode_t/s: 80.9519
+              prefill_t/s: 216.9757
+              prefill_time_to_token: 0.3411
+              compile_decode: 0.0129
+              compile_prefill: 46.1388
             accuracy: {}
-            note: "TODO gap seeded from run 103674493962; populate measured targets."
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
       bh_galaxy_perf:
         entries:
           - batch_size: null
@@ -745,11 +753,11 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 29.5194
-              decode_t/s: 29.5194
-              prefill_t/s: 130.0164
-              prefill_time_to_token: 0.5692
-              compile_decode: 0.034
+              decode_t/s/u: 53.1231
+              decode_t/s: 53.1231
+              prefill_t/s: 491.3222
+              prefill_time_to_token: 0.1506
+              compile_decode: 0.0191
               compile_prefill: 68.1451
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -788,8 +796,8 @@ targets:
               decode_t/s: 375.0
               decode_t_s_u_tolerance: 0.2
               decode_t_s_tolerance: 0.2
-              prefill_t/s: 435.0536
-              prefill_time_to_token: 0.1701
+              prefill_t/s: 793.1659
+              prefill_time_to_token: 0.0933
               # One traced decode step: the trace is captured during prefill warmup.
               compile_decode: 0.005
               compile_decode_tolerance: 0.6
