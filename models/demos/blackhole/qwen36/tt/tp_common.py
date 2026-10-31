@@ -198,7 +198,8 @@ def prefill_strided_rs_cfg():
     Knobs (read once): QWEN36_PREFILL_STRIDED_RS_DOWN_MIN (default 2048), QWEN36_PREFILL_STRIDED_RS_WO_MIN (default
     8192; a huge value turns an op off), QWEN36_PREFILL_STRIDED_RS_WIN (L1 window blocks, default 2; 0 = DRAM matmul
     output), QWEN36_PREFILL_STRIDED_RS_WORKERS (RS workers per link, default 5), QWEN36_PREFILL_STRIDED_RS_LINKS
-    (default 2), QWEN36_PREFILL_STRIDED_RS_KB (matmul K block in tiles, default 4)."""
+    (default 2), QWEN36_PREFILL_STRIDED_RS_KB (matmul K block in tiles, default 4), QWEN36_PREFILL_STRIDED_RS_SMALL_M
+    ("1": also take 256- and 512-row calls, M block 1 / 2 tiles; accuracy-stress only, not a speed setting)."""
     global _STRIDED_RS
     if _STRIDED_RS is None:
         env = os.environ.get
@@ -215,6 +216,7 @@ def prefill_strided_rs_cfg():
             workers=_i("QWEN36_PREFILL_STRIDED_RS_WORKERS", 5),
             links=_i("QWEN36_PREFILL_STRIDED_RS_LINKS", 2),
             kb=_i("QWEN36_PREFILL_STRIDED_RS_KB", 4),
+            small_m=env("QWEN36_PREFILL_STRIDED_RS_SMALL_M", "0") == "1",
         )
         if _STRIDED_RS["on"]:
             logger.info(f"QWEN36_PREFILL_STRIDED_RS on: {_STRIDED_RS}")
@@ -224,15 +226,18 @@ def prefill_strided_rs_cfg():
 _STRIDED_RS_GRID_ROWS = 8  # matmul rows 0..7; RS workers on rows 8..9
 
 
-def _strided_rs_m_block(rows):
+def _strided_rs_m_block(rows, small=False):
     """M block (tiles) for `rows` rows on the 8-row matmul grid, or None when the rows do not split evenly into it
-    (only shapes measured in the microbench are taken: whole M blocks per grid row)."""
+    (only shapes measured in the microbench are taken: whole M blocks per grid row). small: also 1 / 2 tiles per grid
+    row (256 / 512 rows), for QWEN36_PREFILL_STRIDED_RS_SMALL_M."""
     if rows % TILE_SIZE:
         return None
     mt = rows // TILE_SIZE
     if mt % _STRIDED_RS_GRID_ROWS:
         return None
     per_row = mt // _STRIDED_RS_GRID_ROWS
+    if small and per_row in (1, 2):
+        return per_row
     mb = 8 if per_row >= 16 else 4
     return mb if per_row % mb == 0 else None
 
@@ -244,7 +249,7 @@ def prefill_strided_rs_ok(kind, rows, mesh):
     if not c["on"] or tuple(mesh.shape) != (1, 8):
         return False
     floor = c["down_min"] if kind == "down" else c["wo_min"]
-    return rows >= floor and _strided_rs_m_block(rows) is not None
+    return rows >= floor and _strided_rs_m_block(rows, c["small_m"]) is not None
 
 
 def strided_rs_counters(mesh, tt_ccl):
@@ -282,7 +287,7 @@ def strided_rs_prefill(x, weight, mesh, tt_ccl, compute_cfg, topology):
     g = mesh.compute_with_storage_grid_size()
     gx, gy = min(12, g.x), _STRIDED_RS_GRID_ROWS
     cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=_strided_rs_m_block(M),
+        M_block_size=_strided_rs_m_block(M, c["small_m"]),
         K_block_size=c["kb"],
         N_block_size=8,
         subblock_h=2,

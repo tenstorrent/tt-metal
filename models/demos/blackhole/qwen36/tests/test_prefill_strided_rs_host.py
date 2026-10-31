@@ -19,6 +19,7 @@ KNOBS = (
     "QWEN36_PREFILL_STRIDED_RS_DOWN_MIN",
     "QWEN36_PREFILL_STRIDED_RS_WO_MIN",
     "QWEN36_PREFILL_STRIDED_RS_WIN",
+    "QWEN36_PREFILL_STRIDED_RS_SMALL_M",
 )
 RING = types.SimpleNamespace(shape=(1, 8))
 
@@ -72,3 +73,15 @@ def test_floor_knobs(monkeypatch):
 def test_m_block(rows, mb):
     # 8 matmul grid rows: whole M blocks of 8 tiles (>= 16 tiles per grid row) or 4 tiles, else not taken
     assert tpc._strided_rs_m_block(rows) == mb
+
+
+def test_small_m_stress_knob(monkeypatch):
+    monkeypatch.setenv("QWEN36_PREFILL_STRIDED_RS", "1")
+    monkeypatch.setenv("QWEN36_PREFILL_STRIDED_RS_DOWN_MIN", "256")
+    assert not tpc.prefill_strided_rs_ok("down", 256, RING)  # off by default
+    tpc._STRIDED_RS = None
+    monkeypatch.setenv("QWEN36_PREFILL_STRIDED_RS_SMALL_M", "1")
+    assert tpc.prefill_strided_rs_ok("down", 256, RING) and tpc.prefill_strided_rs_ok("down", 512, RING)
+    assert not tpc.prefill_strided_rs_ok("down", 128, RING)  # 4 tiles cannot split over 8 grid rows
+    assert tpc._strided_rs_m_block(256, True) == 1 and tpc._strided_rs_m_block(512, True) == 2
+    assert tpc._strided_rs_m_block(8192, True) == 8
