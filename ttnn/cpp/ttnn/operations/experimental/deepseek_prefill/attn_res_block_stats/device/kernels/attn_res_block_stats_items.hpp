@@ -66,7 +66,7 @@ struct AttnResBlockStatsSplit {
 // next as long as its count stays below 2^width.
 //
 // A row leader counts, per other run of its row, the candidates that run has handed over;
-// the gather core counts, per candidate, the rows whose sum is parked.
+// the gather cores count, per row, the candidates whose sum is parked.
 struct AttnResProgressFields {
     uint32_t width;  // bits per field
 
