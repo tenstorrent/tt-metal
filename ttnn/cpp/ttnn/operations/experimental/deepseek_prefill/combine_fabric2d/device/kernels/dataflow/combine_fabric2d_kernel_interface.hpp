@@ -30,8 +30,6 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// Derived geometry. One-liners off the two structs the framework passes everywhere, named because
-// `aligned_page_size()` as "the token size" is not self-evident.
 inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
@@ -94,8 +92,8 @@ inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
     return 1;
 }
 
-// Token slots in the dispatched buffer, which dispatch_fabric2d sizes as max_dispatch_buffer_token_size and drops
-// tokens past. Validation pins every dim before these two to 1, so the slot index is the whole of the page index.
+// Token slots in the dispatched buffer. Validation pins every dim before these two to 1, so the slot index
+// is the whole of the page index.
 inline uint32_t dispatch_capacity(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-2]);
 }
@@ -164,8 +162,6 @@ struct KernelPlan {
     uint32_t vc_pages = 0;  // the free parameter: pages per channel
     // One entry per channel, in channel order. Addresses are uniform across the mesh, so these are the
     // same numbers on every core -- what differs is which core a given counter is read or bumped on.
-    // These replace the single fwd_arrived_addr: arrival is per channel now, because each channel is its
-    // own dense FIFO with one producer and one consumer.
     std::vector<uint32_t> vc_arrived_addr;
     std::vector<uint32_t> vc_freed_addr;
     std::vector<uint32_t> vc_outbox_addr;
@@ -292,9 +288,12 @@ constexpr uint32_t MAX_VCS = 16;
 // "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
 constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
 
-// Ring slot = token + forwarding metadata. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
-// (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
-// directly.
+// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1,
+// and a channel shallower than a read batch spends all its time announcing.
+constexpr uint32_t MIN_VC_PAGES = 4;
+
+// Ring slot = token + forwarding metadata. 64 rather than the 32 the metadata needs keeps the slot stride
+// DRAM-aligned (14336 + 64 = 64 * 225), so a fabric write can target a forwarding page directly.
 constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 
 // The forwarding metadata a ring slot carries after its token, at (slot_base + token_size_bytes). The reader
@@ -338,9 +337,5 @@ inline uint32_t packets_per_token(uint32_t token_size_bytes) {
 constexpr uint64_t CMD_END = 0;  // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;
 constexpr uint64_t CMD_FORWARD = 2;
-// There is no chunk-ending forward. Splitting the region by movement class left a channel with no chunk
-// boundaries to close -- every page of it shares one destination -- so a forward is just a forward, and the
-// residual a chunk end used to flush is handled by announcing before going idle instead. See the wait in
-// sender_combine_fabric2d.cpp. The dispatch op still has its own dspf2d::CMD_FORWARD_END; this is not it.
 
 }  // namespace cmbf2d

@@ -68,7 +68,12 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     // Zero would divide the dense region by nothing. Any value >= 1 is legal -- the movement-class split
     // means no size can deadlock the ring -- and the page floor catches a factor large enough to round a
     // channel away, so this only rejects the one value that has no meaning.
-    TT_FATAL(args.fwd_reduction >= 1, "combine_fabric2d: fwd_reduction must be >= 1 (got {})", args.fwd_reduction);
+    TT_FATAL(
+        args.fwd_vc_pages >= cmbf2d::MIN_VC_PAGES,
+        "combine_fabric2d: fwd_vc_pages must be at least {} (got {}); the credit threshold is a quarter of a "
+        "channel and has to stay >= 1, and a channel shallower than a read batch spends all its time announcing",
+        cmbf2d::MIN_VC_PAGES,
+        args.fwd_vc_pages);
     TT_FATAL(
         !args.output_mem_config.is_sharded(),
         "combine_fabric2d: output memory config must be interleaved, not sharded");
@@ -280,7 +285,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
-    uint32_t fwd_reduction,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
     using OperationType =
@@ -293,7 +298,7 @@ ttnn::Tensor combine_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
-            .fwd_reduction = fwd_reduction,
+            .fwd_vc_pages = fwd_vc_pages,
             .topology = topology,
             .output_mem_config = memory_config},
         OperationType::tensor_args_t{

@@ -143,7 +143,8 @@ def run_model(
     skip_upstream_reference=False,
     overlap_routed_expert_with_combine=False,
     moe_transport="direct",
-    combine_fwd_reduction=None,
+    dispatch_fwd_vc_pages=None,
+    combine_fwd_vc_pages=None,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -169,7 +170,7 @@ def run_model(
     None keeping the gate config's default. ``skip_upstream_reference`` drops the vendored-model
     cross-check. ``overlap_routed_expert_with_combine`` goes straight to TtMoe: off unless the caller passes
     routed_expert_combine_overlap_arg for a model that opts in (Kimi K2.7, GLM 5.3, Mistral Small 4).
-    ``moe_transport`` and ``combine_fwd_reduction`` go straight to TtMoe too.
+    ``moe_transport`` and the two channel depths go straight to TtMoe too.
 
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
     per-token ids are built here and handed to both sides, and the torch reference takes the
@@ -567,7 +568,8 @@ def run_model(
         rms_norm_eps=rms_norm_eps,
         overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
         moe_transport=moe_transport,
-        combine_fwd_reduction=combine_fwd_reduction,
+        dispatch_fwd_vc_pages=dispatch_fwd_vc_pages,
+        combine_fwd_vc_pages=combine_fwd_vc_pages,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -1114,7 +1116,8 @@ def test_glm_moe_fabric2d(variant, config_only, mesh_device, device_params, num_
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
         moe_transport="fabric2d",
-        combine_fwd_reduction=GLM53Config.COMBINE_FWD_REDUCTION,
+        dispatch_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=GLM53Config.MOE_FWD_VC_PAGES,
     )
 
 
@@ -1261,7 +1264,8 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(KimiK27Config),
         moe_transport="fabric2d",
-        combine_fwd_reduction=KimiK27Config.COMBINE_FWD_REDUCTION,
+        dispatch_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
     )
 
 

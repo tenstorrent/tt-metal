@@ -16,8 +16,8 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// See the combine_fabric2d nanobind docstring for what each tensor carries. The framework reflects over
-// these members for the program-cache hash and to find the mesh, so every field is part of the cache key.
+// The framework reflects over these members for the program-cache hash and to find the mesh, so every
+// field is part of the cache key.
 struct CombineFabric2dParams {
     ttnn::MeshDevice* device = nullptr;
     uint32_t experts_per_chip = 2;
@@ -25,19 +25,11 @@ struct CombineFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
-    // How much smaller than the dense forwarding region to make this op's. A FACTOR rather than a page
-    // count, so it means the same thing for every model, and an op parameter rather than a constant
-    // because where the throughput curve bends is a per-model measurement: the caller is the one who
-    // knows whether DRAM or microseconds is the scarcer thing for the model it is running.
-    //
-    // 16 is what the models routing to many experts over a wide embedding settle on, and so the right
-    // thing for a caller that has not thought about it to inherit. Every caller that reaches the op
-    // through ttnn::prim sets it explicitly, so this initializer is the sibling-style fallback for a
-    // params struct built some other way, not a value the op path falls back to.
-    uint32_t fwd_reduction = 16;
+    // Pages one forwarding channel holds. Any depth is correct -- the channel split makes the movement
+    // graph acyclic, see combine_fabric2d_assignments.hpp -- so this trades DRAM against throughput.
+    uint32_t fwd_vc_pages = 64;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
-    // Set only when combine runs overlapped inside the routed expert: its threshold decides the order
-    // experts are walked, and its writers report completion to the collector.
+    // Set only when combine runs overlapped inside the routed expert.
     uint32_t hybrid_token_threshold = 0;
     uint32_t routed_expert_writers = 0;
     tt::tt_metal::CoreRange routed_expert_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
@@ -52,9 +44,8 @@ struct CombineFabric2dInputs {
     ttnn::Tensor expert_token_counts;
     ttnn::Tensor expert_region_offsets;
     ttnn::Tensor expert_offsets;
-    // Set only when combine runs overlapped: the table the walk order's expert ids are read from.
-    // Optional because the framework reflects over every member to find the mesh and hash the cache
-    // key, and an empty Tensor is not a valid thing to reflect over.
+    // Set only when combine runs overlapped. Optional because the framework reflects over every member
+    // and an empty Tensor is not a valid thing to reflect over.
     std::optional<ttnn::Tensor> global_expert_idx_table;
 };
 

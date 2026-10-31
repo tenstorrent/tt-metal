@@ -78,14 +78,10 @@ constexpr uint32_t meta_pads_addr = ct.control_addr;
 constexpr uint32_t META_READ_BYTES = ::cmbf2d::META_PAD_STRIDE;  // fill the whole pad; the record is shorter
 constexpr uint32_t control_tables_addr = ct.control_addr + ct.meta_prefetch_cap * ::cmbf2d::META_PAD_STRIDE;
 
-// Page of our region of the forwarding buffer. The same formula serves both directions: the stream index
-// is ours either way, only the chip differs, and the buffer's device-local address is uniform across the
-// mesh. Chunk boundaries do not appear here — a chunk is just a run of consecutive pages, so both sides
-// address the region by a single running page count.
-// Page of one CHANNEL of our region. Each channel is its own ring of ct.vc_pages pages, written by one
-// producer and read by one consumer, so a running page count is still all the two chips agree on -- there
-// are simply num_vcs of them now instead of one. Wrapping costs nothing: both sides address the region a
-// page at a time, so nothing ever straddles the wrap.
+// Page of one CHANNEL of our region of the forwarding buffer. Each channel is its own ring of ct.vc_pages
+// pages with a single producer and a single consumer, so a running page count is all the two chips agree
+// on. The same formula serves both directions: the stream index is ours either way, only the chip differs,
+// and the buffer's device-local address is uniform across the mesh.
 constexpr uint32_t fwd_page(uint32_t vc, uint32_t page_in_vc) {
     return (ct.my_stream * ct.num_vcs + vc) * ct.vc_pages + page_in_vc % ct.vc_pages;
 }
@@ -327,13 +323,9 @@ struct Reader {
     uint32_t claimed = 0;
     // Publishing is batched so the atomic is amortised, matching the sender's batch.
     uint32_t pending_publish = 0;
-    // How far into the downstream chip's region we have written, and where the chunk in progress ends. That
-    // reader walks its chunks in exactly the order we emit them, sizing each the same way we do, so the page
-    // counter alone is what the two chips agree on; the end marks where the sender owes it a bump.
     // Per channel. `out_page` counts into the DOWNSTREAM chip's channel, `consumed` out of ours, and
-    // `expected` is how many will ever arrive -- which is what says when a channel is finished, since
-    // there are no chunk boundaries to walk any more: every page of a channel shares one movement class,
-    // so one rule routes the lot and the destination rides in the page.
+    // `expected` is how many will ever arrive, which is what says when a channel is finished. The page
+    // counters alone are what the two chips agree on.
     uint32_t out_page[::cmbf2d::MAX_VCS] = {};
     uint32_t consumed[::cmbf2d::MAX_VCS] = {};
     uint32_t expected[::cmbf2d::MAX_VCS] = {};
@@ -596,17 +588,14 @@ struct Reader {
             slice_begin(begin, n, desc.split_idx + 1, desc.split_count));
     }
 
-    // Walk the schedule for one local expert. The schedule is the same for every expert — which chip pairs
-    // this stream serves and in what order does not depend on the expert — so the expert is only the
-    // caller's loop variable. Forwarding chunks always appear in increasing order, so `consumed` stays a
-    // valid watermark into our region however the own assignments are interleaved around them.
+    // Our own tokens for one local expert, in the schedule's order. The schedule is the same for every
+    // expert — which chip pairs this stream serves and in what order does not depend on it — so the expert
+    // is only the caller's loop variable. Its relay entries are a PRIORITY rather than a position: a channel
+    // is drained by serve_one_channel whenever it can move, so own work goes first and channels fill the
+    // stalls and the gaps between its batches.
     //
     // Publishing at the end leaves nothing claimed but unannounced, which is what lets the local phase
     // treat the next slot as private.
-    // Our own tokens for one local expert, in the schedule's order. The schedule's relay entries are not
-    // walked here any more: a channel is drained whenever it can move, by serve_one_channel, rather than at
-    // a fixed point in a fixed order. What is left of the schedule is a PRIORITY: own work first, channels
-    // when it stalls or between its batches.
     void run_schedule(uint32_t local_expert) {
         for (uint32_t si = 0; si < ct.schedule_len; si++) {
             const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
@@ -795,9 +784,7 @@ void kernel_main() {
     // only needs its own reader to have ended, never ours, so this cannot close a cycle around the ring.
     reader.wait_for_final_writes();
 
-    // The channel counters, left as the next launch expects them. The upstream chip CANNOT now overwrite a
-    // page we have not read -- that is what the credits are for -- so unlike before this is bookkeeping
-    // rather than a known gap.
+    // The channel counters, left as the next launch expects them.
     reader.drain_channel_counters();
     // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();
