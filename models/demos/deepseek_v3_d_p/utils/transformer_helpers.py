@@ -436,6 +436,49 @@ def extract_moe_layer_weights(full_sd, n_routed=None, prefix="", hf_layer=None):
     }
 
 
+def block_cache_state_dict(layer_dequant: dict, is_dense: bool, n_routed: int) -> dict:
+    """The TtPrefillBlock.build_ttnn_cache state_dict for one dequantized HF layer (no `model.layers.N.` prefix)."""
+    layer_dict = {
+        "attn_norm_weight": layer_dequant["input_layernorm.weight"],
+        "mla_weights": {
+            "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
+            "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
+            "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
+            "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
+            "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
+            "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
+            "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
+        },
+        "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
+    }
+
+    # DSA-sparse variants (GLM-5.3, DeepSeek-V3.2) carry lightning-indexer weights; include them
+    # so ttMLA.build_ttnn_cache writes a complete sparse cache — it resolves has_indexer from the
+    # config and errors if the indexer host weights are missing. Auto-engages only when present
+    # (dense DeepSeek-R1 / Kimi checkpoints have no self_attn.indexer.*). The checkpoint's
+    # k_norm.bias maps to the indexer's k_norm_bias.weight slot (see TtIndexer.WEIGHT_NAMES).
+    if "self_attn.indexer.wq_b.weight" in layer_dequant:
+        layer_dict["mla_weights"].update(
+            {
+                "indexer.wq_b.weight": layer_dequant["self_attn.indexer.wq_b.weight"],
+                "indexer.wk.weight": layer_dequant["self_attn.indexer.wk.weight"],
+                "indexer.k_norm.weight": layer_dequant["self_attn.indexer.k_norm.weight"],
+                "indexer.k_norm_bias.weight": layer_dequant["self_attn.indexer.k_norm.bias"],
+                "indexer.weights_proj.weight": layer_dequant["self_attn.indexer.weights_proj.weight"],
+            }
+        )
+
+    if is_dense:
+        layer_dict["ffn_weights"] = {
+            "gate_proj": layer_dequant["mlp.gate_proj.weight"],
+            "up_proj": layer_dequant["mlp.up_proj.weight"],
+            "down_proj": layer_dequant["mlp.down_proj.weight"],
+        }
+    else:
+        layer_dict.update(extract_moe_layer_weights(layer_dequant, n_routed=n_routed))
+    return layer_dict
+
+
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     """Extract one layer's weights from HF state_dict into TtPrefillBlock format."""
     prefix = f"layers.{layer_idx}."
@@ -842,45 +885,7 @@ def load_and_compute_layer_by_layer(
             # Build TTNN cache for this layer (device=None, no accumulation!)
             is_dense = i < first_k_dense
 
-            # Build layer_dict in same format as before
-            layer_dict = {
-                "attn_norm_weight": layer_dequant["input_layernorm.weight"],
-                "mla_weights": {
-                    "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
-                    "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
-                    "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
-                    "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
-                    "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
-                    "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
-                    "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
-                },
-                "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
-            }
-
-            # DSA-sparse variants (GLM-5.3, DeepSeek-V3.2) carry lightning-indexer weights; include them
-            # so ttMLA.build_ttnn_cache writes a complete sparse cache — it resolves has_indexer from the
-            # config and errors if the indexer host weights are missing. Auto-engages only when present
-            # (dense DeepSeek-R1 / Kimi checkpoints have no self_attn.indexer.*). The checkpoint's
-            # k_norm.bias maps to the indexer's k_norm_bias.weight slot (see TtIndexer.WEIGHT_NAMES).
-            if "self_attn.indexer.wq_b.weight" in layer_dequant:
-                layer_dict["mla_weights"].update(
-                    {
-                        "indexer.wq_b.weight": layer_dequant["self_attn.indexer.wq_b.weight"],
-                        "indexer.wk.weight": layer_dequant["self_attn.indexer.wk.weight"],
-                        "indexer.k_norm.weight": layer_dequant["self_attn.indexer.k_norm.weight"],
-                        "indexer.k_norm_bias.weight": layer_dequant["self_attn.indexer.k_norm.bias"],
-                        "indexer.weights_proj.weight": layer_dequant["self_attn.indexer.weights_proj.weight"],
-                    }
-                )
-
-            if is_dense:
-                layer_dict["ffn_weights"] = {
-                    "gate_proj": layer_dequant["mlp.gate_proj.weight"],
-                    "up_proj": layer_dequant["mlp.up_proj.weight"],
-                    "down_proj": layer_dequant["mlp.down_proj.weight"],
-                }
-            else:
-                layer_dict.update(extract_moe_layer_weights(layer_dequant, n_routed=n_routed))
+            layer_dict = block_cache_state_dict(layer_dequant, is_dense, n_routed)
 
             # Build TTNN cache (device=None) - NOT accumulated in memory!
             TtPrefillBlock.build_ttnn_cache(
