@@ -738,7 +738,7 @@ def admits(act, weight, memory_config) -> bool:
         return False
     if len(act.shape) != 4 or int(act.shape[-2]) != 1 or not act.memory_config().is_sharded():
         return False
-    if weight.dtype not in (ttnn.bfloat8_b, ttnn.bfloat16) or len(weight.shape) != 4:
+    if weight.dtype not in (ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat4_b) or len(weight.shape) != 4:
         return False
     return (int(weight.shape[-2]), int(weight.shape[-1])) in SHAPES and int(act.shape[-1]) == int(weight.shape[-2])
 

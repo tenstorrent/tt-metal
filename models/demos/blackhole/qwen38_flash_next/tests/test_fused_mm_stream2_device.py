@@ -21,7 +21,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mm_stream2 as m2
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import placement
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 
-BF8, BF16 = ttnn.bfloat8_b, ttnn.bfloat16
+BF8, BF16, BF4 = ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat4_b
 RESULTS = Path(os.environ.get("X60_RESULTS", "/tmp/x60_stream2.jsonl"))
 SEEDS = [int(s) for s in os.environ.get("X60_SEEDS", "0,1,2,3,4,5,6,7").split(",")]
 ROOT = "/home/ttuser/models/qwen38_cache/caches/c32768-vllm/components/"
@@ -33,6 +33,8 @@ SHAPES = {
     "gdn_in": dict(k=2560, n=2112, dtype=BF8, readers=2, cores=8, cols=4, blk=10),
     "out_proj": dict(k=768, n=2560, dtype=BF8, readers=2, cores=8, cols=2, blk=8),
 }
+for _name in ("gate_up", "qsa_proj", "gdn_in", "out_proj"):  # BFP4 weights (i32): the same shapes, LoFi stock program
+    SHAPES[_name + "_bf4"] = dict(SHAPES[_name], dtype=BF4)
 REAL = {
     "router": "*/moe-small/**/mesh-1x8-physical-1-5-4-0-2-3-7-6/backbone/layer-09/router_replicated_dram_sharded_dtype_BFLOAT16_layout_TILE.tensorbin",
     "gate_up": "*/moe-small/**/mesh-1x8-physical-1-0-2-3-7-6-4-5/backbone/layer-00/shared_gate_up_scalar_dram_sharded.bf8b_dtype_BFLOAT8_B_layout_TILE.tensorbin",
@@ -230,7 +232,20 @@ def test_dispatch_ablation(mesh_device):
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 32 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("op", ["router", "gate_up", "gdn_in", "qsa_proj", "out_proj"])
+@pytest.mark.parametrize(
+    "op",
+    [
+        "router",
+        "gate_up",
+        "gdn_in",
+        "qsa_proj",
+        "out_proj",
+        "gdn_in_bf4",
+        "qsa_proj_bf4",
+        "out_proj_bf4",
+        "gate_up_bf4",
+    ],
+)
 def test_linear_entry_l1_output(mesh_device, op):
     """``mm_stream2.linear`` (the model's entry): the stock op's shape / L1 width-sharded memory config, row 0 bitwise equal, on a
     sentinel-filled L1 output (a dirty buffer at the same addresses), fresh activation per call, then under trace capture.
