@@ -189,7 +189,7 @@ function SvgBox(props: {
   );
 }
 
-function Legend() {
+function Legend({ prNote = false }: { prNote?: boolean }) {
   const t = useHostTheme();
   const box = useBoxStyle();
   const items: Array<[BoxKind, string]> = [
@@ -215,9 +215,11 @@ function Legend() {
           </div>
         );
       })}
-      <Text size="small" tone="tertiary" style={{ color: t.text.tertiary }}>
-        Boxes carry the PR id that builds them.
-      </Text>
+      {prNote ? (
+        <Text size="small" tone="tertiary" style={{ color: t.text.tertiary }}>
+          Boxes carry the PR id that builds them.
+        </Text>
+      ) : null}
     </Row>
   );
 }
@@ -296,8 +298,8 @@ function TierTimeline() {
     { title: "MGD ctor", sub: "each part, before merge", tier: "Tier A + B", what: "that part's meshes and ranks", kind: "new" as BoxKind },
     { title: "merge ctor", sub: "MeshGraphDescriptor::merge", tier: "Tier A + B", what: "merged meshes, all pipelines", kind: "new" as BoxKind },
     { title: "SAT seating loop", sub: "MultiMeshSolutionEnumerator", tier: "Tier C", what: "PSD + each candidate", kind: "new" as BoxKind },
-    { title: "inter-mesh binding", sub: "ControlPlane init", tier: "4.2", what: "binds Tier C's links first", kind: "new" as BoxKind },
-    { title: "pipeline build", sub: "blaze build_topology", tier: "Tier D", what: "exists, unchanged", kind: "existing" as BoxKind },
+    { title: "inter-mesh binding", sub: "ControlPlane init", tier: "C3", what: "binds Tier C's links first", kind: "new" as BoxKind },
+    { title: "pipeline build", sub: "blaze build_topology", tier: "blaze", what: "exists, unchanged", kind: "existing" as BoxKind },
   ];
   const bw = 160;
   const gap = 24;
@@ -528,126 +530,6 @@ function TwoMesh(props: {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Worked example: cases A/B/C with every edge STRICT, and with s3 > s0 RELAXED
-// ---------------------------------------------------------------------------
-
-type CaseId = "A" | "B" | "C";
-type Mode = "all STRICT" | "s3 > s0 RELAXED (later)";
-
-const CASES: Record<
-  CaseId,
-  {
-    title: string;
-    cables: Cable[];
-    strict: { ok: boolean; why: string };
-    relaxed: { ok: boolean; why: string; labels: { a0: string; a1: string; b0: string; b1: string }; host?: boolean };
-  }
-> = {
-  A: {
-    title: "2 links on 2 different slice pairs",
-    cables: [
-      { side: "left", f: 0.5, kind: "bound", label: "a0-b0" },
-      { side: "right", f: 0.5, kind: "bound", label: "a1-b1" },
-    ],
-    strict: { ok: true, why: "Slices form the cycle a0 > a1 > b1 > b0 > a0. plan_ring_carve finds it and the resolver lays the ring on it." },
-    relaxed: {
-      ok: true,
-      why: "Same as all STRICT: an all-fabric cycle exists, so the soft edge is matched and nothing goes to host.",
-      labels: { a0: "s0", a1: "s1", b0: "s3", b1: "s2" },
-    },
-  },
-  B: {
-    title: "2 links, both on the same slice pair",
-    cables: [
-      { side: "left", f: 0.35, kind: "bound", label: "a0-b0" },
-      { side: "left", f: 0.7, kind: "bound", label: "a0-b0" },
-    ],
-    strict: {
-      ok: false,
-      why: "Adjacency is a1-a0, a0-b0, b0-b1: a path, not a cycle. The footprint solve finds no 4-cycle carve (blaze's planner: no-cycle-of-length-4).",
-    },
-    relaxed: {
-      ok: true,
-      why: "With s3 > s0 a soft edge, the solve maps s0..s3 along the fabric path a1 > a0 > b0 > b1 and leaves only the loopback to host, the same cut blaze's plan_ring_placement makes. Allowed: it is RELAXED and not stage 0's outgoing edge.",
-      labels: { a0: "s1", a1: "s0", b0: "s2", b1: "s3" },
-      host: true,
-    },
-  },
-  C: {
-    title: "1 link",
-    cables: [{ side: "left", f: 0.5, kind: "bound", label: "a0-b0" }],
-    strict: { ok: false, why: "Same adjacency as Case B: no 4-slice cycle. Rejected as a ring; an open chain (no loopback) would be accepted." },
-    relaxed: {
-      ok: true,
-      why: "Same plan as Case B: one fabric chain a1 > a0 > b0 > b1, loopback over host.",
-      labels: { a0: "s1", a1: "s0", b0: "s2", b1: "s3" },
-      host: true,
-    },
-  },
-};
-
-function CaseExplorer() {
-  const t = useHostTheme();
-  const [caseId, setCaseId] = useCanvasState<CaseId>("case", "B");
-  const [mode, setMode] = useCanvasState<Mode>("mode", "all STRICT");
-  const c = CASES[caseId];
-  const verdict = mode === "all STRICT" ? c.strict : c.relaxed;
-  const labels = mode === "all STRICT" ? { a0: "s0", a1: "s1", b0: "s3", b1: "s2" } : c.relaxed.labels;
-  return (
-    <Grid columns={fit(360)} gap={24} align="start">
-      <Stack gap={8}>
-        <TwoMesh
-          labels={labels}
-          cables={c.cables}
-          hostEdge={mode === "s3 > s0 RELAXED (later)" && c.relaxed.host ? { from: "b1", to: "a1", label: "s3 > s0 over host" } : undefined}
-        />
-        <Text size="small" tone="tertiary">
-          mesh4x4_stage4x2 from the blaze sweep: two 4x4 meshes, host_topology [1, 2], 4-stage ring of 4x2 stages.
-        </Text>
-      </Stack>
-      <Stack gap={12}>
-        <Row gap={8} wrap>
-          {(["A", "B", "C"] as CaseId[]).map((id) => (
-            <span key={id}>
-              <Pill active={id === caseId} onClick={() => setCaseId(id)}>
-                Case {id}
-              </Pill>
-            </span>
-          ))}
-          <div style={{ width: 12 }} />
-          {(["all STRICT", "s3 > s0 RELAXED (later)"] as Mode[]).map((m) => (
-            <span key={m}>
-              <Pill active={m === mode} onClick={() => setMode(m)}>
-                {m}
-              </Pill>
-            </span>
-          ))}
-        </Row>
-        <H3>{c.title}</H3>
-        <Row gap={8} align="center">
-          <span
-            style={{
-              display: "inline-block",
-              width: 10,
-              height: 10,
-              borderRadius: 5,
-              background: verdict.ok ? t.category.green : t.category.red,
-            }}
-          />
-          <Text weight="semibold">{verdict.ok ? "Tier C accepts this seating" : "Tier C rejects this seating"}</Text>
-        </Row>
-        <Text tone="secondary">{verdict.why}</Text>
-        <Divider />
-        <Text size="small" tone="tertiary">
-          Tier B only sees the count of declared channels (2 in every case). Only Tier C sees where the bound links land,
-          because that depends on the seats SAT picks. In the first version the exact check rejects Case B. Plan 1 (later, optional) could
-          reject it before the solve, but only when hard pinnings fix the chip layout.
-        </Text>
-      </Stack>
-    </Grid>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Tier C loop flowchart
@@ -745,142 +627,6 @@ function LoopFlow() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Carve path drawings
-// ---------------------------------------------------------------------------
-
-function TileGrid(props: {
-  rows: number;
-  cols: number;
-  tile: [number, number];
-  label: (r: number, c: number) => string;
-  title: string;
-  cell?: number;
-  highlight?: (r: number, c: number) => boolean;
-}) {
-  const t = useHostTheme();
-  const cell = props.cell ?? 14;
-  const tr = props.rows / props.tile[0];
-  const tc = props.cols / props.tile[1];
-  const W = props.cols * cell + 4;
-  const H = props.rows * cell + 22;
-  return (
-    <svg width={W} height={H}>
-      <text x={2} y={11} fontSize={10.5} fontWeight={600} fill={t.text.secondary}>
-        {props.title}
-      </text>
-      <g transform="translate(2, 16)">
-        {Array.from({ length: tr }).map((_, r) =>
-          Array.from({ length: tc }).map((__, c) => {
-            const on = props.highlight ? props.highlight(r, c) : true;
-            return (
-              <g key={`${r}-${c}`}>
-                <rect
-                  x={c * props.tile[1] * cell}
-                  y={r * props.tile[0] * cell}
-                  width={props.tile[1] * cell}
-                  height={props.tile[0] * cell}
-                  fill={on ? t.fill.secondary : t.fill.quaternary}
-                  stroke={t.stroke.primary}
-                />
-                <text
-                  x={c * props.tile[1] * cell + (props.tile[1] * cell) / 2}
-                  y={r * props.tile[0] * cell + (props.tile[0] * cell) / 2 + 4}
-                  textAnchor="middle"
-                  fontSize={props.tile[0] * cell < 20 ? 8 : 10.5}
-                  fill={on ? t.text.primary : t.text.tertiary}
-                >
-                  {props.label(r, c)}
-                </text>
-              </g>
-            );
-          }),
-        )}
-      </g>
-    </svg>
-  );
-}
-
-function CarvePaths() {
-  const t = useHostTheme();
-  return (
-    <Grid columns={fit(280)} gap={16} align="start">
-      <Card>
-        <CardHeader trailing={<Text size="small" tone="tertiary">no submesh_shape</Text>}>Planned carve</CardHeader>
-        <CardBody>
-          <Stack gap={10}>
-            <Row gap={12}>
-              <TileGrid rows={4} cols={4} tile={[4, 2]} title="M0" cell={20} label={(_, c) => (c === 0 ? "s0" : "s1")} />
-              <TileGrid rows={4} cols={4} tile={[4, 2]} title="M1" cell={20} label={(_, c) => (c === 0 ? "s3" : "s2")} />
-            </Row>
-            <Text size="small" tone="secondary">
-              Search the slice graph for a cycle of exactly the ring's length, then cut it into stage rectangles. Handles joint
-              stages (a 4x4 stage = 2 slices), also on one mesh. Needs uniform slices, stage 0 on one slice, and a loopback.
-            </Text>
-            <Text size="small" tone="tertiary">
-              plan_ring_carve / plan_fork_carve
-            </Text>
-          </Stack>
-        </CardBody>
-      </Card>
-      <Card>
-        <CardHeader trailing={<Text size="small" tone="tertiary">submesh_shape given</Text>}>Per-rank tiling</CardHeader>
-        <CardBody>
-          <Stack gap={10}>
-            <Row gap={12}>
-              <TileGrid rows={8} cols={4} tile={[4, 2]} title="M0 (4x2 tiles)" cell={10} label={(r, c) => `r${r * 2 + c}`} />
-              <TileGrid rows={8} cols={4} tile={[1, 2]} title="M1 (1x2 tiles)" cell={10} label={() => ""} />
-            </Row>
-            <Text size="small" tone="secondary">
-              Stamp one shape row-major over each mesh. Each rank keeps the first tile whose (0,0) chip it owns; identical chip
-              sets collapse into a joint stage. The resolver then picks which stage goes on which tile.
-            </Text>
-            <Text size="small" tone="tertiary">
-              create_submeshes + _collect_submeshes. The only path for llama_8b_pod (4x2 and 1x2 slices).
-            </Text>
-          </Stack>
-        </CardBody>
-      </Card>
-      <Card>
-        <CardHeader trailing={<Text size="small" tone="tertiary">policy: RELAXED</Text>}>Host cuts on RELAXED edges (later)</CardHeader>
-        <CardBody>
-          <Stack gap={10}>
-            <svg width="100%" viewBox="0 0 260 96" style={{ maxWidth: 260 }}>
-              <ArrowDefs id="fx-arrow" color={t.text.secondary} />
-              <ArrowDefs id="fx-host" color={t.category.orange} />
-              {["s0", "s1", "s2", "s3"].map((s, i) => (
-                <g key={s}>
-                  <rect x={8 + i * 62} y={20} width={46} height={30} rx={5} fill={t.fill.secondary} stroke={t.stroke.primary} />
-                  <text x={31 + i * 62} y={40} textAnchor="middle" fontSize={12} fontWeight={600} fill={t.text.primary}>
-                    {s}
-                  </text>
-                  {i < 3 ? (
-                    <line x1={54 + i * 62} y1={35} x2={70 + i * 62} y2={35} stroke={t.text.secondary} markerEnd="url(#fx-arrow)" />
-                  ) : null}
-                </g>
-              ))}
-              <path d="M 217 50 C 217 88, 31 88, 31 54" fill="none" stroke={t.category.orange} strokeDasharray="5 3" markerEnd="url(#fx-host)" />
-              <text x={124} y={92} textAnchor="middle" fontSize={10} fill={t.category.orange}>
-                host MPI hop
-              </text>
-              <text x={124} y={12} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
-                one fabric chain
-              </text>
-            </svg>
-            <Text size="small" tone="secondary">
-              For a pipeline with RELAXED edges. First try an all-fabric cycle. Otherwise cover the ring with the fewest fabric
-              chains and join them over host, cutting only RELAXED edges. Then carve from the plan, or tile by the uniform stage
-              shape, and resolve each chain on its own.
-            </Text>
-            <Text size="small" tone="tertiary">
-              host_edge_planner.plan_ring_placement (tt-blaze #4513)
-            </Text>
-          </Stack>
-        </CardBody>
-      </Card>
-    </Grid>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // unique_shapes illustration
@@ -3240,661 +2986,6 @@ function PlanTab() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Worked examples: what the code checks, constrains and places
-// ---------------------------------------------------------------------------
-
-type SliceStage = { mesh: 0 | 1; from: number; to: number; label: string; idle?: boolean };
-type SliceCable = { a: number; b: number; kind?: CableKind; label?: string };
-
-/** Two meshes drawn as rows of four 4x2 host slices; stages are boxes over whole slices. */
-function SliceMap(props: {
-  stages: SliceStage[];
-  cables: SliceCable[];
-  intraBreak?: boolean;
-  host?: { from: [0 | 1, number]; to: [0 | 1, number]; label: string };
-  verdict?: { ok: boolean; text: string };
-}) {
-  const t = useHostTheme();
-  const sw = 92;
-  const sh = 46;
-  const x0 = 44;
-  const y = [44, 150] as const;
-  const W = x0 + 4 * sw + 20;
-  const H = 228;
-  const cx = (i: number) => x0 + i * sw + sw / 2;
-  const cableColor = (k?: CableKind) =>
-    k === "required" ? t.accent.primary : k === "unused" ? t.stroke.secondary : t.text.primary;
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: W, minWidth: 0.8 * W }}>
-      <ArrowDefs id="sm-host" color={t.category.orange} />
-      {([0, 1] as const).map((m) => (
-        <g key={m}>
-          <text x={4} y={y[m] + sh / 2 + 4} fontSize={12} fontWeight={600} fill={t.text.secondary}>
-            {m === 0 ? "M0" : "M1"}
-          </text>
-          {[0, 1, 2, 3].map((i) => (
-            <g key={i}>
-              <rect
-                x={x0 + i * sw}
-                y={y[m]}
-                width={sw}
-                height={sh}
-                fill={t.fill.quaternary}
-                stroke={t.stroke.secondary}
-                strokeDasharray="3 3"
-              />
-              <text x={cx(i)} y={m === 0 ? y[m] - 6 : y[m] + sh + 14} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
-                {(m === 0 ? "A" : "B") + i} · rank {m * 4 + i}
-              </text>
-            </g>
-          ))}
-        </g>
-      ))}
-      {props.stages.map((s) => (
-        <g key={`${s.mesh}-${s.from}-${s.label}`}>
-          <rect
-            x={x0 + s.from * sw + 3}
-            y={y[s.mesh] + 3}
-            width={(s.to - s.from + 1) * sw - 6}
-            height={sh - 6}
-            rx={5}
-            fill={s.idle ? "none" : t.fill.secondary}
-            stroke={s.idle ? t.stroke.tertiary : t.accent.primary}
-            strokeDasharray={s.idle ? "3 3" : undefined}
-          />
-          <text
-            x={(cx(s.from) + cx(s.to)) / 2}
-            y={y[s.mesh] + sh / 2 + 4}
-            textAnchor="middle"
-            fontSize={12}
-            fontWeight={s.idle ? 400 : 600}
-            fill={s.idle ? t.text.tertiary : t.text.primary}
-          >
-            {s.label}
-          </text>
-        </g>
-      ))}
-      {props.cables.map((c, i) => (
-        <g key={i}>
-          <line
-            x1={cx(c.a) + (c.label === "2nd" ? 10 : 0)}
-            y1={y[0] + sh}
-            x2={cx(c.b) + (c.label === "2nd" ? 10 : 0)}
-            y2={y[1]}
-            stroke={cableColor(c.kind)}
-            strokeWidth={c.kind === "unused" ? 1.2 : 2.2}
-            strokeDasharray={c.kind === "unused" ? "4 3" : undefined}
-          />
-        </g>
-      ))}
-      {props.host
-        ? (() => {
-            const a = props.host.from;
-            const b = props.host.to;
-            const ax = cx(a[1]);
-            const bx = cx(b[1]);
-            const ay = a[0] === 0 ? y[0] : y[1] + sh;
-            const by = b[0] === 0 ? y[0] : y[1] + sh;
-            const lift = a[0] === 0 ? -1 : 1;
-            return (
-              <g>
-                <path
-                  d={`M ${ax} ${ay} C ${ax} ${ay + lift * 34}, ${bx} ${by + lift * 34}, ${bx} ${by + lift * 2}`}
-                  fill="none"
-                  stroke={t.category.orange}
-                  strokeWidth={1.8}
-                  strokeDasharray="5 3"
-                  markerEnd="url(#sm-host)"
-                />
-                <text x={(ax + bx) / 2} y={a[0] === 0 ? 10 : H - 2} textAnchor="middle" fontSize={10.5} fill={t.category.orange}>
-                  {props.host.label}
-                </text>
-              </g>
-            );
-          })()
-        : null}
-      {props.verdict ? (
-        <text x={W - 6} y={y[1] - 30} textAnchor="end" fontSize={11} fontWeight={600} fill={props.verdict.ok ? t.category.green : t.category.red}>
-          {props.verdict.text}
-        </text>
-      ) : null}
-    </svg>
-  );
-}
-
-/** One galaxy as eight 4x1 rank columns on a column ring; stages are boxes over whole columns. */
-function ColumnRing(props: {
-  stages: Array<{ from: number; to: number; label: string; bad?: boolean }>;
-  caption: string;
-  verdict: { ok: boolean; text: string };
-}) {
-  const t = useHostTheme();
-  const cw = 56;
-  const ch = 70;
-  const x0 = 14;
-  const y0 = 28;
-  const W = x0 * 2 + 8 * cw;
-  const H = 172;
-  const cx = (i: number) => x0 + i * cw + cw / 2;
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: W, minWidth: 0.8 * W }}>
-      <text x={x0} y={14} fontSize={11} fill={t.text.secondary}>
-        {props.caption}
-      </text>
-      {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
-        <g key={i}>
-          <rect x={x0 + i * cw} y={y0} width={cw} height={ch} fill={t.fill.quaternary} stroke={t.stroke.secondary} strokeDasharray="3 3" />
-          <text x={cx(i)} y={y0 + ch + 14} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
-            C{i} · r{i}
-          </text>
-        </g>
-      ))}
-      {props.stages.map((s) => (
-        <g key={`${s.from}-${s.label}`}>
-          <rect
-            x={x0 + s.from * cw + 3}
-            y={y0 + 3}
-            width={(s.to - s.from + 1) * cw - 6}
-            height={ch - 6}
-            rx={5}
-            fill={s.bad ? "none" : t.fill.secondary}
-            stroke={s.bad ? t.category.red : t.accent.primary}
-            strokeDasharray={s.bad ? "4 3" : undefined}
-          />
-          <text x={(cx(s.from) + cx(s.to)) / 2} y={y0 + ch / 2 + 4} textAnchor="middle" fontSize={12} fontWeight={600} fill={s.bad ? t.category.red : t.text.primary}>
-            {s.label}
-          </text>
-        </g>
-      ))}
-      <path
-        d={`M ${cx(7)} ${y0 + ch + 20} C ${cx(7)} ${H - 26}, ${cx(0)} ${H - 26}, ${cx(0)} ${y0 + ch + 20}`}
-        fill="none"
-        stroke={t.text.secondary}
-        strokeWidth={1.4}
-      />
-      <text x={(cx(0) + cx(7)) / 2} y={H - 4} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
-        column wrap C7 to C0 (RING)
-      </text>
-      <text x={W - x0} y={14} textAnchor="end" fontSize={11} fontWeight={600} fill={props.verdict.ok ? t.category.green : t.category.red}>
-        {props.verdict.text}
-      </text>
-    </svg>
-  );
-}
-
-/** Three pods as SAT seats, with the seat-graph link counts between them. */
-function SeatGraph() {
-  const t = useHostTheme();
-  const W = 380;
-  const H = 210;
-  const pos: Record<string, [number, number]> = { P: [190, 40], Q: [70, 170], R: [310, 170] };
-  const edges: Array<{ a: string; b: string; label: string; dropped?: boolean }> = [
-    { a: "P", b: "Q", label: "2 links" },
-    { a: "P", b: "R", label: "2 links" },
-    { a: "Q", b: "R", label: "1 link: dropped once Plan 1 lands (k = 2)", dropped: true },
-  ];
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: W, minWidth: 0.8 * W }}>
-      {edges.map((e) => {
-        const [ax, ay] = pos[e.a];
-        const [bx, by] = pos[e.b];
-        const x1 = e.dropped ? ax + 46 : ax;
-        const y1 = e.dropped ? ay : ay + 18;
-        const x2 = e.dropped ? bx - 46 : bx;
-        const y2 = e.dropped ? by : by - 18;
-        const mx = (x1 + x2) / 2;
-        const my = (y1 + y2) / 2;
-        return (
-          <g key={e.a + e.b}>
-            <line
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
-              stroke={e.dropped ? t.category.red : t.accent.primary}
-              strokeWidth={e.dropped ? 1.5 : 2.4}
-              strokeDasharray={e.dropped ? "5 4" : undefined}
-            />
-            <text
-              x={e.dropped ? mx : mx + (e.a === "P" && e.b === "Q" ? -34 : 34)}
-              y={e.dropped ? my + 34 : my}
-              textAnchor="middle"
-              fontSize={11}
-              fill={e.dropped ? t.category.red : t.text.secondary}
-            >
-              {e.label}
-            </text>
-          </g>
-        );
-      })}
-      {Object.entries(pos).map(([name, [x, y]]) => (
-        <g key={name}>
-          <rect x={x - 46} y={y - 18} width={92} height={36} rx={6} fill={t.fill.secondary} stroke={t.stroke.primary} />
-          <text x={x} y={y - 2} textAnchor="middle" fontSize={13} fontWeight={600} fill={t.text.primary}>
-            pod {name}
-          </text>
-          <text x={x} y={y + 12} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
-            4x8, hosts h0..h3
-          </text>
-        </g>
-      ))}
-    </svg>
-  );
-}
-
-/** M0 as four 4x2 slices above M1, a 2x4 mesh with one 1x2 slice per rank. */
-function SmallMeshMap(props: {
-  m0: string[];
-  m1: string[];
-  cables: Array<{ a: number; row: number; col: number }>;
-  verdict: { ok: boolean; text: string };
-}) {
-  const t = useHostTheme();
-  const sw = 80;
-  const x0 = 44;
-  const W = x0 + 4 * sw + 120;
-  const yA = 26;
-  const cell = 46;
-  const mx = x0 + 2 * sw - 2 * cell;
-  const yB = 124;
-  const H = yB + 2 * 30 + 24;
-  const tiles = [
-    { name: "T0", r: 0, c: 0, rank: 4 },
-    { name: "T1", r: 0, c: 2, rank: 5 },
-    { name: "T2", r: 1, c: 0, rank: 6 },
-    { name: "T3", r: 1, c: 2, rank: 7 },
-  ];
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: W, minWidth: 0.8 * W }}>
-      <text x={4} y={yA + 25} fontSize={12} fontWeight={600} fill={t.text.secondary}>
-        M0
-      </text>
-      <text x={4} y={yB + 34} fontSize={12} fontWeight={600} fill={t.text.secondary}>
-        M1
-      </text>
-      {props.m0.map((label, i) => (
-        <g key={i}>
-          <rect x={x0 + i * sw + 3} y={yA + 3} width={sw - 6} height={38} rx={5} fill={t.fill.secondary} stroke={t.accent.primary} />
-          <text x={x0 + i * sw + sw / 2} y={yA + 26} textAnchor="middle" fontSize={12} fontWeight={600} fill={t.text.primary}>
-            {label}
-          </text>
-          <text x={x0 + i * sw + sw / 2} y={yA - 6} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
-            A{i} · rank {i}
-          </text>
-        </g>
-      ))}
-      {tiles.map((tile, i) => (
-        <g key={tile.name}>
-          <rect
-            x={mx + tile.c * cell + 2}
-            y={yB + tile.r * 30 + 2}
-            width={2 * cell - 4}
-            height={26}
-            rx={4}
-            fill={t.fill.secondary}
-            stroke={t.accent.primary}
-          />
-          <text x={mx + tile.c * cell + cell} y={yB + tile.r * 30 + 19} textAnchor="middle" fontSize={11} fontWeight={600} fill={t.text.primary}>
-            {tile.name} {props.m1[i]}
-          </text>
-          <text
-            x={tile.c === 0 ? mx - 6 : mx + 4 * cell + 6}
-            y={yB + tile.r * 30 + 19}
-            textAnchor={tile.c === 0 ? "end" : "start"}
-            fontSize={10}
-            fill={t.text.tertiary}
-          >
-            rank {tile.rank}
-          </text>
-        </g>
-      ))}
-      {[1, 2, 3].map((c) => (
-        <line key={c} x1={mx + c * cell} y1={yB + 2} x2={mx + c * cell} y2={yB + 58} stroke={t.stroke.tertiary} strokeDasharray="2 3" />
-      ))}
-      {props.cables.map((c, i) => (
-        <g key={i}>
-          <line
-            x1={x0 + c.a * sw + sw / 2}
-            y1={yA + 41}
-            x2={mx + c.col * cell + cell / 2}
-            y2={yB + c.row * 30 + 15}
-            stroke={props.verdict.ok ? t.accent.primary : t.category.red}
-            strokeWidth={2}
-          />
-          <circle cx={mx + c.col * cell + cell / 2} cy={yB + c.row * 30 + 15} r={3.5} fill={props.verdict.ok ? t.accent.primary : t.category.red} />
-        </g>
-      ))}
-      <text x={W - 4} y={yB + 34} textAnchor="end" fontSize={11} fontWeight={600} fill={props.verdict.ok ? t.category.green : t.category.red}>
-        {props.verdict.text}
-      </text>
-    </svg>
-  );
-}
-
-const RUN_MIXED4 = `
-mesh_descriptors {
-  name: "M"  arch: BLACKHOLE
-  device_topology { dims: [ 4, 8 ] }
-  host_topology   { dims: [ 1, 4 ] }   # 4 ranks per mesh, each a 4x2 slice
-  channels { count: 2 policy: RELAXED }
-}
-
-graph_descriptors {
-  name: "G"  type: "FABRIC"
-  instances { mesh { mesh_descriptor: "M" mesh_id: 0 } }   # M0: slices A0..A3, ranks 0-3
-  instances { mesh { mesh_descriptor: "M" mesh_id: 1 } }   # M1: slices B0..B3, ranks 4-7
-  graph_topology { layout_type: ALL_TO_ALL channels { count: 2 policy: RELAXED } }
-}
-top_level_instance { graph { graph_descriptor: "G" graph_id: 0 } }
-
-# 2 meshes x 4 slices = 8 slices; the ring below needs 1 + 2 + 2 + 1 = 6
-pipeline_descriptors {
-  name: "mixed4"
-  stages { id: 0 shape { dims: [ 4, 2 ] } }   # 1 slice
-  stages { id: 1 shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
-  stages { id: 2 shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
-  stages { id: 3 shape { dims: [ 4, 2 ] } }   # 1 slice
-  edges { src: 0 dst: 1 }  edges { src: 1 dst: 2 }
-  edges { src: 2 dst: 3 }  edges { src: 3 dst: 0 }
-}`;
-
-const RUN_POD8 = `
-mesh_descriptors {
-  name: "Big"  arch: BLACKHOLE
-  device_topology { dims: [ 4, 8 ] }
-  host_topology   { dims: [ 1, 4 ] }   # 4 ranks, each a 4x2 slice
-  channels { count: 2 policy: RELAXED }
-}
-
-mesh_descriptors {
-  name: "Small"  arch: BLACKHOLE
-  device_topology { dims: [ 2, 4 ] }
-  host_topology   { dims: [ 2, 2 ] }   # 4 ranks, each a 1x2 slice
-  channels { count: 2 policy: RELAXED }
-}
-
-graph_descriptors {
-  name: "G"  type: "FABRIC"
-  instances { mesh { mesh_descriptor: "Big"   mesh_id: 0 } }   # M0: slices A0..A3, ranks 0-3
-  instances { mesh { mesh_descriptor: "Small" mesh_id: 1 } }   # M1: slices T0..T3, ranks 4-7
-  graph_topology { layout_type: ALL_TO_ALL channels { count: 2 policy: RELAXED } }
-}
-top_level_instance { graph { graph_descriptor: "G" graph_id: 0 } }
-
-# 2 meshes x 4 slices = 8 slices; the ring below needs 8 x 1 = 8
-pipeline_descriptors {
-  name: "pod8"
-  stages { id: 0 shape { dims: [ 4, 2 ] } }   # 1 slice of Big
-  stages { id: 1 shape { dims: [ 4, 2 ] } }
-  stages { id: 2 shape { dims: [ 4, 2 ] } }
-  stages { id: 3 shape { dims: [ 4, 2 ] } }
-  stages { id: 4 shape { dims: [ 1, 2 ] } }   # 1 slice of Small
-  stages { id: 5 shape { dims: [ 1, 2 ] } }
-  stages { id: 6 shape { dims: [ 1, 2 ] } }
-  stages { id: 7 shape { dims: [ 1, 2 ] } }
-  edges { src: 0 dst: 1 }  edges { src: 1 dst: 2 }
-  edges { src: 2 dst: 3 }  edges { src: 3 dst: 4 }
-  edges { src: 4 dst: 5 }  edges { src: 5 dst: 6 }
-  edges { src: 6 dst: 7 }  edges { src: 7 dst: 0 }
-}`;
-
-const RUN_MACHINE = `
-pods P, Q, R: 4x8 grids, four hosts h0..h3 (4x2 each)
-boards U, V:  2x4, four 2-chip hosts
-
-P.h0 - Q.h0    P.h3 - Q.h3       P-Q: 2 links
-P.h0 - R.h0    P.h2 - R.h2       P-R: 2 links
-Q.h1 - R.h1                      Q-R: 1 link
-P.h0, P.h3 - two chips of U      P-U: 2 links
-P.h0, P.h3 - two chips of V      P-V: 2 links
-
-assumed layout: mesh host rank i on host hi of its seat
-  (M0 on P, M1 on Q): cables on A0-B0, A3-B3
-  (M0 on P, M1 on R): cables on A0-B0, A2-B2`;
-
-function RunningExamples() {
-  return (
-    <Stack gap={10}>
-      <H2>Running examples</H2>
-      <Text tone="secondary">
-        Every part below ends with examples of what that step checks, including its edge cases. They are hypothetical, traced by
-        hand through the code as it stands; nothing was run. Slices of a 4x8 mesh with host_topology [1, 4] are A0..A3 on M0
-        (ranks 0-3) and B0..B3 on M1 (ranks 4-7); inside a mesh they form a line.
-      </Text>
-      <Grid columns={fit(360)} gap={16} align="start">
-        <CodeCard path="mixed4: stages that span two ranks" mode="plain" language="protobuf" src={RUN_MIXED4} />
-        <Stack gap={12}>
-          <CodeCard path="pod8: different slice shapes (llama_8b_pod pattern)" mode="plain" language="protobuf" src={RUN_POD8} />
-          <CodeCard path="the machine" mode="plain" language="text" src={RUN_MACHINE} />
-        </Stack>
-      </Grid>
-    </Stack>
-  );
-}
-
-// --- Descriptor tab: Tier A and Tier B -------------------------------------
-
-/** mixed4 ring with each stage painted by the mesh a projection assigns it to. A red edge crosses M0/M1. */
-function ProjectionRing(props: { title: string; mesh: [0 | 1, 0 | 1, 0 | 1, 0 | 1]; verdict: string; ok: boolean }) {
-  const t = useHostTheme();
-  const W = 210;
-  const H = 148;
-  const pos: Array<[number, number]> = [
-    [48, 36],
-    [162, 36],
-    [162, 100],
-    [48, 100],
-  ];
-  const names = ["s0", "s1", "s2", "s3"];
-  const edges: Array<[number, number]> = [
-    [0, 1],
-    [1, 2],
-    [2, 3],
-    [3, 0],
-  ];
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: W }}>
-      <text x={4} y={14} fontSize={11} fontWeight={600} fill={t.text.primary}>
-        {props.title}
-      </text>
-      {edges.map(([a, b], i) => {
-        const cross = props.mesh[a] !== props.mesh[b];
-        const [x1, y1] = pos[a];
-        const [x2, y2] = pos[b];
-        const dx = x2 - x1;
-        const dy = y2 - y1;
-        const len = Math.hypot(dx, dy) || 1;
-        const pad = 18;
-        return (
-          <line
-            key={i}
-            x1={x1 + (dx / len) * pad}
-            y1={y1 + (dy / len) * pad}
-            x2={x2 - (dx / len) * pad}
-            y2={y2 - (dy / len) * pad}
-            stroke={cross ? t.category.red : t.text.tertiary}
-            strokeWidth={cross ? 2.4 : 1.4}
-          />
-        );
-      })}
-      {names.map((name, i) => {
-        const [x, y] = pos[i];
-        const onM0 = props.mesh[i] === 0;
-        return (
-          <g key={name}>
-            <rect x={x - 16} y={y - 12} width={32} height={24} rx={5} fill={onM0 ? t.accent.primary : t.fill.secondary} stroke={t.stroke.primary} />
-            <text x={x} y={y + 4} textAnchor="middle" fontSize={11} fontWeight={600} fill={onM0 ? t.text.onAccent : t.text.primary}>
-              {name}
-            </text>
-          </g>
-        );
-      })}
-      <text x={4} y={H - 6} fontSize={10} fontWeight={600} fill={props.ok ? t.category.green : t.category.red}>
-        {props.verdict}
-      </text>
-    </svg>
-  );
-}
-
-function DescriptorExamples() {
-  return (
-    <Stack gap={12}>
-      <H2>Examples: Tier A</H2>
-      <Table
-        headers={["Descriptor", "Result", "Why"]}
-        rows={[
-          ["mixed4", "pass", "ids unique, edges name declared stages, out-degree 1 everywhere, one cycle (s3 > s0 is the loopback)"],
-          ["pod8", "pass", "a ring of 8; loopback s7 > s0"],
-          ["mixed4 with s3 > s0 not marked loopback", "reject", "the cycle s0 > s1 > s2 > s3 > s0 has no loopback edge"],
-          ["mixed4 with s1 > s2 marked loopback instead", "pass", "any edge of the cycle may be the loopback"],
-          ["a chain s0 > s1 marked loopback", "reject", "the loopback closes no cycle"],
-          ["mixed4 + edge s1 > s1", "reject", "self-edge"],
-          ["mixed4 with s0 > s1 repeated", "pass", "two channels on that hop; the builder reads one link per edge"],
-          ["dflash: router > target0..37 > router, router > draft0..10 > router, both returns loopback", "pass", "ids unique, edges name declared stages, shapes positive, each cycle has its loopback"],
-          ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "pass", "a branch may dead-end; Tier A does not limit stage topology"],
-          ["a stage with three outgoing branches", "pass", "Tier A does not limit stage topology"],
-          ["a branch stage with out-degree 2", "pass", "Tier A does not limit stage topology"],
-          ["two stages with in-degree 0", "reject", "exactly one stage may have no incoming edge besides loopbacks; it owns host I/O"],
-          ["mixed4 with policy: RELAXED on s3 > s0", "reject", "RELAXED is rejected by Tier A in the first version. RELAXED (later): passes"],
-          ["RELAXED (later): mixed4 with s0 > s1 RELAXED", "pass", "allowed; Tier C's planner still never cuts stage 0's outgoing edge"],
-          ["RELAXED (later): dflash with router > draft0 RELAXED", "pass", "any edge may be RELAXED"],
-          ["mixed4 plus a copy named mixed4_b", "pass here", "each is checked on its own; Tier B checks them together"],
-          ["mixed4 plus a copy also named mixed4", "reject", "pipeline names must be unique"],
-          ["a stage [2, 4] where every slice is 4x2", "pass here", "no transpose, so Tier B finds no mesh it binds to"],
-        ]}
-        rowTone={[
-          "success", "success", "danger", "success", "success", "warning", "warning", "warning", "warning", "success", "warning",
-          "warning", "warning", "danger", "warning",
-        ]}
-      />
-
-      <H2>Examples: Tier B</H2>
-      <Text tone="secondary">
-        mixed4: slices are 4x2, four per mesh; 4x2 is one slice and 4x4 two, so every stage binds to either mesh; the ring needs
-        6 of 8 slices. The table lists projections as the optional "find all" run sees them (each row also stands for its
-        mirror, since M0 and M1 are interchangeable); the existence search stops at the first survivor and chooses nothing.
-      </Text>
-      <Table
-        headers={["Projection", "Slices M0 / M1", "Crossings", "Result"]}
-        rows={[
-          ["all four stages on M0", "6 / 0", "0", "dropped: M0 holds 4 slices"],
-          ["s0, s1 > M0; s2, s3 > M1", "3 / 3", "2", "survives"],
-          ["s0, s1, s3 > M0; s2 > M1", "4 / 2", "2", "survives"],
-          ["s0, s2 > M0; s1, s3 > M1", "3 / 3", "4", "dropped: 2 channels"],
-        ]}
-        rowTone={["danger", "success", "success", "danger"]}
-      />
-      <Text size="small" tone="tertiary">
-        Filled stage is on M0, outlined stage is on M1. A red edge is a hop whose two ends sit on different meshes. graph_topology
-        allows 2 such hops.
-      </Text>
-      <Grid columns={fit(200)} gap={12} align="start">
-        <ProjectionRing title="all four on M0" mesh={[0, 0, 0, 0]} ok={false} verdict="0 crossings, 6 slices on M0" />
-        <ProjectionRing title="s0 s1 | s2 s3" mesh={[0, 0, 1, 1]} ok={true} verdict="2 crossings, survives" />
-        <ProjectionRing title="s0 s1 s3 | s2" mesh={[0, 0, 1, 0]} ok={true} verdict="2 crossings, survives" />
-        <ProjectionRing title="s0 s2 | s1 s3" mesh={[0, 1, 0, 1]} ok={false} verdict="4 crossings, 2 channels" />
-      </Grid>
-      <Text tone="secondary">
-        The existence search: s1 (2 slices) first, on M0 (the lowest empty mesh, so its mirror is never tried); s0 joins it
-        (3 of 4); s2 needs 2 slices with 1 free, so M1 (channel 1); s3 ties between neighbours and takes M1, with more room
-        (channel 2). The leaf carves both meshes and Tier B passes after a handful of nodes. In the "find all" run every
-        survivor crosses, and a ring crosses a cut an even number of times, so Plan 1 gets k(M0, M1) = 2. pod8 has exactly
-        one projection: 4x2 binds only to M0 (M1 has 2 rows) and 1x2 only to M1 (not whole 4x2 slices). M0's four stages fill a
-        line, so its boundary slices are A0 and A3.
-      </Text>
-      <Table
-        headers={["Change", "Result", "Rule"]}
-        rows={[
-          ["mixed4 + a fifth stage [4, 6]", "reject", "9 slices needed, 8 declared"],
-          ["mixed4 + a fifth stage [4, 4]", "pass", "8 of 8: s0, s3 and one 4x4 on one mesh, two 4x4 on the other"],
-          ["mixed4 with a stage [4, 10]", "reject", "wider than either mesh"],
-          ["pod8 with M1 4x8, host [1, 4], still 1x2 stages", "reject", "1x2 is not a whole slice; stricter than blaze's per-rank tiling"],
-          ["mixed4 with no MGD connection", "reject", "every projection crosses on some edge"],
-          ["RELAXED (later): the same, s1 > s2 and s3 > s0 RELAXED", "pass", "s0, s1 > M0; s2, s3 > M1 crosses only on RELAXED edges, which need no connection"],
-          ["RELAXED (later): the same, only s3 > s0 RELAXED", "reject", "every projection still crosses on a STRICT edge"],
-          ["mixed4 plus a copy named mixed4_b", "reject", "6 + 6 = 12 slices needed, 8 declared, although each fits alone"],
-          ["two copies of ring4 (four 4x2 stages each)", "reject", "8 of 8 slices fit, but A0..A3 is a line, so each ring splits and crosses twice: 4 crossings, 2 channels"],
-          ["the same, channels { count: 4 }", "pass", "each ring splits 2 + 2; a projection places all eight stages at once"],
-        ]}
-        rowTone={["danger", "success", "danger", "warning", "danger", "success", "danger", "danger", "danger", "success"]}
-      />
-      <H3>How the connectivity check runs (plan)</H3>
-      <Text tone="secondary">
-        Tier B never looks at chips or cables. It searches two small graphs the MGD already holds: the mesh graph, with a
-        channel count per mesh pair, and inside each mesh the slice grid (host_topology, with RING wraps). One search covers
-        every pipeline at once, because pipelines share slices and channels.
-      </Text>
-      <Grid columns={fit(420)} gap={16} align="start">
-        <CodeCard path="detail::check_pipeline_feasibility (pipeline_builder.cpp): the search" mode="plain" language="text" src={TIER_B_SEARCH} />
-        <Stack gap={10}>
-          <Table
-            headers={["", "STRICT edge (first version)", "RELAXED edge (later)"]}
-            rows={[
-              ["crosses meshes A and B", "needs cap(A, B) >= 1, uses one channel", "no condition"],
-              ["both ends on one mesh", "the two rectangles must touch", "no condition"],
-              ["k_AB, boundary slices", "counted", "not counted"],
-              ["every edge of a pipeline", "full search", "steps 1, 2 and no-overlap only"],
-            ]}
-          />
-          <Text tone="secondary">
-            cap(A, B) is the sum of count over FABRIC connections with nodes [A, B]. populate stores each connection in both
-            directions, so only one is read. The connection's own policy does not change cap: STRICT binds exactly count and
-            RELAXED binds up to count, so count is the most Tier B may assume. Binding fewer is Tier C's problem.
-          </Text>
-        </Stack>
-      </Grid>
-      <Table
-        headers={["Change", "Step that decides", "Why"]}
-        rows={[
-          ["fifth stage [4, 6]", "2", "1 + 2 + 2 + 1 + 3 = 9 slices, 8 declared"],
-          ["fifth stage [4, 4] between s3 and s0", "3, 4", "stops at s3, s4, s0 > M0 (path A0 / A1-A2 / A3) and s1, s2 > M1; 2 crossings, 2 channels; nothing stored. \"Find all\" adds the mirror and both carves on M0 (s3 or s0 on A0), so boundary slices {A0, A3}"],
-          ["a stage [4, 10]", "1", "10 columns > 8: no mesh"],
-          ["pod8, M1 as 4x8", "1", "[1, 2] / [4, 2] is not whole: no mesh"],
-          ["no MGD connection", "3", "cap = 0, and no single mesh holds 6 slices, so some edge crosses"],
-          ["RELAXED (later): s1 > s2, s3 > s0 RELAXED", "3, 4", "s0, s1 > M0; s2, s3 > M1 crosses only on RELAXED edges"],
-          ["RELAXED (later): only s3 > s0 RELAXED", "3", "a ring crosses a cut at least twice; only one crossing can be RELAXED"],
-          ["mixed4 + mixed4_b", "2", "6 + 6 = 12 slices, 8 declared"],
-          ["two copies of ring4, 2 channels", "passes (backup step 4 would reject)", "no 4-cycle on a line of slices, so each ring crosses twice: 4 > 2; Tier C rejects it today"],
-        ]}
-      />
-      <H3>Output: mapping constraints for Tier C (backup if the solve is slow, not implemented)</H3>
-      <Text tone="secondary">
-        Not in the first version: Tier B saves nothing. As a backup, it would save what it found as PipelineMappingConstraints on the descriptor: binding sets, k_AB and the minimum
-        crossings per mesh, and the boundary slices per mesh pair. No projection list is stored. Every fact holds for every
-        surviving projection and carve, so constraints built from it never drop a buildable seating. The MGD library stores plain MGD
-        types; pipeline_builder turns them into the mapper's generic ExtraMappingConstraints hooks, which TopologyMapper passes in through TopologyMappingConfig (P10).
-      </Text>
-      <Table
-        headers={["Helper", "Fills", "Adds"]}
-        rows={[
-          ["stage_to_mesh_constraints (report)", "MappingConstraints<PipelineStageNode, MeshId>", "required: stage to its binding set (not a solve)"],
-          ["ExtraMappingConstraints::allow_seat", "SAT seating, in apply_extra_constraints", "forbidden: seats of m with fewer than min_crossings_out(m) cables leaving the footprint"],
-          ["ExtraMappingConstraints::allow_seat_pair", "SAT seating, in build_sat_placement_seat_graph", "no edge between seats with fewer than k_AB links (Plan 1)"],
-          ["ExtraMappingConstraints::intra_mesh", "intra-mesh, after add_exit_node_constraints", "cardinality: at least ceil(k(m, n) / links per ASIC) chips of boundary_slices(m, n) on ASICs cabled toward n"],
-        ]}
-      />
-      <Text tone="secondary">
-        Cost: of the repo's host_topology values, about 200 are one slice, 60 are 2 to 4, 15 are 8 to 16 and 8 are 32. A stage
-        with one mesh in its binding set makes no branch, so llama_8b_pod is a single path. Interchangeable-mesh symmetry turns
-        8 identical meshes on ALL_TO_ALL (8! = 40320 orderings) into one. The only slow case is a fully used 32-slice grid
-        of one-slice stages that must close a ring (a Hamiltonian-cycle search); the exact segment test rejects the
-        impossible ones before searching, so there is no budget. Why not SAT: a variable per (stage, mesh), pseudo-Boolean
-        capacity sums, crossing counters per mesh pair and placement variables for the carve cost more to build than the
-        search takes, an unsat answer gives no reason, and a plain encoding was no faster on the hard failures.
-        The carve check depends only on the MGD, not on seats, so it stays here: as a SAT placement constraint it would
-        prune nothing.
-        Open: a connection between two sub-graphs does not name meshes, so the first version counts only mesh-to-mesh
-        connections.
-      </Text>
-    </Stack>
-  );
-}
-
 const TIER_B_SEARCH = `
 built once per constructor
   slices[m]   = prod(host_dims), grid dims / host_dims
@@ -3934,654 +3025,58 @@ optional     "find all": same searches, keep going after
              k_AB = min crossings, boundary = union of slices
              holding a crossing stage. budget 10^5, else
              defaults k = 0, every slice a boundary`;
+// ===========================================================================
+// PART I: THE DESIGN
+// ===========================================================================
 
-
-// --- Mapper tab: Tier C, carve planner, resolver, carve paths, loop, Tier D ---
-
-const CARVE_A = `
-phase 0   slices all 4x2; stage_counts = [1, 2, 2, 1]; need = 6 <= 8; stage 0 is 1 slice
-phase 2   A3 has one live neighbour (A2), B3 has one (B2): drop both
-          alive = {A0 A1 A2 B0 B1 B2}; all have 2 neighbours -> no branch slices
-phase 3   _cycles_no_branch walks from the lowest slice A0:
-          A0 A1 A2 B2 B1 B0              length 6 == need
-phase 4   canonical walk: anchor A0; A1 (0,0,2) < B0 (1,0,0), so step to A1
-          forward, offset 0:
-            s0 <- [A0]      M0 rows 0-3 cols 0-1   4x2   ok
-            s1 <- [A1 A2]   M0 rows 0-3 cols 2-5   4x4   ok
-            s2 <- [B2 B1]   M1 rows 0-3 cols 2-5   4x4   ok
-            s3 <- [B0]      M1 rows 0-3 cols 0-1   4x2   ok
-phase 5   slots M0 4x2@(0,0)  M0 4x4@(0,2)  M1 4x4@(0,2)  M1 4x2@(0,0)
-          fillers M0 4x2@(0,6)  M1 4x2@(0,6)          (ranks 3 and 7 idle)`;
-
-const CARVE_B = `
-phase 2   every slice has 2 neighbours: nothing pruned, no branch slices
-phase 3   one loop: A0 A1 A2 A3 B3 B2 B1 B0, length 8
-error     no-cycle-of-length-6: this fabric admits no simple cycle of
-          exactly 6 host slices, which is what a 4-stage loopback ring needs.
-            achievable cycle lengths: [8]
-            nearest: none below, 8 above`;
-
-const CARVE_C = `
-phase 2   nothing pruned. Branch slices: A2 (A1, A3, B2) and B2 (B1, B3, A2)
-          _contract walks out of A2 in neighbour order, three chains A2 -> B2:
-            c0  interior A1 A0 B0 B1   weight 4
-            c1  interior A3 B3         weight 2
-            c2  direct                 weight 0
-phase 3   a cycle = two different chains between A2 and B2 = 2 + w + w slices
-            c0 + c2 = 6     c1 + c2 = 4     c0 + c1 = 8
-          need 6 -> c0 + c2 = A2 A1 A0 B0 B1 B2
-          (found 4 times: 2 start slices x 2 directions; one ring)
-          c0 + c1 passes 6 and is pruned before it closes
-phase 4   same canonical walk and plan as example A
-          a 4x2 ring of 4 stages (need 4) would take c1 + c2 = A2 A3 B3 B2
-
-quirk     need 5 here fails with  achievable cycle lengths: [4]
-          lengths above need are never recorded when branch slices exist`;
-
-const CARVE_D = `
-ring      s0 4x2, s1 4x2, s2 4x8     stage_counts [1, 1, 4], need 6
-phase 3   cycle A0 A1 A2 B2 B1 B0, length 6
-phase 4   s2 needs 4 slices in one row of one mesh; the cycle's same-mesh
-          runs are [3, 3], so every rotation puts s2 across a crossing
-error     no-alignment: found 1 cycle(s) of the right length (6 slices) but
-          no rotation places every stage as its declared rectangle ...
-            cycle's same-mesh run lengths: [3, 3]
-            stage shapes: ['4x2', '4x2', '4x8']`;
-
-const CARVE_F = `
-galaxy    one 4x8 mesh, host_topology [1, 8], both axes RING
-          ranks own 4x1 columns C0..C7; slice graph is one 8-cycle
-ring      s0 4x1, s1 4x2, s2 4x2, s3 4x2, s4 4x1, loopback s4 -> s0
-path      one mesh, but s1..s3 are joint: build_pipeline sets multi_mesh
-          and passes no submesh_shape -> planned carve, not tiling
-phase 0   slices all 4x1; stage_counts [1, 2, 2, 2, 1]; need 8 <= 8
-phase 2   every column has 2 neighbours: nothing pruned, no branch slices
-phase 3   _cycles_no_branch: C0 C1 ... C7, length 8 == need
-phase 4   canonical walk: anchor C0; C1 (0,0,1) < C7 (0,0,7) -> toward C1
-          forward, offset 0:
-            s0 <- [C0]      col 0      4x1   ok
-            s1 <- [C1 C2]   cols 1-2   4x2   ok
-            s2 <- [C3 C4]   cols 3-4   4x2   ok
-            s3 <- [C5 C6]   cols 5-6   4x2   ok
-            s4 <- [C7]      col 7      4x1   ok
-phase 5   4x1@(0,0) 4x2@(0,1) 4x2@(0,3) 4x2@(0,5) 4x1@(0,7); no fillers
-collect   ranks 1+2, 3+4, 5+6 each collapse into one co-owned submesh`;
-
-const COLLECT = `
-M0 slots in plan order: 4x2@(0,0), 4x4@(0,2), 4x2@(0,6)
-  rank 0 -> 4x2@(0,0)   rank 1 -> 4x4@(0,2)   rank 2 -> 4x4@(0,2)   rank 3 -> filler
-  (a rank in zero or two slots is a planner bug and raises)
-collapse identical chip sets, first-rank order:
-  submesh 0 = A0 (8)   1 = A1+A2 (16, ranks 1, 2)   2 = A3 (8)
-  submesh 3 = B0 (8)   4 = B1+B2 (16, ranks 5, 6)   5 = B3 (8)
-6 distinct submeshes >= 4 stages`;
-
-const RESOLVE_MIXED4 = `
-topological order, loopback excluded: s0 s1 s2 s3
-chip counts: s0 8, s1 16, s2 16, s3 8
-submesh links: 0-1 1-2 3-4 4-5 (in mesh), 0-3 and 1-4 (cables)
-
-s0: 2 links + 2 host endpoints = 4 <= capacity 1 x 8; needs 2 neighbours
-    submesh 0 (nbrs 1, 3) candidate     submesh 2 (nbr 1)   skip
-    submesh 3 (nbrs 0, 4) candidate     submesh 5 (nbr 4)   skip
-    try submesh 0
-s1: 16 chips, linked to 0 -> submesh 1
-s2: 16 chips, linked to 1 -> submesh 4 (A2-B2 cable)
-s3: 8 chips, from 4 and to 0 -> submesh 3 (A0-B0 cable closes the ring)
-LinkSearch: one chip pair per edge, exclusive chips first;
-            host endpoints on s0's unused chips
-result: s0 -> 0  s1 -> 1  s2 -> 4  s3 -> 3
-(if submesh 0 failed: submesh 3 next, the mirror s0 B0 ... s3 A0)`;
-
-const RESOLVE_POD8 = `
-planned carve   rejected up front: host slices are not uniform (4x2 vs 1x2)
-per-rank tiling 4x2 on M0, 1x2 on M1; each tile is one rank's slice
-submeshes       A0..A3 (8 chips), T0..T3 (2 chips); nothing collapses
-chip counts     s0..s3 only on A, s4..s7 only on T
-capacity        1 slot/chip on >= 8 chips, 2 on smaller: T has 4 slots
-M0              s0..s3 run A0..A3 or A3..A0
-M1              a path through all of a 4-cycle ends NEXT TO its start
-
-seat U   A3 -> (0,1) in T0, A0 -> (1,3) in T3     opposite corners
-         s4 at T0 -> s7 at T1 or T2, but the cable back is on T3
-         s4 at T3 -> s7 at T1 or T2, but the cable back is on T0
-         no valid submesh assignment found
-
-seat V   A3 -> (0,3) in T1, A0 -> (0,0) in T0     neighbours
-         s0 A0  s1 A1  s2 A2  s3 A3  s4 T1  s5 T3  s6 T2  s7 T0
-         mirror: s0 A3 .. s3 A0, s4 T0  s5 T2  s6 T3  s7 T1`;
-
-const HOSTCUT_TRACE = `
-phase 1   no 6-cycle (only the 8-cycle)
-          census: spare = 2 and 6 + 2 is achievable -> passthrough_ring = 2
-phase 3   one fabric component of 8 >= 6, so k starts at 1
-          _cover_with_chains(1): smallest slice first, smallest free neighbour next
-            1. A0 A1 A2 A3 B3 B2     2. A0 B0 B1 B2 B3 A3     3. A1 A0 B0 B1 B2 B3 ...
-phase 4   _group_walk per cover; cuts only between stages, only on RELAXED edges
-          cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1->s2  skipped: STRICT
-          cover 2 best: s0 A3, s1 B3+B2, s2 B1+B0, s3 A0   cut s3->s0  key (1,0,(3,))
-          key = (cut page sizes, 0 if the loopback is cut else 1, cuts)
-result    cover 2: its one cut is the RELAXED loopback; s3 -> s0 goes over host; carve
-          M0 4x2@(0,6), M1 4x4@(0,4), M1 4x4@(0,0), M0 4x2@(0,0); A1, A2 idle
-          _resolve_chains_separately: one fabric chain s0 -> s1 -> s2 -> s3`;
-
-const TIER_D = `
-mixed4 on (P, R), runtime
-  control plane            binds the two cables Tier C relied on (4.2)
-  build_topology           no submesh_shape -> plan_carve
-  discover_host_slices     allgather: A0..A3, B0..B3, 4x2 each
-  discover_slice_adjacency get_forwarding_direction-confirmed: lines + A0-B0, A2-B2
-  plan_ring_carve          the same 6-cycle and plan as Tier C (example A)
-  crc32 exchange           every rank derived the same plan
-  create_submesh           one call per slot on each rank's own mesh
-  collapse                 ranks 1+2 and 5+6 -> joint submeshes
-  resolve_graph_layout     s0 A0, s1 A1+A2, s2 B1+B2, s3 B0
-
-the same machine today, with a second A0-B0 cable on lower chip ids
-  binding takes both A0-B0 cables; blaze sees only A0-B0
-  _prune_leaves: A3, B3, then A2, B2, then A1, B1, then A0, B0
-  CarvePlanError: no-cycle-of-length-6: only 0 slices can lie on any cycle
-  the mapping is committed, so this is a hard failure`;
-
-function MapperExamples() {
+function Bullets({ items }: { items: string[] }) {
   return (
-    <Stack gap={14}>
-      <H2>Examples: what Tier C decides</H2>
-      <Table
-        headers={["Pipeline", "Seating (M0, M1)", "Cables land on", "Tier C", "Why"]}
-        rows={[
-          ["mixed4", "(P, Q)", "A0-B0, A3-B3", "reject", "one loop of 8 slices, the ring needs exactly 6: the footprint solve finds no carve"],
-          ["mixed4", "(P, R)", "A0-B0, A2-B2", "accept", "a 6-slice loop exists and the stages align onto it"],
-          ["RELAXED (later): mixed4 with s3 > s0 RELAXED", "(P, Q)", "A0-B0, A3-B3", "accept", "one fabric path covers 6 slices; the RELAXED loopback goes over host"],
-          ["pod8", "(P, U)", "A3-T0, A0-T3", "reject", "opposite corners of M1: no path through M1's tiles joins them"],
-          ["pod8", "(P, V)", "A3-T1, A0-T0", "accept", "neighbouring tiles"],
-        ]}
-        rowTone={["danger", "success", "success", "danger", "success"]}
-      />
-
-      <H2>Blaze&apos;s carve planner (runtime reference, not ported)</H2>
-      <Callout tone="info" title="Tier C does not port this">
-        The footprint solve decides the carve, stage order and crossings in one solve (C2). Planner + resolver placed 0 of
-        132 carve-requiring benchmark cases; footprint + resolver decided 127. The planner is kept here because blaze still
-        runs it at runtime, and Tier C should agree with it on whether a carve exists (open question 8).
-      </Callout>
-      <Text tone="secondary">
-        plan_ring_carve works on whole host slices, because _collect_submeshes needs every rank's chips in exactly one slot.
-        Every rank runs it alone and must reach the same plan, so slices are ordered by geometry, never by rank.
-      </Text>
-      <Table
-        headers={["Phase", "Code", "What it does"]}
-        rows={[
-          ["1. discover (not ported)", "discover_host_slices, discover_slice_adjacency", "Each rank's chips become a HostSlice. A neighbour on another slice counts only if get_forwarding_direction confirms it; one link per slice pair is enough. Tier C uses get_coord_range and the candidate links."],
-          ["0. input checks", "top of plan_ring_carve", "Uniform slices; each stage a whole number of slices; need <= slices; stage 0 one slice."],
-          ["2. reduce", "_prune_leaves, _contract", "Drop slices with fewer than 2 live neighbours. Slices with more than 2 are branch slices; runs between them become weighted chains."],
-          ["3. cycle search", "_cycles_no_branch, _cycles_of_length", "Simple cycles of exactly need slices; DFS over branch slices, one chain per step, pruned above need. 200,000 expansions, 64 cycles."],
-          ["4. align", "_group_cycle, _canonical_walk, _as_rectangle", "Fewest crossings first; canonical walk, every rotation, reversed. Each stage's group must be one gap-free rectangle on one mesh with the declared shape."],
-          ["5. emit", "validate_carve_plan", "One CarveSlot per stage in order, a filler per unused slice; every chip covered once."],
-        ]}
-      />
-
-      <H3>A. One loop, no branch slices (mixed4 on (P, R))</H3>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SliceMap
-          stages={[
-            { mesh: 0, from: 0, to: 0, label: "s0" },
-            { mesh: 0, from: 1, to: 2, label: "s1 (4x4)" },
-            { mesh: 1, from: 1, to: 2, label: "s2 (4x4)" },
-            { mesh: 1, from: 0, to: 0, label: "s3" },
-            { mesh: 0, from: 3, to: 3, label: "pruned", idle: true },
-            { mesh: 1, from: 3, to: 3, label: "pruned", idle: true },
-          ]}
-          cables={[
-            { a: 0, b: 0, kind: "required" },
-            { a: 2, b: 2, kind: "required" },
-          ]}
-          verdict={{ ok: true, text: "plan found" }}
-        />
-        <CodeCard path="plan_ring_carve, cables A0-B0 and A2-B2" mode="plain" language="text" src={CARVE_A} />
-      </Grid>
-      <Text tone="secondary">
-        Twelve alignments exist (six rotations, two directions). Four work, each putting the 4x4 stages on a different pair of
-        ranks; the rest fail in _as_rectangle because a 4x4 group would take one slice from each mesh.
-      </Text>
-      <Grid columns={fit(300)} gap={14} align="start">
-        {[
-          {
-            name: "forward, offset 0 (returned)",
-            stages: [
-              { mesh: 0, from: 0, to: 0, label: "s0" },
-              { mesh: 0, from: 1, to: 2, label: "s1" },
-              { mesh: 1, from: 1, to: 2, label: "s2" },
-              { mesh: 1, from: 0, to: 0, label: "s3" },
-            ],
-          },
-          {
-            name: "forward, offset 3",
-            stages: [
-              { mesh: 1, from: 2, to: 2, label: "s0" },
-              { mesh: 1, from: 0, to: 1, label: "s1" },
-              { mesh: 0, from: 0, to: 1, label: "s2" },
-              { mesh: 0, from: 2, to: 2, label: "s3" },
-            ],
-          },
-          {
-            name: "reverse, offset 1 (the resolver's mirror)",
-            stages: [
-              { mesh: 1, from: 0, to: 0, label: "s0" },
-              { mesh: 1, from: 1, to: 2, label: "s1" },
-              { mesh: 0, from: 1, to: 2, label: "s2" },
-              { mesh: 0, from: 0, to: 0, label: "s3" },
-            ],
-          },
-          {
-            name: "reverse, offset 4",
-            stages: [
-              { mesh: 0, from: 2, to: 2, label: "s0" },
-              { mesh: 0, from: 0, to: 1, label: "s1" },
-              { mesh: 1, from: 0, to: 1, label: "s2" },
-              { mesh: 1, from: 2, to: 2, label: "s3" },
-            ],
-          },
-        ].map((m) => (
-          <div key={m.name}>
-            <Stack gap={4}>
-              <Text weight="semibold" size="small">
-                {m.name}
-              </Text>
-              <SliceMap stages={m.stages as SliceStage[]} cables={[{ a: 0, b: 0 }, { a: 2, b: 2 }]} />
-            </Stack>
-          </div>
-        ))}
-      </Grid>
-
-      <H3>B. Wrong loop length (mixed4 on (P, Q))</H3>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SliceMap stages={[]} cables={[{ a: 0, b: 0 }, { a: 3, b: 3 }]} verdict={{ ok: false, text: "STRICT: rejected" }} />
-        <CodeCard path="plan_ring_carve, cables A0-B0 and A3-B3" mode="plain" language="text" src={CARVE_B} />
-      </Grid>
-
-      <H3>C. Branch slices and contraction (add cable A3-B3)</H3>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SliceMap
-          stages={[
-            { mesh: 0, from: 0, to: 0, label: "s0" },
-            { mesh: 0, from: 1, to: 2, label: "s1 (4x4)" },
-            { mesh: 1, from: 1, to: 2, label: "s2 (4x4)" },
-            { mesh: 1, from: 0, to: 0, label: "s3" },
-            { mesh: 0, from: 3, to: 3, label: "c1", idle: true },
-            { mesh: 1, from: 3, to: 3, label: "c1", idle: true },
-          ]}
-          cables={[
-            { a: 0, b: 0, kind: "required" },
-            { a: 2, b: 2, kind: "required" },
-            { a: 3, b: 3, kind: "unused" },
-          ]}
-        />
-        <CodeCard path="plan_ring_carve, three cables" mode="plain" language="text" src={CARVE_C} />
-      </Grid>
-
-      <H3>D. Right length, no alignment</H3>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SliceMap
-          stages={[
-            { mesh: 0, from: 0, to: 2, label: "same-mesh run of 3", idle: true },
-            { mesh: 1, from: 0, to: 2, label: "same-mesh run of 3", idle: true },
-          ]}
-          cables={[
-            { a: 0, b: 0 },
-            { a: 2, b: 2 },
-          ]}
-          verdict={{ ok: false, text: "no-alignment" }}
-        />
-        <CodeCard path="plan_ring_carve, a 4x8 stage" mode="plain" language="text" src={CARVE_D} />
-      </Grid>
-
-      <H3>F. Stages wider than a rank, on one mesh</H3>
-      <Text tone="secondary">
-        A separate setup, galaxy4x1, as in blaze's single_bh_galaxy_4x1_slices MGD. Each rank owns a full-height 4x1 column,
-        and each 4x2 stage is two ranks. The stages start on odd columns because s0 takes column 0 by itself.
-      </Text>
-      <Grid columns={fit(420)} gap={20} align="start">
-        <Stack gap={12}>
-          <ColumnRing
-            caption="forward, start C0 (returned)"
-            verdict={{ ok: true, text: "ok" }}
-            stages={[
-              { from: 0, to: 0, label: "s0" },
-              { from: 1, to: 2, label: "s1" },
-              { from: 3, to: 4, label: "s2" },
-              { from: 5, to: 6, label: "s3" },
-              { from: 7, to: 7, label: "s4" },
-            ]}
-          />
-          <ColumnRing
-            caption="forward, start C1"
-            verdict={{ ok: true, text: "ok" }}
-            stages={[
-              { from: 0, to: 0, label: "s4" },
-              { from: 1, to: 1, label: "s0" },
-              { from: 2, to: 3, label: "s1" },
-              { from: 4, to: 5, label: "s2" },
-              { from: 6, to: 7, label: "s3" },
-            ]}
-          />
-          <ColumnRing
-            caption="forward, start C2"
-            verdict={{ ok: false, text: "s3 = {C7, C0}: not a rectangle" }}
-            stages={[
-              { from: 0, to: 0, label: "s3?", bad: true },
-              { from: 2, to: 2, label: "s0" },
-              { from: 3, to: 4, label: "s1" },
-              { from: 5, to: 6, label: "s2" },
-              { from: 7, to: 7, label: "s3?", bad: true },
-            ]}
-          />
-        </Stack>
-        <CodeCard path="plan_ring_carve, 4x2 stages on 4x1 ranks" mode="plain" language="text" src={CARVE_F} />
-      </Grid>
-      <Table
-        headers={["Alignment", "s0", "s1", "s2", "s3", "s4", "Result"]}
-        rows={[
-          ["forward, start C0 (returned)", "C0", "C1+C2", "C3+C4", "C5+C6", "C7", "ok; the loopback rides the wrap"],
-          ["forward, start C1", "C1", "C2+C3", "C4+C5", "C6+C7", "C0", "ok; s3 to s4 rides the wrap"],
-          ["forward, start C2", "C2", "C3+C4", "C5+C6", "C7+C0", "", "fails: s3 is not a rectangle"],
-          ["reverse, start C0", "C0", "C7+C6", "C5+C4", "C3+C2", "C1", "ok; s0 to s1 rides the wrap"],
-          ["reverse, start C1", "C1", "C0+C7", "", "", "", "fails: s1 is not a rectangle"],
-        ]}
-        rowTone={["success", "success", "danger", "success", "danger"]}
-      />
-      <Text tone="secondary">
-        Sixteen alignments, ten work. The six that fail all put a 4x2 stage on C7 and C0: fabric neighbours through the wrap,
-        but not one rectangle. With one mesh there are no crossings, so Tier B's per-mesh carve check already runs the whole
-        ring and gives the verdict; Tier C agrees.
-      </Text>
-      <Table
-        headers={["Case on this galaxy", "Phase", "Result"]}
-        rows={[
-          ["ring of 4x1, 4x2, 4x2, 4x1 (need 6)", "3", "no-cycle-of-length-6, achievable [8]; blaze pads with 4x1 passthroughs"],
-          ["s0 declared 4x2", "0", "input-infeasible: one rank must drive stage 0"],
-          ["a stage declared 2x2", "0", "not a whole number of 4x1 host slices"],
-          ["a 4x2 stage on C7 and C0", "4", "_as_rectangle rejects it"],
-          ["column axis LINE, not RING", "2", "leaf pruning removes every column"],
-          ["a ring needing 9 slices", "0", "input-infeasible: only 8 slices"],
-        ]}
-      />
-      <Table
-        headers={["Other planner edge case", "Phase", "Result"]}
-        rows={[
-          ["pod8 (4x2 and 1x2 slices)", "0", "host slices are not uniform; per-rank tiling is the path"],
-          ["a 1x2 stage on 4x2 slices", "0", "not a whole number of 4x2 host slices"],
-          ["mixed4 with s0 4x4", "0", "input-infeasible: one rank must drive stage 0"],
-          ["only one cable, A0-B0", "2", "leaf pruning removes every slice"],
-          ["an open chain, no loopback", "before 0", "plan_carve refuses; give it a submesh_shape"],
-          ["a huge fabric", "3", "budget-exhausted (every 8x8 or larger grid in the benchmark); the footprint decides these in seconds"],
-        ]}
-      />
-
-      <H2>Examples: blaze&apos;s runtime carve paths</H2>
-      <Text tone="secondary">
-        What blaze does at runtime on the running examples. Tier C does not try these paths; its one position graph covers
-        all of them (except a stage smaller than a host slice, open question 15).
-      </Text>
-      <Grid columns={fit(420)} gap={20} align="start">
-        <CodeCard path="slots to submeshes (planned carve, mixed4 on (P, R))" mode="plain" language="text" src={COLLECT} />
-        <Stack gap={8}>
-          <Text tone="secondary">Per-rank tiling on mixed4 (P, Q), after the planned carve failed:</Text>
-          <Table
-            headers={["M0 tiles", "M1 tiles", "Result"]}
-            rows={[
-              ["4x2", "4x2", "eight 8-chip submeshes: nothing with 16 chips for s1"],
-              ["4x4", "4x4", "four 16-chip submeshes: nothing with 8 chips for s0"],
-              ["4x2", "4x4", "s0, s3 need neighbouring A slices that both have cables; the cables are on A0 and A3"],
-              ["4x4", "4x2", "the mirror, same failure"],
-            ]}
-            rowTone={["danger", "danger", "danger", "danger"]}
-          />
-        </Stack>
-      </Grid>
-      <H3>RELAXED (later): host cuts on RELAXED edges, mixed4 with s3 &gt; s0 RELAXED, on (P, Q)</H3>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SliceMap
-          stages={[
-            { mesh: 0, from: 3, to: 3, label: "s0" },
-            { mesh: 1, from: 2, to: 3, label: "s1 (4x4)" },
-            { mesh: 1, from: 0, to: 1, label: "s2 (4x4)" },
-            { mesh: 0, from: 0, to: 0, label: "s3" },
-            { mesh: 0, from: 1, to: 2, label: "idle", idle: true },
-          ]}
-          cables={[
-            { a: 0, b: 0, kind: "required" },
-            { a: 3, b: 3, kind: "required" },
-          ]}
-          host={{ from: [0, 0], to: [0, 3], label: "s3 > s0 over host" }}
-          verdict={{ ok: true, text: "s3 > s0 RELAXED: accepted" }}
-        />
-        <CodeCard path="plan_ring_placement" mode="plain" language="text" src={HOSTCUT_TRACE} />
-      </Grid>
-      <Table
-        headers={["Host-cut edge case", "Result"]}
-        rows={[
-          ["a cover whose only alignment cuts a STRICT edge", "skipped"],
-          ["a cover whose only alignment cuts s0 > s1", "skipped, even if s0 > s1 is declared RELAXED: stage 0's outgoing edge stays on fabric"],
-          ["a joint between chains inside a 4x4 stage", "skipped: a wide stage cannot be split by a host hop"],
-          ["pod8 with a RELAXED edge", "HostEdgePlanError (slices not uniform), not caught: reject"],
-          ["all fabric already, single-slice stages", "no plan; the resolver places it as for an all-STRICT pipeline"],
-          ["every edge RELAXED", "cover 1's cut is allowed too; cover 2 still wins, because it cuts the loopback"],
-        ]}
-      />
-      <H3>Several pipelines: two copies of ring4 on the mixed4 meshes</H3>
-      <Text tone="secondary">
-        Here the MGD declares channels count 4 between M0 and M1; with mixed4's 2, Tier B already rejects it. The pipelines form one graph whose components are the pipelines. Per seating, place each on the slices the earlier ones
-        left free, trying every order of the pipelines; unused slices become filler once, at the end. Pipelines share no edge,
-        so each is resolved as its own graph. Accept only if every pipeline is placed and resolves.
-      </Text>
-      <Table
-        headers={["Cables", "Placement", "Tier C"]}
-        rows={[
-          [
-            "A0-B0, A2-B2, A3-B3",
-            "ring4_a takes the only 4-cycle, A2 A3 B3 B2; A0, A1, B0, B1 form a path with no cycle, so ring4_b fails; the other order fails the same way",
-            "reject, although each fits alone",
-          ],
-          ["add A1-B1", "ring4_a takes A0 A1 B1 B0, ring4_b takes A2 A3 B3 B2", "accept, every slice used"],
-        ]}
-        rowTone={["danger", "success"]}
-      />
-      <H3>Tile smaller than a host slice</H3>
-      <Text tone="secondary">
-        pod8 with M1 as 4x8, host [1, 4] and 1x2 stages: create_submeshes(1x2) makes 16 tiles; each M1 rank keeps the one whose
-        (0,0) chip is local, all in row 0. A cable landing in row 3 does not count, so the same seat passes or fails depending
-        on the intra-mesh layout. Tier B as written rejects this MGD.
-      </Text>
-
-      <H2>Examples: the resolver</H2>
-      <Table
-        headers={["Check", "Rule"]}
-        rows={[
-          ["chip count", "the submesh has exactly stage_chip_counts[stage] chips"],
-          ["core capacity", "links (one per edge, +2 for stage 0's host-to-device and device-to-host) fit capacity x chips; 1 per chip on >= 8 chips, 2 below"],
-          ["neighbour count", "at least as many neighbouring submeshes as the stage has logical neighbours"],
-          ["connectivity", "linked to every placed neighbour's submesh"],
-          ["lookahead", "remaining_stages_can_connect"],
-        ]}
-      />
-      <Grid columns={fit(420)} gap={20} align="start">
-        <CodeCard path="mixed4 on (P, R)" mode="plain" language="text" src={RESOLVE_MIXED4} />
-        <CodeCard path="pod8 on seats U and V (per-rank tiling)" mode="plain" language="text" src={RESOLVE_POD8} />
-      </Grid>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <Stack gap={6}>
-          <Text weight="semibold">pod8 on U: cables on opposite corners of M1</Text>
-          <SmallMeshMap
-            m0={["s0", "s1", "s2", "s3"]}
-            m1={["", "", "", ""]}
-            cables={[
-              { a: 3, row: 0, col: 1 },
-              { a: 0, row: 1, col: 3 },
-            ]}
-            verdict={{ ok: false, text: "rejected" }}
-          />
-        </Stack>
-        <Stack gap={6}>
-          <Text weight="semibold">pod8 on V: cables on neighbouring tiles</Text>
-          <SmallMeshMap
-            m0={["s0", "s1", "s2", "s3"]}
-            m1={["s7", "s4", "s6", "s5"]}
-            cables={[
-              { a: 3, row: 0, col: 3 },
-              { a: 0, row: 0, col: 0 },
-            ]}
-            verdict={{ ok: true, text: "accepted" }}
-          />
-        </Stack>
-      </Grid>
-      <Table
-        headers={["Resolver edge case", "What happens"]}
-        rows={[
-          ["mixed4 tiled 4x2 on both meshes", "s1 finds nothing with 16 chips"],
-          ["mixed4 tiled 4x4 on both meshes", "s0 finds nothing with 8 chips"],
-          ["a ring stage on A3 or B3 in mixed4 on (P, R)", "one neighbouring submesh: skipped before any link search"],
-          ["harness core-pool overrides", "not in the MGD; Tier C can accept what runtime rejects"],
-        ]}
-      />
-
-      <H2>Example: mixed4 through the mapper loop</H2>
-      <Table
-        headers={["Iteration", "Seating", "Intra-mesh", "Tier C", "Next"]}
-        rows={[
-          ["1", "(P, Q)", "cables on A0-B0, A3-B3", "no-cycle-of-length-6 (B); every tiling fails", "exclude_mapping({M0>P, M1>Q})"],
-          ["2", "(Q, P)", "same cables, meshes swapped", "same failures", "exclude_mapping({M0>Q, M1>P})"],
-          ["3", "(P, R)", "cables on A0-B0, A2-B2", "plan (A), resolver, R fits demand 2", "emit"],
-        ]}
-        rowTone={["danger", "danger", "success"]}
-      />
-      <Table
-        headers={["Intra-mesh constraint", "Function", "On (P, R)"]}
-        rows={[
-          ["rank binding (hard)", "add_rank_binding_constraints", "M0 host rank i's fabric nodes on P.hi's ASICs; M1's on R.hi's"],
-          ["exit nodes (hard)", "add_exit_node_constraints", "mesh-level: at least 2 M0 nodes on ASICs cabled toward R (capped by the physical total under RELAXED); P has two, on h0 and h2"],
-          ["MGD pins (hard)", "add_pinning_constraints", "none declared"],
-          ["PGD layout (soft)", "add_pgd_pinning_preferred_constraints", "puts host rank i on host hi"],
-        ]}
-      />
-      <Table
-        headers={["Rank", "Slice", "TT_PIPELINE_STAGE (written, not consumed)"]}
-        rows={[
-          ["0", "A0", "s0"],
-          ["1, 2", "A1, A2", "s1 (co-owned)"],
-          ["3", "A3", "idle"],
-          ["4", "B0", "s3"],
-          ["5, 6", "B1, B2", "s2 (co-owned)"],
-          ["7", "B3", "idle"],
-        ]}
-      />
-      <Text size="small" tone="tertiary">
-        If blaze's runtime carve picked another alignment of the same cycle (for example s0 on B0), every entry would differ
-        while the mapping stays the same: the entry is a witness.
-      </Text>
-
-      <H2>Example: Tier D at runtime</H2>
-      <CodeCard path="blaze build_topology (unchanged)" mode="plain" language="text" src={TIER_D} />
+    <Stack gap={4}>
+      {items.map((s, i) => (
+        <Row key={i} gap={8} align="start">
+          <Text size="small" tone="tertiary" style={{ minWidth: 10 }}>
+            -
+          </Text>
+          <Text size="small" tone="secondary">
+            {s}
+          </Text>
+        </Row>
+      ))}
     </Stack>
   );
 }
 
-// --- SAT tab -----------------------------------------------------------------
-
-function SatExamples() {
+function StageBox(props: { x: number; y: number; w?: number; h?: number; label: string; accent?: boolean; muted?: boolean }) {
+  const t = useHostTheme();
+  const w = props.w ?? 52;
+  const h = props.h ?? 30;
   return (
-    <Stack gap={14}>
-      <H2>Examples: the master solve on mixed4</H2>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SeatGraph />
-        <Table
-          headers={["Step", "Code", "Result"]}
-          rows={[
-            ["seat pools", "create_sat_placement_pools", "both meshes: {P, Q, R}; orientations merged by sat_footprint_canonical"],
-            ["seat graph", "build_sat_placement_seat_graph", "saturated_link_count parallel edges: P-Q x2, P-R x2, Q-R x1"],
-            ["constraints", "build_sat_placement_constraints", "M0, M1 share a pool but are adjacent: no symmetry window; footprints disjoint"],
-            ["later: Plan 1 (P10)", "seat-graph edge drop", "k = 2: Q-R (1 link) dropped. First version: Q-R kept, and the exact check rejects (Q, R) and (R, Q) one seating each"],
-            ["new: unique_shapes", "MultiMeshSolutionEnumerator callers", "false: (P, Q) and (Q, P) are separate"],
-            ["master session", "MasterSolve::restart", "(P, Q), (Q, P), (P, R), (R, P)"],
-          ]}
-        />
-      </Grid>
-      <Table
-        headers={["Plan 1 case (later, P10)", "Result", "Why"]}
-        rows={[
-          ["mixed4, seat pair Q-R", "dropped", "1 link < k = 2"],
-          ["mixed4, seat pair P-Q", "kept, fails later", "2 links on distinct slice pairs; it fails on loop length, which no link count sees"],
-          ["pod8, seat pairs P-U and P-V", "both kept", "2 links each; with hard pins both touch {A0, A3}; U fails on M1's corners, which is about the path, not the boundary"],
-          ["using one projection's boundary slices", "not allowed", "mixed4's survivors disagree (s0, s1 vs s1, s3 on M0); only the union is sound"],
-          ["RELAXED (later): mixed4 with s3 > s0 RELAXED, seat pair Q-R", "kept", "k = 1 (only s1 > s2 is a STRICT crossing); Q-R works with the loopback over host"],
-          ["RELAXED (later): mixed4 with every edge RELAXED", "nothing pruned", "k = 0"],
-        ]}
-        rowTone={["success", "warning", "warning", "danger", "success", undefined]}
+    <g>
+      <rect
+        x={props.x}
+        y={props.y}
+        width={w}
+        height={h}
+        rx={5}
+        fill={props.accent ? t.fill.secondary : props.muted ? "none" : t.fill.tertiary}
+        stroke={props.accent ? t.accent.primary : props.muted ? t.stroke.tertiary : t.stroke.primary}
+        strokeDasharray={props.muted ? "3 3" : undefined}
       />
-      <H2>Examples: feedback</H2>
-      <Table
-        headers={["Feedback after mixed4 fails on (P, Q)", "Effect", "Verdict"]}
-        rows={[
-          ["exclude_mapping({M0>P, M1>Q})", "blocks this seat set", "correct: (P, R) is still offered and succeeds"],
-          ["add_forbidden_constraint(M0 on P)", "M0 never on P", "wrong: removes (P, R), one of the two seatings that work"],
-          ["add_forbidden_constraint(M1 on Q)", "M1 never on Q", "wrong in general; harmless here"],
-          ["block 'P and Q both used' (new API)", "blocks (P, Q) and (Q, P)", "only when proven for every carve over the pair"],
-        ]}
-        rowTone={["success", "danger", "warning", undefined]}
-      />
-      <Text tone="secondary">
-        unique_shapes: with it on, (P, Q) and (Q, P) share the key {"{P, Q}"} and only the first is checked. Harmless when both
-        lay out the same. If M1 had an MGD pin putting its host rank 0 on h1, the swap would lay out differently and could
-        succeed, but exclude_mapping on {"{P, Q}"} would also hide it.
-      </Text>
-    </Stack>
+      <text
+        x={props.x + w / 2}
+        y={props.y + h / 2 + 4}
+        textAnchor="middle"
+        fontSize={12}
+        fontWeight={props.muted ? 400 : 600}
+        fill={props.muted ? t.text.tertiary : t.text.primary}
+      >
+        {props.label}
+      </text>
+    </g>
   );
 }
 
-// --- Binding tab -------------------------------------------------------------
-
-function BindingExamples() {
-  return (
-    <Stack gap={12}>
-      <H2>Example: mixed4 on (P, R) with an extra cable</H2>
-      <Text tone="secondary">Two A0-B0 cables, both on lower chip ids than the A2-B2 cable; the MGD asks for 2 channels.</Text>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SliceMap
-          stages={[
-            { mesh: 0, from: 0, to: 0, label: "s0" },
-            { mesh: 0, from: 1, to: 2, label: "s1" },
-            { mesh: 1, from: 1, to: 2, label: "s2" },
-            { mesh: 1, from: 0, to: 0, label: "s3" },
-          ]}
-          cables={[
-            { a: 0, b: 0, kind: "required" },
-            { a: 0, b: 0, kind: "unused", label: "2nd" },
-            { a: 2, b: 2, kind: "required" },
-          ]}
-        />
-        <Table
-          headers={["Step", "Today", "With R first"]}
-          rows={[
-            ["candidates", "A0-B0, A0-B0, A2-B2", "same"],
-            ["required links", "none", "A2-B2 (s1 > s2), A0-B0 (s3 > s0)"],
-            ["bind", "two lowest ids: both A0-B0", "R, filling the count of 2"],
-            ["budget", "", "2 links in R, demand 2: fits"],
-            ["runtime", "no-cycle-of-length-6", "builds"],
-          ]}
-        />
-      </Grid>
-      <Table
-        headers={["Binding edge case", "What happens"]}
-        rows={[
-          ["count 3", "phase 0 takes two (one per crossing in R), the fill takes one spare in today's order"],
-          ["count 1", "the layout crosses twice: over budget, the seating is rejected (Tier B already rejects this MGD)"],
-          ["phase 0 cannot place any link of a crossing in R", "first version: the check after the broadcast fails on every rank, naming the crossing; with part 11, the mapper rejects the seating"],
-          ["STRICT device-level connections with pins on A0 and A3", "the candidates are the pinned cables; mixed4 rejects (example B); nothing to choose"],
-        ]}
-      />
-    </Stack>
-  );
-}
+// --- Overview --------------------------------------------------------------
 
 function OverviewTab() {
   return (
@@ -4589,10 +3084,8 @@ function OverviewTab() {
       <Stack gap={8}>
         <H2>The problem</H2>
         <Text tone="secondary">
-          The topology mapper picks which physical chips each logical mesh lands on without knowing the pipeline that will run
-          there. The pipeline builder is the first thing that checks, after the mapping is committed, and fails with "no valid
-          submesh assignment found" or a CarvePlanError. The only recourse today is to enumerate every mapping offline and launch
-          them one by one.
+          The topology mapper picks which chips each mesh lands on without knowing the pipeline. Blaze is the first to
+          check, after the mapping is committed, and fails with "no valid submesh assignment found".
         </Text>
       </Stack>
       <FlowCompare />
@@ -4600,60 +3093,391 @@ function OverviewTab() {
         <H2>Where each check runs</H2>
         <TierTimeline />
       </Stack>
-      <Callout tone="warning" title="First version: STRICT only">
-        Every pipeline edge is STRICT and rides a fabric link. The schema has no edge policy field yet (field 3 is reserved).
-        RELAXED edges, which may go over host MPI, are later work (M5: P14 then P11) and are tagged "RELAXED (later)" wherever
-        they appear. Channel policy on meshes and connections (channels policy: RELAXED) is a different, existing feature and
-        is unchanged.
-      </Callout>
-      <Grid columns={fit(260)} gap={16}>
+      <Grid columns={fit(240)} gap={16}>
         <Callout tone="info" title="Prove a placement exists">
-          Tier C accepts a seating when it finds some carve and layout. That placement is a witness; blaze carves again at runtime
-          and may land elsewhere. That is fine while nothing consumes the mapper's placement.
+          Tier C accepts a seating once it finds one carve and layout. Blaze still places the pipeline itself.
         </Callout>
-        <Callout tone="warning" title="Never eliminate early">
-          Tiers A and B and Plan 1 reject only what is impossible for every stage-to-mesh split and every chip layout. Tier C
-          is the one exception, by choice: it checks one carve per seating, so a seating whose first carve fails the resolver
-          is rejected even if another carve would pass. No benchmark case did (101 of 101 first carves passed; open question 24).
+        <Callout tone="warning" title="Reject only the impossible">
+          Tiers A and B reject only what no mapping could build. Tier C checks one carve per seating.
         </Callout>
-        <Callout tone="neutral" title="Use the builder's code">
-          Reuse the C++ resolver as-is for every layout rule. The carve comes from the footprint solve; blaze&apos;s planner stays
-          the runtime reference. C1 and R read inter-mesh cables and their exact channels from the PSD, in one read per seating (inter_mesh_cables, P5); the policy plan's shared candidate table is a later step (P16).
+        <Callout tone="neutral" title="Use the builder's resolver">
+          Every layout rule comes from the same C++ resolver blaze calls at runtime.
         </Callout>
       </Grid>
-      <RunningExamples />
+      <Callout tone="warning" title="First version: STRICT only">
+        Every pipeline edge rides a fabric link. RELAXED edges (may go over host MPI) are later work.
+      </Callout>
     </Stack>
+  );
+}
+
+// --- The MGD pipeline section ---------------------------------------------
+
+const FORMAT_FIELDS: string[][] = [
+  ["PipelineDescriptor", "name", "Non-empty, unique in the MGD"],
+  ["", "stages", "At least one, in declaration order"],
+  ["", "edges", "Directed. Repeating (src, dst) asks for another channel on that hop"],
+  ["PipelineStage", "id", "Integer, unique in the pipeline; edges refer to it"],
+  ["", "label", "Free text, may be empty or repeat"],
+  ["", "shape { dims: [ rows, cols ] }", "Chips, in the mesh's orientation. Names no mesh: the mapper picks it"],
+  ["PipelineEdge", "src, dst", "Stage ids; src != dst"],
+  ["", "loopback", "true on the edge that closes a cycle"],
+  ["", "policy", "Omitted or STRICT. RELAXED is rejected for now"],
+];
+
+function LoopbackRuleDiagram({ part = "both" }: { part?: "both" | "fork" }) {
+  const t = useHostTheme();
+  const accent = t.accent.primary;
+  const line = { stroke: t.stroke.primary, strokeWidth: 1.2, fill: "none" } as const;
+  const back = { stroke: accent, strokeWidth: 1.6, fill: "none", strokeDasharray: "5 3" } as const;
+  const both = part === "both";
+  return (
+    <ScrollX>
+      <svg
+        width="100%"
+        viewBox={both ? "0 0 760 240" : "370 0 390 240"}
+        style={{ maxWidth: both ? 760 : 390, minWidth: both ? 600 : 0 }}
+      >
+        <ArrowDefs id="lb-arrow" color={t.stroke.primary} />
+        <ArrowDefs id="lb-back" color={accent} />
+        <text x={20} y={16} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          RING (mixed4, gpt_oss)
+        </text>
+        <text x={46} y={68} textAnchor="middle" fontSize={10.5} fill={t.category.green}>
+          host I/O
+        </text>
+        {["0", "1", "2", "3"].map((id, i) => (
+          <g key={id}>
+            <StageBox x={20 + i * 90} y={76} label={id} accent={i === 0} />
+            {i < 3 ? <line {...line} x1={72 + i * 90} y1={91} x2={110 + i * 90} y2={91} markerEnd="url(#lb-arrow)" /> : null}
+          </g>
+        ))}
+        <path {...back} d="M 316 106 C 316 156, 46 156, 46 110" markerEnd="url(#lb-back)" />
+        <text x={181} y={160} textAnchor="middle" fontSize={10.5} fill={accent}>
+          3 -&gt; 0  loopback: true
+        </text>
+
+        <text x={420} y={16} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          FORK (DFlash router)
+        </text>
+        <text x={414} y={125} textAnchor="end" fontSize={10.5} fill={t.category.green}>
+          host I/O
+        </text>
+        <StageBox x={420} y={106} label="0" accent />
+        {[
+          ["1", "2..37", "38"],
+          ["39", "40..48", "49"],
+        ].map((chain, r) => {
+          const y = r === 0 ? 60 : 152;
+          return (
+            <g key={r}>
+              <line {...line} x1={472} y1={121} x2={510} y2={y + 15} markerEnd="url(#lb-arrow)" />
+              {chain.map((id, i) => (
+                <g key={id}>
+                  <StageBox x={512 + i * 84} y={y} w={56} label={id} />
+                  {i < 2 ? <line {...line} x1={568 + i * 84} y1={y + 15} x2={594 + i * 84} y2={y + 15} markerEnd="url(#lb-arrow)" /> : null}
+                </g>
+              ))}
+            </g>
+          );
+        })}
+        <path {...back} d="M 708 60 C 708 26, 446 26, 446 104" markerEnd="url(#lb-back)" />
+        <text x={600} y={30} textAnchor="middle" fontSize={10.5} fill={accent}>
+          38 -&gt; 0  loopback: true
+        </text>
+        <path {...back} d="M 708 182 C 708 218, 446 218, 446 138" markerEnd="url(#lb-back)" />
+        <text x={600} y={232} textAnchor="middle" fontSize={10.5} fill={accent}>
+          49 -&gt; 0  loopback: true
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+function JointStageDiagram() {
+  const t = useHostTheme();
+  const slice = (x: number, y: number, label: string) => (
+    <g key={label}>
+      <rect x={x} y={y} width={100} height={84} fill={t.fill.quaternary} stroke={t.stroke.secondary} strokeDasharray="3 3" />
+      <text x={x + 50} y={y + 16} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
+        {label}
+      </text>
+    </g>
+  );
+  return (
+    <svg width="100%" viewBox="0 0 250 210" style={{ maxWidth: 250 }}>
+      <text x={20} y={14} fontSize={10.5} fill={t.text.tertiary}>
+        8x4 mesh, host_topology 2x2
+      </text>
+      {slice(20, 24, "rank 0 · 4x2")}
+      {slice(120, 24, "rank 1 · 4x2")}
+      {slice(20, 108, "rank 2 · 4x2")}
+      {slice(120, 108, "rank 3 · 4x2")}
+      <rect x={24} y={128} width={192} height={60} rx={6} fill={t.fill.secondary} stroke={t.accent.primary} strokeWidth={1.5} />
+      <text x={120} y={152} textAnchor="middle" fontSize={12} fontWeight={600} fill={t.text.primary}>
+        stage 7 LMHead [4, 4]
+      </text>
+      <text x={120} y={170} textAnchor="middle" fontSize={10.5} fill={t.text.secondary}>
+        one stage, ranks 2 + 3
+      </text>
+    </svg>
+  );
+}
+
+function HeteroDiagram() {
+  const t = useHostTheme();
+  const accent = t.accent.primary;
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 700 150" style={{ maxWidth: 700, minWidth: 560 }}>
+        <ArrowDefs id="ht-arrow" color={t.stroke.primary} />
+        <ArrowDefs id="ht-back" color={accent} />
+        <text x={20} y={30} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          mesh with 4x2 slices
+        </text>
+        <text x={360} y={30} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          meshes with 1x2 slices
+        </text>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <g key={i}>
+            <rect x={20 + i * 40} y={40} width={38} height={40} rx={3} fill={t.fill.secondary} stroke={t.stroke.primary} />
+            <text x={39 + i * 40} y={64} textAnchor="middle" fontSize={10.5} fontWeight={600} fill={t.text.primary}>
+              {i}
+            </text>
+          </g>
+        ))}
+        {Array.from({ length: 32 }).map((_, i) => (
+          <rect key={i} x={360 + i * 10} y={52} width={9} height={16} rx={1} fill={t.fill.secondary} stroke={t.stroke.primary} />
+        ))}
+        <text x={520} y={96} textAnchor="middle" fontSize={10.5} fill={t.text.secondary}>
+          stages 8..39, one [1, 2] slice each
+        </text>
+        <line x1={340} y1={60} x2={358} y2={60} stroke={t.stroke.primary} markerEnd="url(#ht-arrow)" />
+        <path d="M 676 68 C 676 136, 39 136, 39 84" fill="none" stroke={accent} strokeWidth={1.6} strokeDasharray="5 3" markerEnd="url(#ht-back)" />
+        <text x={360} y={130} textAnchor="middle" fontSize={10.5} fill={accent}>
+          39 -&gt; 0  loopback: true
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+type MeshRowsProps = {
+  meshes: Array<{ name: string; slices: string[] }>;
+  stages: Array<{ mesh: 0 | 1; from: number; to: number; label: string; idle?: boolean }>;
+  cables: Array<{ a: number; b: number }>;
+  note?: string;
+};
+
+/** Two meshes as rows of host slices; stages are boxes over whole slices, cables join the rows. */
+function MeshRows(props: MeshRowsProps) {
+  const t = useHostTheme();
+  const sw = 92;
+  const sh = 44;
+  const x0 = 46;
+  const ys = [30, 132] as const;
+  const W = x0 + 4 * sw + 16;
+  const cx = (i: number) => x0 + i * sw + sw / 2;
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} 210`} style={{ maxWidth: W }}>
+      {props.meshes.map((m, mi) => (
+        <g key={m.name}>
+          <text x={4} y={ys[mi] + sh / 2 + 4} fontSize={12} fontWeight={600} fill={t.text.secondary}>
+            {m.name}
+          </text>
+          {m.slices.map((s, i) => (
+            <g key={s}>
+              <rect x={x0 + i * sw} y={ys[mi]} width={sw} height={sh} fill={t.fill.quaternary} stroke={t.stroke.secondary} strokeDasharray="3 3" />
+              <text x={cx(i)} y={mi === 0 ? ys[mi] - 6 : ys[mi] + sh + 14} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
+                {s}
+              </text>
+            </g>
+          ))}
+        </g>
+      ))}
+      {props.cables.map((c, i) => (
+        <line key={i} x1={cx(c.a)} y1={ys[0] + sh} x2={cx(c.b)} y2={ys[1]} stroke={t.text.primary} strokeWidth={2} />
+      ))}
+      {props.stages.map((s) => (
+        <g key={`${s.mesh}-${s.from}`}>
+          <rect
+            x={x0 + s.from * sw + 3}
+            y={ys[s.mesh] + 3}
+            width={(s.to - s.from + 1) * sw - 6}
+            height={sh - 6}
+            rx={5}
+            fill={s.idle ? "none" : t.fill.secondary}
+            stroke={s.idle ? t.stroke.tertiary : t.accent.primary}
+            strokeDasharray={s.idle ? "3 3" : undefined}
+          />
+          <text
+            x={(cx(s.from) + cx(s.to)) / 2}
+            y={ys[s.mesh] + sh / 2 + 4}
+            textAnchor="middle"
+            fontSize={12}
+            fontWeight={s.idle ? 400 : 600}
+            fill={s.idle ? t.text.tertiary : t.text.primary}
+          >
+            {s.label}
+          </text>
+        </g>
+      ))}
+      {props.note ? (
+        <text x={x0} y={204} fontSize={10.5} fill={t.text.tertiary}>
+          {props.note}
+        </text>
+      ) : null}
+    </svg>
+  );
+}
+
+function MachineDiagram() {
+  const t = useHostTheme();
+  const node = (x: number, y: number, title: string, sub: string) => <SvgBox x={x} y={y} w={130} h={42} title={title} sub={sub} />;
+  const edge = (x1: number, y1: number, x2: number, y2: number, label: string, lx: number, ly: number) => (
+    <g>
+      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={t.text.primary} strokeWidth={1.6} />
+      <text x={lx} y={ly} textAnchor="middle" fontSize={10.5} fill={t.text.secondary}>
+        {label}
+      </text>
+    </g>
+  );
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 600 230" style={{ maxWidth: 600, minWidth: 480 }}>
+        {edge(150, 46, 235, 101, "P-Q: h0, h3", 170, 86)}
+        {edge(150, 186, 235, 129, "P-R: h0, h2", 170, 150)}
+        {edge(85, 67, 85, 165, "Q-R: h1", 112, 120)}
+        {edge(365, 101, 450, 46, "P-U: 2", 430, 86)}
+        {edge(365, 129, 450, 186, "P-V: 2", 430, 150)}
+        {node(20, 25, "pod Q", "4x8, hosts h0..h3")}
+        {node(20, 165, "pod R", "4x8, hosts h0..h3")}
+        {node(235, 94, "pod P", "4x8, hosts h0..h3")}
+        {node(450, 25, "board U", "2x4, four 2-chip hosts")}
+        {node(450, 165, "board V", "2x4, four 2-chip hosts")}
+        <text x={300} y={224} textAnchor="middle" fontSize={10.5} fill={t.text.tertiary}>
+          cables run between the named hosts; P-U and P-V land on P.h0 and P.h3
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+const RUN_MIXED4_NEW = `
+mesh_descriptors {
+  name: "M"  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] }
+  host_topology   { dims: [ 1, 4 ] }   # 4 ranks per mesh, each a 4x2 slice
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G"  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M" mesh_id: 0 } }   # M0: slices A0..A3, ranks 0-3
+  instances { mesh { mesh_descriptor: "M" mesh_id: 1 } }   # M1: slices B0..B3, ranks 4-7
+  graph_topology { layout_type: ALL_TO_ALL channels { count: 2 policy: RELAXED } }
+}
+top_level_instance { graph { graph_descriptor: "G" graph_id: 0 } }
+
+# 8 slices declared; the ring needs 1 + 2 + 2 + 1 = 6
+pipeline_descriptors {
+  name: "mixed4"
+  stages { id: 0 shape { dims: [ 4, 2 ] } }   # 1 slice; owns host I/O
+  stages { id: 1 shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
+  stages { id: 2 shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
+  stages { id: 3 shape { dims: [ 4, 2 ] } }   # 1 slice
+  edges { src: 0 dst: 1 }
+  edges { src: 1 dst: 2 }
+  edges { src: 2 dst: 3 }
+  edges { src: 3 dst: 0 loopback: true }       # closes the ring
+}`;
+
+const RUN_POD8_NEW = `
+mesh_descriptors {
+  name: "Big"  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] }
+  host_topology   { dims: [ 1, 4 ] }   # 4 ranks, each a 4x2 slice
+  channels { count: 2 policy: RELAXED }
+}
+mesh_descriptors {
+  name: "Small"  arch: BLACKHOLE
+  device_topology { dims: [ 2, 4 ] }
+  host_topology   { dims: [ 2, 2 ] }   # 4 ranks, each a 1x2 slice
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G"  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "Big"   mesh_id: 0 } }   # M0: slices A0..A3
+  instances { mesh { mesh_descriptor: "Small" mesh_id: 1 } }   # M1: slices T0..T3
+  graph_topology { layout_type: ALL_TO_ALL channels { count: 2 policy: RELAXED } }
+}
+top_level_instance { graph { graph_descriptor: "G" graph_id: 0 } }
+
+# 8 slices declared; the ring needs 8
+pipeline_descriptors {
+  name: "pod8"
+  stages { id: 0 shape { dims: [ 4, 2 ] } }   # binds only to Big; owns host I/O
+  stages { id: 1 shape { dims: [ 4, 2 ] } }
+  stages { id: 2 shape { dims: [ 4, 2 ] } }
+  stages { id: 3 shape { dims: [ 4, 2 ] } }
+  stages { id: 4 shape { dims: [ 1, 2 ] } }   # binds only to Small
+  stages { id: 5 shape { dims: [ 1, 2 ] } }
+  stages { id: 6 shape { dims: [ 1, 2 ] } }
+  stages { id: 7 shape { dims: [ 1, 2 ] } }
+  edges { src: 0 dst: 1 }
+  edges { src: 1 dst: 2 }
+  edges { src: 2 dst: 3 }
+  edges { src: 3 dst: 4 }                      # crosses Big -> Small
+  edges { src: 4 dst: 5 }
+  edges { src: 5 dst: 6 }
+  edges { src: 6 dst: 7 }
+  edges { src: 7 dst: 0 loopback: true }       # crosses back, closes the ring
+}`;
+
+function PatternCard(props: { title: string; diagram: ReturnType<typeof Text>; code: string; bullets: string[] }) {
+  return (
+    <Card>
+      <CardHeader>{props.title}</CardHeader>
+      <CardBody>
+        <Grid columns={fit(320)} gap={16} align="start">
+          <Stack gap={10}>
+            {props.diagram}
+            <Bullets items={props.bullets} />
+          </Stack>
+          <CodeCard path={props.title} mode="plain" language="protobuf" src={props.code} />
+        </Grid>
+      </CardBody>
+    </Card>
   );
 }
 
 function DescriptorTab() {
   return (
-    <Stack gap={22}>
-      <Grid columns={fit(300)} gap={20} align="start">
+    <Stack gap={24}>
+      <Grid columns={fit(340)} gap={20} align="start">
         <Stack gap={8}>
-          <H2>The new MGD section</H2>
+          <H2>The format</H2>
           <Text tone="secondary">
-            Stages, their shapes, and how they connect. No stage names a mesh: the mapper decides where each stage lands. GPT-OSS
-            single galaxy, as one MGD file: the mesh part is blaze's existing single_bh_galaxy_4x2 MGD, unchanged; the pipeline
-            part is new.
+            A new pipeline_descriptors section next to the meshes. It lists stages, their shapes and how they connect.
           </Text>
+          <Table headers={["Message", "Field", "Meaning"]} rows={FORMAT_FIELDS} />
+        </Stack>
+        <Stack gap={8}>
           <CodeCard
             path="gpt_oss_120b_single_galaxy.textproto"
             mode="plain"
             language="protobuf"
             src={`
-# --- Existing: the mesh ------------------------------------------
+# --- Existing: the mesh -------------------------------------
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 8, 4 ] }   # 8 rows x 4 cols = 32 chips
-  host_topology   { dims: [ 2, 2 ] }   # 2x2 hosts = 4 ranks; each owns
-                                       #   (8/2) x (4/2) = a 4x2 slice
+  device_topology { dims: [ 8, 4 ] }   # 32 chips
+  host_topology   { dims: [ 2, 2 ] }   # 4 ranks, each a 4x2 slice
   channels { count: 2 policy: RELAXED }
 }
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
-# --- New: the pipeline -------------------------------------------
+# --- New: the pipeline --------------------------------------
 pipeline_descriptors {
   name: "gpt_oss_120b_single_galaxy"
   stages { id: 0 label: "Embedding" shape { dims: [ 4, 2 ] } }
@@ -4663,103 +3487,891 @@ pipeline_descriptors {
   edges { src: 0 dst: 1 }
   edges { src: 1 dst: 2 }
   edges { src: 2 dst: 3 }
-  edges { src: 3 dst: 0 }
+  edges { src: 3 dst: 0 loopback: true }
 }`}
           />
+          <Row gap={12} align="center">
+            <SingleMeshRing />
+          </Row>
         </Stack>
-        <Stack gap={4}>
-          <SingleMeshRing />
-          <Text size="small" tone="tertiary">
-            One way to place it: single-mesh tiling gives four 4x2 tiles, the resolver lays the ring on them.
-          </Text>
-          <CodeCard
-            path="where the 4x2 slice comes from"
-            mode="plain"
-            language="text"
-            src={`
-device_topology [8, 4] / host_topology [2, 2]
-
-              cols 0-1    cols 2-3
-  rows 0-3    rank 0      rank 1
-  rows 4-7    rank 2      rank 3
-
-= four 4x2 slices, one per rank. Each stage is
-[4, 2] = one slice, so each runs on one rank.`}
-          />
-        </Stack>
-      </Grid>
-
-      <Grid columns={fit(260)} gap={16} align="start">
-        <CodeCard
-          path="joint stage"
-          mode="plain"
-          language="protobuf"
-          src={`
-# a 4x4 LM head over two 4x2 slices
-# = one stage, co-owned by two ranks
-stages { id: 7 label: "LMHead"
-         shape { dims: [ 4, 4 ] } }`}
-        />
-        <CodeCard
-          path="fork, both returns on fabric"
-          mode="plain"
-          language="protobuf"
-          src={`
-# stage 0 is the router, 1..38 the target chain, 39..49 the draft chain
-edges { src: 0  dst: 1 }
-edges { src: 38 dst: 0 }
-edges { src: 0  dst: 39 }
-edges { src: 49 dst: 0 }
-# RELAXED (later): policy: RELAXED here to return over host`}
-        />
-        <CodeCard
-          path="heterogeneous (llama_8b_pod)"
-          mode="plain"
-          language="protobuf"
-          src={`
-# 8 x 4x2 then 32 x 1x2, one ring
-stages { id: 0 shape { dims: [ 4, 2 ] } }
-# ... s1..s7 4x2
-stages { id: 8 shape { dims: [ 1, 2 ] } }
-# ... s9..s39 1x2`}
-        />
       </Grid>
 
       <Stack gap={8}>
-        <H2>Which mesh a stage can bind to</H2>
-        <Text tone="secondary">
-          A stage must be a rectangle of whole host slices, in the mesh's logical orientation (no transpose). Example mesh: 8x4
-          device, host_topology 2x2, so each slice is 4x2.
-        </Text>
-        <Table
-          headers={["Stage shape", "Slices", "Ranks", "Binds?", "Why"]}
-          rows={[
-            ["4x2", "1", "1", "yes", "one slice"],
-            ["4x4", "2", "2", "yes", "joint stage, co-owned"],
-            ["8x2", "2", "2", "yes", "joint stage, vertical"],
-            ["2x4", "-", "-", "no", "not whole slices in this orientation"],
-            ["2x2", "1/2", "-", "no", "a rank's slice cannot be split"],
+        <H2>Loopback and host I/O</H2>
+        <LoopbackRuleDiagram />
+        <Bullets
+          items={[
+            "Without the loopback edges, the edges have no cycle.",
+            "Each loopback edge closes a cycle: its dst reaches its src over the other edges.",
+            "Exactly one stage has no incoming edge except loopbacks. It owns host I/O (green).",
           ]}
-          rowTone={["success", "success", "success", "danger", "danger"]}
         />
+      </Stack>
+
+      <Stack gap={8}>
+        <H2>Which mesh a stage can bind to</H2>
+        <Text tone="secondary">A stage is a rectangle of whole host slices, in the mesh&apos;s orientation. On 4x2 slices:</Text>
+        <Table
+          headers={["Stage shape", "Slices", "Binds?"]}
+          rows={[
+            ["4x2", "1 (one rank)", "yes"],
+            ["4x4 or 8x2", "2 (joint stage, two ranks)", "yes"],
+            ["2x4", "not whole slices (no transpose)", "no"],
+            ["2x2", "half a slice", "no"],
+          ]}
+          rowTone={["success", "success", "danger", "danger"]}
+        />
+      </Stack>
+
+      <Stack gap={12}>
+        <H2>Three patterns</H2>
+        <PatternCard
+          title="Joint stage: one stage over several ranks"
+          diagram={<JointStageDiagram />}
+          code={`
+# a 4x4 LM head over two 4x2 slices
+stages { id: 7 label: "LMHead" shape { dims: [ 4, 4 ] } }`}
+          bullets={[
+            "The shape is bigger than one slice, so the stage takes two whole slices.",
+            "Both ranks own it together. Nothing else in the MGD changes.",
+          ]}
+        />
+        <PatternCard
+          title="Fork: a router with two branches"
+          diagram={<LoopbackRuleDiagram part="fork" />}
+          code={`
+# stage 0 is the router, 1..38 the target chain, 39..49 the draft chain
+edges { src: 0  dst: 1 }
+# ... 1 -> 2, ..., 37 -> 38
+edges { src: 38 dst: 0  loopback: true }   # target returns to the router
+edges { src: 0  dst: 39 }
+# ... 39 -> 40, ..., 48 -> 49
+edges { src: 49 dst: 0  loopback: true }   # draft returns to the router`}
+          bullets={[
+            "The router has two outgoing edges; nothing limits a stage's degree.",
+            "Each branch's return is its own loopback, and both ride fabric in the first version.",
+            "Later: policy: RELAXED on a return lets it go over host MPI.",
+          ]}
+        />
+        <PatternCard
+          title="Heterogeneous: stages of different shapes (llama_8b_pod)"
+          diagram={<HeteroDiagram />}
+          code={`
+# 8 stages of 4x2, then 32 of 1x2, one ring
+stages { id: 0 shape { dims: [ 4, 2 ] } }
+# ... ids 1..7: [ 4, 2 ]
+stages { id: 8 shape { dims: [ 1, 2 ] } }
+# ... ids 9..39: [ 1, 2 ]
+edges { src: 0 dst: 1 }
+# ... i -> i + 1, up to 38 -> 39
+edges { src: 39 dst: 0 loopback: true }`}
+          bullets={[
+            "A [4, 2] stage binds only to meshes with 4x2 slices; [1, 2] only to meshes with 1x2 slices.",
+            "So the ring must cross from one kind of mesh to the other and back.",
+          ]}
+        />
+      </Stack>
+
+      <Stack gap={12}>
+        <H2>Reference MGDs</H2>
+        <Text tone="secondary">The rules below use these two descriptors and this machine.</Text>
+        <Grid columns={fit(380)} gap={16} align="start">
+          <Stack gap={8}>
+            <CodeCard path="mixed4: stages that span two ranks" mode="plain" language="protobuf" src={RUN_MIXED4_NEW} />
+            <MeshRows
+              meshes={[
+                { name: "M0", slices: ["A0 · r0", "A1 · r1", "A2 · r2", "A3 · r3"] },
+                { name: "M1", slices: ["B0 · r4", "B1 · r5", "B2 · r6", "B3 · r7"] },
+              ]}
+              stages={[
+                { mesh: 0, from: 0, to: 0, label: "0" },
+                { mesh: 0, from: 1, to: 2, label: "1" },
+                { mesh: 0, from: 3, to: 3, label: "idle", idle: true },
+                { mesh: 1, from: 0, to: 0, label: "3" },
+                { mesh: 1, from: 1, to: 2, label: "2" },
+                { mesh: 1, from: 3, to: 3, label: "idle", idle: true },
+              ]}
+              cables={[
+                { a: 0, b: 0 },
+                { a: 2, b: 2 },
+              ]}
+              note="one placement on pods (P, R): cables A0-B0 and A2-B2"
+            />
+          </Stack>
+          <Stack gap={8}>
+            <CodeCard path="pod8: two slice shapes" mode="plain" language="protobuf" src={RUN_POD8_NEW} />
+            <MeshRows
+              meshes={[
+                { name: "M0", slices: ["A0", "A1", "A2", "A3"] },
+                { name: "M1", slices: ["T0", "T1", "T2", "T3"] },
+              ]}
+              stages={[
+                { mesh: 0, from: 0, to: 0, label: "0" },
+                { mesh: 0, from: 1, to: 1, label: "1" },
+                { mesh: 0, from: 2, to: 2, label: "2" },
+                { mesh: 0, from: 3, to: 3, label: "3" },
+                { mesh: 1, from: 0, to: 0, label: "7" },
+                { mesh: 1, from: 1, to: 1, label: "4" },
+                { mesh: 1, from: 2, to: 2, label: "6" },
+                { mesh: 1, from: 3, to: 3, label: "5" },
+              ]}
+              cables={[
+                { a: 0, b: 0 },
+                { a: 3, b: 1 },
+              ]}
+              note="M0 on pod P, M1 on board U; T0 T1 / T2 T3 form a 2x2 grid"
+            />
+          </Stack>
+        </Grid>
+        <MachineDiagram />
+      </Stack>
+    </Stack>
+  );
+}
+
+// --- Tier A and Tier B -----------------------------------------------------
+
+const TIER_A_RULES: string[][] = [
+  ["Pipeline name non-empty and unique", "two pipelines both named mixed4"],
+  ["At least one stage; stage ids unique", "two stages with id 3"],
+  ["Shape is two dims, both > 0", "shape { dims: [ 4, 2, 1 ] }"],
+  ["Edges name declared stages, and src != dst", "edges { src: 0 dst: 9 } with no stage 9; edges { src: 0 dst: 0 }"],
+  ["Without the loopback edges, no cycle", "mixed4 with 3 -> 0 not marked loopback"],
+  ["Each loopback edge closes a cycle", "a chain 0 -> 1 whose only edge is marked loopback"],
+  ["Exactly one stage has no incoming edge except loopbacks", "two chains, 0 -> 1 and 2 -> 3"],
+  ["Policy omitted or STRICT", "mixed4 with policy: RELAXED on 3 -> 0 (allowed later)"],
+];
+
+const TIER_B_RULES: string[][] = [
+  ["Binding", "Every stage is whole slices of some mesh, in that mesh's orientation", "a [2, 4] stage when every slice is 4x2"],
+  ["Capacity", "Slices needed by every pipeline <= slices declared; stages that fit only one kind of mesh fit those meshes", "mixed4 plus a [4, 6] stage (9 > 8); mixed4 twice (12 > 8)"],
+  ["A split exists", "Some choice of one mesh per stage fits each mesh, and every edge between two meshes rides a declared connection within its channel count", "mixed4 with no connection between M0 and M1"],
+];
+
+function TiersTab() {
+  return (
+    <Stack gap={22}>
+      <Stack gap={8}>
+        <H2>Tier A: is it a valid pipeline? (parse time, no mesh)</H2>
+        <Table headers={["Rule", "Rejected example"]} rows={TIER_A_RULES} />
         <Text size="small" tone="tertiary">
-          NOTE: no stage is required to be one slice. The descriptor does not say which stage owns host-to-device, so Tier B
-          cannot know which stage, if any, must be a single rank. Blaze's carve planner still rejects a multi-rank stage 0 at
-          build time.
+          Allowed: any number of edges into or out of a stage, branches that end, a repeated edge (another channel), any label.
+        </Text>
+      </Stack>
+      <Stack gap={8}>
+        <H2>Tier B: can it fit the declared meshes? (no hardware)</H2>
+        <Table headers={["Rule", "Checks", "Rejected example"]} rows={TIER_B_RULES} />
+        <Text size="small" tone="tertiary">
+          Counts and channels only: where a stage sits inside its mesh is left to Tier C. The split search stops at its first
+          success, and accepts if it runs out of steps.
+        </Text>
+      </Stack>
+      <Stack gap={8}>
+        <H3>Both tiers run on each MGD part, and again on the merged MGD</H3>
+        <MergeDiagram />
+      </Stack>
+    </Stack>
+  );
+}
+
+// --- Tier C: the mapping ---------------------------------------------------
+
+function TierCFlow() {
+  const t = useHostTheme();
+  const bx = 40;
+  const bw = 380;
+  const bh = 44;
+  const y = (i: number) => 10 + i * 64;
+  const steps: Array<{ title: string; sub: string; kind: BoxKind }> = [
+    { title: "SAT seating", sub: "each mesh on a set of physical chips (a seat)", kind: "existing" },
+    { title: "intra-mesh layout", sub: "which ASIC each logical chip is", kind: "existing" },
+    { title: "C1. position graph", sub: "every place each stage shape fits, and which places touch", kind: "new" },
+    { title: "C2. solve + resolver", sub: "one rectangle per stage; a chip link for every edge; R", kind: "new" },
+    { title: "C3. on success: emit", sub: "the mapping, plus R: the crossings and their cables", kind: "reuse" },
+    { title: "control plane", sub: "binds R's cables first, then today's fill", kind: "reuse" },
+    { title: "blaze builds", sub: "unchanged; a placement is known to exist", kind: "existing" },
+  ];
+  const red = t.category.red;
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 860 460" style={{ maxWidth: 860, minWidth: 640 }}>
+        <ArrowDefs id="tc-arrow" color={t.stroke.primary} />
+        <ArrowDefs id="tc-red" color={red} />
+        {steps.map((s, i) => (
+          <g key={s.title}>
+            <SvgBox x={bx} y={y(i)} w={bw} h={bh} title={s.title} sub={s.sub} kind={s.kind} />
+            {i < steps.length - 1 ? (
+              <line x1={bx + bw / 2} y1={y(i) + bh} x2={bx + bw / 2} y2={y(i + 1)} stroke={t.stroke.primary} markerEnd="url(#tc-arrow)" />
+            ) : null}
+          </g>
+        ))}
+        <text x={bx + bw / 2 + 8} y={y(4) - 6} fontSize={10.5} fill={t.category.green}>
+          accept
+        </text>
+        <SvgBox x={540} y={y(3)} w={280} h={bh} title="C4. on failure" sub="change the layout, or the seating" kind="fail" />
+        <line x1={bx + bw} y1={y(3) + bh / 2} x2={540} y2={y(3) + bh / 2} stroke={red} strokeDasharray="4 3" markerEnd="url(#tc-red)" />
+        <text x={480} y={y(3) + bh / 2 + 16} textAnchor="middle" fontSize={10.5} fill={red}>
+          fails
+        </text>
+        <path d={`M 600 ${y(3)} L 600 ${y(1) + bh / 2} L ${bx + bw + 2} ${y(1) + bh / 2}`} fill="none" stroke={red} strokeDasharray="4 3" markerEnd="url(#tc-red)" />
+        <text x={436} y={y(1) + bh / 2 - 6} fontSize={10.5} fill={red}>
+          1. new layout for the boundary mesh (at most 4 times)
+        </text>
+        <path d={`M 780 ${y(3)} L 780 ${y(0) + bh / 2} L ${bx + bw + 2} ${y(0) + bh / 2}`} fill="none" stroke={red} strokeDasharray="4 3" markerEnd="url(#tc-red)" />
+        <text x={436} y={y(0) + bh / 2 - 6} fontSize={10.5} fill={red}>
+          2. then exclude this seat set; the next seating
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+function PositionDiagram() {
+  const t = useHostTheme();
+  const sw = 70;
+  const x0 = 120;
+  const pos = (x: number, y: number, w: number, label: string) => (
+    <g key={`${x}-${y}`}>
+      <rect x={x + 2} y={y} width={w - 4} height={22} rx={4} fill={t.fill.secondary} stroke={t.accent.primary} />
+      <text x={x + w / 2} y={y + 15} textAnchor="middle" fontSize={10.5} fill={t.text.primary}>
+        {label}
+      </text>
+    </g>
+  );
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 420 220" style={{ maxWidth: 420, minWidth: 360 }}>
+        <text x={4} y={44} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          slices
+        </text>
+        {["A0", "A1", "A2", "A3"].map((s, i) => (
+          <g key={s}>
+            <rect x={x0 + i * sw} y={26} width={sw} height={30} fill={t.fill.quaternary} stroke={t.stroke.secondary} strokeDasharray="3 3" />
+            <text x={x0 + i * sw + sw / 2} y={46} textAnchor="middle" fontSize={11} fill={t.text.tertiary}>
+              {s}
+            </text>
+          </g>
+        ))}
+        <text x={4} y={88} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          [4, 2] stage
+        </text>
+        <text x={4} y={102} fontSize={10.5} fill={t.text.tertiary}>
+          4 positions
+        </text>
+        {[0, 1, 2, 3].map((i) => pos(x0 + i * sw, 76, sw, `A${i}`))}
+        <text x={4} y={140} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          [4, 4] stage
+        </text>
+        <text x={4} y={154} fontSize={10.5} fill={t.text.tertiary}>
+          3 positions
+        </text>
+        {pos(x0, 124, 2 * sw, "A0-A1")}
+        {pos(x0 + sw, 150, 2 * sw, "A1-A2")}
+        {pos(x0 + 2 * sw, 176, 2 * sw, "A2-A3")}
+        <text x={4} y={214} fontSize={10.5} fill={t.text.tertiary}>
+          positions of one shape overlap; the solve uses each slice at most once
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+function C2Strip() {
+  const t = useHostTheme();
+  const boxes: Array<{ title: string; sub: string; fail?: string }> = [
+    { title: "footprint solve", sub: "one rectangle per stage, no overlap", fail: "no carve" },
+    { title: "resolver", sub: "a chip link for every edge", fail: "no layout" },
+    { title: "record R", sub: "cables each crossing can use" },
+    { title: "demand check", sub: "R fits each mesh pair's channels", fail: "over demand" },
+  ];
+  const bw = 190;
+  const gap = 34;
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 900 110" style={{ maxWidth: 900, minWidth: 700 }}>
+        <ArrowDefs id="c2-arrow" color={t.stroke.primary} />
+        {boxes.map((b, i) => {
+          const x = 4 + i * (bw + gap);
+          return (
+            <g key={b.title}>
+              <SvgBox x={x} y={10} w={bw} h={46} title={b.title} sub={b.sub} kind="new" />
+              {i < boxes.length - 1 ? <line x1={x + bw} y1={33} x2={x + bw + gap} y2={33} stroke={t.stroke.primary} markerEnd="url(#c2-arrow)" /> : null}
+              {b.fail ? (
+                <text x={x + bw / 2} y={76} textAnchor="middle" fontSize={10.5} fill={t.category.red}>
+                  {b.fail}: C4
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+        <text x={4 + 3 * (bw + gap) + bw / 2} y={94} textAnchor="middle" fontSize={10.5} fill={t.category.green}>
+          pass: C3
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+function SuccessDiagram() {
+  const t = useHostTheme();
+  const boxes: Array<{ title: string; sub: string; kind: BoxKind }> = [
+    { title: "C2 accepted", sub: "carve + layout + R", kind: "new" },
+    { title: "emit the mapping", sub: "mesh -> chips, as today", kind: "existing" },
+    { title: "publish R", sub: "every rank gets it", kind: "new" },
+    { title: "phase 0: bind R", sub: "before any other cable", kind: "new" },
+    { title: "today's fill", sub: "the rest of the budget", kind: "existing" },
+  ];
+  const bw = 160;
+  const gap = 24;
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 920 110" style={{ maxWidth: 920, minWidth: 720 }}>
+        <ArrowDefs id="sc-arrow" color={t.stroke.primary} />
+        {boxes.map((b, i) => {
+          const x = 4 + i * (bw + gap);
+          return (
+            <g key={b.title}>
+              <SvgBox x={x} y={10} w={bw} h={46} title={b.title} sub={b.sub} kind={b.kind} />
+              {i < boxes.length - 1 ? <line x1={x + bw} y1={33} x2={x + bw + gap} y2={33} stroke={t.stroke.primary} markerEnd="url(#sc-arrow)" /> : null}
+            </g>
+          );
+        })}
+        <text x={4 + 3 * (bw + gap) + bw / 2} y={78} textAnchor="middle" fontSize={10.5} fontWeight={600} fill={t.accent.primary}>
+          constrained here:
+        </text>
+        <text x={4 + 3 * (bw + gap) + bw / 2} y={93} textAnchor="middle" fontSize={10.5} fill={t.text.secondary}>
+          which cables carry each crossing
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+function FailureDiagram() {
+  const t = useHostTheme();
+  const red = t.category.red;
+  const box = useBoxStyle();
+  const scope = (x: number, y: number, w: number, h: number, label: string, kind: BoxKind) => {
+    const s = box(kind);
+    return (
+      <g>
+        <rect x={x} y={y} width={w} height={h} rx={6} fill={s.fill} stroke={s.stroke} strokeDasharray={s.dash} />
+        <text x={x + 10} y={y + 16} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          {label}
+        </text>
+      </g>
+    );
+  };
+  const note = (y: number, x1: number, lines: string[], color: string) => (
+    <g>
+      <line x1={x1} y1={y} x2={490} y2={y} stroke={color} strokeDasharray="3 3" />
+      {lines.map((l, i) => (
+        <text key={i} x={498} y={y + 4 + i * 14} fontSize={10.5} fill={i === 0 ? color : t.text.secondary} fontWeight={i === 0 ? 600 : 400}>
+          {l}
+        </text>
+      ))}
+    </g>
+  );
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 780 250" style={{ maxWidth: 780, minWidth: 640 }}>
+        {scope(10, 10, 460, 230, "SAT master solve: every seat set", "existing")}
+        {scope(30, 44, 420, 186, "one seating: a seat per mesh", "existing")}
+        {scope(50, 80, 380, 140, "intra-mesh layout of one mesh", "existing")}
+        {scope(70, 140, 210, 66, "C1 + C2 on this layout", "fail")}
+        {note(174, 280, ["C2 fails", "exact for this layout only"], red)}
+        {note(110, 430, ["1. retry the layout", "block where the cabled chips sit,", "solve the mesh again (at most 4)"], red)}
+        {note(58, 450, ["2. exclude the seat set", "the master gives the next seating"], red)}
+        {note(24, 470, ["never: forbid one mesh on one seat", "another split could still use it"], t.text.tertiary)}
+      </svg>
+    </ScrollX>
+  );
+}
+
+const TIER_C_TYPES: string[][] = [
+  ["PipelineStageNode", "A stage in the mapper's logical graph; all pipelines in one graph"],
+  ["PipelineStageInfo", "A stage's shape and its loopback edges"],
+  ["position", "A rectangle of whole host slices that one stage shape fills"],
+  ["PipelinePlacementEnumerationSession", "C1 and C2 for one seating: builds the position graph, solves, runs the resolver"],
+  ["GraphLayoutResult", "The resolver's answer: each stage's submesh and the chip pair under each edge"],
+  ["PipelineLayoutResult", "Per pipeline: its submeshes and GraphLayoutResult; plus R"],
+  ["RequiredCrossing (R)", "One per edge between meshes: the cables that can carry it, and how many channels it needs"],
+  ["ExitNodeConnection", "One ETH channel between two ASICs, from the physical system descriptor"],
+];
+
+function TierCTab() {
+  return (
+    <Stack gap={24}>
+      <Stack gap={8}>
+        <H2>The loop</H2>
+        <Text tone="secondary">Tier C runs once per seating, after the intra-mesh layout, and only when the MGD has a pipeline.</Text>
+        <Legend />
+        <TierCFlow />
+      </Stack>
+
+      <Grid columns={fit(380)} gap={24} align="start">
+        <Stack gap={8}>
+          <H2>C1: the position graph</H2>
+          <PositionDiagram />
+          <Bullets
+            items={[
+              "A node is a position: a rectangle of slices one stage shape fills.",
+              "Two positions are joined when they do not overlap and touch, or a cable links them across meshes.",
+              "A position a stage cannot use (too few core slots, no room for stage 0's host I/O) is left out for that stage.",
+            ]}
+          />
+        </Stack>
+        <Stack gap={8}>
+          <H2>C2: one solve, one check</H2>
+          <C2Strip />
+          <Bullets
+            items={[
+              "The solve maps the stage graph onto the position graph: one position per stage, each slice used once.",
+              "The resolver, the same code blaze runs, lays every edge on a chip link.",
+              "Each edge between meshes adds a crossing to R. R must fit the channels the MGD gives that mesh pair.",
+              "Any failure fails this layout: C4.",
+            ]}
+          />
+        </Stack>
+      </Grid>
+
+      <Stack gap={8}>
+        <H2>C3: on success</H2>
+        <SuccessDiagram />
+        <Text tone="secondary">
+          The count of channels per mesh pair stays what the MGD says. What changes is which cables are bound: the ones the
+          layout crosses on.
+        </Text>
+        <BindingCompare />
+      </Stack>
+
+      <Stack gap={8}>
+        <H2>C4: on failure</H2>
+        <FailureDiagram />
+        <Text size="small" tone="tertiary">
+          With a pipeline, the master also offers seatings that only swap meshes (unique_shapes off): two meshes swapped can lay
+          out differently.
         </Text>
       </Stack>
 
       <Stack gap={8}>
-        <H2>Edge policy: STRICT or RELAXED, per edge - RELAXED (later)</H2>
-        <Callout tone="warning" title="RELAXED (later)">
-          Not in the first version: every edge is STRICT: the policy field exists, but Tier A rejects RELAXED. This is the design for M5 (P14, P11).
-        </Callout>
+        <H2>Types worth knowing</H2>
+        <Table headers={["Type", "What it is"]} rows={TIER_C_TYPES} />
+      </Stack>
+    </Stack>
+  );
+}
+
+// --- Worked examples -------------------------------------------------------
+
+type Lane = "MGD" | "Tier A" | "Tier B" | "Tier C" | "control plane" | "blaze";
+type FlowStep = { lane: Lane; title: string; detail: string };
+
+function FlowSteps({ steps }: { steps: FlowStep[] }) {
+  const t = useHostTheme();
+  const colors: Record<Lane, string> = {
+    MGD: t.text.tertiary,
+    "Tier A": t.category.blue,
+    "Tier B": t.category.blue,
+    "Tier C": t.accent.primary,
+    "control plane": t.category.orange,
+    blaze: t.category.green,
+  };
+  return (
+    <div>
+      {steps.map((s, i) => (
+        <div key={i}>
+          <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+            <div style={{ width: 104, flexShrink: 0, paddingTop: 7, textAlign: "right" }}>
+              <Text size="small" weight="semibold" style={{ color: colors[s.lane] }}>
+                {s.lane}
+              </Text>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                borderLeft: `3px solid ${colors[s.lane]}`,
+                background: t.fill.quaternary,
+                borderRadius: 4,
+                padding: "6px 10px",
+              }}
+            >
+              <Stack gap={2}>
+                <Text size="small" weight="semibold">
+                  {s.title}
+                </Text>
+                <Text size="small" tone="secondary">
+                  {s.detail}
+                </Text>
+              </Stack>
+            </div>
+          </div>
+          {i < steps.length - 1 ? <div style={{ marginLeft: 117, height: 10, borderLeft: `1px solid ${t.stroke.secondary}` }} /> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** One mesh as a row of host slices with the stage on each, and the loopback over the wrap. */
+function StripRing(props: { cells: string[]; subs?: string[]; cellW: number; wrap: string; title: string }) {
+  const t = useHostTheme();
+  const n = props.cells.length;
+  const x0 = 10;
+  const W = x0 * 2 + n * props.cellW;
+  const accent = t.accent.primary;
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox={`0 0 ${W} 132`} style={{ maxWidth: W, minWidth: Math.min(W, 640) }}>
+        <ArrowDefs id={`sr-${n}`} color={accent} />
+        <text x={x0} y={14} fontSize={11} fontWeight={600} fill={t.text.secondary}>
+          {props.title}
+        </text>
+        {props.cells.map((c, i) => (
+          <g key={i}>
+            <rect x={x0 + i * props.cellW + 1} y={24} width={props.cellW - 2} height={44} rx={4} fill={t.fill.secondary} stroke={t.stroke.primary} />
+            <text x={x0 + i * props.cellW + props.cellW / 2} y={props.subs ? 42 : 50} textAnchor="middle" fontSize={11} fontWeight={600} fill={t.text.primary}>
+              {c}
+            </text>
+            {props.subs ? (
+              <text x={x0 + i * props.cellW + props.cellW / 2} y={58} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
+                {props.subs[i]}
+              </text>
+            ) : null}
+          </g>
+        ))}
+        <path
+          d={`M ${x0 + (n - 0.5) * props.cellW} 68 C ${x0 + (n - 0.5) * props.cellW} 112, ${x0 + props.cellW / 2} 112, ${x0 + props.cellW / 2} 72`}
+          fill="none"
+          stroke={accent}
+          strokeWidth={1.6}
+          strokeDasharray="5 3"
+          markerEnd={`url(#sr-${n})`}
+        />
+        <text x={W / 2} y={122} textAnchor="middle" fontSize={10.5} fill={accent}>
+          {props.wrap}
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+function DFlashPlacementDiagram() {
+  const t = useHostTheme();
+  const accent = t.accent.primary;
+  const back = { fill: "none", stroke: accent, strokeWidth: 1.6, strokeDasharray: "5 3" } as const;
+  return (
+    <ScrollX>
+      <svg width="100%" viewBox="0 0 760 260" style={{ maxWidth: 760, minWidth: 620 }}>
+        <ArrowDefs id="df-arrow" color={t.stroke.primary} />
+        <ArrowDefs id="df-back" color={accent} />
+        <SvgBox x={10} y={34} w={80} h={40} title="0 Router" kind="new" />
+        <SvgBox x={130} y={14} w={610} h={34} title="1..63 target: Embedding, Dense0, MoE1..60, LMHead" />
+        <SvgBox x={130} y={100} w={300} h={34} title="64..72 draft: Pre, 6 decoders, Post, Relay" />
+        <line x1={90} y1={46} x2={128} y2={31} stroke={t.stroke.primary} markerEnd="url(#df-arrow)" />
+        <line x1={90} y1={62} x2={128} y2={117} stroke={t.stroke.primary} markerEnd="url(#df-arrow)" />
+        <path {...back} d="M 735 48 L 735 64 L 92 64" markerEnd="url(#df-back)" />
+        <text x={420} y={80} textAnchor="middle" fontSize={10.5} fill={accent}>
+          63 -&gt; 0  loopback
+        </text>
+        <path {...back} d="M 425 134 L 425 150 L 50 150 L 50 76" markerEnd="url(#df-back)" />
+        <text x={240} y={166} textAnchor="middle" fontSize={10.5} fill={accent}>
+          72 -&gt; 0  loopback (blaze sends it over host MPI)
+        </text>
+        {[0, 1, 2, 3, 4].map((m) => (
+          <SvgBox key={m} x={10 + m * 148} y={190} w={138} h={40} title={`M${m}`} sub="4x32, 16 slices of 4x2" />
+        ))}
+        <text x={380} y={252} textAnchor="middle" fontSize={10.5} fill={t.text.tertiary}>
+          80 slices for 73 stages: 7 stay idle. Every mesh pair has a connection with 16 channels.
+        </text>
+      </svg>
+    </ScrollX>
+  );
+}
+
+const KIMI16_MGD = `
+# --- the mesh: quad_bh_galaxy_4x2 (exists) ----------------------------
+mesh_descriptors {
+  name: "M0"  arch: BLACKHOLE
+  device_topology { dims: [ 4, 32 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 16 ] }   # 16 ranks; slice j = cols 2j, 2j+1
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+
+# --- new: the ring stage.build_pipeline builds for 16 processes -------
+pipeline_descriptors {
+  name: "kimi_k2_6_16"
+  stages { id: 0  label: "Embedding"   shape { dims: [ 4, 2 ] } }
+  stages { id: 1  label: "Dense0"      shape { dims: [ 4, 2 ] } }
+  stages { id: 2  label: "MoE1"        shape { dims: [ 4, 2 ] } }
+  # ... ids 3..13: MoE2 .. MoE12, each [ 4, 2 ]
+  stages { id: 14 label: "LMHead"      shape { dims: [ 4, 2 ] } }
+  stages { id: 15 label: "Passthrough" shape { dims: [ 4, 2 ] } }
+  edges { src: 0 dst: 1 }
+  # ... i -> i + 1, up to 14 -> 15
+  edges { src: 15 dst: 0 loopback: true }   # over the col 31 -> col 0 wrap
+}`;
+
+const KIMI16_STEPS: FlowStep[] = [
+  { lane: "MGD", title: "One quad galaxy and a 16-stage ring", detail: "A 4x32 mesh, both axes RING, 16 hosts along the columns. The pipeline is the ring blaze builds for 16 processes." },
+  { lane: "Tier A", title: "A valid pipeline", detail: "Ids 0..15 are unique. Without 15 -> 0 the edges are a chain; 15 -> 0 is marked loopback and closes it. Stage 0 is the only stage with no other incoming edge, so it owns host I/O." },
+  { lane: "Tier B", title: "It fits the mesh", detail: "[4, 2] is one slice of M0, so every stage binds to M0. 16 slices needed, 16 declared. One mesh: no crossings to count." },
+  { lane: "Tier C", title: "Seating and intra-mesh layout", detail: "One mesh, one seat: the quad galaxy. The intra-mesh solve fixes which ASIC each logical chip is, as today." },
+  { lane: "Tier C", title: "C1: 16 positions", detail: "Every stage fits any of the 16 slices. Neighbouring slices touch, and so do slice 15 and slice 0 over the column wrap." },
+  { lane: "Tier C", title: "C2: solve and resolver", detail: "Stage j lands on slice j (or a rotation or mirror). The resolver finds a direct chip link for every edge, 15 -> 0 included. Nothing crosses meshes, so R is empty." },
+  { lane: "control plane", title: "C3: nothing extra to bind", detail: "The mapping is emitted as today. R is empty, so the links are bound exactly as today." },
+  { lane: "blaze", title: "entry.build_pipeline, generic path", detail: "Neither reload nor DFlash: stage.build_pipeline. The world size is 16, so get_pipeline_harnesses returns Embedding, Dense0, MoE1..12, LMHead, Passthrough." },
+  { lane: "blaze", title: "Harnesses become the same graph", detail: "Harness i becomes node s{i}, with edges s0 -> ... -> s15 and the loopback s15 -> s0: the MGD's pipeline. One mesh, so build_topology tiles it into 4x2 submeshes and the resolver assigns stages to them." },
+  { lane: "blaze", title: "Each rank builds its stage", detail: "GenericStage takes harnesses[my_stage_idx]: that layer's weights, socket sizes and kernels." },
+];
+
+const RELOAD_MGD = `
+# --- the mesh: single_bh_galaxy_4x8_torus_xy (exists) -----------------
+mesh_descriptors {
+  name: "M0"  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 4 ] }   # 4 ranks; stage j = cols 2j, 2j+1
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+
+# --- new: the 4-stage ring ReloadPipeline.open builds ------------------
+pipeline_descriptors {
+  name: "kimi_k2_6_reload"
+  stages { id: 0 label: "m0" shape { dims: [ 4, 2 ] } }   # 17 images
+  stages { id: 1 label: "m1" shape { dims: [ 4, 2 ] } }   # 16 images
+  stages { id: 2 label: "m2" shape { dims: [ 4, 2 ] } }   # 16 images
+  stages { id: 3 label: "m3" shape { dims: [ 4, 2 ] } }   # 16 images
+  edges { src: 0 dst: 1 }
+  edges { src: 1 dst: 2 }
+  edges { src: 2 dst: 3 }
+  edges { src: 3 dst: 0 loopback: true }   # over the col 7 -> col 0 wrap
+}`;
+
+const RELOAD_STEPS: FlowStep[] = [
+  { lane: "MGD", title: "One galaxy torus and a 4-stage ring", detail: "A 4x8 mesh, both axes RING, 4 hosts, 2 channels on every link. The MGD has the 4 ring stages, not the 65 model steps." },
+  { lane: "Tier A", title: "A valid pipeline", detail: "A chain 0 -> 1 -> 2 -> 3, closed by the loopback 3 -> 0. Stage 0 owns host I/O." },
+  { lane: "Tier B", title: "It fits the mesh", detail: "4 slices needed, 4 declared, one mesh, no crossings." },
+  { lane: "Tier C", title: "C1: 4 positions", detail: "One per slice. Slice 3 touches slice 0 only because the column axis is RING." },
+  { lane: "Tier C", title: "C2: the ring needs the wrap", detail: "The only ring is m0..m3 around the 4 slices. The resolver needs a direct link for 3 -> 0, which only the col 7 -> col 0 wrap gives. With a LINE column axis this seating fails. R is empty." },
+  { lane: "control plane", title: "C3: nothing extra to bind", detail: "One mesh; every link has the mesh's 2 channels, as today." },
+  { lane: "blaze", title: "entry.build_pipeline(reload=True)", detail: "build_reload_pipeline checks for 4 processes, slow dispatch and the blaze BRISC firmware." },
+  { lane: "blaze", title: "Deal the model onto the ring", detail: "FULL_SEQUENCE is 65 steps: embedding, dense 0, MoE 1..60, 2 bypasses, head. Step i goes to stage i % 4: m0 gets 17 harnesses, m1..m3 get 16." },
+  { lane: "blaze", title: "ReloadPipeline.open builds the 4-node graph", detail: "s0..s3 with the loopback s3 -> s0: the MGD's pipeline. On one mesh, build_topology cuts four 4x2 submeshes, the resolver assigns stages, and each rank gets my_stage_idx." },
+  { lane: "blaze", title: "Capture, install, launch once", detail: "Each rank compiles its stage's 16 or 17 images and captures each into the reload table. After one launch, the firmware swaps images as packets pass." },
+];
+
+const DFLASH_MGD = `
+# --- the meshes: SC20_4x2 (exists) ------------------------------------
+mesh_descriptors {
+  name: "M0"  arch: BLACKHOLE
+  device_topology { dims: [ 4, 32 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 16 ] }   # 16 ranks per mesh
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G0"  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  # ... mesh_id 1 .. 4
+  connections {                       # one per mesh pair, 10 in all
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  # ... the other 9 pairs, 16 channels each
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+
+# --- new: the router fork ---------------------------------------------
+pipeline_descriptors {
+  name: "kimi_k2_6_dflash"
+  stages { id: 0  label: "Router"     shape { dims: [ 4, 2 ] } }
+  stages { id: 1  label: "Embedding"  shape { dims: [ 4, 2 ] } }   # target 1..63
+  stages { id: 2  label: "Dense0"     shape { dims: [ 4, 2 ] } }
+  # ... ids 3..62: MoE1 .. MoE60
+  stages { id: 63 label: "LMHead"     shape { dims: [ 4, 2 ] } }
+  stages { id: 64 label: "PreDecode"  shape { dims: [ 4, 2 ] } }   # draft 64..72
+  # ... ids 65..70: DraftDecoder0 .. DraftDecoder5
+  stages { id: 71 label: "PostDecode" shape { dims: [ 4, 2 ] } }
+  stages { id: 72 label: "Relay"      shape { dims: [ 4, 2 ] } }
+  edges { src: 0  dst: 1 }
+  # ... 1 -> 2, ..., 62 -> 63
+  edges { src: 63 dst: 0  loopback: true }   # verifier returns
+  edges { src: 0  dst: 64 }
+  # ... 64 -> 65, ..., 71 -> 72
+  edges { src: 72 dst: 0  loopback: true }   # drafter returns (STRICT: fabric)
+}`;
+
+const DFLASH_STEPS: FlowStep[] = [
+  { lane: "MGD", title: "Five galaxies and a router fork", detail: "Five 4x32 meshes of 16 slices (80 in all), every pair joined with 16 channels. 73 stages: the router, the target chain 1..63 and the draft chain 64..72." },
+  { lane: "Tier A", title: "A valid fork", detail: "The router has two outgoing edges, which is allowed. Each return is marked loopback and closes a cycle through stage 0. Stage 0 is the only stage with no other incoming edge." },
+  { lane: "Tier B", title: "It fits the meshes", detail: "Every [4, 2] stage binds to any mesh. 73 slices needed, 80 declared. A mesh holds 16 stages, so the target loop must cross meshes; some split keeps every pair within its 16 channels." },
+  { lane: "Tier C", title: "Seating and intra-mesh layouts", detail: "SAT seats the 5 meshes on the 5 galaxies, then lays out each mesh's chips." },
+  { lane: "Tier C", title: "C1: 80 positions", detail: "16 per mesh. Positions on two meshes join where a cable connects them." },
+  { lane: "Tier C", title: "C2: place 73 stages", detail: "The solve puts each stage on its own position; 7 stay idle. The resolver lays every edge on a chip link, both loopbacks included. Each edge between meshes becomes a crossing in R, and R must fit 16 channels per pair." },
+  { lane: "control plane", title: "C3: bind R first", detail: "Phase 0 binds a cable for every crossing in R before today's fill uses the rest of the 16." },
+  { lane: "blaze", title: "entry.build_pipeline(dflash_router=True)", detail: "build_kimi_dflash_router_pipeline_graph writes the 73-node graph by hand: the same stages and edges, with the draft return marked transport=\"host\"." },
+  { lane: "blaze", title: "build_model_pipeline_from_graph", detail: "multi_mesh, submesh 4x2: the fork path resolves the graph into a ForkLayout. 80 ranks, 73 stages, 7 idle ranks." },
+  { lane: "blaze", title: "Each rank builds its stage", detail: "Router: BlockDiffusionRouterStageKind. Targets: GenericStage over the 63 Kimi harnesses, picked by the branch-local index. Drafts: their own DFlash stage kinds." },
+];
+
+function ExampleSection(props: {
+  title: string;
+  intro: string;
+  mgdPath: string;
+  mgd: string;
+  picture: ReturnType<typeof Text>;
+  steps: FlowStep[];
+  after?: ReturnType<typeof Text>;
+}) {
+  return (
+    <Stack gap={12}>
+      <H2>{props.title}</H2>
+      <Text tone="secondary">{props.intro}</Text>
+      <Grid columns={fit(420)} gap={20} align="start">
+        <CodeCard path={props.mgdPath} mode="plain" language="protobuf" src={props.mgd} />
+        <Stack gap={12}>
+          {props.picture}
+          <FlowSteps steps={props.steps} />
+        </Stack>
+      </Grid>
+      {props.after}
+    </Stack>
+  );
+}
+
+function ExamplesTab() {
+  return (
+    <Stack gap={28}>
+      <Text tone="secondary">
+        Each example starts from a real MGD in tt-blaze, adds the pipeline section, and follows it through the tiers, the
+        control plane and blaze. Colours mark who does each step.
+      </Text>
+      <ExampleSection
+        title="1. A regular ring: Kimi K2.6 on 16 processes"
+        intro="The generic path: entry.py builds no graph; blaze turns one harness per process into a ring."
+        mgdPath="quad_bh_galaxy_4x2 + kimi_k2_6_16"
+        mgd={KIMI16_MGD}
+        picture={
+          <StripRing
+            title="M0, 4x32: 16 slices of 4x2"
+            cells={["E", "D0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "H", "P"]}
+            cellW={44}
+            wrap="15 -> 0 loopback over the col 31 -> col 0 wrap"
+          />
+        }
+        steps={KIMI16_STEPS}
+      />
+      <ExampleSection
+        title="2. The reload ring: Kimi K2.6 on one galaxy"
+        intro="Four processes run all 65 model steps by swapping kernels. The mapper only needs the 4-stage ring."
+        mgdPath="single_bh_galaxy_4x8_torus_xy + kimi_k2_6_reload"
+        mgd={RELOAD_MGD}
+        picture={
+          <StripRing
+            title="M0, 4x8: 4 slices of 4x2"
+            cells={["m0", "m1", "m2", "m3"]}
+            subs={["embed, head, …", "dense 0, MoE 4, …", "MoE 1, 5, …", "MoE 2, 6, …"]}
+            cellW={150}
+            wrap="3 -> 0 loopback over the col 7 -> col 0 wrap"
+          />
+        }
+        steps={RELOAD_STEPS}
+        after={
+          <Callout tone="info" title="Not in the MGD">
+            The images per stage, each rank&apos;s L1 size and the firmware. They stay in blaze; the mapper only needs the ring.
+          </Callout>
+        }
+      />
+      <ExampleSection
+        title="3. The DFlash router fork: Kimi K2.6 on SC20"
+        intro="entry.py writes the fork graph itself. A router feeds a 63-stage verifier and a 9-stage drafter, and both return to it."
+        mgdPath="SC20_4x2 + kimi_k2_6_dflash"
+        mgd={DFLASH_MGD}
+        picture={<DFlashPlacementDiagram />}
+        steps={DFLASH_STEPS}
+        after={
+          <Callout tone="warning" title="First version: the draft return is STRICT">
+            The MGD asks for a fabric link on 72 -&gt; 0. Blaze carries it over host MPI, because a second fabric loopback makes
+            its resolver too slow on the 63-stage branch. So Tier C is stricter than blaze here and can reject a machine blaze
+            could build on, and its resolver call faces the same two-loopback cost. RELAXED (later) on that edge makes the two
+            agree.
+          </Callout>
+        }
+      />
+      <Stack gap={8}>
+        <H2>Side by side</H2>
+        <Table
+          headers={["", "Regular ring", "Reload ring", "DFlash fork"]}
+          rows={[
+            ["MGD stages", "16", "4 (65 steps inside)", "73"],
+            ["Meshes", "1", "1", "5"],
+            ["R (crossings)", "none", "none", "every edge between meshes"],
+            ["Who writes blaze's graph", "stage.build_pipeline", "ReloadPipeline.open", "entry.py, by hand"],
+            ["What blaze adds", "harness per stage", "16-17 images per stage, firmware", "stage kinds, host draft return"],
+          ]}
+        />
+      </Stack>
+    </Stack>
+  );
+}
+
+// ===========================================================================
+// PART II: IMPLEMENTATION
+// ===========================================================================
+
+const PROTO_CHANGE = `
++message PipelineStage {
++  uint32 id = 1;
++  string label = 2;
++  TorusTopology shape = 3;        // dims only; dim_types ignored
++}
++message PipelineEdge {
++  uint32 src = 1;
++  uint32 dst = 2;
++  optional Policy policy = 3;      // omitted = STRICT; RELAXED rejected for now
++  bool loopback = 4;
++}
++message PipelineDescriptor {
++  string name = 1;
++  repeated PipelineStage stages = 2;
++  repeated PipelineEdge edges = 3;
++}
+ message MeshGraphDescriptor {
+   ...
++  repeated PipelineDescriptor pipeline_descriptors = 6;
+ }`;
+
+function ImplFormatTab() {
+  return (
+    <Stack gap={22}>
+      <Grid columns={fit(380)} gap={20} align="start">
+        <Stack gap={8}>
+          <H2>The proto change</H2>
+          <CodeCard path="tt_metal/fabric/protobuf/mesh_graph_descriptor.proto" mode="diff" language="protobuf" src={PROTO_CHANGE} />
+          <Table
+            headers={["Check", "Where"]}
+            rows={[
+              ["Tier A", "static_validate, on the proto, before populate"],
+              ["Tier B", "after populate, on the descriptor's meshes"],
+              ["Merge", "merge() copies every part's pipelines, rejects a repeated name; the merged ctor runs A and B again"],
+            ]}
+          />
+        </Stack>
+        <Stack gap={8}>
+          <H2>Tier B: the search</H2>
+          <CodeCard path="Tier B, pseudo-code" mode="plain" src={TIER_B_SEARCH} />
+          <Text size="small" tone="tertiary">
+            The first version runs steps 1 to 3. Step 4 (the carve check), "find all" and the mesh-class symmetry are a backup,
+            not implemented.
+          </Text>
+        </Stack>
+      </Grid>
+      <Stack gap={8}>
+        <H2>RELAXED edges (later)</H2>
         <Text tone="secondary">
-          Each edge says whether it must ride the fabric; the words match channels policy. STRICT is the default (the field is optional, as on
-          channels): an edge with no policy is STRICT, and only edges marked policy: RELAXED may go over host. Every edge STRICT is blaze's
-          placement="strict" and every edge RELAXED is placement="flexible"; a mix, such as a STRICT ring whose only RELAXED edge
-          is the loopback, is what neither mode can say. There is no HOST value: an edge that always goes over host needs no
-          link, so to the mapper it is RELAXED. Blaze's Edge carries the same policy, so the MGD and the runtime graph agree.
+          STRICT is the default; only edges marked policy: RELAXED may go over host MPI. Blaze&apos;s Edge carries the same policy.
         </Text>
         <Grid columns={fit(340)} gap={16} align="start">
           <CodeCard
@@ -4767,116 +4379,38 @@ stages { id: 8 shape { dims: [ 1, 2 ] } }
             mode="plain"
             language="protobuf"
             src={`
-// PipelineEdge: optional Policy policy = 3 (the enum channels uses); omitted = STRICT
-
-edges { src: 0 dst: 1 }                    # STRICT
-edges { src: 1 dst: 2 }                    # STRICT
-edges { src: 2 dst: 3 }                    # STRICT
+edges { src: 0 dst: 1 }
+edges { src: 1 dst: 2 }
+edges { src: 2 dst: 3 }
 edges { src: 3 dst: 0 policy: RELAXED loopback: true }   # may go over host`}
           />
           <Table
             headers={["Step", "STRICT edge", "RELAXED edge"]}
             rows={[
-              ["Tier B crossing rules", "rides a declared connection, within its channels", "left out"],
+              ["Tier B crossings", "rides a declared connection, within its channels", "left out"],
               ["Plan 1 k_AB", "counted", "not counted"],
-              ["Tier C", "a fabric link in the layout", "the host-cut planner may cut it; each fabric chain resolved alone"],
+              ["Tier C", "a fabric link in the layout", "a soft edge in the same solve; each fabric chain resolved alone"],
             ]}
           />
         </Grid>
-        <Callout tone="neutral" title="RELAXED is allowed on every edge">
-          An MGD stage does not have to map onto a blaze stage yet, so the MGD does not restrict where RELAXED goes. Tier B and
-          Plan 1 leave every RELAXED crossing out. Tier C mirrors blaze's host-cut planner, which never cuts stage 0's
-          outgoing edge, so a RELAXED one there still needs a fabric link (_group_walk skips 0 in cuts; stage 0's rank drives
-          inference and cannot pump).
-        </Callout>
-        <Callout tone="info" title="Note: rules that might be good to add">
-          Once MGD stages map onto blaze stages, Tier A could reject RELAXED where blaze can never carry the edge over host:
-          stage 0's outgoing edge, and any edge of an open chain (graph.py raises "host edges are
-          only supported on a looped-back ring"). Tier B and Plan 1 would then count those edges as STRICT, which prunes more.
-        </Callout>
-      </Stack>
-
-      <Stack gap={8}>
-        <H2>How Tier A and Tier B differ</H2>
-        <Text>
-          Both run inside every MeshGraphDescriptor constructor. Tier A asks whether the pipeline text is a valid descriptor.
-          Tier B asks whether those stages can fit on the meshes that same descriptor declares. Tier A never looks at a mesh.
-          Tier B never looks at the physical machine, and it does not choose which mesh a stage lands on.
-        </Text>
-        <Table
-          headers={["", "Tier A", "Tier B"]}
-          rows={[
-            ["When", "static_validate, on the proto, before populate", "after populate, on this descriptor's meshes"],
-            ["Sees", "stage ids, edges, shapes, pipeline names", "host_topology rank grids, slices, declared connections"],
-            ["Asks", "Is this text a pipeline?", "Can these stages fit on these meshes?"],
-            ["Does not", "look at a mesh, or limit how stages connect", "see the physical machine, or pick an assignment"],
-          ]}
-        />
-        <Text tone="secondary">
-          On 4×2 slices, Tier A accepts [4, 2], [4, 4], and [2, 4], because each is two positive numbers. Tier B keeps [4, 2]
-          (one slice) and [4, 4] (two slices). [2, 4] binds to no mesh: 2 is not a multiple of 4, and the shape is not turned
-          sideways. mixed4's stages and edges pass Tier A. Tier B then drops "all four stages on M0" (6 slices, M0 has 4) and
-          "s0, s2 on one mesh and s1, s3 on the other" (4 crossings, 2 channels). "s0, s1 on M0 and s2, s3 on M1" uses 3 and 3
-          and crosses twice, so it survives. Several assignments survive, and none is chosen.
-        </Text>
-        <Text tone="secondary">
-          Loading a part runs both tiers on that part. merge builds a new descriptor, so both run again. The second Tier B can
-          reject two pipelines which each fit their own file but do not fit together.
-        </Text>
-      </Stack>
-
-      <Stack gap={8}>
-        <H2>Tier A rules (parse time)</H2>
-        <Table
-          headers={["Rule", "Rejected example"]}
-          rows={[
-            ["Stage ids unique and non-empty; edges name real stages", 'edges { src: 0 dst: 9 } with no s9'],
-            ["No self-edges", 'edges { src: 0 dst: 0 }'],
-            ["The edges not marked loopback have no cycle", 'edges s0 > s1 and s1 > s0, neither marked loopback'],
-            ["Each loopback edge closes a cycle", 'only edges { src: 0 dst: 1 loopback: true }'],
-            ["Exactly one stage has no incoming edge besides loopbacks; it owns host I/O", "two chains, s0 > s1 and s2 > s3"],
-            ["Shapes rank 2, dims > 0", "shape { dims: [ 4, 2, 1 ] }"],
-            ["Pipeline names unique and non-empty; each pipeline is checked on its own", "two pipelines both named mixed4"],
-          ]}
-        />
         <Text size="small" tone="tertiary">
-          Repeating an edge declares a second channel on that hop. The edge that closes a ring is marked loopback: true, as in s3 to s0; a fork marks each return.
-          Every edge is STRICT in the first version. RELAXED (later): any edge may be RELAXED; Tier A will not restrict where.
+          Tier C mirrors blaze&apos;s host-cut planner, which never cuts stage 0&apos;s outgoing edge, so a RELAXED edge there still
+          needs a fabric link.
         </Text>
-        <Callout tone="info" title="NOTE: beyond one host I/O stage, Tier A does not limit stage topology">
-          In-degree, out-degree, and whether a branch is a chain are all accepted. A graph
-          blaze cannot build still passes Tier A and fails at build time.
-        </Callout>
-        <Callout tone="warning" title="Dead-end branches are allowed">
-          A branch may end without an edge back. Tier A accepts that. A graph blaze cannot build still passes Tier A and
-          fails at build time.
-        </Callout>
       </Stack>
-
-      <Stack gap={8}>
-        <H2>Merging MGDs</H2>
-        <Text tone="secondary">
-          The mapper always merges its MGD parts. With two or more parts, merge rebuilds the proto field by field and would drop
-          the pipelines. P2 copies every part's pipelines and rejects a name declared twice. Each part is a MeshGraphDescriptor,
-          so Tier B has already run on that part's meshes. merge() constructs a new descriptor, and Tier B runs again on the
-          merged meshes and every pipeline together. Plan 1 reads the merged descriptor's facts. Tier C places the pipelines on
-          disjoint slices and resolves each on its own.
-        </Text>
-        <MergeDiagram />
-      </Stack>
-      <DescriptorExamples />
     </Stack>
   );
 }
 
-function MapperTab() {
+
+function ImplMapperTab() {
   return (
     <Stack gap={22}>
       <Stack gap={8}>
         <H2>The per-seating check</H2>
         <Text tone="secondary">
           MultiMeshSolutionEnumerator::next() today stops after step 2. Tier C adds four steps after intra-mesh success, and
-          they run only when the MGD has a pipeline. This tab covers C1 and C2; C3 and C4 have their own tabs.
+          they run only when the MGD has a pipeline. This part covers C1 and C2; C3 and C4 follow.
         </Text>
         <Table
           headers={["Step", "Does", "Outputs", "First version", "Later (optional)"]}
@@ -4898,7 +4432,7 @@ function MapperTab() {
           C2 sees one intra-mesh layout at a time, so a failure is exact for that layout, not the seating. C4&apos;s exit-node
           retry (P15) tries other layouts of the same seating before excluding it.
         </Text>
-        <Legend />
+        <Legend prNote />
         <LoopFlow />
       </Stack>
       <Stack gap={8}>
@@ -4996,55 +4530,6 @@ function MapperTab() {
             ["R over demand on (A, B)", "demand check", "seating fails: C4, pipeline_binding and the pair"],
           ]}
         />
-        <Text tone="secondary">
-          Why one carve is enough: the resolver accepted the first carve on all 101 benchmark cases
-          (results/rerun_2026-10-27/footprint_then_resolver, at most 4 ms each). The one case built to fail it
-          (chip_level/reject_demo) has no passing carve at all. The cost: a seating can be lost when another carve on it would
-          pass. If a real MGD hits that, the seating's PipelinePlacementEnumerationSession gives a second carve with one more next(),
-          still the existing API (open question 24).
-        </Text>
-        <H2>Speed: blaze&apos;s carve planner + resolver against footprint + resolver</H2>
-        <Table
-          headers={["Group (60 s cap)", "Cases", "Planner + resolver: placed", "Footprint + resolver: decided", "Resolver after footprint, worst"]}
-          rows={[
-            ["original carve cases", "17", "0 (17 budget-exhausted)", "16", "0.029 s"],
-            ["heterogeneous sweep, 60 to 95% fill", "30", "0 (30 budget-exhausted)", "30", "0.001 s"],
-            ["single mesh, no 1x1 stages", "45", "0 (stage-0 rule; off: 2)", "43", "0.029 s"],
-            ["heterogeneous multi-mesh", "12", "0 (stage-0 rule; off: 0)", "12", "0.001 s"],
-            ["multi-mesh, no 1x1 stages", "28", "0 (stage-0 rule; off: 0)", "26", "0.036 s"],
-            ["all", "132", "0", "127", "0.036 s"],
-          ]}
-        />
-        <Table
-          headers={["Case (seconds, carve + resolver)", "Planner + resolver", "Footprint + resolver"]}
-          rows={[
-            ["4x4: 1x1, 3x 2x2, 1x1", "0.000 + 0.000", "0.000 + 0.000"],
-            ["4x8: 1x1, 2x4, 2x4, 2x2, 1x1", "0.009 + 0.000", "0.001 + 0.000"],
-            ["4x8 ring of 32 x 1x1", "0.038 + 0.001", "0.004 + 0.001"],
-            ["4x8 ring of 16 x 1x2 (planner stage-0 rule off)", "0.036 + 0.000", "0.002 + 0.000"],
-            ["4x4: 1x1, 3x 2x2 (feasible)", "wrong reject: no-cycle-of-length-13", "0.000 + 0.000"],
-            ["4x6 and 4x8: 1x1, 2x2 ring, 1x1 (feasible)", "wrong reject: no-alignment", "0.001 + 0.000"],
-            ["8x8 fill: 1x1, 15x 2x2, 3x 1x1", "budget exhausted", "0.026 + 0.000"],
-            ["16x16: 1x1, 62x 2x2, 1x1", "budget exhausted", "0.13 + 0.004"],
-            ["random 8x8, 30 stages", "budget exhausted", "0.60 + 0.001"],
-            ["random 8x16, 37 stages", "budget exhausted", "5.6 + 0.001"],
-            ["4 meshes of 4x8, 1 cable per pair, ring of 112 x 1x1", "budget exhausted", "9.9 + 0.020"],
-            ["7x7: 1x1, 10x 2x2 (infeasible)", "budget exhausted, no verdict", "no, 2.1"],
-            ["5x5 ring of 25 x 1x1 (odd, infeasible)", "budget exhausted, no verdict", "no, 0.003"],
-          ]}
-        />
-        <Callout tone="info" title="Use footprint + resolver">
-          The planner only completes on small rings of columns, where both take milliseconds. On grid-shaped meshes it has no
-          degree-2 chains to contract, so its cycle search runs out of budget on every 8x8 or larger grid and every multi-mesh
-          case; its stage-0 rule rejects every case without a 1x1 stage, and its grouping wrongly rejects 16 cases the
-          footprint carves in milliseconds. In the footprint path the carve is the whole cost: the resolver checks every
-          carve in at most 36 ms.
-        </Callout>
-        <Text size="small" tone="tertiary">
-          Planner: blaze&apos;s plan_ring_carve ported to C++ (topo/carve_planner_port.hpp, blaze&apos;s 200k-expansion and 64-cycle
-          budgets). Footprint: with resource completeness. Source: REPORT.md section 5.3 and
-          results/rerun_2026-10-27/carve_comparison.md, one machine.
-        </Text>
         <H2>The check: resolver inputs</H2>
         <Table
           headers={["Resolver argument", "What C2 builds for the chosen rectangles", "Rule it enforces"]}
@@ -5062,46 +4547,6 @@ function MapperTab() {
           segment test before the solve (Itai-Papadimitriou-Szwarcfiter: colours plus a few cases on grids 1 to 3 wide). Not
           covered: tight meshes with dead slices, and tight multi-mesh rings with several cables per pair; there the
           session&apos;s conflict_cap bounds the solve, and a capped solve reads as no mapping with today&apos;s API (open question 13).
-        </Text>
-      </Stack>
-
-      <Stack gap={10}>
-        <H2>Worked example: where the links land matters</H2>
-        <Text tone="secondary">
-          A 4-stage ring split two stages per mesh crosses M0 to M1 twice. Every case below declares two channels, so the
-          descriptor-only checks cannot tell them apart. Pick a case, and whether the loopback s3 &gt; s0 is RELAXED (later; the first version is all STRICT).
-        </Text>
-        <CaseExplorer />
-        <Table
-          headers={["Case", "Bound links", "every edge STRICT", "s3 > s0 RELAXED (later)"]}
-          rows={(["A", "B", "C"] as CaseId[]).map((id) => [
-            `Case ${id}`,
-            CASES[id].title,
-            CASES[id].strict.ok ? "accept: all-fabric ring" : "reject: no 4-slice cycle",
-            CASES[id].relaxed.host ? "accept: fabric chain + host loopback" : "accept: all-fabric ring",
-          ])}
-          rowTone={[undefined, "warning", "warning"]}
-        />
-      </Stack>
-
-      <Stack gap={10}>
-        <H2>Blaze&apos;s carve paths and the one position graph</H2>
-        <Text tone="secondary">
-          Blaze turns meshes into submeshes in one of these ways. Tier C does not try them one by one: C1 builds one position
-          graph per seating (every rectangle each stage shape fills), which covers all of them, and C2 solves it once.
-        </Text>
-        <CarvePaths />
-        <Table
-          headers={["MGD", "Blaze at runtime", "Tier C, every edge STRICT", "Tier C, some edge RELAXED (later)"]}
-          rows={[
-            ["one mesh, every stage on one rank", "single-mesh tiling", "one footprint solve", "same, RELAXED edges soft"],
-            ["one mesh with a joint stage, or several meshes", "planned carve (or per-rank tiling with submesh_shape)", "one footprint solve", "same, RELAXED edges soft"],
-            ["a stage smaller than a host slice", "per-rank tiling, first tile", "not modelled; Tier B rejects", "same (open question 15)"],
-          ]}
-        />
-        <Text size="small" tone="tertiary">
-          Blaze's multi_mesh flag is set for more than one mesh or any stage spanning several ranks, so a galaxy with 4x1 rank
-          columns and 4x2 stages takes blaze's planned carve (3.2, example F).
         </Text>
       </Stack>
 
@@ -5189,7 +4634,6 @@ function MapperTab() {
           ]}
         />
       </Stack>
-      <MapperExamples />
     </Stack>
   );
 }
@@ -5208,7 +4652,7 @@ std::map<LogicalMeshNode, tt::tt_metal::distributed::MeshContainer<MeshCoordinat
 // PhysicalMultiMeshGraph: unchanged. PipelinePlacementEnumerationSession is built only inside
 // the enumerator's place_pipelines, which runs only for a stage graph with nodes`;
 
-function SatTab() {
+function ImplSatTab() {
   return (
     <Stack gap={22}>
       <Stack gap={8}>
@@ -5328,7 +4772,6 @@ function SatTab() {
           ring-stress and superpod MGDs. The code change is in P8.
         </Callout>
       </Stack>
-      <SatExamples />
     </Stack>
   );
 }
@@ -5365,7 +4808,7 @@ const std::vector<RequiredCrossing>& get_pipeline_required_links() const;
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(
     const PortDescriptorTable& port_descriptors, const std::vector<RequiredCrossing>& required_crossings);`;
 
-function BindingTab() {
+function ImplBindingTab() {
   return (
     <Stack gap={22}>
       <Stack gap={8}>
@@ -5396,14 +4839,6 @@ function BindingTab() {
             between those positions. The rerun is dropped. It would only matter if Tier C checked blaze&apos;s first cycle (question 8).
           </Callout>
         </Grid>
-      </Stack>
-      <Stack gap={8}>
-        <H2>Bind the cables the pipeline needs</H2>
-        <Text tone="secondary">
-          After mapping, the control plane picks which physical cables carry each MGD connection. Today it ignores the pipeline,
-          so it can throw away the cables Tier C relied on.
-        </Text>
-        <BindingCompare />
       </Stack>
       <Stack gap={8}>
         <H2>Taken from the inter-mesh policy plan (later, P16)</H2>
@@ -5501,7 +4936,6 @@ function BindingTab() {
           </Text>
         </Stack>
       </Grid>
-      <BindingExamples />
     </Stack>
   );
 }
@@ -5560,13 +4994,22 @@ function QuestionsTab() {
 }
 
 const SECTIONS = [
-  { id: "overview", label: "Overview", body: OverviewTab },
-  { id: "descriptor", label: "The MGD pipeline section", body: DescriptorTab },
-  { id: "mapper", label: "Tier C, C1 and C2: graph and solve", body: MapperTab },
-  { id: "binding", label: "C3: on success, emit and bind", body: BindingTab },
-  { id: "sat", label: "C4: on failure, next solve", body: SatTab },
-  { id: "plan", label: "Implementation plan", body: PlanTab },
-  { id: "questions", label: "Gaps and open questions", body: QuestionsTab },
+  { id: "overview", part: 1, label: "Overview", body: OverviewTab },
+  { id: "descriptor", part: 1, label: "The MGD pipeline section", body: DescriptorTab },
+  { id: "tiers", part: 1, label: "Tier A and Tier B rules", body: TiersTab },
+  { id: "tierc", part: 1, label: "Tier C: the mapping", body: TierCTab },
+  { id: "examples", part: 1, label: "Worked examples, MGD to blaze", body: ExamplesTab },
+  { id: "plan", part: 2, label: "PR plan", body: PlanTab },
+  { id: "impl-format", part: 2, label: "Format, Tier A and Tier B", body: ImplFormatTab },
+  { id: "impl-mapper", part: 2, label: "Tier C: C1 and C2", body: ImplMapperTab },
+  { id: "impl-binding", part: 2, label: "Tier C: C3, emit and bind", body: ImplBindingTab },
+  { id: "impl-sat", part: 2, label: "Tier C: C4, the SAT loop", body: ImplSatTab },
+  { id: "questions", part: 2, label: "Gaps and open questions", body: QuestionsTab },
+] as const;
+
+const PARTS = [
+  { part: 1, title: "Part I: the design", sub: "What the MGD says, what each tier checks, and how a pipeline is mapped." },
+  { part: 2, title: "Part II: implementation", sub: "PRs, files and code. Read Part I first." },
 ] as const;
 
 export default function MgdPipelineDesign() {
@@ -5574,47 +5017,68 @@ export default function MgdPipelineDesign() {
   const t = useHostTheme();
   return (
     <Stack gap={28} style={{ padding: 24, maxWidth: 1240 }}>
-      <Stack gap={8}>
+      <Stack gap={10}>
         <H1>Pipeline-aware topology mapping</H1>
         <Text tone="secondary">
-          Encode pipeline stages in the MGD so the topology mapper only commits mappings the pipeline builder can build on.
-          Design for [tt-metal#52016](https://github.com/tenstorrent/tt-metal/issues/52016). Nothing here is implemented yet;
-          blaze's builder (Tier D) is unchanged.
+          Describe pipeline stages in the MGD, so the topology mapper only commits mappings the pipeline builder can build on.
+          Design for [tt-metal#52016](https://github.com/tenstorrent/tt-metal/issues/52016). Blaze&apos;s builder is unchanged.
         </Text>
         <Row gap={8}>
           <Button
             variant="ghost"
-            onClick={() => dispatch({ type: "openFile", path: "/data/rsong/tt-metal3/docs/scratch/mgd-pipeline-graph-design.md" })}
+            onClick={() => dispatch({ type: "openFile", path: "/data/rsong/tt-blaze/tt-metal/docs/scratch/mgd-pipeline-graph-design.md" })}
           >
             Open the full design doc
           </Button>
         </Row>
-        <Row gap={6} wrap>
-          {SECTIONS.map((s, i) => (
-            <span key={s.id}>
-              <Pill onClick={() => scrollToId(`sec-${s.id}`)}>
-                {i + 1}. {s.label}
-              </Pill>
-            </span>
-          ))}
-        </Row>
+        {PARTS.map((p) => (
+          <Row key={p.part} gap={6} wrap align="center">
+            <Text size="small" weight="semibold" style={{ minWidth: 150 }}>
+              {p.title}
+            </Text>
+            {SECTIONS.filter((s) => s.part === p.part).map((s) => (
+              <span key={s.id}>
+                <Pill size="sm" onClick={() => scrollToId(`sec-${s.id}`)}>
+                  {s.label}
+                </Pill>
+              </span>
+            ))}
+          </Row>
+        ))}
       </Stack>
-      {SECTIONS.map((s, i) => {
-        const Body = s.body;
-        return (
-          <div key={s.id} id={`sec-${s.id}`} style={{ scrollMarginTop: 12 }}>
-            <Stack gap={16}>
-              <div style={{ borderTop: `1px solid ${t.stroke.secondary}`, paddingTop: 16 }}>
-                <Text size="small" tone="tertiary">
-                  PART {i + 1} OF {SECTIONS.length}
-                </Text>
-                <H1 style={{ margin: 0 }}>{s.label}</H1>
-              </div>
-              <Body />
-            </Stack>
-          </div>
-        );
-      })}
+      {PARTS.map((p) => (
+        <div key={p.part} id={`part-${p.part}`}>
+          <Stack gap={28}>
+            <div
+              style={{
+                background: p.part === 1 ? t.fill.secondary : t.fill.tertiary,
+                borderLeft: `4px solid ${p.part === 1 ? t.accent.primary : t.category.orange}`,
+                borderRadius: 6,
+                padding: "14px 18px",
+              }}
+            >
+              <H1 style={{ margin: 0 }}>{p.title}</H1>
+              <Text tone="secondary">{p.sub}</Text>
+            </div>
+            {SECTIONS.filter((s) => s.part === p.part).map((s, i) => {
+              const Body = s.body;
+              return (
+                <div key={s.id} id={`sec-${s.id}`} style={{ scrollMarginTop: 12 }}>
+                  <Stack gap={16}>
+                    <div style={{ borderTop: `1px solid ${t.stroke.secondary}`, paddingTop: 16 }}>
+                      <Text size="small" tone="tertiary">
+                        {p.part === 1 ? "I" : "II"}.{i + 1}
+                      </Text>
+                      <H2 style={{ margin: 0 }}>{s.label}</H2>
+                    </div>
+                    <Body />
+                  </Stack>
+                </div>
+              );
+            })}
+          </Stack>
+        </div>
+      ))}
     </Stack>
   );
 }
