@@ -379,7 +379,7 @@ def test_minimal_second_fallback_caps_grid_without_throttle(tmp_path, monkeypatc
     assert second.result.status == Status.FAIL and second.log == str(d / "log_03")
 
 
-def test_minimal_first_fallback_pass_skips_second(tmp_path, monkeypatch):
+def test_minimal_runs_second_fallback_after_first_passes(tmp_path, monkeypatch):
     from gwdt_steps import Ctx, State
 
     def write(cmd, log, env):
@@ -389,7 +389,7 @@ def test_minimal_first_fallback_pass_skips_second(tmp_path, monkeypatch):
     calls = _fake_sh(monkeypatch, 0, write)
     state = State()
     assert _nd_step("matmul:minimal").run(Ctx(tmp_path, tmp_path, False), state).status == Status.FAIL
-    assert len(calls) == 6 and [f.result.status for f in state.fallbacks] == [Status.PASS]
+    assert len(calls) == 9 and [f.result.status for f in state.fallbacks] == [Status.PASS, Status.FAIL]
 
 
 def test_matmul_pass_does_not_rerun(tmp_path, monkeypatch):
