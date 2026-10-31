@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RC experiment switches: which half of the L1 port-3 fix is on
-#define LLK_PORT3_AT_END   1
 #define LLK_PORT3_AT_START 1
 #include <algorithm>
 #include <cstdint>
