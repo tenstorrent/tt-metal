@@ -17,6 +17,7 @@
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::prim {
@@ -69,7 +70,8 @@ std::vector<CBInfo> get_cb_info(
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
     uint32_t input_channels_padded,
-    std::optional<uint32_t> reader_indices_actual_page_size) {
+    std::optional<uint32_t> reader_indices_actual_page_size,
+    bool fp32_partials) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -174,8 +176,11 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t in0_num_blocks_w =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED ? num_blocks_act_w * conv_act_c_blocks : num_blocks_act_w;
     packer_l1_acc = determine_packer_l1_acc(packer_l1_acc, enable_bias, in0_num_blocks_w);
-    const tt::tt_metal::DataType partial_dtype =
-        packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
+    const bool float32_spill =
+        fp32_dest_acc_en && fp32_partials && !is_1d_depthwise_conv && (in0_num_blocks_w > 1 || enable_bias);
+    const tt::tt_metal::DataType partial_dtype = packer_l1_acc
+                                                     ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16)
+                                                     : (float32_spill ? DataType::FLOAT32 : output_datatype);
     const tt::DataFormat partial_df = datatype_to_dataformat_converter(partial_dtype);
     const uint32_t partial_tile_size = tt::tile_size(partial_df);
 
@@ -671,7 +676,7 @@ bool is_split_reader_viable(
 // count themselves (calculate_total_cb_size for the legacy path, summed
 // desc.cbs for the descriptor path) and compare against the returned
 // `CB_allocation_size`.
-static conv_op_l1_usage predicted_conv2d_l1_usage(
+conv_op_l1_usage predicted_conv2d_l1_usage(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     std::optional<uint32_t> reader_indices_actual_page_size) {
@@ -728,7 +733,26 @@ static conv_op_l1_usage predicted_conv2d_l1_usage(
             groups, input_tensor_shape[3], output_channels, kernel_dims[0], input_tensor_shape[1], has_bias),
         input_channels_padded,
         skip_mcast.skip_activation_mcast,
-        reader_indices_actual_page_size);
+        reader_indices_actual_page_size,
+        operation_attributes.fp32_partials);
+}
+
+bool fp32_partials_fit_in_l1(const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args) {
+    Conv2dParams with_fp32 = operation_attributes;
+    with_fp32.fp32_partials = true;
+    const conv_op_l1_usage l1_usage = predicted_conv2d_l1_usage(with_fp32, tensor_args, std::nullopt);
+    const uint64_t output_in_l1 = operation_attributes.memory_config.is_l1() ? l1_usage.tensor_allocation_size : 0;
+    const uint64_t needed = uint64_t{l1_usage.CB_allocation_size} + output_in_l1;
+    const uint64_t usable = ttnn::operations::core::usable_program_l1_capacity(tensor_args.a.device());
+    if (needed > usable) {
+        log_debug(
+            tt::LogOp,
+            "Conv2d: Float32 partials need {} B of L1, {} B usable; keeping the partials in the output dtype",
+            needed,
+            usable);
+        return false;
+    }
+    return true;
 }
 
 void emit_cb_descriptors(
@@ -780,6 +804,25 @@ void emit_cb_descriptors(
             cb.index = overlapped_cb.index;
         }
     }
+}
+
+void mark_fp32_partials_reload(
+    const std::vector<CBInfo>& cb_info,
+    std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode,
+    bool has_bias) {
+    const CBInfo& partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS);
+    if (has_bias || partials.num_pages == 0 || partials.data_format != tt::DataFormat::Float32) {
+        return;
+    }
+    if (unpack_to_dest_mode.empty()) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    }
+    unpack_to_dest_mode[partials.index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+}
+
+bool partials_format_differs_from_output(const std::vector<CBInfo>& cb_info) {
+    const CBInfo& partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS);
+    return partials.num_pages > 0 && partials.data_format != get_cb_info_by_name(cb_info, Conv2dCb::OUT).data_format;
 }
 
 void post_conv2d_op_memory_checks_descriptor(

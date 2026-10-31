@@ -5,6 +5,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 
 #include <array>
 #include <cstdint>
@@ -245,6 +246,18 @@ Tensor conv2d(
 
     operation_attributes.pre_op_l1_allocation_size_bytes =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+
+    const bool wormhole_hifi4 = device->arch() == tt::ARCH::WORMHOLE_B0 &&
+                                compute_kernel_config.math_fidelity == tt::tt_metal::MathFidelity::HiFi4;
+    if (a.memory_config().is_sharded() && compute_kernel_config.fp32_dest_acc_en && !wormhole_hifi4) {
+        Conv2dParams l1_acc = operation_attributes;
+        l1_acc.compute_kernel_config.packer_l1_acc = true;
+        operation_attributes.fp32_partials = fp32_partials_fit_in_l1(l1_acc, tensor_args);
+        if (operation_attributes.fp32_partials && !compute_kernel_config.packer_l1_acc) {
+            log_debug(tt::LogOp, "Conv2d: fp32_dest_acc_en with packer_l1_acc=false; enabling packer_l1_acc");
+            operation_attributes.compute_kernel_config.packer_l1_acc = true;
+        }
+    }
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
