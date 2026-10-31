@@ -178,9 +178,12 @@ def gate_gather(gathered_partials, normalized, up, memory_config, *, matmul: str
                 for c, core in enumerate(producers)
             ],
         )
+        trim = g3.rowtrim_defines(rows)
         computes = [
-            fp.compute_kernel(g3.LOWRANK3, plain_set, [t, TP_SIZE, t, 16, 17], fp32_dest=True),
-            fp.compute_kernel(g3.LOWRANK3, inject_set, [t, TP_SIZE, inject_local, 16, 17], fp32_dest=True),
+            fp.compute_kernel(g3.LOWRANK3, plain_set, [t, TP_SIZE, t, 16, 17], defines=trim, fp32_dest=True),
+            fp.compute_kernel(
+                g3.LOWRANK3, inject_set, [t, TP_SIZE, inject_local, 16, 17], defines=trim, fp32_dest=True
+            ),
         ]
         senders = [
             g3._mcast_writer(
@@ -222,6 +225,7 @@ def gate_gather(gathered_partials, normalized, up, memory_config, *, matmul: str
             g3.GATE3,
             w_set,
             [PARTIAL_TILES, BRANCHES, 8, 9, 10, 11, 12, 13, 14, 18, g3.UP_SPILL if matmul == "chain" else 0, 15],
+            defines=trim,
             fp32_dest=True,
             unpack_to_dest_fp32=(10, 12, 13),
         )

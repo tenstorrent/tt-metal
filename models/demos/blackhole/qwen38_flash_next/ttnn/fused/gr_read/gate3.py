@@ -49,6 +49,22 @@ LOWRANK3 = fp.kernel_source(NAME, "lowrank_compute3.cpp")
 GATE3 = fp.kernel_source(NAME, "gate_compute3.cpp")
 
 
+ROWTRIM_ENV = "QWEN38_GR_GATE_ROWTRIM"
+ROWTRIM_MAX_ROWS = 4
+ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); the default kernels run 8
+
+
+def rowtrim_defines(rows: int):
+    """Kernel defines of the two GR compute kernels: with ``QWEN38_GR_GATE_ROWTRIM=1`` (default; "0" off) and ``rows <= 4`` every
+    SFPU op runs ``ROWTRIM_ITERATIONS`` iterations per face (VectorMode::R) instead of 8; empty otherwise (kernels as before).
+    """
+    import os
+
+    if os.environ.get(ROWTRIM_ENV, "1") == "1" and 1 <= rows <= ROWTRIM_MAX_ROWS:
+        return [("QWEN38_GR_ROWTRIM_ITERS", str(ROWTRIM_ITERATIONS))]
+    return []
+
+
 def enabled(rows: int) -> bool:
     import os
 
@@ -110,9 +126,10 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
             for c, core in enumerate(producers)
         ],
     )
+    trim = rowtrim_defines(rows)
     computes = [
-        fp.compute_kernel(LOWRANK3, plain_set, [t, TP_SIZE, t, 16, 17], fp32_dest=True),
-        fp.compute_kernel(LOWRANK3, inject_set, [t, TP_SIZE, inject_local, 16, 17], fp32_dest=True),
+        fp.compute_kernel(LOWRANK3, plain_set, [t, TP_SIZE, t, 16, 17], defines=trim, fp32_dest=True),
+        fp.compute_kernel(LOWRANK3, inject_set, [t, TP_SIZE, inject_local, 16, 17], defines=trim, fp32_dest=True),
     ]
     senders = [
         _mcast_writer(
@@ -154,6 +171,7 @@ def low_rank_gate3(gathered_partials, normalized, up, *, matmul: str = "chain"):
         GATE3,
         w_set,
         [PARTIAL_TILES, BRANCHES, 8, 9, 10, 11, 12, 13, 14, 18, UP_SPILL if matmul == "chain" else 0, 15],
+        defines=trim,
         fp32_dest=True,
         unpack_to_dest_fp32=(10, 12, 13),
     )

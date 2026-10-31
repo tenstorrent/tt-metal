@@ -14,6 +14,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "../../kernels/zones.h"
 
+// SFPU iterations per face of every unary/binary op below.  8 (rows 0..15 of faces 0 and 1) unless the host sets
+// QWEN38_GR_ROWTRIM_ITERS (QWEN38_GR_GATE_ROWTRIM=1 and rows <= 4): 2 covers rows 0..3 at all 16 columns of a face.
+#ifndef QWEN38_GR_ROWTRIM_ITERS
+#define QWEN38_GR_ROWTRIM_ITERS 8
+#endif
+
 void kernel_main() {
     constexpr uint32_t T = get_compile_time_arg_val(0);
     constexpr uint32_t D = get_compile_time_arg_val(1);
@@ -67,8 +73,13 @@ void kernel_main() {
         for (uint32_t t = 0; t < T; ++t) {
             tile_regs_acquire();
             copy_tile(c_q, t, 0);
-            MATH(
-                (SFPU_UNARY_CALL(DST_SYNC_MODE, false, calculate_silu, (false, 8 /* ITERATIONS */), 0, VectorMode::R)));
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                false,
+                calculate_silu,
+                (false, QWEN38_GR_ROWTRIM_ITERS /* ITERATIONS */),
+                0,
+                VectorMode::R)));
             tile_regs_commit();
             lr.reserve_back(1);
             tile_regs_wait();
@@ -81,13 +92,19 @@ void kernel_main() {
             tile_regs_acquire();
             copy_tile(c_q, inject, 0);
             sigmoid_tile_init<false>();
-            sigmoid_tile<VectorMode::R, false, false>(0);
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                false,
+                calculate_sigmoid,
+                (false, false, QWEN38_GR_ROWTRIM_ITERS /* ITERATIONS */),
+                0,
+                VectorMode::R)));
             binop_with_scalar_tile_init();
             MATH((SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 true,
                 calculate_binop_with_scalar,
-                (APPROX, MUL_UNARY, 8 /* ITERATIONS */, true),
+                (APPROX, MUL_UNARY, QWEN38_GR_ROWTRIM_ITERS /* ITERATIONS */, true),
                 0,
                 VectorMode::R,
                 0x40000000u)));

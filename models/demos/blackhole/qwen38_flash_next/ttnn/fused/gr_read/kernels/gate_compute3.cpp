@@ -15,13 +15,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "../../kernels/zones.h"
 
+// SFPU iterations per face of every unary/binary op below.  8 (rows 0..15 of faces 0 and 1) unless the host sets
+// QWEN38_GR_ROWTRIM_ITERS (QWEN38_GR_GATE_ROWTRIM=1 and rows <= 4): 2 covers rows 0..3 at all 16 columns of a face.
+#ifndef QWEN38_GR_ROWTRIM_ITERS
+#define QWEN38_GR_ROWTRIM_ITERS 8
+#endif
+
 // mul_binary_tile with VectorMode::R (faces 0 and 1: rows 0..15)
 ALWI void mul_binary_tile_r(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         false,
         calculate_sfpu_binary_mul,
-        (APPROX, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */, false),
+        (APPROX, ckernel::BinaryOp::MUL, QWEN38_GR_ROWTRIM_ITERS /* ITERATIONS */, false),
         idst0,
         idst1,
         odst,
@@ -112,7 +118,13 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t b = 0; b < B; ++b) {
             copy_tile(c_up, b, b);
-            sigmoid_tile<VectorMode::R, false, false>(b);
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                false,
+                calculate_sigmoid,
+                (false, false, QWEN38_GR_ROWTRIM_ITERS /* ITERATIONS */),
+                b,
+                VectorMode::R)));
         }
         tile_regs_commit();
         gate.reserve_back(B);
