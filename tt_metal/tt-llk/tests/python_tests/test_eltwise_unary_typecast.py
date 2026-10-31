@@ -95,11 +95,10 @@ TYPECAST_PAIRS = [
 def _whole_number_float_spec(high: int) -> StimuliSpec:
     """Float stimuli restricted to whole numbers in ``[0, high)``.
 
-    Whole numbers make float->int conversions exact regardless of whether the
-    kernel truncates (int32/uint32) or rounds (uint16/uint8), and keep the
-    values inside the range each format represents exactly so the golden is
-    lossless. A small ``high`` is used when a block-float format is involved so
-    the shared-exponent quantization is (near-)exact within each 16-elem block.
+    Whole numbers make float->int conversions exact and keep the values inside
+    the range each format represents exactly so the golden is lossless. A small
+    ``high`` is used when a block-float format is involved so the
+    shared-exponent quantization is (near-)exact within each 16-elem block.
     """
 
     def dist(size, dtype, generator):
@@ -429,25 +428,18 @@ def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
     return patterns
 
 
-def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
-    # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
-    # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
-    # Every finite |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)
-    dest_acc = DestAccumulation.Yes
-    input_dimensions = [32, 64]
-    patterns = _fp32_to_uint8_wide_exponent_bits()
-
+def _run_typecast_on_bit_patterns(
+    formats, dest_acc, input_dimensions, bits, golden, result_mask
+):
+    """Typecast the fp32 bit patterns `bits` (one per element) and return
+    (src_bits, mismatches), where mismatches = [(input bits, expected, got)]."""
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
-    # The stimuli generator calls a custom distribution once per face, so place
-    # the bit patterns over the whole operand afterwards.
-    assert len(patterns) <= src_A.numel()
-    bits = patterns + [0] * (src_A.numel() - len(patterns))
+    assert len(bits) == src_A.numel()
     src_A = (
         torch.tensor(
             [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
@@ -459,7 +451,7 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     src_bits = [
         b & 0xFFFFFFFF for b in src_A.to(torch.float32).view(torch.int32).tolist()
     ]
-    golden = [_fp32_to_uint8_wrap(b) for b in src_bits]
+    expected = golden(src_A, src_bits)
 
     configuration = _build_typecast_config(
         formats,
@@ -471,12 +463,37 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
         src_B,
         tile_cnt_B,
     )
-    result = [int(v) & 0xFF for v in configuration.run().result]
+    result = [int(v) & result_mask for v in configuration.run().result]
     assert len(result) == len(
-        golden
-    ), f"expected {len(golden)} result elements, got {len(result)}"
+        expected
+    ), f"expected {len(expected)} result elements, got {len(result)}"
 
-    mismatches = [(b, g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
+    mismatches = [(b, g, r) for b, g, r in zip(src_bits, expected, result) if g != r]
+    return src_bits, mismatches
+
+
+def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
+    # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
+    # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
+    # Every finite |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 64]
+    patterns = _fp32_to_uint8_wide_exponent_bits()
+
+    # The stimuli generator calls a custom distribution once per face, so place
+    # the bit patterns over the whole operand afterwards.
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    assert len(patterns) <= num_elements
+    bits = patterns + [0] * (num_elements - len(patterns))
+    _, mismatches = _run_typecast_on_bit_patterns(
+        formats,
+        dest_acc,
+        input_dimensions,
+        bits,
+        lambda src_A, src_bits: [_fp32_to_uint8_wrap(b) for b in src_bits],
+        0xFF,
+    )
     failing_exponents = sorted({_fp32_unbiased_exp(b) for b, _, _ in mismatches})
     assert not mismatches, (
         f"{len(mismatches)} fp32->uint8 mismatches at unbiased exponents "
@@ -513,6 +530,31 @@ def _uint_to_uint8_wide_range_values(input_format: DataFormat, chunk: int) -> li
         0, top, (fill,), dtype=torch.int64, generator=generator
     ).tolist()
     return values
+
+
+def _fp32_bits_of(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _fractional_to_uint16_bits(input_format: DataFormat) -> list[int]:
+    """fp32 bit patterns for float -> uint16: fractions, zeros, denormals and the uint16
+    limit. A Float16_b source keeps the patterns that are exact in bfloat16."""
+    values = [k / 4 for k in range(-64, 256)]  # quarter steps, exact in bfloat16
+    values += [n + 0.5 for n in range(64, 128)]  # half steps, exact in bfloat16
+    values += [2.0**-25, 2.0**-30, -(2.0**-25), -(2.0**-30)]
+    values += [65280.0, 65536.0, 70144.0, 2.0**31]  # bfloat16 around the uint16 limit
+    values += [255.5, 1023.5, 32767.5, 65533.5, 65534.25, 65534.5, 65534.75]
+    values += [65535.0, 65535.25, 65535.5, 65535.75, 65536.5]
+    patterns = [_fp32_bits_of(v) for v in values]
+    patterns += [0x00000000, 0x80000000]  # +0.0, -0.0
+    patterns += [0x00010000, 0x007F0000, 0x80010000]  # bfloat16 denormals
+    patterns += [0x00800000, 0x80800000]  # smallest normals
+    patterns += [0x00000001, 0x007FFFFF, 0x80000001]  # fp32-only denormals
+    # 1 - 2**-23, 1 - 2**-24 and 2 - 2**-23 truncate to 0, 0 and 1.
+    patterns += [0x3F7FFFFE, 0x3F7FFFFF, 0x3FFFFFFF]
+    if input_format == DataFormat.Float16_b:
+        patterns = [p for p in patterns if p & 0xFFFF == 0]
+    return patterns
 
 
 @parametrize(
@@ -563,6 +605,50 @@ def test_eltwise_unary_typecast_uint_to_uint8_wide_range(
     assert not mismatches, (
         f"{len(mismatches)} {formats.input_format.name}->UInt8 mismatches; first "
         f"(input, expected, got): {[(hex(v), g, r) for v, g, r in mismatches[:16]]}"
+    )
+
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format in (DataFormat.Float16_b, DataFormat.Float32)
+        and pair.output_format == DataFormat.UInt16
+    ],
+    dest_acc=_production_dest_acc,
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_fractional_to_uint16(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    # Float16_b runs the 16-bit Dest (SFPLOADMACRO) kernel path, Float32 the 32-bit one.
+    patterns = _fractional_to_uint16_bits(formats.input_format)
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    assert len(patterns) <= num_elements
+    # Fill the rest of the operand with quarter steps.
+    bits = patterns + [
+        _fp32_bits_of((k % 256) / 4) for k in range(num_elements - len(patterns))
+    ]
+    src_bits, mismatches = _run_typecast_on_bit_patterns(
+        formats,
+        dest_acc,
+        input_dimensions,
+        bits,
+        lambda src_A, src_bits: [
+            int(v)
+            for v in get_golden_generator(TypecastGolden)(
+                src_A, formats.input_format, formats.output_format, input_dimensions
+            ).tolist()
+        ],
+        0xFFFF,
+    )
+    assert src_bits == bits, "stimulus is not exact in the input format"
+    assert not mismatches, (
+        f"{len(mismatches)} float->uint16 mismatches; first (input bits, expected, got): "
+        f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"
     )
 
 

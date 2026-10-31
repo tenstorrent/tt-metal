@@ -44,12 +44,23 @@ constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 // the notes in ckernel_sfpu_topk_xl.h), so an OR of those names would read as self-contradictory.
 constexpr std::uint32_t SFPSHFT_MOD1_IMM_SRC_VC = 0b101;
 
+// float -> uint16 truncates toward zero like the other integer destinations. SFP_STOCH_RND
+// rounds to nearest (ties away from zero), and max(0, x - 0.5) rounds to trunc(x) for every
+// finite x. The uint16 mode drops the sign, so the clamp is needed, and it must follow the
+// subtraction (max(0, x) - 0.5 rounds 0 to 1). Values from 65535 up saturate to 65535.
+// NaN conversion results depend on the source format and Dest mode. On Blackhole,
+// negative NaNs can produce 65535, but Float16_b 0xFFC0 with FP32 Dest produces 0.
+// Wormhole preserves the sign and produces 0 for negative NaNs.
+// The plain loops need an SFPNOP after SFPADDI: SFPSWAP reads its operands before the SFPADDI
+// result is visible, and the hardware does not stall for it.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_fp32_to_uint16() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPADDI(0xBF00, p_sfpu::LREG0, 0);  // -0.5
+        TTI_SFPNOP;
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         if (is_fp32_dest_acc_en) {
@@ -64,26 +75,30 @@ inline void calculate_typecast_fp32_to_uint16() {
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
         //
-        // t | Load | Simple            | MAD | Round            | Store   |
-        // - | ---- | ----------------- | --- | ---------------- | ------- |
-        // 0 | [v]  |                   |     |                  |         |
-        // 1 | nop  | [v] = max(v, 0.0) |     |                  |         |
-        // 0 | ...  | (must be idle)    |     | (must be idle)   |         |
-        // 1 | ...  |                   |     | [v] L16 = rnd(v) |         |
-        // 0 | ...  |                   |     |                  | [v] L16 |
+        // t | Load | Simple            | MAD            | Round            | Store   |
+        // - | ---- | ----------------- | -------------- | ---------------- | ------- |
+        // 0 | [v]  |                   |                |                  |         |
+        // 1 | nop  |                   | [v] = v - 0.5  |                  |         |
+        // 4 | ...  | [v] = max(v, 0.0) | (must be idle) |                  |         |
+        // 5 | ...  | (must be idle)    |                | (must be idle)   |         |
+        // 6 | ...  |                   |                | [v] L16 = rnd(v) |         |
+        // 7 | ...  |                   |                |                  | [v] L16 |
 
         // SFPLOADMACRO operand encoding: operand0 = (macro_select << 2) | (VD & 3) and the
         // trailing operand = VD >> 2, so the hardware reconstructs the value-register index
         // VD = (trailing << 2) | (operand0 & 3) -- a 3-bit index spanning LREG0..LREG7 -- while
-        // operand0[3:2] selects which armed macro fires. Here VD is 0/1 and macro_select 0, so
+        // operand0[3:2] selects which armed macro fires. Here VD is 0..3 and macro_select 0, so
         // the mask/shift are no-ops, but the same idiom addresses VD >= 4 elsewhere (e.g.
         // calculate_typecast_uint32_to_fp32 fires macro 2 with VD = LREG7).
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+            int v = d & 3;  // rotate over p_sfpu::LREG0..LREG3
             TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, v >> 2);
             TTI_SFPNOP;
         }
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
         TTI_SFPNOP;
         TTI_SFPNOP;
         TTI_SFPNOP;
@@ -93,6 +108,8 @@ inline void calculate_typecast_fp32_to_uint16() {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+            TTI_SFPADDI(0xBF00, p_sfpu::LREG0, 0);  // -0.5
+            TTI_SFPNOP;
             TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
             TTI_SFP_STOCH_RND(
                 0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
@@ -890,12 +907,18 @@ inline void init_typecast_fp32_to_uint16() {
     // InstructionTemplate[1]
     TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
 
-    // Macro 0
+    // InstructionTemplate[2]
+    TTI_SFPADDI(0xBF00, 14, 0);  // L[VD] += -0.5
+
+    // Macro 0, one load every 2 cycles: MAD x - 0.5 at delay 0, Simple max(0, .) at 3, Round at
+    // 5, Store at 6. The swap lands on a cycle with no MAD and is followed by one with no Simple
+    // or Round. [v] is live for 7 cycles, so VD rotates over four LRegs and the loop ends with
+    // six SFPNOPs to drain the last macro.
     {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0x00 | 0x40 | (2 << 3) | (4 + 1);
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (3 << 3) | (4 + 0);
+        constexpr std::uint32_t mad_bits = 0x00 | 0x00 | (0 << 3) | (4 + 2);
+        constexpr std::uint32_t round_bits = 0x00 | 0x40 | (5 << 3) | (4 + 1);
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (6 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
