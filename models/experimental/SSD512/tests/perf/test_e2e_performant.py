@@ -71,7 +71,7 @@ def create_ssd512_pipeline_model(ttnn_model, dtype=ttnn.bfloat16):
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "batch_size, size, expected_compile_time, expected_throughput_fps",
-    [(1, 512, 25.4, 40.83)],
+    [(1, 512, 25.4, 51.5)],
 )
 @pytest.mark.models_performance_bare_metal
 def test_ssd512_e2e_performant(

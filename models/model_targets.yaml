@@ -2337,7 +2337,7 @@ targets:
             status: active
             enforce_perf: false
             perf:
-              fps: 40.83
+              fps: 51.5
               fps_tolerance: 0.10
             owner_id: U07J5E9NA9G # Dalar Vartanians
             team: models
