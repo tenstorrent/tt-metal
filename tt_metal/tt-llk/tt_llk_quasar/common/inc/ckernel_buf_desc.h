@@ -10,6 +10,7 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "llk_assert.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"
@@ -107,6 +108,36 @@ inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const st
     bd_table[buf_desc_id].words[0] = word0;
     bd_table[buf_desc_id].words[1] = word1;
     bd_table[buf_desc_id].words[2] = word2;
+}
+
+/**
+ * @brief Returns the L1 data format programmed in a buffer table entry.
+ * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
+ */
+inline DataFormat _get_buf_desc_l1_format_(const std::uint32_t buf_desc_id)
+{
+    LLK_ASSERT(buf_desc_id < BD_TABLE_NUM_ENTRIES, "buf_desc_id out of range");
+    return static_cast<DataFormat>(
+        (bd_table[buf_desc_id].words[0] & BUFFER_DESCRIPTOR_TABLE_REG0_TILE_FORMAT_MASK) >> BUFFER_DESCRIPTOR_TABLE_REG0_TILE_FORMAT_SHAMT);
+}
+
+/**
+ * @brief Points a buffer table entry at a new L1 base from the issuing thread's instruction stream.
+ *
+ * The in-stream counterpart of @ref _configure_buf_desc_table_, for retargeting an entry between execute calls.
+ *
+ * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
+ * @param base_l1_16B: New L1 base address, in 16B units
+ */
+inline void _set_buf_desc_l1_base_(const std::uint32_t buf_desc_id, const std::uint32_t base_l1_16B)
+{
+    LLK_ASSERT(buf_desc_id < BD_TABLE_NUM_ENTRIES, "buf_desc_id out of range");
+    LLK_ASSERT(
+        ((base_l1_16B << BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_SHAMT) & ~BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_MASK) == 0,
+        "base_l1_16B exceeds the buffer descriptor L1 base field");
+    // bd_table entries are buffer_descriptor_u, back to back from the table base.
+    const std::uint32_t word0_addr32 = BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_ADDR32 + buf_desc_id * (sizeof(buffer_descriptor_u) / sizeof(std::uint32_t));
+    cfg_rmw(word0_addr32, BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_SHAMT, BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_MASK, base_l1_16B);
 }
 
 /**
