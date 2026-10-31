@@ -239,6 +239,8 @@ inline void calculate_gelu_appx() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
+        v_if(sfpi::is_inf(in) && in < 0.0f) { in = sfpi::setexp(in, 254); }
+        v_endif;
         sfpi::vFloat half = sfpi::vConstFloatPrgm0;
         sfpi::vFloat half_in = in * half;
         sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);

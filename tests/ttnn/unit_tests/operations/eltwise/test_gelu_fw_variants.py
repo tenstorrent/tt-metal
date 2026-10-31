@@ -271,8 +271,7 @@ def test_tanh_differs_from_accurate(device):
 def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     """Sanity-check the kernel doesn't silently produce a finite value for +inf,
     -inf, or NaN inputs. Exact non-finite output varies by variant/dtype: BF16
-    NaN encoding may get canonicalised to +inf through SFPU pack/convert, and
-    fast_lut returns -inf or NaN for -inf (the LUT doesn't apply saturation)."""
+    NaN encoding may get canonicalised to +inf through SFPU pack/convert."""
     variant_enum, _ = _VARIANTS[variant_name]
     inputs = torch.zeros((32, 32), dtype=torch_dtype)
     inputs[0, 0] = float("inf")
@@ -290,6 +289,20 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     # want to flag if the kernel silently produced a usable finite-nonzero value.
     for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
         assert val == 0.0 or not math.isfinite(val), f"{variant_name}: {name} -> {val!r}, expected 0 or any non-finite"
+
+
+@pytest.mark.parametrize(
+    "torch_dtype,tt_dtype",
+    [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)],
+    ids=["bf16", "fp32"],
+)
+def test_gelu_fast_lut_infinities(device, torch_dtype, tt_dtype):
+    inputs = torch.full((32, 32), float("-inf"), dtype=torch_dtype)
+    inputs[1::2, :] = float("inf")
+    tt_input = ttnn.from_torch(inputs, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.gelu(tt_input, fast_and_approximate_mode=True)).float()
+    expected = torch.relu(inputs.float())  # the limits of gelu at -inf and +inf
+    assert torch.equal(out, expected), f"gelu(-inf) -> {out[0, 0].item()!r}, gelu(+inf) -> {out[1, 0].item()!r}"
 
 
 # NaN payloads of both signs. A negative NaN used to fall below the accurate
