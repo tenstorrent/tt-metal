@@ -511,6 +511,8 @@ Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `c
 
 **Switches (all default OFF).** `DSV41_STRUCTURED_SPEC=1` (alias `DSV41_STRUCT_MASK=1`; needs a speculative launch and the in-trace sampler `DSV41_INTRACE_SAMPLE=1`), `DSV41_STRUCTURED_M2=1` (needs the first). They pair with the plugin's `VLLM_TT_STRUCTURED_SPEC` (off, 8.21). Not set in the catalog yet.
 
+The host-side row permutation (`permute_to_runner`, `tt/grammar_mask.py`) works on the packed words and skips all-ones rows: 2.8 -> 0.32 ms for M1 and 6.3 -> 0.68 ms for M2.
+
 **Verified** on B=16 and B=8 / 1M (device check files in `tests/struct_mask_device/`; M2 model side verified). **Cost:** a masked round costs about +5 ms on a 99 ms round at B=16; with 4 structured workers the plain users go 38 -> 28 tok/s/user (the M0 narrow path of 8.21 gives 101 -> 41 tok/s for 4 streams). Tests: `tests/test_struct_mask_model_cpu.py`, `tests/test_grammar_mask_cpu.py`.
 
 ## 9. Branches not merged
