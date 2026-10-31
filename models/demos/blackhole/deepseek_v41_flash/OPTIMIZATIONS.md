@@ -503,7 +503,7 @@ Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `c
 
 **Pending.** M1 (masked verify: per-request k=0 with an on-device mask) and M2. The model-side host helpers for M1 are on this branch but inert: `tt/grammar_mask.py`, `tests/test_grammar_mask_cpu.py`, interface note `STRUCTURED_SPEC_INTERFACE.md`.
 
-**Catalog.** No env change (the switches default as above).
+**Catalog (rc4).** Superseded by 8.22: the catalog now sets the structured switches (M1 mode) in all deepseek_v41 entries.
 
 ## 8.22 Structured outputs, model-side grammar mask (M1 / M2; switches default OFF, not in the catalog)
 
@@ -516,6 +516,8 @@ The host-side row permutation (`permute_to_runner`, `tt/grammar_mask.py`) works 
 M2 over-accept fix (per-row accept-count cap, active only with `DSV41_STRUCTURED_SPEC=1`): replays 63 -> 0 and structured requests 21.3 -> 25.5 tok/s; plain users are unchanged (46 -> 28 tok/s with M1, 23 with M2, 4 structured workers) because the loss is prefill-call churn: each prefill call costs 0.55-0.85 s fixed.
 
 **Verified** on B=16 and B=8 / 1M (device check files in `tests/struct_mask_device/`; M2 model side verified). **Cost:** a masked round costs about +5 ms on a 99 ms round at B=16; with 4 structured workers the plain users go 38 -> 28 tok/s/user (the M0 narrow path of 8.21 gives 101 -> 41 tok/s for 4 streams). Tests: `tests/test_struct_mask_model_cpu.py`, `tests/test_grammar_mask_cpu.py`.
+
+**rc4: structured outputs ON (M1 mode) in the catalog.** `DSV41_STRUCTURED_SPEC=1`, `VLLM_TT_STRUCTURED_SPEC=1`, `DSV41_INTRACE_SAMPLE=1`, `DSV41_STRUCTURED_M2=0` and `VLLM_TT_STRUCTURED_M2=0` in all six deepseek_v41 entries (both M2 switches must be set; the plugin default for `VLLM_TT_STRUCTURED_M2` is 1 = M2 mode, so leaving it unset would not match the model's M1). Also merged: grammar-mask upload skipped when the mask equals the one the device holds (`325e2e01022`) and the plugin M2 side (`431ef0e`) with the live mode file `VLLM_TT_STRUCTURED_MODE_FILE` (m0 / m1 / m2, cached 0.2 s) for A/B. Validated by the branch owner: plain decode c8 47.95 tok/s/user, GSM8K spot 98.0, 28/28 matrix, 256/256 tools.
 
 ## 8.23 Device-resident block-paged APC (`DSV41_APC_PAGED=1`, default off)
 
@@ -546,6 +548,14 @@ Restore cost per hit: about 2 ms of host time (3 table uploads + 6 launches, `re
 **Merged with 8.19 / 8.20 / 8.22 (rc4 integration).** Text requests the paged cache owns bypass the host tier (neither restored from nor snapshotted into it, and not planned by the M0' grid); `DSV41_APC_PAGED_HOST=1` restores the host-tier fallback for them. Image prompts (8.19) and B=16 stay on the host tier, and the M0' grid (8.20) remains the host-tier policy. With `DSV41_APC_PAGED=1` the model advertises the scheduler hit policy `model` (the plugin asks the model's block index through `vllm_tt_plugin.prefix_hooks`); without it the policy stays `all` / `pow2` as before. Catalog: `DSV41_APC_PAGED: "1"` in the B=4 and B=8 entries (text and vision) only; B=16 (Up < U) is unsupported by the paged path. Kill switch: unset / 0. Knobs: `DSV41_APC_PAGED_HOST`, `DSV41_APC_PAGED_HALO_A`, `DSV41_APC_PAGED_ZONE_EQ`.
 
 **Memory and limits.** +65 MiB per bank; free DRAM at B=8 is 348 MiB per bank. The halo-A store (128 slots per mesh row) is the binding resource. Hit logits are bit-identical to a cold prefill including the `b_zone < p0_new` case; no regression in cold prefill.
+
+## 8.24 Image-cut piece lag (`DSV41_PIECE_LAG=1`)
+
+**Problem.** vLLM cuts a long prompt into prefill pieces; a piece end that is not on a chunk boundary, or that lands inside an image span, made the next piece recompute from position 0 (wasted prefill, worst for image prompts).
+
+**Fix** (`IMAGE_CUT_NOTES.md`; `tt/generator_vllm.py`, `tt/vllm_state.py`): a piece that does not end its prompt is cut back to a chunk boundary (and before a straddling image span), and the next piece resumes at the carried end (the end vLLM believes the user has reached is tracked separately). `DSV41_PIECE_LAG_FILE` is a live switch file for A/B in one boot.
+
+**Measured** (device A/B, branch owner): wasted recompute 32.6 % -> 2.0 %, no errors. **Catalog:** `DSV41_PIECE_LAG: "1"` in all deepseek_v41 entries.
 
 ## 9. Branches not merged
 
