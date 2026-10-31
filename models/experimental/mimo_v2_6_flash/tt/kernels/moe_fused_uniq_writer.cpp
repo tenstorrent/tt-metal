@@ -45,6 +45,7 @@ void kernel_main() {
     // each of those cores by one (the row all-gather's senders in the same launch wait for every bank core).
     constexpr uint32_t signal_args_at = get_compile_time_arg_val(20);
     constexpr uint32_t signal_sem = get_compile_time_arg_val(21);
+    constexpr uint32_t experts = get_compile_time_arg_val(22);
     constexpr uint32_t bf16_tile_bytes = 2048;
     constexpr uint32_t tiny_face_bytes = rows * mimo_moe::kFaceDim * 2;  // rows 0..rows-1 of one face
     constexpr uint32_t tiny_bytes = 2 * tiny_face_bytes;
@@ -86,7 +87,7 @@ void kernel_main() {
         }
     }
     uint32_t uniq[num_pairs];
-    const uint32_t n = mimo_moe::table_experts<topk, users>(tbl, entry_bytes, uniq);
+    const uint32_t n = mimo_moe::table_experts<topk, users, experts>(tbl, entry_bytes, uniq);
     cb_reserve_back(cb_cnt, 1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_cnt)) = n;
     cb_push_back(cb_cnt, 1);

@@ -723,6 +723,7 @@ class FusedStream:
             dn.compact_tiles,
             3 + 2 * banks if signal else 0,  # signal args follow the writer's other runtime args
             0,
+            gu.expert_tiles * TILE,
         ]
         compute_ct = [
             gu.cb_x,

@@ -112,7 +112,7 @@ void kernel_main() {
     MOE_MARK(12);
 
     uint32_t uniq[num_pairs];
-    const uint32_t n = mimo_moe::table_experts<topk, users>(tbl, entry_bytes, uniq);
+    const uint32_t n = mimo_moe::table_experts<topk, users, expert_tiles * 32>(tbl, entry_bytes, uniq);
     MOE_MARK(13);
 
     // Stream: block i goes to CB slot i % num_buffers with trid (i % num_buffers) + 1; at most in_flight blocks

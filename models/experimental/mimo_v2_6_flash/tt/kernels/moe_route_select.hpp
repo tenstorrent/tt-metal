@@ -183,26 +183,40 @@ inline uint32_t append_unique(uint32_t* uniq, uint32_t n, const uint32_t* ids) {
 
 // The distinct experts of a routing table's active users in user order, each at its first selection (with no active
 // user, user 0's), as append_unique lists them; returns the count. Entry u at tbl + u * entry_bytes is [active,
-// ids[topk], weight bits[topk]] (FusedStream).
-template <uint32_t topk, uint32_t users>
+// ids[topk], weight bits[topk]] (FusedStream). A bitmap over the experts replaces append_unique's list scan (n^2
+// compares: ~9 us for 37 experts on these RISCs).
+template <uint32_t topk, uint32_t users, uint32_t experts>
 inline uint32_t table_experts(uint32_t tbl, uint32_t entry_bytes, uint32_t* uniq) {
+    static_assert(experts % 32 == 0);
+    uint32_t seen[experts / 32];
+    for (uint32_t w = 0; w < experts / 32; w++) {
+        seen[w] = 0;
+    }
     uint32_t n = 0;
-    uint32_t ids[topk];
     for (uint32_t u = 0; u < users; u++) {
         volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tbl + u * entry_bytes);
-        if (e[0] != 0) {
-            for (uint32_t i = 0; i < topk; i++) {
-                ids[i] = e[1 + i];
+        if (e[0] == 0) {
+            continue;
+        }
+        for (uint32_t i = 0; i < topk; i++) {
+            const uint32_t id = e[1 + i];
+            const uint32_t bit = 1u << (id & 31u);
+            if ((seen[id >> 5] & bit) == 0) {
+                seen[id >> 5] |= bit;
+                uniq[n++] = id;
             }
-            n = append_unique<topk>(uniq, n, ids);
         }
     }
     if (n == 0) {
         volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tbl);
         for (uint32_t i = 0; i < topk; i++) {
-            ids[i] = e[1 + i];
+            const uint32_t id = e[1 + i];
+            const uint32_t bit = 1u << (id & 31u);
+            if ((seen[id >> 5] & bit) == 0) {
+                seen[id >> 5] |= bit;
+                uniq[n++] = id;
+            }
         }
-        n = append_unique<topk>(uniq, 0, ids);
     }
     return n;
 }
