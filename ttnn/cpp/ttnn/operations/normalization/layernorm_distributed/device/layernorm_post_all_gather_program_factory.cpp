@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -536,6 +535,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
+                // 2D core grid: core x owns global rows [x*tiles_per_core_x, (x+1)*tiles_per_core_x);
+                // the input, stats, and output offsets must all start at the core's first row.
                 uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
                 uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
 
