@@ -998,15 +998,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    // Single steps with group delivery: 3 K/V pages, unless 2 fit enough more slots to need fewer passes (a pass
-    // re-streams every piece and, after the first, cannot hide under the all-gather; e.g. MiniMax-H3 10 s: 2 passes of
-    // 10 slots at 3 pages, 1 pass of 19 at 2). The 2-page 19-slot configuration hung on 2026-10-30 while the plan
-    // records were copied to the compute stack, which overflowed; they are now read from L1.
-    if (group_mcast) {
-        const uint32_t slots3 = fit_slots_for(3, false);
-        const uint32_t slots2 = fit_slots_for(2, false);
-        kv_cb_pages = slots2 > 0 && passes_for(slots2) < passes_for(slots3) ? 2u : 3u;
-    }
+    // Single steps with group delivery: 3 K/V pages. 2 pages can save a Q pass (MiniMax-H3 10 s: 1 pass of 19 slots
+    // instead of 2 of 10) but measured no faster (traced 12.27 vs 12.32 ms, 2026-10-30) and rule out pair steps there.
     // DEBUG (dev branch): TT_SPARSE_KV_PAGES=2|3 forces the single-step page count (A/B and repro).
     if (const char* pages_env = std::getenv("TT_SPARSE_KV_PAGES"); pages_env != nullptr && *pages_env != 0) {
         kv_cb_pages = std::string(pages_env) == "2" ? 2u : 3u;
