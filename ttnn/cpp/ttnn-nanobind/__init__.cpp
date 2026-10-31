@@ -31,6 +31,7 @@
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
+#include "ttnn-nanobind/program_spec.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
 #include "ttnn-nanobind/mcast_host.hpp"
 #include "ttnn-nanobind/reports.hpp"
@@ -273,6 +274,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
+    auto m_program_spec = mod.def_submodule("program_spec", "Metal 2.0 ProgramSpec and ProgramRunArgs (experimental)");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
     auto m_mcast_host =
         mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
@@ -352,6 +354,10 @@ NB_MODULE(_ttnn, mod) {
     // TODO: pull them out of the ttnn::operations::py_module.
     ttnn::operations::py_module(m_operations);
     // tt::operations::primary::py_module(m_primary_ops);
+
+    // After the operations: KernelSpec.CompilerOptions defaults to a KernelBuildOptLevel, which the fabric mux
+    // operation binds.
+    ttnn::program_spec::py_module_types(m_program_spec);
 
     // CONFIG is a shared mutable global: Python code reads and writes properties
     // via setattr (e.g. manage_config context manager).  We must bind by reference
