@@ -37,7 +37,7 @@ from models.experimental.bevformer.model_config import (
     POST_CENTER_RANGE,
     SCORE_DTYPE,
 )
-from models.experimental.bevformer.tt.tt_common import device_constant
+from models.experimental.bevformer.tt.tt_common import device_constant, signpost
 
 # _gather_rows' padded row width, a whole tile.
 _GATHER_WIDTH = ttnn.TILE_SIZE
@@ -254,23 +254,35 @@ class TTNMSFreeCoder:
             raise ValueError(f"{num_classes} class logits, the coder has {self.num_classes} classes")
         if num_query * num_classes < self.max_num:
             raise ValueError(f"{num_query * num_classes} scores for a top-{self.max_num}")
+        signpost(header="TTNN Coder TopK Start")
         # The scores and boxes are tens of KB; in L1 the coder's many small ops, which keep their
         # input's memory, skip DRAM.
         cls_scores, bbox_preds = (ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG) for t in (cls_scores, bbox_preds))
         logits = ttnn.reshape(cls_scores, (bs, 1, 1, num_query * num_classes))
-        shifted = ttnn.typecast(ttnn.subtract(logits, self._kth_logit(logits)), ttnn.bfloat16)
+        signpost(header="Coder KthLogit Start")
+        kth_logit = self._kth_logit(logits)
+        signpost(header="Coder KthLogit End")
+        signpost(header="Coder Select Start")
+        shifted = ttnn.typecast(ttnn.subtract(logits, kth_logit), ttnn.bfloat16)
         _, selected = ttnn.topk(shifted, k=self.max_num, dim=-1)
         # The row gather takes uint32 indexes.
         selected = ttnn.typecast(selected, ttnn.uint32)
         selected_logits = _gather_rows(ttnn.reshape(logits, (bs, num_query * num_classes, 1)), selected)
+        signpost(header="Coder Select End")
+        signpost(header="Coder Sort Start")
         top_logits, indexes = self._sort_descending(ttnn.reshape(selected_logits, (bs, 1, 1, self.max_num)), selected)
+        signpost(header="Coder Sort End")
+        signpost(header="Coder Decode Start")
         scores = ttnn.sigmoid(top_logits)
         labels = ttnn.remainder(indexes, num_classes)
         # Integer division, exact for any index; the row gather takes uint32 indexes.
         query_index = ttnn.div(ttnn.typecast(indexes, ttnn.int32), num_classes, rounding_mode="floor")
         query_index = ttnn.typecast(query_index, ttnn.uint32)
         boxes = self._decode(_gather_rows(bbox_preds, query_index, self._decode_columns, self._count_config))
-        return tuple(ttnn.reshape(t, (bs, self.max_num)) for t in (scores, labels, query_index)) + (boxes,)
+        outputs = tuple(ttnn.reshape(t, (bs, self.max_num)) for t in (scores, labels, query_index)) + (boxes,)
+        signpost(header="Coder Decode End")
+        signpost(header="TTNN Coder TopK End")
+        return outputs
 
     def _decode(self, gathered):
         """``_gather_rows``' box codes under ``self._decode_columns`` to ``(cx, cy, cz, w, l, h, yaw,
@@ -321,7 +333,10 @@ class TTNMSFreeCoder:
     def finalize(self, scores, boxes):
         """:meth:`topk`'s scores and boxes to upstream ``get_bboxes``' boxes and their validity,
         tested before the move, as upstream's coder does."""
-        return self.bottom_center(boxes), self.valid(scores, boxes)
+        signpost(header="TTNN Coder Finalize Start")
+        outputs = self.bottom_center(boxes), self.valid(scores, boxes)
+        signpost(header="TTNN Coder Finalize End")
+        return outputs
 
     @staticmethod
     def compact(scores, labels, boxes, valid):
