@@ -73,6 +73,62 @@ def test_eth_heartbeat_timeout_signature() -> None:
     assert "ETH heartbeat timeout" in matching_signature_labels(log_text)
 
 
+@pytest.mark.parametrize(("lock_id", "device_id"), [(20, 16), (0, 0), (255, 1024)])
+def test_leftover_process_signature_matches_any_lock_and_device(lock_id, device_id) -> None:
+    log_text = (
+        f"Waiting for KMD lock {lock_id} on /dev/tenstorrent/{device_id}, " "which is currently held by another handle"
+    )
+
+    assert matching_signature_labels(log_text) == ["Leftover process"]
+
+
+def test_leftover_process_signature_handles_formatting_and_chunk_boundaries(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("runner_failure_common.LOG_SCAN_CHUNK_SIZE", 128)
+    log_text = "x" * 120 + (
+        "\n\x1b[33mWaiting for KMD lock 20\x1b[0m on /dev/tenstorrent/16,\n"
+        "which is currently held by another handle\n"
+        "Failed to allocate TLB window.\n"
+    )
+    path = tmp_path / "job.log"
+    path.write_text(log_text)
+
+    assert scan_log_file(path) == (["TLB error", "Leftover process"], "")
+
+
+@pytest.mark.parametrize(
+    "log_text",
+    [
+        "Waiting for KMD lock 20 on /dev/tenstorrent/16",
+        "Waiting for KMD lock 20 on /tmp/file, which is currently held by another handle",
+        "Waiting for KMD lock 20 on /dev/tenstorrent/16, which is not held by another handle",
+        "Waiting for lock 20 on /dev/tenstorrent/16, which is currently held by another handle",
+    ],
+)
+def test_leftover_process_signature_ignores_incomplete_or_unrelated_messages(log_text) -> None:
+    assert matching_signature_labels(log_text) == []
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out", "success", "cancelled", "skipped", ""])
+def test_leftover_process_signature_requires_a_failed_job(monkeypatch, conclusion) -> None:
+    def download(command, **kwargs):
+        kwargs["stdout"].write(
+            b"Waiting for KMD lock 20 on /dev/tenstorrent/16, which is currently held by another handle\n"
+            b"Failed to allocate TLB window.\n"
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("runner_failure_common.subprocess.run", download)
+    monkeypatch.setattr("runner_failure_common.gh_api_json", lambda *_args, **_kwargs: {})
+    job = job_from_dict({"job_id": "1", "status": "completed", "conclusion": conclusion})
+
+    result = scan_job(job, timeout=120)
+
+    assert result.log_checked
+    assert ("Leftover process" in result.signature_labels) is (conclusion in {"failure", "timed_out"})
+    assert "TLB error" in result.signature_labels
+    assert scan_result_from_dict(result_to_dict(result)) == result
+
+
 @pytest.mark.parametrize("requested_shape", ["[4, 8]", "[8, 4]"])
 def test_unrotatable_system_mesh_signature(requested_shape) -> None:
     log_text = (
