@@ -45,8 +45,10 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
 
         Returns:
             List[ttnn.Tensor]: ``[tokens]``, plus ``overhang`` when
-            ``overhang_size_bytes > 0``, plus ``metadata`` when ``metadata_size_bytes > 0``,
-            in that order. Caller-owned destinations are returned as-is.
+            ``overhang_size_bytes > 0``, plus one tensor per ``extra_tensors`` entry of a
+            D2DStreamServiceReceiver, plus ``metadata`` when ``metadata_size_bytes > 0``, in
+            that order. The overhang split is unavailable with extra tensors. Caller-owned
+            destinations are returned as-is.
         )doc";
 
     // Two overloads under one Python name; nanobind dispatches on the `service`

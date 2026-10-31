@@ -174,6 +174,138 @@ def test_d2d_socket_sync(mesh_device, metadata_words):
         del sender
 
 
+def _bf16_tile_to_device(torch_bf16, mesh, mapper):
+    return ttnn.from_torch(
+        torch_bf16,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+
+
+def _assert_shards_equal(sent, received, what):
+    in_shards = ttnn.get_device_tensors(sent)
+    out_shards = ttnn.get_device_tensors(received)
+    assert len(in_shards) == len(out_shards), f"{what}: shard count {len(in_shards)} != {len(out_shards)}"
+    for k, (a, b) in enumerate(zip(in_shards, out_shards)):
+        assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"{what}: shard {k} round-trip mismatch"
+
+
+@pytest.mark.parametrize("metadata_words", [None, [7, 128, 256, 1]], ids=["no_metadata", "metadata"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 2),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_d2d_socket_sync_multi_tensor(mesh_device, metadata_words):
+    """Three tensors on one socket: the sharded uint32 activation, a sharded bf16 TILE
+    tensor, and replicated uint32 ROW_MAJOR token ids with an odd page count. Each drains
+    into its own output bit-exact, metadata last, and iteration 2 hits the program cache
+    on both sides."""
+    if not is_blackhole():
+        pytest.skip("D2DStreamService needs Blackhole (or UBB Galaxy) service cores")
+    rows_total, cols = mesh_device.shape[0], mesh_device.shape[1]
+    if rows_total < 2 or rows_total % 2 != 0:
+        pytest.skip(f"need an even row count to split into sender/receiver halves, got {mesh_device.shape}")
+
+    half = rows_total // 2
+    sender_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(0, 0))
+    receiver_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(half, 0))
+    sender_mesh.enable_program_cache()
+    receiver_mesh.enable_program_cache()
+
+    g_tokens = half * _TOKENS_PER_ROW
+    act_shape = [1, 1, g_tokens, _HIDDEN]
+    tile_shape = [1, 1, half * 64, cols * 96]
+    ids_shape = [1, 1, 3, 32]
+
+    def spec(shape, dtype, layout):
+        return ttnn.TensorSpec(shape=ttnn.Shape(shape), dtype=dtype, layout=layout, buffer_type=ttnn.BufferType.DRAM)
+
+    metadata_size_bytes = 0 if metadata_words is None else len(metadata_words) * 4
+    sender, receiver = ttnn.D2DStreamService.create_pair(
+        sender_mesh=sender_mesh,
+        receiver_mesh=receiver_mesh,
+        global_spec=spec(act_shape, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        mapper=_shard_mapper(sender_mesh),
+        fifo_size_bytes=_FIFO_SIZE_BYTES,
+        sender_worker_cores=_WORKER_CORES,
+        receiver_worker_cores=_WORKER_CORES,
+        socket_buffer_type=ttnn.BufferType.L1,
+        metadata_size_bytes=metadata_size_bytes,
+        share_fabric_links=False,
+        extra_tensors=[
+            (spec(tile_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT), _shard_mapper(sender_mesh)),
+            (spec(ids_shape, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), _replicate_mapper(sender_mesh)),
+        ],
+    )
+    assert len(sender.get_backing_tensors()) == 3
+    assert len(receiver.get_backing_tensors()) == 3
+
+    cache_after_first = None
+    # Inputs stay alive until the end so iteration 2 allocates at new addresses and
+    # the program-cache hit has to patch every segment's input binding.
+    kept_inputs = []
+    try:
+        for it in range(2):
+            torch.manual_seed(it)
+            torch_act = (torch.arange(g_tokens * _HIDDEN, dtype=torch.int32) + it * 100_000).reshape(act_shape)
+            torch_tile = torch.randn(tile_shape, dtype=torch.bfloat16)
+            torch_ids = torch.randint(0, 2**31 - 1, ids_shape, dtype=torch.int32)
+            tt_act = _to_device(torch_act, sender_mesh, _shard_mapper(sender_mesh))
+            tt_tile = _bf16_tile_to_device(torch_tile, sender_mesh, _shard_mapper(sender_mesh))
+            tt_ids = _to_device(torch_ids, sender_mesh, _replicate_mapper(sender_mesh))
+
+            md_tensor = None
+            if metadata_words is not None:
+                md_torch = torch.tensor(metadata_words, dtype=torch.int32).reshape(1, 1, 1, -1)
+                md_tensor = _to_device(md_torch, sender_mesh, _replicate_mapper(sender_mesh))
+
+            backings = ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
+                sender, [tt_act, tt_tile, tt_ids], metadata=md_tensor
+            )
+            assert len(backings) == 3
+
+            drained = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+                receiver, metadata_size_bytes=metadata_size_bytes
+            )
+            assert len(drained) == (4 if metadata_words is not None else 3)
+            assert drained[1].dtype == ttnn.bfloat16 and drained[1].layout == ttnn.TILE_LAYOUT
+            assert drained[2].dtype == ttnn.uint32
+
+            _assert_shards_equal(tt_act, drained[0], f"iter {it} activation")
+            _assert_shards_equal(tt_tile, drained[1], f"iter {it} bf16 tile")
+            _assert_shards_equal(tt_ids, drained[2], f"iter {it} ids")
+            for dev_ids in ttnn.get_device_tensors(drained[2]):
+                assert torch.equal(ttnn.to_torch(dev_ids).to(torch.int32), torch_ids), f"iter {it}: ids mismatch"
+            if metadata_words is not None:
+                for dev_md in ttnn.get_device_tensors(drained[3]):
+                    got_md = ttnn.to_torch(dev_md).flatten().to(torch.int64).tolist()
+                    assert got_md == metadata_words, f"iter {it}: metadata mismatch {got_md} != {metadata_words}"
+
+            kept_inputs += [t for t in (tt_act, tt_tile, tt_ids, md_tensor) if t is not None]
+
+            n_cached = (sender_mesh.num_program_cache_entries(), receiver_mesh.num_program_cache_entries())
+            if it == 0:
+                cache_after_first = n_cached
+            else:
+                assert n_cached == cache_after_first, f"program cache grew on iter 2: {cache_after_first} -> {n_cached}"
+    finally:
+        for t in kept_inputs:
+            ttnn.deallocate(t)
+        del receiver
+        del sender
+
+
 @pytest.mark.parametrize("relay", [False, True], ids=["direct", "relay"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
