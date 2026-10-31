@@ -65,6 +65,7 @@ SECTIONS
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
+    *(.llk_kernel_end_tail)
   } > REGION_CODE
   .fini :
   {
