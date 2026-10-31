@@ -322,8 +322,8 @@ inline void _llk_unpack_AB_matmul_uninit_()
  * @param tile_size_b: Size of one operand B tile, used to compute per-tile offsets.
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
- * @param ct_dim: Number of column tiles in the output block.
- * @param rt_dim: Number of row tiles in the output block.
+ * @param ct_dim: Number of column tiles in the output block; max(ct_dim, rt_dim) must be <= 16.
+ * @param rt_dim: Number of row tiles in the output block; max(ct_dim, rt_dim) must be <= 16.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
  * @note Call @ref _llk_unpack_AB_matmul_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
@@ -348,8 +348,13 @@ inline void _llk_unpack_AB_matmul_(
 
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    const bool reuse_a        = ct_dim >= rt_dim;
-    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    const bool reuse_a                               = ct_dim >= rt_dim;
+    const std::uint32_t t_dim                        = reuse_a ? rt_dim : ct_dim;
+    const std::uint32_t mop_count                    = reuse_a ? ct_dim : rt_dim;
+    constexpr std::uint32_t MAX_MOP_ZMASK_ITERATIONS = 16; // zmask is 16 bits; dest caps ct_dim and rt_dim at 16
+    LLK_ASSERT(mop_count <= MAX_MOP_ZMASK_ITERATIONS, "max(ct_dim, rt_dim) exceeds MAX_MOP_ZMASK_ITERATIONS, the matmul MOP zmask width");
+    // zmask bit i set -> iteration i runs skipA (context-1 replay).
+    constexpr std::uint32_t ALL_ITERATIONS_CONTEXT1_ZMASK = (1u << MAX_MOP_ZMASK_ITERATIONS) - 1;
 
     if (!reuse_a)
     {
@@ -418,7 +423,7 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
+        TT_MOP(0, mop_count - 1, unp_cfg_context == 0 ? 0 : ALL_ITERATIONS_CONTEXT1_ZMASK); // Run the MOP
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
