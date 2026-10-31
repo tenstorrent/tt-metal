@@ -172,6 +172,9 @@ SessionAttachOutcome TileImpl::attach_session(SessionId id) {
         fail("attach_session was given a default-constructed SessionId, which names no execution");
     }
     const std::lock_guard<std::mutex> lock(session_mutex_);
+    if (reviving_) {
+        return SessionAttachOutcome::Busy;
+    }
     if (!healthy_) {
         return SessionAttachOutcome::Unhealthy;
     }
@@ -197,6 +200,35 @@ bool TileImpl::complete_session(SessionId id, bool restored, const std::array<Ha
         failure_hartstates_ = hartstates;
     }
     return true;
+}
+
+bool TileImpl::begin_revive(SessionId owned) {
+    const std::lock_guard<std::mutex> lock(session_mutex_);
+    if (reviving_) {
+        return false;
+    }
+    if (session_active_ && !(owned && active_session_id_ == owned)) {
+        return false;
+    }
+    reviving_ = true;
+    return true;
+}
+
+void TileImpl::end_revive(SessionId owned, bool restored, const std::array<HartState, kHartsPerTile>& hartstates) {
+    const std::lock_guard<std::mutex> lock(session_mutex_);
+    reviving_ = false;
+    if (owned && session_active_ && active_session_id_ == owned) {
+        session_active_ = false;
+        active_session_id_ = SessionId{};
+    }
+    if (restored) {
+        // The one path that clears the latch: every hart was confirmed back
+        // in resident idle by the same inspection enqueue gates on.
+        healthy_ = true;
+    } else {
+        healthy_ = false;
+        failure_hartstates_ = hartstates;
+    }
 }
 
 bool TileImpl::session_active() const {
@@ -301,6 +333,9 @@ CleanupResult ActiveSessionImpl::restore(std::chrono::milliseconds timeout) {
         return fail_cleanup(CleanupOutcome::InvalidObservation, hartstates, timeout);
     }
     if (!returned.satisfied) {
+        if (revive_on_cleanup_timeout_) {
+            return escalate_cleanup(CleanupOutcome::StillRunningActiveFw, hartstates, timeout);
+        }
         return fail_cleanup(CleanupOutcome::StillRunningActiveFw, hartstates, timeout);
     }
 
@@ -332,6 +367,9 @@ CleanupResult ActiveSessionImpl::restore(std::chrono::milliseconds timeout) {
         return fail_cleanup(CleanupOutcome::InvalidObservation, hartstates, timeout);
     }
     if (!rearmed.satisfied) {
+        if (revive_on_cleanup_timeout_) {
+            return escalate_cleanup(CleanupOutcome::IdleNotReArmed, hartstates, timeout);
+        }
         return fail_cleanup(CleanupOutcome::IdleNotReArmed, hartstates, timeout);
     }
 
@@ -433,6 +471,251 @@ CleanupResult ActiveSessionImpl::fail_cleanup(
     result.timeout = timeout;
     result.error = std::move(error);
     (void)tile_.complete_session(id_, false, hartstates);
+    return result;
+}
+
+CleanupResult ActiveSessionImpl::escalate_cleanup(
+    CleanupOutcome outcome, const std::array<HartState, kHartsPerTile>& hartstates, std::chrono::milliseconds timeout) {
+    auto revived = tile_.revive_harts(kAllHartsMask, timeout, id_);
+    if (revived.outcome == ReviveOutcome::Busy) {
+        // Nothing was written and the slot is still this session's.
+        auto result = fail_cleanup(outcome, hartstates, timeout, revived.error);
+        result.revive = std::move(revived);
+        return result;
+    }
+    // revive_harts released the slot and set the health latch either way.
+    CleanupResult result;
+    result.timeout = timeout;
+    if (revived.revived()) {
+        result.outcome = CleanupOutcome::Revived;
+        for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+            result.hartstates[hart] = revived.harts[hart].after;
+        }
+    } else {
+        result.outcome = outcome;
+        result.hartstates = hartstates;
+        result.error = "revive after the cleanup timeout failed: " + std::string(to_string(revived.outcome));
+    }
+    result.revive = std::move(revived);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Revive
+// ---------------------------------------------------------------------------
+
+ReviveResult TileImpl::revive_harts(uint32_t mask, std::chrono::milliseconds timeout, SessionId owned) noexcept {
+    using Clock = std::chrono::steady_clock;
+    ReviveResult result;
+    result.timeout = timeout;
+    for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+        result.harts[hart].hart_id = hart;
+        result.harts[hart].requested = (mask >> hart) & 1u;
+    }
+    if (!begin_revive(owned)) {
+        result.outcome = ReviveOutcome::Busy;
+        result.error = "a submission, a session or another revive holds the tile";
+        return result;
+    }
+
+    // Whether anything was written. A refusal before the first write leaves
+    // a tile without a session exactly as it was.
+    bool touched = false;
+    bool trigger_raised = false;
+    std::array<uint32_t, kHartsPerTile> counts_before{};
+    std::array<HartState, kHartsPerTile> after{};
+    const auto tile = core();
+
+    const auto count_address = [](uint32_t hart) {
+        return X280_HART_STATE_ADDR(0) + hart * X280_HART_RECORD_STRIDE + X280_HART_STATE_REVIVE_COUNT_OFFSET;
+    };
+    const auto requested = [&](uint32_t hart) { return ((mask >> hart) & 1u) != 0; };
+
+    // The device sequence. A refusal found before the first write returns
+    // early with the outcome set; the tail below runs either way.
+    const auto sequence = [&] {
+        runtime_->require_mesh_live("revive", &id());
+        Clock::time_point triggered;
+        {
+            const std::lock_guard<std::mutex> serialise(chip_->lock());
+            const auto state = inspect_state();
+            if (!state.observation_valid) {
+                result.outcome = ReviveOutcome::InvalidObservation;
+                result.error = state.invalid_reason;
+            } else if (!state.reset_released) {
+                result.outcome = ReviveOutcome::NotReleased;
+                result.error = "the tile is held in reset";
+            } else if (state.ecc != LimEccState::Primed) {
+                result.outcome = ReviveOutcome::NotInstalled;
+                result.error = std::string("no resident idle can be in LIM while ECC is ") + to_string(state.ecc);
+            } else if (auto why = rnmi_not_installed_unlocked(); !why.empty()) {
+                result.outcome = ReviveOutcome::NotInstalled;
+                result.error = std::move(why);
+            }
+            if (result.outcome != ReviveOutcome::Failed) {
+                after = state.harts;
+                return;
+            }
+
+            for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+                result.harts[hart].before = state.harts[hart];
+                counts_before[hart] = state.harts[hart].state.revive_count;
+            }
+            result.run_status_before = transport().read_reg32(id().chip_id, tile, kHartRunStatus);
+
+            // A revived hart re-enters idle, which jumps on a JUMP with a
+            // stable run value: the dead session's command and entry would
+            // send it straight back into the dead image.
+            touched = true;
+            for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+                if (!requested(hart)) {
+                    continue;
+                }
+                publish_active_command(hart, X280_HART_COMMAND_NONE);
+                const uint64_t entry_address =
+                    X280_HART_CONTROL_ADDR(0) + hart * X280_HART_RECORD_STRIDE + X280_HART_CONTROL_ENTRY_OFFSET;
+                transport().write_u64(id().chip_id, tile, entry_address, 0);
+                const uint64_t seen = transport().read_u64(id().chip_id, tile, entry_address);
+                if (seen != 0) {
+                    fail("hart " + std::to_string(hart) + " entry did not clear: " + format_readback_values(0, seen));
+                }
+            }
+
+            const uint32_t trigger = transport().read_reg32(id().chip_id, tile, kRnmiTrigger);
+            trigger_raised = true;
+            transport().write_reg32(id().chip_id, tile, kRnmiTrigger, rnmi_trigger_set(trigger, mask));
+            triggered = Clock::now();
+        }
+
+        // Spin rather than sleep: the default 5 ms poll interval would hide a
+        // sub-millisecond revive.
+        Clock::time_point acked;
+        const Deadline ack_deadline{timeout};
+        const auto ack = poll_until(ack_deadline, std::chrono::milliseconds{0}, [&] {
+            const std::lock_guard<std::mutex> serialise(chip_->lock());
+            for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+                if (!requested(hart)) {
+                    continue;
+                }
+                uint32_t count = 0;
+                transport().read_block(id().chip_id, tile, count_address(hart), &count, sizeof(count));
+                if (count == counts_before[hart]) {
+                    return false;
+                }
+            }
+            acked = Clock::now();
+            return true;
+        });
+
+        std::array<HartState, kHartsPerTile> harts{};
+        {
+            // Level-triggered: the handler leaves only once its bit is clear.
+            // Cleared on a timeout too: a bit left armed would fire into a
+            // state the host no longer expects.
+            const std::lock_guard<std::mutex> serialise(chip_->lock());
+            const uint32_t trigger = transport().read_reg32(id().chip_id, tile, kRnmiTrigger);
+            transport().write_reg32(id().chip_id, tile, kRnmiTrigger, rnmi_trigger_clear(trigger, mask));
+            const uint32_t seen = transport().read_reg32(id().chip_id, tile, kRnmiTrigger);
+            trigger_raised = (seen & mask) != 0;
+            if (trigger_raised) {
+                fail("RNMI trigger bits " + hex(seen & mask) + " did not clear");
+            }
+            // Re-read once after the clear: a hart that took the RNMI just
+            // after the deadline is acknowledged and proceeds to idle.
+            harts = read_hart_states_unlocked();
+        }
+        if (ack.satisfied) {
+            result.trigger_to_ack = std::chrono::duration_cast<std::chrono::microseconds>(acked - triggered);
+        }
+
+        bool all_acknowledged = true;
+        for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+            result.harts[hart].acknowledged =
+                requested(hart) && hart_revive_acknowledged(harts[hart], counts_before[hart]);
+            all_acknowledged = all_acknowledged && (!requested(hart) || result.harts[hart].acknowledged);
+        }
+
+        if (!all_acknowledged) {
+            result.outcome = ReviveOutcome::NotResponding;
+            result.error = "a selected hart did not take the RNMI within " + std::to_string(timeout.count()) +
+                           " ms: it is inside an access that never completes, or stopped. An ASIC reset is "
+                           "required.";
+            after = harts;
+        } else {
+            Clock::time_point idle_at;
+            const Deadline idle_deadline{timeout};
+            TileState final_state;
+            const auto rearmed = poll_until(idle_deadline, std::chrono::milliseconds{0}, [&] {
+                const std::lock_guard<std::mutex> serialise(chip_->lock());
+                const auto phases = read_hart_phases();
+                for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+                    if (requested(hart) && phases[hart] != X280_HART_PHASE_IDLE) {
+                        return false;
+                    }
+                }
+                final_state = inspect_state();
+                idle_at = Clock::now();
+                return final_state.observation_valid && final_state.resident_idle_live;
+            });
+            if (!rearmed.satisfied) {
+                const std::lock_guard<std::mutex> serialise(chip_->lock());
+                final_state = inspect_state();
+            }
+            after = final_state.harts;
+            if (!final_state.observation_valid) {
+                result.outcome = ReviveOutcome::InvalidObservation;
+                result.error = final_state.invalid_reason;
+            } else if (rearmed.satisfied) {
+                result.outcome = ReviveOutcome::Revived;
+                result.trigger_to_idle = std::chrono::duration_cast<std::chrono::microseconds>(idle_at - triggered);
+            } else {
+                result.outcome = ReviveOutcome::NotReArmed;
+                result.error =
+                    "every selected hart took the RNMI, but resident idle did not re-arm on all four "
+                    "harts within " +
+                    std::to_string(timeout.count()) + " ms";
+            }
+        }
+        {
+            const std::lock_guard<std::mutex> serialise(chip_->lock());
+            result.run_status_after = transport().read_reg32(id().chip_id, tile, kHartRunStatus);
+        }
+    };
+
+    try {
+        sequence();
+    } catch (const std::exception& error) {
+        result.outcome = ReviveOutcome::Failed;
+        result.error = error.what();
+    } catch (...) {
+        result.outcome = ReviveOutcome::Failed;
+        result.error = "unknown revive failure";
+    }
+
+    if (trigger_raised) {
+        // Best effort after a transport failure: never leave a bit armed.
+        try {
+            const std::lock_guard<std::mutex> serialise(chip_->lock());
+            const uint32_t trigger = transport().read_reg32(id().chip_id, tile, kRnmiTrigger);
+            transport().write_reg32(id().chip_id, tile, kRnmiTrigger, rnmi_trigger_clear(trigger, mask));
+        } catch (...) {
+        }
+    }
+
+    for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+        result.harts[hart].after = after[hart];
+        if (result.harts[hart].acknowledged) {
+            result.harts[hart].revive_epc = after[hart].state.revive_epc;
+            result.harts[hart].revive_cause = after[hart].state.revive_cause;
+        }
+    }
+    const bool restored = result.outcome == ReviveOutcome::Revived;
+    if (!touched && !owned) {
+        const std::lock_guard<std::mutex> lock(session_mutex_);
+        reviving_ = false;
+    } else {
+        end_revive(owned, restored, after);
+    }
     return result;
 }
 
@@ -601,6 +884,70 @@ CleanupResult RuntimeImpl::cleanup(SessionId id, std::chrono::milliseconds timeo
     return result;
 }
 
+ReviveResult RuntimeImpl::revive(X280Tile& tile, const ReviveRequest& request) {
+    ReviveResult result;
+    result.timeout = request.timeout;
+    for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+        result.harts[hart].hart_id = hart;
+    }
+    auto& target = *tile.impl_;
+    if (target.runtime_ != this) {
+        result.outcome = ReviveOutcome::WrongRuntime;
+        return result;
+    }
+
+    // A live session on the tile is claimed exactly as cleanup() claims it, so
+    // no cleanup can drive STOP into harts this revive is taking, and it is
+    // reaped here afterwards. An exclusive (pinned-input) admission refuses,
+    // as it refuses every enqueue.
+    X280ActiveSession* claimed = nullptr;
+    SessionId owned;
+    const TileKey key = tile_key(target.id());
+    {
+        const std::lock_guard<std::mutex> lock(sessions_mutex_);
+        const auto entry = sessions_.find(key);
+        const bool live = entry != sessions_.end();
+        const auto check = validate_revive_request(request, live);
+        if (!check.ok) {
+            result.outcome = ReviveOutcome::InvalidRequest;
+            result.error = check.reason;
+            return result;
+        }
+        if (exclusive_) {
+            result.outcome = ReviveOutcome::Busy;
+            result.error = "an exclusive session is live";
+            return result;
+        }
+        if (live) {
+            if (!entry->second->impl_->claim_for_restoration()) {
+                result.outcome = ReviveOutcome::Busy;
+                result.error = "a cleanup is restoring this tile's session";
+                return result;
+            }
+            claimed = entry->second.get();
+            owned = claimed->id();
+        }
+    }
+
+    result = target.revive_harts(request.hart_mask, request.timeout, owned);
+
+    if (claimed != nullptr) {
+        if (result.outcome == ReviveOutcome::Busy) {
+            // Unreachable while this revive holds the claim, but the claim is
+            // single-shot: the session is ended unrestored rather than left
+            // claimed with nothing able to restore it.
+            std::array<HartState, kHartsPerTile> unknown{};
+            (void)target.complete_session(owned, false, unknown);
+        }
+        const std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions_.erase(key);
+        if (exclusive_ == key) {
+            exclusive_.reset();
+        }
+    }
+    return result;
+}
+
 EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& request, bool exclusive) {
     EnqueueResult result;
     auto& target = *tile.impl_;
@@ -763,8 +1110,8 @@ EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& reque
                 const std::lock_guard<std::mutex> lock(sessions_mutex_);
                 const auto inserted = sessions_.emplace(
                     id.tile,
-                    std::unique_ptr<X280ActiveSession>(new X280ActiveSession(
-                        std::make_unique<ActiveSessionImpl>(target, id, request.run_value, request.cleanup_timeout))));
+                    std::unique_ptr<X280ActiveSession>(new X280ActiveSession(std::make_unique<ActiveSessionImpl>(
+                        target, id, request.run_value, request.cleanup_timeout, request.revive_on_cleanup_timeout))));
                 if (!inserted.second) {
                     fail(
                         "internal error: " + label_chip_l2cpu(id.tile.chip_id, id.tile.tile_index) +
