@@ -1,0 +1,104 @@
+{
+ "used": [
+  {
+   "id": "DS41-138",
+   "how": "all_to_all_async_generic concatenates on in_dim / splits on out_dim: the engram projection's block-major column split + in_dim=3 / out_dim=2 lands the own rows in block order; the head a2a in_dim=2 / out_dim=3",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "the head's a2a writes the head's load-time x buffer and the local tail writes the load-time [S/N, H] output; NORM_INTO_MOE skipped under OWN_ROWS so MoEBlock.input_buffer() is never allocated mid-forward",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-147",
+   "how": "TailA2A local mode builds one program for the whole mesh range (no per-coordinate programs)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "the head a2a's returned wrapper is ignored; the head reads self.fused.x itself (address equality: no copy)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "the 9-10 minute measure / ladder runs went to a background shell with a long timeout, not the 10-minute foreground limit",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-186",
+   "how": "ffn_norm on whole rows keeps the default rms_norm program (no dtype change to bfp8)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "embed: the reshape view e4 and e freed after the a2a copy",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "MoEBlock already supports MoEOptions(residual='owners') with the fused head (an a2a in front of it) and an ops add tail: no entry or repo-map row said so (added a repo-map row)",
+  "err_layer_L39's spread across rounding-only picks (0.70-0.91): added DS41-188"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the engram projection keeps its weight bytes (columns rearranged, one a2a), hc_fn replicated is the whole weight the chip's whole rows need (20480 x 32 fp32), no inflated shapes"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the only Python-built program added/touched is TailA2A (local mode): prepared via ShapeKeyedTailA2A (tt/prepared_tail.py io/descriptor), patch count guard adjusted (workers x (2 + se)); test_tail_a2a_local covers prepared=True"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suites run; only the new test_tail_a2a_local.py (8 passed on the 8x4) and the model-level measure / ladder"
+  }
+ ],
+ "cited_only": [
+  "DS41-188"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.23",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-31T16:53:17",
+  "head": "cd47f91c07f",
+  "touched": [
+   "models/demos/common/bringup/knowledge/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.23.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.23.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/prepared_tail.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/moe_block/moe_block.py",
+   "models/demos/moe_block/tests/test_tail_a2a_local.py",
+   "models/demos/moe_block/tt/tail_a2a.py"
+  ]
+ }
+}

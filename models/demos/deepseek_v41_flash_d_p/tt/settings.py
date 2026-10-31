@@ -729,6 +729,22 @@ TABLE = {
         "chip's rows), the indexer's weights_proj replicated (no TP sum of the gates); + ~0.3 GiB a chip. off = "
         "attn_norm / q_a / kv / compressor / gates hidden-split with their TP sums (the path before P.10)",
     ),
+    "OWN_ROWS": Setting(
+        "on",
+        ("on", "off"),
+        "P.23 (galaxy 8x4, owner pick 2026-10-31, opportunity #1; needs ATTN_SP32=on, MHC_FUSED=on, GLUE_FOLD=on, "
+        "MOE_IMPL=block with MOE_HEAD=fused, else off): on = the residual / mHC streams rest on each chip's own "
+        "S/(SP TP) rows with the whole hidden, [1, 1, S/(SP TP), 4 x H] (tt/model.py): attn_hc / ffn_hc read the whole "
+        "hc_fn (replicated) and need no partial-row gather over TP; attn_norm and ffn_norm are local whole-row norms (no "
+        "cols -> rows all_to_all, no statistics gather, no stats-only norm call); the attention returns its own rows "
+        "(no exit all_to_all); the engram projection's columns are arranged so ONE all_to_all of its [S/SP, 5 H/TP] "
+        "output lands the chip's own rows of [key 0..3 | value] and the engram gates need no TP sum; the block MoE runs "
+        "with MoEOptions(residual='owners'): the fused head's x arrives through one TP all_to_all straight into its x "
+        "buffer (owners_a2a_into_head), the fused tail is TailA2A's local mode (tilize + the shared expert's add, no "
+        "all_to_all: the owner rows are this chip's rows); the embedding's rows go through one all_to_all a chunk; the "
+        "final norm is local. The mHC / norm statistics are full-K fp32 sums instead of TP partials added in mesh "
+        "order (no lowering). off = the column split [1, 1, S/SP, 4 x H/TP] (the path before P.23)",
+    ),
     "ROPE_UNIFORM_PROGRAM": Setting(
         "on",
         ("on", "off"),

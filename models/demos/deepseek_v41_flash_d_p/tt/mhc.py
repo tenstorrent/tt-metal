@@ -55,10 +55,15 @@ class TtHcMixes:
 
     out_sites = (None, None)  # FORK_OUT_BUFFERS=on (P.16, tt/host_alloc.reserve_forks): fused()'s hc / y sites
 
-    def __init__(self, mesh, fn, scale, base, hidden: int, norm_eps: float, hc_eps: float, iters: int):
+    def __init__(
+        self, mesh, fn, scale, base, hidden: int, norm_eps: float, hc_eps: float, iters: int, rows: bool = False
+    ):
         fn = fn.float()
         assert fn.shape == (NG, HC * hidden), fn.shape
-        tp = mesh.shape[1]
+        # OWN_ROWS=on (P.23, ``rows``): the streams are the chip's own rows with the whole hidden [R, 4 x H]: hc_fn^T
+        # whole on every chip (stream-major rows), the partial row is the whole row - no exchange over TP
+        self.rows = bool(rows)
+        tp = 1 if self.rows else mesh.shape[1]
         assert hidden % (tp * 32) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
         self.mesh, self.hidden = mesh, hidden
         self.inv_n = 1.0 / float(HC * hidden)
@@ -80,7 +85,9 @@ class TtHcMixes:
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             memory_config=DRAM,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 2)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh, mesh_shape=tuple(mesh.shape), dims=(None, None if self.rows else 2)
+            ),
         )
         self.sinkhorn = settings.get("HC_SINKHORN")
         self.gather = ccl.glue_fold()  # GLUE_FOLD=on (P.19): the fused step's exchange as one all_gather
@@ -124,14 +131,17 @@ class TtHcMixes:
             row = self.partial_row(x)
         tp = self.mesh.shape[TP_AXIS]
         partials = {}
-        if self.gather and tp > 1:
+        if self.rows:  # OWN_ROWS=on (P.23): the chip's row is the whole row (full-K fp32 sums), nothing to exchange
+            red = row
+        elif self.gather and tp > 1:
             # GLUE_FOLD=on (P.19): ONE all_gather of the chips' fp32 rows over TP -> [1, TP, R, 32]; mhc_pre_xing adds
             # them in mesh-column order on the SFPU (exact fp32: _gather_add's sum; no bf16 RS, no casts)
             red = ccl.all_gather(row, 1, TP_AXIS, site="mhc.row")  # (HOST_ALLOC: load-time output)
             partials = {"partials": tp}
         else:
             red = tp_sum(self.mesh, row)
-        dealloc(row)
+        if red is not row:
+            dealloc(row)
         hs, ys = self.out_sites  # FORK_OUT_BUFFERS=on (P.16): load-time outputs of an in-layer hc / y
         rows = x.shape[-2]
         hco = host_alloc.fork_out(self.mesh, hs, (1, 1, rows, HC * (HC + 2)), ttnn.float32)
@@ -166,8 +176,11 @@ class TtHcMixes:
             mix, x, n=HC, max_grid=max_grid()
         )  # column 24 = this chip's sum of x^2 (exact)
         dealloc(mix)
-        red = tp_sum(self.mesh, packed)
-        dealloc(packed)
+        if self.rows:  # OWN_ROWS=on (P.23): whole rows
+            red = packed
+        else:
+            red = tp_sum(self.mesh, packed)
+            dealloc(packed)
         if self.sinkhorn == "sfpu_fp32":
             hc, _ = ttnn.bringup.mhc_pre_xing(
                 red,
@@ -206,9 +219,10 @@ class TtHcMixes:
         return ttnn.reshape(out, [1, 1, rows, NG], sub_core_grids=sub_cores(out))
 
 
-def build_hc(mesh, ck, cfg, layer: int, step: str) -> TtHcMixes:
-    """step: 'attn_hc' or 'ffn_hc' (checkpoint layers.<layer>.hc_attn_* / hc_ffn_*, fp32)."""
+def build_hc(mesh, ck, cfg, layer: int, step: str, rows: bool = False) -> TtHcMixes:
+    """step: 'attn_hc' or 'ffn_hc' (checkpoint layers.<layer>.hc_attn_* / hc_ffn_*, fp32). ``rows``: OWN_ROWS (P.23),
+    the streams are the chip's own rows with the whole hidden."""
     kind = {"attn_hc": "attn", "ffn_hc": "ffn"}[step]
     p = f"layers.{layer}.hc_{kind}_"
     fn, scale, base = (ck.weight(p + k, torch.float32) for k in ("fn", "scale", "base"))
-    return TtHcMixes(mesh, fn, scale, base, cfg.dim, cfg.eps, cfg.hc_eps, cfg.sinkhorn_iters)
+    return TtHcMixes(mesh, fn, scale, base, cfg.dim, cfg.eps, cfg.hc_eps, cfg.sinkhorn_iters, rows=rows)

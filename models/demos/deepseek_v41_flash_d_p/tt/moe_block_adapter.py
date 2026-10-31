@@ -72,12 +72,15 @@ def block_model(cfg):
     return m
 
 
-def block_options(mesh=None):
+def block_options(mesh=None, own_rows: bool = False):
     """max_grid (FIX.15, MAX_WORKER_CORES): the block's own programs inside tt/cores.max_grid(mesh) (11 x 10 on a
     Galaxy; None elsewhere: the whole grid, as before). MOE_HEAD=fused (the default, owner 2026-10-27): the fused head on the column split, the combine snapped (owner
     2026-10-27: keep the snap; bit-identical runs). ops: D2 x gathered, D4 ops head, D7 fixed combine order. MOE_TAIL:
     ops (a program a stage) or fused (TailA2A: tilize + shared + TP all-to-all in one program); TAIL_A2A_PREPARED: the
-    fused tail's descriptors prepared once and dispatched with run_prepared."""
+    fused tail's descriptors prepared once and dispatched with run_prepared. own_rows (OWN_ROWS, P.23, the fused head):
+    the residual is each chip's own rows [S/N, H] (MoEOptions residual "owners"): the head's x through one TP
+    all-to-all straight into its x buffer, the fused tail TailA2A's local mode (tilize + the shared expert, no
+    all-to-all)."""
     from models.demos.moe_block.moe_block import MoEOptions
 
     tail = settings.get("MOE_TAIL")
@@ -85,7 +88,18 @@ def block_options(mesh=None):
     g = max_grid(mesh) if mesh is not None else None
     cap = (g.x, g.y) if g is not None else None
     if settings.get("MOE_HEAD") == "fused":
+        if own_rows:
+            return MoEOptions(
+                head="fused",
+                tail=tail,
+                tail_prepared=tp,
+                combine_snap=COMBINE_SNAP,
+                max_grid=cap,
+                residual="owners",
+                owners_a2a_into_head=True,
+            )
         return MoEOptions(head="fused", tail=tail, tail_prepared=tp, combine_snap=COMBINE_SNAP, max_grid=cap)
+    assert not own_rows, "OWN_ROWS: MOE_HEAD=fused"
     return MoEOptions(
         head="ops", tail=tail, tail_prepared=tp, x_gathered=True, combine_deterministic=True, max_grid=cap
     )
@@ -157,8 +171,10 @@ def _block_op(mesh, fe, g, n_experts: int, layout: dict):
 class TtMoEBlockLayer:
     """One layer's MoE on the shared MoE block: __call__(ffn_norm x) -> the MoE output [1, 1, S/SP, H/TP]."""
 
-    def __init__(self, mesh, ck, cfg, layer: int, chunk: int, cache_dir=None):
+    def __init__(self, mesh, ck, cfg, layer: int, chunk: int, cache_dir=None, own_rows: bool = False):
         from models.demos.moe_block.moe_block import Geometry, MoELayer, MoEWeights, RoutedExperts, fuse_gate_up
+
+        self.own_rows = bool(own_rows)  # OWN_ROWS (P.23): x and the output are the chip's own rows [S/N, H]
 
         # D8: the block's exchange runs the flat op at LoFi with bfp8 x / h tiles (glm); full is not plumbed
         assert settings.get("EXPERTS_PRECISION") == "glm", (
@@ -171,7 +187,7 @@ class TtMoEBlockLayer:
         rows, cols = tuple(mesh.shape)
         self.mesh, self.layer, self.chunk = mesh, int(layer), int(chunk)
         self.fold = ccl.glue_fold()
-        host_alloc.reserve_tail_out(mesh, self.chunk, int(cfg.dim))  # HOST_ALLOC=on (P.15): at load time
+        host_alloc.reserve_tail_out(mesh, self.chunk, int(cfg.dim), own_rows=self.own_rows)  # HOST_ALLOC (P.15)
         m = self.model = block_model(cfg)
         g = self.g = Geometry.of(mesh, m, self.chunk, LINKS, zigzag=False)
         # (lines or a torus: the block reads the wraps from the open fabric; torus untested on DS41, owner D14)
@@ -238,7 +254,7 @@ class TtMoEBlockLayer:
                 WeightCache(path=None, layer=self.layer),
                 num_links=LINKS,
                 dtypes=self.dtypes,
-                options=block_options(self.mesh),
+                options=block_options(self.mesh, own_rows=self.own_rows),
             )
             if settings.get("PREPARED_ALL") == "on":  # (P.14: the fused tail keyed on shapes, addresses patched)
                 from .prepared_tail import install
@@ -260,9 +276,10 @@ class TtMoEBlockLayer:
         return x, xq
 
     def __call__(self, x: ttnn.Tensor, xq_ready: bool = False) -> ttnn.Tensor:
-        """x: ffn_norm [1, 1, S/SP, H] TILE (MOE_HEAD=fused: [1, 1, S/SP, H/TP]; bf16, or fp32: cast here) ->
-        [1, 1, S/SP, H/TP] bf16 (GLUE_FOLD=off: fp32, as moe_add's output). xq_ready (NORM_INTO_MOE=on): x is
-        input_buffers()[0] and the norm wrote input_buffers()[1] from it."""
+        """x: ffn_norm [1, 1, S/SP, H] TILE (MOE_HEAD=fused: [1, 1, S/SP, H/TP]; OWN_ROWS: [1, 1, S/(SP TP), H]; bf16,
+        or fp32: cast here) -> [1, 1, S/SP, H/TP] bf16 (OWN_ROWS: [1, 1, S/(SP TP), H]; GLUE_FOLD=off: fp32, as
+        moe_add's output). xq_ready (NORM_INTO_MOE=on): x is input_buffers()[0] and the norm wrote input_buffers()[1]
+        from it."""
         assert x.layout == ttnn.TILE_LAYOUT
         xb = cast(x, ttnn.bfloat16)
         y = self.block()(xb, layer=self.weights, xq_ready=xq_ready)
@@ -275,5 +292,5 @@ class TtMoEBlockLayer:
         return y
 
 
-def build_moe_block_layer(mesh, ck, cfg, layer: int, chunk: int, cache_dir=None) -> TtMoEBlockLayer:
-    return TtMoEBlockLayer(mesh, ck, cfg, layer, chunk, cache_dir=cache_dir)
+def build_moe_block_layer(mesh, ck, cfg, layer: int, chunk: int, cache_dir=None, own_rows: bool = False):
+    return TtMoEBlockLayer(mesh, ck, cfg, layer, chunk, cache_dir=cache_dir, own_rows=own_rows)

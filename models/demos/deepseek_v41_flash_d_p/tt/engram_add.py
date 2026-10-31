@@ -54,10 +54,20 @@ class TtEngramAdd:
     pre [1, 1, R, 4] or None); returns (new streams [1, 1, R, 4 x H/TP] fp32, pre). Consumes no input."""
 
     def __init__(
-        self, mesh, q_weight: torch.Tensor, k_weight: torch.Tensor, hidden: int, eps: float, rows: int | None = None
+        self,
+        mesh,
+        q_weight: torch.Tensor,
+        k_weight: torch.Tensor,
+        hidden: int,
+        eps: float,
+        rows: int | None = None,
+        own_rows: bool = False,
     ):
         assert q_weight.shape == (HC, hidden) and k_weight.shape == (HC, hidden), (q_weight.shape, k_weight.shape)
-        tp = mesh.shape[TP_AXIS]
+        # OWN_ROWS=on (P.23): h [R, 4 x H] and kv [R, 5 x H] are the chip's own rows with the whole hidden: the weight
+        # whole on every chip, the partial sums are the whole sums (no TP exchange), the identity comb per own row
+        self.own_rows = bool(own_rows)
+        tp = 1 if self.own_rows else mesh.shape[TP_AXIS]
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
         self.mesh, self.hidden, self.w = mesh, hidden, hidden // tp
         self.eps = float(eps)
@@ -66,7 +76,7 @@ class TtEngramAdd:
         self.ckc = compute_config(mesh)
         wt = (q_weight.float() * k_weight.float()).reshape(1, HC * hidden)  # the reference's fp32 product
         wt = streams_cols_to_chip_major(wt, hidden, tp)  # chip column c's [4 x H/TP] block (stream-major)
-        dims = (None, 3) if TP_AXIS == 1 else (3, None)
+        dims = ((None, 3) if TP_AXIS == 1 else (3, None)) if not self.own_rows else (None, None)
         self.weight = from_torch(
             wt.reshape(1, 1, 1, HC * hidden).contiguous(),
             dtype=ttnn.float32,
@@ -97,7 +107,7 @@ class TtEngramAdd:
         if t is None:
             sp = self.mesh.shape[0]
             e = torch.eye(HC, dtype=torch.float32).reshape(1, HC * HC).expand(rows * sp, HC * HC)
-            t = self._eye[rows] = row_split_to_device(self.mesh, e.contiguous())
+            t = self._eye[rows] = row_split_to_device(self.mesh, e.contiguous())  # (replicated over TP: any rows)
         return t
 
     def _rowsum(self, t: ttnn.Tensor) -> ttnn.Tensor:
@@ -111,6 +121,8 @@ class TtEngramAdd:
         part = ttnn.bringup.mhc_pre_xing_pack(
             None, h, n=HC, engram_keys=kv, engram_weight=self.weight32, max_grid=max_grid()
         )
+        if self.own_rows:  # OWN_ROWS=on (P.23): the whole rows' sums already
+            return part
         full = tp_sum(self.mesh, part, exact=True)
         dealloc(part)
         return full
@@ -152,6 +164,8 @@ class TtEngramAdd:
         part = ttnn.concat(parts, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores(parts))  # [1, 1, R, 12]
         for t in parts:
             dealloc(t)
+        if self.own_rows:
+            return self._gate_math(part, rows)
         full = tp_sum(self.mesh, part)
         dealloc(part)
         return self._gate_math(full, rows)
@@ -256,10 +270,10 @@ class TtEngramAdd:
         return out, pre, None
 
 
-def build_engram_add(mesh, ck, cfg, layer: int, rows: int | None = None) -> TtEngramAdd:
+def build_engram_add(mesh, ck, cfg, layer: int, rows: int | None = None, own_rows: bool = False) -> TtEngramAdd:
     """Layer ``layer``'s engram residual add (q_weight * k_weight, fp32, built at load; ``rows`` per chip: the
-    MHC_FUSED identity comb at load too)."""
+    MHC_FUSED identity comb at load too). ``own_rows``: OWN_ROWS (P.23), whole-hidden own rows."""
     assert cfg.is_engram(layer), f"layer {layer} has no engram"
     qw = ck.weight(f"layers.{layer}.engram.q_weight", torch.float32)
     kw = ck.weight(f"layers.{layer}.engram.k_weight", torch.float32)
-    return TtEngramAdd(mesh, qw, kw, cfg.dim, cfg.eps, rows=rows)
+    return TtEngramAdd(mesh, qw, kw, cfg.dim, cfg.eps, rows=rows, own_rows=own_rows)
