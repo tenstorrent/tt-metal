@@ -137,4 +137,88 @@ INSTANTIATE_TEST_SUITE_P(
         RelationalUnaryParam{100, 458, 128, 128},                 // lt, ne
         RelationalUnaryParam{564, -118, 64, 128}));               // gt, ne
 
+struct RelationalUnaryUint32Param {
+    uint32_t scalar_input;
+    uint32_t scalar_param;
+};
+
+class RelationalUnaryUint32Fixture : public TTNNFixtureWithSuiteDevice<RelationalUnaryUint32Fixture>,
+                                     public testing::WithParamInterface<RelationalUnaryUint32Param> {};
+
+static ttnn::Tensor make_uint32_tensor(ttnn::MeshDevice& device, uint32_t fill_value) {
+    std::array<uint32_t, 2> dimensions = {32, 32};
+    ttnn::Shape shape(dimensions);
+    auto zero_tensor = ttnn::zeros(shape, DataType::UINT32, ttnn::TILE_LAYOUT, device);
+    return ttnn::fill(zero_tensor, fill_value);
+}
+
+template <typename UnaryOp>
+void test_relational_unary_uint32_impl(
+    ttnn::MeshDevice& device,
+    const RelationalUnaryUint32Param& p,
+    const UnaryOp& unary_op,
+    uint32_t expected_value,
+    const char* op_name) {
+    const ttnn::Tensor output = unary_op(make_uint32_tensor(device, p.scalar_input), p.scalar_param);
+    const ttnn::Tensor expected = make_uint32_tensor(device, expected_value);
+
+    auto output_values = ttnn::from_device(output).to_vector<uint32_t>();
+    auto expected_values = ttnn::from_device(expected).to_vector<uint32_t>();
+    TT_FATAL(
+        output_values == expected_values, "{}({:#x}, {:#x}) result mismatch", op_name, p.scalar_input, p.scalar_param);
+}
+
+TEST_P(RelationalUnaryUint32Fixture, GtUnaryMatchesExpected) {
+    auto p = GetParam();
+    test_relational_unary_uint32_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::gt_unary(t, s); },
+        (p.scalar_input > p.scalar_param) ? 1u : 0u,
+        "gt_unary");
+}
+
+TEST_P(RelationalUnaryUint32Fixture, LtUnaryMatchesExpected) {
+    auto p = GetParam();
+    test_relational_unary_uint32_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::lt_unary(t, s); },
+        (p.scalar_input < p.scalar_param) ? 1u : 0u,
+        "lt_unary");
+}
+
+TEST_P(RelationalUnaryUint32Fixture, GeUnaryMatchesExpected) {
+    auto p = GetParam();
+    test_relational_unary_uint32_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::ge_unary(t, s); },
+        (p.scalar_input >= p.scalar_param) ? 1u : 0u,
+        "ge_unary");
+}
+
+TEST_P(RelationalUnaryUint32Fixture, LeUnaryMatchesExpected) {
+    auto p = GetParam();
+    test_relational_unary_uint32_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::le_unary(t, s); },
+        (p.scalar_input <= p.scalar_param) ? 1u : 0u,
+        "le_unary");
+}
+
+// Values with the high bit set compare as negative under a signed int32 compare.
+INSTANTIATE_TEST_SUITE_P(
+    RelationalUnaryUint32Tests,
+    RelationalUnaryUint32Fixture,
+    ::testing::Values(
+        RelationalUnaryUint32Param{0x80000000u, 1u},
+        RelationalUnaryUint32Param{0xFFFFFFFFu, 0x7FFFFFFFu},
+        RelationalUnaryUint32Param{5u, 0x90000000u},
+        RelationalUnaryUint32Param{0x90000000u, 0x90000000u},
+        RelationalUnaryUint32Param{0xFFFFFFFEu, 0xFFFFFFFFu},
+        RelationalUnaryUint32Param{0u, 0x80000000u},
+        RelationalUnaryUint32Param{7u, 3u}));
+
 }  // namespace ttnn::operations::unary::test
