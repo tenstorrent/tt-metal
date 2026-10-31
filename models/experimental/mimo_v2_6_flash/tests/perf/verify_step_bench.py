@@ -206,7 +206,7 @@ def main():
             # pos[r]: the position of request r's last committed token tok[r] (not yet in the cache).
             pos = getattr(main, "_pos", [a.ctx] * users)
             tok = getattr(main, "_tok", list(last))
-            times, per_step_tokens = [], []
+            times, per_step_tokens, per_request = [], [], []
             if plain:
                 for s in range(a.steps):
                     tokens = torch.zeros(rows, 1, dtype=torch.int32)
@@ -280,10 +280,14 @@ def main():
                         got.append(c)
                     counts[n:] = 1
                     per_step_tokens.append(sum(got) / n)
+                    per_request.append(got)
                 mode = f"spec{k}"
             main._pos, main._tok = pos, tok
             t = times[a.warm :]
             tps = statistics.mean(per_step_tokens[a.warm :])
+            if per_request:  # each request's tokens per step (a verify's slots: a request per draft group)
+                each = [statistics.mean(g[r] for g in per_request[a.warm :]) for r in range(n)]
+                say(f"users={n} per_request_tokens_per_step={[round(v, 2) for v in each]}")
             med = statistics.median(t)
             say(
                 f"users={n} mode={mode} step_ms={1e3 * med:.2f} mean={1e3 * statistics.mean(t):.2f} "

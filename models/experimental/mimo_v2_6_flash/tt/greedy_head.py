@@ -68,7 +68,8 @@ class GreedyHead:
 
     def _scan_program(self, logits):
         elem_bytes = 4 if logits.dtype == ttnn.float32 else 2
-        crs, cb = self._scratch(self.scan_cores, self.max_tiles * 2 * self.users * 16 * elem_bytes + 64)
+        out_row = 128 if self.users > 8 else 64  # a core's partial row: one face row, two with more than 8 users
+        crs, cb = self._scratch(self.scan_cores, self.max_tiles * 2 * self.users * 16 * elem_bytes + out_row)
         rt = ttnn.RuntimeArgs()
         for i, (core, (b, e)) in enumerate(zip(self.scan_cores, self.ranges)):
             rt[core.x][core.y] = [logits.buffer_address(), self.partials.buffer_address(), b, e, i]
