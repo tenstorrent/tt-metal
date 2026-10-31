@@ -17,7 +17,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/indestructible.hpp>
 
 #include "context/metal_context.hpp"

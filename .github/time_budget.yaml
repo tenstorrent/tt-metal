@@ -248,6 +248,7 @@ runtime:
   pr_gate:
     wh_n150_civ2: 30
     github_hosted_cpu: 15
+    bh_loudbox: 5  # Required host AVX-512 BFP parity coverage.
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
@@ -363,7 +364,7 @@ models:
     bh_loudbox: 215
     bh_quietbox_2: 90
     bh_sc1: 20
-    bh_galaxy: 40
+    bh_galaxy: 43
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 215

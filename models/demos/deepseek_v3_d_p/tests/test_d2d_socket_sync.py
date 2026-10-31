@@ -172,3 +172,90 @@ def test_d2d_socket_sync(mesh_device, metadata_words):
     finally:
         del receiver
         del sender
+
+
+@pytest.mark.parametrize("relay", [False, True], ids=["direct", "relay"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_d2d_socket_sync_shared_links(mesh_device, relay):
+    """Share mode (as in the prefill runner): 3 transfers, checked bit for bit.
+    With relay=True only the row-3 chips send across, like cable chips on a pod.
+    """
+    if not is_blackhole():
+        pytest.skip("D2DStreamService needs Blackhole (or UBB Galaxy) service cores")
+    rows_total, cols = mesh_device.shape[0], mesh_device.shape[1]
+    half = rows_total // 2
+    sender_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(0, 0))
+    receiver_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(half, 0))
+
+    g_tokens = half * _TOKENS_PER_ROW
+    global_spec = ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, g_tokens, _HIDDEN]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    metadata_words = [7, 128, 256, 1]
+    metadata_size_bytes = len(metadata_words) * 4
+
+    sender, receiver = ttnn.D2DStreamService.create_pair(
+        sender_mesh=sender_mesh,
+        receiver_mesh=receiver_mesh,
+        global_spec=global_spec,
+        mapper=_shard_mapper(sender_mesh),
+        fifo_size_bytes=_FIFO_SIZE_BYTES,
+        sender_worker_cores=_WORKER_CORES,
+        receiver_worker_cores=_WORKER_CORES,
+        socket_buffer_type=ttnn.BufferType.L1,
+        metadata_size_bytes=metadata_size_bytes,
+        share_fabric_links=True,
+        relay=relay,
+    )
+
+    numel = g_tokens * _HIDDEN
+    try:
+        # 3 transfers: the relay slots and credits must be reused correctly after the first.
+        for it in range(3):
+            torch_in = (torch.arange(numel, dtype=torch.int32) + it * 100_000).reshape(1, 1, g_tokens, _HIDDEN)
+            tt_in = _to_device(torch_in, sender_mesh, _shard_mapper(sender_mesh))
+            md_torch = torch.tensor(metadata_words, dtype=torch.int32).reshape(1, 1, 1, -1) + it
+            md_tensor = _to_device(md_torch, sender_mesh, _replicate_mapper(sender_mesh))
+
+            # Same order as prefill_runner.py: push, then grant the links on both sides.
+            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(sender, tt_in, metadata=md_tensor)
+            sender.release_fabric_links()
+            receiver.release_fabric_links()
+            recv, recv_md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+                receiver, metadata_size_bytes=metadata_size_bytes
+            )
+            sender.wait_for_fabric_links()
+            receiver.wait_for_fabric_links()
+
+            in_shards = ttnn.get_device_tensors(tt_in)
+            out_shards = ttnn.get_device_tensors(recv)
+            assert len(in_shards) == len(out_shards)
+            for k, (a, b) in enumerate(zip(in_shards, out_shards)):
+                ta = ttnn.to_torch(a).to(torch.int32)
+                tb = ttnn.to_torch(b).to(torch.int32)
+                assert torch.equal(ta, tb), f"relay={relay} iter {it}: shard {k} mismatch"
+            for dev_md in ttnn.get_device_tensors(recv_md):
+                got_md = ttnn.to_torch(dev_md).flatten().to(torch.int64).tolist()
+                want = [w + it for w in metadata_words]
+                assert got_md == want, f"relay={relay} iter {it}: metadata {got_md} != {want}"
+            print(f"[d2d shared-links] relay={relay} iter {it}: {len(out_shards)} shards bit-exact")
+
+            ttnn.deallocate(tt_in)
+            ttnn.deallocate(md_tensor)
+    finally:
+        del receiver
+        del sender

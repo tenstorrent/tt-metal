@@ -145,6 +145,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
+        case tt::tt_fabric::FabricConfig::MGD_DEFAULT:
             TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;

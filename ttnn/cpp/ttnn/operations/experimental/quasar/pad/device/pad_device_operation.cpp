@@ -4,7 +4,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"

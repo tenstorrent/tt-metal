@@ -246,6 +246,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/streaming_profiler_common.h
+    inc/hostdev/l1_ecc_halt_constants.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/hostdev/fabric_edm_packet_header.hpp
