@@ -133,6 +133,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         assert drafter.users in (1, self.users), (drafter.users, self.users)
         assert self.model.dspark is not None, "the fused draft call needs the model's seeder (dspark_weights)"
         self.drafter = drafter
+        drafter.gather_sp = self.pool.gather_sp  # the standalone call's drafts gathered over SP: one readback
         layouts = []
         for u in list(range(self.users)) if users is None else users:
             for k in range(max_k + 1):

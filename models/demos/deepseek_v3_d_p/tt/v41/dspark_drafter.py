@@ -286,6 +286,11 @@ class TtDSparkDrafter:
         self.buffers: dict = {}
         self._zero_tap = None  # the host zero tap of the standalone call (built once)
         self.packed = DSPARK_HOST_INPUTS == "one" and DSPARK_MARKOV == "device"
+        # the standalone call's drafts gathered over SP inside the graph (``gather_sp``: the pool's, set by
+        # ``TtV41VerifyDecoder.attach_drafter``) so the eight ranks' rows are one readback of chip 0
+        # (eight per-rank reads were 2.5 to 4.5 ms a round); None: the per-rank reads
+        self.gather_sp = None
+        self.gathered = False  # ``out`` is the gathered tile (``read_ranks`` reads chip 0's)
         self._staged_use_tap32 = None  # the ``use_tap32`` value the buffer holds (copied when it changes)
         self._tap_is_zero = False  # the ``tap`` buffer holds the zero tap (no copy needed for a zero host tap)
         self.captures: dict[int, tuple] = {}  # the standalone call's capture per block count
@@ -512,7 +517,8 @@ class TtDSparkDrafter:
         t = dspark_blocks.mesh_inputs(entries_by_rank, self.ring_slots, self.users)
         tick("blocks")
         rm = ttnn.ROW_MAJOR_LAYOUT
-        inputs = {"token": self._per_rank(t["ids"].view(sp, 1, ROWS), ttnn.uint32, rm)}
+        packed = self.packed and main_hidden is None
+        inputs = {} if packed else {"token": self._per_rank(t["ids"].view(sp, 1, ROWS), ttnn.uint32, rm)}
         tick("token")
         if main_hidden is None:
             # no host tap (the served and harness calls select the step's tap tile on device): the zero tap, one
@@ -530,8 +536,7 @@ class TtDSparkDrafter:
         main = cos_sin(cfg, False, t["main_pos"].flatten())
         block = cos_sin(cfg, False, t["block_pos"].flatten())
         tick("rope")
-        if self.packed and main_hidden is None:
-            del inputs["token"]
+        if packed:
             inputs[ONE] = self._pack_one(t, main, block)
             tick("pack")
             return inputs
@@ -719,6 +724,12 @@ class TtDSparkDrafter:
                 inputs.update(self._unpack_one(inputs[ONE]))
             ids, logits, _ = self.draft_ids(inputs, blocks=self.blocks)
             ttnn.deallocate(logits)
+            self.gathered = self.gather_sp is not None
+            if self.gathered:
+                # as ``DeviceSampler.gather``: the row on every tile row, tilized, gathered over SP (a gathered
+                # 128-byte row-major row arrives on the other ranks' chips as stale memory)
+                tile = ttnn.to_layout(ttnn.concat([ids] * ROWS, dim=2), ttnn.TILE_LAYOUT)
+                return self.gather_sp(tile, dim=2)  # [1, 1, sp * ROWS, ROWS] uint32 tiled
             return ids
         assert self.blocks == 1, "the host Markov loop takes one block"
         logits, _ = self.draft(self.buffers)
@@ -729,6 +740,8 @@ class TtDSparkDrafter:
         mode); ``tokens``: the blocks' first tokens (the host loop's ``out[0]``). The rank-0 chip's row: the
         harness's lockstep slots; the served round reads every rank (``read_ranks``)."""
         if DSPARK_MARKOV == "device":
+            if self.gathered:
+                return self.read_ranks(out)[0]
             return dspark_blocks.read_drafts(ttnn.to_torch(ttnn.get_device_tensors(out)[0]), self.blocks)
         rows = self.head._tile_to_host(out, 0)
         ids, _ = self.markov_loop(tokens[0], rows)
@@ -739,6 +752,12 @@ class TtDSparkDrafter:
         -> its five drafts (the TP chips of a rank hold the same row; the first is read)."""
         assert DSPARK_MARKOV == "device"
         tick = self._tick("read")
+        if self.gathered:  # chip 0's tile: rows [r * 32, (r + 1) * 32) rank r's row on every row
+            t = ttnn.to_torch(ttnn.get_device_tensors(out)[0])[0, 0]  # [sp * ROWS, ROWS]
+            rows = t.view(self.sp, ROWS, ROWS)[:, 0, :]
+            ranks = [dspark_blocks.read_drafts(rows[r], self.blocks) for r in range(self.sp)]
+            tick("gathered")
+            return ranks
         chips = ttnn.get_device_tensors(out)
         assert len(chips) == self.sp * self.tp, len(chips)
         ranks = [dspark_blocks.read_drafts(ttnn.to_torch(chips[r * self.tp]), self.blocks) for r in range(self.sp)]
