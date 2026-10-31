@@ -473,6 +473,14 @@ class BlockIndex:
             self._drop(req_id)
 
     @_locked
+    def cancel_user(self, user):
+        """drop the UNBOUND reservation that holds ``user`` (a model-level caller needs the user for another request); the reserving request is counted as lost"""
+        rid = self._reserved.get(int(user))
+        if rid is not None:
+            self._drop(rid)
+            self._mark_lost(rid)
+
+    @_locked
     def bind(self, req_id, start_pos, user=None, prompt_len=None):
         self._expire()
         start_pos = int(start_pos)
@@ -773,6 +781,17 @@ class BlockIndex:
     @_locked
     def reserved_users(self, row):
         return sorted(u for u in self._reserved if self._row_of(u) == row)
+
+    @_locked
+    def reservation(self, req_id):
+        """the HitPlan of an UNBOUND reservation of ``req_id`` (None: none / bound / lost)"""
+        req = self._reqs.get(req_id)
+        return req.plan if req is not None and req.state == "planned" else None
+
+    @_locked
+    def reserved_all(self):
+        """set of the global users reserved for a hit (planned, not bound yet): a model that places other requests must not claim them"""
+        return set(self._reserved)
 
     @_locked
     def free_users(self, row):
