@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Runtime-configured (unpack and math) variant of fpu_reduce_block_max_tiny_bf16_fp32_dest.
+# Source B is all ones as the identity scale; source A spans a wide range so the row maxima differ.
+
+# Blackhole only: the Wormhole unpack sizes the SrcA y_dim for four faces, so a 16x32 block reads every other
+# tile and some rows' maxima land in the wrong tile (in 16-bit DEST mode too). Enable wormhole once the Wormhole
+# y_dim fix lands.
+supported_archs: ["blackhole"]
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+    stimuli: [-1000.0, 1000.0]
+  - name: "input_B"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+    stimuli: 1.0
+  - name: "reduce_block_max_tiny_bf16_fp32_dest_runtime_out"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float32"
+    # Row maxima of U(-1000, 1000) samples cluster near 985, so the default 5 percent band lets a maximum
+    # from the wrong row or tile pass; 0.1 percent still covers the Tf32 truncation of Float32 inputs.
+    rtol: 0.001
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [16, 128]
+        in0: "input_A"
+        in1: "input_B"
+        operation: "ReduceBlockMaxRuntime"
+        unpacker: "ReduceBlockMaxRuntimeUnpacker"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "reduce_block_max_tiny_bf16_fp32_dest_runtime_out"
+        block_size: [16, 128]
+        packer: "Packer"
