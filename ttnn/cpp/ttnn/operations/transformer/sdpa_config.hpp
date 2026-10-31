@@ -29,6 +29,14 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // Chunked (paged) causal prefill only, ignored elsewhere; 0 builds today's program. Every bit only moves data or
+    // work between cores: each Q row still meets its K chunks in the same order, so outputs stay bit-identical.
+    //   1: size the K/V read batches by the cores that actually read DRAM (more tiles in flight per barrier).
+    //   2: K/V prefix chains: the cores whose Q chunks read the same (batch, KV head) K/V take each chunk from the
+    //      previous core of their chain (only the first core reads DRAM), across Q chunks and the KV head's Q heads.
+    //   4: one Q chunk per core when there are no more Q chunks than cores (no causal light/heavy pairs).
+    //   bits 8-15: most cores per chain (0 = 8).
+    uint32_t prefix_reuse = 0;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

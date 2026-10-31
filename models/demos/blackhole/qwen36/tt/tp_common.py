@@ -445,6 +445,143 @@ def sdpa_prefill_exp_approx():
     return os.environ.get("QWEN36_SDPA_PREFILL_EXP_APPROX", "1") == "1"
 
 
+def _probe_sdpa_prefix_reuse():
+    """Whether this ttnn build's SDPAProgramConfig takes prefix_reuse (QWEN36_SDPA_PREFIX_REUSE); probed without a
+    device, like _probe_spec_sdpa_pack in attention/tp.py."""
+    try:
+        return hasattr(ttnn.SDPAProgramConfig, "prefix_reuse")
+    except Exception:  # noqa: BLE001 - a stub ttnn (host tests) has no SDPAProgramConfig
+        return False
+
+
+SDPA_PREFIX_REUSE_SUPPORTED = _probe_sdpa_prefix_reuse()
+_SDPA_PREFIX_REUSE = None
+_PREFIX_REUSE_AUTO = -1  # QWEN36_SDPA_PREFIX_REUSE=auto
+
+
+def sdpa_prefix_reuse_bits():
+    """QWEN36_SDPA_PREFIX_REUSE (default "0" = today's chunked prefill SDPA program, byte for byte): the
+    SDPAProgramConfig.prefix_reuse of the chunked (paged, causal) prefill SDPA. Bits, each only moving K/V reads or Q
+    chunks between cores so every Q row still meets its K chunks in the same order (bit-identical outputs):
+      1  K/V read batches sized by the cores that read K/V from DRAM instead of by the grid (more reads in flight);
+      2  K/V prefix chains: the cores whose Q chunks read the same (batch, KV head) K/V, across Q chunks and across the
+         KV head's 3 query heads, take each K/V chunk from the previous core of their chain (store and forward), so
+         only one core per chain reads the prefix from DRAM;
+      4  one Q chunk per core when there are no more Q chunks than cores (no causal light/heavy pairs: 2048-row chunks
+         and the short traces at depth otherwise run two Q chunks' prefixes back to back on half the cores).
+    Bits 8-15 cap the chain length in cores (0 = 8). "auto" (recommended) picks per call, see sdpa_prefill_reuse_bits.
+    Read once (traces capture the program built at warm-up); 0 when the ttnn build has no prefix_reuse."""
+    global _SDPA_PREFIX_REUSE
+    if _SDPA_PREFIX_REUSE is None:
+        raw = os.environ.get("QWEN36_SDPA_PREFIX_REUSE", "0").strip() or "0"
+        if raw.lower() == "auto":
+            bits = _PREFIX_REUSE_AUTO
+        else:
+            bits = int(raw, 0)
+            if bits < 0 or bits > 0xFFFF:
+                raise ValueError(f"QWEN36_SDPA_PREFIX_REUSE={raw!r}: expected auto or 0..0xFFFF")
+        _SDPA_PREFIX_REUSE = bits if SDPA_PREFIX_REUSE_SUPPORTED else 0
+    return _SDPA_PREFIX_REUSE
+
+
+def sdpa_prefill_reuse_bits(rows, q_chunk, n_heads, n_cores, k_chunk=128):
+    """prefix_reuse of one chunked prefill SDPA call of `rows` Q rows in Q chunks of q_chunk rows (K chunks of k_chunk
+    rows). An explicit QWEN36_SDPA_PREFIX_REUSE value applies to every call. "auto" uses what measured best on one TP8
+    row (op level, prefix 0-96K):
+      * more Q chunks than cores (the 8192-row chunks, causal light/heavy pairs on 96 cores): the prefix chains (2:
+        0.98-1.27x on the SDPA alone, 2-7% off the model's 16K steps, the most at depth; read batches were slower);
+      * Q chunks that fit the grid (the 2048-row chunks, the short traces): one Q chunk per core (4: 1.8-2.0x at depth);
+      * split calls on few cores (at most sdpa_prefill_read_batch_units Q chunks: the 128- and 256-row short traces in
+        32-row Q chunks, 12 / 24 cores): also the read batches (5: 1.84-1.86x over 4 alone at 24K-96K)."""
+    bits = sdpa_prefix_reuse_bits()
+    if bits != _PREFIX_REUSE_AUTO:
+        return bits
+    units = n_heads * -(-rows // q_chunk)
+    if units > n_cores:
+        return 2
+    if q_chunk < k_chunk and units <= sdpa_prefill_read_batch_units(n_cores):
+        return 5
+    return 4
+
+
+_SDPA_PREFILL_READ_BATCH_UNITS = None
+
+
+def sdpa_prefill_read_batch_units(n_cores):
+    """QWEN36_SDPA_PREFILL_READ_BATCH_UNITS (default 1/5 of the grid, 24 on the 12x10 Galaxy grid; 0 = never): with
+    QWEN36_SDPA_PREFIX_REUSE=auto, a split call (Q chunk smaller than the K chunk) of at most this many Q chunks also
+    sizes its K/V read batches by the cores that read DRAM (prefix_reuse bit 1). Measured on one TP8 row (op level):
+    128 / 256 rows in 32-row Q chunks at 24K-96K, 1.84-1.86x on the SDPA over one Q chunk per core alone; at 48 Q chunks
+    it is a wash (+-4%). Read once."""
+    global _SDPA_PREFILL_READ_BATCH_UNITS
+    if _SDPA_PREFILL_READ_BATCH_UNITS is None:
+        raw = os.environ.get("QWEN36_SDPA_PREFILL_READ_BATCH_UNITS", "").strip()
+        v = int(raw) if raw else -1
+        if raw and v < 0:
+            raise ValueError(f"QWEN36_SDPA_PREFILL_READ_BATCH_UNITS={raw!r}: expected a count >= 0")
+        _SDPA_PREFILL_READ_BATCH_UNITS = v
+    return n_cores // 5 if _SDPA_PREFILL_READ_BATCH_UNITS < 0 else _SDPA_PREFILL_READ_BATCH_UNITS
+
+
+_SDPA_PREFILL_QSPLIT = None
+_SDPA_PREFILL_QSPLIT_UNITS = None
+
+
+def sdpa_prefill_qsplit_min():
+    """QWEN36_SDPA_PREFILL_QSPLIT (default "0" = Q chunk equals the K chunk, today's call): the smallest Q chunk (32 or
+    64 rows) the chunked prefill SDPA may use. See sdpa_prefill_q_chunk. Read once."""
+    global _SDPA_PREFILL_QSPLIT
+    if _SDPA_PREFILL_QSPLIT is None:
+        raw = os.environ.get("QWEN36_SDPA_PREFILL_QSPLIT", "0").strip() or "0"
+        v = int(raw)
+        if v not in (0, 32, 64):
+            raise ValueError(f"QWEN36_SDPA_PREFILL_QSPLIT={raw!r}: expected 0, 32 or 64")
+        _SDPA_PREFILL_QSPLIT = v
+    return _SDPA_PREFILL_QSPLIT
+
+
+def sdpa_prefill_qsplit_units(n_cores):
+    """QWEN36_SDPA_PREFILL_QSPLIT_UNITS (default 2/5 of the grid, 48 on the 12x10 Galaxy grid): the most Q chunks a split
+    may make. Measured on one TP8 row (op level, prefix 24K-96K): the best split of the 128-2048-row calls lands at
+    about 48 Q chunks; more, smaller ones run slower (a 32- or 64-row Q chunk costs nearly a 128-row one per K chunk,
+    and every Q chunk reads the whole K/V prefix from DRAM: 48 such readers already draw about 350 GB/s per chip).
+    Read once."""
+    global _SDPA_PREFILL_QSPLIT_UNITS
+    if _SDPA_PREFILL_QSPLIT_UNITS is None:
+        raw = os.environ.get("QWEN36_SDPA_PREFILL_QSPLIT_UNITS", "").strip()
+        v = int(raw) if raw else 0
+        if v < 0:
+            raise ValueError(f"QWEN36_SDPA_PREFILL_QSPLIT_UNITS={raw!r}: expected a positive count")
+        _SDPA_PREFILL_QSPLIT_UNITS = v
+    return _SDPA_PREFILL_QSPLIT_UNITS or max(1, (2 * n_cores) // 5)
+
+
+def sdpa_prefill_q_chunk(k_chunk, rows, n_heads, n_cores, q_min=None, chunk_start=0, max_units=None):
+    """Q chunk rows of a chunked prefill SDPA whose K chunk is k_chunk rows (QWEN36_SDPA_PREFILL_QSPLIT).
+
+    A causal Q chunk of k_chunk rows runs on one core and walks the whole K/V prefix. Short calls at depth (the
+    128-1024-row short traces) have far fewer such chunks than cores, so most of the grid idles while a few cores walk
+    the prefix. A Q chunk of k_chunk / 2 or k_chunk / 4 rows keeps the K chunks (each row still meets K chunks
+    [0, its diagonal chunk] in order, with the same per-row masks: bit-identical) and multiplies the cores working on
+    the call. Picks the smallest Q chunk >= q_min whose count n_heads * ceil(rows / q) stays within max_units
+    (sdpa_prefill_qsplit_units); k_chunk when the flag is off, k_chunk is not 128, or no smaller chunk fits. A split
+    needs chunk_start to be a multiple of the Q chunk (it always is: chunk starts are multiples of 128)."""
+    q_min = sdpa_prefill_qsplit_min() if q_min is None else q_min
+    if not q_min or k_chunk != 128 or rows < k_chunk:
+        return k_chunk
+    max_units = sdpa_prefill_qsplit_units(n_cores) if max_units is None else max_units
+    best = k_chunk
+    q = k_chunk // 2
+    while q >= q_min:
+        if chunk_start % q:
+            break
+        if n_heads * -(-rows // q) > max_units:
+            break
+        best = q
+        q //= 2
+    return best
+
+
 LMHEAD_CFG_ENV = "QWEN36_LMHEAD_CFG"
 _LMHEAD_LOGGED = False
 

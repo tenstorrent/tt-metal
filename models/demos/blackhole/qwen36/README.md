@@ -311,6 +311,19 @@ until the plugin relaxes that for TT-owned recurrent state; the continuation sto
 | `QWEN36_CHUNKED_PREFILL` | `0` | `1` advertises `supports_chunked_prefill` and builds the continuation store (needs `--no-enable-prefix-caching`) |
 | `QWEN36_CHUNK_STATE_SLOTS` | `4` | continuation snapshot slots (about 19 MB of DRAM per device per slot at TP=8) |
 
+### Prefill attention at depth (chunked SDPA)
+
+Each prefill chunk's attention reads the whole K/V prefix before it (`chunked_scaled_dot_product_attention`, one core
+per 128-row Q chunk and query head). Two opt-in flags change only where K/V is read from and how the Q rows are split
+over the cores; every row still meets its 128-token K chunks in the same order with the same masks, so outputs are
+bit-identical (checked by `tests/test_sdpa_prefix_reuse_ops.py` and by greedy md5s of the whole model).
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `QWEN36_SDPA_PREFIX_REUSE` | `0` | `auto` (recommended): prefix chains for the 8192-row chunks, one Q chunk per core for the 2048-row chunks and the short traces, plus read batches for split calls on few cores. Or explicit `SDPAProgramConfig.prefix_reuse` bits for every call: `1` K/V read batches sized by the cores that read DRAM, `2` K/V prefix chains (the cores reading one KV head's prefix, across Q chunks and the KV head's query heads, take each K/V chunk from the previous core; only the first core of a chain reads DRAM), `4` one Q chunk per core when there are no more Q chunks than cores; bits 8-15 cap the chain length (default 8) |
+| `QWEN36_SDPA_PREFILL_QSPLIT` | `0` | smallest Q chunk (`32` recommended, or `64`) for calls with few Q chunks (the short traces); the K chunk stays 128. Splits up to `QWEN36_SDPA_PREFILL_QSPLIT_UNITS` Q chunks (default 2/5 of the grid: 48) |
+| `QWEN36_SDPA_PREFILL_READ_BATCH_UNITS` | 1/5 of the grid (24) | with `auto`: a split call of at most this many Q chunks (the 128- and 256-row short traces in 32-row Q chunks) also sizes its K/V read batches by the cores that read DRAM (bit `1`); `0` never |
+
 ## Multimodal serving: vision buckets and `max_pixels` (vLLM)
 
 The vision tower runs on padded patch buckets (ceil-to-2048 of the patch count + 1 step) that must be compiled

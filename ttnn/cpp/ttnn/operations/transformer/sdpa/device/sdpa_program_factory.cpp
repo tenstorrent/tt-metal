@@ -242,7 +242,14 @@ uint32_t kv_chain_mode_for(
     uint32_t q_num_chunks,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
-    uint32_t Skt) {
+    uint32_t Skt,
+    bool chunked_prefix_chains = false) {
+    // prefix_reuse bit 1 (chunked calls only, which are never a plain K/V stream): every Q chunk reads the whole K/V
+    // prefix, so the chains carry nearly all of it whatever the pairing or the compute kernel. Reader forwarding at
+    // 1-2 q tiles, writer forwarding from 3.
+    if (chunked_prefix_chains) {
+        return Sq_chunk_t <= 2 ? 2 : 3;
+    }
     if (!plain_kv_stream) {
         return 0;
     }
@@ -397,6 +404,102 @@ void build_grouped_causal_chains(
             chains_built,
             chains_skipped);
     }
+}
+
+// Chunked prefill prefix reuse (SDPAProgramConfig::prefix_reuse); 0 everywhere keeps today's program.
+struct PrefixReuse {
+    bool kv_reads = false;  // bit 0: K/V read batches sized by the cores that read DRAM
+    bool chains = false;    // bit 1: K/V prefix chains for chunked calls
+    bool unpaired = false;  // bit 2: one Q chunk per core while Q chunks <= cores
+    uint32_t max_chain_cores = 8;
+};
+
+PrefixReuse prefix_reuse_for(uint32_t bits, bool applies) {
+    PrefixReuse p;
+    if (!applies || bits == 0) {
+        return p;
+    }
+    p.kv_reads = (bits & 1u) != 0;
+    p.chains = (bits & 2u) != 0;
+    p.unpaired = (bits & 4u) != 0;
+    const uint32_t max_cores = (bits >> 8) & 0xFFu;
+    p.max_chain_cores = max_cores >= 2 ? max_cores : 8;
+    return p;
+}
+
+// Chunked prefill: every Q chunk of a (batch, KV head) reads the same K/V prefix [0, chunk start) plus its own causal
+// part, so all of the group's cores, across Q chunks and across the KV head's Q heads, can share one DRAM stream. Each
+// core's first segment joins. Pairs go in pair order (light chunks grow and heavy chunks shrink along the chain, so a
+// hop carries all but one chunk of the next core's light chunk and all of its heavy chunk); single Q chunks go in
+// descending order (each hop carries everything the next core needs). Pieces of at most max_cores cores, each with its
+// own injector. The reader derives the per Q chunk hop sizes from the runtime chunk start.
+void build_chunked_prefix_chains(
+    const std::vector<std::vector<HeadSegmentRef>>& head_segments,
+    const std::vector<CoreWork>& core_work,
+    std::vector<CoreChainInfo>& core_chain_info,
+    uint32_t q_num_chunks,
+    uint32_t heads_per_group,
+    std::size_t max_cores,
+    bool use_zigzag,
+    uint32_t& chains_built,
+    uint32_t& chains_skipped) {
+    const auto num_groups = static_cast<uint32_t>(head_segments.size()) / heads_per_group;
+    for (uint32_t group = 0; group < num_groups; ++group) {
+        std::vector<HeadSegmentRef> segments;
+        for (uint32_t h = group * heads_per_group; h < (group + 1) * heads_per_group; ++h) {
+            for (const auto& seg : head_segments[h]) {
+                if (seg.head_work_index == 0 && !core_chain_info[seg.core_idx].participates) {
+                    segments.push_back(seg);
+                }
+            }
+        }
+        if (segments.size() < 2) {
+            chains_skipped++;
+            continue;
+        }
+        const auto work_of = [&](std::size_t idx) -> const CoreHeadWork& {
+            return core_work[segments[idx].core_idx].head_work[segments[idx].head_work_index];
+        };
+        const auto first_q_chunk = [&](std::size_t idx) {
+            const uint32_t flat = work_of(idx).global_start;
+            const uint32_t pos = flat % q_num_chunks;
+            if (!use_zigzag) {
+                return pos;
+            }
+            return pos % 2 == 0 ? pos / 2 : q_num_chunks - 1 - pos / 2;
+        };
+        std::vector<std::size_t> order(segments.size());
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            order[i] = i;
+        }
+        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            const auto& wa = work_of(a);
+            const auto& wb = work_of(b);
+            if (wa.q_chunk_count != wb.q_chunk_count) {
+                return wa.q_chunk_count > wb.q_chunk_count;
+            }
+            if (wa.q_chunk_count >= 2) {
+                return (wa.global_start % q_num_chunks) < (wb.global_start % q_num_chunks);
+            }
+            return first_q_chunk(a) > first_q_chunk(b);
+        });
+        for (std::size_t begin = 0; begin < order.size(); begin += max_cores) {
+            const std::size_t end = std::min(order.size(), begin + max_cores);
+            if (end - begin < 2) {
+                break;
+            }
+            link_causal_chain(segments, order, begin, end, core_work, core_chain_info, heads_per_group);
+            chains_built++;
+        }
+    }
+}
+
+// K/V read batch for prefix_reuse bit 0: the default read-barrier rule shares ~512 tiles of reads in flight among all
+// grid cores; give that budget to the cores that actually read K/V from DRAM (never less than the default).
+uint32_t prefix_kv_barrier_tiles(uint32_t dram_readers, uint32_t num_cores, uint32_t tile_bytes, uint32_t chunk_tiles) {
+    const auto rule = [&](uint32_t readers) { return ((512 / std::max(readers, 1u)) * (1024 + 128)) / tile_bytes; };
+    const uint32_t base = std::max(rule(num_cores), 1u);
+    return std::max(base, std::min(rule(dram_readers), 2 * chunk_tiles));
 }
 
 // Blackhole serves DRAM slowest on the low rows of the full grid; moving the remainder off them pays in these cases.
@@ -647,6 +750,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool generated_padding_mask = use_padded_mask && !is_windowed;
     const bool use_mask_block_map = tensor_args.attn_mask_block_map.has_value();
     const bool use_k_range_ctrl = is_windowed || use_mask_block_map;
+    // Chunked prefill prefix reuse: plain causal paged calls only (no mask, mask block map, MLA or sliding window).
+    const PrefixReuse prefix_reuse = prefix_reuse_for(
+        program_config.has_value() ? program_config->prefix_reuse : 0u,
+        is_chunked && use_causal_kernel && !use_provided_mask && !use_mask_block_map && !use_mla &&
+            sliding_window_size.value_or(0) == 0 && NKH == NVH);
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -734,7 +842,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Q-chunk space evenly across cores. Pair-distribute when causal + even q_num_chunks so every
     // core gets balanced light/heavy work after the shared zigzag remap (reader/writer/compute CT 32/20/29).
     const uint32_t total_q_chunks = B * NQH * q_num_chunks;
-    const bool global_q_pair_distribute = use_causal_kernel && (q_num_chunks % 2 == 0);
+    // prefix_reuse bit 2: with no more Q chunks than cores every Q chunk gets its own core; a light/heavy pair would
+    // run both chunks' K/V prefixes back to back on one core.
+    const bool global_q_pair_distribute =
+        use_causal_kernel && (q_num_chunks % 2 == 0) && !(prefix_reuse.unpaired && total_q_chunks <= num_cores);
     uint32_t global_q_base_chunks_per_core = 0;
     uint32_t global_q_cores_doing_extra = 0;
     uint32_t global_q_extra_chunks_per_core = 0;
@@ -794,7 +905,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         q_num_chunks,
         Sq_chunk_t,
         Sk_chunk_t,
-        Skt);
+        Skt,
+        prefix_reuse.chains);
     const bool kv_chains_possible = kv_chain_mode != 0;
     const bool remainder_on_last_cores = remainder_goes_to_last_cores(
         use_causal_kernel,
@@ -1350,7 +1462,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         std::vector<uint32_t> injector_phys_x;
         injector_phys_x.reserve(head_segments.size());
 
-        if (use_causal_kernel) {
+        if (use_causal_kernel && prefix_reuse.chains) {
+            build_chunked_prefix_chains(
+                head_segments,
+                core_work,
+                core_chain_info,
+                q_num_chunks,
+                chain_heads_per_group,
+                prefix_reuse.max_chain_cores,
+                use_zigzag_balancing,
+                chains_built,
+                chains_skipped);
+        } else if (use_causal_kernel) {
             build_grouped_causal_chains(
                 head_segments,
                 core_work,
@@ -1735,6 +1858,27 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
+
+    // prefix_reuse: kernel switches, defined only when a bit is on so that 0 compiles today's kernels.
+    if (prefix_reuse.chains) {
+        defines.emplace_back("SDPA_CHUNKED_CHAINS", "1");
+    }
+    if (prefix_reuse.kv_reads) {
+        uint32_t dram_readers = 0;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const bool has_work = global_q_range_for_core(i).second > 0;
+            const auto& chain = core_chain_info[i];
+            // A chain member past the injector takes all but at most one K chunk per Q chunk from its chain.
+            dram_readers += (has_work && !(chain.participates && !chain.is_injector)) ? 1 : 0;
+        }
+        defines.emplace_back(
+            "SDPA_KV_BARRIER_TILES",
+            std::to_string(prefix_kv_barrier_tiles(
+                dram_readers,
+                num_cores,
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype())),
+                Sk_chunk_t * DHt)));
+    }
 
     // ---- Kernels (deferred until after chain construction for mcast_enabled flag) ----
 
