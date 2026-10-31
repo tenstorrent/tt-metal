@@ -42,6 +42,7 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
             (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
+    llk_pack_default_mop_output = INVALID_PACK_OUTPUT;  // the MOP is about to become an untilize one
     if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
         const std::uint8_t bfd_id = llk_pack_program_bfd(output_id);
         _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
