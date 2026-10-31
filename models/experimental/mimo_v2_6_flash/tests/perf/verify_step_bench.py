@@ -43,6 +43,27 @@ CORPUS = "ttnn/cpp/ttnn/operations/**/*.[hc]pp"
 PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
 
+PERF_JSON = os.environ.get("VSB_PERF_JSON")  # with PROFILING: each read's per-program device times, one chip
+_perf = []
+
+
+def read_profiler(model, keep=False):
+    """ttnn.ReadDeviceProfiler on the row's submesh; with VSB_PERF_JSON (and TT_METAL_PROFILER_MID_RUN_DUMP=1,
+    TT_METAL_PROFILER_CPP_POST_PROCESS=1) also keep the read's programs of its lowest chip: runtime id, trace id and
+    replay counter, start / end (cycles) and the analyses' durations (ns)."""
+    ttnn.ReadDeviceProfiler(model.models[0].mesh_device)
+    if not (PERF_JSON and keep):
+        return
+    data = ttnn.get_latest_programs_perf_data()
+    if not data:
+        return
+    chip = min(data)
+    for d in data[chip]:
+        uid = d.program_execution_uid
+        res = {k: (v.start_timestamp, v.end_timestamp, v.duration) for k, v in d.program_analyses_results.items()}
+        _perf.append([len(_perf), uid.runtime_id, uid.trace_id, uid.trace_id_counter, res])
+
+
 def say(msg):
     logger.info(msg)
     print(f"VSB {msg}", flush=True)
@@ -177,7 +198,7 @@ def main():
             last.append(int(logits[0, -1].argmax()))
         say(f"prefilled {users} x {a.ctx} tokens in {time.time() - t0:.0f} s")
         if PROFILING:
-            ttnn.ReadDeviceProfiler(model.models[0].mesh_device)
+            read_profiler(model)
 
         k = a.k
         for plain, n in [(m == "plain", n) for m in a.modes.split(",") for n in users_list]:
@@ -198,7 +219,7 @@ def main():
                     )
                     times.append(time.perf_counter() - t1)
                     if PROFILING:
-                        ttnn.ReadDeviceProfiler(model.models[0].mesh_device)
+                        read_profiler(model, keep=s >= a.warm)
                     for r in range(n):
                         tok[r], pos[r] = int(logits[r, 0].argmax()), pos[r] + 1
                     per_step_tokens.append(1.0)
@@ -251,7 +272,7 @@ def main():
                     drafts = model.propose_draft_tokens(k, committed, cpos, counts)
                     times.append(time.perf_counter() - t1)
                     if PROFILING:
-                        ttnn.ReadDeviceProfiler(model.models[0].mesh_device)
+                        read_profiler(model, keep=s >= a.warm)
                     got = []
                     for r in range(n):
                         c = int(counts[r])
@@ -270,6 +291,12 @@ def main():
             )
         if a.breakdown:
             breakdown(model.models[0])
+        if PERF_JSON:
+            import json
+
+            with open(PERF_JSON, "w") as f:
+                json.dump(_perf, f)
+            say(f"{len(_perf)} program records in {PERF_JSON}")
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
