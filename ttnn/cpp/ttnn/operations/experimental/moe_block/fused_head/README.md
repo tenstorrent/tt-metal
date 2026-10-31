@@ -12,9 +12,9 @@ latent down + all-to-all.
 |---|---|---|
 | Layout planner (`head_plan.fit`) and its sizing closure | `device/head_plan.*`, `device/head_sizing.*` | done; exact parity with the reference on 230 cases |
 | Block-level plan (`FusedHead.plan` / `model_checks` / `shape`) cached in `MoEBlockResources` | `fused_head.*` (`plan_fused_head`) | done |
-| Kernels | `device/kernels/` | materialized as files, not yet compiled on device |
+| Kernels | `device/kernels/` | compile against main: the op launches on the mock Galaxy for all five models (no execution) |
 | Host model + per-chip programs (`HeadSE3._run`, `SeEngine3.pieces`, `XGather3.pieces`, `RouterStream.pieces`, `RoutingStream`) | `device/head_program.*` | done; programs compared with the reference's on the mock Galaxy |
-| Device operation (WorkloadDescriptor factory, address-only cache hits), host entry, weights | `device/fused_head_device_operation.*`, `fused_head.*` | done, not run on device |
+| Device operation (WorkloadDescriptor factory, address-only cache hits), host entry, weights | `device/fused_head_device_operation.*`, `fused_head.*` | done; launches on the mock (a cache hit ~330-380 us of host a call there); not run on hardware |
 | Bit-exact device test, host timing | `test_fused_head.py` | written; needs the reference dump (`dump_ref_fused_head.py`) and a Galaxy |
 
 ## The device operation
