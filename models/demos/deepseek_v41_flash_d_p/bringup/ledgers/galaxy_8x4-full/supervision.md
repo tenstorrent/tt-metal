@@ -1201,3 +1201,15 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
 - 16:20 P.22 ACCEPTED (delegation): device -16.1 / -11.6, wall -26.0 / -24.2, host -35 / -31 ms a chunk at 50k / 500k, -296 launches, accuracy unchanged. 50k chunk now ~235 ms wall / ~180 ms device.
 - 18:05 P.23 ACCEPTED (delegation): device -14.7 / -9.2, wall -24.6 / -17.4 ms a chunk, -175 launches; MoE head gets x through one all_to_all instead of the row-shard x_gather (agent: ~5k lines of fused kernels, hang risk; accepted). Accuracy within every limit, but window_kv L24-L32 rose to 0.79-0.91 of their limits (was 0.66-0.83): margin used, watch the next precision change there. 50k chunk ~218 ms wall / 172 ms device.
 - 20:05 P.24 ACCEPTED (delegation): -89 launches, host -11.5 / -9.3, wall -1.5 / -12.3 ms a chunk, device flat, accuracy identical. Opportunity set done: 50k chunk ~203 ms wall / ~170 ms device (morning 274 / 195).
+
+## 2026-10-31 20:10 MILESTONE + HAND-OFF: opportunity set done (P.18, FIX.16, P.21-P.24), run stopped at --until P.24
+State: HEAD 5dba2aab859 (pushed). 50k chunk ~203 ms wall / ~170 ms device (morning after FIX.15: 274 / 195; ~25k tok/s
+a Galaxy with all 40 layers). Accepted today: P.16, P.17 (MoE drop), P.19 (matmul sweep), FIX.15 (110-core cap, K.1
+incl. Paris PASS), P.18 (window tiles), FIX.16 (steady-state profile), P.21, P.22, P.23 (own rows; window_kv L24-L32
+now 0.79-0.91 of their limits), P.24. Rejected: P.20 (SP=8). Quick-mode picks' full gates (K.1 etc.) run before X.3.
+Pending owner decisions: reboot the node for the host-memory leak (~155 GiB unaccounted; report
+https://claude.ai/artifact/SmvnZSkfoBuDdzZHuopu5B; watcher tmux devmem); then X.3 (final) or more perf (A2 layer split,
+estimate script /scratch/dnijemcevic/opportunities/prefill_tps.py). Framework to fix: F237 (a released fix is placed
+before the first open task, not the next runnable one); agents need a sanctioned way to run device jobs > 10 min.
+Rules added today (skill / agents): overseer queues never does; never idle the box on trivia; owner rules in the skill
+not memory; Galaxy 110 cores (rule 18); no single-card jobs / back-door resets on a Galaxy (rule 19); check estimates.
