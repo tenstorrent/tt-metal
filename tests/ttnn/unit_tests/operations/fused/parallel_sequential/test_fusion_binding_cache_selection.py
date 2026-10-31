@@ -74,7 +74,6 @@ def test_prebound_factory_spec_does_not_change_unbound_output(device, monkeypatc
         patch.setattr(descriptor_impl, "_program_key_cache_get", lambda cache, key: None)
         unbound = _identity(source)
     [default_result] = Sequential(unbound).run()
-    print("factory-shapes", construction, tuple(bound_result.shape), tuple(default_result.shape), flush=True)
     assert tuple(default_result.shape) == (1, 1, 32, 128)
     assert torch.equal(ttnn.to_torch(default_result), torch.full((1, 1, 32, 128), 3, dtype=torch.bfloat16))
     assert tuple(bound_result.shape) == (32, 128)

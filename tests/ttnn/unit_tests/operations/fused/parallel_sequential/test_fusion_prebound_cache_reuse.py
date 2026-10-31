@@ -68,7 +68,6 @@ def test_fresh_prebound_containers_compile_once(device, monkeypatch, container_t
                 retained.append((result, expected))
             for result, expected in retained:
                 assert torch.equal(ttnn.to_torch(result), expected)
-        print("fresh-prebound-cold-builds", container_type.__name__, entry_point, len(builds), flush=True)
         assert len(builds) == 1
     finally:
         clear_build_cache()

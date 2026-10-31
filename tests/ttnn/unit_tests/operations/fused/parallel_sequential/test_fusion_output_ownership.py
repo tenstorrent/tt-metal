@@ -8,8 +8,6 @@ import pytest
 import torch
 import ttnn
 
-from models.common.device_utils import is_blackhole
-
 from models.experimental.ops.descriptors.fusion import Parallel, Sequential, clear_build_cache
 from models.experimental.ops.descriptors.fusion import fusion as impl
 from models.experimental.ops.descriptors.op_descriptor import LazyOutputList, OpDescriptor
@@ -17,9 +15,6 @@ from tests.ttnn.unit_tests.operations.fused.parallel_sequential.demo.test_fused_
 from tests.ttnn.unit_tests.operations.fused.parallel_sequential.test_parallel_sequential_global_cb import (
     build_identity_op,
 )
-
-
-pytestmark = pytest.mark.skipif(not is_blackhole(), reason="not yet run on Wormhole")
 
 
 def _core(x):

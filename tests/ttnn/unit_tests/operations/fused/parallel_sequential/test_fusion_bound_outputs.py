@@ -6,14 +6,10 @@ import pytest
 import torch
 import ttnn
 
-from models.common.device_utils import is_blackhole
 from models.experimental.ops.descriptors.fusion import Parallel, Sequential, clear_build_cache
 from tests.ttnn.unit_tests.operations.fused.parallel_sequential.test_parallel_sequential_global_cb import (
     build_identity_op,
 )
-
-
-pytestmark = pytest.mark.skipif(not is_blackhole(), reason="not yet run on Wormhole")
 
 
 @pytest.mark.parametrize(
@@ -22,10 +18,7 @@ pytestmark = pytest.mark.skipif(not is_blackhole(), reason="not yet run on Wormh
         pytest.param(
             False,
             False,
-            marks=[
-                pytest.mark.merge_gate,
-                pytest.mark.skipif(not is_blackhole(), reason="Supplied-output merge gate is qualified on Blackhole"),
-            ],
+            marks=pytest.mark.merge_gate,
         ),
         (True, False),
         (False, True),
