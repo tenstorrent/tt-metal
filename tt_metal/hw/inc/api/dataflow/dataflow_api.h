@@ -2562,6 +2562,11 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID, false, noc);
+    // The outstanding counter only counts a read once the NIU has processed the NOC_CMD_CTRL write that issued it.
+    // A counter load issued right after that write can overtake it, read 0, and end the barrier before the data
+    // has landed. Reading NOC_CMD_CTRL back and using the value orders the counter loads after the issue; an
+    // unused read-back is not enough on Blackhole.
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
     while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid)) {
         continue;
     }
@@ -2709,6 +2714,11 @@ FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
     RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_WITH_TRID, false, noc);
+    // Order the counter poll after the write command reaches the NIU. The read-back value must be used.
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    if constexpr (write_reg_cmd_buf != write_cmd_buf) {
+        while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+    }
     while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
         continue;
     }
@@ -2734,6 +2744,11 @@ FORCE_INLINE
 void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID, false, noc);
     WAYPOINT("NFTW");
+    // Order the counter poll after the write command reaches the NIU. The read-back value must be used.
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    if constexpr (write_reg_cmd_buf != write_cmd_buf) {
+        while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+    }
     while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
         continue;
     }
