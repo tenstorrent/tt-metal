@@ -203,6 +203,13 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
+    // With one input tile per output the output write is a large share of the work: write only faces 0 and 2, which hold
+    // the ROW result (column 0); the rest of the page is padding.
+    const bool col_face_output =
+        Wt == 1u && !rm_path && !use_height_sharding && !is_sfpu_reduce && !use_fpu_negate &&
+        operation_attributes.output_layout == Layout::TILE && !output.memory_config().is_sharded() &&
+        tile_height == 32u && tile_width == 32u && output.tensor_spec().tile().get_width() == 32u &&
+        (dst_cb_data_format == tt::DataFormat::Float16_b || dst_cb_data_format == tt::DataFormat::Float32);
 
     // ---- Dataflow buffers ----
     if (rm_path) {
@@ -445,9 +452,10 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         writer_rta_names = {"num_units"};
         // No tensor binding: the output is written in place through the borrowed OUT_DFB.
     } else {
-        writer_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_metal2.cpp";
+        writer_source = col_face_output ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+                                          "writer_reduce_w_col_interleaved.cpp"
+                                        : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                          "writer_unary_interleaved_start_id_metal2.cpp";
         writer_rta_names = {"num_pages", "start_id"};
         writer_tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}};
     }
