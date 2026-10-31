@@ -312,12 +312,10 @@ Tensor prod_result_computation_WH_B0(
                           ttnn::Shape({}),
                           ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type,
-                              PageConfig(Layout::ROW_MAJOR),
+                              PageConfig(layout),
                               MemoryConfig{},
                               /*logical_shape=*/ttnn::Shape({}),
-                              /*padded_shape=*/ttnn::Shape({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}))))
-
-                      .to_layout(layout);
+                              /*padded_shape=*/ttnn::Shape({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}))));
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
     }
