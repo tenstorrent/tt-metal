@@ -1964,7 +1964,7 @@ class Model:
                         for b_, t_, st_, e_ in wave:
                             if st_ == 0 and not (vis and b_ in vis):
                                 tot_ = None if totals is None else totals.get(b_)
-                                apc.new_prompt(b_, t_, e_ if tot_ is None else tot_)
+                                apc.new_prompt(b_, t_, e_ if tot_ is None else tot_, zone.get(b_, 0) if rep else 0)
                     new_ = self._apc_restore_wave(
                         cand, apc, vis, zone if rep else None
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)

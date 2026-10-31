@@ -828,6 +828,7 @@ class PrefixCache:
             g = int(os.environ["DSV41_APC_GRID"])
             if g == self.chunk and self.defer():
                 self.grid = GridPolicy(self.chunk, self.margin, tips=int(os.environ.get("DSV41_APC_GRID_TIPS", "2")))
+                self.grid.div_extra = int(os.environ.get("DSV41_APC_GRID_LADDER", "0"))
             else:
                 self.log(
                     f"prefix cache: DSV41_APC_GRID={g} ignored (needs grid == chunk {self.chunk} and DSV41_APC_DEFER=1)"
@@ -891,11 +892,11 @@ class PrefixCache:
         kt, ok = key_tokens(torch.as_tensor(tokens).reshape(-1)[:n], spans, self.image_token_id)
         return kt if ok else None
 
-    def new_prompt(self, b, tokens, total):
+    def new_prompt(self, b, tokens, total, zone=0):
         """APC M0': a prompt starts on user ``b``: choose its extra snapshot boundaries (``GridPolicy.plan``: tip / divergence); continuation pieces reuse the plan."""
         self.serial += 1
         if self.grid is not None and self.active() and not self._has_image(tokens, int(total)):
-            self.plans[b] = (self.serial, self.grid.plan(tokens, total))
+            self.plans[b] = (self.serial, self.grid.plan(tokens, total, zone))
         else:
             self.plans.pop(b, None)
 
@@ -907,7 +908,9 @@ class PrefixCache:
         """A new tip supersedes the tips of OLDER prompts on its own token chain (the conversation moved on): they cost host RAM and are rarely hit again. Power-of-two and divergence points stay."""
         if (
             self.grid is None
-            or getattr(snap, "kind", "") not in ("tip", "tip2")
+            or getattr(snap, "kind", "") not in ("tip", "tip2", "zone")
+            or getattr(snap, "kind", "")
+            == "zone"  # (zone points are the safe hit points of same-length prompts: a longer prompt's tip must not remove them)
             or os.environ.get("DSV41_APC_GRID_THIN", "1") != "1"
         ):
             return

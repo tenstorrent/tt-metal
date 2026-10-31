@@ -41,9 +41,10 @@ class GridPolicy:
         self.chunk, self.margin, self.tips, self.div = int(chunk), int(margin), int(tips), bool(div)
         self.seen = OrderedDict()  # chunk-chain key -> None (LRU, bounded: 16 B per block of 512 tokens)
         self.seen_cap = int(seen_cap)
+        self.div_extra, self.div_step = 0, 2 * self.chunk  # (see ``plan``; set from DSV41_APC_GRID_LADDER)
 
-    def plan(self, tokens, total=None):
-        """Choose the boundaries to snapshot for a prompt of ``total`` tokens (default: len(tokens)) and register its chunk chain as seen. -> {B: 'tip' | 'tip2' | 'div'}."""
+    def plan(self, tokens, total=None, zone=0):
+        """Choose the boundaries to snapshot for a prompt of ``total`` tokens (default: len(tokens)) and register its chunk chain as seen. -> {B: 'tip' | 'tip2' | 'zone' | 'div'}; ``zone``: first replay chunk start of the prompt (0 = every layer on every chunk)."""
         C, m = self.chunk, self.margin
         n = _as_np(tokens).size
         total = n if total is None else min(int(total), n)
@@ -53,13 +54,26 @@ class GridPolicy:
         if top > 0 and self.tips >= 1:
             out[top] = "tip"
         t2 = max(total - m, 0) // C * C
-        if t2 > 0 and t2 != top and self.tips >= 2:
+        if zone > 0:
+            # bounded replay (DSV41_PF_REPLAY): a snapshot taken at B > zone is 'partial' (PrefixSnapshot.full False) and only restores into a prompt whose own zone start is >= B. A repeat / a same-length
+            # family therefore never uses a boundary past its zone: the usable points are the zone start itself (kind 'zone') and, for a longer prompt, the tip; a divergence point is capped at the zone start.
+            if zone not in out:
+                out[zone] = "zone"
+        elif t2 > 0 and t2 != top and self.tips >= 2:
             out[t2] = "tip2"
         if self.div:
             usable = max(total - m, 0) // C * C
+            if zone > 0:
+                usable = min(usable, int(zone))
             sdiv = max((s for s, k in ch.items() if s <= usable and k in self.seen), default=0)
             if sdiv > 0 and sdiv not in out:
                 out[sdiv] = "div"
+            for j in range(
+                1, self.div_extra + 1
+            ):  # a ladder below it: later prompts of the family have zone starts a little lower (their tails are shorter), a hit needs s <= that zone
+                s = sdiv - j * self.div_step
+                if sdiv > 0 and s > 0 and s not in out:
+                    out[s] = "div"
         for k in ch.values():
             if k in self.seen:
                 self.seen.move_to_end(k)

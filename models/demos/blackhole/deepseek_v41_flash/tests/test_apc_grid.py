@@ -84,17 +84,18 @@ def make_cache(monkeypatch, budget=10**9, grid=True, nbytes=1000):
     return PC.PrefixCache(FakeModel(), C, budget, "pow2", log=lambda *_: None)
 
 
-def serve(cache, t, b=0):
+def serve(cache, t, b=0, replay=0):
     """One prompt through the cache the way ``prefill_interleaved`` drives it: lookup, new_prompt, a snapshot call at every chunk boundary the call computes. -> hit position."""
     t = torch.as_tensor(t)
     e = t.numel()
     cache.finish_pending()
-    snap = cache.lookup(b, t, e)
+    zone = max(0, (e - replay) // C * C) if replay else 0  # bounded replay: first chunk start that runs layers 21-39
+    snap = cache.lookup(b, t, e, zone=zone if replay else None)
     s0 = snap.s if snap else 0
     if cache.grid is not None:
-        cache.new_prompt(b, t, e)
+        cache.new_prompt(b, t, e, zone)
     for B in range(s0 + C, e // C * C + 1, C):
-        cache.begin_snapshot(b, B, t, True)
+        cache.begin_snapshot(b, B, t, zone == 0)  # (the model: full = zone == 0)
     cache.finish_pending()
     return s0
 
@@ -158,16 +159,16 @@ def test_grid_needs_defer(monkeypatch):
     assert c.grid is None
 
 
-def _policy_run(reqs):
-    """Mean recompute fraction and mean simulated TTFT of the real PrefixCache policy on the simulator workloads (hit rule and TTFT model of tools/apc_paged_sim.py)."""
+def _policy_run(reqs, grid=True):
+    """Mean recompute fraction and mean simulated TTFT of the real PrefixCache under the bounded-replay rule (partial snapshots restore only at s <= the zone start of the new prompt), TTFT model of tools/apc_paged_sim.py."""
     mp = __import__("pytest").MonkeyPatch()
     try:
-        c = make_cache(mp, nbytes=10)
+        c = make_cache(mp, nbytes=10, grid=grid)
         new = tot = 0
         ttft = []
         for t in reqs:
             e = len(t)
-            s = serve(c, t)
+            s = serve(c, t, replay=SIM.ZR)
             p0 = max(0, (e - SIM.ZR) // C * C)
             ch = sum(SIM.CH_AB if s + k * C >= p0 else SIM.CH_A for k in range(-(-(e - s) // C)))
             ttft.append(SIM.F + ch + (SIM.r_host(s) if s else 0))
@@ -186,14 +187,38 @@ def test_against_the_simulator():
         "sys30k": SIM.shared_sys(32, 30000),
     }
     for name, reqs in cases.items():
-        pow2 = SIM.run(reqs, "host_pow2")
-        div = SIM.run(reqs, "host_div")
+        div = SIM.run(reqs, "host_div")  # (the simulator lets a hit use a snapshot past the zone: optimistic)
+        fp, tp = _policy_run(reqs, grid=False)
         fr, tt = _policy_run(reqs)
         print(
-            f"{name}: pow2 {pow2['ttft_mean']} div(sim) {div['ttft_mean']} policy {tt:.2f} recompute {fr:.3f} (sim {div['recompute_frac']})"
+            f"{name}: pow2 {tp:.2f} [{fp:.2f}] grid {tt:.2f} [{fr:.3f}] (sim tip+div, no zone rule: {div['ttft_mean']} [{div['recompute_frac']}])"
         )
+        assert tt <= tp + 1e-6, name
         assert (
-            tt <= div["ttft_mean"] * 1.03
-        ), name  # the real policy is as good as the simulated tip + divergence host tier
-        assert tt <= pow2["ttft_mean"] + 1e-6, name
-        assert fr <= div["recompute_frac"] + 0.02, name
+            tt >= div["ttft_mean"] * 0.97
+        ), name  # (the zone rule can only cost: never better than the optimistic simulator)
+    assert _policy_run(cases["sys30k"])[1] < 0.5 * _policy_run(cases["sys30k"], grid=False)[1]
+
+
+def test_plan_with_bounded_replay_zone():
+    g = GridPolicy(C, 128)
+    t = seg(1, 32006)
+    zone = (32006 - 2560) // C * C
+    plan = g.plan(t, zone=zone)
+    assert (
+        plan == {31744: "tip", zone: "zone"} and zone == 29184
+    )  # no tip2: a boundary past the zone is unusable by a repeat
+    sysp = seg(7, 30000)
+    g2 = GridPolicy(C, 128)
+    g2.plan(np.concatenate([sysp, seg(8, 2000)]), zone=29184)
+    p2 = g2.plan(np.concatenate([sysp, seg(9, 2000)]), zone=29184)
+    assert p2[29184] == "zone" and 29696 not in p2  # the divergence (29696) is capped at the zone start
+
+
+def test_zone_points_survive_newer_tips(monkeypatch):
+    c = make_cache(monkeypatch)
+    sysp = seg(7, 30000)
+    for i in range(3):
+        serve(c, np.concatenate([sysp, seg(100 + i, 2000)]), replay=2560)
+    assert any(k[2] == 29184 for k in c.store.snaps)  # a later prompt's tip does not thin the zone point
+    assert serve(c, np.concatenate([sysp, seg(200, 2000)]), replay=2560) == 29184
