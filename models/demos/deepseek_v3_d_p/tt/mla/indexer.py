@@ -938,6 +938,9 @@ class TtIndexerBase:
             block_cyclic_chunk_local=q_dev.shape[2],
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
+            # Q rows and the index cache are SP-major (sp_coord*tp + tp_coord): row-major on the mesh at
+            # sp_axis=0, column-major at sp_axis=1.
+            full_mesh_outer_axis=self.sp_axis,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
