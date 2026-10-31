@@ -1134,9 +1134,10 @@ void Device::register_program(detail::ProgramImpl* program) {
     active_programs_.insert(program);
 }
 
-void Device::unregister_program(detail::ProgramImpl* program) {
+bool Device::unregister_program(detail::ProgramImpl* program) {
     std::lock_guard<std::mutex> lock(active_programs_mutex_);
     active_programs_.erase(program);
+    return active_programs_.empty();
 }
 
 uint64_t Device::get_total_cb_allocated() const {

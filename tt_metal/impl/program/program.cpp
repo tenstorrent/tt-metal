@@ -2499,10 +2499,11 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
         for (const IDevice* idevice : this->cb_devices_) {
             auto* device = dynamic_cast<Device*>(const_cast<IDevice*>(idevice));
             if (device) {
-                device->unregister_program(this);
-                // Update locally-allocated CB stats via query (accurate after deallocation)
+                const bool no_programs_left = device->unregister_program(this);
+                // Update locally-allocated CB stats via query
                 if (device->get_shm_stats_provider()) {
-                    device->get_shm_stats_provider()->update_from_allocator(device, getpid());
+                    device->get_shm_stats_provider()->update_from_allocator(
+                        device, getpid(), /*force=*/no_programs_left);
                 }
             }
         }

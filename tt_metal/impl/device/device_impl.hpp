@@ -182,7 +182,7 @@ public:
 
     // Program tracking for accurate CB memory reporting
     void register_program(detail::ProgramImpl* program);
-    void unregister_program(detail::ProgramImpl* program);
+    bool unregister_program(detail::ProgramImpl* program);
     uint64_t get_total_cb_allocated() const;
 
     // Deprecated overrides for sub_device_manager_tracker
