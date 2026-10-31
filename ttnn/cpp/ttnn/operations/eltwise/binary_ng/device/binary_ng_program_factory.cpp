@@ -1093,7 +1093,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
              b_dtype == DataType::INT32);
 
-        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op and !is_integer_division) {
+        if ((binary::utils::is_typecast(a_dtype, c_dtype) || c_dtype == DataType::INT8) && !is_quant_op &&
+            !is_integer_division) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
@@ -1137,6 +1138,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // tiles a compute batch may hold in DST (below), not only the compute kernel config.
     const bool fp32_dest_acc_en =
         c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
+        c_data_format == tt::DataFormat::Int8 ||
         c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
         b_data_format == tt::DataFormat::Float32 ||
         (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
