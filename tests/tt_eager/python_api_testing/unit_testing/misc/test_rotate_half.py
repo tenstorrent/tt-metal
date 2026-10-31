@@ -64,3 +64,14 @@ def test_rotate_half_row_major(shape, device):
 
     eq = torch.equal(tt_got_back, pt_out)
     assert eq
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat8_b], ids=["float32", "bfloat8_b"])
+def test_rotate_half_dtypes(dtype, device):
+    x = torch.randn([1, 2, 64, 128])
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    x = ttnn.to_torch(xt).float()
+
+    tt_got_back = ttnn.to_torch(ttnn.experimental.rotate_half(xt)).float()
+
+    torch.testing.assert_close(tt_got_back, rotate_half(x), rtol=1e-2, atol=1e-2)
