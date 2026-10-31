@@ -31,9 +31,11 @@ void fill_column_of_ones(uint32_t tile_addr, uint32_t tile_bytes) {
 
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t num_candidates = get_compile_time_arg_val(1);
     constexpr uint32_t kSplitArgs = 2;
-    constexpr auto sealed_args = TensorAccessorArgs<kSplitArgs + 3>();
+    using Split = AttnResBlockStatsSplit<kSplitArgs>;
+    constexpr uint32_t Wt = Split::Wt;
+    constexpr auto sealed_args = TensorAccessorArgs<kSplitArgs + 5>();
     constexpr auto queries_args = TensorAccessorArgs<sealed_args.next_compile_time_args_offset()>();
 
     // Common args: the queries, then one (address, first page) pair per candidate.
@@ -49,31 +51,50 @@ void kernel_main() {
     CircularBuffer cb_queries_obj(cb_queries);
     CircularBuffer cb_ones_obj(cb_ones);
 
-    // Resident for every item: the queries and the column of ones.
+    uint32_t first_unit, num_units;
+    Split::core_units(first_unit, num_units);
+    if (num_units == 0) {
+        return;
+    }
+
+    // Resident for every unit: the queries over this core's run of the row — every unit
+    // of a core is the same chunk of its row — and the column of ones.
+    const auto span = Split::unit(first_unit);
     auto queries_accessor = TensorAccessor(queries_args, get_common_arg_val<uint32_t>(0));
-    cb_queries_obj.reserve_back(Wt);
-    for (uint32_t k = 0; k < Wt; ++k) {
-        noc.async_read(queries_accessor, cb_queries_obj, tile_bytes, {.page_id = k}, {.offset_bytes = k * tile_bytes});
+    cb_queries_obj.reserve_back(Split::max_run);
+    for (uint32_t k = span.begin; k < span.end; ++k) {
+        noc.async_read(
+            queries_accessor,
+            cb_queries_obj,
+            tile_bytes,
+            {.page_id = k},
+            {.offset_bytes = (k - span.begin) * tile_bytes});
     }
     cb_ones_obj.reserve_back(1);
     fill_column_of_ones(cb_ones_obj.get_write_ptr(), tile_bytes);
     noc.async_read_barrier();
-    cb_queries_obj.push_back(Wt);
+    cb_queries_obj.push_back(Split::max_run);
     cb_ones_obj.push_back(1);
 
-    for_each_attn_res_block_stats_item<kSplitArgs>([&](uint32_t item) {
-        const uint32_t candidate = item / Ht;
-        const uint32_t row = item % Ht;
-        const uint32_t address = get_common_arg_val<uint32_t>(kCandidateArgs + 2 * candidate);
-        const uint32_t first_page = get_common_arg_val<uint32_t>(kCandidateArgs + 2 * candidate + 1) + row * Wt;
-        auto sealed_accessor = TensorAccessor(sealed_args, address);
-
-        cb_v_obj.reserve_back(Wt);
-        for (uint32_t k = 0; k < Wt; ++k) {
-            noc.async_read(
-                sealed_accessor, cb_v_obj, tile_bytes, {.page_id = first_page + k}, {.offset_bytes = k * tile_bytes});
+    // Each candidate's run of the unit's row, one CB unit apiece.
+    for (uint32_t u = first_unit; u < first_unit + num_units; ++u) {
+        const auto unit = Split::unit(u);
+        for (uint32_t c = 0; c < num_candidates; ++c) {
+            const uint32_t address = get_common_arg_val<uint32_t>(kCandidateArgs + 2 * c);
+            const uint32_t first_page =
+                get_common_arg_val<uint32_t>(kCandidateArgs + 2 * c + 1) + unit.row * Wt + unit.begin;
+            auto sealed_accessor = TensorAccessor(sealed_args, address);
+            cb_v_obj.reserve_back(Split::max_run);
+            for (uint32_t k = 0; k < unit.num_tiles(); ++k) {
+                noc.async_read(
+                    sealed_accessor,
+                    cb_v_obj,
+                    tile_bytes,
+                    {.page_id = first_page + k},
+                    {.offset_bytes = k * tile_bytes});
+            }
+            noc.async_read_barrier();
+            cb_v_obj.push_back(Split::max_run);
         }
-        noc.async_read_barrier();
-        cb_v_obj.push_back(Wt);
-    });
+    }
 }
