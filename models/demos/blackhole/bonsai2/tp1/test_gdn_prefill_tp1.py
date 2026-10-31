@@ -6,6 +6,17 @@ Prefills one real GDN layer with both modules at each length in LENGTHS (fresh s
 agree, then runs DECODE_STEPS decode steps on each module (TP=1 with the fused recurrence) from the state
 the prefill captured and checks those agree too.
     MESH_DEVICE=P150 HF_MODEL=<HF checkpoint dir> pytest models/demos/blackhole/bonsai2/tp1/test_gdn_prefill_tp1.py -s
+
+KNOWN UPSTREAM FAILURE at seq_len 128 and 256 (xfail, strict). The SINGLE-DEVICE BASELINE module
+(Qwen36GatedDeltaNet) cannot run mode="chunk" at those lengths on Blackhole 140: its chunk scan
+(ttnn.transformer.gated_delta_attn_seq, reached via ttnn_delta_rule_seq.py) allocates static dataflow
+buffers that clash with an L1 buffer already placed at 1373632 B, needing 1426816 B. It is not
+monotonic in length -- 32 and 64 pass, 128 and 256 fail, 2048 passes -- and it is unaffected by
+l1_small_size (measured at 24 KB, 64 KB and 128 KB, identical), because the clash is in STATIC CBs
+rather than the L1_SMALL carve-out. It predates c75e2d5 and lives in models/experimental/, so it is
+not fixable from this test. The TP=1 module under test is fine at both lengths; only the baseline
+reference call fails. Kept as xfail(strict) so the case stays visible and fails loudly if upstream
+fixes it and it starts passing.
 """
 import pytest
 import torch
@@ -18,12 +29,28 @@ from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc
 LENGTHS = [128, 2048]
 DECODE_STEPS = 4
 
+# See the module docstring: the single-device baseline's chunk scan overflows L1 at these buckets
+# (upstream, predates c75e2d5, unaffected by l1_small_size). strict=True so an upstream fix makes
+# this XPASS and therefore fail, prompting removal of the mark.
+UPSTREAM_L1_BUCKETS = (128, 256)
+
 
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("seq_len", LENGTHS)
-def test_gdn_prefill_tp1(mesh_device, seq_len):
+def test_gdn_prefill_tp1(mesh_device, seq_len, request):
+    if seq_len in UPSTREAM_L1_BUCKETS:
+        request.node.add_marker(
+            pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    f"upstream gated_delta_attn_seq static-CB L1 clash at bucket {seq_len} in the "
+                    "SINGLE-DEVICE BASELINE module (predates c75e2d5; not affected by l1_small_size); "
+                    "the TP=1 module is fine"
+                ),
+            )
+        )
     args, li, _, old, tp = _build(mesh_device, max_seq_len=4096)
     tp.use_fused_recurrent_decode = True
     # layer.py sets this for the real model (TP=1 has no mesh axis to all-gather along); the test
