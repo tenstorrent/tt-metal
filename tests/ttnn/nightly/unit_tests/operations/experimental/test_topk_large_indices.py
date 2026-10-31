@@ -1454,3 +1454,179 @@ def test_topk_large_indices_classic_body_multi_row_covers_every_row(device, num_
     tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
 
     _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+@pytest.mark.parametrize("valid_end", [256, 896, 2048, 5120], ids=["end256", "end896", "end2048", "end5120"])
+def test_topk_large_indices_metadata_matches_scalar_split_rows(device, valid_end):
+    """GLM-5.3's indexer call, metadata (traced) form vs scalar (eager) form, on more rows than cores.
+
+    The metadata form reads its bound on device (valid_length_tensor + valid_length_offset, capped at
+    ceil32(valid_end_tensor)), so the host derives the row-to-core assignment from the full width n. Rows past
+    the core count are then halved across core pairs (num_chunks >= 2), while the scalar form, knowing a bound
+    of <= one K chunk, keeps them whole. Every row must still get the same indices. Distinct values per row, so
+    the order is unique.
+    """
+    k, n, num_rows = 2048, 5120, 160  # GLM-5.3: index top-k, chunk width, query rows per chip (8x4, TP-split)
+    g = torch.Generator().manual_seed(896)
+    hi16 = torch.stack([torch.randperm(n, generator=g) for _ in range(num_rows)]).numpy().astype(np.uint32) + 0x3F80
+    torch_input = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    valid = -(-valid_end // 32) * 32
+
+    scalar = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid)
+    metadata = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, 0),  # actual_start
+        valid_length_offset=n,  # the indexer's chunk_global
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+    )
+    s = ttnn.to_torch(scalar, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    m = ttnn.to_torch(metadata, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    differ = [r for r in range(num_rows) if not torch.equal(s[r], m[r])]
+    set_differ = [r for r in differ if not torch.equal(s[r].sort().values, m[r].sort().values)]
+    logger.info(
+        f"end={valid_end}: {len(differ)} of {num_rows} rows differ (rows {differ[:3]}..{differ[-3:]}), "
+        f"{len(set_differ)} as sets"
+        + (
+            f"; row {set_differ[0]}: scalar {s[set_differ[0], :8].tolist()} metadata {m[set_differ[0], :8].tolist()}"
+            if set_differ
+            else ""
+        )
+    )
+    assert not differ, f"metadata top-k differs from scalar on {len(differ)} rows ({len(set_differ)} as sets)"
+
+
+@pytest.mark.parametrize("grid", ["default", "topk108"], ids=["grid_default", "grid_topk108"])
+@pytest.mark.parametrize("base", [0, 640], ids=["rows0", "rows640"])
+@pytest.mark.parametrize("valid_end", [256, 896, 2048, 5120], ids=["end256", "end896", "end2048", "end5120"])
+def test_topk_large_indices_metadata_matches_scalar_causal(device, valid_end, base, grid):
+    """As test_topk_large_indices_metadata_matches_scalar_split_rows, with GLM-5.3 indexer-shaped logits: query row
+    r sits at position base + r and scores only keys <= its position (the rest -inf, as the causal score writes).
+    grid "topk108" is the sparse-MLA overlap's top-k sub-grid on a 12x10 device (rows 1-9)."""
+    k, n, num_rows = 2048, 5120, 160
+    g = torch.Generator().manual_seed(896)
+    hi16 = torch.stack([torch.randperm(n, generator=g) for _ in range(num_rows)]).numpy().astype(np.uint32) + 0x3F80
+    torch_input = torch.from_numpy((hi16 << 16).view(np.float32).copy())
+    future = torch.arange(n)[None, :] > (base + torch.arange(num_rows))[:, None]
+    torch_input = torch_input.masked_fill(future, float("-inf")).to(torch.bfloat16)
+    valid = -(-valid_end // 32) * 32
+    kwargs = {}
+    if grid == "topk108":
+        g_size = device.compute_with_storage_grid_size()
+        if (g_size.x, g_size.y) != (12, 10):
+            pytest.skip(f"the top-k overlap sub-grid is defined on a 12x10 grid, got {g_size.x}x{g_size.y}")
+        kwargs["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(11, 9))])
+
+    scalar = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid, **kwargs)
+    metadata = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+        valid_length_offset=n,
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+        **kwargs,
+    )
+    s = ttnn.to_torch(scalar, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    m = ttnn.to_torch(metadata, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    differ = [r for r in range(num_rows) if not torch.equal(s[r], m[r])]
+    set_differ = [r for r in differ if not torch.equal(s[r].sort().values, m[r].sort().values)]
+    msg = f"end={valid_end} base={base} grid={grid}: {len(differ)} of {num_rows} rows differ, {len(set_differ)} as sets"
+    if differ:
+        r = differ[0]
+        pos = (s[r] != m[r]).nonzero().flatten()[:4].tolist()
+        msg += f"; first row {r} at slots {pos}: scalar {s[r, pos].tolist()} metadata {m[r, pos].tolist()}"
+    logger.info(msg)
+    assert not differ, msg
+
+
+@pytest.mark.parametrize("grid", ["default", "topk108"], ids=["grid_default", "grid_topk108"])
+@pytest.mark.parametrize("valid_end", [256, 896, 2048, 5120], ids=["end256", "end896", "end2048", "end5120"])
+def test_topk_large_indices_metadata_matches_scalar_ties(device, valid_end, grid):
+    """Causal GLM-5.3-shaped logits with bf16 ties (randn rounded to bf16, as the indexer's scores are). The index
+    ORDER of a row must not depend on the bound form (metadata vs scalar) or on the full-chunk bound, which decide
+    whether the row is reduced on one core or split across two: sparse attention sums in index order, so a
+    different order of tied keys changes its output (#63408)."""
+    k, n, num_rows = 2048, 5120, 160
+    g = torch.Generator().manual_seed(896)
+    torch_input = torch.randn(num_rows, n, generator=g)
+    future = torch.arange(n)[None, :] > torch.arange(num_rows)[:, None]
+    torch_input = torch_input.masked_fill(future, float("-inf")).to(torch.bfloat16)
+    valid = -(-valid_end // 32) * 32
+    kwargs = {}
+    if grid == "topk108":
+        g_size = device.compute_with_storage_grid_size()
+        if (g_size.x, g_size.y) != (12, 10):
+            pytest.skip(f"the top-k overlap sub-grid is defined on a 12x10 grid, got {g_size.x}x{g_size.y}")
+        kwargs["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(11, 9))])
+
+    def run(**bound):
+        out = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, **bound, **kwargs)
+        return ttnn.to_torch(out, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+
+    s = run(valid_length=valid)
+    m = run(
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+        valid_length_offset=n,
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+    )
+    full = run(valid_length=n)  # the full chunk's bound: what a token computed inside a full chunk gets
+    failures = []
+    for label, other in (("metadata", m), ("scalar-full", full)):
+        differ = [r for r in range(num_rows) if not torch.equal(s[r], other[r])]
+        set_differ = [r for r in differ if not torch.equal(s[r].sort().values, other[r].sort().values)]
+        logger.info(
+            f"end={valid_end} grid={grid} scalar vs {label}: {len(differ)} of {num_rows} rows differ "
+            f"(first {differ[:1]}, rows >= 108: {sum(r >= 108 for r in differ)}), {len(set_differ)} as sets"
+        )
+        if differ:
+            failures.append(
+                f"scalar vs {label}: {len(differ)} rows differ, first {differ[0]}, {len(set_differ)} as sets"
+            )
+    assert not failures, f"end={valid_end} grid={grid}: " + "; ".join(failures)
+
+
+@pytest.mark.parametrize("grid", ["default", "topk108"], ids=["grid_default", "grid_topk108"])
+@pytest.mark.parametrize("valid_end", [56320, 71680, 102400], ids=["end56320", "end71680", "end102400"])
+def test_topk_large_indices_long_rows_ties(device, valid_end, grid):
+    """Long rows with bf16 ties: past 32 K' chunks a row is reduced in 32-chunk segments joined by the unfused
+    (value-only) merge, so the fused cross-core join of #63408 does not cover it.
+
+    Asserted: the scalar and metadata bounds (eager and traced) return the same order, since both plan the same
+    segments and the same split. Logged, not asserted: the order against a longer bound over the same real
+    columns (the same tokens in a full chunk), which can differ once either bound passes 32 chunks."""
+    k, n, num_rows = 2048, 131072, 160
+    torch_input = torch.randn(num_rows, n, generator=torch.Generator().manual_seed(56320))
+    torch_input[:, valid_end:] = float("-inf")
+    torch_input = torch_input.to(torch.bfloat16)
+    kwargs = {}
+    if grid == "topk108":
+        g_size = device.compute_with_storage_grid_size()
+        if (g_size.x, g_size.y) != (12, 10):
+            pytest.skip(f"the top-k overlap sub-grid is defined on a 12x10 grid, got {g_size.x}x{g_size.y}")
+        kwargs["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(11, 9))])
+
+    def run(**bound):
+        out = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, **bound, **kwargs)
+        return ttnn.to_torch(out, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+
+    def compare(a, b):
+        differ = [r for r in range(num_rows) if not torch.equal(a[r], b[r])]
+        set_differ = [r for r in differ if not torch.equal(a[r].sort().values, b[r].sort().values)]
+        return differ, set_differ
+
+    s = run(valid_length=valid_end)
+    m = run(
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+        valid_length_offset=n,
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+    )
+    full = run(valid_length=n)
+    chunks = -(-valid_end // k)
+    for label, other in (("metadata", m), ("scalar-full", full)):
+        differ, set_differ = compare(s, other)
+        logger.info(
+            f"long end={valid_end} ({chunks} chunks) grid={grid} scalar vs {label}: {len(differ)} of {num_rows} rows "
+            f"differ (rows >= 108: {sum(r >= 108 for r in differ)}), {len(set_differ)} as sets"
+        )
+        if label == "metadata":
+            assert not differ, f"end={valid_end} grid={grid}: scalar vs metadata: {len(differ)} rows differ"
