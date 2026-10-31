@@ -791,6 +791,16 @@ TABLE = {
         "final norm, the compressor / indexer sites. Buffers allocated at load time (tt/host_alloc.reserve_forks), one "
         "per site for every layer; outputs bit-identical. off = today's path (the ops allocate)",
     ),
+    "STEADY_STATE": Setting(
+        "on",
+        ("on", "off"),
+        "FIX.16 (owner 2026-10-31, framework F236): what the device model's steady_state(start) does before each TIMED "
+        "profile / wall run (never before an accuracy run). on = every layer's window carry is marked as the kept tail "
+        "of a whole previous chunk ending at start (tt/attention.TtWindowCache.steady), so the timed run takes the "
+        "consecutive-chunk path serving takes (no carry rebuild from the served cache: slice + to_layout + ckv_bfp4 a "
+        "layer); the carry's values are the last run's tail (timing only). off = no-op: every timed run rebuilds the "
+        "carry (the path before FIX.16; comparison only)",
+    ),
     "MAX_WORKER_CORES": Setting(
         110,
         None,
