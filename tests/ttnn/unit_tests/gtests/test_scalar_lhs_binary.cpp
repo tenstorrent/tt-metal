@@ -102,10 +102,11 @@ TEST_F(ScalarLhsBinaryFixture, SubtractScalarFromBlockFloatTensorKeepsOperandOrd
     std::array<uint32_t, 2> dimensions = {32, 64};
     ttnn::Shape shape(dimensions);
 
-    // The block-float multiply test above compares two flag values on one operand order, and
-    // multiply is commutative, so it cannot detect a lost scalar_is_lhs. Subtract on the same
-    // block formats can: 2 - 6 and 6 - 2 differ in sign, and this checks an absolute value
-    // rather than a second execution of the same implementation.
+    // The block-float multiply test above compares two flag values on one operand order, so it
+    // cannot detect a lost scalar_is_lhs: the two orders of a multiply differ only by the srcA /
+    // srcB rounding difference, a couple of ULP, which no value assertion would separate from a
+    // correct result. Subtract on the same block formats can: 2 - 6 and 6 - 2 differ in sign, and
+    // this checks an absolute value rather than a second execution of the same implementation.
     for (const auto dtype : {DataType::BFLOAT8_B, DataType::BFLOAT4_B}) {
         const auto input_tensor = ttnn::full(shape, 6.0f, dtype, ttnn::TILE_LAYOUT, device);
 
