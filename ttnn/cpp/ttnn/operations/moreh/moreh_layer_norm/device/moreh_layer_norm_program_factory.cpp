@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/moreh/moreh_layer_norm/device/moreh_layer_norm_tile_mean.hpp"
 #include <bit>
 #include <string>
 #include <vector>
@@ -137,6 +138,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     const uint32_t in4_t = beta_has_value ? 2 * block_size : 0;   // beta
     const uint32_t in5_t = do_mask_h ? 1 : 0;                     // mask_h
     const uint32_t in6_t = do_mask_w ? 1 : 0;                     // mask_w
+    uint32_t in7_t = 0;
 
     const uint32_t out0_t = 2 * block_size;          // output
     const uint32_t out1_t = mean_has_value ? 1 : 0;  // mean
@@ -150,6 +152,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
+    const uint32_t im8_t = 1;
 
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto single_tile_size = tt::tile_size(cb_data_format);
@@ -158,7 +161,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
 
     const uint32_t cb_usage =
         ((in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size) +
-        ((im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size);
+        ((im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t + im8_t) * intermed_single_tile_size);
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
@@ -168,6 +171,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         in0_t = 2 * block_size;
         im1_t = 2 * block_size;
         im2_t = 2 * block_size;
+        in7_t = 1;
     } else {
         log_info(tt::LogTest, "Small moreh_layer_norm algorithm is selected.");
     }
@@ -199,6 +203,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     push_cb(static_cast<uint8_t>(CBIndex::c_4), in4_t, cb_data_format);       // beta
     push_cb(static_cast<uint8_t>(CBIndex::c_5), in5_t, cb_data_format);       // mask_h
     push_cb(static_cast<uint8_t>(CBIndex::c_6), in6_t, cb_data_format);       // mask_w
+    push_cb(static_cast<uint8_t>(CBIndex::c_7), in7_t, cb_data_format);
     push_cb(static_cast<uint8_t>(CBIndex::c_16), out0_t, cb_data_format);     // output
     push_cb(static_cast<uint8_t>(CBIndex::c_17), out1_t, cb_data_format);     // mean
     push_cb(static_cast<uint8_t>(CBIndex::c_18), out2_t, cb_data_format);     // rstd
@@ -210,6 +215,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     push_cb(static_cast<uint8_t>(CBIndex::c_29), im5_t, intermed_cb_format);  // 1.0/(sqrt(Var[x] + eps))
     push_cb(static_cast<uint8_t>(CBIndex::c_30), im6_t, intermed_cb_format);  // y * gamm + beta
     push_cb(static_cast<uint8_t>(CBIndex::c_31), im7_t, intermed_cb_format);  // Sum[x]
+    push_cb(static_cast<uint8_t>(CBIndex::c_8), im8_t, intermed_cb_format);   // zero tile
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -282,6 +288,20 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
 
+    float scaler_f = 0.0f;
+    if (normalized_dims == 1) {
+        scaler_f = 1.0f / static_cast<float>(origin_W);
+    } else {
+        uint32_t reduce_size = 1;
+        for (uint32_t i = input_rank - normalized_dims; i < input_rank; i++) {
+            auto size = input_shape_without_padding[i];
+            reduce_size *= size;
+        }
+
+        scaler_f = 1.0f / std::sqrt(static_cast<float>(reduce_size));
+    }
+    const uint32_t tile_mean_bits = tile_mean_factor_bits(scaler_f, is_lastdim_layer_norm, origin_H, origin_W);
+
     KernelDescriptor compute_desc_1;
     compute_desc_1.kernel_source = compute_kernel_file;
     compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -297,7 +317,8 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         static_cast<uint32_t>(mean_has_value),
         static_cast<uint32_t>(rstd_has_value),
         static_cast<uint32_t>(is_lastdim_layer_norm),
-        static_cast<uint32_t>(is_groupnorm)};
+        static_cast<uint32_t>(is_groupnorm),
+        tile_mean_bits};
     compute_desc_1.defines = compute_defines;
     compute_desc_1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -323,7 +344,8 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
             static_cast<uint32_t>(mean_has_value),
             static_cast<uint32_t>(rstd_has_value),
             static_cast<uint32_t>(is_lastdim_layer_norm),
-            static_cast<uint32_t>(is_groupnorm)};
+            static_cast<uint32_t>(is_groupnorm),
+            tile_mean_bits};
         compute_desc_2.defines = compute_defines;
         compute_desc_2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
@@ -336,18 +358,6 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    float scaler_f = 0.0f;
-    if (normalized_dims == 1) {
-        scaler_f = 1.0f / static_cast<float>(origin_W);
-    } else {
-        uint32_t reduce_size = 1;
-        for (uint32_t i = input_rank - normalized_dims; i < input_rank; i++) {
-            auto size = input_shape_without_padding[i];
-            reduce_size *= size;
-        }
-
-        scaler_f = 1.0f / std::sqrt(static_cast<float>(reduce_size));
-    }
     const uint32_t scaler_u = std::bit_cast<uint32_t>(scaler_f);
 
     const uint32_t e_u = std::bit_cast<uint32_t>(eps);  // epsilon
