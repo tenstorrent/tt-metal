@@ -81,3 +81,76 @@ def test_drop_forgets_reported():
     g.inprog.update(3, 512, torch.arange(1000), reported=700)
     g.inprog.drop(3)
     assert 3 not in g.inprog.users and 3 not in g.inprog.reported
+
+
+# ---- piece ends vs image spans (VisionBook.cut_end) -------------------------------------------------------------------------------------------------------------------------------
+import random
+
+from models.demos.blackhole.deepseek_v41_flash.tt import vision_state as VSN
+
+IMG = 7
+
+
+def _prompt(spans_at, L):
+    t = torch.ones(L, dtype=torch.long)
+    for s, n in spans_at:
+        t[s : s + n] = IMG
+    return t
+
+
+def test_cut_end_never_lands_inside_an_earlier_span():
+    # the failure of the first device run: image 32203..32397, next image at ~32600 straddles the 32768 budget; aligned-down 32256 is inside the first image
+    t = _prompt([(32203, 194), (32600, 194)], 40000)
+    c = VSN.cut_end(t, [194, 194], IMG, 32768, align=512)
+    assert c == 31744 and not (32203 < c < 32397)
+    # the lag cut to the chunk boundary 32256 (a non-final piece ending at 32300) must also move below the span
+    assert VSN.cut_end(t, [194, 194], IMG, 32256, align=512) == 31744
+
+
+def test_cut_end_unchanged_when_no_span_is_cut():
+    t = _prompt([(100, 50), (900, 50)], 3000)
+    assert VSN.cut_end(t, [50, 50], IMG, 2048, align=512) == 2048
+    assert VSN.cut_end(t, [50, 50], IMG, 900, align=512) == 900  # ends exactly at a span start: fine
+
+
+def _plan(rng, t, span_lens, C):
+    """vLLM-like pieces (random budget, sometimes rolled back before an image, sometimes ending inside one) + the adapter's lag cut -> list of (start, end) the model computes"""
+    L = t.numel()
+    rep, carried, computed = 0, 0, []
+    while rep < L:
+        e = min(L, rep + rng.choice([97, 600, 1500, 4095, 4096, 9000, 32768]))
+        if e < L and rng.random() < 0.5:  # scheduler rolls back before an image that does not fit
+            starts = (t[:e] == IMG).nonzero().reshape(-1)
+            if starts.numel():
+                pass
+        final = e == L
+        end = e
+        if not final:
+            a = e // C * C
+            end = VSN.cut_end(t, span_lens, IMG, a, align=C) if a > carried else a
+        if end > carried:
+            assert end == L or end % C == 0, (carried, end)
+            computed.append((carried, end))
+            carried = end
+        rep = e
+    return computed
+
+
+def test_random_layouts_piece_ends_outside_spans_and_full_coverage():
+    rng = random.Random(1234)
+    C = 512
+    for _ in range(300):
+        pos, spans = rng.randrange(0, 700), []
+        for _i in range(rng.randrange(1, 40)):
+            n = rng.choice([66, 130, 194, 258, 322, 700])
+            spans.append((pos, n))
+            pos += n + rng.choice([0, 1, 5, 80, 400, 1500])
+        L = pos + rng.randrange(1, 800)
+        t = _prompt(spans, L)
+        comp = _plan(rng, t, [n for _, n in spans], C)
+        assert comp[0][0] == 0 and comp[-1][1] == L
+        for (a, b), (c, d) in zip(comp, comp[1:]):
+            assert b == c  # contiguous: no position skipped or recomputed
+        for _, end in comp[:-1]:
+            assert end % C == 0
+            assert not any(s < end < s + n for s, n in spans), (end, spans)

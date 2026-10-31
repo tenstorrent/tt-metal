@@ -65,16 +65,23 @@ def cut_end(tokens, span_lens, image_token_id, end, align=1):
     The piece is then shortened to the chunk boundary at or below the span's first token; the next piece of the request finds no carried state at its start and recomputes from position 0 (always correct).
     """
     t = torch.as_tensor(tokens).reshape(-1)[:end]
-    pos = 0
+    pos, spans = 0, []
     for n in span_lens:
         hit = (t[pos:] == image_token_id).nonzero()
         if hit.numel() == 0:
             break
         s = pos + int(hit[0])
-        if s + n > t.numel():
-            return s // align * align
+        spans.append((s, n))
         pos = s + n
-    return int(end)
+    # a piece end strictly inside a span is moved to the chunk boundary at or below the span's first token; that boundary may itself fall inside an EARLIER span (images closer than a chunk): repeat
+    # until no span contains the end (the span at positions 32203..32397 vs a boundary of 32256 killed the server)
+    c, again = int(end), True
+    while again:
+        again = False
+        for s, n in spans:
+            if s < c < s + n:
+                c, again = s // align * align, True
+    return c
 
 
 class VisionBook:
