@@ -75,11 +75,12 @@ _SAMPLES = 5
 _WALL_SAMPLES = 30
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power). Traced and untraced
-# share the reference and the band: production prefill runs untraced, and the untraced walk is held to the
-# traced time. Within a box the spread is under 2%; bh-glx-120-b07u02 measures the traced boundary layer ~6%
-# above CI, so a run off the CI pool may need ATTN_RES_PERF_REPORT_ONLY=1.
-_REFERENCE_E2E_US = {"boundary": 1656.0, "ordinary": 141.0}
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), the traced median of
+# runs 41209975005, 41209981451 and 41209987401. Traced and untraced share the reference and the band:
+# production prefill runs untraced, and the untraced walk is held to the traced time. Within a box the spread is
+# under 2%; bh-glx-120-b07u02 measures these layers ~4% above CI, so a run off the CI pool may need
+# ATTN_RES_PERF_REPORT_ONLY=1.
+_REFERENCE_E2E_US = {"boundary": 435.0, "ordinary": 119.0}
 _MARGIN = 0.05
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
