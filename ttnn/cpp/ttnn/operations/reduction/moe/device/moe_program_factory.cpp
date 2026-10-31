@@ -87,8 +87,6 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
 
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
-    const uint32_t tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
-    uint32_t num_out_tiles = out_tensor.physical_volume() / tile_hw;
     uint32_t scale_tiles = 1;
 
     auto input_shape = input_tensor.padded_shape();
@@ -186,14 +184,14 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MOE_DFB_CUR_MAX,
         .entry_size = out_tile_size,
-        .num_entries = num_out_tiles,
+        .num_entries = Ht,
         .data_format_metadata = out_dfb_data_format,
     });
 
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MOE_DFB_CUR_SUM,
         .entry_size = out_tile_size,
-        .num_entries = num_out_tiles,
+        .num_entries = Ht,
         .data_format_metadata = out_dfb_data_format,
     });
 
@@ -201,7 +199,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = MOE_DFB_OUT,
         .entry_size = out_tile_size,
-        .num_entries = num_out_tiles,
+        .num_entries = Ht,
         .data_format_metadata = out_dfb_data_format,
     });
 
@@ -272,7 +270,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
             {
                 TensorBinding{.tensor_parameter_name = MOE_TENSOR_OUTPUT, .accessor_name = "output"},
             },
-        .compile_time_args = {{"Ht", Ht}, {"K", k}},
+        .compile_time_args = {{"Ht", Ht}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
