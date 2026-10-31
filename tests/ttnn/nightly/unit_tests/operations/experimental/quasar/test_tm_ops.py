@@ -1012,3 +1012,594 @@ def test_quasar_transpose_hc_sharded_non_origin_grid(device, grid_ranges, orient
     out = ttnn.experimental.quasar.transpose(tt_in, 1, 2)
     actual = ttnn.to_torch(out).to(torch.bfloat16)
     assert torch.equal(actual, x.transpose(1, 2))
+
+
+def _width_shard_config(device, ncores, sh, sw, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
+    spec = ttnn.ShardSpec(ttnn.num_cores_to_corerangeset(ncores, compute_grid, True), (sh, sw), orientation)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
+
+
+def _block_shard_config(device, grid_x, grid_y, sh, sw):
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid_x > compute_grid.x or grid_y > compute_grid.y:
+        pytest.skip(f"needs a {grid_x}x{grid_y} compute grid, device has {compute_grid.x}x{compute_grid.y}")
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    spec = ttnn.ShardSpec(grid, (sh, sw), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+
+# RM BLOCK/WIDTH-sharded input or output whose shard row isn't a multiple of the 16B L1 alignment, on
+# tile-multiple H/W (#62605). The sharded NoC helpers use the aligned page size as both the page stride
+# and the per-page payload, so these used to return wrong data without an error.
+@pytest.mark.parametrize(
+    "shape, dim0, dim1, input_factory, output_factory",
+    [
+        pytest.param(
+            (1, 1, 32, 96),
+            2,
+            3,
+            lambda d: _width_shard_config(d, 8, 32, 12),
+            lambda d: None,
+            id="WH_width_in_24B_row",
+        ),
+        pytest.param(
+            (1, 1, 64, 96),
+            2,
+            3,
+            lambda d: _block_shard_config(d, 8, 2, 32, 12),
+            lambda d: None,
+            id="WH_block_in_24B_row",
+        ),
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            2,
+            lambda d: _width_shard_config(d, 8, 64, 12),
+            lambda d: None,
+            id="HC_width_in_24B_row",
+        ),
+        pytest.param(
+            (2, 1, 32, 96),
+            0,
+            1,
+            lambda d: _width_shard_config(d, 8, 64, 12),
+            lambda d: None,
+            id="CN_width_in_24B_row",
+        ),
+        # Aligned 64B input row; the output shard inherited from it rescales to (256, 4), an 8B row.
+        pytest.param(
+            (1, 1, 32, 256),
+            2,
+            3,
+            lambda d: _width_shard_config(d, 8, 32, 32),
+            lambda d: None,
+            id="WH_inherited_out_8B_row",
+        ),
+        # Aligned 32B input row on a non-native shard; the device op rescales the output to (128, 4).
+        pytest.param(
+            (1, 1, 32, 128),
+            2,
+            3,
+            lambda d: _width_shard_config(d, 8, 32, 16),
+            lambda d: None,
+            id="WH_device_op_derived_out_8B_row",
+        ),
+        pytest.param(
+            (1, 1, 32, 128),
+            2,
+            3,
+            lambda d: _width_shard_config(d, 4, 32, 32),
+            lambda d: _width_shard_config(d, 8, 128, 4),
+            id="WH_explicit_out_8B_row",
+        ),
+        # Interleaved RM input is routed to permute, which writes the same sub-aligned output.
+        pytest.param(
+            (1, 1, 32, 96),
+            2,
+            3,
+            lambda d: L1_INTERLEAVED,
+            lambda d: _width_shard_config(d, 8, 96, 4),
+            id="WH_interleaved_in_explicit_out_8B_row",
+        ),
+    ],
+)
+def test_quasar_transpose_rm_bw_sharded_subaligned_shard_row(shape, dim0, dim1, input_factory, output_factory, device):
+    output_mem_config = output_factory(device)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_factory(device)
+    )
+    out = ttnn.experimental.quasar.transpose(tt_in, dim0, dim1, memory_config=output_mem_config)
+    if output_mem_config is not None:
+        requested, actual = output_mem_config.shard_spec, out.memory_config().shard_spec
+        assert out.memory_config().memory_layout == output_mem_config.memory_layout
+        assert tuple(actual.shape) == tuple(requested.shape), f"Expected shard {requested.shape}, got {actual.shape}"
+        assert actual.grid == requested.grid, f"Expected grid {requested.grid}, got {actual.grid}"
+    assert_with_ulp(expected_result=x.transpose(dim0, dim1), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# Sub-aligned RM input staged through L1 interleaved must still seed a specless sharded output from
+# the input's orientation.
+def test_quasar_transpose_rm_subaligned_shard_row_specless_output_keeps_orientation(device):
+    in_mc = _width_shard_config(device, 8, 32, 12, orientation=ttnn.ShardOrientation.COL_MAJOR)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 32, 96), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.transpose(tt_in, 2, 3, memory_config=out_mc)
+    mc = out.memory_config()
+    assert mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED, f"Expected WIDTH_SHARDED, got {mc.memory_layout}"
+    assert mc.shard_spec is not None, "Sharded output requested but result has no shard_spec"
+    assert mc.shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR, f"Got {mc.shard_spec.orientation}"
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# A specless sharded output through the unshard arm is synthesized from the input's orientation and
+# logical shape. NH/NW/CW and rank > 4 delegate to ttnn.permute, which rejects an explicit RM shard row
+# that isn't L1-aligned in any sharded layout, so a sub-aligned synthesized row must not reach it.
+@pytest.mark.parametrize(
+    "shape, dim0, dim1, input_factory, out_layout",
+    [
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 8, 64, 12, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            id="CW_col_major_in_block_out",
+        ),
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 8, 64, 12),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            id="CW_subaligned_in_height_out",
+        ),
+        pytest.param(
+            (1, 2, 7, 6),
+            0,
+            2,
+            lambda d: _width_shard_config(d, 3, 14, 2),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            id="NH_irregular_in_height_out",
+        ),
+        # (32, 20) over 5 cores pads the input width to 100; the output has 96 rows.
+        pytest.param(
+            (1, 1, 32, 96),
+            2,
+            3,
+            lambda d: _width_shard_config(d, 5, 32, 20),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            id="WH_partial_last_shard_width_out",
+        ),
+        pytest.param(
+            (1, 1, 32, 96),
+            2,
+            3,
+            lambda d: _width_shard_config(d, 5, 32, 20),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            id="WH_partial_last_shard_block_out",
+        ),
+        pytest.param(
+            (1, 2, 7, 96),
+            0,
+            2,
+            lambda d: _width_shard_config(d, 6, 14, 16),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            id="NH_irregular_in_block_out",
+        ),
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 8, 64, 12),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            id="CW_subaligned_in_block_out",
+        ),
+        pytest.param(
+            (1, 1, 2, 7, 96),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 6, 14, 16),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            id="rank5_irregular_in_width_out",
+        ),
+    ],
+)
+def test_quasar_transpose_rm_unshard_arm_specless_output_via_permute(
+    shape, dim0, dim1, input_factory, out_layout, device
+):
+    in_mc = input_factory(device)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.transpose(
+        tt_in, dim0, dim1, memory_config=ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1)
+    )
+    mc = out.memory_config()
+    assert mc.memory_layout == out_layout
+    assert mc.shard_spec is not None, "Sharded output requested but result has no shard_spec"
+    assert mc.shard_spec.orientation == in_mc.shard_spec.orientation, f"Got {mc.shard_spec.orientation}"
+    assert_with_ulp(expected_result=x.transpose(dim0, dim1), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# An explicit ND-sharded output has no legacy shard_spec but is fully specified; the unshard arm must
+# pass it through rather than synthesize a legacy spec over it.
+@pytest.mark.parametrize(
+    "shape, input_factory, nd_shard_shape, ncores",
+    [
+        pytest.param(
+            (1, 1, 32, 96), lambda d: _width_shard_config(d, 8, 32, 12), [1, 1, 32, 32], 3, id="subaligned_in"
+        ),
+        pytest.param((1, 1, 32, 48), lambda d: _width_shard_config(d, 3, 32, 16), [1, 1, 16, 32], 3, id="irregular_in"),
+    ],
+)
+def test_quasar_transpose_rm_unshard_arm_keeps_explicit_nd_output(shape, input_factory, nd_shard_shape, ncores, device):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncores - 1, 0))})
+    nd_spec = ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape(nd_shard_shape), grid=grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    out_mc = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_spec)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_factory(device)
+    )
+    out = ttnn.experimental.quasar.transpose(tt_in, 2, 3, memory_config=out_mc)
+    actual_nd = out.memory_config().nd_shard_spec
+    assert actual_nd is not None, "Explicit ND-sharded output was dropped"
+    assert (
+        list(actual_nd.shard_shape) == nd_shard_shape
+    ), f"Expected {nd_shard_shape}, got {list(actual_nd.shard_shape)}"
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+def _dram_width_shard_config(device, nbanks, sh, sw):
+    if device.dram_grid_size().x < nbanks:
+        pytest.skip(f"needs {nbanks} DRAM banks, device has {device.dram_grid_size().x}")
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(nbanks - 1, 0))})
+    spec = ttnn.ShardSpec(grid, (sh, sw), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, spec)
+
+
+_DRAM_WIDTH_SPECLESS = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM)
+
+
+# A 48B shard row (24 bf16) is L1-aligned but not DRAM-aligned (32B on WH, 64B on BH/Quasar), so these
+# only take the staging path if the alignment check uses the DRAM value for DRAM buffers.
+@pytest.mark.parametrize(
+    "shape, input_factory, output_factory",
+    [
+        pytest.param(
+            (1, 1, 32, 192), lambda d: _dram_width_shard_config(d, 8, 32, 24), lambda d: None, id="dram_in_48B_row"
+        ),
+        pytest.param(
+            (1, 1, 192, 32),
+            lambda d: L1_INTERLEAVED,
+            lambda d: _dram_width_shard_config(d, 8, 32, 24),
+            id="dram_explicit_out_48B_row",
+        ),
+        pytest.param(
+            (1, 1, 32, 96),
+            lambda d: _width_shard_config(d, 8, 32, 12),
+            lambda d: _DRAM_WIDTH_SPECLESS,
+            id="dram_specless_out_l1_subaligned_in",
+        ),
+        pytest.param(
+            (1, 1, 32, 192),
+            lambda d: _dram_width_shard_config(d, 8, 32, 24),
+            lambda d: _DRAM_WIDTH_SPECLESS,
+            id="dram_specless_out_dram_48B_in",
+        ),
+    ],
+)
+def test_quasar_transpose_rm_dram_subaligned_shard_row(shape, input_factory, output_factory, device):
+    output_mem_config = output_factory(device)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_factory(device)
+    )
+    out = ttnn.experimental.quasar.transpose(tt_in, 2, 3, memory_config=output_mem_config)
+    if output_mem_config is not None:
+        mc = out.memory_config()
+        assert mc.memory_layout == output_mem_config.memory_layout
+        assert mc.buffer_type == ttnn.BufferType.DRAM
+        assert mc.shard_spec is not None, "Sharded output requested but result has no shard_spec"
+        if output_mem_config.shard_spec is not None:
+            assert tuple(mc.shard_spec.shape) == tuple(output_mem_config.shard_spec.shape)
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# A specless DRAM output is synthesized in DRAM-bank coordinates: every core must have y == 0, including
+# COL_MAJOR orientation and outputs wide or tall enough to need more than one compute-grid row.
+@pytest.mark.parametrize(
+    "shape, input_factory, out_layout",
+    [
+        pytest.param(
+            (1, 1, 32, 96),
+            lambda d: _width_shard_config(d, 8, 32, 12, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            id="col_major_width",
+        ),
+        pytest.param(
+            (1, 1, 1024, 96),
+            lambda d: _width_shard_config(d, 8, 1024, 12),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            id="wide_width",
+        ),
+        pytest.param(
+            (1, 1, 32, 1536),
+            lambda d: _width_shard_config(d, 64, 32, 24),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            id="tall_height",
+        ),
+    ],
+)
+def test_quasar_transpose_rm_specless_dram_output_uses_bank_grid(shape, input_factory, out_layout, device):
+    in_mc = input_factory(device)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.transpose(
+        tt_in, 2, 3, memory_config=ttnn.MemoryConfig(out_layout, ttnn.BufferType.DRAM)
+    )
+    mc = out.memory_config()
+    assert mc.memory_layout == out_layout
+    assert mc.buffer_type == ttnn.BufferType.DRAM
+    assert mc.shard_spec is not None, "Sharded output requested but result has no shard_spec"
+    assert mc.shard_spec.grid.bounding_box().end.y == 0, f"DRAM shard grid off the bank row: {mc.shard_spec.grid}"
+    assert mc.shard_spec.orientation == in_mc.shard_spec.orientation, f"Got {mc.shard_spec.orientation}"
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# An identity transpose of a sub-aligned sharded input must return the input as-is unless a different
+# memory config is requested.
+@pytest.mark.parametrize("dim0, dim1", [(2, 2), (0, 1)], ids=["same_dim", "size1_dims"])
+def test_quasar_transpose_rm_subaligned_identity_keeps_input(dim0, dim1, device):
+    in_mc = _width_shard_config(device, 8, 32, 12)
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 32, 96), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.transpose(tt_in, dim0, dim1)
+    assert out.memory_config() == tt_in.memory_config()
+    assert out.buffer_address() == tt_in.buffer_address(), "Identity transpose copied the input"
+    assert_with_ulp(expected_result=x, actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+    converted = ttnn.experimental.quasar.transpose(tt_in, dim0, dim1, memory_config=L1_INTERLEAVED)
+    assert converted.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert_with_ulp(expected_result=x, actual_result=ttnn.to_torch(converted.cpu()), ulp_threshold=0)
+
+
+# NH/NW/CW and rank > 4 transposes delegate to ttnn::permute, which rejects an explicit RM output whose
+# shard row isn't aligned. Quasar transpose must still produce the requested spec.
+@pytest.mark.parametrize(
+    "shape, dim0, dim1, input_factory, output_factory",
+    [
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 8, 64, 12),
+            lambda d: _width_shard_config(d, 2, 3072, 1),
+            id="CW_subaligned_in_width_out_2B_row",
+        ),
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 8, 64, 12),
+            lambda d: _explicit_height_shard_config(d, 64, 96, 2),
+            id="CW_subaligned_in_height_out_4B_row",
+        ),
+        pytest.param(
+            (1, 2, 7, 192),
+            0,
+            2,
+            lambda d: _width_shard_config(d, 8, 14, 24),
+            lambda d: _width_shard_config(d, 8, 14, 24),
+            id="NH_subaligned_in_width_out_48B_row",
+        ),
+        pytest.param(
+            (1, 1, 2, 7, 96),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 6, 14, 16),
+            lambda d: _width_shard_config(d, 8, 14, 12),
+            id="rank5_width_out_24B_row",
+        ),
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            3,
+            lambda d: L1_INTERLEAVED,
+            lambda d: _width_shard_config(d, 2, 3072, 1),
+            id="CW_interleaved_in_width_out_2B_row",
+        ),
+        pytest.param(
+            (1, 2, 32, 96),
+            1,
+            3,
+            lambda d: L1_INTERLEAVED,
+            lambda d: _dram_width_shard_config(d, 1, 3072, 24),
+            id="CW_interleaved_in_dram_out_48B_row",
+        ),
+    ],
+)
+def test_quasar_transpose_rm_permute_path_explicit_subaligned_output(
+    shape, dim0, dim1, input_factory, output_factory, device
+):
+    output_mem_config = output_factory(device)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_factory(device)
+    )
+    out = ttnn.experimental.quasar.transpose(tt_in, dim0, dim1, memory_config=output_mem_config)
+    mc = out.memory_config()
+    assert mc.memory_layout == output_mem_config.memory_layout
+    assert mc.buffer_type == output_mem_config.buffer_type
+    assert tuple(mc.shard_spec.shape) == tuple(output_mem_config.shard_spec.shape)
+    assert mc.shard_spec.grid == output_mem_config.shard_spec.grid
+    assert_with_ulp(expected_result=x.transpose(dim0, dim1), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# Aligned, tile-multiple RM sharded inputs on the permute paths: the rank-5 default output derives
+# (4096, 1) shards (2B rows), and the CW permute would chain transposes through sharded 8B-row
+# intermediates. A default CW output keeps the placement ttnn::permute's chain gives it: L1 interleaved
+# for a non-native (BLOCK/WIDTH) RM input, sharded for a HEIGHT-sharded one.
+_WIDTH = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+_HEIGHT = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+_INTERLEAVED = ttnn.TensorMemoryLayout.INTERLEAVED
+
+
+@pytest.mark.parametrize(
+    "shape, dim0, dim1, input_factory, output_factory, expected_layout",
+    [
+        pytest.param(
+            (1, 1, 8, 32, 128),
+            2,
+            4,
+            lambda d: _width_shard_config(d, 8, 256, 16),
+            lambda d: None,
+            _WIDTH,
+            id="rank5_default_out_derived_2B_row",
+        ),
+        pytest.param(
+            (1, 2, 32, 256),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 8, 64, 32),
+            lambda d: _width_shard_config(d, 2, 8192, 1),
+            _WIDTH,
+            id="CW_aligned_in_explicit_out_2B_row",
+        ),
+        pytest.param(
+            (1, 2, 32, 256),
+            1,
+            3,
+            lambda d: _width_shard_config(d, 8, 64, 32),
+            lambda d: None,
+            _INTERLEAVED,
+            id="CW_width_in_default_out",
+        ),
+        pytest.param(
+            (1, 8, 64, 256),
+            1,
+            3,
+            lambda d: _block_shard_config(d, 4, 2, 256, 64),
+            lambda d: None,
+            _INTERLEAVED,
+            id="CW_block_in_default_out",
+        ),
+        pytest.param(
+            (1, 8, 64, 256),
+            1,
+            3,
+            lambda d: _explicit_height_shard_config(d, 8, 64, 256),
+            lambda d: None,
+            _HEIGHT,
+            id="CW_height_in_default_out",
+        ),
+    ],
+)
+def test_quasar_transpose_rm_permute_path_aligned_sharded_input(
+    shape, dim0, dim1, input_factory, output_factory, expected_layout, device
+):
+    in_mc = input_factory(device)
+    output_mem_config = output_factory(device)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.transpose(tt_in, dim0, dim1, memory_config=output_mem_config)
+    mc = out.memory_config()
+    assert mc.memory_layout == expected_layout, f"Expected {expected_layout}, got {mc.memory_layout}"
+    if output_mem_config is not None:
+        assert tuple(mc.shard_spec.shape) == tuple(output_mem_config.shard_spec.shape)
+        assert mc.shard_spec.grid == output_mem_config.shard_spec.grid
+    assert_with_ulp(expected_result=x.transpose(dim0, dim1), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# An explicit ND output on a permute path normalizes to legacy WIDTH shards; when that row is sub-aligned
+# it must be staged too, and the output must keep the caller's ND shard shape.
+@pytest.mark.parametrize(
+    "input_factory, nd_shard_shape, ncores",
+    [
+        pytest.param(lambda d: L1_INTERLEAVED, [1, 96, 32, 1], 2, id="interleaved_in_2B_row"),
+        pytest.param(lambda d: _width_shard_config(d, 8, 64, 12), [1, 96, 32, 1], 2, id="width_in_2B_row"),
+        pytest.param(lambda d: L1_INTERLEAVED, [1, 96, 32, 8], 1, id="interleaved_in_aligned_row"),
+    ],
+)
+def test_quasar_transpose_rm_permute_path_nd_output(input_factory, nd_shard_shape, ncores, device):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncores - 1, 0))})
+    nd_spec = ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape(nd_shard_shape), grid=grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    out_mc = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_spec)
+    torch.manual_seed(0)
+    x = torch.rand((1, 2, 32, 96), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_factory(device)
+    )
+    out = ttnn.experimental.quasar.transpose(tt_in, 1, 3, memory_config=out_mc)
+    mc = out.memory_config()
+    assert mc.nd_shard_spec is not None and list(mc.nd_shard_spec.shard_shape) == nd_shard_shape
+    assert_with_ulp(expected_result=x.transpose(1, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# A rank > 4 identity transpose of a sub-aligned sharded input must return the input as-is too.
+def test_quasar_transpose_rm_subaligned_rank5_identity_keeps_input(device):
+    in_mc = _width_shard_config(device, 8, 256, 12)
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 8, 32, 96), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.transpose(tt_in, 2, 2)
+    assert out.memory_config() == tt_in.memory_config()
+    assert out.buffer_address() == tt_in.buffer_address(), "Identity transpose copied the input"
+    assert_with_ulp(expected_result=x, actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# ttnn::permute chains transposes for a HEIGHT-sharded input too; the CW chain's first WH step writes
+# WIDTH shards [256, 4] (8B rows) even though the input and the output are aligned.
+@pytest.mark.parametrize(
+    "output_factory",
+    [lambda d: L1_INTERLEAVED, lambda d: None],
+    ids=["interleaved_out", "default_out"],
+)
+def test_quasar_transpose_rm_height_sharded_cw_chain(output_factory, device):
+    in_mc = _explicit_height_shard_config(device, 8, 4, 256)
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.transpose(tt_in, 1, 3, memory_config=output_factory(device))
+    assert_with_ulp(expected_result=x.transpose(1, 3), actual_result=ttnn.to_torch(out.cpu()), ulp_threshold=0)
+
+
+# Unsharding an RM input whose shard is wider than the tensor and whose row isn't L1 aligned hangs
+# to_memory_config, so staging must reject it up front.
+def test_quasar_transpose_rm_oversized_subaligned_input_shard_raises(device, expect_error):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 36), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    x = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    with expect_error(RuntimeError, "input shard width 36 exceeds the tensor width 32"):
+        ttnn.experimental.quasar.transpose(tt_in, 2, 3)
+
+
+# Resharding into an RM shard wider than the tensor whose row isn't L1 aligned hangs to_memory_config, so
+# the staged reshard must reject it up front.
+def test_quasar_transpose_rm_subaligned_output_wider_than_tensor_raises(device, expect_error):
+    torch.manual_seed(0)
+    x = torch.rand((2, 1, 32, 96), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    with expect_error(RuntimeError, "exceeds the tensor width"):
+        ttnn.experimental.quasar.transpose(tt_in, 0, 3, memory_config=_width_shard_config(device, 1, 3072, 4))
