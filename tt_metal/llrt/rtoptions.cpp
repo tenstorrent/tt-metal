@@ -1052,7 +1052,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DEVICE_PROFILER=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER:
 #if !defined(TRACY_ENABLE)
-            TT_FATAL(false, "TT_METAL_DEVICE_PROFILER requires a Tracy-enabled build of tt-metal.");
+            TT_FATAL(!is_env_enabled(value), "TT_METAL_DEVICE_PROFILER=1 requires a Tracy-enabled build of tt-metal.");
 #else
             if (is_env_enabled(value)) {
                 this->profiler_enabled = true;
@@ -1070,7 +1070,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_STREAMING_PROFILER=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER:
 #if !defined(TRACY_ENABLE)
-            TT_FATAL(false, "TT_METAL_STREAMING_PROFILER requires a Tracy-enabled build of tt-metal.");
+            TT_FATAL(
+                !is_env_enabled(value), "TT_METAL_STREAMING_PROFILER=1 requires a Tracy-enabled build of tt-metal.");
 #else
             if (is_env_enabled(value)) {
                 this->streaming_profiler_enabled = true;
