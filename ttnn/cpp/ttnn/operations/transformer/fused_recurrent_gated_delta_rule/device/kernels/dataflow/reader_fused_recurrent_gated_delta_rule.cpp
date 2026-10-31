@@ -77,10 +77,18 @@ void kernel_main() {
     }
     read_into(s0_acc, cb_S, s0_block * kv, kv);
 
+    // GQA: q/k may carry only H = HV/gqa query heads, so value-head h reads query head h/gqa. With
+    // gqa == 1 this is exactly h*T+t, the pre-expanded form, so the pre-expanded callers are
+    // unaffected. Doing the replicate here costs one divide per core instead of a
+    // repeat_interleave tensor on the host (two untilize/concat/tilize/copy chains at decode).
+    const uint32_t gqa = get_arg_val<uint32_t>(11);
+    const uint32_t qk_h = h / gqa;
+
     for (uint32_t t = 0; t < T; t++) {
         const uint32_t block = h * T + t;
-        read_into(q_acc, cb_q, block * Kt, Kt);
-        read_into(k_acc, cb_k, block * Kt, Kt);
+        const uint32_t qk_block = qk_h * T + t;
+        read_into(q_acc, cb_q, qk_block * Kt, Kt);
+        read_into(k_acc, cb_k, qk_block * Kt, Kt);
         read_into(v_acc, cb_v, block * Vt, Vt);
         read_into(d_acc, cb_decay, block, 1);
         read_into(b_acc, cb_beta, block, 1);

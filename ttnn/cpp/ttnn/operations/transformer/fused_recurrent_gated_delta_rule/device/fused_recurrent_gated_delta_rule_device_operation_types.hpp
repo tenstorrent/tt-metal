@@ -26,6 +26,9 @@ struct FusedRecurrentGatedDeltaRuleParams {
     uint32_t T;        // number of tokens processed sequentially per head
     uint32_t key_dim;  // K (multiple of 32)
     uint32_t val_dim;  // V (multiple of 32)
+    // GQA group size HV/H. When > 1 the caller passes q/k with only H query heads and the READER
+    // replicates head hv/G onto core hv, so no repeat_interleave tensor is built on the host.
+    uint32_t gqa;
     bool output_final_state;
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
     tt::tt_metal::MemoryConfig output_mem_config;

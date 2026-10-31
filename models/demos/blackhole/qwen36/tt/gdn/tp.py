@@ -1510,15 +1510,22 @@ class TPGatedDeltaNet:
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
         ttnn.deallocate(conv)
 
-        # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
+        # GQA expand Q/K Nk->Nv; recurrence L2-norms + scales internally.
+        # QWEN36_TP1_GDN: the fused recurrence's READER replicates query head hv/rf onto value head hv,
+        # so q/k stay at Nk heads and the per-layer repeat_interleave (two untilize+concat+tilize+copy
+        # chains, ~11 us each at decode) disappears. Guarded on use_fused_recurrent_decode, which only
+        # the single-chip path sets: the TP=4 module and the composite decode below keep the expand.
         rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=1)
-        k = ttnn.repeat_interleave(k, rf, dim=1)
+        n_qk = Nk
+        if not self.use_fused_recurrent_decode:
+            q = ttnn.repeat_interleave(q, rf, dim=1)
+            k = ttnn.repeat_interleave(k, rf, dim=1)
+            n_qk = Nv
         # Decode: hand q/k/v to the recurrent kernel in L1. The kernel typecasts + does a LOCAL
         # l2-norm (no cross-device gather), so placement is output-neutral here (unlike SDPA-q,
         # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
-        q = ttnn.reshape(q, (B, 1, Nv, Dk), memory_config=_L1)
-        k = ttnn.reshape(k, (B, 1, Nv, Dk), memory_config=_L1)
+        q = ttnn.reshape(q, (B, 1, n_qk, Dk), memory_config=_L1)
+        k = ttnn.reshape(k, (B, 1, n_qk, Dk), memory_config=_L1)
         v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
 
         beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))

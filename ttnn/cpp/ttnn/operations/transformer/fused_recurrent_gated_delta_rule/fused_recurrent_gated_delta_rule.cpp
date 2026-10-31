@@ -91,7 +91,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const uint32_t HV = vs[2];
     const uint32_t V = vs[3];
     TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
-    const uint32_t G = HV / H;
     const uint32_t BH = B * HV;
 
     const float scale = scale_opt.has_value() ? *scale_opt : (1.0f / std::sqrt(static_cast<float>(K)));
@@ -99,12 +98,11 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // Scale q (q is already L2-normed on host), then head-split + GQA-expand q,k from H to HV heads.
     ttnn::Tensor q = ttnn::multiply(as_f32(q_in), scale);
     ttnn::Tensor k = as_f32(k_in);
-    q = head_split(q, B, T, H, K);  // [B*H, T, K]
+    // q/k keep their H query heads: the READER replicates head hv/G onto core hv, which costs one
+    // integer divide per core instead of a repeat_interleave tensor. At decode that expand was two
+    // untilize/concat/tilize/copy chains, ~11 us each.
+    q = head_split(q, B, T, H, K);  // [B*H, T, K]  (H = HV/G query heads)
     k = head_split(k, B, T, H, K);
-    if (G > 1) {
-        q = ttnn::repeat_interleave(q, G, 0);  // [BH, T, K]
-        k = ttnn::repeat_interleave(k, G, 0);
-    }
     ttnn::Tensor v = head_split(v_in, B, T, HV, V);  // [BH, T, V]
 
     // decay = exp(g); beta as-is (already sigmoid'd). exp is elementwise, so it commutes with the
@@ -118,8 +116,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // T==1 fast path: head_split already yields [BH,1,D] == [BH*T,1,D], so the q/k/v relayout is a
     // no-op — skip the RM round-trip (it is ~5x the cost of the permute; see test_headsplit_bench).
     if (T > 1) {
-        q = reshape_rm(q, ttnn::Shape({BH * T, 1, K}));
-        k = reshape_rm(k, ttnn::Shape({BH * T, 1, K}));
+        const uint32_t BHQ = B * H;  // q/k hold H query heads, not HV
+        q = reshape_rm(q, ttnn::Shape({BHQ * T, 1, K}));
+        k = reshape_rm(k, ttnn::Shape({BHQ * T, 1, K}));
         v = reshape_rm(v, ttnn::Shape({BH * T, 1, V}));
     }
     // decay/beta must be per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. At T == 1
