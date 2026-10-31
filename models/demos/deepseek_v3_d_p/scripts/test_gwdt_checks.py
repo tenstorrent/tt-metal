@@ -640,6 +640,14 @@ def test_skip_and_unknown_keys():
         skipped_keys(["paths"], skip="", only="nope")
 
 
+def test_nd_group_picks_every_matmul_step():
+    from galaxy_workload_deployment_test import skipped_keys
+
+    keys = ["reset", "matmul:minimal", "matmul:ff1", "block:glm53"]
+    assert skipped_keys(keys, skip="", only="nd") == {"reset", "block:glm53"}
+    assert skipped_keys(keys, skip="nd", only="") == {"matmul:minimal", "matmul:ff1"}
+
+
 def test_missing_node_ids_matches_tree_names():
     from gwdt_checks import missing_node_ids
 
