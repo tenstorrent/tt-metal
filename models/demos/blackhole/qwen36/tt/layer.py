@@ -57,6 +57,19 @@ class _FusedDistRMSNorm(RMSNorm):
         return out if len(shape) == 4 else ttnn.reshape(out, shape)
 
 
+def sharded_decode_norm(norm, x, args, output_mem_config):
+    """Single-chip decode RMSNorm on the sharded multi-core program. The interleaved rms_norm runs a one-tile-row
+    input on one core (~80 us at dim 5120); this reshards to the attn norm grid and back to output_mem_config."""
+    cfg = args.get_norm_config("attn", Mode.DECODE)
+    x_sh = x if x.is_sharded() else ttnn.to_memory_config(x, cfg["sharded_output_config"])
+    y_sh = norm(x_sh, mode=Mode.DECODE, in_sharded=True, out_sharded=True, norm_config=cfg)
+    if x_sh is not x:
+        ttnn.deallocate(x_sh)
+    y = ttnn.sharded_to_interleaved(y_sh, output_mem_config)
+    ttnn.deallocate(y_sh)
+    return y
+
+
 class Qwen36DecoderLayer:
     """Single transformer layer with hybrid attention dispatch.
 
@@ -73,6 +86,8 @@ class Qwen36DecoderLayer:
         self.is_full_attention = args.is_full_attention_layer(layer_num)
         # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
         self._tp1_gdn = self.num_devices == 1 and not self.is_full_attention and os.environ.get("QWEN36_TP1_GDN") == "1"
+        # QWEN36_1C_SHARDED_NORM=1: on one chip, run the decode norms through sharded_decode_norm.
+        self._sharded_norm_1c = self.num_devices == 1 and os.environ.get("QWEN36_1C_SHARDED_NORM") == "1"
 
         prefix = f"layers.{layer_num}"
 
@@ -298,7 +313,11 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        sharded_norm = self._sharded_norm_1c and mode == "decode"
+        if sharded_norm:
+            attn_input = sharded_decode_norm(self.attention_norm, x, self.args, ttnn.L1_MEMORY_CONFIG)
+        else:
+            attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -409,7 +428,10 @@ class Qwen36DecoderLayer:
         h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+        if sharded_norm:
+            ff_input = sharded_decode_norm(self.ffn_norm, h, self.args, ttnn.L1_MEMORY_CONFIG)
+        else:
+            ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
