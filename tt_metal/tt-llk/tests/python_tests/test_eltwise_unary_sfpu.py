@@ -1695,3 +1695,140 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+_NAN_BITS = (0x7FC00000, 0x7F800001, 0x7FFFFFFF, 0xFFC00000, 0xFF800001, 0xFFFFFFFF)
+
+
+def _float_tile(values, num_elements=1024):
+    row = torch.as_tensor(values, dtype=torch.float32).flatten()
+    return row.repeat(num_elements // row.numel() + 1)[:num_elements].contiguous()
+
+
+def _nan_values(bits=_NAN_BITS):
+    return torch.tensor(
+        [b - (1 << 32) if b >> 31 else b for b in bits], dtype=torch.int32
+    ).view(torch.float32)
+
+
+def _run_unary_edge(
+    mathop, formats, src_A, approx_mode=ApproximationMode.No, fast_mode=FastMode.No
+):
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
+    res = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc,
+        approx_mode=approx_mode,
+        mathop=mathop,
+        fast_mode=fast_mode,
+        input_dimensions=[32, 32],
+        src_A=src_A,
+        src_B=torch.zeros_like(src_A),
+        check_golden=False,
+    )
+    return torch.tensor(res, dtype=torch.float32)
+
+
+_EDGE_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+]
+
+
+@pytest.mark.parametrize("formats", _EDGE_FORMATS, ids=lambda f: f.input_format.name)
+@pytest.mark.parametrize(
+    "mathop, approx_mode",
+    [
+        (MathOperation.Erf, ApproximationMode.No),
+        (MathOperation.Erf, ApproximationMode.Yes),
+        (MathOperation.Erfc, ApproximationMode.No),
+    ],
+    ids=lambda v: v.name,
+)
+def test_erf_erfc_nan_input(formats, mathop, approx_mode):
+    finite = torch.tensor(
+        [0.0, 0.5, -0.5, 4.0, -4.0, 6.0, -6.0, 20.0, -20.0], dtype=torch.float32
+    )
+    src_A = _float_tile(torch.cat([_nan_values(), finite]))
+    res = _run_unary_edge(mathop, formats, src_A, approx_mode)
+
+    nan_in = torch.isnan(src_A)
+    if formats.output_format.is_32_bit():
+        bad = nan_in & ~torch.isnan(res)
+    else:
+        bad = nan_in & torch.isfinite(res)
+    assert (
+        not bad.any()
+    ), f"{mathop.name}: {int(bad.sum())} NaN inputs came out as {res[bad][:4].tolist()}"
+    assert torch.isfinite(
+        res[~nan_in]
+    ).all(), f"{mathop.name}: finite inputs came out non-finite"
+
+
+def test_gelu_accurate_bf16_nonfinite_and_saturated():
+    saturated = [-5.5625, -6.0, -13.375, -100.0, -1.0e30, -3.0e38]
+    src_A = _float_tile([float("nan"), -float("nan"), -float("inf")] + saturated)
+    res = _run_unary_edge(MathOperation.Gelu, _EDGE_FORMATS[1], src_A)
+
+    delivered = src_A.to(torch.bfloat16).float()
+    nonfinite_in = ~torch.isfinite(delivered)
+    assert not torch.isfinite(
+        res[nonfinite_in]
+    ).any(), "gelu: a NaN or -inf input came out finite"
+    sat = res[torch.isfinite(delivered)]
+    assert (
+        torch.equal(sat, torch.zeros_like(sat)) and not torch.signbit(sat).any()
+    ), sat.unique().tolist()
+
+
+@pytest.mark.parametrize("formats", _EDGE_FORMATS, ids=lambda f: f.input_format.name)
+def test_xielu_below_underflow(formats):
+    near = torch.arange(-200.0, -95.0, 0.5)
+    far = -torch.arange(400000.0, 16000000.0, 31200.0)
+    src_A = _float_tile(torch.cat([near, far]))
+    res = _run_unary_edge(MathOperation.Xielu, formats, src_A)
+
+    x = src_A.to(format_dict[formats.input_format]).double()
+    alpha_n, beta = UnarySFPUGolden._XIELU_ALPHA_N, UnarySFPUGolden._XIELU_BETA
+    expected = (alpha_n * (torch.expm1(x) - x) + beta * x).float()
+    rtol = 6e-5 if formats.output_format.is_32_bit() else 1e-2
+    assert torch.allclose(
+        res, expected, rtol=rtol, atol=1e-6
+    ), f"xielu max relative error {((res - expected).abs() / expected.abs()).max().item():.3g}"
+    if formats.output_format.is_32_bit():
+        far_lanes = x < -1e5
+        off = far_lanes & (res != expected)
+        assert (
+            not off.any()
+        ), f"xielu of {x[off][:4].tolist()} returned {res[off][:4].tolist()}, expected {expected[off][:4].tolist()}"
+
+
+@pytest.mark.parametrize(
+    "fast_mode", [FastMode.No, FastMode.Yes], ids=lambda m: f"fast_{m.name}"
+)
+@pytest.mark.parametrize("formats", _EDGE_FORMATS, ids=lambda f: f.input_format.name)
+def test_log_zero_exponent_inputs(formats, fast_mode):
+    sign = torch.tensor([0, 1], dtype=torch.int64).repeat_interleave(128)
+    if formats.input_format.is_32_bit():
+        mantissa = torch.randint(
+            1,
+            1 << 23,
+            (128,),
+            generator=torch.Generator().manual_seed(0),
+            dtype=torch.int64,
+        )
+        mantissa[0], mantissa[1] = 0, (1 << 23) - 1
+        bits = (sign << 31) | mantissa.repeat(2)
+    else:
+        bits = (sign << 31) | (torch.arange(128, dtype=torch.int64).repeat(2) << 16)
+    src_A = _float_tile(bits.to(torch.int32).view(torch.float32))
+    res = _run_unary_edge(MathOperation.Log, formats, src_A, fast_mode=fast_mode)
+
+    bad = ~(torch.isinf(res) & (res < 0))
+    assert (
+        not bad.any()
+    ), f"log of zero-exponent inputs {src_A[bad][:4].tolist()} returned {res[bad][:4].tolist()}"

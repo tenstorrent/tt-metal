@@ -39,6 +39,8 @@ ALWI void cumprod_tile(uint32_t idst, bool first = true) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cumprod_tile_init() { MATH(SFPU_UNARY_INIT_FN(cumprod, sfpu::cumprod_init, (false /* APPROXIMATE */))); }
+ALWI void cumprod_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(cumprod, sfpu::cumprod_init, (false /* APPROXIMATE */, DST_ACCUM_MODE)));
+}
 
 }  // namespace ckernel

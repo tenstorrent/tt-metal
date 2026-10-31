@@ -17,6 +17,10 @@ ALWI void ema_init(uint32_t alpha, uint32_t beta) {
 
 ALWI void ema_clear_previous_output() { MATH((llk_math_ema_sfpu_clear_previous_output())); }
 
+ALWI void ema_seed_previous_output(uint32_t input_dst_index) {
+    MATH((llk_math_ema_sfpu_seed_previous_output(input_dst_index)));
+}
+
 ALWI void ema_tile(uint32_t input_dst_index) { MATH((llk_math_ema_sfpu_tile(input_dst_index))); }
 
 }  // namespace ckernel
