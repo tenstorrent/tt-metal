@@ -89,6 +89,22 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
         output_tensor.logical_volume() > 0,
         "Output to softmax backward must be non-empty, got shape {}",
         output_tensor.logical_shape());
+    TT_FATAL(
+        output_grad_tensor.logical_shape() == output_tensor.logical_shape(),
+        "output_grad shape {} must match output shape {}",
+        output_grad_tensor.logical_shape(),
+        output_tensor.logical_shape());
+
+    const auto& input_grad_tensor = tensor_args.input_grad_tensor;
+    if (input_grad_tensor.has_value()) {
+        TT_FATAL(
+            input_grad_tensor->logical_shape() == output_tensor.logical_shape(),
+            "input_grad shape {} must match output shape {}",
+            input_grad_tensor->logical_shape(),
+            output_tensor.logical_shape());
+        TT_FATAL(input_grad_tensor->storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+        TT_FATAL((input_grad_tensor->layout() == Layout::TILE), "Input_grad to softmax must be tilized");
+    }
 }
 
 void MorehSoftmaxBackwardOperation::validate_on_program_cache_miss(
