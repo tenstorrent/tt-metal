@@ -766,6 +766,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 + list(self.spec_buckets.values())
             )
         )
+        # M2: per-position masks (a restricted row may carry drafts; column j = the grammar state after j drafts): the plugin reads this next to ``verify_grammar_enabled``
+        self.verify_grammar_positions = bool(
+            self.verify_grammar_enabled and os.environ.get("DSV41_STRUCTURED_M2", "0") == "1"
+        )
         self.vision = self.vbook = None  # image input (init_vision, DSV41_VISION=1)
         self.gens = {}  # seeded per-request generators by model user
         self.rng = torch.Generator().manual_seed(int(os.environ.get("DSV41_VLLM_SAMPLE_SEED", "9472")))
