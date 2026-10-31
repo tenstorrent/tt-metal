@@ -44,6 +44,7 @@ public:
     void run_launch_phase(const std::set<tt::ChipId>& device_ids);
 
 private:
+    void request_early_exit_of_ethernet_cores(const std::set<tt::ChipId>& device_ids);
     void clear_l1_state(tt::ChipId device_id);
     void clear_dram_state(tt::ChipId device_id);
     void clear_launch_messages_on_eth_cores(tt::ChipId device_id);
