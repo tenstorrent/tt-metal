@@ -513,6 +513,8 @@ Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `c
 
 The host-side row permutation (`permute_to_runner`, `tt/grammar_mask.py`) works on the packed words and skips all-ones rows: 2.8 -> 0.32 ms for M1 and 6.3 -> 0.68 ms for M2.
 
+M2 over-accept fix (per-row accept-count cap, active only with `DSV41_STRUCTURED_SPEC=1`): replays 63 -> 0 and structured requests 21.3 -> 25.5 tok/s; plain users are unchanged (46 -> 28 tok/s with M1, 23 with M2, 4 structured workers) because the loss is prefill-call churn: each prefill call costs 0.55-0.85 s fixed.
+
 **Verified** on B=16 and B=8 / 1M (device check files in `tests/struct_mask_device/`; M2 model side verified). **Cost:** a masked round costs about +5 ms on a 99 ms round at B=16; with 4 structured workers the plain users go 38 -> 28 tok/s/user (the M0 narrow path of 8.21 gives 101 -> 41 tok/s for 4 streams). Tests: `tests/test_struct_mask_model_cpu.py`, `tests/test_grammar_mask_cpu.py`.
 
 ## 8.23 Device-resident block-paged APC (`DSV41_APC_PAGED=1`, default off)
