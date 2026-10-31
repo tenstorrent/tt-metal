@@ -317,14 +317,18 @@ RingSemaphores allocate_ring_semaphores(
         channel_semaphore_count_for_vcs(vcs));
     const auto grid = mesh->compute_with_storage_grid_size();
     const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    // Only a semaphore made here needs the Synchronize below, and a caller that hands over every one may be
+    // building this program inside a trace capture, where a Synchronize is not allowed.
+    bool made_any = false;
+    auto make = [&] {
+        made_any = true;
+        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+    };
     auto make_or_take = [&](const tt::tt_metal::GlobalSemaphore* sem) {
         if (sem != nullptr) {
             return *sem;
         }
-        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
-    };
-    auto make = [&] {
-        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+        return make();
     };
     // The channels in the order channel_semaphore_count documents, taken one at a time so the walk below reads
     // the same whether they were handed over or made here.
@@ -352,7 +356,9 @@ RingSemaphores allocate_ring_semaphores(
         kSemaphoresPerCore,
         untilizers_per_group,
         num_links);
-    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    if (made_any) {
+        tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    }
     return sems;
 }
 
