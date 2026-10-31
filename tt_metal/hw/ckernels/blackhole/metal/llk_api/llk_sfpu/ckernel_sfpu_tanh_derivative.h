@@ -152,7 +152,11 @@ inline void calculate_tanh_derivative_sech2() {
         }
         v_endif;
 
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
+            constexpr std::int32_t kInfBits = 0x7F800000;
+            v_if(sfpi::as<sfpi::vInt>(a) > kInfBits) { result = val; }
+            v_endif;
+        } else {
             // SFPSTORE truncates; round to bfloat16 explicitly.
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
