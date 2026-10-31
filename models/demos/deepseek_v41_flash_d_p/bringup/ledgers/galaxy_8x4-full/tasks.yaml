@@ -1792,6 +1792,62 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 260
+- id: P.18
+  title: 'WINDOW_TILES: the window KV as bfloat8_b tiles in a per-chip region, a neighbour exchange instead of the window all-gathers'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - FIX.15
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-30 (handover page v4, A12). Under SP=32 a chip runs 160 query rows (5120 / 32) and needs 288
+      window rows: its own 160 plus the 128 before them, which all sit on the previous chip in sequence order. Today
+      every chip gathers the whole replicated [128 carry | 5120] window (all_gather over TP, then over SP, plus the carry
+      block gathers), rounds it to bfloat8_b blocks (ckv_bfp4 blocks=True) and sparse_sdpa reads it by index (NOW
+      profile at 51200: ~11 ms device and ~39 ms host a chunk in those window ops; DS41-142). Do: a setting value
+      WINDOW_KV_FORMAT=bfp8_tiles (bfp8_blocks stays): the window as bfloat8_b TILES in a per-chip 288-row region
+      (9 tile rows; the same 16-value exponent groups and round-to-nearest-even as the blocks, so the same values), ONE
+      neighbour send of the last 128 rows (4 tile rows) to the next chip in sequence order instead of the window
+      all-gathers (the chunk''s carry from the last chip to chip 0), rounding only the chip''s own rows, and in the
+      sparse_sdpa fork a dense band read of the window part (5 query tile rows against 9 key tile rows with the
+      causal / window mask) instead of the index gather, the softmax still joint with the top-k rows (same math).
+      Non-chunk-aligned starts (prefix hits, the runner test''s 2496) must work (any multiple of 32) or keep the old
+      path. The SERVED window copy (0_window_kv, SERVED_WINDOW all) is unchanged: its TP gather and write stay. Agent
+      rules 18 (at most 110 cores per op) and 19 (no single-card device jobs) hold. No fork regression suites (F.1);
+      add tests for the fork option you add. Report per op before / after (device and host a chunk) and the window
+      memory a chip.'
+  ab:
+    env:
+      WINDOW_KV_FORMAT: bfp8_blocks
+      ENGRAM_TABLE: resident
+    change:
+      WINDOW_KV_FORMAT: bfp8_tiles
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+      acks_early: == 0
+      contract_checks_failed: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -1805,6 +1861,7 @@ tasks:
   - P.17
   - P.19
   - P.20
+  - P.18
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
