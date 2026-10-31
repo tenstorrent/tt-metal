@@ -5,6 +5,7 @@
 #pragma once
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/sdpa_fw/sdpa_fw_program_config.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal {
@@ -19,6 +20,7 @@ std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
     const bool return_intermediates = false,
     // Gate tensor for gated attention mechanism (optional). It contains pre-sigmoid values.
     // out = sdpa(Q, K, V) * sigmoid(gate); gate shape (B, Hq, S, Dv)
-    const std::optional<ttnn::Tensor>& gate = std::nullopt);
+    const std::optional<ttnn::Tensor>& gate = std::nullopt,
+    const SDPAForwardProgramConfig& program_config = {});
 
 }  // namespace ttml::metal

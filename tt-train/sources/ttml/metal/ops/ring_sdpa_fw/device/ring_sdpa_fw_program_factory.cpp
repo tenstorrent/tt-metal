@@ -15,6 +15,26 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
+namespace {
+
+// Ring SDPA runs the chunking main ran, so nothing changes for it in this PR: one query tile-row per item
+// and, as main's pick_sk_chunk_t, the largest of four, two or one K/V tiles per step that divides the
+// per-device sequence (a ring shard can be a tile or two long). With that, the causal pairs land on the
+// cores exactly as on main. Its only test is the Galaxy ring test, which the single-chip and QB2 legs do
+// not run; the chunk knobs for ring come with the cost-based scheduler (PR 2) and its own ring CI run.
+SDPAForwardProgramConfig ring_chunking(const ttnn::Tensor& query) {
+    const uint32_t St = query.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t Sk_chunk_t = 4U;
+    while (Sk_chunk_t > 1U && St % Sk_chunk_t != 0U) {
+        Sk_chunk_t /= 2U;
+    }
+    return SDPAForwardProgramConfig{
+        .q_chunk_size = tt::constants::TILE_HEIGHT,
+        .k_chunk_size = Sk_chunk_t * tt::constants::TILE_HEIGHT,
+        .heads_per_item = 1U};
+}
+
+}  // namespace
 
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -59,7 +79,10 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
         sdpa_fw::device::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
+            .return_intermediates = true,
+            .mask_type = effective_mask_type,
+            .dropout_probability = 0.0F,
+            .program_config = ring_chunking(query)};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -76,22 +99,10 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         auto cached_program =
             sdpa_fw::device::SDPAForwardProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
 
-        // Store SDPA shared variables for runtime argument override
-        const auto& sdpa_vars = cached_program.shared_variables;
-        shared_variables_t ring_vars{
-            .sdpa_fw_reader_kernel = sdpa_vars.sdpa_fw_reader_kernel,
-            .sdpa_fw_writer_kernel = sdpa_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_kernel_group_1 = sdpa_vars.sdpa_fw_kernel_group_1,
-            .sdpa_fw_kernel_group_2 = sdpa_vars.sdpa_fw_kernel_group_2,
-            .core_group_1 = sdpa_vars.core_group_1,
-            .core_group_2 = sdpa_vars.core_group_2,
-            .num_cores = sdpa_vars.num_cores,
-            .num_cores_y = sdpa_vars.num_cores_y};
-
         // Add program to mesh workload
         ttnn::MeshCoordinateRange single_coord_range{mesh_coord};
         mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
-        shared_vars[single_coord_range] = std::move(ring_vars);
+        shared_vars[single_coord_range] = std::move(cached_program.shared_variables);
     }
 
     return cached_mesh_workload_t(std::move(mesh_workload), std::move(shared_vars));
@@ -135,7 +146,10 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
         std::optional<ttnn::Tensor> gate_opt = std::nullopt;
         sdpa_fw::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
+            .return_intermediates = true,
+            .mask_type = effective_mask_type,
+            .dropout_probability = 0.0F,
+            .program_config = ring_chunking(query)};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -148,19 +162,8 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
 
         sdpa_fw::tensor_return_value_t sdpa_return_value{output, intermediates};
 
-        // Convert our shared_variables to SDPA's shared_variables type
-        sdpa_fw::SDPAForwardProgramFactory::shared_variables_t sdpa_shared_vars{
-            .sdpa_fw_reader_kernel = shared_vars.sdpa_fw_reader_kernel,
-            .sdpa_fw_writer_kernel = shared_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_kernel_group_1 = shared_vars.sdpa_fw_kernel_group_1,
-            .sdpa_fw_kernel_group_2 = shared_vars.sdpa_fw_kernel_group_2,
-            .core_group_1 = shared_vars.core_group_1,
-            .core_group_2 = shared_vars.core_group_2,
-            .num_cores = shared_vars.num_cores,
-            .num_cores_y = shared_vars.num_cores_y};
-
         // Create a proxy CachedProgram and call SDPA's override_runtime_arguments
-        auto cached_program = sdpa_fw::SDPAForwardProgramFactory::cached_program_t::proxy(program, sdpa_shared_vars);
+        auto cached_program = sdpa_fw::SDPAForwardProgramFactory::cached_program_t::proxy(program, shared_vars);
 
         sdpa_fw::SDPAForwardProgramFactory::override_runtime_arguments(
             cached_program, sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
