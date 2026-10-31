@@ -12,6 +12,15 @@ using tt::tt_metal::MathFidelity;
 
 const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
     switch (op_type) {
+        case UnaryBackwardOpType::SELU_BW: {
+            // The generated kernel evaluates the gradient over BF16 DEST.
+            static const UnaryBackwardKernelSpec spec{
+                .compute_kernel_path =
+                    "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/compute/"
+                    "eltwise_bw_selu.cpp",
+            };
+            return spec;
+        }
         case UnaryBackwardOpType::SIGMOID_BW: {
             static const UnaryBackwardKernelSpec spec{
                 .compute_kernel_path =
@@ -65,6 +74,7 @@ const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
 
 std::string_view to_string(UnaryBackwardOpType op_type) {
     switch (op_type) {
+        case UnaryBackwardOpType::SELU_BW: return "SELU_BW";
         case UnaryBackwardOpType::SIGMOID_BW: return "SIGMOID_BW";
         case UnaryBackwardOpType::TANH_BW: return "TANH_BW";
         case UnaryBackwardOpType::GELU_BW: return "GELU_BW";
