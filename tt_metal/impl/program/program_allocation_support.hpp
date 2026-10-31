@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -48,11 +49,12 @@ struct EphemeralAllocationMetadata {
     // Per-core L1 is laid out as [persistent L1 arena, program-scope resources, ...], growing upward.
     // (See persistent_l1_arena.hpp for more.)
     //
-    // Once `prepare_ephemeral_allocation` is called, further persistent L1 allocations must be forbidden on the
-    // regions' cores, as they would overlap the program-scope resources placed above the arena.
+    // Once `prepare_ephemeral_allocation` is called, a persistent L1 allocation on the regions' cores would overlap
+    // the program-scope resources placed above the arena.
     //
-    // These seals stop the arena from giving out space on those cores, per arena and per core. The seals are released
-    // via RAII once this metadata is destructed.
+    // These relocatable seals, per arena and per core, make such an allocation relocate the seal's holder (see
+    // PersistentL1Arena::Relocatable), which drops its seals on that arena and lays its resources out again above the
+    // arena. The seals are released via RAII once this metadata is destructed.
     std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> seals;
 
     // `PersistentL1Arena::high_water_mark` of an empty CoreRangeSet, to be returned when allocation on an empty core
@@ -67,13 +69,16 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 
 // This is to be called before program-local allocation begins.
 //
-// It prevents further persistent-l1 space allocations when they could intersect with program-local allocations.
-// Also sets the base address of all the regions.
+// A later persistent-l1 space allocation that could intersect with program-local allocations relocates `holder`
+// instead of overlapping them. Also sets the base address of all the regions.
 //
 // side-effect:
 //  - starts each region that has no allocations at its base address.
-//  - "seal" persistent_l1 to prevent collision between address spaces during allocation.
-void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
+//  - "seal" persistent_l1 with relocatable seals naming `holder`, to prevent collision between address spaces.
+void prepare_ephemeral_allocation(
+    EphemeralAllocationMetadata& metadata,
+    PersistentL1Arena& persistent_l1,
+    const std::weak_ptr<PersistentL1Arena::Relocatable>& holder);
 
 // TODO(#62451):
 // The allocation logic should be unified in the future but we unfortunately have different allocation routine for now.

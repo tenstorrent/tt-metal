@@ -20,6 +20,7 @@
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
@@ -220,17 +221,24 @@ struct BoundTensorFootprint {
 BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
 
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
-class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
+class ProgramImpl final : public std::enable_shared_from_this<ProgramImpl>, public PersistentL1Arena::Relocatable {
 public:
     explicit ProgramImpl(ContextId context_id = DEFAULT_CONTEXT_ID);
 
     ProgramImpl(const ProgramImpl& other) = delete;
     ProgramImpl& operator=(const ProgramImpl& other) = delete;
 
-    ProgramImpl(ProgramImpl&& other) = default;
-    ProgramImpl& operator=(ProgramImpl&& other) = default;
+    // Persistent L1 seals and the Inspector registration identify a program by its address.
+    ProgramImpl(ProgramImpl&& other) = delete;
+    ProgramImpl& operator=(ProgramImpl&& other) = delete;
 
     ~ProgramImpl() noexcept;
+
+    // A persistent L1 allocation landed on cores where this program placed program-local L1
+    // (CBs, DFBs, scratchpads). Releases this program's seals on `arena` and invalidates that
+    // placement, so the next enqueue lays it out again above the arena's new high-water mark
+    // and the cached dispatch commands pick up the new CB/DFB configs and scratchpad CRTAs.
+    void relocate_persistent_l1(PersistentL1Arena& arena) noexcept override;
 
     // CB mask width derived from kernel_config_msg_t::local_cb_mask type
     using LocalCBMaskType = typename dev_msgs::kernel_config_msg_t::
@@ -702,7 +710,7 @@ private:
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
-    uint64_t id;        // Need to make non-const due to move constructor
+    const uint64_t id;
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel

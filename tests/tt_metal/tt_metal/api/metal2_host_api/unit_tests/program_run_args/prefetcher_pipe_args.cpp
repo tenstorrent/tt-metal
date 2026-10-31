@@ -63,9 +63,8 @@ ProgramRunArgs PipeArgs(std::vector<std::pair<PrefetcherPipeParamName, Prefetche
 #define EXPECT_THROWS_WITH(stmt, substr) \
     EXPECT_THAT([&] { stmt; }, ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(substr)))
 
-// Persistent pipes are created before the programs that use them: placing a program's DFBs on a
-// core seals that core's persistent L1 arena (allocate_dataflow_buffers), so a pipe created
-// afterwards on those cores is rejected. Tests below follow that order.
+// Most tests below create the pipe before the program that binds it. Either order works: a pipe
+// created after a program placed DFBs on its cores moves those DFBs above the pipe's L1.
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsBindsPipeToEverySlotAndRelay) {
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
