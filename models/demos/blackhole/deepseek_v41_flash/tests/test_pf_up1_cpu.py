@@ -40,7 +40,8 @@ def test_images_hits_and_owned():
     assert not ok([it(0, 18)], vis={0: object()})
     assert not ok([it(0, 18), it(2, 30)], has_hit=lambda b, t, e: b == 2)
     assert ok([it(0, 18), it(2, 30)], has_hit=lambda b, t, e: False)
-    assert not ok([it(0, 18)], owned=lambda b: True)
+    assert not ok([it(0, 512)], owned=lambda b, e: e >= C)  # a full block: the paged cache would commit it
+    assert ok([it(0, 511)], owned=lambda b, e: e >= C)
 
 
 def test_modes_without_two_slots():

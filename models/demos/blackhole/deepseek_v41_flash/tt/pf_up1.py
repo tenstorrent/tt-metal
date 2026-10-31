@@ -31,7 +31,7 @@ def eligible(items, chunk, rows, U, Up, final, vis=None, has_hit=None, owned=Non
     """True when the whole call may run on the one-slot context.
 
     ``items`` [(user, tokens, start, end)], ``final`` {user: bool} (None: the plugin does not say -> False), ``vis`` {user: VisionSeq} of image prompts, ``has_hit(user, tokens, end)`` -> True when a prefix
-    cache would restore a snapshot for that prompt, ``owned(user)`` -> True when the paged prefix cache owns the request.
+    cache would restore a snapshot for that prompt, ``owned(user, end)`` -> True when the paged prefix cache would commit / serve blocks of that prompt (it works on whole 512-token blocks: a prompt shorter than one block never does).
     """
     if not items or Up != U or U < 2 or final is None:
         return False
@@ -50,7 +50,7 @@ def eligible(items, chunk, rows, U, Up, final, vis=None, has_hit=None, owned=Non
         if r in seen:
             return False
         seen.add(r)
-        if owned is not None and owned(b):
+        if owned is not None and owned(b, e):
             return False
         if has_hit is not None and has_hit(b, t, e):
             return False

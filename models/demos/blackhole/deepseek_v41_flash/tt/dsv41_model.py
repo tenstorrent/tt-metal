@@ -1883,7 +1883,11 @@ class Model:
             final,
             vis=vis,
             has_hit=has_hit,
-            owned=None if pa is None else pa.owns,
+            owned=None
+            if pa is None
+            else (
+                lambda b, e: e >= int(chunk)
+            ),  # (paged cache: its commits read the carried tables by decode user: only a prompt shorter than one block, which commits nothing, may use the one-slot context)
         )
 
     def _prefill_up1(self, items, chunk, want_logits, vis, final, totals, rids):
@@ -1953,7 +1957,7 @@ class Model:
         ends = {b: e for b, _, _, e in items}
         assert len(ends) == len(items), "duplicate users in one prefill call"
         up1_ = self.__dict__.get("_up1_active", False)
-        pa = None if up1_ else self.__dict__.get("apc_paged")
+        pa = self.__dict__.get("apc_paged")
         hits, tots = {}, {}
         if pa is not None:
             fin_ = None if final is None else {int(b) for b, f in final.items() if f}
