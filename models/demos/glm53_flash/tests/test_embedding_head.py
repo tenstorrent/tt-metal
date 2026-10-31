@@ -33,6 +33,7 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.embedding import TtEmbedding, padded_rows
 from models.demos.glm53_flash.tt.functional_decoder import device_streams_to_host, host_streams_to_device
 from models.demos.glm53_flash.tt.model_head import TtModelHead
+from models.demos.glm53_flash.tt.sampler import TtSampler
 
 DUMP = Path("bringup/references/glm53_flash/R4097")
 HEAD_LAYER = 4  # stand-in streams (see the module docstring)
@@ -244,3 +245,53 @@ def test_head_greedy_trace(mesh_device):
     ttnn.synchronize_device(mesh_device)
     logger.info(f"traced head+argmax B={B}: {(time.perf_counter() - t0) / n * 1e3:.2f} ms per replay")
     ttnn.release_trace(mesh_device, trace_id)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_head_sampler(mesh_device):
+    """``tt/sampler.py`` on the head's decode logits (B = 8 real rows): all-greedy parameters reproduce the head's
+    argmax ids bit-exactly; sampled rows draw inside their top-k, identically under the same seeds and differently
+    under new seeds (hot rows); the sampler's eager step cost is logged."""
+    cfg = _cfg()
+    norm_w, lm_w = _head_weights()
+    head = TtModelHead(mesh_device, cfg, norm_w, lm_w)
+    B = 8
+    streams = host_streams_to_device(_decode_streams(0, B), mesh_device, pad_to=B)
+    logits_dev, ids_dev = head.forward_greedy(streams)
+    ids = ttnn.to_torch(ids_dev).view(torch.int32).long().reshape(-1)
+    logits = ttnn.to_torch(logits_dev).float()[0, 0]
+    top32 = torch.topk(logits, 32, dim=-1).indices
+
+    def run():
+        return ttnn.to_torch(sampler(logits_dev, ids_dev)).view(torch.int32).long().reshape(-1)
+
+    sampler = TtSampler(mesh_device, users=B)
+    sampler.set_params(k=[1] * B, p=[1.0] * B, inv_temp=[1.0] * B, greedy=[True] * B)
+    sampler.set_seeds(list(range(1, B + 1)))
+    out = run()
+    assert torch.equal(out, ids), f"all-greedy sampler must return the head's argmax: {out.tolist()} vs {ids.tolist()}"
+    # rows 0-3 greedy, rows 4-7 sampled hot (1/T = 0.1, top-p 0.95), row 7 with top-k 10
+    k = [1] * 4 + [32, 32, 32, 10]
+    sampler.set_params(k=k, p=[0.95] * B, inv_temp=[1.0] * 4 + [0.1] * 4, greedy=[True] * 4 + [False] * 4)
+    draws = []
+    for s in range(4):
+        sampler.set_seeds([100 + s * 31 + u for u in range(B)])
+        draws.append(run())
+    d = torch.stack(draws)
+    assert torch.equal(d[:, :4], ids[:4].expand(4, 4)), "greedy rows keep the argmax beside sampled companions"
+    for r in range(4, B):
+        allowed = set(top32[r, : k[r]].tolist())
+        assert all(int(v) in allowed for v in d[:, r]), f"row {r} drew outside its top-{k[r]}: {d[:, r].tolist()}"
+    sampler.set_seeds([100 + u for u in range(B)])
+    assert torch.equal(run(), d[0]), "the same seeds must reproduce the draw"
+    varied = int((d[:, 4:] != d[0, 4:]).any(0).sum())
+    logger.info(
+        f"sampled rows over 4 seed sets: {d[:, 4:].tolist()}; {varied}/4 rows varied; greedy rows {ids[:4].tolist()}"
+    )
+    assert varied >= 1, "hot rows (1/T = 0.1, top-p 0.95) must vary across seeds"
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(10):
+        sampler(logits_dev, ids_dev)
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"sampler step B={B}: {(time.perf_counter() - t0) / 10 * 1e3:.2f} ms (eager, one chip)")
