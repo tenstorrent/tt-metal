@@ -26,7 +26,7 @@ idx.add_listener(fn(event: dict))           # events: {"kind": "block"|"halo_a"|
 plan = idx.plan_hit(req_id, key_tokens, num_tokens, max_hit=None, salt=b"", spans=None)   # idempotent per req_id (a re-plan replaces the old reservation)
 plan.hit_tokens   # 0 or a multiple of 512, <= min(num_tokens - 128, max_hit)
 plan.row          # owning mesh row (hit) or -1
-plan.user         # reserved in-row user (hit) or -1  -> the model MUST prefill this request in (row, user)
+plan.user         # reserved GLOBAL physical user id = row * users_per_row + in-row index (hit) or -1  -> the model MUST prefill this request on it
 plan.block_ids    # chunk-block ids (opaque ints, stable while pinned) 1..hit/512
 plan.page_ids     # hit_tokens/128 pool page ids (the first entries of the request's page table; shared, refcounted)
 plan.key_slots    # hit_tokens/512 key slot ids (history entry j <- key_slots[j]; copy for key_load)
@@ -40,7 +40,7 @@ idx.cancel(req_id)                          # drop an UNBOUND reservation (abort
 ```
 b = idx.bind(req_id, start_pos, user=None, prompt_len=None)
 ```
-- planned reservation and `start_pos == plan.hit_tokens`: returns `Binding` = the plan fields above + `src_row` (== `row` in M1). Pins turn into the request's holds (shared pages refcounted for the life of the request; they are freed only at release).
+- planned reservation and `start_pos == plan.hit_tokens`: returns `Binding` = the same `HitPlan` object (`src_row` == `row` in M1; no cross-row copy before M3). Pins turn into the request's holds (shared pages refcounted for the life of the request; they are freed only at release).
 - `start_pos == 0` with no reservation (a miss): `user` is required (the model's own claim; must not be a reserved user: `idx.reserved_users(row)`); returns a Binding with `hit_tokens=0`.
 - reservation lost (evicted by `reset`, expired TTL, `start_pos` differs from the plan): returns `None`; counted in `stats()["lost"]`; the model recomputes from 0 exactly as today (and claims a user itself).
 - Unknown request id with `start_pos > 0` that is not a tracker continuation: `None`.
@@ -95,4 +95,4 @@ idx.reset()                 # model.reset_prefix_cache(): all published blocks d
 - `reset_prefix_cache` already reaches `model.reset_prefix_cache()` (flag on SchedulerOutput); the model calls `idx.reset()` there.
 - Switch off (`DSV41_APC_PAGED` unset): the model advertises `pow2` as today; the `model` branch is dead code.
 
-Changelog: v1 (initial).
+Changelog: v1 (initial). v2: `user` everywhere is the global physical id (`free_users` provider returns global ids too); code is `tt/apc_paged.py` (`BlockIndex`, `HitPlan`, `ChunkPlan`, `ApcPagedHook`, `Chain`, `chain_digests`, `zone_start`, `OutOfPages`); `halo_thin` ctor arg (halos only every n-th chunk end and the tip); a hit touches the LRU of the blocks on its path but the halo LRU only at the hit boundary; plan time `halo_b` is -1 when the hit boundary s <= p0.
