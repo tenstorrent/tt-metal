@@ -343,6 +343,33 @@ void MeshGraph::initialize_from_mgd(
     // Count total meshes including switches (switches are treated as meshes internally)
     uint32_t total_mesh_count = mgd.all_meshes().size() + mgd.all_switches().size();
 
+    // A mesh/switch local_id (the declared mesh_id/switch_id) is used directly as a dense index into
+    // per-mesh structures throughout the fabric stack -- the connectivity vectors and host-rank tables
+    // sized below, plus 0..N-1 iteration in downstream consumers. The ids must therefore be contiguous
+    // starting at 0. Reject any other numbering (non-zero-based, gapped, or duplicated) up front with a
+    // clear error instead of indexing out of bounds, which corrupts the heap (segfault in
+    // generate_rank_bindings / topology mapping).
+    {
+        std::set<uint32_t> declared_ids;
+        for (const auto& mesh : mgd.all_meshes()) {
+            declared_ids.insert(static_cast<uint32_t>(mgd.get_instance(mesh).local_id));
+        }
+        for (const auto& switch_inst : mgd.all_switches()) {
+            declared_ids.insert(static_cast<uint32_t>(mgd.get_instance(switch_inst).local_id));
+        }
+        for (uint32_t expected_id = 0; expected_id < total_mesh_count; ++expected_id) {
+            TT_FATAL(
+                declared_ids.contains(expected_id),
+                "MeshGraph: mesh_id/switch_id values must be contiguous starting at 0, but id {} is missing "
+                "across {} mesh(es)/switch(es) (ids declared: {}). Renumber the mesh graph descriptor "
+                "instances to 0..{}.",
+                expected_id,
+                total_mesh_count,
+                declared_ids,
+                total_mesh_count - 1);
+        }
+    }
+
     // Make intramesh connectivity
     // NOTE: Building connectivity based on FabricConfig override (if provided) or MGD's fabric type
     this->intra_mesh_connectivity_.resize(total_mesh_count);
