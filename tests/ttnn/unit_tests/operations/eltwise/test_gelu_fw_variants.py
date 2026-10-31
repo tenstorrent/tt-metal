@@ -272,23 +272,42 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     """Sanity-check the kernel doesn't silently produce a finite value for +inf,
     -inf, or NaN inputs. Exact non-finite output varies by variant/dtype: BF16
     NaN encoding may get canonicalised to +inf through SFPU pack/convert, and
-    fast_lut returns -inf or NaN for -inf (the LUT doesn't apply saturation)."""
+    fast_lut returns -inf or NaN for -inf (the LUT doesn't apply saturation).
+
+    NaN is fed with both signs. torch stores float("nan") as the positive
+    canonical pattern, but a host 0/0 or inf-inf gives the sign-set 0xFFC00000,
+    so that pattern is written through an integer view. The accurate fp32 kernel
+    must return NaN for either sign: its region test x > GELU_SAT is not NaN-aware
+    (Blackhole orders -NaN below -inf; Wormhole subtracts and sign-tests the NaN
+    that comes out), so -NaN fails it and keeps the saturation default 0."""
     variant_enum, _ = _VARIANTS[variant_name]
     inputs = torch.zeros((32, 32), dtype=torch_dtype)
     inputs[0, 0] = float("inf")
     inputs[0, 1] = float("-inf")
     inputs[0, 2] = float("nan")
+    if torch_dtype == torch.float32:
+        inputs.view(torch.int32)[0, 3] = torch.tensor(0xFFC00000, dtype=torch.int64).to(torch.int32)
+    else:
+        inputs.view(torch.int16)[0, 3] = torch.tensor(0xFFC0, dtype=torch.int64).to(torch.int16)
+    assert math.isnan(inputs[0, 3].item()) and math.copysign(1.0, inputs[0, 3].item()) < 0, "no -NaN written"
     tt_input = ttnn.from_torch(inputs, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.to_torch(ttnn.gelu(tt_input, variant=variant_enum))
 
-    pos_inf, neg_inf, nan_out = out[0, 0].item(), out[0, 1].item(), out[0, 2].item()
-    logger.info(f"{variant_name}/{torch_dtype}: gelu(+inf)={pos_inf} gelu(-inf)={neg_inf} gelu(NaN)={nan_out}")
+    pos_inf, neg_inf, nan_out, neg_nan_out = (out[0, i].item() for i in range(4))
+    logger.info(
+        f"{variant_name}/{torch_dtype}: gelu(+inf)={pos_inf} gelu(-inf)={neg_inf} "
+        f"gelu(+NaN)={nan_out} gelu(-NaN)={neg_nan_out}"
+    )
 
     # gelu(+inf) -> +inf: consistent saturation = identity across all variants/dtypes.
     assert pos_inf == float("inf"), f"{variant_name}: gelu(+inf) -> {pos_inf!r}, expected +inf"
+    if variant_name == "accurate" and torch_dtype == torch.float32:
+        # The exact fp32 kernel propagates NaN regardless of its sign.
+        for name, val in [("gelu(+NaN)", nan_out), ("gelu(-NaN)", neg_nan_out)]:
+            assert math.isnan(val), f"{variant_name}/fp32: {name} -> {val!r}, expected NaN"
     # gelu(-inf) and gelu(NaN): accept 0 (saturation) or any non-finite output. We just
     # want to flag if the kernel silently produced a usable finite-nonzero value.
-    for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
+    for name, val in [("gelu(-inf)", neg_inf), ("gelu(+NaN)", nan_out), ("gelu(-NaN)", neg_nan_out)]:
         assert val == 0.0 or not math.isfinite(val), f"{variant_name}: {name} -> {val!r}, expected 0 or any non-finite"
 
 

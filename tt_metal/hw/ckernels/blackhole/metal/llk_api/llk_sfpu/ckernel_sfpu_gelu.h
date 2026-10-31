@@ -329,6 +329,11 @@ inline void calculate_gelu() {
                 v_endif;
             }
             v_endif;
+            // NaN: the region test is a sign-magnitude ordered compare, which sorts a sign-set NaN
+            // below -inf, where the saturation default is 0; +NaN sorts above +inf, takes the region
+            // and propagates. is_nan tests exponent and mantissa only, so either sign returns x.
+            v_if(sfpi::is_nan(x)) { result = x; }
+            v_endif;
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
