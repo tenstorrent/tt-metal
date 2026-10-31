@@ -223,7 +223,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axi
         weight_cache_path=cache,
     )
 
-    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+    slabs = attach_kda_states(mesh_device, model, sp_axis=sp_axis, tp_axis=tp_axis)
     # One KV slot per FULL-ATTENTION layer, not per layer. Depths 1 and 2 hold none — layers 0 and 1
     # are both KDA — so there is nothing to allocate and `kvpe_cache=None` is the honest argument.
     kvpe = None

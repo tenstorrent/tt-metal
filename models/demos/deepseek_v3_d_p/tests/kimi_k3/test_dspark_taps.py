@@ -108,7 +108,7 @@ def test_dspark_taps_match_golden(mesh_device, device_params, sp_axis, tp_axis, 
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
-    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+    slabs = attach_kda_states(mesh_device, model, sp_axis=sp_axis, tp_axis=tp_axis)
     kvpe = None
     if model.schedule.num_mla_layers:
         kvpe = allocate_mla_kvpe_cache(
