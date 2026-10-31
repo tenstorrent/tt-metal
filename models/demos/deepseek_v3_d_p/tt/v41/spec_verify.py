@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import torch
 
@@ -100,13 +99,6 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self._no_draft_rows: tuple | None = None  # the fused call's rows when no fused call runs (constants)
         self._pre: tuple | None = None  # ``prepare_next``'s (signature, position half) for the next step
         self.pre_items: dict = {}  # its timer items (``in.pre.*`` on a hit)
-        # V41_VR_ENGRAM_THREADS=1 (default): the Engram layers' host row gathers in parallel threads
-        n_engram = len(self.model.engram) if self.model.engram else 0
-        self._engram_pool = (
-            ThreadPoolExecutor(max_workers=n_engram, thread_name_prefix="engram")
-            if n_engram > 1 and os.environ.get("V41_VR_ENGRAM_THREADS", "1") == "1"
-            else None
-        )
         self.pending_carry: dict[int, int] = {}  # slot -> the scratch row to commit into its carry
         self.scratch = {
             src: tuple(self._replicated(torch.zeros(1, 1, ROWS, self.config.HEAD_DIM), ttnn.float32) for _ in range(2))
@@ -496,19 +488,14 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             ids_rows = torch.cat(ids_rows, dim=0)
             flat = layout["flat"]
             tick("engram_hash")
+            inputs["engram"] = {}
             live = active.flatten().nonzero().flatten()
-
-            def rows_of(l, e):
+            # the two layers' row gathers in sequence: in two threads they took 5.2 ms against 4.4 and the
+            # staging after them 1.4 against 0.6
+            for l, e in self.model.engram.items():
                 ids_l = torch.zeros(sp * ROWS, hash_.n_hash_cols, dtype=torch.int64)
                 ids_l[flat] = ids_rows[:, hash_.layer_index(l)]
-                return e.prepare_host(ids_l, sp * ROWS, live_rows=live)
-
-            if self._engram_pool is not None:
-                # the layers' row gathers at once (``index_select`` from the host tables releases the GIL;: 4.4 ms for the two layers in sequence)
-                futures = [(l, self._engram_pool.submit(rows_of, l, e)) for l, e in self.model.engram.items()]
-                inputs["engram"] = {l: f.result() for l, f in futures}
-            else:
-                inputs["engram"] = {l: rows_of(l, e) for l, e in self.model.engram.items()}
+                inputs["engram"][l] = e.prepare_host(ids_l, sp * ROWS, live_rows=live)
             tick("engram_rows")
         return inputs
 
