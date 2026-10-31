@@ -424,6 +424,11 @@ def test_router_with_one_prompt_per_lane_keeps_full_rounds_and_the_serial_remain
     inst, _model, calls = _bridge(monkeypatch, prompts=1)
     kwargs, tables = _step([0, 32, 64], [50] * 3)
     assert inst._try_lane_parallel_prefill(kwargs, tables) is None, "B < lanes falls through"
+    # the decline names the frame the single-prompt path needed (the served log's only word on a serial prefill)
+    (reason,) = inst._g4_router_reasons_logged
+    assert "B=3 < lanes=" in reason and "no 1x128 frame is captured" in reason and "captured frames []" in reason
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is None
+    assert len(inst._g4_router_reasons_logged) == 1, "a repeated reason is not logged at INFO again"
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -766,13 +771,14 @@ def _replay_instance(monkeypatch, *, install=None):
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.tt_transformers.tt import common as tt_common
 
-    calls = {"installs": [], "copies": 0, "executed": [], "logits": 0}
+    calls = {"installs": [], "copies": 0, "executed": [], "logits": 0, "released": []}
     model = SimpleNamespace(
         mesh_device="mesh",
         mesh_config=SimpleNamespace(lane_sharded=True, lanes=LANES_lane_prefill_trace_host),
         lane_slots=LANE_SLOTS_lane_prefill_trace_host,
         _persistent_pt_by_batch={LANES_lane_prefill_trace_host: _buffers("a")},
     )
+    monkeypatch.setattr(ttnn, "release_trace", lambda mesh, tid: calls["released"].append((mesh, tid)))
 
     def _update(tables, force=False):
         calls["installs"].append([tuple(t.shape) for t in tables])
@@ -847,7 +853,9 @@ def test_replay_drops_a_frame_whose_table_buffers_moved_between_calls(monkeypatc
     assert _replay_call(inst, model) is None
     assert calls["executed"] == [] and calls["copies"] == 0 and len(calls["installs"]) == 1
     assert (1, 128) not in inst._g4_lane_prefill_traces and not hasattr(model, "_active_page_tables_per_layer")
+    assert calls["released"] == [("mesh", 7)], "the dropped frame's trace goes back to the trace region"
     assert _replay_call(inst, model) is None, "a dropped frame never replays"
+    assert calls["released"] == [("mesh", 7)], "released once: a frame no longer in the registry has no trace"
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -859,12 +867,13 @@ def test_replay_drops_a_frame_reallocated_under_its_own_install(monkeypatch):
     inst, model, calls = _replay_instance(monkeypatch, install=_grow)
     assert _replay_call(inst, model) is None
     assert calls["executed"] == [] and (1, 128) not in inst._g4_lane_prefill_traces
+    assert calls["released"] == [("mesh", 7)]
 
     # an address change alone (same objects, moved buffers) is caught by the fingerprint too
     inst, model, calls = _replay_instance(monkeypatch)
     for b in model._persistent_pt_by_batch[LANES_lane_prefill_trace_host]:
         b.buffer_address = lambda: 0xBEEF
-    assert _replay_call(inst, model) is None and calls["executed"] == []
+    assert _replay_call(inst, model) is None and calls["executed"] == [] and calls["released"] == [("mesh", 7)]
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")

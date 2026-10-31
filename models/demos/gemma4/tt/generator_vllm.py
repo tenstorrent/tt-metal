@@ -2284,8 +2284,24 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return merged_tokens, merged_log_probs
         return merged_output
 
+    # Distinct lane-router decline reasons a process logs at INFO before every decline goes to DEBUG.
+    _G4_ROUTER_REJECT_INFO_LINES = 8
+
     def _g4_router_reject(self, reason):
-        logger.debug("Gemma4 vLLM: lane router ineligible -- {}", reason)
+        """The lane router declines this call: the serial path takes it (eager under GEMMA4_DISABLE_PREFILL_TRACE=1).
+
+        The first distinct reasons of a process are logged at INFO: a served log otherwise shows the serial
+        prefill perf line with no word on why no frame replayed (a prompt past the 128-token bucket, a cached
+        prefix, a dropped frame all read the same -- the 2026-10-31 Galaxy windows); every repeat stays at DEBUG.
+        """
+        seen = getattr(self, "_g4_router_reasons_logged", None)
+        if seen is None:
+            seen = self._g4_router_reasons_logged = set()
+        if reason not in seen and len(seen) < self._G4_ROUTER_REJECT_INFO_LINES:
+            seen.add(reason)
+            logger.info("Gemma4 vLLM: lane router ineligible -- {} (serial prefill path; repeats at debug)", reason)
+        else:
+            logger.debug("Gemma4 vLLM: lane router ineligible -- {}", reason)
         return None
 
     def _try_lane_parallel_prefill(self, kwargs, full_page_tables, raw_page_tables_per_layer=None, enable_trace=True):
@@ -2341,7 +2357,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         captured = set(getattr(self, "_g4_lane_prefill_traces", None) or {})
         traced_single = (1, S_pad) in captured
         if B < lanes and not traced_single:
-            return self._g4_router_reject(f"B={B} < lanes={lanes}")
+            return self._g4_router_reject(
+                f"B={B} < lanes={lanes} and no 1x{S_pad} frame is captured for a {S}-token prompt "
+                f"(captured frames {sorted(captured)})"
+            )
         if not full_page_tables:
             return self._g4_router_reject("no per-layer page tables")
         g_idxs = [i for i, lt in enumerate(model.hf_config.layer_types) if lt == "full_attention"]

@@ -2483,6 +2483,15 @@ class ChunkedPrefillPageTableGuardMixin:
                     moved,
                 )
                 self._g4_lane_trace_registry().pop((k, S), None)
+                # The frame's trace goes back to the trace region with the frame: a popped id kept its trace
+                # buffers for the life of the process (the decode-trace leak of 2026-10-18, here per frame; the
+                # 32x128 frame alone is a sizeable slice of the region). The last replay of this frame was read
+                # back before this call, so nothing of it is in flight. Its persistent inputs and output go with
+                # the registry entry.
+                try:
+                    ttnn.release_trace(mesh, entry["trace_id"])
+                except Exception as e:  # noqa: BLE001 - the frame is off either way; the region keeps the buffers
+                    logger.warning("Gemma4: releasing the dropped lane prefill trace {}x{} raised {!r}", k, S, e)
                 return None
             t_stage = time.perf_counter()
             legacy = fit_table_width(page_tables.to(torch.int32), entry["needed_blocks"])
