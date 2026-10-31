@@ -5,6 +5,7 @@
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -45,6 +46,22 @@ MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Ope
 
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.tmp_pow_sum.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> MorehClipGradNormStep2Operation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // A preallocated total_norm is written in place and handed back. It keeps its own label while tmp_pow_sum's is
+    // compatible with it (device_operation::detail::caller_owned_output_topology). tmp_pow_sum holds per-device partial
+    // sums and is labelled Shard whenever any gradient is sharded across the mesh; every device's norm then differs,
+    // and the hook returns {} so the framework's union applies. A fresh total_norm is left to that union as well.
+    if (!tensor_args.total_norm.has_value()) {
+        return {};
+    }
+    if (const auto label = ttnn::device_operation::detail::caller_owned_output_topology(
+            *tensor_args.total_norm, {&tensor_args.tmp_pow_sum}, "ttnn::moreh_clip_grad_norm (step 2)")) {
+        return {*label};
+    }
+    return {};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2
