@@ -19,3 +19,9 @@ Hunks in shared files (all small, additive):
 | tt/generator_vllm.py | `_chunked_prefill_capabilities`, `prefix_cache_hit_policy` | default `all` instead of `pow2` when `DSV41_APC_GRID` is set | none (img2 hunks are at 883, 1052, 1177) |
 
 Not touched: `window_needs_sync` (the grid needs `DSV41_APC_DEFER=1`, the default: the plan is consulted only in `begin_snapshot`, so no extra host sync is needed), the lookup (`PrefixStore.lookup` already scans every chunk boundary), restore.
+
+## Update after the first device runs
+
+- `GridPolicy.plan(tokens, total, zone)`: with bounded replay (zone > 0) the points are tip, the zone start (kind `zone`) and the divergence capped at the zone start (partial snapshots only restore at s <= the new prompt zone start). `new_prompt(b, tokens, total, zone)` is called with `zone.get(b)` in `dsv41_model.py` (same hunk as before, one extra argument).
+- `PrefixCache._thin`: tips thin older tips only; zone points are never thinned by tips.
+- `DSV41_APC_GRID_FILE` (live switch, 0 = grid snapshots off) read in `new_prompt`; `DSV41_APC_GRID_LADDER` (default 0) extra divergence points.
