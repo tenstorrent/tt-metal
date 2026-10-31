@@ -202,6 +202,7 @@ class BlockIndex:
         clock=time.monotonic,
         free_users=None,
         halo_thin=1,
+        halo_budget=0,
         strict_spans=False,
         strict_zone_equal=False,
     ):
@@ -212,6 +213,9 @@ class BlockIndex:
         self.zone, self.margin, self.signature = int(zone), int(margin), signature
         self.ttl, self.clock, self._free_users_fn = float(ttl_s), clock, free_users
         self.halo_thin, self.strict_spans = max(1, int(halo_thin)), bool(strict_spans)
+        self.halo_budget = int(
+            halo_budget
+        )  # > 0: at most about this many halo A records per prompt (thin = ceil(blocks / budget), the tip always): a long cold prompt must not wipe the halo store of its row
         self.strict_zone_equal = bool(
             strict_zone_equal
         )  # halo B valid only if b_zone == p0_new (exact), instead of b_zone <= p0_new
@@ -227,7 +231,7 @@ class BlockIndex:
         self._bid = 0
         self.counters = dict(
             lookups=0, hits=0, hit_tokens=0, lost=0, binds=0, misses_bound=0, commits=0, dup_commits=0, upgrades=0,
-            ev_block=0, ev_halo_a=0, ev_halo_b=0, out_of_pages=0, resets=0, expired=0,
+            ev_block=0, ev_halo_a=0, ev_halo_b=0, out_of_pages=0, resets=0, expired=0, busy_loss=0, busy_loss_tokens=0, halo_loss=0, halo_loss_tokens=0,
         )  # fmt: skip
 
     # ---- listeners ---------------------------------------------------------------------------------------------------------------------------------------
@@ -248,13 +252,21 @@ class BlockIndex:
             self.signature = sig
         self.reset()
 
-    def _free_users(self, row):
+    def _free_users(self, row, fin_users=()):
+        """free users of ``row``. ``fin_users``: users whose request the scheduler already finished but the model has not released yet (the release rides on the next step's SchedulerOutput, which carries
+        the new request too): they are free for a new reservation (the model releases them before it prefills the new request)
+        """
         base = (
             list(self._free_users_fn(row))
             if self._free_users_fn is not None
             else list(range(row * self.U, (row + 1) * self.U))
         )
-        return [u for u in base if u not in self._reserved and u not in self._busy and self._row_of(u) == row]
+        base += [u for u in fin_users if u not in base]
+        return [
+            u
+            for u in base
+            if u not in self._reserved and (u not in self._busy or u in fin_users) and self._row_of(u) == row
+        ]
 
     def _expire(self):
         now = self.clock()
@@ -361,11 +373,13 @@ class BlockIndex:
         top = max(top, 0) // self.chunk * self.chunk
         p0 = zone_start(num_tokens, self.zone, self.chunk)
         best, path, cur = 0, [], []
+        self._depth = 0
         for i in range(1, top // self.chunk + 1):
             blk = row.blocks.get(digests[i - 1])
             if blk is None:
                 break
             cur.append(blk)
+            self._depth = len(cur)
             s = i * self.chunk
             if (
                 blk.halo_a >= 0
@@ -410,8 +424,10 @@ class BlockIndex:
         return req
 
     @_locked
-    def plan_hit(self, req_id, key_tokens, num_tokens, max_hit=None, salt=b"", spans=None):
+    def plan_hit(self, req_id, key_tokens, num_tokens, max_hit=None, salt=b"", spans=None, finished_ids=()):
+        """``finished_ids``: request ids the scheduler finished since the model was last told (their users count as free, see ``_free_users``)"""
         self._expire()
+        fin_users = {r.user for r in (self._reqs.get(i) for i in finished_ids) if r is not None and r.state == "bound"}
         self._drop(req_id)
         self._lost.pop(req_id, None)
         self.counters["lookups"] += 1
@@ -426,14 +442,25 @@ class BlockIndex:
         chain = Chain(self.chunk, salt).extend(_as_i64(key_tokens), top)
         digests = chain.digests
         best = (0, -1, None, None)  # hit, row, path, free users
+        any_hit = (
+            depth
+        ) = 0  # diagnostics: the deepest hit of any row (ignoring free users) and the deepest block chain (ignoring halos)
         for ri in range(self.rows):
-            free = self._free_users(ri)
+            free = self._free_users(ri, fin_users)
+            hit, path = self._lookup_row(ri, digests, num_tokens, max_hit, spans)
+            any_hit = max(any_hit, hit)
+            depth = max(depth, self._depth * self.chunk)
             if not free:
                 continue
-            hit, path = self._lookup_row(ri, digests, num_tokens, max_hit, spans)
             if hit > best[0] or (hit == best[0] and hit > 0 and len(free) > len(best[3])):
                 best = (hit, ri, path, free)
         hit, ri, path, free = best
+        if any_hit > hit:
+            self.counters["busy_loss"] += 1
+            self.counters["busy_loss_tokens"] += any_hit - hit
+        if depth > any_hit:
+            self.counters["halo_loss"] += 1
+            self.counters["halo_loss_tokens"] += depth - any_hit
         if not hit:
             return HitPlan()
         row = self._rows[ri]
@@ -579,7 +606,10 @@ class BlockIndex:
         z_new = zone_start(prompt_len, self.zone, c)
         full = start >= z_new
         tip = end == int(prompt_len) // c * c
-        want_halo = tip or (i % self.halo_thin == 0)
+        thin = self.halo_thin
+        if self.halo_budget > 0:
+            thin = max(thin, -(-(int(prompt_len) // c) // self.halo_budget))
+        want_halo = tip or (i % thin == 0)
         blk = row.blocks.get(key)
         if blk is not None:  # dup: only halos can be added
             self._touch(row, blk, halos=want_halo)
@@ -680,13 +710,26 @@ class BlockIndex:
                 row.free_a.extend([cp.halo_a] if cp.halo_a >= 0 else [])
                 row.free_b.extend([cp.halo_b] if cp.halo_b >= 0 else [])
                 return False
+            # (two requests may have planned a record for the same block while it had none: the first to finish attaches its slot, the other gives its slot back instead of overwriting,
+            # which leaked the first one; a record a pending hit pinned is never replaced)
             if cp.halo_a >= 0:
-                blk.halo_a = cp.halo_a
-                row.a_lru[blk.id] = blk
+                if blk.halo_a >= 0:
+                    row.free_a.append(cp.halo_a)
+                else:
+                    blk.halo_a = cp.halo_a
+                    row.a_lru[blk.id] = blk
             if cp.halo_b >= 0:
-                blk.halo_b = cp.halo_b
-                blk.b_zone = cp.zone
-                row.b_lru[blk.id] = blk
+                if blk.halo_a < 0:  # (the block lost its A record meanwhile: B needs A)
+                    row.free_b.append(cp.halo_b)
+                elif blk.halo_b >= 0 and (blk.b_zone <= cp.zone or blk.halo_pins > 0):
+                    row.free_b.append(cp.halo_b)  # (the attached record is at least as widely valid / is pinned)
+                else:
+                    if blk.halo_b >= 0:  # (replace a record written by a prompt whose zone started later)
+                        row.b_lru.pop(blk.id, None)
+                        row.free_b.append(blk.halo_b)
+                    blk.halo_b = cp.halo_b
+                    blk.b_zone = cp.zone
+                    row.b_lru[blk.id] = blk
             self._touch(row, blk)
             self.counters["upgrades"] += 1
             return True
@@ -869,7 +912,7 @@ class ApcPagedHook:
     def __init__(self, index, key_tokens_fn=None):
         self.index, self.key_tokens_fn = index, key_tokens_fn
 
-    def plan_hit(self, request_id, tokens, num_tokens, max_hit=None, mm=None, salt=b""):
+    def plan_hit(self, request_id, tokens, num_tokens, max_hit=None, mm=None, salt=b"", finished_ids=()):
         """-> (hit_tokens, row). ``tokens``: the prompt token ids; ``mm``: opaque multimodal info for ``key_tokens_fn`` (images never reach this today)."""
         if self.key_tokens_fn is not None:
             kt = self.key_tokens_fn(tokens, mm)
@@ -877,7 +920,7 @@ class ApcPagedHook:
                 return 0, -1
         else:
             kt = tokens
-        plan = self.index.plan_hit(request_id, kt, num_tokens, max_hit=max_hit, salt=salt)
+        plan = self.index.plan_hit(request_id, kt, num_tokens, max_hit=max_hit, salt=salt, finished_ids=finished_ids)
         return plan.hit_tokens, plan.row
 
     def cancel(self, request_id):

@@ -150,6 +150,7 @@ class PagedApc:
             signature="",
             free_users=self._free_users,
             strict_zone_equal=os.environ.get("DSV41_APC_PAGED_ZONE_EQ", "0") == "1",
+            halo_budget=int(os.environ.get("DSV41_APC_PAGED_HALO_BUDGET", "32")),
         )
         self.rid = {}  # user -> bound request id
         self.auto = set()  # users whose request is anonymous (no commits)
@@ -435,6 +436,6 @@ class PagedApc:
         r0 = s["rows"][0]
         return (
             f"APC paged: lookups {s['lookups']} hits {s['hits']} ({s['hit_tokens']} tokens) lost {s['lost']} commits {s['commits']} dup {s['dup_commits']} evictions block/haloA/haloB "
-            f"{s['ev_block']}/{s['ev_halo_a']}/{s['ev_halo_b']} out_of_pages {s['out_of_pages']}; row0 free pages {r0['pages_free']} keys {r0['key_free']} A {r0['halo_a_free']} B {r0['halo_b_free']} blocks {r0['blocks']}; "
+            f"{s['ev_block']}/{s['ev_halo_a']}/{s['ev_halo_b']} out_of_pages {s['out_of_pages']}; busy-row loss {s['busy_loss']} ({s['busy_loss_tokens']} tok), halo loss {s['halo_loss']} ({s['halo_loss_tokens']} tok); row0 free pages {r0['pages_free']} keys {r0['key_free']} A {r0['halo_a_free']} B {r0['halo_b_free']} blocks {r0['blocks']}; "
             f"restores {self.stats['restores']} ({1e3 * self.stats['restore_s']:.1f} ms), commit {1e3 * self.stats['commit_s']:.1f} ms"
         )

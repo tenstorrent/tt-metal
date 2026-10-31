@@ -996,3 +996,45 @@ def test_matches_simulator_hit_for_hit(case, H, thin, p_busy):
     b = _hits_idx(reqs, H, 4096, p_busy, 0, thin)
     assert a == b, [(i, x, y) for i, (x, y) in enumerate(zip(a, b)) if x != y][:5]
     assert sum(a) > 0 or case.startswith("sys") is False
+
+
+def test_two_dup_commits_of_a_block_without_halo_do_not_leak_slots():
+    """two requests that planned a halo A record for the same block (it had none) finish one after the other: the second gives its slot back (the first slot used to be overwritten = leaked)"""
+    idx = mk(halo_thin=2, halo_a=8, halo_b=4)
+    t = toks(31, 700)
+    idx.bind("A", 0, user=0)
+    idx.page_table("A", 700)
+    # block 1 is not a halo boundary of A (thin 2) and not its tip (A has 1400 tokens): stored without halo
+    cp = idx.begin_chunk("A", 0, C, t, 1400)
+    assert cp is not None and cp.halo_a == -1
+    idx.finish_chunk(cp)
+    idx.release("A")
+    for rid, u in (("B", 0), ("C", 1)):
+        idx.bind(rid, 0, user=u)
+        idx.page_table(rid, 700)
+    cb = idx.begin_chunk("B", 0, C, t, 700)  # tip of a 700-token prompt: wants a halo, the block has none
+    cc = idx.begin_chunk("C", 0, C, t, 700)
+    assert cb.dup and cc.dup and cb.halo_a >= 0 and cc.halo_a >= 0 and cb.halo_a != cc.halo_a
+    idx.finish_chunk(cb)
+    idx.finish_chunk(cc)
+    idx.check()  # (a leaked slot fails the accounting)
+    assert idx.stats()["rows"][0]["halo_a_free"] == 8 - 1
+
+
+def test_finished_requests_free_their_users_for_the_next_reservation():
+    """the scheduler plans the hit of a new request in the step that also carries the release of a finished one: ``finished_ids`` makes that user (still busy in the index) reservable"""
+    idx = mk(rows=1, users_per_row=2)
+    t = toks(41, 2000)
+    idx.bind("A", 0, user=0)
+    idx.page_table("A", 2000)
+    for st in range(0, 1536, C):
+        idx.finish_chunk(idx.begin_chunk("A", st, st + C, t, 2000))
+    idx.bind("B", 0, user=1)  # a second busy user: both users of the row are held
+    idx.page_table("B", 700)
+    t2 = np.concatenate([t[:1536], toks(42, 600)])
+    assert idx.plan_hit("N", t2, len(t2)).hit_tokens == 0  # no free user: no hit
+    plan = idx.plan_hit("N", t2, len(t2), finished_ids=["A"])  # A finished in the scheduler: its user is free for N
+    assert plan.hit_tokens == 1536 and plan.user == 0
+    idx.release("A")  # the model releases A before it binds N
+    assert idx.bind("N", 1536, user=0) is not None
+    idx.check()
