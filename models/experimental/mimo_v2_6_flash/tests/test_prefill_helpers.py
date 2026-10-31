@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks of prefill padding and the test PCC helper (no device needed)."""
+"""Host-only checks of prefill padding and the tests' PCC and greedy-agreement helpers (no device needed)."""
 
 import pytest
 import torch
 
-from models.experimental.mimo_v2_6_flash.tests.common import pcc
+from models.experimental.mimo_v2_6_flash.tests.common import first_divergence, pcc
 from models.experimental.mimo_v2_6_flash.tt import kv
 from models.experimental.mimo_v2_6_flash.tt.attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split
 from models.experimental.mimo_v2_6_flash.tt.common import pad_to
@@ -106,3 +106,31 @@ def test_pcc_rejects_non_finite(expect_error):
         pcc(a, b)
     with expect_error(AssertionError, "PCC is not finite"):
         pcc(torch.ones(64), a)  # a constant tensor has no correlation (NaN)
+
+
+def greedy_logits(*top):
+    """Logits over a small vocabulary where token i scores top[i] and the rest score well below."""
+    logits = torch.full((8,), 10.0)
+    logits[: len(top)] = torch.tensor(top)
+    return logits
+
+
+@pytest.mark.parametrize(
+    "gap, near_tie",
+    [(0.0, True), (0.02, True), (2.0, True), (2.5, False), (5.0, False)],
+    ids=["equal", "flip-0.02", "2-steps", "2.5-steps", "5-steps"],
+)
+def test_first_divergence_tolerates_only_bf16_near_ties(gap, near_tie):
+    """test_model_chunked_tp8_dp4's greedy agreement: at the first different token each run's pick must score within
+    TIE_STEPS bf16 steps (0.125 at logits in [16, 32)) of the other run's best; later tokens are not compared."""
+    step = 0.125
+    same = greedy_logits(22.8, 22.0)
+    ref = [same, same, greedy_logits(22.84, 22.84 - 0.7 * step)]  # the reference picks token 0, token 1 0.7 steps back
+    run = [same, same, greedy_logits(22.69 - gap * step, 22.69)]  # this run picks token 1, token 0 ``gap`` steps back
+    # past the fork the histories differ: these tokens are not compared, however far apart
+    assert first_divergence([0, 0, 1, 5], run, [0, 0, 0, 3], ref) == (2, near_tie)
+    assert first_divergence([0, 0, 1], run, [0, 0, 0], ref)[1] == near_tie
+    assert first_divergence([0, 0, 0, 4], ref, [0, 0, 0, 4], ref) is None
+    # both directions count: this run's pick 5 steps behind in the reference's logits fails, whatever ``gap`` is
+    far_ref = [same, same, greedy_logits(22.84, 22.84 - 5 * step)]
+    assert first_divergence([0, 0, 1], run, [0, 0, 0], far_ref) == (2, False)
