@@ -3,9 +3,9 @@
 
 // One direction (BRISC: forward, NCRISC: backward) of one link of the row all-gather that feeds the fused reduce
 // (ReduceExpand.call_fabric). This sender handles `cores` reduce cores starting at first_core: their compact tiles
-// (core i owns tiles [t * i, t * i + t) of this chip's compact rows, t = tiles_per_core: 2, or 4 with 8 user rows)
-// are read into L1, then each two tiles of a core go to every chip `range` hops away in this direction as one fabric
-// multicast packet: a scatter write into slots (tile, this chip) of that core's persistent gather buffer plus an
+// (core i owns tiles [t * i, t * i + t) of this chip's compact rows, t = tiles_per_core: 2, 4 with 8 user rows, 8 with
+// 16) are read into L1, then each two tiles of a core go to every chip `range` hops away in this direction as one
+// fabric multicast packet: a scatter write into slots (tile, this chip) of that core's persistent gather buffer plus an
 // increment of its global semaphore. The forward sender also writes this chip's own slots and increments the local
 // semaphores, so every reduce core waits for `chips * tiles_per_core / 2` increments.
 #include <cstdint>
@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(0);
     constexpr uint32_t range = get_compile_time_arg_val(1);
     constexpr uint32_t cores = get_compile_time_arg_val(2);
-    constexpr uint32_t tiles_per_core = get_compile_time_arg_val(3);  // 2 or 4
+    constexpr uint32_t tiles_per_core = get_compile_time_arg_val(3);  // 2, 4 or 8
     constexpr uint32_t chips = get_compile_time_arg_val(4);
     constexpr bool local_copy = get_compile_time_arg_val(5) == 1;
     constexpr bool src_dram = get_compile_time_arg_val(6) == 1;
@@ -59,9 +59,12 @@ void kernel_main() {
         noc_async_read(src_gen.get_noc_addr(first_core * tiles_per_core + t, 0), scratch + t * tile_bytes, tile_bytes);
     }
 
+    // A RISC's header pool holds 12 (NUM_PACKET_HEADERS / 2): with 16 user rows (4 packets per core) the packets cycle
+    // through 8 headers, a header reused only once the writes that read it have left.
+    constexpr uint32_t num_headers = cores * packets <= 8 ? cores * packets : 8;
     PacketHeaderPool::reset();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[cores * packets];
-    for (uint32_t i = 0; i < cores * packets; i++) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[num_headers];
+    for (uint32_t i = 0; i < num_headers; i++) {
         headers[i] = PacketHeaderPool::allocate_header();
     }
     connection.open_finish();
@@ -71,13 +74,17 @@ void kernel_main() {
     for (uint32_t i = 0; i < cores; i++) {
         for (uint32_t k = 0; k < packets; k++) {
             const uint32_t j = 2 * k;
+            const uint32_t h = i * packets + k;
+            if (h >= num_headers && h % num_headers == 0) {
+                noc_async_writes_flushed();
+            }
             const uint64_t dst0 = get_noc_addr(core_x[i], core_y[i], gather_addr + (j * chips + my_chip) * tile_bytes);
             const uint64_t dst1 =
                 get_noc_addr(core_x[i], core_y[i], gather_addr + ((j + 1) * chips + my_chip) * tile_bytes);
             const uint64_t sem = get_noc_addr(core_x[i], core_y[i], sem_addr);
             fabric_multicast_noc_fused_scatter_write_atomic_inc(
                 &connection,
-                headers[i * packets + k],
+                headers[h % num_headers],
                 scratch + i * core_bytes + j * tile_bytes,
                 2 * tile_bytes,
                 tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
