@@ -20,7 +20,7 @@ ACT2CLS = {
     "silu": ttnn.silu,
     "mish": ttnn.mish,
     "gelu": ttnn.gelu,
-    "gelu_tanh": partial(ttnn.gelu, fast_and_approximate_mode=True),
+    "gelu_tanh": partial(ttnn.gelu, variant=ttnn.GeluVariant.Tanh),
     "relu": ttnn.relu,
 }
 
