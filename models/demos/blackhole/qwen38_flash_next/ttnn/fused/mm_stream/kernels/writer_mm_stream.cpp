@@ -84,6 +84,25 @@ void kernel_main() {
                 {},
                 {.noc_x = cx, .noc_y = cy, .addr = dst + 512});
         } else {
+#ifdef S2I_FOLD_F32
+            {
+                // QWEN38_S2I_FOLD: the DRAM output is an fp32 TILE tensor: widen the two bf16 row chunks (32 B each) to
+                // fp32 (the same values the stock ShardedToInterleaved dtype=float32 gives) in a scratch CB, then write
+                // row 0 of face 0 (byte 0) and of face 1 (byte 1024) of the 4 KB page.
+                const uint32_t src = out.get_read_ptr() + j * 64;
+                CircularBuffer scratch_cb(get_named_compile_time_arg_val("cb_scratch"));
+                const uint32_t scr = scratch_cb.get_write_ptr() + j * 128;
+                volatile tt_l1_ptr uint16_t* s16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
+                volatile tt_l1_ptr uint32_t* d32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
+                for (uint32_t i = 0; i < 32; ++i) {
+                    d32[i] = static_cast<uint32_t>(s16[i]) << 16;
+                }
+                noc.async_write(CoreLocalMem<uint32_t>(scr), out_tensor, 64, {}, {.page_id = tile, .offset_bytes = 0});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(scr + 64), out_tensor, 64, {}, {.page_id = tile, .offset_bytes = 1024});
+            }
+            continue;
+#endif
             noc.async_write(
                 CoreLocalMem<uint32_t>(out.get_read_ptr() + j * 64),
                 out_tensor,

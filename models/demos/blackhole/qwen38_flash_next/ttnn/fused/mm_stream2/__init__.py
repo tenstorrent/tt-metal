@@ -149,6 +149,7 @@ CB_X, CB_W, CB_OUT, CB_STAGE = m1.CB_X, m1.CB_W, m1.CB_OUT, m1.CB_STAGE
 SEM_X, SEM_HUB = m1.SEM_X, m1.SEM_HUB
 FID = m1.FID
 BANKS = 8
+CB_SCRATCH = 4
 
 
 def column_groups(n: int, nb: int, cols: int, banks: int = BANKS):
@@ -423,6 +424,20 @@ def mm_stream2_program(
     ncols_set = sorted({g[2] for g in groups})
     by_nc = {nc: [i for i in range(count) if groups[i][2] == nc] for nc in ncols_set}
     cbs = [tiny_cb(CB_X, kt, x_cores), tiny_cb(CB_OUT, cols, active_set)]
+    out_f32 = (
+        not out_l1
+    ) and out.dtype == ttnn.float32  # QWEN38_S2I_FOLD: the writer widens row 0 to an fp32 DRAM tile
+    if out_f32:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=cols * 128,
+                core_ranges=active_set,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=CB_SCRATCH, data_format=ttnn.bfloat16, page_size=128)
+                ],
+            )
+        )
+        named = named + [("cb_scratch", CB_SCRATCH)]
     kernels = []
     for nc, idx in by_nc.items():
         cs = cset(idx)
@@ -455,7 +470,16 @@ def mm_stream2_program(
         (assign[i], [out.buffer_address(), groups[i][3], groups[i][2], hub_xy.x, hub_xy.y, *shard_xy])
         for i in range(count)
     ]
-    kernels.append(fp.writer_kernel(KERNELS["writer"], active_set, fp.accessor_args(out), writer_args, named=named))
+    kernels.append(
+        fp.writer_kernel(
+            KERNELS["writer"],
+            active_set,
+            fp.accessor_args(out),
+            writer_args,
+            named=named,
+            defines=[("S2I_FOLD_F32", "1")] if out_f32 else [],
+        )
+    )
     kernels.append(
         fp.compute_kernel(
             KERNELS["compute"],
@@ -579,8 +603,10 @@ def relaid_weight(mesh, weight, k, n, cols):
     return new
 
 
-def linear(act, weight, *, memory_config, program_config, compute_kernel_config, **rest):
-    """``ttnn.linear`` (same arguments); with QWEN38_MM_STREAM2=1 and an admitted call the re-laid streamed program instead (row 0 of the
+def linear(act, weight, *, memory_config, program_config, compute_kernel_config, f32_dram=False, **rest):
+    """``ttnn.linear`` (same arguments); ``f32_dram`` (QWEN38_S2I_FOLD): a streamed call returns the fp32 DRAM TILE tensor
+    (the drained form) instead of the bf16 L1 shard; the stock / warmup calls still return the shard (the caller checks).
+    With QWEN38_MM_STREAM2=1 and an admitted call the re-laid streamed program instead (row 0 of the
     result is defined, the stock op's shape / L1 width-sharded memory config / topology; learned from the shape's first, stock call).
     """
     stock = lambda: ttnn.linear(  # noqa: E731
@@ -614,7 +640,11 @@ def linear(act, weight, *, memory_config, program_config, compute_kernel_config,
 
     cols, blk, place = SHAPES[(k, n)]
     nb = weight.memory_config().shard_spec.shape[1] // TILE
-    out = fp.allocate(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, out_cfg)
+    if f32_dram:
+        out = fp.allocate(shape, ttnn.float32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        out_cfg = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        out = fp.allocate(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, out_cfg)
     exclude = moe_experts.model_exclude(mesh)
     if (k, n) in OPTIMAL_SHAPES and optimal_enabled():
         place = "optimal"

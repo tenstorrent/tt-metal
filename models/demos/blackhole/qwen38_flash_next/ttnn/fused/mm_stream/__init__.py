@@ -369,7 +369,7 @@ def admits(act, weight, memory_config) -> bool:
     return (int(weight.shape[-2]), int(weight.shape[-1])) in SHAPES and int(act.shape[-1]) == int(weight.shape[-2])
 
 
-def linear(act, weight, *, memory_config, program_config, compute_kernel_config, **rest):
+def linear(act, weight, *, memory_config, program_config, compute_kernel_config, f32_dram=False, **rest):
     """``ttnn.linear`` (same arguments) for the decode linears; with QWEN38_MM_STREAM=1 and an admitted call the streamed
     program instead.  The result has EXACTLY the stock op's shape, layout and L1 width-sharded memory config (learned from
     the shape's first, stock call -- eager warmup, before any capture) and mesh topology; only ROW 0 of its tile is
@@ -391,6 +391,7 @@ def linear(act, weight, *, memory_config, program_config, compute_kernel_config,
             memory_config=memory_config,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
+            f32_dram=f32_dram,
             **rest,
         )
     if not admits(act, weight, memory_config):

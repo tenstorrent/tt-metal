@@ -1457,8 +1457,12 @@ class Qwen38TTNNMoE:
             memory_config=l1_ws,
             program_config=self.router_program_config,
             compute_kernel_config=self.compute_config,
+            f32_dram=os.environ.get("QWEN38_S2I_FOLD", "1") == "1",
         )
-        if os.environ.get("QWEN38_ROUTER_L1", "0") == "1":
+        if logits_ws.dtype == ttnn.float32 and not logits_ws.memory_config().is_sharded():
+            # QWEN38_S2I_FOLD: the streamed router writes the fp32 DRAM tile (the drain's result) itself
+            logits = logits_ws
+        elif os.environ.get("QWEN38_ROUTER_L1", "0") == "1":
             # the router linear's bf16 L1 width shard goes to the top-k as it is (the same values the drain widens): one
             # ShardedToInterleaved less per MoE layer
             logits = logits_ws
