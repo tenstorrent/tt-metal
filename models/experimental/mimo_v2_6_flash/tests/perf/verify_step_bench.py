@@ -48,6 +48,7 @@ PERF_JSON = os.environ.get("VSB_PERF_JSON")  # with PROFILING: each read's per-p
 # alike must commit the same tokens).
 TOKENS = int(os.environ.get("VSB_TOKENS", "0"))
 DUP = int(os.environ.get("VSB_DUP", "0"))
+EAGER = os.environ.get("VSB_EAGER") == "1"  # plain steps without the trace (MIMO_DEBUG_ROWS)
 _perf = []
 
 
@@ -224,7 +225,7 @@ def main():
                         tokens[r, 0], positions[r] = tok[r], pos[r]
                     t1 = time.perf_counter()
                     logits = model.decode_forward(
-                        tokens, positions, tables[0], kv, enable_trace=True, page_tables_per_layer=layer_tables
+                        tokens, positions, tables[0], kv, enable_trace=not EAGER, page_tables_per_layer=layer_tables
                     )
                     times.append(time.perf_counter() - t1)
                     if PROFILING:

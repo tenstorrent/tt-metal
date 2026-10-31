@@ -146,6 +146,10 @@ def prefill_warmup_batches(max_tokens, max_users, max_padded, max_seq_len):
     ]
 
 
+# MIMO_DEBUG_ROWS=0,8,12 (debug, eager decode): log each layer's output norms of those rows.
+DEBUG_ROWS = [int(r) for r in os.environ.get("MIMO_DEBUG_ROWS", "").split(",") if r]
+
+
 class TtMiMoModel:
     DECODE_TOPK = 32  # candidates per chip read back each decode step
     DECODE_HISTORY = 64  # device-resident greedy steps between token reads
@@ -1605,6 +1609,13 @@ class TtMiMoModel:
             )
             x.deallocate(True)
             x = y
+            if DEBUG_ROWS:  # eager decode only: each layer's output rows (and the fused norm's), chip 0
+                yy = ttnn.to_torch(ttnn.get_device_tensors(y)[0]).float()[0, 0]
+                hh = ttnn.to_torch(ttnn.get_device_tensors(h)[0]).float()[0, 0] if h is not None else None
+                logger.info(
+                    f"MIMO_DEBUG_ROWS layer {i}: y {[round(float(yy[r].norm()), 3) for r in DEBUG_ROWS]}"
+                    + (f" h {[round(float(hh[r].norm()), 3) for r in DEBUG_ROWS]}" if hh is not None else "")
+                )
             if self.dflash is not None:
                 self.dflash.tap(i, y)  # DFlash's context: the target layers' outputs it reads (tt/dflash.py)
         logits = self._logits(x, h)
