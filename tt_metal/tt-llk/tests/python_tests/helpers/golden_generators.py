@@ -2484,6 +2484,7 @@ class UnarySFPUGolden:
             MathOperation.TiledProd: self._tiled_prod,
             MathOperation.AltComplexRotate90: self._alt_complex_rotate90,
             MathOperation.Softcap: self._softcap,
+            MathOperation.QuickGelu: self._quick_gelu,
         }
         # Ops whose result mixes the elements of a tile (see _call_tile_structural). Each maps a
         # 32x32 row-major tile to a new one.
@@ -2537,6 +2538,12 @@ class UnarySFPUGolden:
         # take away precision Dest still holds.
         self.dst_format = None
         self.dest_acc = DestAccumulation.No
+
+    def _quick_gelu(self, x):
+        # The exact value of activations/products/quick_gelu.json's leaf in float64,
+        # at the input as the SFPU reads it (a subnormal as 0).
+        x = 0.0 if abs(float(x)) < 2.0**-126 else x
+        return self._in_fp64(x, lambda a: (a / (1 + torch.exp(-1.702 * a))))
 
     def __call__(
         self,

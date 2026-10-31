@@ -8,6 +8,7 @@ from itertools import product
 
 import pytest
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -1631,6 +1632,77 @@ def build_eltwise_unary_sfpu_config(
         run_types=run_types,
         test_config_kwargs=test_config_kwargs,
     )
+
+
+QUICK_GELU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.QuickGelu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**QUICK_GELU_SWEEP)
+def test_eltwise_unary_sfpu_quick_gelu(formats, dest_acc, mathop):
+    # quick_gelu, both signs past the hold; Blackhole has the only kernel.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+    )
+
+
+# Inputs at or below this one store 0: the exp leaf's biased exponent 127 - |z| log2(e) drops below 1, so
+# e^-|z| is 0, as in stock's sigmoid. The exact result there is a tiny normal; it is not scored.
+_QUICK_GELU_LOGISTIC_FLUSH_INPUT = -51.5
+# An exact result this close (relative) above the smallest normal may be stored as 0 by the last multiply.
+_QUICK_GELU_BOUNDARY_BAND = 2.0**-12
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@pytest.mark.parametrize("dest_acc", [DestAccumulation.No, DestAccumulation.Yes])
+def test_eltwise_unary_sfpu_quick_gelu_every_bf16_input(dest_acc):
+    # Every finite BF16 input, in the sweep's ascending order with its zero padding last.
+    from helpers.ulp import ulp_distance
+    from helpers.ulp_sweep import sweep_spec
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    result, golden = eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.QuickGelu,
+        FastMode.No,
+        [256, 256],
+        spec_A=sweep_spec(DataFormat.Float16_b),
+    )
+    values = (torch.arange(65536, dtype=torch.int32) << 16).view(torch.float32)
+    values = torch.sort(values[torch.isfinite(values)]).values
+    inputs = torch.cat([values, torch.zeros(65536 - values.numel())])
+    golden, result = golden.flatten().to(torch.bfloat16), result.flatten().to(
+        torch.bfloat16
+    )
+    tiny = torch.finfo(torch.float32).tiny
+    magnitude = golden.float().abs()
+    scored = (
+        (magnitude >= tiny * (1 + _QUICK_GELU_BOUNDARY_BAND))
+        & (inputs > _QUICK_GELU_LOGISTIC_FLUSH_INPUT)
+        & torch.isfinite(golden.float())
+    )
+    scored[values.numel() :] = False
+    steps = ulp_distance(golden, result)[scored]
+    over = int((steps > 1).sum())
+    assert (
+        over == 0
+    ), f"{over} of {int(scored.sum())} scored lanes over 1 BF16 step; max {int(steps.max())}"
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false

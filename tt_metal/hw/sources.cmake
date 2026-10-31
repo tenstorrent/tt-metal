@@ -194,6 +194,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/pack.h
     inc/api/compute/pack_untilize.h
     inc/api/compute/quantization.h
+    inc/api/compute/quick_gelu.h
     inc/api/compute/reconfig_data_format.h
     inc/api/compute/reduce.h
     inc/api/compute/reduce_custom.h
