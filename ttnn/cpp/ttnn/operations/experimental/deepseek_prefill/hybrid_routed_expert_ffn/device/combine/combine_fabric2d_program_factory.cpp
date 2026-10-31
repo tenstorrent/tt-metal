@@ -796,6 +796,36 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         "combine_fabric2d: the number of routed-expert writer cores must be set");
     const auto placement = decide_placement(
         mesh_device, operation_attributes.axis, operation_attributes.num_links, per_group, /*with_collector=*/true);
+    // Combine lays its L1 out at the same base the routed expert's circular buffers start at, so a combine core
+    // inside the routed expert's rectangle would overwrite them.
+    for (const auto& [coord, chip] : placement) {
+        const auto& re_cores = operation_attributes.routed_expert_cores;
+        for (const auto& [stream, self] : chip.streams) {
+            TT_FATAL(
+                !re_cores.contains(self.worker_logical),
+                "combine_fabric2d {}: stream {} core {} lies inside the routed expert's cores {}",
+                coord,
+                stream,
+                self.worker_logical,
+                re_cores);
+        }
+        for (const auto& group : chip.untilizers) {
+            for (const auto& untilizer : group) {
+                TT_FATAL(
+                    !re_cores.contains(untilizer.logical),
+                    "combine_fabric2d {}: untilizer core {} lies inside the routed expert's cores {}",
+                    coord,
+                    untilizer.logical,
+                    re_cores);
+            }
+        }
+        TT_FATAL(
+            !re_cores.contains(chip.collector.value()),
+            "combine_fabric2d {}: collector core {} lies inside the routed expert's cores {}",
+            coord,
+            chip.collector.value(),
+            re_cores);
+    }
     const auto fwd =
         allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args, l1_resources.forwarding);
 
