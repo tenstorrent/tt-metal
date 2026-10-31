@@ -24,6 +24,13 @@
 // direction, same link) of the receiving chip sends one per wave once the link's roots collected that wave
 // (SEM_PORT_FREED += 1 each) and its sibling port D (where the entries land) flushed its relays of it (+= 1).
 // K == num_waves is the credit-free fast path (every ring branch is compiled out).
+// Direct delivery (Perf 2, TRANSPORT): a port may carry SEVERAL own items (wait 0), each addressed straight to one
+// destination chip as a multi-hop unicast routed by the fabric's table (farthest destination first). No relay on the
+// direct schedule; relay items (wait j+1, after the own items) remain only for the host's relay fallback (a Linear
+// group on a torus fabric, whose table routes a 2-hop destination over the wrap where this op has no port). Arrival
+// counters are indexed by SLOT on the host. With several destination chips the ready fence / bounded-landing credits
+// count one per destination chip (n_ready_wait). Measured (perf_experiments/direct_exchange): 640x1792 18.97/20.47 ->
+// 18.81/19.78 us fastest/slowest; fabric line multicast (hop range >= 2) hangs on FABRIC_2D_TORUS_XY 1x4 (BLOCKED).
 // Raw fabric API: the measured transport this op cites is this raw sender (op_design.md -> Helpers considered and
 // rejected: the kernel_lib CCL helper is unmeasured and has no relay-with-arrival-counter item model).
 
@@ -266,7 +273,8 @@ void kernel_main() {
         // Bounded landing: wave w may overwrite wave slot w mod K at the destination once its credit for w - K is back.
         auto credit_ok = [&](uint32_t w) -> bool {
             if constexpr (ring) {
-                return w < landing_waves || *ready >= w + 1 - landing_waves;
+                // one credit per destination chip per wave (n_ready_wait destination chips)
+                return w < landing_waves || *ready >= (w + 1 - landing_waves) * n_ready_wait;
             } else {
                 return true;
             }
@@ -275,9 +283,14 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_port_freed_id));
         uint32_t credits_sent = 0;
         const uint32_t send_waves = n_send > 0 ? num_waves : 0;
-        const uint32_t relay_waves = n_send > 1 ? num_waves : 0;
-        uint32_t ow = 0;          // own cursor: next wave of item 0
-        uint32_t rw = 0, rk = 1;  // relay cursor: (wave, item)
+        // Own items: the leading items with wait 0 (relay: item 0 only; direct: every item).
+        uint32_t n_own = 0;
+        while (n_own < n_send && get_arg_val<uint32_t>(send_idx + n_own * SEND_WORDS + 3) == 0) {
+            ++n_own;
+        }
+        const uint32_t relay_waves = n_send > n_own ? num_waves : 0;
+        uint32_t ow = 0;              // own cursor: next wave of the own items
+        uint32_t rw = 0, rk = n_own;  // relay cursor: (wave, item)
         {
             DeviceZoneScopedN("prt_exchange");
             while (ow < send_waves || rw < relay_waves || notified < notify_total || credits_sent < n_credit_out) {
@@ -311,7 +324,10 @@ void kernel_main() {
                     }
                     const uint32_t q = get_arg_val<uint32_t>(send_idx);
                     DeviceZoneScopedN("prt_send");
-                    send_item(0, landing + (slot_wave(ow) * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + ow));
+                    for (uint32_t k = 0; k < n_own; ++k) {
+                        send_item(
+                            k, landing + (slot_wave(ow) * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + ow));
+                    }
                     ++ow;
                 } else if (relay_ready) {
                     const uint32_t q = get_arg_val<uint32_t>(send_idx + rk * SEND_WORDS);
@@ -328,7 +344,7 @@ void kernel_main() {
                                     1);
                             }
                         }
-                        rk = 1;
+                        rk = n_own;
                         ++rw;
                     }
                 }

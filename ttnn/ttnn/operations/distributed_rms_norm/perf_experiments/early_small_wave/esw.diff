@@ -1,0 +1,391 @@
+--- orig/distributed_rms_norm_program_descriptor.py	2026-10-31 05:56:39.251084228 +0000
++++ distributed_rms_norm_program_descriptor.py	2026-10-31 07:32:40.619183671 +0000
+@@ -59,7 +59,7 @@
+ SCALE_BLOCK_TILES = 8
+ MIN_BLOCKS_PER_CORE = 1
+ GAMMA_RESIDENT = True
+-NUM_WAVES = 2
++NUM_WAVES = int(os.environ.get("DRMS_ESW_NUM_WAVES", "") or 2)
+ # Lamp L4: the ports notify the roots per landed entry (True) or once per wave (False). The root collects slot by
+ # slot either way; per entry it reads each slot while the next one is still relaying.
+ NOTIFY_PER_ENTRY = True
+@@ -69,7 +69,78 @@
+ # Wave-ordered reads: a core issues the reads of wave k+1's rows only once its wave k is reduced locally (True), so the
+ # grid's wave-0 reads (which gate the first exchange) are not slowed by the fast cores' wave-1 reads.
+ READ_WAVE_GATE = True
+-R3_ROWS_PER_GROUP = 2
++R3_ROWS_PER_GROUP = int(os.environ.get("DRMS_ESW_RPG", "") or 2)
++# ---- EARLY SMALL WAVE (perf experiment) ----
++# ESW_GROUPS: row-groups (in root order) per global wave offset, e.g. "2,9,9": the first 2 groups start at wave 0, the
++#   next 9 at wave 1, the last 9 at wave 2 (a group's own waves are shifted by its offset; every root publishes every
++#   global wave, empty ones too). "auto:F:N": the first F groups at offset 0, the rest split evenly over offsets
++#   1..N-1. "" = every group at offset 0 (the op's current scheme).
++# ESW_DEFER_NS: a core whose group starts at offset o issues its first x read only after
++#   (tile-rows of the chip in global waves < o) * ESW_DEFER_NS ns (chip-wide read priority by wave; 0 = off).
++#   Default "rule" (the host rule below); "off" = every group at offset 0.
++ESW_GROUPS = os.environ.get("DRMS_ESW_GROUPS", "") or "rule"
++ESW_GROUPS = "" if ESW_GROUPS == "off" else ESW_GROUPS
++ESW_DEFER_NS = float(os.environ.get("DRMS_ESW_DEFER_NS", "") or 0)
++# ESW_READ_GBPS (overrides ESW_DEFER_NS when set): the read start of offset o = x bytes of the chip in waves < o / this
++# rate (GB/s = B/ns), i.e. a modelled DRAM read rate rather than a per-row constant.
++ESW_READ_GBPS = float(os.environ.get("DRMS_ESW_READ_GBPS", "") or 0)
++ESW_TRIM = os.environ.get("DRMS_ESW_TRIM", "1") not in ("", "0")  # per-wave segment bytes = the non-empty extent
++CLOCK_GHZ = 1.35
++
++
++# The host rule (ESW_GROUPS = "rule"): DRAM-interleaved input (the scheme trades read order for an earlier write burst;
++# a resident shard has no reads to reorder), at least ESW_RULE_MIN_BYTES of x per chip (below it the extra exchange
++# rounds cost more than the earlier first wave saves; measured break-even ~2.1 MB on the 1x4 ring), at least
++# ESW_RULE_MIN_LINKS links, and >= 3 row-groups: the row-groups in root order split into 3 consecutive equal thirds at
++# offsets 0 / 1 / 2, reads of offset o start at (x bytes in waves < o) / ESW_RULE_READ_GBPS.
++ESW_RULE_MIN_BYTES = int(os.environ.get("DRMS_ESW_RULE_MIN_BYTES", "") or 2_200_000)
++ESW_RULE_MIN_LINKS = int(os.environ.get("DRMS_ESW_RULE_MIN_LINKS", "") or 1)
++ESW_RULE_READ_GBPS = 300.0
++
++
++def esw_rule(plan, L):
++    """(groups spec, read GB/s) of the host rule for this plan."""
++    g = plan.geometry
++    x_bytes = sum(w.rows for w in plan.roots) * g.Wt * g.T_in
++    if g.sharded or x_bytes < ESW_RULE_MIN_BYTES or L < ESW_RULE_MIN_LINKS or len(plan.roots) < 3:
++        return "", 0.0
++    return "frac:1,1,1", ESW_RULE_READ_GBPS
++
++
++def esw_offsets(n_groups, spec=None):
++    spec = ESW_GROUPS if spec is None else spec
++    if not spec:
++        return [0] * n_groups
++    if spec.startswith("frac:"):
++        fr = [float(f) for f in spec[5:].split(",")]
++        tot = sum(fr)
++        cum, counts, prev = 0.0, [], 0
++        for f in fr:
++            cum += f
++            c = int(round(cum / tot * n_groups))
++            counts.append(c - prev)
++            prev = c
++        counts = [c for c in counts if c > 0] or [n_groups]
++    elif spec.startswith("auto:"):
++        _, f, n = spec.split(":")
++        f, n = min(int(f), n_groups), int(n)
++        rest = n_groups - f
++        counts = [f]
++        if n > 1 and rest > 0:
++            base, extra = divmod(rest, n - 1)
++            counts += [base + (1 if i < extra else 0) for i in range(n - 1)]
++        elif rest > 0:
++            counts[0] += rest
++    else:
++        counts = [int(c) for c in spec.split(",")]
++        if sum(counts) != n_groups:  # spec written for another shape: scale the tail to fit
++            counts = counts[:-1] + [max(0, n_groups - sum(counts[:-1]))]
++            if sum(counts) != n_groups:
++                return [0] * n_groups
++    offs = []
++    for o, c in enumerate(counts):
++        offs += [o] * c
++    return offs[:n_groups]
+ R3_MAX_GROUP_CORES = 24
+ R3_MIN_SLICE_TILES = 4
+ R3_OCCUPANCY_GAIN = 2
+@@ -845,7 +916,7 @@
+     """Measurement-only: DRMS_ZONES=1 turns on the per-stage device zones of every kernel (DRMS_ZONE in the kernels).
+     DRMS_ABLATE_WRITE=1: the writer skips the output NoC writes (CB protocol kept; output wrong by design).
+     DRMS_ABLATE_FINALIZE=1: the root's finalize copies slot 0 to its output (the sum / scale / rsqrt math stubbed)."""
+-    keys = ("DRMS_ZONES", "DRMS_ABLATE_WRITE", "DRMS_ABLATE_FINALIZE")
++    keys = ("DRMS_ZONES", "DRMS_ABLATE_WRITE", "DRMS_ABLATE_FINALIZE", "DRMS_ESW_TRID")
+     return [(k, os.environ[k]) for k in keys if os.environ.get(k, "0") not in ("", "0")]
+
+
+@@ -896,11 +967,15 @@
+     available = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in port_set]
+
+     # ---- local plan + exchange layout (the landing comes out of every core's L1, so plan against it) ----
++    def esw_spec(plan):
++        return esw_rule(plan, L)[0] if ESW_GROUPS == "rule" else ESW_GROUPS
++
+     def exchange_layout(plan):
+         R = plan.block_rows
+         Rw, nwpb = wave_split(R)
+-        num_blocks_max = max(math.ceil(w.rows / R) for w in plan.work)
+-        num_waves = num_blocks_max * nwpb  # waves of the call (every root publishes every wave)
++        offs = esw_offsets(len(plan.roots), esw_spec(plan))
++        num_waves = max(o + math.ceil(w.rows / R) * nwpb for o, w in zip(offs, plan.roots))
++        # waves of the call (every root publishes every wave)
+         n_roots = len(plan.roots)
+         n_roots_l = [sum(1 for gi in range(n_roots) if gi % L == l) for l in range(L)]
+         seg_l = [n * Rw * RECORD_BYTES for n in n_roots_l]
+@@ -954,6 +1029,38 @@
+     LAST_EXCHANGE_LAYOUT.update(num_waves=num_waves, landing_waves=K, landing_words=landing_words)  # test hook
+     roots = plan.roots
+     root_link = {(w.core.x, w.core.y): (gi % L, gi // L) for gi, w in enumerate(roots)}
++    # ---- EARLY SMALL WAVE: per-group global wave offset, per-wave rows, per-wave per-link segment extent ----
++    offs = esw_offsets(len(roots), esw_spec(plan))
++    read_gbps = esw_rule(plan, L)[1] if ESW_GROUPS == "rule" else ESW_READ_GBPS
++    root_off = {(w.core.x, w.core.y): o for o, w in zip(offs, roots)}
++
++    def wave_n_g(w, rows, off):  # mirror of the reader's wave_n
++        if w < off:
++            return 0
++        w -= off
++        b, k = divmod(w, nwpb)
++        rem = rows - b * R
++        if rem <= 0:
++            return 0
++        rb = min(rem, R)
++        first = k * Rw
++        return 0 if first >= rb else min(Rw, rb - first)
++
++    wave_rows = [sum(wave_n_g(wv, r.rows, o) for o, r in zip(offs, roots)) for wv in range(num_waves)]
++    seg_wave = []  # [link][wave] bytes actually published (the trailing empty roots' records are not sent)
++    for l in range(L):
++        per = []
++        for wv in range(num_waves):
++            ext = 0
++            for gi, r in enumerate(roots):
++                if gi % L == l and wave_n_g(wv, r.rows, offs[gi]) > 0:
++                    ext = max(ext, (gi // L + 1) * Rw * RECORD_BYTES)
++            per.append(ext if ESW_TRIM else seg_l[l])
++        seg_wave.append(per)
++    rows_before = [sum(wave_rows[:o]) for o in range(num_waves + 1)]
++    LAST_EXCHANGE_LAYOUT.update(esw_offsets=offs, esw_wave_rows=wave_rows)
++    esw_on = max(offs) > 0  # any group off wave 0: the reader reads (wave_off, read_start) (define DRMS_ESW_OFFSETS)
++    reader_defines = _zone_defines() + ([("DRMS_ESW_OFFSETS", "1")] if esw_on else [])
+
+     landing = allocate_landing(mesh, landing_words)
+     landing_addr = int(landing.buffer_address())
+@@ -1119,6 +1226,11 @@
+             compute_kernel_config.math_approx_mode,
+             payload,
+             _port_defines(),
++            ESW_GROUPS,
++            ESW_DEFER_NS,
++            ESW_READ_GBPS,
++            ESW_TRIM,
++            tuple(offs),
+         )
+     )
+
+@@ -1178,6 +1290,15 @@
+                 p,
+                 out_addr,
+             ]
++            if esw_on:
++                args += [
++                root_off[(w.root.x, w.root.y)],
++                int(
++                    rows_before[root_off[(w.root.x, w.root.y)]]
++                    * (g.Wt * g.T_in / read_gbps if read_gbps > 0 else ESW_DEFER_NS)
++                    * CLOCK_GHZ
++                ),
++                ]
+             # bounded landing: the ports that return the credits for this root's landed slots (opposite direction)
+             fp = [_pack(virt(ports[(_OPP[d], l)])) for d in (FWD, BWD) if ch["entries"][d]] if is_root else []
+             args += [len(fp)] + fp + [0] * (2 - len(fp))
+@@ -1198,7 +1319,7 @@
+                 kernel_source=str(KERNEL_DIR / "distributed_rms_norm_reader.cpp"),
+                 core_ranges=compute_crs,
+                 compile_time_args=reader_ct,
+-                defines=_zone_defines(),
++                defines=reader_defines,
+                 runtime_args=reader_rt,
+                 config=ttnn.ReaderConfigDescriptor(),
+             ),
+@@ -1274,7 +1395,7 @@
+                     assert tgt == peer
+                     rc = virt(ports[(td, l)])
+                     args += [0, rc.x, rc.y]
+-                args += [seg_l[l]] * num_waves
++                args += seg_wave[l]
+                 args += link_roots if max(n_roots, n_notify) > 0 else []
+                 if has_conn:
+                     pn = _node(mesh, peer)
+--- orig/kernels/distributed_rms_norm_reader.cpp	2026-10-31 05:56:39.251223394 +0000
++++ kernels/distributed_rms_norm_reader.cpp	2026-10-31 06:59:24.236872867 +0000
+@@ -83,6 +83,33 @@
+ constexpr uint32_t FACE_DIM = 16;
+ constexpr uint32_t RECORD_BYTES = TILE_DIM * 4;
+
++// EARLY SMALL WAVE (perf experiment, host DRMS_ESW_TRID=1): the x row reads carry NoC transaction id X_TRID and every
++// other read of this RISC (gather copy, slot collect, own-inv copy) keeps id 0, and the chain's barriers wait on id 0
++// only: a blocking chain read is no longer held behind the in-flight x row (a DRAM read under the grid's full read
++// load: 1-3 us), and the load cursor polls its own id.
++#ifdef DRMS_ESW_TRID
++constexpr uint32_t X_TRID = 1;
++constexpr uint32_t CHAIN_TRID = 2;  // the default read id of this kernel (set at start, cleared at exit)
++// The per-id outstanding counter only sees a request once the read command buffer has handed it to the NIU: wait for
++// the buffer to be ready first (measured: polling right after the issue returned early -> stale records).
++FORCE_INLINE void chain_read_barrier() {
++    while (!noc_cmd_buf_ready(noc_index, read_cmd_buf)) {
++    }
++    noc_async_read_barrier_with_trid(CHAIN_TRID);
++}
++FORCE_INLINE bool x_reads_flushed() {
++    return noc_cmd_buf_ready(noc_index, read_cmd_buf) &&
++           ncrisc_noc_read_with_transaction_id_flushed(noc_index, X_TRID);
++}
++#else
++FORCE_INLINE void chain_read_barrier() { noc_async_read_barrier(); }
++FORCE_INLINE bool x_reads_flushed() { return ncrisc_noc_reads_flushed(noc_index); }
++#endif
++
++FORCE_INLINE uint32_t wall_clock_l() {
++    return *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
++}
++
+ FORCE_INLINE uint32_t sem_value(uint32_t id) {
+     return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id));
+ }
+@@ -333,6 +360,15 @@
+     const uint32_t n_in_bwd = get_arg_val<uint32_t>(a++);
+     const uint32_t my_slot = get_arg_val<uint32_t>(a++);
+     [[maybe_unused]] const uint32_t out_addr = get_arg_val<uint32_t>(a++);
++    // EARLY SMALL WAVE (perf experiment): this core's row-group starts at global wave wave_off (every wave below it is
++    // empty for the group); its x reads start read_start cycles after kernel start (chip-wide read priority by wave).
++#ifdef DRMS_ESW_OFFSETS
++    const uint32_t wave_off = get_arg_val<uint32_t>(a++);
++    const uint32_t read_start = get_arg_val<uint32_t>(a++);
++#else  // every group at offset 0 (host): the op's current scheme, nothing to compute
++    constexpr uint32_t wave_off = 0;
++    constexpr uint32_t read_start = 0;
++#endif
+     const uint32_t n_free = get_arg_val<uint32_t>(a++);  // ports I report collected waves to (bounded landing)
+     const uint32_t free_port[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
+     a += 2;
+@@ -344,6 +380,10 @@
+     // virtual coords), count]
+     const uint32_t member_idx = a;
+
++    [[maybe_unused]] const uint32_t t_start = read_start != 0 ? wall_clock_l() : 0;
++#ifdef DRMS_ESW_TRID
++    noc_async_read_set_trid(CHAIN_TRID);
++#endif
+     const auto input_accessor = TensorAccessor(input_args, input_addr, T_in);
+     Noc noc;
+
+@@ -379,8 +419,12 @@
+     const uint32_t own_staging = staging + G * Rw * RECORD_BYTES;
+
+     const uint32_t num_blocks = (rows + R - 1) / R;
+-    const uint32_t own_waves = num_blocks * nwpb;
++    const uint32_t own_waves = wave_off + num_blocks * nwpb;  // global waves this core may hold rows in
+     auto wave_n = [&](uint32_t w) -> uint32_t {
++        if (w < wave_off) {
++            return 0;
++        }
++        w -= wave_off;
+         const uint32_t b = w / nwpb;
+         if (b >= num_blocks) {
+             return 0;
+@@ -420,7 +464,7 @@
+             return false;
+         } else {
+             if (load_inflight) {
+-                if (!ncrisc_noc_reads_flushed(noc_index)) {
++                if (!x_reads_flushed()) {
+                     return false;
+                 }
+                 DRMS_ZONE("rd_land");
+@@ -447,18 +491,28 @@
+                 // first row of wave k >= 1 of the core: wait until wave k-1's local partial exists (pushed by compute,
+                 // or already consumed by this reader)
+                 const uint32_t row = lb * R + lr;
+-                if (row > 0 && lr % Rw == 0 && !wave_reduced(row / Rw - 1)) {
++                if (row > 0 && lr % Rw == 0 && !wave_reduced(wave_off + row / Rw - 1)) {
+                     return false;
+                 }
+             }
++            if (read_start != 0 && lb == 0 && lr == 0 &&
++                wall_clock_l() - t_start < read_start) {
++                return false;
++            }
+             DRMS_ZONE("rd_load");
+             const uint32_t tile_row = start_tile_row + lb * R + lr;
+             x_cb.reserve_back(WS);
+             const uint32_t l1 = x_cb.get_write_ptr();
+             const uint32_t row_page = tile_row * Wt + w0;
++#ifdef DRMS_ESW_TRID
++            noc_async_read_set_trid(X_TRID);
++#endif
+             for (uint32_t j = 0; j < V; ++j) {
+                 noc_async_read_tile(row_page + j, input_accessor, l1 + j * T_in);
+             }
++#ifdef DRMS_ESW_TRID
++            noc_async_read_set_trid(CHAIN_TRID);
++#endif
+             load_inflight = true;
+             return true;
+         }
+@@ -477,7 +531,7 @@
+             return false;
+         }
+         DRMS_ZONE("mb_send");
+-        const uint32_t k = ws % nwpb;
++        const uint32_t k = (ws - wave_off) % nwpb;
+         write_faces_0_2<T_i>(
+             partial_cb.get_read_ptr(), root_x, root_y, gather_base + (k * G_w + my_index) * Rw * T_i, n);
+         noc_async_write_barrier();  // the partial has landed before the root can count it
+@@ -516,7 +570,7 @@
+             return false;
+         }
+         const uint32_t n = wave_n(wg);
+-        const uint32_t k = wg % nwpb;
++        const uint32_t k = (wg - wave_off) % nwpb;
+         if (!partial_cb.pages_available_at_front(n) || !gather_cb.pages_reservable_at_back(G_w * Rw) ||
+             sem_value(SEM_GATHER_BASE + k) < gather_count[k] + (G_w - 1)) {
+             return false;
+@@ -524,7 +578,7 @@
+         DRMS_ZONE("rt_gather");
+         gather_cb.reserve_back(G_w * Rw);
+         noc_async_read(get_noc_addr(partial_cb.get_read_ptr()), gather_cb.get_write_ptr(), n * T_i);
+-        noc_async_read_barrier();
++        chain_read_barrier();
+         gather_cb.push_back(G_w * Rw);
+         partial_cb.pop_front(n);
+         gather_count[k] += G_w - 1;
+@@ -616,7 +670,7 @@
+             for (uint32_t t = 0; t < n; ++t) {
+                 noc_async_read(src + t * RECORD_BYTES, dst + t * T_i, RECORD_BYTES);
+             }
+-            noc_async_read_barrier();
++            chain_read_barrier();
+             pending &= ~(1u << q);
+             return;
+         }
+@@ -625,7 +679,7 @@
+             get_noc_addr(unpack_x(pp), unpack_y(pp), landing + (slot_wave(wc) * G + q) * seg_stride + rec_off),
+             rec,
+             n * RECORD_BYTES);
+-        noc_async_read_barrier();
++        chain_read_barrier();
+         invalidate_l1_cache();
+         const uint32_t dst = stats_cb.get_write_ptr();
+         for (uint32_t t = 0; t < n; ++t) {
+@@ -688,7 +742,7 @@
+             return false;
+         }
+         DRMS_ZONE("rt_distribute");
+-        const uint32_t k = wd % nwpb;
++        const uint32_t k = (wd - wave_off) % nwpb;
+         const uint32_t src = rms_root_cb.get_read_ptr();
+         const uint32_t dst = inv_base + k * Rw * T_i;
+         // Own copy first: this root's compute (the next wave's finalize) is not held behind the member writes.
+@@ -702,7 +756,7 @@
+             rms_root_cb.pop_front(n);
+         } else {
+             noc_async_read(get_noc_addr(src), own, n * T_i);
+-            noc_async_read_barrier();
++            chain_read_barrier();
+         }
+         inv_cb.push_back(n);
+         if constexpr (!combine) {
+@@ -827,4 +881,8 @@
+     }
+     noc_async_write_barrier();
+     noc_async_atomic_barrier();
++#ifdef DRMS_ESW_TRID
++    noc_async_read_barrier();
++    noc_async_read_set_trid(0);
++#endif
+ }

@@ -70,6 +70,20 @@ PORT_OWN_AHEAD = False
 # grid's wave-0 reads (which gate the first exchange) are not slowed by the fast cores' wave-1 reads.
 READ_WAVE_GATE = True
 R3_ROWS_PER_GROUP = 2
+# Early small wave (Perf 2, OVERLAP, perf_experiments/early_small_wave). With a DRAM-interleaved input of at least
+# ESW_MIN_BYTES of x per chip and at least 3 row-groups, the row-groups (in root order) split into 3 consecutive equal
+# thirds at global wave offsets 0 / 1 / 2: a group's own waves are shifted by its offset (every root still publishes
+# every global wave, the waves below its offset empty), and its x reads start (x bytes of the chip in global waves < o)
+# / ESW_READ_GBPS after kernel start. The first third then owns the DRAM read bandwidth, its inv_rms comes early, and
+# the output write burst overlaps the later thirds' reads instead of starting after every read (640x1792: first write
+# 12.2 -> 10.5 us; 2048x1280: 24.5 -> 15.5 us). Carve-outs (measured regressions, offsets forced on): a sharded input
+# (no reads to reorder: HEIGHT_SHARDED 640x1792 +4.9 us, 2048x1280 +8.7 us) and x below ESW_MIN_BYTES (the extra
+# exchange rounds cost more than the earlier first wave saves: +0.7 .. +2.1 us at 0.46 .. 1.97 MB; break-even ~2.1 MB).
+# ESW_READ_GBPS is a Blackhole calibration (2048x1280 fastest chip: 250 -> 36.6, 300 -> 34.5, 382 -> 36.7 us).
+ESW_MIN_BYTES = int(os.environ.get("DRMS_ESW_MIN_BYTES", "") or 2_200_000)  # env: measurement override
+ESW_CLASSES = 3
+ESW_READ_GBPS = 300.0
+AICLK_GHZ = 1.35  # read_start is in RISC wall-clock cycles
 R3_MAX_GROUP_CORES = 24
 R3_MIN_SLICE_TILES = 4
 R3_OCCUPANCY_GAIN = 2
@@ -205,7 +219,7 @@ def _align_up(v, a):
 
 
 # ---------------------------------------------------------------------------
-# Groups, links, exchange schedule (TRANSPORT: relay, from examples/fabric_ring_exchange + fabric_all_gather)
+# Groups, links, exchange schedule (TRANSPORT: direct, relay fallback; from examples/fabric_ring_exchange)
 # ---------------------------------------------------------------------------
 
 
@@ -235,46 +249,141 @@ def usable_links(mesh, groups, ring):
     return min(counts) if counts else 0
 
 
-def exchange_plan(groups, ring):
-    """Per chip coord: {p, next, prev, items[d], entries[d], ready_out[d]} — relay all-gather of one slot per chip.
-    items[d]     slots port d sends, in order: item 0 = own slot p, item i >= 1 relays entry i-1 of port d
-    entries[d]   slots landing on port d (sent by the upstream chip's port d), entry i has arrival counter i
-    ready_out[d] chips whose port (the opposite direction) writes into this chip and must get a ready from port d"""
+# Exchange schedule (Perf 2, TRANSPORT, perf_experiments/direct_exchange): DIRECT delivery. Every port sends only its
+# own slot, one multi-hop unicast per destination chip routed by the fabric's table (each destination is served by the
+# port whose connection carries the route's first hop), farthest destination first (its packet gates the last landing).
+# In the op the ready fence is hidden behind the local reads (Refinement 5), so the extra fence hop that made direct
+# slower than relay in isolation (examples/fabric_ring_exchange) costs nothing here, and every entry lands one fabric
+# traversal after its source published: 640x1792 18.97/20.47 -> 18.81/19.78 us, 2048x1280 40.06/42.99 -> 39.76/41.72.
+# Carve-out (inexpressible): when the fabric routes a destination off this op's ports (a Linear group on a torus fabric,
+# whose table takes the wrap), the store-and-forward RELAY schedule, which only ever uses one-hop neighbours.
+# Fabric line multicast (hop range >= 2) hangs on FABRIC_2D_TORUS_XY 1x4 and is not used.
+
+
+def _eth_dir(mesh, a, b):
+    d = ttnn.get_eth_forwarding_direction(_node(mesh, a), _node(mesh, b))
+    return None if d is None else int(d)  # eth_chan_directions: EAST 0, WEST 1, NORTH 2, SOUTH 3
+
+
+def esw_offsets(plan):
+    """Per root (plan.roots order): its global wave offset under the early-small-wave rule (all 0 = rule off)."""
+    g = plan.geometry
+    n = len(plan.roots)
+    x_bytes = sum(w.rows for w in plan.roots) * g.Wt * g.T_in
+    if g.sharded or x_bytes < ESW_MIN_BYTES or n < ESW_CLASSES:
+        return [0] * n
+    bounds = [int(round(c * n / ESW_CLASSES)) for c in range(1, ESW_CLASSES)]  # 10 roots -> 3 / 4 / 3
+    return [sum(1 for b in bounds if i >= b) for i in range(n)]
+
+
+def exchange_plan(groups, ring, mesh):
+    """Per chip coord: {p, G, next, prev, sends[d], dests[d], entries[d], ready_out[d], n_wait[d], items[d]}.
+    sends[d]     items port d sends per wave, in order: (slot q, header index, wait); wait 0 = own slot, j + 1 = relay of
+                 entry j of port d (relay fallback only)
+    dests[d]     destination chip coords of port d's packet headers (one header each)
+    entries[d]   slots landing on port d, in notify order; every slot has its own arrival counter (arrival_addrs[q],
+                 the same on every chip)
+    ready_out[d] readies (and bounded-landing credits) port d sends: (source coord, source port direction, header)
+    n_wait[d]    destination chips of port d's sends (one ready / one credit per wave from each)"""
+    try:
+        return _exchange_plan(groups, ring, mesh, direct=True)
+    except NotImplementedError:
+        return _exchange_plan(groups, ring, mesh, direct=False)
+
+
+def _exchange_plan(groups, ring, mesh, direct):
     chips = {}
     for grp in groups:
         G = len(grp)
+        nxt_of = lambda p: grp[(p + 1) % G] if (ring or p < G - 1) else None
+        prv_of = lambda p: grp[(p - 1) % G] if (ring or p > 0) else None
         for p, coord in enumerate(grp):
-            nxt = grp[(p + 1) % G] if (ring or p < G - 1) else None
-            prv = grp[(p - 1) % G] if (ring or p > 0) else None
-            if ring:
-                kf = G // 2
-                kb = G - 1 - kf
-                fwd = [(p - i) % G for i in range(kf)]
-                bwd = [(p + i) % G for i in range(kb)]
-            else:
-                fwd = [p - i for i in range(p + 1)] if p < G - 1 else []
-                bwd = [p + i for i in range(G - p)] if p > 0 else []
             chips[coord] = dict(
                 p=p,
                 G=G,
-                next=nxt,
-                prev=prv,
-                items={FWD: fwd, BWD: bwd},
+                next=nxt_of(p),
+                prev=prv_of(p),
+                sends={FWD: [], BWD: []},
+                dests={FWD: [], BWD: []},
                 entries={FWD: [], BWD: []},
                 ready_out={FWD: [], BWD: []},
+                n_wait={FWD: 0, BWD: 0},
             )
-    for coord, ch in chips.items():
-        for d, peer in ((FWD, ch["next"]), (BWD, ch["prev"])):
-            if ch["items"][d]:
-                assert peer is not None
-                chips[peer]["entries"][d] = list(ch["items"][d])
-                chips[peer]["ready_out"][_OPP[d]].append((coord, d))
+
+        def hdr(coord, d, dst):
+            lst = chips[coord]["dests"][d]
+            if dst not in lst:
+                lst.append(dst)
+            return lst.index(dst)
+
+        def first_hop(s, t):
+            """Port of chip s whose neighbour carries the fabric's first hop s -> t (unicast routing by table)."""
+            dt = _eth_dir(mesh, grp[s], grp[t])
+            for d, nb in ((FWD, nxt_of(s)), (BWD, prv_of(s))):
+                if nb is not None and dt == _eth_dir(mesh, grp[s], nb):
+                    return d
+            raise NotImplementedError(f"direct exchange: route {grp[s]} -> {grp[t]} leaves through no port")
+
+        hop = lambda s, t, d: ((t - s) % G) if d == FWD else ((s - t) % G)
+        targets = {}  # (s, d) -> destination positions
+        if not direct:
+            for p in range(G):
+                if ring:
+                    kf = G // 2
+                    kb = G - 1 - kf
+                    fwd = [(p - i) % G for i in range(kf)]
+                    bwd = [(p + i) % G for i in range(kb)]
+                else:
+                    fwd = [p - i for i in range(p + 1)] if p < G - 1 else []
+                    bwd = [p + i for i in range(G - p)] if p > 0 else []
+                for d, lst, peer in ((FWD, fwd, nxt_of(p)), (BWD, bwd, prv_of(p))):
+                    if not lst:
+                        continue
+                    h = hdr(grp[p], d, peer)
+                    chips[grp[p]]["sends"][d] = [(q, h, 0 if i == 0 else i) for i, q in enumerate(lst)]
+                    chips[peer]["entries"][d] = list(lst)
+                    targets[(p, d)] = [grp.index(peer)]
+        else:
+            for s in range(G):
+                for d in (FWD, BWD):
+                    targets[(s, d)] = []
+                if ring:
+                    for t in range(G):
+                        if t != s:
+                            targets[(s, first_hop(s, t))].append(t)
+                else:
+                    for d in (FWD, BWD):
+                        k = (G - 1 - s) if d == FWD else s
+                        ts = [(s + i) if d == FWD else (s - i) for i in range(1, k + 1)]
+                        for t in ts:
+                            if first_hop(s, t) != d:
+                                raise NotImplementedError(
+                                    f"direct exchange (line): the fabric routes {grp[s]} -> {grp[t]} off the line"
+                                )
+                        targets[(s, d)] = ts
+                for d in (FWD, BWD):
+                    order = sorted(targets[(s, d)], key=lambda t: hop(s, t, d), reverse=True)  # farthest first
+                    chips[grp[s]]["sends"][d] = [(s, hdr(grp[s], d, grp[t]), 0) for t in order]
+            for t in range(G):
+                for d in (FWD, BWD):
+                    srcs = [s for s in range(G) if s != t and t in targets[(s, d)]]
+                    chips[grp[t]]["entries"][d] = sorted(srcs, key=lambda s: hop(s, t, d))
+        for (s, d), ts in targets.items():
+            if not ts:
+                continue
+            chips[grp[s]]["n_wait"][d] = len(ts)
+            for t in ts:
+                if not direct:
+                    back = _OPP[d]
+                else:
+                    back = first_hop(t, s)
+                    if not ring and back != _OPP[d]:
+                        raise NotImplementedError(f"direct exchange (line): ready {grp[t]} -> {grp[s]} off the line")
+                h = hdr(grp[t], back, grp[s])
+                chips[grp[t]]["ready_out"][back].append((grp[s], d, h))
+    for ch in chips.values():
+        ch["items"] = {d: [q for q, _, _ in ch["sends"][d]] for d in (FWD, BWD)}
     return chips
-
-
-# ---------------------------------------------------------------------------
-# Port placement and the fused grid
-# ---------------------------------------------------------------------------
 
 
 def _cores_of(core_range_set):
@@ -899,8 +1008,9 @@ def create_mesh_program_descriptor(
     def exchange_layout(plan):
         R = plan.block_rows
         Rw, nwpb = wave_split(R)
-        num_blocks_max = max(math.ceil(w.rows / R) for w in plan.work)
-        num_waves = num_blocks_max * nwpb  # waves of the call (every root publishes every wave)
+        offs = esw_offsets(plan)
+        # waves of the call (every root publishes every wave; a root's waves start at its early-small-wave offset)
+        num_waves = max(o + math.ceil(w.rows / R) * nwpb for o, w in zip(offs, plan.roots))
         n_roots = len(plan.roots)
         n_roots_l = [sum(1 for gi in range(n_roots) if gi % L == l) for l in range(L)]
         seg_l = [n * Rw * RECORD_BYTES for n in n_roots_l]
@@ -913,7 +1023,7 @@ def create_mesh_program_descriptor(
 
     l1_tensors = (input_tensor, output_tensor, gamma)
     # Persistent semaphores first: their L1 words bound the CB region of this call too (l1_budget).
-    ready_sem, arrival_sems = get_semaphores(mesh, G)
+    ready_sem, arrival_sems = get_semaphores(mesh, G + 1)  # one arrival counter per SLOT (indexed by slot q)
     ready_addr = int(ttnn.get_global_semaphore_address(ready_sem))
     arrival_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in arrival_sems]
     sem_addrs = [ready_addr] + arrival_addrs
@@ -953,6 +1063,41 @@ def create_mesh_program_descriptor(
     g, R, x_depth = plan.geometry, plan.block_rows, plan.x_depth
     LAST_EXCHANGE_LAYOUT.update(num_waves=num_waves, landing_waves=K, landing_words=landing_words)  # test hook
     roots = plan.roots
+    # ---- early small wave: per-group global wave offset, rows per global wave, per-wave per-link segment extent ----
+    offs = esw_offsets(plan)
+    root_off = {(w.core.x, w.core.y): o for o, w in zip(offs, roots)}
+
+    def wave_n_g(wv, rows, off):  # mirror of the reader's wave_n
+        if wv < off:
+            return 0
+        b, k = divmod(wv - off, nwpb)
+        rem = rows - b * R
+        if rem <= 0:
+            return 0
+        rb = min(rem, R)
+        first = k * Rw
+        return 0 if first >= rb else min(Rw, rb - first)
+
+    wave_rows = [sum(wave_n_g(wv, r.rows, o) for o, r in zip(offs, roots)) for wv in range(num_waves)]
+    rows_before = [sum(wave_rows[:o]) for o in range(num_waves + 1)]
+    # [link][wave] bytes a port sends: the extent of the roots that publish a non-empty record run in that wave
+    seg_wave = [
+        [
+            max(
+                [
+                    (gi // L + 1) * Rw * RECORD_BYTES
+                    for gi, r in enumerate(roots)
+                    if gi % L == l and wave_n_g(wv, r.rows, offs[gi]) > 0
+                ]
+                or [0]
+            )
+            for wv in range(num_waves)
+        ]
+        for l in range(L)
+    ]
+    LAST_EXCHANGE_LAYOUT.update(esw_offsets=offs, esw_wave_rows=wave_rows)
+    esw_on = max(offs) > 0  # some group off wave 0: the reader takes (wave_off, read_start) (define DRMS_ESW_OFFSETS)
+    reader_defines = _zone_defines() + ([("DRMS_ESW_OFFSETS", "1")] if esw_on else [])
     root_link = {(w.core.x, w.core.y): (gi % L, gi // L) for gi, w in enumerate(roots)}
 
     landing = allocate_landing(mesh, landing_words)
@@ -962,7 +1107,7 @@ def create_mesh_program_descriptor(
         raise NotImplementedError("distributed_rms_norm: the CBs do not fit next to the exchange landing in L1")
 
     groups = build_groups(mesh_shape, cluster_axis)
-    chips = exchange_plan(groups, ring)
+    chips = exchange_plan(groups, ring, mesh)
     payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
 
     compute_cores = [w.core for w in plan.work]
@@ -1087,6 +1232,7 @@ def create_mesh_program_descriptor(
         str(v)
         for v in (
             "distributed_rms_norm",
+            "direct_exchange",
             list(input_tensor.shape),
             input_tensor.dtype,
             in_mc,
@@ -1119,6 +1265,7 @@ def create_mesh_program_descriptor(
             compute_kernel_config.math_approx_mode,
             payload,
             _port_defines(),
+            tuple(offs),
         )
     )
 
@@ -1178,8 +1325,11 @@ def create_mesh_program_descriptor(
                 p,
                 out_addr,
             ]
-            # bounded landing: the ports that return the credits for this root's landed slots (opposite direction)
-            fp = [_pack(virt(ports[(_OPP[d], l)])) for d in (FWD, BWD) if ch["entries"][d]] if is_root else []
+            if esw_on:
+                o = root_off[(w.root.x, w.root.y)]
+                args += [o, int(rows_before[o] * g.Wt * g.T_in / ESW_READ_GBPS * AICLK_GHZ)]
+            # bounded landing: the ports that send readies (= return credits) for this chip, whatever their direction
+            fp = [_pack(virt(ports[(d, l)])) for d in (FWD, BWD) if ch["ready_out"][d]] if is_root else []
             args += [len(fp)] + fp + [0] * (2 - len(fp))
             args += [_pack(virt(slot_port(q, l))) for q in range(G)]
             args += list(ch["entries"][FWD]) + list(ch["entries"][BWD])  # slot of entry i per direction
@@ -1198,7 +1348,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "distributed_rms_norm_reader.cpp"),
                 core_ranges=compute_crs,
                 compile_time_args=reader_ct,
-                defines=_zone_defines(),
+                defines=reader_defines,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
@@ -1228,13 +1378,16 @@ def create_mesh_program_descriptor(
             for d in (FWD, BWD):
                 core = ports[(d, l)]
                 items, entries, ready_out = ch["items"][d], ch["entries"][d], ch["ready_out"][d]
+                sends, dests = ch["sends"][d], ch["dests"][d]
+                n_wait = ch["n_wait"][d]
                 peer = peer_of[d]
                 has_conn = len(items) > 0 or len(ready_out) > 0
                 pc = virt(core)
-                dests = [peer] if has_conn else []
                 n_roots = len(link_roots) if items else 0
                 n_notify = len(link_roots) if entries else 0
                 n_counted = len(link_roots) if (items and num_waves > 1) else 0
+                n_relay = sum(1 for _, _, wt in sends if wt != 0)
+                assert len(dests) <= MAX_HEADERS
                 args = [
                     landing_addr,
                     seg_stride,
@@ -1244,7 +1397,7 @@ def create_mesh_program_descriptor(
                     len(entries),
                     n_roots,
                     len(ready_out),
-                    1 if items else 0,  # readies to wait for: one per destination chip (relay: the neighbour)
+                    n_wait,  # readies to wait for: one per destination chip
                     pc.x,
                     pc.y,
                     n_notify,
@@ -1253,28 +1406,26 @@ def create_mesh_program_descriptor(
                     1 if NOTIFY_PER_ENTRY else max(1, len(entries)),  # notify quantum (lamp L4)
                     SEM_LANDED[d],
                 ]
-                # Bounded landing (K < num_waves): this port returns the credits of the sibling port D (opposite
-                # direction, same link) whose entries come from the peer I fence; D reports its flushed relays here.
+                # Bounded landing (K < num_waves): a port with readies returns one credit per consumed wave to each of
+                # them once the link's roots freed it (+ relay: its sibling D flushed its relays of it).
                 credit_waves = num_waves - K
                 sib = _OPP[d]
-                sib_items = ch["items"][sib]
-                sib_entries = ch["entries"][sib]
+                sib_relays = sum(1 for _, _, wt in ch["sends"][sib] if wt != 0)
                 n_credit_out = credit_waves if (ready_out and credit_waves > 0) else 0
-                credit_thr = (len(link_roots) if sib_entries else 0) + (1 if len(sib_items) > 1 else 0)
-                relay_done_to = _pack(virt(ports[(sib, l)])) if (credit_waves > 0 and len(items) > 1) else 0
-                n_credit_in = credit_waves if (items and credit_waves > 0) else 0
+                credit_thr = (len(link_roots) if ready_out else 0) + (1 if (ready_out and sib_relays > 0) else 0)
+                relay_done_to = _pack(virt(ports[(sib, l)])) if (credit_waves > 0 and n_relay > 0) else 0
+                n_credit_in = credit_waves * n_wait if (items and credit_waves > 0) else 0
                 args += [n_credit_out, credit_thr, relay_done_to, n_credit_in]
-                args += arrival_addrs[: len(entries)]
+                args += [arrival_addrs[q] for q in entries]  # slot-indexed arrival counters
                 for dst in dests:
                     dn = _node(mesh, dst)
                     args += [int(dn.chip_id), int(dn.mesh_id), 1]
-                for i, q in enumerate(items):
-                    args += [q, 0, arrival_addrs[i], 0 if i == 0 else i]
-                for tgt, td in ready_out:
-                    assert tgt == peer
+                for q, h, wt in sends:
+                    args += [q, h, arrival_addrs[q], wt]
+                for tgt, td, h in ready_out:
                     rc = virt(ports[(td, l)])
-                    args += [0, rc.x, rc.y]
-                args += [seg_l[l]] * num_waves
+                    args += [h, rc.x, rc.y]
+                args += seg_wave[l]
                 args += link_roots if max(n_roots, n_notify) > 0 else []
                 if has_conn:
                     pn = _node(mesh, peer)

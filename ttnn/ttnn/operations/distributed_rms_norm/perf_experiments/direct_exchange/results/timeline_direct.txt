@@ -1,0 +1,100 @@
+chip 0: span 19.48
+  port (5, 2) ready_wait:1.64-3.39 send:7.19-7.64 notify:8.55-8.75 send:9.08-9.51 notify:9.62-9.82 notify:10.27-10.48 notify:11.17-11.37
+  port (6, 2) ready_wait:1.02-2.59 send:7.19-7.43 send:9.10-9.34 notify:9.63-9.83 notify:12.00-12.20
+  port (7, 2) ready_wait:1.60-3.36 send:7.03-7.47 notify:8.38-8.58 notify:9.51-9.71 send:9.78-10.21 notify:10.87-11.07 notify:11.60-11.80
+  port (11, 2) ready_wait:0.99-2.02 send:7.10-7.34 notify:9.56-9.76 send:9.82-10.05 notify:12.07-12.27
+  rt_publish[0] n=10 start 5.29/5.76/6.43 end 5.78/6.25/6.91
+  rt_publish[1] n=10 start 7.15/8.14/8.97 end 7.61/8.64/9.46
+  rt_collect[0] n=10 start 5.98/6.44/7.11 end 6.28/6.74/7.41
+  rt_collect[1] n=10 start 8.59/8.89/9.26 end 8.89/9.19/9.56
+  rt_collect[2] n=10 start 9.76/9.86/10.03 end 10.00/10.15/10.33
+  rt_collect[3] n=10 start 10.15/10.29/10.47 end 10.36/10.59/10.77
+  rt_collect[4] n=10 start 10.69/10.92/11.11 end 10.91/11.23/11.41
+  rt_collect[5] n=10 start 11.75/12.00/12.17 end 11.97/12.30/12.48
+  rt_collect[6] n=10 start 12.39/12.73/13.91 end 12.60/13.89/16.49
+  rt_collect[7] n=10 start 12.75/14.04/16.63 end 12.97/14.80/16.93
+  cp_fin[0] n=10 start 7.51/8.76/9.35 end 10.58/10.80/10.99
+  cp_fin[1] n=10 start 7.54/8.80/9.39 end 10.65/10.87/11.05
+  cp_fin[2] n=10 start 7.79/9.04/9.63 end 7.97/9.22/9.81
+  cp_fin[3] n=10 start 11.57/11.89/12.07 end 13.17/15.00/17.12
+  cp_fin[4] n=10 start 11.62/11.95/12.13 end 13.24/15.07/17.19
+  cp_fin[5] n=10 start 11.77/12.10/12.28 end 11.95/12.28/12.46
+  rt_distribute[0] n=10 start 11.03/11.35/11.53 end 11.68/11.92/12.10
+  rt_distribute[1] n=10 start 13.38/15.21/17.33 end 14.01/15.79/18.00
+  wr_store[0] n=100 start 0.64/1.47/2.36 end 12.31/14.58/18.62
+  wr_store[1] n=100 start 12.34/14.61/18.65 end 14.50/17.47/19.30
+chip 1: span 19.65
+  port (4, 2) ready_wait:1.54-1.77 send:7.16-7.40 notify:8.76-8.97 send:9.04-9.27 notify:10.76-10.96
+  port (5, 2) ready_wait:1.64-3.46 send:7.18-7.62 notify:8.34-8.54 send:9.07-9.50 notify:9.94-10.14 notify:10.37-10.58 notify:12.35-12.55
+  port (6, 2) ready_wait:1.13-1.77 send:6.98-7.22 notify:9.08-9.29 send:9.60-9.83 notify:11.22-11.42
+  port (10, 2) ready_wait:1.61-3.56 send:7.03-7.48 notify:8.33-8.54 send:9.60-10.04 notify:10.14-10.34 notify:10.96-11.16 notify:12.40-12.60
+  rt_publish[0] n=10 start 4.87/5.43/6.40 end 5.33/5.90/6.88
+  rt_publish[1] n=10 start 7.20/8.20/8.98 end 7.66/8.69/9.47
+  rt_collect[0] n=10 start 5.51/6.10/7.08 end 5.83/6.40/7.39
+  rt_collect[1] n=10 start 8.55/8.74/9.17 end 8.77/9.04/9.47
+  rt_collect[2] n=10 start 8.91/9.48/9.62 end 9.12/9.78/9.92
+  rt_collect[3] n=10 start 10.13/10.36/10.55 end 10.35/10.60/10.84
+  rt_collect[4] n=10 start 10.67/10.94/11.18 end 10.89/11.24/11.48
+  rt_collect[5] n=10 start 11.74/12.03/12.28 end 11.95/12.33/12.58
+  rt_collect[6] n=10 start 12.43/12.76/16.45 end 12.64/14.56/16.81
+  rt_collect[7] n=10 start 12.79/14.70/16.95 end 13.00/15.08/17.25
+  cp_fin[0] n=10 start 7.68/8.82/9.24 end 10.56/10.82/11.06
+  cp_fin[1] n=10 start 7.72/8.86/9.28 end 10.63/10.88/11.13
+  cp_fin[2] n=10 start 7.96/9.10/9.51 end 8.15/9.29/9.70
+  cp_fin[3] n=10 start 11.55/11.90/12.14 end 13.20/15.27/17.44
+  cp_fin[4] n=10 start 11.61/11.96/12.20 end 13.27/15.34/17.51
+  cp_fin[5] n=10 start 11.76/12.11/12.35 end 11.95/12.29/12.54
+  rt_distribute[0] n=10 start 11.01/11.36/11.60 end 11.67/11.95/12.21
+  rt_distribute[1] n=10 start 13.41/15.48/17.65 end 14.04/16.02/18.31
+  wr_store[0] n=100 start 0.62/1.50/2.37 end 12.32/14.82/17.58
+  wr_store[1] n=100 start 12.35/14.85/17.61 end 14.53/17.44/19.42
+chip 2: span 19.56
+  port (4, 2) ready_wait:1.67-3.00 send:7.06-7.51 send:9.15-9.59 notify:9.72-9.93 notify:11.47-11.67
+  port (6, 2) ready_wait:1.05-3.30 send:7.11-7.34 notify:8.53-8.73 send:9.17-9.40 notify:10.26-10.46
+  port (7, 2) ready_wait:1.63-2.96 send:7.34-7.78 notify:9.06-9.27 send:9.61-10.04 notify:11.73-11.93
+  port (10, 2) ready_wait:1.80-2.62 send:7.39-7.63 notify:8.33-8.53 send:9.69-9.92 notify:10.87-11.07
+  rt_publish[0] n=10 start 5.17/5.88/6.58 end 5.66/6.35/7.06
+  rt_publish[1] n=10 start 7.55/8.28/9.01 end 8.01/8.77/9.51
+  rt_collect[0] n=10 start 5.85/6.54/7.26 end 6.15/6.84/7.56
+  rt_collect[1] n=10 start 8.64/8.91/9.21 end 8.85/9.20/9.51
+  rt_collect[2] n=10 start 9.40/9.79/10.10 end 9.70/10.04/10.41
+  rt_collect[3] n=10 start 9.83/10.17/10.54 end 10.12/10.43/10.83
+  rt_collect[4] n=10 start 10.46/10.76/11.17 end 10.76/11.02/11.47
+  rt_collect[5] n=10 start 11.44/11.89/12.25 end 11.74/12.14/12.56
+  rt_collect[6] n=10 start 12.16/12.56/13.64 end 12.52/13.56/15.34
+  rt_collect[7] n=10 start 12.66/13.70/15.47 end 13.12/14.68/16.40
+  cp_fin[0] n=10 start 7.54/8.90/9.27 end 10.34/10.65/11.05
+  cp_fin[1] n=10 start 7.58/8.93/9.31 end 10.41/10.72/11.12
+  cp_fin[2] n=10 start 7.82/9.18/9.55 end 8.00/9.36/9.73
+  cp_fin[3] n=10 start 11.42/11.68/12.13 end 13.31/14.88/16.60
+  cp_fin[4] n=10 start 11.48/11.74/12.19 end 13.38/14.95/16.67
+  cp_fin[5] n=10 start 11.63/11.89/12.34 end 11.81/12.07/12.52
+  rt_distribute[0] n=10 start 10.88/11.14/11.59 end 11.35/11.81/12.18
+  rt_distribute[1] n=10 start 13.52/15.09/16.81 end 14.11/15.67/17.54
+  wr_store[0] n=100 start 0.58/1.65/2.59 end 12.08/14.38/19.00
+  wr_store[1] n=100 start 12.11/14.41/19.03 end 14.70/17.47/19.36
+chip 3: span 18.85
+  port (4, 2) ready_wait:1.94-2.04 send:7.60-7.84 notify:7.94-8.14 notify:9.76-9.96 send:10.03-10.26
+  port (5, 2) ready_wait:1.64-2.51 send:7.64-8.09 notify:8.20-8.40 notify:8.61-8.81 send:10.00-10.44 notify:10.54-10.75
+  port (6, 2) ready_wait:1.49-2.52 send:7.48-7.72 notify:8.00-8.20 send:9.96-10.19 notify:10.66-10.86
+  port (7, 2) ready_wait:1.74-2.84 send:7.48-7.93 notify:8.44-8.64 notify:8.85-9.05 send:9.99-10.43 notify:10.81-11.01 notify:11.22-11.42
+  rt_publish[0] n=10 start 4.90/5.76/6.84 end 5.37/6.25/7.33
+  rt_publish[1] n=10 start 7.67/8.74/9.38 end 8.14/9.23/9.87
+  rt_collect[0] n=10 start 5.55/6.44/7.52 end 5.86/6.74/7.82
+  rt_collect[1] n=10 start 8.23/8.36/8.76 end 8.45/8.66/9.05
+  rt_collect[2] n=10 start 8.83/9.04/9.43 end 9.07/9.30/9.73
+  rt_collect[3] n=10 start 9.21/9.80/10.00 end 9.39/10.10/10.30
+  rt_collect[4] n=10 start 9.72/10.44/10.63 end 10.02/10.74/10.94
+  rt_collect[5] n=10 start 10.98/11.46/11.79 end 11.27/11.77/12.18
+  rt_collect[6] n=10 start 11.71/12.25/12.57 end 11.95/13.17/15.13
+  rt_collect[7] n=10 start 12.09/13.31/15.27 end 12.31/13.78/15.92
+  cp_fin[0] n=10 start 8.03/9.01/9.76 end 9.61/10.32/10.51
+  cp_fin[1] n=10 start 8.07/9.05/9.80 end 9.68/10.38/10.58
+  cp_fin[2] n=10 start 8.30/9.29/10.04 end 8.49/9.47/10.22
+  cp_fin[3] n=10 start 10.68/11.40/11.60 end 12.51/13.98/16.11
+  cp_fin[4] n=10 start 10.74/11.45/11.65 end 12.58/14.05/16.18
+  cp_fin[5] n=10 start 10.89/11.61/11.80 end 11.07/11.79/11.98
+  rt_distribute[0] n=10 start 10.14/10.86/11.06 end 10.76/11.39/11.72
+  rt_distribute[1] n=10 start 12.72/14.19/16.32 end 13.34/14.72/16.97
+  wr_store[0] n=100 start 0.62/1.82/2.42 end 11.31/13.78/18.29
+  wr_store[1] n=100 start 11.34/13.81/18.32 end 13.83/16.82/18.65

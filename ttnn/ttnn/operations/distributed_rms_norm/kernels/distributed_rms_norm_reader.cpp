@@ -83,6 +83,13 @@ constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
 constexpr uint32_t RECORD_BYTES = TILE_DIM * 4;
 
+// Raw wall-clock register read (Perf 2, early small wave): no dataflow helper offers a timed start relative to kernel
+// launch. It gates the first x read of a later-wave row-group so the first wave owns the DRAM read bandwidth; measured
+// 640x1792 18.97/20.48 -> 17.75/18.59 us and 2048x1280 40.05/42.99 -> 33.96/38.59 us (with the direct exchange).
+FORCE_INLINE uint32_t wall_clock_l() {
+    return *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+}
+
 FORCE_INLINE uint32_t sem_value(uint32_t id) {
     return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id));
 }
@@ -333,6 +340,17 @@ void kernel_main() {
     const uint32_t n_in_bwd = get_arg_val<uint32_t>(a++);
     const uint32_t my_slot = get_arg_val<uint32_t>(a++);
     [[maybe_unused]] const uint32_t out_addr = get_arg_val<uint32_t>(a++);
+    // Early small wave (Perf 2, OVERLAP; host esw_rule): this core's row-group starts at global wave wave_off (every
+    // wave below it is empty for the group), and its x reads start read_start cycles after kernel start, so the
+    // groups of the first wave own the DRAM read bandwidth and their inv_rms (and the output write burst) comes early,
+    // overlapping the later groups' reads. Compiled in only when the host gave some group an offset.
+#ifdef DRMS_ESW_OFFSETS
+    const uint32_t wave_off = get_arg_val<uint32_t>(a++);
+    const uint32_t read_start = get_arg_val<uint32_t>(a++);
+#else  // every group at offset 0 (host): the op's current scheme, nothing to compute
+    constexpr uint32_t wave_off = 0;
+    constexpr uint32_t read_start = 0;
+#endif
     const uint32_t n_free = get_arg_val<uint32_t>(a++);  // ports I report collected waves to (bounded landing)
     const uint32_t free_port[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
     a += 2;
@@ -344,6 +362,7 @@ void kernel_main() {
     // virtual coords), count]
     const uint32_t member_idx = a;
 
+    [[maybe_unused]] const uint32_t t_start = read_start != 0 ? wall_clock_l() : 0;
     const auto input_accessor = TensorAccessor(input_args, input_addr, T_in);
     Noc noc;
 
@@ -379,8 +398,12 @@ void kernel_main() {
     const uint32_t own_staging = staging + G * Rw * RECORD_BYTES;
 
     const uint32_t num_blocks = (rows + R - 1) / R;
-    const uint32_t own_waves = num_blocks * nwpb;
+    const uint32_t own_waves = wave_off + num_blocks * nwpb;  // global waves this core may hold rows in
     auto wave_n = [&](uint32_t w) -> uint32_t {
+        if (w < wave_off) {
+            return 0;
+        }
+        w -= wave_off;
         const uint32_t b = w / nwpb;
         if (b >= num_blocks) {
             return 0;
@@ -447,9 +470,12 @@ void kernel_main() {
                 // first row of wave k >= 1 of the core: wait until wave k-1's local partial exists (pushed by compute,
                 // or already consumed by this reader)
                 const uint32_t row = lb * R + lr;
-                if (row > 0 && lr % Rw == 0 && !wave_reduced(row / Rw - 1)) {
+                if (row > 0 && lr % Rw == 0 && !wave_reduced(wave_off + row / Rw - 1)) {
                     return false;
                 }
+            }
+            if (read_start != 0 && lb == 0 && lr == 0 && wall_clock_l() - t_start < read_start) {
+                return false;
             }
             DRMS_ZONE("rd_load");
             const uint32_t tile_row = start_tile_row + lb * R + lr;
@@ -477,7 +503,7 @@ void kernel_main() {
             return false;
         }
         DRMS_ZONE("mb_send");
-        const uint32_t k = ws % nwpb;
+        const uint32_t k = (ws - wave_off) % nwpb;
         write_faces_0_2<T_i>(
             partial_cb.get_read_ptr(), root_x, root_y, gather_base + (k * G_w + my_index) * Rw * T_i, n);
         noc_async_write_barrier();  // the partial has landed before the root can count it
@@ -516,7 +542,7 @@ void kernel_main() {
             return false;
         }
         const uint32_t n = wave_n(wg);
-        const uint32_t k = wg % nwpb;
+        const uint32_t k = (wg - wave_off) % nwpb;
         if (!partial_cb.pages_available_at_front(n) || !gather_cb.pages_reservable_at_back(G_w * Rw) ||
             sem_value(SEM_GATHER_BASE + k) < gather_count[k] + (G_w - 1)) {
             return false;
@@ -688,7 +714,7 @@ void kernel_main() {
             return false;
         }
         DRMS_ZONE("rt_distribute");
-        const uint32_t k = wd % nwpb;
+        const uint32_t k = (wd - wave_off) % nwpb;
         const uint32_t src = rms_root_cb.get_read_ptr();
         const uint32_t dst = inv_base + k * Rw * T_i;
         // Own copy first: this root's compute (the next wave's finalize) is not held behind the member writes.

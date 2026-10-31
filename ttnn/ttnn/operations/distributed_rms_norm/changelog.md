@@ -413,3 +413,208 @@ relay (TRANSPORT, item 3), and fast multi-row reads in flight.
 
 Summary: both ideas were measured. 1 graduated, 0 null, 1 regression (not graduated). The op is 1.21 µs faster on the
 focus case (fastest chip), and faster on all three perf cases, with no regression.
+
+## Perf 2 — perf tournament, round 2
+- Date: 2026-10-31
+- Focus case: `LOOSE_CASES[0]` exactly as declared. Per chip (1,1,640,1792) bf16 TILE, interleaved,
+  fp32_dest_acc_en=True, HiFi4, bf16 TILE γ, Ring, cluster_axis=1, num_links=2, on the 1×4 QuietBox 2 ring. Every
+  knob is in SUPPORTED. SUPPORTED is unchanged.
+- **Instrumentation.** `perf_instrumentation.hpp` (`MaybeDeviceZoneScope`) still does not exist in this tree. The op's
+  permanent `DRMS_ZONE` / `DeviceZoneScopedN` zones are reused; they cover every changed stage (`prt_send`,
+  `prt_ready_wait`, `rd_load`, `rd_land`, `rt_publish`, `rt_collect`, `rt_distribute`, `wr_store`).
+
+### Measured breakdown (before; after Perf 1)
+- **Harness** (`perf_measure.py`, 5 experiments, fastest / slowest chip, µs):
+  - 640×1792: 18.970 / 20.481;
+  - 32×1792: 8.607 / 9.849;
+  - 2048×1280: 40.052 / 42.993.
+  - Not dispatch-bound.
+- **Cumulative ablation** (fastest chip, µs):
+
+  | Step | µs |
+  |---|---|
+  | full op | 18.97 |
+  | exchange stubbed | 17.48 (exposed transport 1.49) |
+  | + writes stubbed | 13.84 |
+  | + finalize math stubbed | 13.80 |
+  | writes stubbed alone | 14.79 |
+
+- **Wave-0 chain** (chip 0, µs from kernel start, zones on):
+  1. x lands 2.2–3.9 per root (member reads 1.3–4.2).
+  2. Reduce +0.8.
+  3. Root gather 4.8–6.4 (waits for the slowest member).
+  4. Publish ends 5.8–7.2.
+  5. The ports send their own slots at 7.0–7.6 (each waits for the slowest root of its link).
+  6. Peer slots are collected at ~8.6, ~9.4 and ~9.9. The last is the 2-hop relayed one.
+  7. inv_rms is distributed at 10.5–11.7.
+  8. The output write burst runs 11.8–19 at the DRAM write ceiling (~320 GB/s).
+  - The x reads end at ~7.0, so DRAM is idle for ~4.8 µs.
+- **Ranked bottleneck.**
+  1. The first wave's chain (~7 µs from x landed to inv_rms) gates the start of the write burst:
+     - exchange ~2.5–3 µs: relay hop 2 lands last, and each chip's 2-hop entry also waits for its neighbour's publish;
+     - pre-exchange ~2.5 µs: gather skew, publish, port waits for the slowest root;
+     - post-exchange ~1.2 µs.
+  2. The write burst is at the write ceiling (`/perf-ceiling-dm`). Its throughput is not a target: it can only start
+     earlier, or overlap the reads (mixed traffic beats write-only).
+
+### Portfolio (hard cap: 2 experiments)
+1. **direct_exchange** (TRANSPORT): direct delivery replaces the store-and-forward relay. The candidates were a fabric
+   line multicast, or one multi-hop unicast per destination. The fence penalty measured in isolation should not apply
+   in the op, because the fence is hidden there.
+2. **early_small_wave** (OVERLAP): make the first wave small and early, so its inv_rms arrives while later x is still
+   being read and the write burst overlaps the remaining reads.
+
+Floated but not tested (cap): per-root exchange items (skew tolerance in the pre-exchange chain), and a cheaper
+publish (word-copy + barrier ~0.5 µs).
+
+### Verdicts
+**direct_exchange: WIN. Graduated.** Bit-identical on 17 cells:
+- the three perf shapes, num_links=1, fp32, bf8b and 64×1000;
+- the bounded landing ring ×3;
+- Linear, including a bounded case;
+- cluster_axis=0 on a 4×1 mesh, Ring and Linear;
+- G=2 Ring and Linear.
+
+Variants (fastest / slowest µs, vs 18.97 / 20.47 · 8.61 / 9.85 · 40.06 / 42.99):
+
+| Variant | 640×1792 | 32×1792 | 2048×1280 | Verdict |
+|---|---|---|---|---|
+| direct, farthest first | **18.81 / 19.78** | **8.60 / 8.90** | **39.76 / 41.72** | win · null fastest, slowest −0.95 · win |
+| direct, nearest first | 18.91 / 20.13 | 8.66 / 9.67 | 39.49 / 42.69 | smaller |
+| line multicast (hop range ≥ 2) | hangs on FABRIC_2D_TORUS_XY 1×4 | — | — | BLOCKED |
+
+- **num_links=1:**
+  - 640×1792: 19.25 / 21.26 → 18.93 / 20.25;
+  - 2048×1280: 40.85 / 45.72 → 40.17 / 43.11.
+- **Mechanism.** The relay turnaround itself is only ~0.3 µs. The larger effect is that a chip's 2-hop entry no
+  longer waits for its neighbour's own publish plus a relay, so skew no longer compounds around the ring and the chip
+  spread shrinks by 0.7–1.3 µs. The 2-destination fence still ends ~2 µs before the first publish.
+- **Domain:** every topology the fabric routes on the op's ports.
+  - Inexpressible: a Linear group on a torus fabric (the table routes 2-hop destinations over the wrap). The plan
+    falls back to relay there; this is detected, not listed.
+  - G=2: identical to relay.
+- Artifacts: `perf_experiments/direct_exchange/`.
+
+**early_small_wave: WIN. Graduated.** Bit-identical on 22 slice cases:
+- the three perf shapes, 1 link, Linear, bf16 DEST, fp32, bf8b, no γ;
+- HEIGHT- and WIDTH-sharded inputs, masked width, ragged and batched shapes;
+- the bounded landing ring on the focus and R1 shapes.
+
+Variants alone (fastest / slowest µs; same-session real op 18.97 / 20.49 · 8.62 / 9.83 · 40.04 / 42.99):
+
+| Variant | 640×1792 | 32×1792 | 2048×1280 | Note |
+|---|---|---|---|---|
+| **rule: thirds, read start at 300 GB/s** | **18.36 / 19.20** | 8.61 / 9.86 (rule off) | **34.48 / 38.57** | |
+| thirds + TRID read isolation | 18.37 / 19.24 | 8.68 / 9.93 | 34.60 / 38.36 | decode slowest regressed |
+| split 1:3:1 + TRID | 18.13 / 19.29 | 8.73 / 9.92 | 35.95 / 39.34 | decode slowest regressed |
+| TRID alone | 18.73 / 20.12 | 8.65 / 10.01 | null | |
+| `2,8` groups, 600 ns/row deferral | 19.23 | – | – | regression |
+| 1-row groups, first wave 2 tile-rows | 21.0–23.5 | – | – | not bit-identical (different W slicing) |
+| same schedules, no read deferral | 19.4–20.8 | – | 43.2 | regression |
+
+- 3 offset classes beat 2 and 4. On R1, 1:1:1:1 gave 36.4 and 1:1:1:1:1:1 gave 41.8.
+- **Read-rate calibration** (2048×1280, fastest chip):
+  - 250 GB/s → 36.6;
+  - 300 GB/s → 34.5;
+  - 382 GB/s → 36.7;
+  - 500 GB/s → 40.6.
+  - The focus case is flat from 250 to 382 GB/s.
+- **Domain sweep** (rule vs real, fastest / slowest µs). Wins:
+  - 640×1792 −0.60 / −1.28;
+  - 896×1792 −2.31 / −2.68;
+  - 1280×1792 −3.62 / −2.95;
+  - 4096×1792 −5.05 / −7.29;
+  - fp32 640×1792 −3.58 / −4.34;
+  - Linear 2048×1280 −4.86 / −3.56;
+  - bf8b 2048×1280 −0.45 / −0.75.
+  - Cells below 2.2 MB stay on the rule-off path, as listed under Carve-outs below.
+- Artifacts: `perf_experiments/early_small_wave/` (`esw.diff` is the full experiment diff).
+
+### Graduated: direct exchange + early small wave, together
+**Direct exchange is the op's one exchange schedule.**
+- `exchange_plan` (host) builds direct sends, falling back to relay only when a destination's route leaves through no
+  port.
+- The port kernel sends several own items per wave, farthest first, and counts readies and credits per destination
+  chip. Arrival counters are indexed by slot (`get_semaphores(mesh, G + 1)`).
+- Deleted: the experiment's multicast route, `relay_mc1`, the `DRMS_MC_PLAIN` debug path and the `EXCHANGE_MODE` /
+  `DIRECT_FAR_FIRST` knobs.
+- The relay item model stays only as the inexpressible fallback.
+
+**Early small wave** is applied to every cell where it is correct and measured not to regress. It is host
+`esw_offsets` plus the reader's `DRMS_ESW_OFFSETS` define and RT args `wave_off` / `read_start`; per-wave port segment
+bytes are trimmed to the roots that publish. The early wave is the default, and the cells it skips are written as
+carve-outs (`if cannot: offsets 0`).
+
+**Carve-outs, each earned by a measured regression** (offsets forced on):
+1. **Sharded input.** It has no reads to reorder. HEIGHT_SHARDED regressed +4.9 µs at 640×1792 and +8.7 µs at
+   2048×1280.
+2. **x below `ESW_MIN_BYTES` = 2.2 MB per chip.** The extra exchange rounds cost more than the earlier first wave saves:
+
+   | x per chip | 0.46 MB | 0.9 MB | 1.64 MB | 1.84 MB | 1.97 MB |
+   |---|---|---|---|---|---|
+   | fastest chip | +0.7 | +1.1 | +2.1 | +1.6 to +1.7 | +0.8 |
+
+   The break-even is ~2.1 MB.
+3. **Fewer than 3 row-groups.** The 3 offset classes need 3 groups to exist.
+
+**Inside the rule** (re-measured on the combined op, rule on vs off via `DRMS_ESW_MIN_BYTES`):
+- **num_links=1, 640×1792: win.** 18.94 / 20.23 → 18.32 / 19.38. The experiment alone had measured +0.47 on the
+  fastest chip over relay; the direct exchange removed it.
+- **Linear, 640×1792 (relay fallback on the torus mock): mixed, no carve-out.**
+  - 19.39 / 22.69 → 19.66 / 20.95: fastest chip +0.27 (noise 0.20), slowest chip −1.75.
+  - `compare` calls it a regression on the fastest chip, but the call completes 1.75 µs earlier.
+  - A carve-out keyed on "relay fallback" would encode a fabric-mock artifact.
+  - Recorded as a measured trade-off; the unified path is kept.
+
+**Whole op** (`perf_measure.py`, 5 experiments, `CCL_PERF_CASES=all`, fastest / slowest µs; `ccl_perf compare` vs
+the round's baseline):
+
+| Case | Before | After | Δ fastest / slowest | Verdict |
+|---|---|---|---|---|
+| 640×1792 (PERF FOCUS) | 18.970 / 20.481 | **17.751 / 18.591** | −1.219 / −1.889 | win |
+| 32×1792 | 8.607 / 9.849 | **8.603 / 8.898** | −0.004 / −0.952 | null (fastest within noise; slowest −0.95) |
+| 2048×1280 | 40.052 / 42.993 | **33.960 / 38.585** | −6.092 / −4.408 | win |
+
+On the focus case the combination beats either idea alone (18.81 and 18.36).
+
+**Zones after** (focus case, zones on):
+- The first inv_rms is distributed at 8.6–9.0 µs (was 10.5–11.0).
+- The first wave's writes end from ~10.1 µs (was ~11.8).
+- Chip spans are 18.5–18.8 µs (were 19.2–19.9).
+
+### Guard set / no regression
+- **Golden `test_golden.py`: 10,626 passed, 0 failed.**
+  - INTERLEAVED (including the 3 loose cases): 3603;
+  - HEIGHT_SHARDED: 3420;
+  - WIDTH_SHARDED: 3600;
+  - the xfails are the expected ones.
+- `test_ring_mock.py` + `test_regression.py`: 36 passed.
+- `test_translated.py`: 279 passed, 51 skipped.
+- Unit tests: acceptance 111/111, knobs 34/34, debug 6/6, precision 20 passed / 4 skipped.
+- **Sharded guard** (only the direct exchange applies there), 640×1792, real op before → after, fastest / slowest µs:
+  - HEIGHT_SHARDED: 14.934 / 16.690 → 14.751 / 15.016;
+  - WIDTH_SHARDED: 79.082 / 79.527 → 78.205 / 78.444.
+- **Precision:** same math, same slot fold order. Outputs are bit-identical (both experiments' slices), and the
+  precision contract is untouched.
+
+### Remaining headroom
+- The focus case is at 17.75 µs; the target is 11.9 and the roofline 9.0.
+- DRAM still idles ~2.5 µs before the first write.
+- The pre-exchange chain (gather skew + publish + the port waiting for the link's slowest root) is the next lever.
+- `ESW_READ_GBPS` = 300 is a Blackhole QuietBox 2 calibration; re-measure it on other boxes.
+- Observation (not in scope): WIDTH_SHARDED 640×1792 runs ~78 µs, 4× the interleaved case.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this: a timed start relative to kernel launch (would belong with the dataflow scheduling / `noc` helpers) | capability | No dataflow helper can hold back a core's first DRAM read until N cycles after kernel start. The reader reads `RISCV_DEBUG_REG_WALL_CLOCK_L` raw and polls it non-blockingly inside its event loop. | — (no helper path exists) | whole op 640×1792 18.97 → 17.75 µs (with direct exchange) | `kernels/distributed_rms_norm_reader.cpp:89` (`wall_clock_l`), `:477` (read-start gate) |
+
+The direct exchange extends the op's existing raw fabric sender bypass (`port.cpp`, justified since Phase 0: the
+kernel_lib CCL helper has no relay-with-arrival-counter item model) with several own items per port. No new helper is
+bypassed.
+
+**Summary.** Both ideas were measured; 2 graduated, 0 null. Line multicast was BLOCKED (hang), and TRID read isolation
+was not graduated (decode's slowest chip regressed).
+- The op is 1.22 µs faster on the focus case (fastest chip; −1.89 µs slowest) and 6.09 µs faster on 2048×1280.
+- Decode is flat on the fastest chip and −0.95 µs on the slowest.
+- Golden is green, with no regression beyond the one recorded Linear trade-off.
