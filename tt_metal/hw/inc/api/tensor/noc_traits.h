@@ -203,27 +203,9 @@ struct noc_traits_t<TensorAccessor<DSpecT>> : tensor_accessor::detail::PushIssue
             tensor_accessor::detail::TransferAccess::bank_base(dst) + args.offset_bytes,
             noc.get_noc_id());
     }
-    // Called by Noc::async_write_multicast, which knows whether the multicast includes the sender.
-    static void sanitize_dst_mcast(
-        const TensorAccessor<DSpecT>& dst,
-        const Noc& noc,
-        const dst_args_mcast_type& args,
-        uint64_t noc_addr,
-        uint32_t src_addr,
-        uint32_t size_bytes,
-        bool includes_sender) {
-        DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(
-            noc.get_noc_id(),
-            noc_addr,
-            src_addr,
-            size_bytes,
-            args.noc_x_start,
-            args.noc_y_start,
-            args.noc_x_end,
-            args.noc_y_end,
-            &dst.dspec().packed_xy_coords()[0],
-            dst.dspec().num_banks(),
-            includes_sender);
+    // The tensor's nodes, which Noc::async_write_multicast checks the rectangle against with Watcher.
+    static DebugMulticastNodeSet multicast_node_set(const TensorAccessor<DSpecT>& dst) {
+        return {&dst.dspec().packed_xy_coords()[0], dst.dspec().num_banks()};
     }
 };
 
