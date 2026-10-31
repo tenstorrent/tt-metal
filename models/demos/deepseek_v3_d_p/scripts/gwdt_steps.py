@@ -58,6 +58,9 @@ class State:
     loops: list[Result] = field(default_factory=list)
     rows: list[Result] = field(default_factory=list)
     now: str = ""
+    attempt: int = 1
+    env: dict[str, str] = field(default_factory=dict)
+    rerun: "State | None" = None
 
 
 @dataclass
@@ -177,9 +180,14 @@ RESET_CMD = "tt-smi -glx_reset_auto"
 SMI_CMD = "tt-smi -s --snapshot_no_tty"
 
 
-def save_smi(ctx: Ctx, d: Path) -> None:
+def attempt_path(path: Path, attempt: int) -> Path:
+    """A rerun's files sit next to the first run's: reset.log, reset_02.log."""
+    return path if attempt == 1 else path.with_stem(f"{path.stem}_{attempt:02d}")
+
+
+def save_smi(ctx: Ctx, d: Path, attempt: int = 1) -> None:
     """Device telemetry right after a device step, before the next reset, for post-mortem."""
-    sh(ctx, SMI_CMD, d / "tt-smi.json", timeout=120)
+    sh(ctx, SMI_CMD, attempt_path(d / "tt-smi.json", attempt), timeout=120)
 
 
 def reset(ctx: Ctx, log: Path, state: State) -> Result | None:
@@ -202,10 +210,10 @@ def pytest_step(
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
             return run_collect(ctx, key, ids)
-        d = step_dir(ctx, key)
-        if group != "gate" and (failed := reset(ctx, d / "reset.log", state)):
+        d, n = step_dir(ctx, key), state.attempt
+        if group != "gate" and (failed := reset(ctx, attempt_path(d / "reset.log", n), state)):
             return failed
-        log, csv = d / "log_01", d / "crash_triage_01.csv"
+        log, csv = d / f"log_{n:02d}", d / f"crash_triage_{n:02d}.csv"
         state.log = str(log)
         cmd = "pytest -vs -rA " + " ".join(f"'{a}'" for a in ids + opts)
 
@@ -216,10 +224,11 @@ def pytest_step(
 
         outer_tick, ctx.tick = ctx.tick, tick
         try:
-            sh(ctx, cmd, log, {**(common_sh(ctx.repo, model)[0] if model else {}), **env, **triage_env(ctx.repo, csv)})
+            model_env = common_sh(ctx.repo, model)[0] if model else {}
+            sh(ctx, cmd, log, {**model_env, **env, **state.env, **triage_env(ctx.repo, csv)})
         finally:
             ctx.tick = outer_tick
-        save_smi(ctx, d)
+        save_smi(ctx, d, n)
         state.rows = row_results(read_tail(log), ids)
         if csv.is_file() and csv.stat().st_size > 0:
             return Result(Status.HANG, f"triage {csv}")
@@ -480,13 +489,15 @@ def write_ack_step() -> Step:
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
             return run_collect(ctx, key, ids)
-        d = step_dir(ctx, key)
-        if failed := reset(ctx, d / "reset.log", state):
+        d, n = step_dir(ctx, key), state.attempt
+        if failed := reset(ctx, attempt_path(d / "reset.log", n), state):
             return failed
-        log = d / "log_01"
+        log = d / f"log_{n:02d}"
         state.log = str(log)
-        sh(ctx, cmd, log, {"TMPDIR": str(d), "MATMUL_ITERS": str(MATMUL_ITERS)}, timeout=1800)
-        save_smi(ctx, d)
+        # The script wipes its work dir under TMPDIR, so a rerun gets its own.
+        tmp = d if n == 1 else d / f"tmp_{n:02d}"
+        sh(ctx, cmd, log, {"TMPDIR": str(tmp), "MATMUL_ITERS": str(MATMUL_ITERS), **state.env}, timeout=1800)
+        save_smi(ctx, d, n)
         return write_ack_result(log.read_text(errors="replace"))
 
     return Step(key, "matmul mcast-ack", "matmul", None, True, run, lambda ctx: ids)
@@ -524,6 +535,28 @@ def matmul_steps() -> list[Step]:
         core_sweep_step(),
         write_ack_step(),
     ]
+
+
+THROTTLE_ENV = {"TT_MM_THROTTLE_PERF": "5"}
+
+
+def rerun_throttled(step: Step) -> Step:
+    """A failed or hung ND run reruns once, after its own reset, with matmul compute throttled to 33%. The row keeps the
+    first result; the rerun is a sub-row."""
+
+    def run(ctx: Ctx, state: State) -> Result:
+        r = step.run(ctx, state)
+        if ctx.mode_co or r.status not in (Status.FAIL, Status.HANG):
+            return r
+        rerun = state.rerun = State(Result(Status.RUN), start=time.time(), attempt=2, env=THROTTLE_ENV)
+        try:
+            rerun.result = step.run(ctx, rerun)
+        except Exception as e:
+            rerun.result = Result(Status.FAIL, f"{type(e).__name__}: {e}")
+        rerun.end = time.time()
+        return r
+
+    return Step(step.key, step.title, step.group, step.model, step.blocking, run, step.collect)
 
 
 def build_steps(models: list[str]) -> list[Step]:
@@ -589,7 +622,7 @@ def build_steps(models: list[str]) -> list[Step]:
         mla_step("mla-smoke", 50),
         mla_step("mla-soak", 2500),
     ]
-    matmul = matmul_steps()
+    matmul = [rerun_throttled(s) for s in matmul_steps()]
     return [paths_step(models), collect_step(hardware + matmul + model_steps)] + hardware + matmul + model_steps
 
 

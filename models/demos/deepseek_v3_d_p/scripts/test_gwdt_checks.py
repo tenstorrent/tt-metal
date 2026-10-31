@@ -304,6 +304,105 @@ def test_matmul_nd_layout(tmp_path, monkeypatch):
     assert rows["matmul:duty-cycle-bursty-5"]["details"] == ["device 17: 2 non-deterministic outputs"]
 
 
+def _nd_step(key):
+    from gwdt_steps import build_steps
+
+    return next(s for s in build_steps(["glm53"]) if s.key == key)
+
+
+@pytest.mark.parametrize("key", MATMUL_KEYS)
+def test_matmul_fail_reruns_throttled(tmp_path, monkeypatch, key):
+    from gwdt_steps import Ctx, State
+
+    seen = []
+    calls = _fake_sh(monkeypatch, 0, lambda cmd, log, env: seen.append((log, env)))
+    state = State()
+    r = _nd_step(key).run(Ctx(tmp_path, tmp_path, False), state)
+    d = tmp_path / key.replace(":", "/")
+    assert r.status == Status.FAIL and state.log == str(d / "log_01")
+    assert calls[3:] == calls[:3] and calls[0] == "tt-smi -glx_reset_auto"
+    assert [log for log, _ in seen] == [
+        d / "reset.log",
+        d / "log_01",
+        d / "tt-smi.json",
+        d / "reset_02.log",
+        d / "log_02",
+        d / "tt-smi_02.json",
+    ]
+    assert "TT_MM_THROTTLE_PERF" not in seen[1][1] and seen[4][1]["TT_MM_THROTTLE_PERF"] == "5"
+    assert state.rerun.result.status == Status.FAIL and state.rerun.log == str(d / "log_02")
+    assert state.rerun.env == {"TT_MM_THROTTLE_PERF": "5"} and state.rerun.end >= state.rerun.start
+    if key == "matmul:mcast-ack":
+        assert seen[4][1]["TMPDIR"] == str(d / "tmp_02")
+    else:
+        assert seen[4][1]["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"].endswith(
+            f"--llm-output-path={d / 'crash_triage_02.csv'}; kill -9 $PPID"
+        )
+
+
+def test_matmul_hang_reruns_and_keeps_first_result(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State
+
+    def write(cmd, log, env):
+        if "TT_MM_THROTTLE_PERF" in env:
+            log.write_text("=== 1 passed in 250s ===\n")
+        elif cmd.startswith("pytest"):
+            cmd_env = env["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"]
+            Path(cmd_env.split("--llm-output-path=")[1].split(";")[0]).write_text("dev,core\n")
+
+    _fake_sh(monkeypatch, 0, write)
+    state = State()
+    r = _nd_step("matmul:minimal").run(Ctx(tmp_path, tmp_path, False), state)
+    assert r.status == Status.HANG and state.log == str(tmp_path / "matmul" / "minimal" / "log_01")
+    assert state.rerun.result == Result(Status.PASS, "1 passed")
+
+
+def test_matmul_pass_does_not_rerun(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State
+
+    calls = _fake_sh(monkeypatch, 0, lambda cmd, log, env: log.write_text("=== 1 passed in 9s ===\n"))
+    state = State()
+    assert _nd_step("matmul:ff1").run(Ctx(tmp_path, tmp_path, False), state).status == Status.PASS
+    assert len(calls) == 3 and state.rerun is None
+
+
+def test_matmul_co_does_not_rerun(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State
+
+    calls = _fake_sh(monkeypatch, 0)
+    state = State()
+    assert _nd_step("matmul:ff1").run(Ctx(tmp_path, tmp_path, True), state).status == Status.FAIL
+    assert len(calls) == 1 and state.rerun is None
+
+
+def test_matmul_nd_rerun_row(tmp_path, monkeypatch):
+    import json
+    import re
+    import time
+
+    from galaxy_workload_deployment_test import Screen
+    from gwdt_steps import State, Step
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    bad = Step("matmul:minimal", "matmul minimal", "matmul", None, True, None)
+    bad.state.result = Result(Status.FAIL, "assert False", ["device 17: 2 non-deterministic outputs"])
+    rerun = Result(Status.FAIL, "assert False", ["device 3: 1 non-deterministic outputs"])
+    bad.state.rerun = State(rerun, "log_02", time.time() - 250, time.time(), attempt=2, env={"TT_MM_THROTTLE_PERF": "5"})
+    screen = Screen([bad], ["hdr"], tmp_path / "status.json", {})
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in screen.lines()]
+    m = lines.index("MATMUL ND")
+    step, dev, again, again_dev = lines[m + 1 : m + 5]
+    assert step.startswith("   minimal ") and dev.startswith("     device 17 ")
+    assert again.startswith("     rerun ") and again_dev.startswith("       device 3 ")
+    assert step.index("FAIL") == dev.index("FAIL") == again.index("FAIL") == again_dev.index("FAIL")
+    assert again.endswith("4m10s    TT_MM_THROTTLE_PERF=5  assert False")
+    screen.write_status()
+    row = json.loads((tmp_path / "status.json").read_text())["steps"][0]
+    assert row["status"] == "FAIL" and row["rerun"]["status"] == "FAIL"
+    assert row["rerun"]["env"] == {"TT_MM_THROTTLE_PERF": "5"} and row["rerun"]["log"] == "log_02"
+    assert row["rerun"]["details"] == ["device 3: 1 non-deterministic outputs"]
+
+
 def test_fabric_results():
     log = "PASSED x.py::test_fabric_opens[FABRIC_2D]\n" "FAILED x.py::test_fabric_opens[FABRIC_2D_TORUS_XY] - E\n"
     assert fabric_results(log) == {"FABRIC_2D": True, "FABRIC_2D_TORUS_XY": False}
