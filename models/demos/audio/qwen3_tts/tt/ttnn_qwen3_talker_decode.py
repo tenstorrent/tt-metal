@@ -9,6 +9,10 @@ correctness work simple and what makes generation quadratic. This adds the two p
 request actually runs: a one-shot prefill that seeds a per-layer on-device KV cache, and a
 single-position step that reads it.
 
+The cache is paged, `[blocks, kv_heads, block_size, head_dim]` per layer, and every read and
+write goes through a page table. The decoder allocates its own cache with an identity table
+unless it is handed one, which is how a serving runtime that owns the KV blocks (vLLM) uses it.
+
 At step t only the new position's Q/K/V are computed. Its K/V append to a preallocated
 cache and attention runs over 0..t through flash decode, so the prefix is never pushed
 through the projections again.
@@ -27,15 +31,9 @@ Three things differ from the same trick applied to a plain GPT:
     embeddings, so the step needs the current position's row. The talker's three MRoPE axes
     carry identical positions during generation, which is why plain tables suffice.
 
-Two hazards inherited rather than rediscovered, both from the XTTS-v2 GPT port:
-
-  * `scaled_dot_product_attention_decode` is wrong when the cache length is an odd number
-    of 32-row tiles, so `max_seq` rounds up to a multiple of 64.
-  * `ttnn.fill_cache` hands each core only its first cache address and walks forward, so a
-    write run crossing a head boundary lands in the previous head and leaves positions
-    silently zero, identically on every repeat. Safe only when every core gets at most one
-    block, so anything longer is chunked: an even split over the cores is not enough, since a
-    core's run still crosses a head whenever its block count does not divide the head's.
+A hazard inherited rather than rediscovered, from the XTTS-v2 GPT port:
+`scaled_dot_product_attention_decode` is wrong when the cache length is an odd number of
+32-row tiles, so `max_seq` rounds up to a multiple of 64.
 """
 
 import torch
@@ -46,6 +44,11 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, c
 
 # sdpa_decode miscomputes at an odd tile count; keep the cache an even number of tiles.
 CACHE_TILE_MULTIPLE = 64
+
+# Positions per block of a cache the decoder allocates itself. A prefill pads the prompt to a
+# 32-row tile and fills the padding too, so any block size must be a multiple of 32 for that
+# fill to stay inside the request's last block.
+OWNED_BLOCK_SIZE = 64
 
 NORM_NAMES = ("input_layernorm", "post_attention_layernorm")
 
@@ -158,15 +161,6 @@ def preprocess_cached_talker_parameters(
     return {"config": cfg, "layers": layers, "norm": norm("norm"), "norm_weights": {n: state[n] for n in names}}
 
 
-def fill_step_tiles(kv_heads, cores):
-    """Largest per-call tile count at which `ttnn.fill_cache` seeds every position.
-
-    See the hazard note in the module docstring: no write run can straddle a head boundary
-    when each core gets at most one block.
-    """
-    return max(1, cores // kv_heads)
-
-
 # Width-sharded RMSNorm for the single-position step. An interleaved norm on one [1, 1, H]
 # row runs effectively single-core, and the step does 57 of them at hidden 2048 (two per
 # layer plus the final one), so sharding the reduction is worth it at equal PCC. The
@@ -204,7 +198,9 @@ def sharded_norm_plan(device, dim, dtype=ttnn.bfloat16):
 class TtTalkerCachedDecoder:
     """Prefill once into an on-device KV cache, then step one position at a time."""
 
-    def __init__(self, device, parameters, max_seq=512):
+    def __init__(self, device, parameters, max_seq=512, kv_cache=None):
+        """`kv_cache`, when given, is one `(k, v)` pair per layer of paged caches the caller
+        owns; the caller then also supplies each request's blocks through `set_page_table`."""
         self.device = device
         self.p = parameters
         self.config = parameters["config"]
@@ -219,9 +215,34 @@ class TtTalkerCachedDecoder:
         self.layers = len(parameters["layers"])
 
         self.max_seq = ((max_seq + CACHE_TILE_MULTIPLE - 1) // CACHE_TILE_MULTIPLE) * CACHE_TILE_MULTIPLE
-        empty = torch.zeros(1, self.kv_heads, self.max_seq, self.head_dim)
-        self.k_cache = [self._cache_tensor(empty) for _ in range(self.layers)]
-        self.v_cache = [self._cache_tensor(empty) for _ in range(self.layers)]
+        self._owns_cache = kv_cache is None
+        if self._owns_cache:
+            blocks = -(-self.max_seq // OWNED_BLOCK_SIZE)
+            empty = torch.zeros(blocks, self.kv_heads, OWNED_BLOCK_SIZE, self.head_dim)
+            kv_cache = [(self._cache_tensor(empty), self._cache_tensor(empty)) for _ in range(self.layers)]
+        if len(kv_cache) != self.layers:
+            raise ValueError(f"kv_cache has {len(kv_cache)} layers, the talker {self.layers}")
+        self.k_cache = [k for k, _ in kv_cache]
+        self.v_cache = [v for _, v in kv_cache]
+        self.block_size = int(self.k_cache[0].shape[2])
+        if self.block_size % 32 or tuple(self.k_cache[0].shape)[1:] != (self.kv_heads, self.block_size, self.head_dim):
+            raise ValueError(
+                f"cache blocks of shape {tuple(self.k_cache[0].shape)}: need [blocks, {self.kv_heads}, "
+                f"a multiple of 32, {self.head_dim}]"
+            )
+        # One request's blocks, in position order. Device-resident and rewritten in place, so a
+        # captured step reads whichever request's table is current.
+        self.max_blocks = -(-self.max_seq // self.block_size)
+        if not self._owns_cache and self.max_blocks > int(self.k_cache[0].shape[0]):
+            # A page table may not be wider than the cache it indexes, and no request can
+            # hold more positions than the cache has, so the caller's cache bounds both.
+            self.max_blocks = int(self.k_cache[0].shape[0])
+            self.max_seq = self.max_blocks * self.block_size
+        self._page_table = ttnn.from_torch(
+            torch.zeros(1, self.max_blocks, dtype=torch.int32), dtype=ttnn.int32, device=device
+        )
+        if self._owns_cache:
+            self.set_page_table(torch.arange(self.max_blocks, dtype=torch.int32))
 
         # Stable per-step state, allocated once so a captured trace can read it. Allocating
         # under a live trace corrupts it, so everything the step touches exists up front.
@@ -245,7 +266,7 @@ class TtTalkerCachedDecoder:
         # One zero tensor to clear the caches from. `zeros_like` would allocate a fresh
         # device buffer per cache per utterance, and a buffer allocated while a trace is
         # live is corrupt once that trace runs unless it is released first.
-        self._zero_cache = self._cache_tensor(empty)
+        self._zero_cache = self._cache_tensor(empty) if self._owns_cache else None
 
         # Decode-only matmul configs. gate_proj carries the silu so the activation runs
         # inside the matmul rather than as a separate elementwise kernel.
@@ -304,6 +325,15 @@ class TtTalkerCachedDecoder:
     def _cache_tensor(self, empty):
         return ttnn.from_torch(empty, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
+    def set_page_table(self, blocks):
+        """Point prefill and step at one request's cache blocks, in position order."""
+        blocks = torch.as_tensor(blocks, dtype=torch.int32).reshape(-1)
+        if blocks.numel() > self.max_blocks:
+            raise ValueError(f"{blocks.numel()} blocks for a table of {self.max_blocks}")
+        row = torch.zeros(1, self.max_blocks, dtype=torch.int32)
+        row[0, : blocks.numel()] = blocks
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(row, dtype=ttnn.int32), self._page_table)
+
     # ── shared pieces ───────────────────────────────────────────────────────
 
     def _rotate(self, x, cos, sin):
@@ -357,8 +387,7 @@ class TtTalkerCachedDecoder:
         """Seed the cache for positions 0..P-1 in one pass and return the hidden states.
 
         Each layer's K/V weights are read once here rather than once per position, and the
-        cache is written with `ttnn.fill_cache`, chunked when a single shot would let a
-        write run cross a head boundary.
+        cache is written through the page table with `paged_fill_cache`.
         """
         length = embeddings.shape[1]
         if length > self.max_seq:
@@ -375,12 +404,6 @@ class TtTalkerCachedDecoder:
         x = to_device(embeddings) if not isinstance(embeddings, ttnn.Tensor) else embeddings
         cos_tt, sin_tt, mask_tt = to_device(cos), to_device(sin), to_device(causal_mask(length))
 
-        grid = self.device.compute_with_storage_grid_size()
-        cores = grid.x * grid.y
-        tiles = (length + 31) // 32
-        single_shot = self.kv_heads * tiles <= cores
-        step = fill_step_tiles(self.kv_heads, cores)
-
         for index, layer in enumerate(self.p["layers"]):
             normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=self.eps)
             qkv = ttnn.linear(normed, layer["qkv"], compute_kernel_config=self.compute_config)
@@ -389,7 +412,8 @@ class TtTalkerCachedDecoder:
             query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos_tt, sin_tt)
             key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), cos_tt, sin_tt)
 
-            self._seed_cache(index, key, value, length, tiles, single_shot, step)
+            ttnn.experimental.paged_fill_cache(self.k_cache[index], key, self._page_table, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(self.v_cache[index], value, self._page_table, batch_idx=0)
 
             repeats = self.heads // self.kv_heads
             attended = ttnn.matmul(
@@ -412,19 +436,6 @@ class TtTalkerCachedDecoder:
             x = ttnn.add(x, self._mlp(normed, layer))
 
         return ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps)
-
-    def _seed_cache(self, index, key, value, length, tiles, single_shot, step):
-        """Write positions 0..length-1 of one layer's cache."""
-        if single_shot:
-            ttnn.fill_cache(self.k_cache[index], key, 0)
-            ttnn.fill_cache(self.v_cache[index], value, 0)
-            return
-        for start in range(0, tiles, step):
-            first, last = 32 * start, min(32 * (start + step), length)
-            for cache, source in ((self.k_cache[index], key), (self.v_cache[index], value)):
-                chunk = ttnn.slice(source, (0, 0, first, 0), (1, self.kv_heads, last, self.head_dim))
-                ttnn.fill_cache(cache, chunk, 0, update_idx=first)
-                ttnn.deallocate(chunk)
 
     # ── one cached step ─────────────────────────────────────────────────────
 
@@ -456,13 +467,14 @@ class TtTalkerCachedDecoder:
                 self.v_cache[index],
                 ttnn.to_memory_config(value, self._v_shard),
                 update_idxs_tensor=self._pos,
-                page_table=None,
+                page_table=self._page_table,
             )
 
-            attended = ttnn.transformer.scaled_dot_product_attention_decode(
+            attended = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 query,
                 self.k_cache[index],
                 self.v_cache[index],
+                page_table_tensor=self._page_table,
                 cur_pos_tensor=self._pos,
                 scale=self.scale,
                 compute_kernel_config=self.compute_config,
@@ -503,7 +515,9 @@ class TtTalkerCachedDecoder:
             self._warmed = False
 
     def reset(self):
-        """Clear the caches without allocating."""
+        """Clear the caches without allocating. Only for a cache this decoder owns."""
+        if not self._owns_cache:
+            raise RuntimeError("the KV cache belongs to the caller; it clears its own blocks")
         for cache in self.k_cache + self.v_cache:
             ttnn.copy(self._zero_cache, cache)
 
