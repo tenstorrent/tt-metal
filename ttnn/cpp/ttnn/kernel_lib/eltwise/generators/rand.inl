@@ -25,8 +25,9 @@ namespace compute_kernel_lib {
 ///       RandTile<Dst::D0>{from, scale, get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1)},
 ///       PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{out});
 /// @endcode
-template <Dst DstSlot>
-struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {
+/// `WholeTile` draws the tile in one call on Blackhole (rand_tile<true>), the same samples.
+template <Dst DstSlot, bool WholeTile>
+struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot, WholeTile>, DstSlot> {
     /// Runtime payload — `from`/`scale` define the uniform [from, from+scale] range;
     /// `seed` seeds the PRNG once at init and `stream_id` domain-separates per-core work ranges.
     uint32_t from_;
@@ -40,7 +41,7 @@ struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {
 
     ALWI void init() const { rand_tile_init(seed_, stream_id_); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
-        rand_tile(to_u32(DstSlot) + slot_offset, from_, scale_);
+        rand_tile<WholeTile>(to_u32(DstSlot) + slot_offset, from_, scale_);
     }
 };
 
