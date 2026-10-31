@@ -37,18 +37,30 @@ ttnn::Tensor head_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t 
     return ttnn::reshape(t, ttnn::Shape({B * H, T, D}));
 }
 
-// [B,T,H] -> [B*H, T], fp32 TILE.
-ttnn::Tensor headvec_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H) {
-    ttnn::Tensor t = as_f32(x);
-    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B,H,T]
-    return ttnn::reshape(t, ttnn::Shape({B * H, T}));
-}
-
 // Reshape through ROW_MAJOR (moves data across the tile boundary), then re-tilize.
 ttnn::Tensor reshape_rm(const ttnn::Tensor& x, const ttnn::Shape& shape) {
     ttnn::Tensor t = ttnn::to_layout(x, Layout::ROW_MAJOR);
     t = ttnn::reshape(t, shape);
     return ttnn::to_layout(t, Layout::TILE);
+}
+
+// [B,T,H] -> [B*H*T, 1, 1] fp32 TILE: the per-(head, token) scalar pages the kernel broadcasts from
+// (block index h*T + t, and bcast_scalar reads element [0,0] of each page).
+//
+// T == 1 fast path: the block order (h*1 + 0 = h) IS the element order of [B,1,H], so the entire
+// layout change is ONE reshape across the tile boundary ([1,1,48] -> [48,1,1]) -- verified
+// element-for-element against the row-major path in test_reshape_correct.py. The general form below
+// also permutes and crosses the boundary twice (untilize + tilize); for the pair of scalars this
+// serves, that measured 51.6 us per layer of pure layout cost, so it is kept only for T > 1, where
+// the block order (h outer, t inner) really does differ from the element order (t outer).
+ttnn::Tensor headvec_scalars(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H) {
+    ttnn::Tensor t = as_f32(x);
+    if (T == 1) {
+        return ttnn::reshape(t, ttnn::Shape({B * H, 1, 1}));
+    }
+    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B,H,T]
+    t = ttnn::reshape(t, ttnn::Shape({B * H, T}));
+    return reshape_rm(t, ttnn::Shape({B * H * T, 1, 1}));
 }
 
 }  // namespace
@@ -95,9 +107,11 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     }
     ttnn::Tensor v = head_split(v_in, B, T, HV, V);  // [BH, T, V]
 
-    // decay = exp(g); beta as-is (already sigmoid'd).
-    ttnn::Tensor decay = ttnn::exp(headvec_split(g_in, B, T, HV));  // [BH, T]
-    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);           // [BH, T]
+    // decay = exp(g); beta as-is (already sigmoid'd). exp is elementwise, so it commutes with the
+    // layout change; doing it here keeps it on the compact [B,T,H] form (2 tiles at decode rather
+    // than 48 padded pages).
+    ttnn::Tensor decay = ttnn::exp(as_f32(g_in));         // [B,T,H], unchanged layout
+    ttnn::Tensor beta = as_f32(beta_in);                  // [B,T,H]
 
     // Per-token layout: each (head, token) its own zero-padded tile-block.
     //   q/k [BH*T,1,K], v [BH*T,1,V], decay/beta [BH*T,1,1].
@@ -108,10 +122,11 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         k = reshape_rm(k, ttnn::Shape({BH * T, 1, K}));
         v = reshape_rm(v, ttnn::Shape({BH * T, 1, V}));
     }
-    // decay/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
-    // relayout to per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. They are tiny.
-    decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, 1}));
-    beta = reshape_rm(beta, ttnn::Shape({BH * T, 1, 1}));
+    // decay/beta must be per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. At T == 1
+    // that is one reshape each (see headvec_scalars); the values are 48 floats, the cost is the
+    // crossing, not the arithmetic.
+    decay = headvec_scalars(decay, B, T, HV);
+    beta = headvec_scalars(beta, B, T, HV);
 
     // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
     // always reads S (it takes the unconditional path; there is no in-kernel zeroing). Traced callers
