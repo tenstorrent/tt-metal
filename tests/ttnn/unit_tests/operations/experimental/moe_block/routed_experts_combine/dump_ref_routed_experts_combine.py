@@ -11,7 +11,8 @@ Galaxy 8x4:
 experimental/moe_block/routed_experts_combine/dump_ref_routed_experts_combine.py
 
 Per case and chip it saves the op's inputs (the dispatched rows xg, the planner's counts / regions / token_index /
-table / plan, the flat expert's weights and words gidx / done) and its output y_own (the combine's row-major [1, 1, S,
+table / plan; the experts' weights regenerate from the seed: torch.randn x 0.02 per chip, per local expert Wg, Wu, Wd)
+and its output y_own (the combine's row-major [1, 1, S,
 Hr]), with combine_snap 2^-14 (bit-identical in any landing order). The routing comes from the device planner of the
 standalone exchange (routed()), the same tables the fused head's planner writes.
 """
@@ -130,13 +131,8 @@ def test_dump(mesh_device, case, key, routing):
         token_index=pl["token_index"],
         table=pl["table"],
         plan=pl["plan"],
-        w_gu=op.w_gu,
-        w_d=op.w_d,
-        gidx=op.gidx,
         y_own=out,
     )
-    if op.w_rd is not None:
-        named["w_rd"] = op.w_rd
     per_chip = {(i // C, i % C): {} for i in range(N)}
     for name, t in named.items():
         for ch, v in from_mesh(t, (R, C)).items():
@@ -158,6 +154,7 @@ def test_dump(mesh_device, case, key, routing):
             E=E,
             K=K,
             chunk_tokens=CHUNK,
+            m=int(block.op.m),
             combine_snap=SNAP,
             torus=list(torus),
             n_acc=block.A,

@@ -12,9 +12,13 @@ void RoutedExpertsCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& p, const tensor_args_t& t) {
     TT_FATAL(p.plan != nullptr && p.flat_plan != nullptr, "routed_experts_combine: no plans");
     TT_FATAL(!p.flat.writers.empty(), "routed_experts_combine: no y writers");
-    TT_FATAL(p.flat_config.cmb_rt > 0 && p.flat_config.y_l1, "routed_experts_combine: the flat config's combine overlap");
-    TT_FATAL(!p.dispatch_in_program, "routed_experts_combine: the in-program dispatch phase is not integrated yet");
-    TT_FATAL(t.plan.dtype() == DataType::UINT32 && t.plan.logical_volume() >= kPlanWords, "routed_experts_combine: plan");
+    TT_FATAL(
+        p.flat_config.cmb_rt > 0 && p.flat_config.y_l1, "routed_experts_combine: the flat config's combine overlap");
+    TT_FATAL(
+        p.dispatch_in_program == (t.route.has_value() && t.sems.has_value()),
+        "routed_experts_combine: the route words and the dispatch's semaphore words iff the in-program dispatch");
+    TT_FATAL(
+        t.plan.dtype() == DataType::UINT32 && t.plan.logical_volume() >= kPlanWords, "routed_experts_combine: plan");
     TT_FATAL(t.table.dtype() == DataType::UINT32, "routed_experts_combine: table");
     TT_FATAL(
         t.out.dtype() == DataType::BFLOAT16 && t.out.layout() == Layout::ROW_MAJOR &&
@@ -45,6 +49,7 @@ ttsl::hash::hash_t RoutedExpertsCombineDeviceOperation::compute_program_hash(
         t.bar.tensor_spec(),
         t.hcache.tensor_spec(),
         t.lut.has_value(),
+        t.route.has_value() ? std::optional(t.route->tensor_spec()) : std::nullopt,
         t.flat.x.tensor_spec(),
         t.flat.counts.tensor_spec(),
         t.flat.regions.tensor_spec(),

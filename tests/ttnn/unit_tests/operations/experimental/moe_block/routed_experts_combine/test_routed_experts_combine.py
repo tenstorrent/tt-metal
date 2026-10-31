@@ -2,64 +2,132 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """ttnn.experimental.moe_block.routed_experts_combine on device, bit-exact against the reference cases
-(dump_ref_routed_experts_combine.py; combine_snap 2^-14). Needs the case's mesh and fabric; skips without them, without
-reference data ($MOE_BLOCK_REFS) or before the flat routed expert's builder is integrated into the op (FLAT_INTEGRATED).
+(dump_ref_routed_experts_combine.py: the Python exchange's experts + combine, combine_snap 2^-14), and the host cost of a
+program-cache hit. Needs the case's mesh and fabric (Galaxy 8x4, FABRIC_2D_TORUS_XY); skips without reference data
+($MOE_BLOCK_REFS) or on another mesh.
 """
 
-import os
-import sys
+import importlib.util
+import time
 from pathlib import Path
 
 import pytest
+import torch
 
 import ttnn
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ref_harness import REFS_ROOT, assert_bit_exact, from_mesh, list_cases, load_case, to_mesh  # noqa: E402
-
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[6]
 OP = "routed_experts_combine"
+CALLS = 50
+
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+harness = _load("moe_block_ref_harness", HERE.parent / "ref_harness.py")
+weights_py = _load(
+    "flat_routed_expert_weights",
+    REPO / "ttnn/cpp/ttnn/operations/experimental/moe_block/flat_routed_expert/flat_routed_expert_weights.py",
+)
 mb = ttnn.experimental.moe_block
-
-# SEAM(flat): the op takes the flat expert's tensors (xg, counts, regions, token_index, w_gu, w_d, w_rd, gidx, done)
-# once its builder is in (flat_routed_expert/device/flat_program.hpp); until then it has no y writers to run.
-FLAT_INTEGRATED = False
-
-CASES = list_cases(OP) if os.environ.get("MOE_BLOCK_REFS") or REFS_ROOT.exists() else []
-U32, BF16 = ttnn.uint32, ttnn.bfloat16
-RM = ttnn.ROW_MAJOR_LAYOUT
+CASES = harness.list_cases(OP)
 
 
-def _resources(mesh_device, meta):
-    cfg = meta["config"]
-    dims = mb.MoEModelDims(num_experts=cfg["E"], top_k=cfg["K"], emb_dim=cfg["Hr"], routed_expert_hidden_dim=cfg["I"])
-    conf = mb.MoEBlockConfig(chunk_tokens=cfg["chunk_tokens"], combine_snap=cfg["combine_snap"])
-    return mb.MoEBlockResources.create(mesh_device, dims, conf)
+class _Call:
+    """One case on the mesh: the resources, the layer's flat expert (its weights regenerated from the dump's seed) and
+    the op's inputs; call() runs the op."""
 
-
-@pytest.mark.skipif(not FLAT_INTEGRATED, reason="SEAM(flat): the flat routed expert's builder is not integrated yet")
-@pytest.mark.skipif(not CASES, reason="no reference cases (dump_ref_routed_experts_combine.py, $MOE_BLOCK_REFS)")
-@pytest.mark.parametrize("case", CASES or ["none"])
-@pytest.mark.parametrize("device_params", [dict(fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY)], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_routed_experts_combine(mesh_device, case):
-    meta, ref = load_case(OP, case)
-    if list(mesh_device.shape) != meta["mesh_shape"]:
-        pytest.skip(f"case {case} needs a {meta['mesh_shape']} mesh")
-    cfg = meta["config"]
-    res = _resources(mesh_device, meta)
-    try:
-        plan = to_mesh(ref, "plan", mesh_device, dtype=U32, layout=RM)
-        table = to_mesh(ref, "table", mesh_device, dtype=U32, layout=RM)
+    def __init__(self, mesh_device, meta, ref):
+        cfg = meta["config"]
+        R, C = meta["mesh_shape"]
+        N = R * C
+        self.mesh, self.cfg, self.ref = mesh_device, cfg, ref
+        dims = mb.MoEModelDims(
+            num_experts=cfg["E"], top_k=cfg["K"], emb_dim=cfg["Hr"], routed_expert_hidden_dim=cfg["I"]
+        )
+        conf = mb.MoEBlockConfig(chunk_tokens=cfg["chunk_tokens"], combine_snap=cfg["combine_snap"])
+        self.res = mb.MoEBlockResources.create(mesh_device, dims, conf)
+        Hr, I, E = cfg["Hr"], cfg["I"], cfg["E"]
+        EPC = E // N
+        g = torch.Generator().manual_seed(meta["seed"])
+        r = lambda *s: torch.randn(*s, generator=g) * 0.02  # noqa: E731  (dump_ref_routed_experts_combine's order)
+        gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]
+        per_dev = [[(r(Hr, I), r(Hr, I), r(I, Hr)) for _ in gl] for gl in gids]
+        self.layer = weights_py.FlatRoutedExpert(
+            mesh_device, per_dev, m=cfg["m"], H=Hr, I=I, gids=gids, n_global=E, act=cfg["activation"], pin=1
+        )
+        rm = lambda name, dt: harness.to_mesh(ref, name, mesh_device, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT)  # noqa
+        self.args = [
+            rm("xg", ttnn.bfloat16),
+            rm("counts", ttnn.uint32),
+            rm("regions", ttnn.uint32),
+            rm("token_index", ttnn.uint32),
+            rm("table", ttnn.uint32),
+            rm("plan", ttnn.uint32),
+            self.layer.gidx,
+            self.layer.w_gu,
+            self.layer.w_d,
+            self.res,
+        ]
         combine = mb.CombineConfig()
         combine.n_acc = cfg["n_acc"]
         combine.mode = mb.CombineMode.AccOnPorts if cfg["acc_on_ports"] else mb.CombineMode.PortsApart
         combine.arena_bytes = cfg["arena_bytes"]
-        cells = [ttnn.CoreCoord(x, y) for x, y in cfg["cells"]]
-        writers = [ttnn.CoreCoord(x, y) for x, y in cfg["writers"]]
-        out = mb.routed_experts_combine(
-            plan, table, res, cells=cells, writers=writers, writer_words_offset=cfg["arena_bytes"], combine=combine
-        )
-        got = from_mesh(out, tuple(meta["mesh_shape"]))
-        assert_bit_exact({ch: {"y_own": t} for ch, t in got.items()}, ref, ["y_own"])
+        self.kw = dict(max_tokens_per_expert=cfg["m"], activation=weights_py.ACTS[cfg["activation"]], combine=combine)
+
+    def call(self):
+        return mb.routed_experts_combine(*self.args, **self.kw)
+
+    def close(self):
+        self.layer.close()
+        self.res.release()
+
+
+def _case(mesh_device, case):
+    if case == "none":
+        pytest.skip(f"no saved {OP} case (dump_ref_routed_experts_combine.py, $MOE_BLOCK_REFS)")
+    meta, ref = harness.load_case(OP, case)
+    if list(mesh_device.shape) != meta["mesh_shape"]:
+        pytest.skip(f"case {case} needs a {meta['mesh_shape']} mesh")
+    return meta, ref
+
+
+@pytest.mark.parametrize("case", CASES or ["none"])
+@pytest.mark.parametrize("device_params", [dict(fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_routed_experts_combine(mesh_device, case):
+    meta, ref = _case(mesh_device, case)
+    run = _Call(mesh_device, meta, ref)
+    try:
+        for _ in range(3):  # (a miss, then hits on the same addresses: the per-call zeroing and counters)
+            out = run.call()
+            got = harness.from_mesh(out, tuple(meta["mesh_shape"]))
+            harness.assert_bit_exact({ch: {"y_own": t} for ch, t in got.items()}, ref, ["y_own"])
     finally:
-        res.release()
+        run.close()
+
+
+@pytest.mark.parametrize("case", CASES[:1] or ["none"])
+@pytest.mark.parametrize("device_params", [dict(fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_routed_experts_combine_host_time(mesh_device, case):
+    """us a call on a program-cache hit (host until the call returns, untraced, back to back after a warm-up): compare
+    with the Python reference's experts + combine launch (k3 _experts_combine)."""
+    meta, ref = _case(mesh_device, case)
+    run = _Call(mesh_device, meta, ref)
+    try:
+        run.call()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(CALLS):
+            run.call()
+        host = (time.perf_counter() - t0) / CALLS * 1e6
+        ttnn.synchronize_device(mesh_device)
+        print(f"routed_experts_combine {case}: {host:.1f} us a call (host, cache hit, {CALLS} calls)")
+    finally:
+        run.close()

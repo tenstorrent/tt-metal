@@ -25,6 +25,10 @@ CombineBuffers buffers_of(const RoutedExpertsCombineInputs& t, const ttnn::Tenso
     set(CombineBuf::Bar, t.bar.buffer());
     set(CombineBuf::Hcache, t.hcache.buffer());
     set(CombineBuf::Lut, t.lut ? t.lut->buffer() : nullptr);
+    set(CombineBuf::Xbuf, t.flat.x.buffer());
+    set(CombineBuf::Route, t.route ? t.route->buffer() : nullptr);
+    set(CombineBuf::Sems, t.sems ? t.sems->buffer() : nullptr);
+    set(CombineBuf::RelayWords, t.flat.words.buffer());
     return b;
 }
 
@@ -68,7 +72,8 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
                 "routed_experts_combine: {} y writers in the program, {} planned",
                 sv.flat.y_writers.size(),
                 p.flat.writers.size());
-            sv.combine = add_combine_program(program, *p.plan, ChipCoord{coord[0], coord[1]}, mesh_device, bufs, p.flat);
+            sv.combine =
+                add_combine_program(program, *p.plan, ChipCoord{coord[0], coord[1]}, mesh_device, bufs, p.flat);
             set_report(program, sv, p, bufs);
             const ttnn::MeshCoordinateRange r(coord, coord);
             workload.add_program(r, std::move(program));

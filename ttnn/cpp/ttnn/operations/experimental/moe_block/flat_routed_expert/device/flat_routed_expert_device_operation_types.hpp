@@ -111,7 +111,7 @@ struct FlatRoutedExpertParams {
             y_l1,
             cmb_no_go,
             cmb_slot_order,
-            layout.key());
+            layout);
     }
 };
 

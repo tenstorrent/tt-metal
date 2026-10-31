@@ -93,7 +93,12 @@ void bind_routed_experts_combine(nb::module_& mod) {
             resources: the block's MoEBlockResources (config, placement, persistent words, the DRISC senders).
             max_tokens_per_expert: the flat expert's capacity m.
             activation: the experts' activation (se3_compute SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU).
-            weights_bf8: bfp8 expert weights (else bfp4).
+            route: with MoEBlockConfig.experts_during_dispatch, the dispatch's route words [1, 1, 1, RW S] uint32: the
+                dispatch runs as the first phase of the combine's port kernels and fills dispatched (the flat x relays
+                wait for it); None otherwise.
+            route: with MoEBlockConfig.experts_during_dispatch, the dispatch's route words [1, 1, 1, RW S] uint32 (the
+                dispatch then runs as the first phase of the combine's port kernels and fills dispatched; the flat x
+                relays wait for it); None otherwise.
             layout: FlatLayoutOptions.
             combine: CombineConfig.
 
@@ -114,16 +119,17 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("max_tokens_per_expert"),
         nb::arg("activation"),
-        nb::arg("weights_bf8") = false,
+        nb::arg("route") = nb::none(),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = CombineConfig{});
 
     mod.def(
         "routed_experts_combine_flat_plan",
-        [](MoEBlockResources& resources, uint32_t max_tokens_per_expert, uint32_t activation, bool weights_bf8,
+        [](MoEBlockResources& resources,
+           uint32_t max_tokens_per_expert,
+           uint32_t activation,
            const flat_routed_expert::FlatLayoutOptions& layout) {
-            const auto cfg =
-                routed_experts_combine_flat_config(resources, max_tokens_per_expert, activation, weights_bf8, layout);
+            const auto cfg = routed_experts_combine_flat_config(resources, max_tokens_per_expert, activation, layout);
             nb::dict d;
             d["hidden"] = cfg.hidden;
             d["intermediate"] = cfg.intermediate;
@@ -136,7 +142,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("max_tokens_per_expert"),
         nb::arg("activation"),
-        nb::arg("weights_bf8") = false,
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         "The flat expert config routed_experts_combine builds (ensures its resources: plan, words, DRISC senders).");
 

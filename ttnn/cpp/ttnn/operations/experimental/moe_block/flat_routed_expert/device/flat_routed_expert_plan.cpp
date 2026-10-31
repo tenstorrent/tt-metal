@@ -346,7 +346,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
         "room for the east rectangle; got a {} x {} grid with readers in columns {}",
         grid.x,
         grid.y,
-        std::vector<uint32_t>(rcols.begin(), rcols.end()));
+        [&] {  // (as text: a vector has no fmt formatter in every unity batch)
+            std::string cols;
+            for (const auto c : rcols) {
+                cols += (cols.empty() ? "" : ", ") + std::to_string(c);
+            }
+            return cols;
+        }());
     const uint32_t shift = east - 6;
     for (auto& [x0, x1, y0, y1] : p.rects) {
         if (x0 > 6) {  // the east rectangle

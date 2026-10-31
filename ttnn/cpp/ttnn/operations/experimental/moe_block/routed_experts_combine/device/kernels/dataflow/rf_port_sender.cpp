@@ -5,8 +5,9 @@
 // Port sender (sparse_combine_rf._RF_SENDER): injects this port's rows (one fabric connection, multi-hop 2D unicasts
 // straight into the home accumulator's landing ring), returns credits of the rows its chip's accumulators consumed
 // from the sources whose first hop back is this port, and forwards those sources their rings' layouts for the call.
-// Defines: REC_FUSED (a port that is also an accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off and
-// the accumulator's output writes), REC_ACC_LUT (per-chip roles: a home chip's accumulator cells from a DRAM table).
+// Defines: REC_DISPATCH (experts_during_dispatch: the dispatch's send phase first), REC_FUSED (a port that is also an
+// accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off and the accumulator's output writes),
+// REC_ACC_LUT (per-chip roles: a home chip's accumulator cells from a DRAM table).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -14,6 +15,10 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "combine_zero_gate.hpp"
+#ifdef REC_DISPATCH
+// (experts_during_dispatch: the sparse 2D dispatch's sender runs first on this kernel's connection)
+#include "../../../../sparse_dispatch_2d/device/kernels/dataflow/sparse_dispatch_2d_sender.hpp"
+#endif
 using namespace tt::tt_fabric;
 
 constexpr uint32_t cb_inj = get_compile_time_arg_val(0);
@@ -53,6 +58,9 @@ constexpr uint32_t ZERO = get_compile_time_arg_val(32);  // 1: this kernel zeroe
 constexpr uint32_t WORDS_OFF = get_compile_time_arg_val(33);
 constexpr uint32_t LUT_OFF = get_compile_time_arg_val(34);
 constexpr uint32_t LUT_BYTES = get_compile_time_arg_val(35);
+#ifdef REC_DISPATCH
+constexpr uint32_t cb_man = get_compile_time_arg_val(36);  // the dispatch's manifest, then its phase's args from 37
+#endif
 #ifdef REC_FUSED
 constexpr uint32_t cb_out = get_compile_time_arg_val(36);
 constexpr uint32_t NT_ = get_compile_time_arg_val(37);
@@ -61,6 +69,9 @@ constexpr auto o_args = TensorAccessorArgs<38>();
 
 void kernel_main() {
     size_t a = 0;
+#ifdef REC_DISPATCH
+    const sa::SenderArgs dargs = sa::sender_args(a, get_write_ptr(cb_man));
+#endif
     const uint32_t area = get_arg_val<uint32_t>(a++);  // the arena (same address on every core and chip)
     const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint32_t me = get_arg_val<uint32_t>(a++), lnk = get_arg_val<uint32_t>(a++);
@@ -165,6 +176,9 @@ void kernel_main() {
         rec::wait_released(bar_addr, call);
     }
     conn.open();
+#ifdef REC_DISPATCH
+    sa::send_phase<37>(dargs, conn);  // (the dispatch first)
+#endif
 #ifdef REC_FUSED
     const uint32_t hW = get_arg_val<uint32_t>(a++), hdid = get_arg_val<uint32_t>(a++), hQ = get_arg_val<uint32_t>(a++);
     const uint32_t hwords = area + WORDS_OFF, o_addr = get_arg_val<uint32_t>(a++);

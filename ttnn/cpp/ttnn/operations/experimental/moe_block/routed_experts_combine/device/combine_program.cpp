@@ -15,6 +15,8 @@
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/experimental/moe_block/common/moe_block_resources.hpp"
+#include "ttnn/operations/experimental/moe_block/flat_routed_expert/device/flat_routed_expert_device_operation_types.hpp"
+#include "ttnn/operations/experimental/moe_block/sparse_dispatch_2d/device/sparse_dispatch_2d_plan.hpp"
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
@@ -277,6 +279,12 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
     plan->D = N > 1 ? plan->PSL / (N - 1) : 0;
     plan->cred = credit_policy(N, in.S, A, plan->PSL, plan->tuning);
     plan->la = std::min<uint32_t>(plan->tuning.la, 64);
+    plan->dispatch = cfg.experts_during_dispatch;
+    if (plan->dispatch) {  // (the dispatch's row group and packing: sparse_dispatch_2d's defaults)
+        TT_FATAL(!plan->fused, "routed_experts_combine: the in-program dispatch needs the ports apart");
+        plan->group = sparse_dispatch_2d::default_group(in.W);
+        plan->pack = sparse_dispatch_2d::default_pack(align64(2ull * in.W), resources.fabric_max_payload_bytes());
+    }
     plan->far = plan->tuning.la > 1 ? plan->tuning.far : 0;
     const uint32_t acc_area = plan->st.RINGS + plan->PSL * SLOT;
     uint32_t QP = QP0, QL = 0;
@@ -405,15 +413,20 @@ CombineHandles add_combine_program(
 
     // circular buffers, all in the arena at the reference's offsets
     const Buffer& arena = *bufs[CombineBuf::Arena];
-    auto arena_cb = [&](uint8_t i, const CoreRangeSet& cores, uint32_t off, uint32_t total, tt::DataFormat fmt,
-                        uint32_t page) {
-        TT_FATAL(off + total <= plan.arena_bytes, "routed_experts_combine: CB {} at {} + {} B past the arena", i, off, total);
-        tt::tt_metal::CircularBufferConfig c(total, {{i, fmt}});
-        c.set_page_size(i, page);
-        c.set_globally_allocated_address(arena);
-        c.set_address_offset(off);
-        h.arena_cbs.emplace_back(tt::tt_metal::CreateCircularBuffer(program, cores, c), off);
-    };
+    auto arena_cb =
+        [&](uint8_t i, const CoreRangeSet& cores, uint32_t off, uint32_t total, tt::DataFormat fmt, uint32_t page) {
+            TT_FATAL(
+                off + total <= plan.arena_bytes,
+                "routed_experts_combine: CB {} at {} + {} B past the arena",
+                i,
+                off,
+                total);
+            tt::tt_metal::CircularBufferConfig c(total, {{i, fmt}});
+            c.set_page_size(i, page);
+            c.set_globally_allocated_address(arena);
+            c.set_address_offset(off);
+            h.arena_cbs.emplace_back(tt::tt_metal::CreateCircularBuffer(program, cores, c), off);
+        };
     arena_cb(kCbInj, pset, plan.inj_off, plan.QP * ISLOT, tt::DataFormat::UInt32, ISLOT);
     if (!plan.fused) {
         std::vector<CoreCoord> only_ports;
@@ -456,12 +469,84 @@ CombineHandles add_combine_program(
     std::vector<uint32_t> o_ct;
     tt::tt_metal::TensorAccessorArgs(*bufs[CombineBuf::Out]).append_to(o_ct);
 
+    // the dispatch phase (experts_during_dispatch): its CBs on the port cores (the manifest the first local CB there:
+    // the same address on every port core of every chip), its defines and compile-time args after the port kernels'
+    namespace sd = sparse_dispatch_2d;
+    std::map<std::string, std::string> dis_defs;
+    std::vector<uint32_t> rd_ct_dis, sd_ct_dis;
+    uint32_t ring_offs = 0;
+    if (plan.dispatch) {
+        Buffer* xb = bufs[CombineBuf::Xbuf];
+        Buffer* rb = bufs[CombineBuf::Route];
+        const uint32_t row_bytes = xb->aligned_page_size(), plan_bytes = rb->aligned_page_size();
+        const auto sz = sd::cb_sizes(topo, plan.S, row_bytes, plan_bytes, plan.group, plan.manifest_batch);
+        const auto ml = manifest_layout(topo.R, topo.C, topo.wrap_x, topo.wrap_y, plan.S);
+        ring_offs = ml.ring1_offset | (ml.ring2_offset << 16);
+        auto local_cb = [&](uint8_t i, uint32_t total, tt::DataFormat fmt, uint32_t page) {
+            tt::tt_metal::CircularBufferConfig c(total, {{i, fmt}});
+            c.set_page_size(i, page);
+            tt::tt_metal::CreateCircularBuffer(program, pset, c);
+        };
+        local_cb(kCbDisManifest, sz.manifest, tt::DataFormat::UInt32, sz.manifest);
+        local_cb(kCbDisRows, sz.rows, tt::DataFormat::Float16_b, row_bytes);
+        local_cb(kCbDisMeta, sz.meta, tt::DataFormat::UInt32, sd::META_PAGE);
+        local_cb(kCbDisPlan, sz.plan, tt::DataFormat::UInt32, sz.plan);
+        local_cb(kCbDisStage, sz.stage, tt::DataFormat::UInt32, sz.stage);
+        local_cb(kCbDisDbg, sz.dbg, tt::DataFormat::UInt32, sz.dbg);
+        const auto span = span_subs(topo.R, topo.C, topo.wrap_x, topo.wrap_y);
+        auto list = [](const std::vector<uint8_t>& v) {
+            std::string out;
+            for (size_t i = 0; i < v.size(); ++i) {
+                out += (i ? "," : "") + std::to_string(v[i]);
+            }
+            return out;
+        };
+        dis_defs = {
+            {"REC_DISPATCH", "1"},
+            {"SA_R", std::to_string(topo.R)},
+            {"SA_C", std::to_string(topo.C)},
+            {"SA_S", std::to_string(plan.S)},
+            {"SA_GMAX", std::to_string(sd::gmax(topo))},
+            {"SA_RW", std::to_string(route_words(N))},
+            {"SA_WRAP_X", span.wrap_x ? "1" : "0"},
+            {"SA_WRAP_Y", span.wrap_y ? "1" : "0"},
+            {"SA_XRING", list(span.xring)},
+            {"SA_YRING", list(span.yring)}};
+        rd_ct_dis = {kCbDisManifest, kCbDisRows, kCbDisMeta, kCbDisPlan, row_bytes, plan.group, plan_bytes, kCbDisDbg};
+        tt::tt_metal::TensorAccessorArgs(*xb).append_to(rd_ct_dis);
+        tt::tt_metal::TensorAccessorArgs(*rb).append_to(rd_ct_dis);
+        tt::tt_metal::TensorAccessorArgs(*rb).append_to(rd_ct_dis);  // (the debug records: never written)
+        sd_ct_dis = {
+            kCbDisManifest, kCbDisRows, kCbDisMeta, kCbDisStage, row_bytes, plan.group, plan.manifest_batch, plan.pack};
+        tt::tt_metal::TensorAccessorArgs(*xb).append_to(sd_ct_dis);
+    }
+    std::vector<uint32_t> relay_xy;
+    for (const auto& c : flat.relays) {
+        const auto v = virt(c);
+        relay_xy.push_back(v.x);
+        relay_xy.push_back(v.y);
+    }
+
     // port readers (ports apart only: fused ports run the hand-off on the sender)
     if (!plan.fused) {
-        const auto k = dm_kernel(
-            program, "dataflow/rf_port_reader.cpp", pset, {kCbInj, kCbTab, st.MISC, words_off, r_slot}, r_riscv0);
+        std::vector<uint32_t> ct = {kCbInj, kCbTab, st.MISC, words_off, r_slot};
+        ct.insert(ct.end(), rd_ct_dis.begin(), rd_ct_dis.end());
+        const auto k = dm_kernel(program, "dataflow/rf_port_reader.cpp", pset, std::move(ct), r_riscv0, dis_defs);
         for (uint32_t pid = 0; pid < n_pid; ++pid) {
             Args a;
+            if (plan.dispatch) {  // (sparse_dispatch_2d's reader args, then the x relays' ready counts)
+                const auto& p = my[pid];
+                const auto w = sd::wiring(plan.mesh, ch, p.dir);
+                a.buf(CombineBuf::Xbuf);
+                a.buf(CombineBuf::Route);
+                a.buf(CombineBuf::Sems);
+                a.lits({ring_offs, w.ring_mask, ch.r, ch.c, static_cast<uint32_t>(p.dir), p.li});
+                a.buf(CombineBuf::Route);
+                a.lits({sd::port_index(topo, ch, p.dir, p.li), 0u});
+                a.lits({static_cast<uint32_t>(flat.relays.size()), 1 + (pid == 0 ? kXReadyN - n_pid : 0u)});
+                a.buf(CombineBuf::RelayWords, flat_routed_expert::X_READY_OFF);
+                a.lits(relay_xy);
+            }
             a.buf(CombineBuf::Arena);
             a.buf(CombineBuf::Plan);
             a.buf(CombineBuf::Bar);
@@ -474,12 +559,42 @@ CombineHandles add_combine_program(
     // port senders
     {
         std::vector<uint32_t> ct = {
-            kCbInj, pc.row_bytes, SLOT, plan.PSL, A, N, L, ISLOT,
-            st.CRED, st.USED, st.RET, st.MISC, st.HDRS, st.RINGS, st.LAYR, st.LAYO, st.U0,
-            plan.cred.cred_thr, plan.cred.cred_idle, plan.cred.cred_age, plan.far,
-            pc.NP, pc.PD, pc.PS, kNumHeaders, kHeaderStride, plan.la,
-            1u /*BAR*/, plan.tuning.gbgate ? 1u : 0u, kMiscRtot, kMiscRdone, s_slot,
-            plan.fused ? 0u : 1u /*ZERO*/, words_off, plan.lut_off, plan.lut_bytes};
+            kCbInj,
+            pc.row_bytes,
+            SLOT,
+            plan.PSL,
+            A,
+            N,
+            L,
+            ISLOT,
+            st.CRED,
+            st.USED,
+            st.RET,
+            st.MISC,
+            st.HDRS,
+            st.RINGS,
+            st.LAYR,
+            st.LAYO,
+            st.U0,
+            plan.cred.cred_thr,
+            plan.cred.cred_idle,
+            plan.cred.cred_age,
+            plan.far,
+            pc.NP,
+            pc.PD,
+            pc.PS,
+            kNumHeaders,
+            kHeaderStride,
+            plan.la,
+            1u /*BAR*/,
+            plan.tuning.gbgate ? 1u : 0u,
+            kMiscRtot,
+            kMiscRdone,
+            s_slot,
+            plan.fused ? 0u : 1u /*ZERO*/,
+            words_off,
+            plan.lut_off,
+            plan.lut_bytes};
         std::map<std::string, std::string> defs;
         if (plan.fused) {
             defs["REC_FUSED"] = "1";
@@ -490,7 +605,12 @@ CombineHandles add_combine_program(
         if (plan.perchip) {
             defs["REC_ACC_LUT"] = "1";
         }
-        const auto k = dm_kernel(program, "dataflow/rf_port_sender.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
+        if (plan.dispatch) {
+            defs.insert(dis_defs.begin(), dis_defs.end());
+            ct.insert(ct.end(), sd_ct_dis.begin(), sd_ct_dis.end());
+        }
+        const auto k =
+            dm_kernel(program, "dataflow/rf_port_sender.cpp", pset, std::move(ct), s_riscv0, std::move(defs));
         std::vector<uint32_t> acc_xy;
         for (const auto& c : accs) {
             const auto v = virt(c);
@@ -500,6 +620,29 @@ CombineHandles add_combine_program(
         for (uint32_t pid = 0; pid < n_pid; ++pid) {
             const auto& p = my[pid];
             Args a;
+            if (plan.dispatch) {  // (sparse_dispatch_2d's sender args)
+                const auto& mp = *plan.mesh.chips.at(ch)[static_cast<size_t>(p.dir)];
+                const auto w = sd::wiring(plan.mesh, ch, p.dir);
+                const auto ready = virt(plan.port_core.at(PortKey{mp.peer, opposite(p.dir), p.li}));
+                const auto pn = node(mp.peer);
+                a.buf(CombineBuf::Xbuf);
+                a.buf(CombineBuf::Sems);
+                a.lits(
+                    {static_cast<uint32_t>(ready.x),
+                     static_cast<uint32_t>(ready.y),
+                     static_cast<uint32_t>(*pn.mesh_id),
+                     static_cast<uint32_t>(pn.chip_id),
+                     ring_offs});
+                for (const auto& sw : w.streams) {
+                    if (sw.on) {
+                        const auto v = virt(plan.port_core.at(PortKey{mp.peer, sw.target, p.li}));
+                        a.lits({sw.on, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), sw.ring});
+                    } else {
+                        a.lits({0u, 0u, 0u, 0u});
+                    }
+                }
+                a.lits({mp.peer.r, mp.peer.c, static_cast<uint32_t>(p.dir)});
+            }
             a.buf(CombineBuf::Arena);
             a.lits({plan.mesh_id, idx(ch), p.li});
             a.buf(CombineBuf::Bar);
@@ -575,9 +718,31 @@ CombineHandles add_combine_program(
             program,
             "dataflow/rf_acc_reader.cpp",
             aset,
-            {kCbRow, kCbMeta, kCbTab, pc.row_bytes, SLOT, plan.PSL, A, NT, N, L, st.RET, st.MISC, st.RINGS, st.LAYO,
-             pc.NP, pc.PD, pc.PS, kCbW, kMiscTaken, kMiscRtot, plan.fused ? 160u : 128u, plan.fused ? 103u : 101u,
-             plan.loc_off, words_off, r_slot},
+            {kCbRow,
+             kCbMeta,
+             kCbTab,
+             pc.row_bytes,
+             SLOT,
+             plan.PSL,
+             A,
+             NT,
+             N,
+             L,
+             st.RET,
+             st.MISC,
+             st.RINGS,
+             st.LAYO,
+             pc.NP,
+             pc.PD,
+             pc.PS,
+             kCbW,
+             kMiscTaken,
+             kMiscRtot,
+             plan.fused ? 160u : 128u,
+             plan.fused ? 103u : 101u,
+             plan.loc_off,
+             words_off,
+             r_slot},
             r_riscv0);
         // (the fp32 sums unpacked straight to DEST: the default narrows a Float32 CB to TF32 on its way)
         std::vector<tt::tt_metal::UnpackToDestMode> u2d(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);

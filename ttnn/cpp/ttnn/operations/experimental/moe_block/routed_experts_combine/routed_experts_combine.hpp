@@ -18,7 +18,8 @@ class MoEBlockResources;
 
 namespace ttnn::operations::experimental::moe_block::routed_experts_combine {
 
-// dispatched: the gathered rows [N S, Hr] bf16 row-major (the dispatch's output); counts / regions / token_index /
+// dispatched: the gathered rows [N S, Hr] bf16 row-major (the dispatch's output; with experts_during_dispatch its
+// buffer, filled in this program from route, the route words [1, 1, 1, RW S]); counts / regions / token_index /
 // table / plan: the fused head's planner outputs; global_expert_ids / gate_up_weights / down_weights: the layer's flat
 // expert (prepared for the plan of this config). Returns y_own [1, 1, S, Hr] bf16 row-major (persistent: the
 // resources' "routed_experts_combine/out").
@@ -35,7 +36,7 @@ ttnn::Tensor routed_experts_combine(
     MoEBlockResources& resources,
     uint32_t max_tokens_per_expert,
     uint32_t activation,
-    bool weights_bf8 = false,
+    const std::optional<ttnn::Tensor>& route = std::nullopt,
     const flat_routed_expert::FlatLayoutOptions& layout = {},
     const CombineConfig& combine = {});
 
@@ -44,7 +45,6 @@ flat_routed_expert::FlatRoutedExpertConfig routed_experts_combine_flat_config(
     MoEBlockResources& resources,
     uint32_t max_tokens_per_expert,
     uint32_t activation,
-    bool weights_bf8 = false,
     const flat_routed_expert::FlatLayoutOptions& layout = {});
 
 }  // namespace ttnn::operations::experimental::moe_block::routed_experts_combine
