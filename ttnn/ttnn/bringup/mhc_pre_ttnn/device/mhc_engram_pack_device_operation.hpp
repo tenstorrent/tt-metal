@@ -30,6 +30,12 @@ struct MhcEngramPackParams {
     // Fork option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle (0, 0) ..
     // (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid. Hashed when set.
     std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
+    // Fork option engram_gate_eps (deepseek_v41_flash_d_p P.24, TINY_KERNELS): when set, the streams' C columns are
+    // the whole hidden (no TP split) and the root also writes the engram gates into columns 3n .. 4n-1 of the row:
+    //     g_i = sigmoid(copysign(sqrt(max(|d_i|, 1e-6)), d_i)),
+    //     d_i = row[i] * (rsqrt(row[n + i] / C + eps) * rsqrt(row[2n + i] / C + eps)) * C^-0.5
+    // (fp32 SFPU, the op chain's steps and roundings). Default (none) = the program it always was. Hashed when set.
+    std::optional<float> gate_eps = std::nullopt;
 };
 
 struct MhcEngramPackInputs {
@@ -81,5 +87,6 @@ std::vector<ttnn::Tensor> mhc_engram_pack(
     const ttnn::Tensor& keys,
     const ttnn::Tensor& weight,
     uint32_t n,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    std::optional<float> gate_eps = std::nullopt);
 }  // namespace ttnn::prim::bringup

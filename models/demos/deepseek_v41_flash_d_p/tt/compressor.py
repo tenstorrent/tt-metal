@@ -53,7 +53,7 @@ import torch
 
 import ttnn
 
-from . import ccl, cores
+from . import ccl, cores, host_alloc
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, tp_sum
@@ -524,6 +524,7 @@ class TtCompressor:
         kdt = ttnn.bfloat16 if self.stock else None
         self.k_norm = TtDistributedRmsNorm(mesh, w["k_norm"].float()[permk], cfg.eps, split=False, dtype=kdt)
         self.glue_partial = indexer_glue() and settings.get("HC_TP_SUM") == "gather_add"  # P.16 (tt/ccl.tp_sum)
+        self.pool_site = None  # TINY_KERNELS (P.24): pair_pool's load-time output site (tt/host_alloc.reserve_forks)
 
     def _mm(self, a: ttnn.Tensor, b: ttnn.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
         return mm.linear(a, b, site="compressor", dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM)
@@ -531,6 +532,10 @@ class TtCompressor:
     def _pool(self, p: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, R, 2 hd] = [kv | gate] per token -> the pair-pooled latent [1, 1, R / 2, hd] fp32."""
         rows, hd = p.shape[-2], self.hd
+        if settings.get("TINY_KERNELS") == "on" and p.dtype == ttnn.float32 and rows % 64 == 0:
+            # TINY_KERNELS=on (P.24): ONE fork program, the chain's fp32 steps (a load-time output when reserved)
+            out = host_alloc.fork_out(self.mesh, self.pool_site, [1, 1, rows // 2, hd], ttnn.float32)
+            return ttnn.bringup.pair_pool(p, output_tensor=out, max_grid=max_grid())
         pr = ttnn.reshape(p, [1, 1, rows // 2, 4 * hd], sub_core_grids=sub_cores(p))  # [kv_0 | g_0 | kv_1 | g_1]
 
         def col(i):

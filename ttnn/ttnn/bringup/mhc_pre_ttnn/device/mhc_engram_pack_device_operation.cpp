@@ -5,6 +5,7 @@
 #include "mhc_engram_pack_device_operation.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
@@ -94,6 +95,16 @@ MhcEngramPackDeviceOperation::tensor_return_value_t MhcEngramPackDeviceOperation
 
 ttsl::hash::hash_t MhcEngramPackDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.gate_eps.has_value()) {  // P.24: the gate epilogue's own programs (the off hashes unchanged)
+        return tt::tt_metal::operation::hash_operation<MhcEngramPackDeviceOperation>(
+            attrs.n,
+            t.streams.tensor_spec(),
+            t.keys.tensor_spec(),
+            t.weight.tensor_spec(),
+            attrs.max_grid.has_value() ? attrs.max_grid->x : 0u,
+            attrs.max_grid.has_value() ? attrs.max_grid->y : 0u,
+            std::bit_cast<uint32_t>(*attrs.gate_eps));
+    }
     if (attrs.max_grid.has_value()) {  // FIX.15: the off hash is the one it always was
         return tt::tt_metal::operation::hash_operation<MhcEngramPackDeviceOperation>(
             attrs.n,
@@ -116,9 +127,10 @@ std::vector<ttnn::Tensor> mhc_engram_pack(
     const ttnn::Tensor& keys,
     const ttnn::Tensor& weight,
     uint32_t n,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    std::optional<float> gate_eps) {
     using OperationType = ttnn::operations::bringup::mhc_pre_ttnn::MhcEngramPackDeviceOperation;
-    auto attrs = OperationType::operation_attributes_t{.n = n, .max_grid = max_grid};
+    auto attrs = OperationType::operation_attributes_t{.n = n, .max_grid = max_grid, .gate_eps = gate_eps};
     auto args = OperationType::tensor_args_t{.streams = streams, .keys = keys, .weight = weight};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }

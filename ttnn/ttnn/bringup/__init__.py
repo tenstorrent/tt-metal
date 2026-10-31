@@ -22,6 +22,8 @@ PYTHON_OPS = {
     "ckv_bfp4": ("ckv_bfp4_ttnn", "ckv_bfp4"),
     # bf16 TILE -> bfloat4_b / bfloat8_b TILE rounded to nearest even (deepseek_v41_flash_d_p index keys / query)
     "bfp_round": ("ckv_bfp4_ttnn", "bfp_round"),
+    # [kv | gate] row pairs -> softmax-gated pair pool, fp32 (deepseek_v41_flash_d_p compressor, P.24 TINY_KERNELS)
+    "pair_pool": ("pair_pool_ttnn", "pair_pool"),
 }
 
 

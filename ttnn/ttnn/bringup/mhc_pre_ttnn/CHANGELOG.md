@@ -279,3 +279,22 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
 - Measured: 8x4 Galaxy, one 5120-token chunk (mhc_pre_xing / mhc_pre_xing_pack): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/mhc_engram_pack_device_operation.cpp, device/mhc_engram_pack_device_operation.hpp, device/mhc_engram_pack_program_factory.cpp, device/mhc_pre_xing_device_operation.cpp, device/mhc_pre_xing_device_operation.hpp, device/mhc_pre_xing_program_factory.cpp, mhc_pre_ttnn_nanobind.cpp, mhc_pre_xing.cpp, mhc_pre_xing.hpp
+
+### engram_gate_eps: the engram gates as an epilogue of the engram pass (2026-10-31)
+- What: option `engram_gate_eps` (float, default None = off: the same program, args, CBs and hash as before) on
+  `mhc_pre_xing_pack` engram mode. On: the writer lays the partial row tiles coefficient-major (define
+  MHC_ENGRAM_GATE), so the root's summed row has column k as SFPU vector k; the compute then computes the gates in
+  the op chain's steps with the stock SFPU bodies (`_calculate_sqrt_body_` rsqrt / sqrt with sqrt_init's constants,
+  `_sfpu_sigmoid_<true>` with the reciprocal constant; every product and sum stored to DEST between steps so no
+  multiply-add fuses) into columns 3n .. 4n-1; the writer re-lays the row row-major in its free stage page. Constants
+  (1 / C, eps, C^-0.5, 1e-6) as compile-time fp32 bits; the hash adds eps (and max_grid) only when set.
+- Why: TINY_KERNELS (owner 2026-10-31, opportunity #10): the gate math was ~19 tiny ops a layer after the pass.
+- Gotcha: a runtime-indexed DEST loop around the sqrt bodies crashed the SFPI compiler (internal compiler error in
+  gimple-rvtt-synth.cc renumber); one template instance per stream (constant DEST indices) compiles.
+- Tests: tests/unit/test_engram_pack.py test_engram_gate (3 shapes: gates 0 ulp from the device op chain, rel vs
+  float64 <= 1.8e-6, sums byte-equal to the option-off call, zero row / floor case, a dropped-copysign control) and
+  test_engram_gate_refusals; the file's option-off tests pass too (12 passed, 8x4). No regression suite (OV-25: F.1).
+- Needed by: deepseek_v41_flash_d_p P.24
+- Files: device/mhc_engram_pack_device_operation.{hpp,cpp}, device/mhc_engram_pack_program_factory.cpp,
+  kernels/mhc_engram_pack_compute.cpp, kernels/mhc_engram_pack_writer.cpp, mhc_pre_xing.{hpp,cpp},
+  mhc_pre_ttnn_nanobind.cpp, tests/unit/test_engram_pack.py

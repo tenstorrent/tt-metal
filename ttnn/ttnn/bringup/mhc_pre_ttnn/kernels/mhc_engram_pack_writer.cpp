@@ -6,6 +6,9 @@
 // row totals (cb_soa_out, slot 0 of each) -> columns i, n + i, 2n + i of a zero row tile (cb_stage) -> scratch page
 // r (n G) + bu, then one semaphore increment on row r's root core. Root phase: each rooted row's sum (cb_fin) -> the
 // output page r. Word copies only (bit-exact).
+// MHC_ENGRAM_GATE (option engram_gate_eps, P.24): the partial row tiles are laid coefficient-major (column k = SFPU
+// vector k, lane = token row), so the root's sum is too and the compute's gate epilogue reads each column as one
+// vector; the root's row is re-laid row-major (in the then free stage page) before its write.
 
 #include <cstdint>
 
@@ -30,6 +33,15 @@ inline void cols_to_soa(const volatile tt_l1_ptr uint32_t* src, volatile tt_l1_p
             d[slot_index(k, 0)] = s[rc_index(0, k)];
         }
     }
+}
+
+// MHC_ENGRAM_GATE: where the partial row keeps column `col` of token row l
+inline uint32_t part_index(uint32_t l, uint32_t col) {
+#ifdef MHC_ENGRAM_GATE
+    return slot_index(col, l);
+#else
+    return rc_index(l, col);
+#endif
 }
 
 }  // namespace
@@ -83,7 +95,7 @@ void kernel_main() {
             ptr_t src = reinterpret_cast<ptr_t>(tot + t * page);
             const uint32_t col = t * n + U.i;
             for (uint32_t l = 0; l < 32; ++l) {
-                stage[rc_index(l, col)] = src[slot_index(0, l)];
+                stage[part_index(l, col)] = src[slot_index(0, l)];
             }
         }
         cb_pop_front(cb_soa_out, 3);
@@ -92,7 +104,7 @@ void kernel_main() {
         for (uint32_t t = 0; t < 3; ++t) {
             const uint32_t col = t * n + U.i;
             for (uint32_t l = 0; l < 32; ++l) {
-                stage[rc_index(l, col)] = 0;
+                stage[part_index(l, col)] = 0;
             }
         }
         const uint32_t xy = get_arg_val<uint32_t>(root_arg0 + (u - start));
@@ -102,7 +114,20 @@ void kernel_main() {
     for (uint32_t j = 0; j < n_rooted; ++j) {
         const uint32_t r = get_arg_val<uint32_t>(ROWS_ARG0 + j);
         cb_wait_front(cb_fin, 1);
+#ifdef MHC_ENGRAM_GATE
+        {  // coefficient-major -> row-major in the stage page (free after the units)
+            const volatile tt_l1_ptr uint32_t* fin = reinterpret_cast<ptr_t>(get_read_ptr(cb_fin));
+            noc_async_writes_flushed();  // (the previous root row's write reads the stage page)
+            for (uint32_t l = 0; l < 32; ++l) {
+                for (uint32_t k = 0; k < 32; ++k) {
+                    stage[rc_index(l, k)] = fin[slot_index(k, l)];
+                }
+            }
+            noc_async_write_page(r, o_acc, reinterpret_cast<uint32_t>(stage));
+        }
+#else
         noc_async_write_page(r, o_acc, get_read_ptr(cb_fin));
+#endif
         noc_async_writes_flushed();
         cb_pop_front(cb_fin, 1);
     }

@@ -61,6 +61,9 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
 // pass over the streams h and the keys k (engram_keys (..., T, >= n*C) fp32, the keys in columns 0 .. n*C - 1) with
 // the weight w (engram_weight (..., 32, n*C) fp32, the weight row on all 32 rows) -> a new row (..., T, 32) fp32 =
 // [sum_c h_i w_i k_i (i < n) | sum_c h_i^2 | sum_c k_i^2 | 0 ...] (exact fp32 SFPU; the engram gate's partials).
+// engram_gate_eps (engram mode only, deepseek_v41_flash_d_p P.24; default none = off): the C columns are the whole
+// hidden, and columns 3n .. 4n-1 also hold the gates sigmoid(copysign(sqrt(max(|d_i|, 1e-6)), d_i)),
+// d_i = dot_i rsqrt(sum h_i^2 / C + eps) rsqrt(sum k_i^2 / C + eps) / sqrt(C) (fp32 SFPU, the op chain's steps).
 Tensor mhc_pre_xing_pack(
     const std::optional<Tensor>& mix,
     const Tensor& streams,
@@ -68,6 +71,7 @@ Tensor mhc_pre_xing_pack(
     const std::optional<Tensor>& engram_keys = std::nullopt,
     const std::optional<Tensor>& engram_weight = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    std::optional<float> engram_gate_eps = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::mhc_pre_ttnn

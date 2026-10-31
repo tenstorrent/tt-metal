@@ -1,0 +1,122 @@
+{
+ "used": [
+  {
+   "id": "DS41-145",
+   "how": "pair_pool takes its whole split from common runtime args (per, extra, the core's logical x / y) with merged core ranges: no per-core args on 32 chips (75.8 us host a warm call)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-147",
+   "how": "pair_pool prepares one program for the whole mesh range (one MeshCoordinateRange), not one per chip",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "the pool's output buffer is reserved at load time in host_alloc.reserve_forks (site fork.compressor.pool), never allocated mid-forward",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "pair_pool returns the caller's output_tensor object itself, so ccl.dealloc's pinned-id skip sees it",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-178",
+   "how": "fork tests run through run_safe_pytest on the whole mesh (no tt-probe mesh probes, which reset the box)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-57",
+   "how": "the new fork tests open the whole-box mesh (FABRIC_2D), never a single card on the Galaxy (rule 19)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "the final measure (longer than 10 minutes) ran as a background shell with a long timeout",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-188",
+   "how": "the quick A/B's L39 is judged against the swing this entry records; L00-L38 are the signal",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which SFPU per-vector bodies the stock unary / binary fp32 ops use and which programmable constants each init sets (sqrt / rsqrt vs reciprocal share a register): needed to fuse an op chain bit-identically (now DS41-190 and a repo_map row)",
+  "the SFPI compiler's internal compiler error on runtime-indexed DEST loops around sqrt bodies (now DS41-189)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding: pair_pool works on the real [S/SP, 1024] shape (R % 64 refusal instead of padding); the gate epilogue reads the existing row"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the new Python-built op pair_pool always dispatches through ttnn.bringup.prepare_program / run_prepared (patch_count 2 asserted), output reused from a load-time buffer; host 75.8 us a warm call on 32 chips (tests/unit/test_pair_pool.py). The engram gate is a C++ device op option (program cache, override_runtime_arguments), not Python-built"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "only the new tests ran on the 8x4: pair_pool_ttnn tests/unit/test_pair_pool.py (6 passed) and mhc_pre_ttnn tests/unit/test_engram_pack.py (the file holding the new gate tests: 11 passed); no fork regression suite, no source-test check"
+  }
+ ],
+ "cited_only": [
+  "DS41-189",
+  "DS41-190"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.24",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-31T19:00:55",
+  "head": "e3e75423c18",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.24.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_engram_pack.py",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/README.md",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_common.hpp",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_compute.cpp",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_reader.cpp",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_writer.cpp",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/pair_pool.py",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/tests/__init__.py",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/pair_pool_ttnn/tests/unit/test_pair_pool.py"
+  ]
+ }
+}

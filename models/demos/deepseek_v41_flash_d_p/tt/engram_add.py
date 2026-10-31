@@ -32,6 +32,10 @@ MHC_FUSED=on (P.14): the 12 partial sums come from ONE ttnn.bringup.mhc_pre_xing
 the identity comb's zero terms add exact zeros, so each output is round(h_n + round(gate_n value)), the addcmul's
 arithmetic), replacing the 4 h slices, 4 gate slices, 4 addcmul and the concat; the identity [S/SP, 16] is built at
 load (``rows``) or once per row count.
+
+TINY_KERNELS=on (P.24, with OWN_ROWS=on: the pass's sums are the whole rows'): the pass also computes the gates (fork
+option engram_gate_eps: the _gate_math steps on the SFPU, bit-identical to the chain) into columns 12..15 of its row,
+and mhc_post reads them there (post_col=12): no gate op chain (~19 launches a layer).
 """
 
 from __future__ import annotations
@@ -47,6 +51,7 @@ from .layout import HC, row_split_to_device, streams_cols_to_chip_major
 from .settings import settings
 
 GATE_FLOOR = 1e-6  # reference: dot.abs().clamp_min(1e-6)
+GATE_COL = 3 * HC  # TINY_KERNELS (P.24): the gates' first column in the engram pass's row
 
 
 class TtEngramAdd:
@@ -96,6 +101,10 @@ class TtEngramAdd:
                 memory_config=DRAM,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims),
             )
+        # TINY_KERNELS=on (P.24, OWN_ROWS: the pass's sums are the whole rows' sums): the engram pass also writes the
+        # gates (mhc_pre_xing_pack engram_gate_eps) into columns 3n .. 4n-1 of its row; mhc_post reads them there
+        self.tiny = self.fused and self.own_rows and settings.get("TINY_KERNELS") == "on"
+        self.gate_col = GATE_COL if self.tiny else 0
         self._eye = {}  # rows per chip -> identity comb [1, 1, rows, 16] fp32 (row-split, TP-replicated)
         if self.fused and rows:
             self.eye(rows)
@@ -130,6 +139,16 @@ class TtEngramAdd:
     def gates(self, h: ttnn.Tensor, kv: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, R, 4] fp32 gate per stream, replicated over TP."""
         rows, w = h.shape[-2], self.w
+        if self.fused and self.tiny:  # TINY_KERNELS=on (P.24): the gates from the engram pass itself (columns 12..15)
+            return ttnn.bringup.mhc_pre_xing_pack(
+                None,
+                h,
+                n=HC,
+                engram_keys=kv,
+                engram_weight=self.weight32,
+                max_grid=max_grid(),
+                engram_gate_eps=self.eps,
+            )
         if self.fused:
             return self._gate_math(self._partials_fused(h, kv), rows)
         hw = ttnn.multiply(
@@ -244,11 +263,12 @@ class TtEngramAdd:
                     self.eye(rows),
                     stats_weight=hc.fn_t,
                     compute_kernel_config=hc.post_cfg,
+                    post_col=self.gate_col,
                     max_grid=max_grid(),
                 )
             else:
                 out = ttnn.bringup.mhc_post(
-                    value, h, gate, self.eye(rows), max_grid=max_grid()
+                    value, h, gate, self.eye(rows), post_col=self.gate_col, max_grid=max_grid()
                 )  # X'_n = gate_n value + h_n
             dealloc(value)
             dealloc(gate)
