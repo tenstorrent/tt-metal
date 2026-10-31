@@ -82,8 +82,9 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         // for width sharded
         if (input_buffer_type == TensorMemoryLayout::WIDTH_SHARDED &&
             output_buffer_type == TensorMemoryLayout::WIDTH_SHARDED) {
-            input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
-            output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
+            // Width-sharded: one shard per core of the whole CoreRangeSet (it may span several ranges).
+            input_num_shard_cores = input_buffer->shard_spec().grid().num_cores();
+            output_num_shard_cores = output_buffer->shard_spec().grid().num_cores();
         }
 
         source_width =

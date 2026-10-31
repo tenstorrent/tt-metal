@@ -441,48 +441,13 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
         invalid_mapping_output[total_page_number * i] = 0;
     }
 
-    // find input invalid base pages if applicable
-    for (auto mapped_page : input_buffer_page_mapping) {
-        auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
-        CoreCoord shard_grid = input_buffer->shard_spec().grid().ranges()[0].grid_size();
-        bool is_last_in_row = (core.x == shard_grid.x - 1);
-        if (input_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
-            is_last_in_row = (core.y == shard_grid.y - 1);
-        }
-        uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
-        uint32_t valid_pages = input_pages_per_original;
-        if (is_last_in_row) {
-            uint32_t next_total =
-                ((base_start_page + num_input_pages_per_row) / num_input_pages_per_row) * total_page_number;
-            next_total = std::max(next_total, total_page_number);
-            valid_pages = std::min(next_total - base_start_page, input_pages_per_original);
-        }
-        if (input_pages_per_original - valid_pages > 0) {
-            num_invalid_pages_input = input_pages_per_original - valid_pages;
-            break;
-        }
-    }
-
-    // find output invalid base pages if applicable
-    for (auto mapped_page : output_buffer_page_mapping) {
-        auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
-        CoreCoord shard_grid = output_buffer->shard_spec().grid().ranges()[0].grid_size();
-        bool is_last_in_row = (core.x == shard_grid.x - 1);
-        if (output_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
-            is_last_in_row = (core.y == shard_grid.y - 1);
-        }
-        uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
-        uint32_t valid_pages = output_pages_per_original;
-        if (is_last_in_row) {
-            uint32_t next_total =
-                ((base_start_page + num_output_pages_per_row) / num_output_pages_per_row) * total_page_number;
-            valid_pages = std::min(next_total - base_start_page, output_pages_per_original);
-        }
-        if (output_pages_per_original - valid_pages > 0) {
-            num_invalid_pages_output = output_pages_per_original - valid_pages;
-            break;
-        }
-    }
+    // Padding base pages per row = the base pages the shards provide beyond the logical row. This is a
+    // property of the shard width and the logical width alone; it does not depend on which core holds the
+    // last shard (the previous scan located that core through the first core range's extent, which is wrong
+    // when the shard grid spans several ranges).
+    TT_ASSERT(num_input_pages_per_row >= total_page_number && num_output_pages_per_row >= total_page_number);
+    num_invalid_pages_input = num_input_pages_per_row - total_page_number;
+    num_invalid_pages_output = num_output_pages_per_row - total_page_number;
 
     for (uint32_t i = 1; i <= num_rows; i++) {
         invalid_mapping_input[total_page_number * i] = (i - 1) * num_invalid_pages_input;
