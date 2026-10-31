@@ -163,3 +163,67 @@ inline void _llk_unpack_hadamard_h128_(
     // Re-pin phase 1 to context 0 for the next tile (one SETC16, no stall).
     reset_config_context();
 }
+
+// Vectors per SrcA bank in the block form: each takes 16 rows (8 data, 8 zero).
+constexpr std::uint32_t HADAMARD_H128_BLOCK_VECTORS = 4;
+
+// Unpacks num_vectors inputs (tiles tile_index_b onward, contiguous in L1) for _llk_math_hadamard_h128_block_.
+// Each group of up to four shares one H_16 load: its inputs go to SrcA rows 16 * v of one bank and H_16 to SrcB and
+// to the other SrcA bank. Call _llk_unpack_hadamard_h128_init_ first.
+inline void _llk_unpack_hadamard_h128_block_(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const std::uint32_t num_vectors)
+{
+    volatile std::uint32_t *cfg = get_cfg_pointer();
+
+    const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a; // h16
+
+    constexpr std::uint32_t kFaceXEnd  = FACE_R_DIM * FACE_C_DIM - 1;
+    constexpr std::uint32_t kInputXEnd = 8 * FACE_C_DIM - 1;
+
+    // A context-0 X dimension of one input tile makes each Z step read the next tile (bf16, 8 datums per 16 bytes).
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_RMW>(tile_size_b * 8);
+
+    for (std::uint32_t first = 0; first < num_vectors; first += HADAMARD_H128_BLOCK_VECTORS)
+    {
+        const std::uint32_t count = (num_vectors - first) < HADAMARD_H128_BLOCK_VECTORS ? (num_vectors - first) : HADAMARD_H128_BLOCK_VECTORS;
+
+        wait_for_next_context(1);
+        _llk_unpack_configure_addresses_(base_address_b + tile_size_b * (tile_index_b + first), address_a, cfg);
+        semaphore_post(semaphore::UNPACK_SYNC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+        TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+        // Rows 8..15 of every input slot stay zero: only the first group clears the bank.
+        if (first == 0)
+        {
+            TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*no Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        }
+        TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101);
+        TTI_SETADCXX(p_setadc::UNP_A, kInputXEnd, 0x0);
+        for (std::uint32_t v = 0; v + 1 < count; v++)
+        {
+            // Z steps the L1 read to the next tile and the SrcA write to the next 16 rows.
+            TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        }
+        TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_SETADCXX(p_setadc::UNP_A, kFaceXEnd, 0x0);
+        TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101);
+
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        switch_config_context(unp_cfg_context);
+
+        TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+
+        reset_config_context();
+    }
+
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_RMW>(FACE_R_DIM * FACE_C_DIM);
+}
