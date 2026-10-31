@@ -43,7 +43,10 @@ CORPUS = "ttnn/cpp/ttnn/operations/**/*.[hc]pp"
 PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
 
-PERF_JSON = os.environ.get("VSB_PERF_JSON")  # with PROFILING: each read's per-program device times, one chip
+PERF_JSON = os.environ.get("VSB_PERF_JSON")
+TOKENS = int(
+    os.environ.get("VSB_TOKENS", "0")
+)  # print each request's first committed tokens  # with PROFILING: each read's per-program device times, one chip
 _perf = []
 
 
@@ -207,6 +210,7 @@ def main():
             pos = getattr(main, "_pos", [a.ctx] * users)
             tok = getattr(main, "_tok", list(last))
             times, per_step_tokens, per_request = [], [], []
+            committed_log = [[] for _ in range(users)]
             if plain:
                 for s in range(a.steps):
                     tokens = torch.zeros(rows, 1, dtype=torch.int32)
@@ -278,6 +282,7 @@ def main():
                         c = int(counts[r])
                         tok[r], pos[r] = int(ids[r, c - 1]), pos[r] + c
                         got.append(c)
+                        committed_log[r].extend(int(ids[r, j]) for j in range(c))
                     counts[n:] = 1
                     per_step_tokens.append(sum(got) / n)
                     per_request.append(got)
@@ -285,6 +290,9 @@ def main():
             main._pos, main._tok = pos, tok
             t = times[a.warm :]
             tps = statistics.mean(per_step_tokens[a.warm :])
+            if TOKENS:  # each request's first committed tokens (greedy: the same at any draft length)
+                for r in range(n):
+                    say(f"users={n} request={r} tokens={committed_log[r][:TOKENS]}")
             if per_request:  # each request's tokens per step (a verify's slots: a request per draft group)
                 each = [statistics.mean(g[r] for g in per_request[a.warm :]) for r in range(n)]
                 say(f"users={n} per_request_tokens_per_step={[round(v, 2) for v in each]}")
