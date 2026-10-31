@@ -603,7 +603,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_tanh_init);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_tanh_init<is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {

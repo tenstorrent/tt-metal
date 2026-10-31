@@ -8,6 +8,7 @@ from itertools import product
 
 import pytest
 import torch
+from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -1630,6 +1631,28 @@ def build_eltwise_unary_sfpu_config(
         is_perf=is_perf,
         run_types=run_types,
         test_config_kwargs=test_config_kwargs,
+    )
+
+
+@skip_for_quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.GeluTanh],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_unary_sfpu_gelu_tanh_bf16_dest(formats, dest_acc, mathop):
+    # gelu_tanh over both signs, past where its logistic factor underflows. With FP32
+    # DEST off Blackhole runs the generated BF16 kernel; every other cell runs the
+    # stock body.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
     )
 
 
