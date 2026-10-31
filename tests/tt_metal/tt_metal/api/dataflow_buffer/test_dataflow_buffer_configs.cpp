@@ -2427,8 +2427,7 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
 // The per-core slot limit is on how many DFBs share a core, not on how many exist in the program:
 // DFBs on disjoint cores all fit at slot 0.
 TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
-    const bool is_quasar = this->device().arch() == ARCH::QUASAR;
-    const uint32_t max_slots = is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_num_dataflow_buffers();
+    const uint32_t max_slots = hal::get_num_dataflow_buffers();
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_dfbs = max_slots + 4;
     if (grid.x * grid.y < num_dfbs) {
