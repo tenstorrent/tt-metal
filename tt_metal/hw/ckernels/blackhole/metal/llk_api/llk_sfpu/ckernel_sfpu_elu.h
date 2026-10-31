@@ -19,8 +19,22 @@ inline void elu_init() {
     expm1_cw_init_prgm_consts();
 }
 
+bool bf16_dest_elu();
+template <int ITERATIONS>
+void calculate_elu_bf16();
+// The slope the generated elu kernel is fitted for, as FP32 bits; any other slope runs the stock kernel.
+inline constexpr std::uint32_t elu_bf16_slope_bits = 0x3f800000u;
+// Whether BF16 DEST runs the generated elu kernel as one call over the whole tile.
+inline constexpr bool elu_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_elu() && slope == ckernel::sfpu::elu_bf16_slope_bits) {
+            calculate_elu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     sfpi::vFloat alpha = Converter::as_float(slope);
     // expm1's two top Horner coefficients, loaded once and held in LRegs for the whole loop (the three
     // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (through 7.89.0) never hoists a literal out
@@ -45,3 +59,5 @@ inline void calculate_elu(uint slope) {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_elu_bf16.h"
