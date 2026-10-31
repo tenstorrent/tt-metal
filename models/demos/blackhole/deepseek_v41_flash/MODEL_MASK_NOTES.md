@@ -44,3 +44,11 @@ Capability: `model_capabilities["supports_verify_grammar_bitmask"]`, instance `v
 CPU: `tests/test_struct_mask_model_cpu.py` (shard layout vs logits columns, bias arithmetic, masked argmax, row layout, adaptive slice), `tests/test_grammar_mask_cpu.py` (plugin agent).
 Device: `/mnt/tt-data/ssinghal/dsv4-logs/structured_model/cmds/` (c10 greedy: all-ones = unmasked, random masks vs host reference computed from trace A's logits, allowed token outside the
 unmasked top-32, non-structured rows unchanged, k=5 / k=3; c20 sampled: membership + law vs softmax over the allowed set).
+
+## Device results (rc2 image, 2026-10-31, hosts .34)
+* Model level (adapter harness, B=16 / k=5): all-ones mask == unmasked; random masks == host argmax over the allowed tokens of trace A's fp32 logits; an allowed token far outside the unmasked top-32 is chosen;
+  non-structured rows bit-identical; sampled rows never leave the allowed set and follow softmax over the allowed set (192 draws vs the unmasked top_k=6 control); M2: per-position masks == host reference, and the
+  speculative masked decode (drafts, accept / commit on device) emits exactly the plain masked decode stream (48 tokens x 16 rows identical, 29 vs 47 rounds).
+* Cost: masked sampler trace +0.50 ms (1.03 -> 1.52 ms), packed mask upload 3.4 ms (1.6 MB at B=16), host `permute_to_runner` 2.8 ms (M1) / 6.3 ms (M2) before the helper is made cheap. Rounds without a mask are unchanged.
+* Server level (plugin d9d8ca1, VLLM_TT_STRUCTURED_SPEC=1 + DSV41_STRUCTURED_SPEC=1): B=16/262144 prod spec: matrix 28/28, mixed 55/56 (the failure is a max_tokens truncation of an unbounded array, not a grammar violation),
+  tool_checks 28 PASS / 0 FAIL, tool_protocol_probe rc 0, hang canary 30 x (8 x 8k) with structured cells in the background clean; B=8/1M catalog default (adaptive k): 28/28, 56/56, 28 PASS, probe 0, canary clean.
