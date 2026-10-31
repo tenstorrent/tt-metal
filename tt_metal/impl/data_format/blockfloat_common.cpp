@@ -275,9 +275,11 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
         if (se > 31) {
             se = 31;
             mantissa = 0x007fffff;
-        } else if (se < 0) {
-            se = 0;
-            mantissa = 0x0;
+        } else if (se <= 0) {
+            // Packer threshold is EXP_B < 113. Magnitudes below 2^-14 are not
+            // representable in exponent-A and flush to +0. Returning here keeps
+            // the hidden bit from turning the flushed datum into ±2^-15.
+            return 0;
         }
 
         exp = static_cast<uint32_t>(se);
