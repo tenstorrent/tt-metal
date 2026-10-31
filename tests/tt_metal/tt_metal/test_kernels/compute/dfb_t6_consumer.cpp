@@ -14,8 +14,9 @@ void kernel_main() {
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
     DataflowBuffer dfb(dfb::in);
 
+    // Entries may be smaller than a tile, so use dummy_unpack (as dfb_t6_consumer_2_0.cpp does): it supplies
+    // the unpacker op required between wait_front and pop_front (TEN-4746) without reading L1.
     compute_kernel_hw_startup(dfb::in, dfb::in);
-    copy_init(dfb::in);
 
     // Each consumer pops exactly num_entries_per_consumer entries from its own TC(s).
     // No modulo-skip is needed: the DFB hardware delivers only this consumer's entries
@@ -24,7 +25,7 @@ void kernel_main() {
         tile_regs_acquire();
         tile_regs_wait();
         dfb.wait_front(1);
-        copy_tile(dfb::in, 0, 0);
+        dummy_unpack(dfb::in);
         DPRINT_UNPACK("unpack consumer tile id {}\n", tile_id);
         dfb.pop_front(1);
         tile_regs_commit();
