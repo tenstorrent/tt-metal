@@ -43,9 +43,10 @@ from models.tt_dit.pipelines.wan.dbcache import ExpertCacheRunner
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils.video import export_to_video
+from models.tt_dit.utils.video_quality import assert_first_frame_matches
 
 from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
-from .common import DEMO_PROMPT, check_first_frame_matches_seed, check_output_sanity, demo_image
+from .common import DEMO_PROMPT, check_output_sanity, demo_image
 
 # Per spatial bucket, each expert has one trace without DBCache and three with it. The DBCache test
 # fits both sets of one bucket in 256 MB.
@@ -192,7 +193,7 @@ def test_wan_resolutions(
         frames = np.asarray(frames[0])
         check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
         if image is not None:
-            check_first_frame_matches_seed(frames, seed_image=image, width=width, height=height)
+            assert_first_frame_matches(frames[0], image, pcc_floor=0.3)
         outputs.append(((width, height), frames))
 
         cached = sum(len(b) for s in pipeline.cache_summary() for b in s["cached_steps"])

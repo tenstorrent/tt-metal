@@ -43,9 +43,10 @@ from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 from models.tt_dit.utils import dram_probe
 from models.tt_dit.utils.dbcache import DBCacheConfig
+from models.tt_dit.utils.video_quality import assert_first_frame_matches
 
 from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
-from .common import check_first_frame_matches_seed, check_output_sanity
+from .common import check_output_sanity
 from .test_pipeline_wan_dbcache import _TRACE_REGION_SIZE, _parse_custom_config, _pcc, _psnr, _save_frame_strip, _Timer
 
 _DEFAULT_IMAGE = Path(__file__).resolve().parents[4] / "sample_data" / "house_in_field_1080p.jpg"
@@ -382,7 +383,7 @@ def test_wan_i2v_dbcache_ab(
             e2e_s = time.perf_counter() - t_call  # whole pipeline call: T5 + VAE encode + denoising + VAE decode
             frames = np.asarray(frames[0])
             check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
-            check_first_frame_matches_seed(frames, seed_image=seed_image, width=width, height=height)
+            assert_first_frame_matches(frames[0], seed_image, pcc_floor=0.3)
 
             summary = pipeline.cache_summary() if cache_config is not None else []
             cached_steps = sum(len(b) for s in summary for b in s["cached_steps"])
