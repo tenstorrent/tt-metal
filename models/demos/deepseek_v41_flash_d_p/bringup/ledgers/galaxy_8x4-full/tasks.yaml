@@ -1848,6 +1848,164 @@ tasks:
       contract_checks_failed: == 0
       pcc_producer_kv_*: '>= limit'
       smoke_runner_ok: == 1
+- id: P.21
+  title: 'CHEAP_BUNDLE: host glue, norms writing their consumers'' buffers and dtypes, the two tiny-op chains as small kernels'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.18
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/common/bringup/core/model_settings.py
+  - models/demos/moe_block
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-31: opportunities #9, #7, #8, #10 as one pick. #9 HOST_GLUE: Settings.get without an
+      os.environ read per call (snapshot at model load, the shared core/model_settings.py: keep every model working),
+      mm_configs.program_config memoized per call site. #7 NORM_INTO_MOE: ffn_norm writes the MoE block''s input buffer
+      directly (no bf16->bf16 copy) and, if the rms_norm fork can, a second bfp8 output (SFPU bf16 round first:
+      bit-identical to today). #8 NORM_GEMM_DTYPE: norms write the matmul input dtype where the matmul is their only
+      reader (q_a typecast, the indexer typecast), q_norm''s gamma carries the 512^-0.5 scale (folded at load) and
+      writes bfp8 (one rounding instead of two, DS41-137). #10 TINY_KERNELS: compressor _pool and engram _gate_math as
+      one small fork kernel each (the engram one may fit mhc_pre_xing_pack''s engram mode). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops, shapes,
+      file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated
+      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first;
+      precision at the reference''s level (no lowering; a change of rounding only where the report says it is one
+      rounding instead of two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add
+      tests for every fork option you add. Do not profile the model: the orchestrator measures off vs on at 51200 and
+      512000. Report per item: ops removed a chunk, device and host ms a chunk before / after.'
+  ab:
+    env:
+      HOST_GLUE: 'off'
+      NORM_INTO_MOE: 'off'
+      NORM_GEMM_DTYPE: 'off'
+      TINY_KERNELS: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      HOST_GLUE: 'on'
+      NORM_INTO_MOE: 'on'
+      NORM_GEMM_DTYPE: 'on'
+      TINY_KERNELS: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+- id: P.22
+  title: 'ROPE_CHAINS: the attention output chain and the q chains as single rope-fork ops'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.21
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-31: opportunities #2 and #4 as one pick, both through rotary_embedding_indexed (and a
+      TILE in / out option of the sparse_sdpa fork if needed). #2: sparse_sdpa output -> to_layout -> inverse rope ->
+      nlp_concat_heads -> typecast bfp8 becomes one rope op that reads the sdpa output, writes heads grouped for wo_a
+      and in bfp8 after an SFPU bf16 round (bit-identical to rope -> bf16 -> typecast). #4: nlp_create_q_heads_split ->
+      rope -> untilize becomes a rope op that reads each head straight from wq_b''s TILE output and writes what
+      sparse_sdpa reads (RM, or TILE with a sparse_sdpa option); in the indexer layers its bfp4 round-to-nearest-even
+      output replaces bfp_round. Setting ROPE_CHAINS (on / off). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops, shapes,
+      file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated
+      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first;
+      precision at the reference''s level (no lowering; a change of rounding only where the report says it is one
+      rounding instead of two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add
+      tests for every fork option you add. Do not profile the model: the orchestrator measures off vs on at 51200 and
+      512000. Report per item: ops removed a chunk, device and host ms a chunk before / after.'
+  ab:
+    env:
+      ROPE_CHAINS: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      ROPE_CHAINS: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+      acks_early: == 0
+      contract_checks_failed: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+- id: P.23
+  title: 'OWN_ROWS: the residual and mHC streams on each chip''s own 160 rows (no attention all_to_all, local norms)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.22
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/moe_block
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-31: opportunity #1 (supersedes #5 / #6). Keep the residual / mHC streams as each chip''s own
+      160 rows with the whole hidden ([160, 4 x 5120]) instead of [640, 1280] cols: the mHC row exchange, attn_norm and
+      ffn_norm become local (no statistics gather, no stats-only norm call), attention needs no all_to_all in or out,
+      the MoE tail keeps its owner rows, and only the TP-split shared expert still gathers x (row shards, an x_gather3
+      variant in the fused head). This changes the MoE head / tail interface (models/demos/moe_block, Marko''s code):
+      add it behind an option, today''s path the default there, so other models keep working. Setting OWN_ROWS (on /
+      off). Comparable work for scale: SP=32 attention (P.8-P.10). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops, shapes,
+      file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated
+      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first;
+      precision at the reference''s level (no lowering; a change of rounding only where the report says it is one
+      rounding instead of two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add
+      tests for every fork option you add. Do not profile the model: the orchestrator measures off vs on at 51200 and
+      512000. Report per item: ops removed a chunk, device and host ms a chunk before / after.'
+  ab:
+    env:
+      OWN_ROWS: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      OWN_ROWS: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+      acks_early: == 0
+      contract_checks_failed: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -1862,6 +2020,9 @@ tasks:
   - P.19
   - P.20
   - P.18
+  - P.21
+  - P.22
+  - P.23
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
