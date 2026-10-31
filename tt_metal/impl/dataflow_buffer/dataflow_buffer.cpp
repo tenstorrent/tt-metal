@@ -26,6 +26,20 @@
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
+static bool dfb_is_blocked_strided(const DataflowBufferConfig& config) {
+    return (config.pap == ::dfb::AccessPattern::BLOCKED && config.cap == ::dfb::AccessPattern::STRIDED) ||
+           (config.pap == ::dfb::AccessPattern::STRIDED && config.cap == ::dfb::AccessPattern::BLOCKED);
+}
+
+// Split credits: one whole-block op is shared by all of this hart's counters (the BLOCKED side
+// of a BLOCKED<->STRIDED ring with more than one peer).
+static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_producer) {
+    const DataflowBufferConfig& config = dfb.config;
+    const bool side_blocked = (is_producer ? config.pap : config.cap) == ::dfb::AccessPattern::BLOCKED;
+    const uint32_t other_side_count = is_producer ? config.num_consumers : config.num_producers;
+    return dfb_is_blocked_strided(config) && side_blocked && other_side_count > 1;
+}
+
 namespace {
 
 // Narrow a host-side value into an on-disk init-blob field width. Rejects silent truncation so the
@@ -74,7 +88,10 @@ uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) 
 }
 
 dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
-    uint8_t num_tcs, const std::vector<::dfb::PackedTileCounter>& tcs, uint8_t tiles_to_post_or_ack) {
+    uint8_t num_tcs,
+    const std::vector<::dfb::PackedTileCounter>& tcs,
+    uint8_t tiles_to_post_or_ack,
+    const dfb_dm0_finish_info_t& finish) {
     TT_FATAL(
         num_tcs <= ::dfb::MAX_TCS_PER_TXN,
         "Implicit-sync DFB txn descriptor lists {} tile counters, but the ISR image holds at most {}; "
@@ -87,6 +104,7 @@ dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
         img.tile_counters[j] = tcs[j];
     }
     img.tiles_to_post_or_ack = tiles_to_post_or_ack;
+    img.finish = finish;
     return img;
 }
 
@@ -155,8 +173,12 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
         // sync), so its tile counters are neither listed nor held to the ISR image limit.
         const bool producer_live = dfb->producer_txn_descriptor.num_txn_ids > 0;
         const bool consumer_live = dfb->consumer_txn_descriptor.num_txn_ids > 0;
+        // Counters are listed per issuing hart in ascending hart order, num_tcs_to_rr each. DM0's
+        // kernel-exit flush relies on that order to find each issuer's counters (dfb_dm0_flush_side).
         std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
         std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
+        dfb_dm0_finish_info_t prod_finish = {};
+        dfb_dm0_finish_info_t cons_finish = {};
         for (int bit = 0; bit < 16; bit++) {
             if (!(dfb->risc_mask & (1 << bit))) {
                 continue;
@@ -180,20 +202,32 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
                     blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
                 }
             }
+            // Only DMs issue implicit-sync transactions; risc ids below TENSIX_RISC_OFFSET are DM hart ids.
+            if (bit < ::dfb::TENSIX_RISC_OFFSET) {
+                dfb_dm0_finish_info_t& finish = rc->is_producer ? prod_finish : cons_finish;
+                finish.issuer_hart_mask |= static_cast<uint8_t>(1u << bit);
+                finish.flags = static_cast<uint8_t>(
+                    (dfb_dm_side_credits_split(*dfb, rc->is_producer) ? DFB_DM0_FINISH_FLAG_SPLIT : 0u) |
+                    (rc->config.broadcast_tc ? DFB_DM0_FINISH_FLAG_BROADCAST : 0u));
+            }
         }
 
+        prod_finish.num_txn_ids = dfb->producer_txn_descriptor.num_txn_ids;
+        cons_finish.num_txn_ids = dfb->consumer_txn_descriptor.num_txn_ids;
         const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
         const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
-        const auto prod_desc =
-            producer_live
-                ? build_dm0_txn_descriptor_image(
-                      num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc)
-                : dfb_dm0_txn_descriptor_image_t{};
-        const auto cons_desc =
-            consumer_live
-                ? build_dm0_txn_descriptor_image(
-                      num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc)
-                : dfb_dm0_txn_descriptor_image_t{};
+        const auto prod_desc = producer_live ? build_dm0_txn_descriptor_image(
+                                                   num_prod_tcs,
+                                                   blob_producer_tcs,
+                                                   dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc,
+                                                   prod_finish)
+                                             : dfb_dm0_txn_descriptor_image_t{};
+        const auto cons_desc = consumer_live ? build_dm0_txn_descriptor_image(
+                                                   num_cons_tcs,
+                                                   blob_consumer_tcs,
+                                                   dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc,
+                                                   cons_finish)
+                                             : dfb_dm0_txn_descriptor_image_t{};
 
         for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
             const uint8_t txn_id = dfb->producer_txn_descriptor.txn_ids[i];
@@ -503,20 +537,6 @@ static uint32_t dfb_effective_block_entries(const DataflowBufferImpl& dfb, bool 
 }
 
 // BLOCKED <-> STRIDED rings: every (producer, consumer) pair shares one tile counter.
-static bool dfb_is_blocked_strided(const DataflowBufferConfig& config) {
-    return (config.pap == ::dfb::AccessPattern::BLOCKED && config.cap == ::dfb::AccessPattern::STRIDED) ||
-           (config.pap == ::dfb::AccessPattern::STRIDED && config.cap == ::dfb::AccessPattern::BLOCKED);
-}
-
-// Split credits: one whole-block op is shared by all of this hart's counters (the BLOCKED side
-// of a BLOCKED<->STRIDED ring with more than one peer).
-static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_producer) {
-    const DataflowBufferConfig& config = dfb.config;
-    const bool side_blocked = (is_producer ? config.pap : config.cap) == ::dfb::AccessPattern::BLOCKED;
-    const uint32_t other_side_count = is_producer ? config.num_consumers : config.num_producers;
-    return dfb_is_blocked_strided(config) && side_blocked && other_side_count > 1;
-}
-
 // Transactions a DM hart does on one counter before moving to the next (0 = split: every
 // transaction touches all counters).
 static uint32_t dfb_dm_side_counter_share(const DataflowBufferImpl& dfb, bool is_producer) {
@@ -1256,7 +1276,8 @@ std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
         DFB_TXN_ID_BASE,
         HW_TXN_ID_MAX,
         USER_TXN_ID_MAX);
-    // Hand out a contiguous ascending block from the top of the remaining pool.
+    // Hand out a contiguous ascending block from the top of the remaining pool. Quasar firmware relies on
+    // the ascending order: txn_ids[0] is a side's lowest id, which keys its kernel-exit record.
     const uint8_t first = static_cast<uint8_t>(next_id_ - count + 1);
     std::vector<uint8_t> ids;
     ids.reserve(count);

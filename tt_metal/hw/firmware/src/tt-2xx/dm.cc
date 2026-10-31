@@ -13,6 +13,7 @@
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_finish.h"
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
 #include "hostdev/dev_msgs.h"
 #include "api/debug/kernel_profiler.hpp"
@@ -155,6 +156,8 @@ thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
+thread_local DFBImplicitProgress g_dfb_progress[dfb::NUM_DFBS] __attribute__((used));
+uint32_t g_dfb_exit_record[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -232,15 +235,66 @@ inline uint32_t get_num_local_dfbs(const launch_msg_t* launch_msg) {
     return launch_msg->kernel_config.enables ? launch_msg->kernel_config.local_cb_mask : 0;
 }
 
+inline bool subordinates_done() {
+    return subordinate_sync->allDMs == RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE &&
+           subordinate_sync->allNeo0 == RUN_SYNC_MSG_ALL_SUBORDINATES_DONE &&
+           subordinate_sync->allNeo1 == RUN_SYNC_MSG_ALL_SUBORDINATES_DONE &&
+           subordinate_sync->allNeo2 == RUN_SYNC_MSG_ALL_SUBORDINATES_DONE &&
+           subordinate_sync->allNeo3 == RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+}
+
 inline void wait_subordinates() {
     WAYPOINT("NTW");
     // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
     subordinate_sync->padding = 0;
-    while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
-           subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
-           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
-           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
-           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    while (!subordinates_done());
+    WAYPOINT("NTD");
+}
+
+// Bit per kernel DM whose run state is DFB_DRAINING or DONE, i.e. whose DFB exit records are written.
+inline uint8_t dfb_dm0_draining_harts(uint64_t all_dms) {
+    uint8_t ready = 0;
+    for (uint32_t hart = dfb::FIRST_KERNEL_DM_HART; hart < 8; hart++) {
+        const uint8_t state = static_cast<uint8_t>(all_dms >> (8 * (hart - 1)));
+        if (state == RUN_SYNC_MSG_DFB_DRAINING || state == RUN_SYNC_MSG_DONE) {
+            ready |= static_cast<uint8_t>(1u << hart);
+        }
+    }
+    return ready;
+}
+
+// Waits for all subordinates. Whenever a DM's run state changes, flushes each implicit-sync DFB side whose
+// issuing DMs are all draining and have written their exit records (dataflow_buffer_finish.h). Checks again
+// on every poll while a side is waiting only on records.
+inline void wait_subordinates_and_finish_dfbs(DfbImplicitSyncTxnMasks pending) {
+    WAYPOINT("NTW");
+    subordinate_sync->padding = 0;
+    uint64_t seen_dms = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+    bool records_missing = false;
+    while (true) {
+        const uint64_t dms = subordinate_sync->allDMs;
+        if (dms == RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE && subordinates_done()) {
+            break;
+        }
+        if ((pending.producer | pending.consumer) == 0) {
+            continue;
+        }
+        if (dms != seen_dms || records_missing) {
+            seen_dms = dms;
+            const uint8_t ready = dfb_dm0_draining_harts(dms);
+            records_missing = false;
+            if (pending.producer != 0) {
+                records_missing |= dfb_dm0_flush_ready_sides(pending.producer, ready, /*is_producer=*/true);
+            }
+            if (pending.consumer != 0) {
+                records_missing |= dfb_dm0_flush_ready_sides(pending.consumer, ready, /*is_producer=*/false);
+            }
+        }
+        // Polling flags other cores are about to write slows those cores down; pause briefly between polls.
+        for (uint32_t i = 0; i < 4; i++) {
+            asm volatile("nop; nop; nop; nop; nop");
+        }
+    }
     WAYPOINT("NTD");
 }
 
@@ -273,6 +327,11 @@ extern "C" uint32_t _start1() {
         } while (READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR) != 0b1111);
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        volatile uint32_t* const exit_records =
+            dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(&g_dfb_exit_record[0][0]));
+        for (uint32_t i = 0; i < dfb::NUM_KERNEL_DM_HARTS * NUM_DFB_POOL_TXN_IDS; i++) {
+            exit_records[i] = DFB_EXIT_RECORD_NONE;
+        }
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
         zero_semaphore_regions();
@@ -439,14 +498,15 @@ extern "C" uint32_t _start1() {
                     start_dm1_dfb_init();
                 }
                 WAYPOINT("R");
-                setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
+                const DfbImplicitSyncTxnMasks implicit_sync_txn_ids =
+                    setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
 
                 if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
                     worker_completion_group =
                         prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/true);
                 }
-                wait_subordinates();
+                wait_subordinates_and_finish_dfbs(implicit_sync_txn_ids);
 
                 // Every TRISC is done: the window spans the whole kernel and the TRISC profiler buffers are final.
                 StopPerfCounters();

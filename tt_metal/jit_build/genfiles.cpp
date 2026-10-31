@@ -382,6 +382,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "struct ScratchpadBindingToken;\n";
     }
 
+    // Bit per DFB this kernel binds. Quasar's kernel-exit finish (dataflow_buffer_finish.h) walks these.
+    uint32_t bound_dfb_mask = 0;
+    for (const auto& entry : dfb_entries) {
+        TT_FATAL(
+            entry.id < 32, "DFB binding '{}' has device slot {}, outside the 32-bit bound mask", entry.name, entry.id);
+        bound_dfb_mask |= 1u << entry.id;
+    }
+    content << fmt::format("#define KERNEL_BOUND_DFB_MASK 0x{:x}u\n", bound_dfb_mask);
+
     // Emit DFB bindings
     content << "namespace dfb {\n";
     for (const auto& entry : dfb_entries) {
