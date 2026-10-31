@@ -1,0 +1,90 @@
+{
+  "scope": "synthetic TP4 sampler-only controls; not full-model or device timing",
+  "source": "probe_sampling_contract --timing --semantic-greedy --batches 1 32 16 8; sampler_timing.log",
+  "semantic_greedy_checks": 96,
+  "all_return_maximum_valued_token": true,
+  "lowest_index_tie_mismatches": 14,
+  "tie_semantics": "Any maximum-valued token is greedy. Cross-device/local ties need not choose torch.argmax lowest index. Unique-winner and negative-logit cases checked.",
+  "timings": [
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 1,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.4821747347705241,
+      "host_wall_ms_per_replay_with_token_readback": 0.5031852501815592,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 1
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 1,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.894374859351956,
+      "host_wall_ms_per_replay_with_token_readback": 2.925336913904175,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 32,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.5009770547985681,
+      "host_wall_ms_per_replay_with_token_readback": 0.5282408828861662,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 32,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.8667982423939975,
+      "host_wall_ms_per_replay_with_token_readback": 2.9006165232203784,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 16,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.5254609768599039,
+      "host_wall_ms_per_replay_with_token_readback": 0.9561140936966694,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 16,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.8836099686486705,
+      "host_wall_ms_per_replay_with_token_readback": 2.918425218467746,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "split_greedy",
+      "batch": 8,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 0.5256526719676913,
+      "host_wall_ms_per_replay_with_token_readback": 0.7802001091476995,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    },
+    {
+      "library": "tt",
+      "mode": "force_argmax",
+      "batch": 8,
+      "iterations": 128,
+      "host_wall_ms_per_replay": 2.77647869552311,
+      "host_wall_ms_per_replay_with_token_readback": 2.806298797167983,
+      "scope": "synthetic sampler only; includes declared row padding; host-wall not device time",
+      "sampler_logical_rows": 32
+    }
+  ]
+}

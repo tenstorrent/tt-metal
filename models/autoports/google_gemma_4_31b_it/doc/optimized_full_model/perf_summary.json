@@ -1,0 +1,20 @@
+{
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 4096,
+    "gen_len": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "source": "autoregressive",
+  "ttft_ms": 660.7935259817168,
+  "decode_ms_per_token_e2e": 29.162053535344064,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": 9.488506625,
+  "roofline_basis": "50 sliding+10 full layer one-weight-read plus active4096-context KV bounds from optimized_multichip_decoder/tracy_final/{sliding_attention,full_attention}/batch1/performance.json, plus374341632B head per ASIC at512GB/s per ASIC. TP4 aggregate2.048TB/s; excludes embedding/norm/activation/CCL traffic and compute, not a latency prediction. BFP4/LoFi decoder, BFP8 KV/head, HiFi2 head.",
+  "named_limitations": [
+    "Full60-layer profiling prohibited; reduced two-layer device windows are not a full-model device measurement.",
+    "Stage05 layer budgets and current reduced terminal measurements are engineering controls, not same-run full-model accounting.",
+    "EOS-sensitive streaming and teacher forcing are separate paths; fixed-step headline has one first-token and one final history read."
+  ]
+}

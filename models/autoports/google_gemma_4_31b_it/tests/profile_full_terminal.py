@@ -54,7 +54,7 @@ def main():
         run(gen, args)
     finally:
         if gen is not None:
-            for trace in (gen.model_trace, gen.sample_trace):
+            for trace in (gen.model_trace, gen.sample_trace, gen.buffered_sample_trace):
                 if trace is not None:
                     ttnn.release_trace(mesh, trace)
         ttnn.close_mesh_device(mesh)

@@ -1,0 +1,69 @@
+{
+  "scope": "reduced_layers_0_5",
+  "batch": 1,
+  "generated_tokens": 1024,
+  "head_mode": "dram",
+  "diagnostics": {
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+  },
+  "cases": [
+    {
+      "length": 161,
+      "sampled": false,
+      "exact": true,
+      "counters": {
+        "model_replays": 1023,
+        "sample_replays": 1024,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 1,
+        "captures": 0
+      },
+      "traces": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ]
+    },
+    {
+      "length": 129,
+      "sampled": true,
+      "exact": true,
+      "counters": {
+        "model_replays": 1023,
+        "sample_replays": 1024,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 1,
+        "captures": 0
+      },
+      "traces": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ]
+    },
+    {
+      "length": 161,
+      "sampled": false,
+      "exact": true,
+      "counters": {
+        "model_replays": 1023,
+        "sample_replays": 1024,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 1,
+        "captures": 0
+      },
+      "traces": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ]
+    }
+  ]
+}

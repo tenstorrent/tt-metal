@@ -29,8 +29,10 @@ class Gemma4Generator(Generator):
         page_table=None,
         host_page_tables=None,
         pool_tokens=None,
+        output_capacity=None,
+        head_mode="dram",
     ):
-        self.model = Gemma4Model(mesh_device, layer_indices=layer_indices)
+        self.model = Gemma4Model(mesh_device, layer_indices=layer_indices, head_mode=head_mode)
         self.mesh = mesh_device
         self.batch = batch_size
         self.context = max_seq_len
@@ -72,6 +74,22 @@ class Gemma4Generator(Generator):
                 cluster_shape=tuple(mesh_device.shape),
             ),
         )
+        if output_capacity is None:
+            output_capacity = min(1024, max_seq_len)
+        if not isinstance(output_capacity, int) or not 1 <= output_capacity <= max_seq_len:
+            raise ValueError("Output capacity must be within configured context")
+        self.output_capacity = output_capacity
+        self.output_history = self.model.upload(
+            torch.zeros(output_capacity, 1, 1, 32, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.output_index = self.model.upload(
+            torch.zeros(1, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.buffered_sample_trace = None
         self.model_trace = None
         self.sample_trace = None
         self.logits = self.model.upload(torch.zeros(1, 1, self.batch, self.model.config.vocab_size), shard=3)
@@ -106,7 +124,7 @@ class Gemma4Generator(Generator):
         ttnn.copy(logits, self.logits)
         return self.logits
 
-    def _sample(self):
+    def _sample(self, *, record=False):
         logits = self.logits
         # Common sampler parameter/index buffers own32 slots. Singleton rows
         # broadcast; intermediate logical batches must expose the padded rows.
@@ -114,6 +132,10 @@ class Gemma4Generator(Generator):
             logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, 32 - self.batch), (0, 0)], value=0.0)
         result = self.sampler(logits, tt_out_tok=self.tokens)
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
+        if record:
+            history = ttnn.indexed_fill(self.output_index, self.output_history, self.tokens)
+            ttnn.copy(history, self.output_history)
+            ttnn.plus_one(self.output_index)
         return result
 
     def prepare_decode(self):
@@ -133,6 +155,7 @@ class Gemma4Generator(Generator):
             del hidden, all_logits, selected, rows
         self._decode()
         self._sample()
+        self._sample(record=True)
         self.reset()
         self._copy(torch.zeros(1, 1, 1, 32, dtype=torch.int32), self.tokens)
         self._copy(self.seed_values, self.sampler.seeds_tt_tensor)
@@ -147,7 +170,11 @@ class Gemma4Generator(Generator):
         if logprobs is not None:
             raise RuntimeError("Unexpected logprob allocation in token-only trace")
         self.sample_trace = sid
-        self.counters["captures"] += 2
+        bid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        self._sample(record=True)
+        ttnn.end_trace_capture(self.mesh, bid, cq_id=0)
+        self.buffered_sample_trace = bid
+        self.counters["captures"] += 3
         self.prepared = True
         self.reset()
 
@@ -159,7 +186,9 @@ class Gemma4Generator(Generator):
         self.counters["readbacks"] += 1
         return ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1)).float()
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, **kwargs):
+    def prefill_forward(
+        self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, buffered=False, **kwargs
+    ):
         if kv_cache is not self.kv_cache or page_table is not self.page_table:
             raise ValueError("External cache must be bound before preparation")
         if len(prompt_lens) != tokens.shape[0] or len(prompt_lens) != self.batch:
@@ -199,9 +228,11 @@ class Gemma4Generator(Generator):
         rows = selected_rows[0] if self.batch == 1 else ttnn.concat(selected_rows, dim=2)
         ttnn.copy(rows, self.logits)
         del rows, selected_rows
-        ttnn.execute_trace(self.mesh, self.sample_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(
+            self.mesh, self.buffered_sample_trace if buffered else self.sample_trace, cq_id=0, blocking=False
+        )
         self.counters["sample_replays"] += 1
-        return self._read_tokens()
+        return self.tokens if buffered else self._read_tokens()
 
     def set_sampling(self, *, temperature=0.0, top_k=1, top_p=1.0, seed=0):
         def per_slot(value, name):
@@ -341,6 +372,7 @@ class Gemma4Generator(Generator):
         enable_trace=True,
         host_sampling=False,
         ignore_eos=False,
+        buffered=True,
         sampling_params=None,
         **kwargs,
     ):
@@ -363,6 +395,14 @@ class Gemma4Generator(Generator):
             raise ValueError("Requested generation exceeds cache capacity")
         if max_new_tokens <= 0:
             return []
+        if (
+            buffered
+            and ignore_eos
+            and next_input is None
+            and not host_sampling
+            and max_new_tokens <= self.output_capacity
+        ):
+            return self.generate_buffered([prompt_token_ids], max_new_tokens, sampling_params=sampling_params)[0]
         self.prepare_decode()
         self.set_sampling(**(sampling_params or {}))
         self.reset()
@@ -399,7 +439,9 @@ class Gemma4Generator(Generator):
                 self.counters["token_refreshes"] += 1
         return output
 
-    def generate_batch(self, prompts, max_new_tokens, *, enable_trace=True, sampling_params=None, ignore_eos=False):
+    def generate_batch(
+        self, prompts, max_new_tokens, *, enable_trace=True, sampling_params=None, ignore_eos=False, buffered=True
+    ):
         """Fixed configured slots, with independent prompt lengths and positions."""
         if not enable_trace:
             raise ValueError("Batched generation requires traced token feedback")
@@ -410,6 +452,8 @@ class Gemma4Generator(Generator):
             raise ValueError("Generation exceeds configured cache capacity")
         if max_new_tokens <= 0 or not any(lengths):
             return [[] for _ in prompts]
+        if buffered and ignore_eos and max_new_tokens <= self.output_capacity:
+            return self.generate_buffered(prompts, max_new_tokens, sampling_params=sampling_params)
         self.prepare_decode()
         self.set_sampling(**(sampling_params or {}))
         self.reset()
@@ -434,7 +478,46 @@ class Gemma4Generator(Generator):
                     finished[slot] = not ignore_eos and int(token) in self.eos_token_ids
         return outputs
 
+    def generate_buffered(self, prompts, max_new_tokens, *, sampling_params=None):
+        """Fixed-step generation with one output read, returning all tokens per slot.
+
+        EOS is deliberately not a device-loop stop condition. Callers needing
+        immediate EOS stopping use generate/generate_batch. Output capacity is
+        chosen at construction, before traces, independently of context capacity.
+        """
+        if len(prompts) != self.batch:
+            raise ValueError("Supply one token list or None per configured slot")
+        lengths = [len(p) if p else 0 for p in prompts]
+        if not 0 <= max_new_tokens <= self.output_capacity:
+            raise ValueError("Generation exceeds prepared output capacity")
+        if any(n + max_new_tokens > self.context for n in lengths):
+            raise ValueError("Generation exceeds configured cache capacity")
+        if not max_new_tokens or not any(lengths):
+            return [[] for _ in prompts]
+        self.prepare_decode()
+        self.set_sampling(**(sampling_params or {}))
+        self.reset()
+        self._reserve_requests(lengths, max_new_tokens)
+        tokens = torch.zeros(self.batch, max(lengths), dtype=torch.int32)
+        for slot, prompt in enumerate(prompts):
+            if prompt:
+                tokens[slot, : len(prompt)] = torch.tensor(prompt)
+        self.prefill_forward(
+            tokens, page_table=self.page_table, kv_cache=self.kv_cache, prompt_lens=lengths, buffered=True
+        )
+        self._copy(torch.tensor([[n if n else -1 for n in lengths]], dtype=torch.int32), self.positions)
+        self.counters["position_refreshes"] += 1
+        for _ in range(1, max_new_tokens):
+            ttnn.execute_trace(self.mesh, self.model_trace, cq_id=0, blocking=False)
+            ttnn.execute_trace(self.mesh, self.buffered_sample_trace, cq_id=0, blocking=False)
+            self.counters["model_replays"] += 1
+            self.counters["sample_replays"] += 1
+        self.counters["readbacks"] += 1
+        history = ttnn.to_torch(ttnn.get_device_tensors(self.output_history)[0]).reshape(self.output_capacity, 32)
+        return [history[:max_new_tokens, slot].tolist() if length else [] for slot, length in enumerate(lengths)]
+
     def reset(self):
+        self._copy(torch.zeros(1, dtype=torch.int32), self.output_index)
         for cache in self.kv_cache:
             for tensor in cache:
                 ttnn.mul(tensor, 0, output_tensor=tensor)

@@ -1,0 +1,38 @@
+{
+  "scope": "reduced real layers0/5, TP4 Blackhole, batch1 input4096 output128",
+  "raw_csv": "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/tracy_reduced/reports/2026_10_31_05_24_07/ops_perf_results_2026_10_31_05_24_07.csv",
+  "raw_csv_bytes": 174616642,
+  "raw_csv_sha256": "b29a4e36446990b1211b2bfc9d34ba2f7322c68a82862e637aa07c3761f06f2b",
+  "source_manifest": "source_manifest.json",
+  "collection_command": "commands.json: profile_optimized_full_terminal via tracy",
+  "collection_log": "profile_reduced.log",
+  "analysis_command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.summarize_full_profile models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/tracy_reduced/reports/2026_10_31_05_24_07/ops_perf_results_2026_10_31_05_24_07.csv",
+  "analysis_log": "profile_summary.log",
+  "exit_codes": {
+    "collection": 0,
+    "analysis": 0
+  },
+  "diagnostics": {
+    "TT_METAL_DEVICE_PROFILER": 1,
+    "TT_METAL_TRACE_ALLOC_TRACKING": 0,
+    "TT_METAL_WATCHER": 0
+  },
+  "reports": [
+    "prefill_perf_report.txt",
+    "prefill_perf_report.csv",
+    "prefill_perf_report.console.log",
+    "decode_perf_report.txt",
+    "decode_perf_report.csv",
+    "decode_perf_report.console.log",
+    "model_only_perf_report.txt",
+    "model_only_perf_report.csv",
+    "model_only_perf_report.console.log",
+    "sampler_only_perf_report.txt",
+    "sampler_only_perf_report.csv",
+    "sampler_only_perf_report.console.log",
+    "terminal_perf_report.txt",
+    "terminal_perf_report.csv",
+    "terminal_perf_report.console.log"
+  ],
+  "raw_retention": "Local only; raw trace, zone/device logs and runtime CSV excluded from commit and telemetry."
+}

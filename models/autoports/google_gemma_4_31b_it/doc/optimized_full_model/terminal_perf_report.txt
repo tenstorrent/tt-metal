@@ -1,0 +1,66 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_TERMINAL'.
+Using operations until 'PERF_TERMINAL_END'.
+Detected data from 4 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                 Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 2169    6.8 %         LayerNormDeviceOperation                      1        86 μs                    1                                                 BF16, BF16 => BF16
+ 2192    0.2 %         InterleavedToShardedDeviceOperation           2         2 μs          0 μs      8                                                       BF16 => BF16
+ 2193   10.3 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        2       129 μs          0 μs      8  342 GB/s  66.7 %  21.9 TFLOPs   98.8 %  HiFi2 BF16 x BFP8 => BF16
+ 2172    0.2 %         ShardedToInterleavedDeviceOperation           1         2 μs          0 μs      8                                                       BF16 => BF16
+ 2195   10.4 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        2       130 μs          0 μs      8  338 GB/s  66.0 %  21.6 TFLOPs   97.7 %  HiFi2 BF16 x BFP8 => BF16
+ 2152    0.2 %         ShardedToInterleavedDeviceOperation           0         2 μs          0 μs      8                                                       BF16 => BF16
+ 2197   10.4 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        2       129 μs          0 μs      8  340 GB/s  66.4 %  21.8 TFLOPs   98.4 %  HiFi2 BF16 x BFP8 => BF16
+ 2220    0.2 %         ShardedToInterleavedDeviceOperation           3         2 μs          0 μs      8                                                       BF16 => BF16
+ 2177   10.1 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        1       126 μs          0 μs      8  350 GB/s  68.3 %  22.4 TFLOPs  101.2 %  HiFi2 BF16 x BFP8 => BF16
+ 2156    0.2 %         ShardedToInterleavedDeviceOperation           0         2 μs          0 μs      8                                                       BF16 => BF16
+ 2179   10.3 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        1       129 μs          0 μs      8  341 GB/s  66.6 %  21.8 TFLOPs   98.6 %  HiFi2 BF16 x BFP8 => BF16
+ 2158    0.2 %         ShardedToInterleavedDeviceOperation           0         2 μs          0 μs      8                                                       BF16 => BF16
+ 2159   10.3 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        0       128 μs          0 μs      8  343 GB/s  67.0 %  21.9 TFLOPs   99.2 %  HiFi2 BF16 x BFP8 => BF16
+ 2160    0.2 %         ShardedToInterleavedDeviceOperation           0         2 μs          0 μs      8                                                       BF16 => BF16
+ 2227   10.5 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        3       131 μs          0 μs      8  337 GB/s  65.8 %  21.6 TFLOPs   97.6 %  HiFi2 BF16 x BFP8 => BF16
+ 2162    0.2 %         ShardedToInterleavedDeviceOperation           0         2 μs          1 μs      8                                                       BF16 => BF16
+ 2163   10.2 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        0       128 μs          0 μs      8  345 GB/s  67.3 %  22.1 TFLOPs   99.7 %  HiFi2 BF16 x BFP8 => BF16
+ 2208    0.2 %         ShardedToInterleavedDeviceOperation           2         2 μs          0 μs      8                                                       BF16 => BF16
+ 2231    2.1 %         ConcatDeviceOperation                         3        26 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 2232    2.3 %         BinaryNgDeviceOperation                       3        29 μs          0 μs    110                                                       BF16 => BF16
+ 2211    2.1 %         UnaryDeviceOperation                          2        26 μs          0 μs    110                                                       BF16 => BF16
+ 2212    2.2 %         BinaryNgDeviceOperation                       2        27 μs          0 μs    110                                                       BF16 => BF16
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         22 device ops, 0 host ops, 0 signposts              1,245 μs          7 μs         283 GB/s  55.3 %
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+ 2193   10.3 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        2       129 μs          0 μs      8  342 GB/s  66.7 %  21.9 TFLOPs   98.8 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+ 2195   10.4 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        2       130 μs          0 μs      8  338 GB/s  66.0 %  21.6 TFLOPs   97.7 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+ 2197   10.4 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        2       129 μs          0 μs      8  340 GB/s  66.4 %  21.8 TFLOPs   98.4 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+ 2177   10.1 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        1       126 μs          0 μs      8  350 GB/s  68.3 %  22.4 TFLOPs  101.2 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+ 2179   10.3 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        1       129 μs          0 μs      8  341 GB/s  66.6 %  21.8 TFLOPs   98.6 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+ 2159   10.3 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        0       128 μs          0 μs      8  343 GB/s  67.0 %  21.9 TFLOPs   99.2 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+ 2227   10.5 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        3       131 μs          0 μs      8  337 GB/s  65.8 %  21.6 TFLOPs   97.6 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+ 2163   10.2 %   BOTH  MatmulDeviceOperation 32 x 5376 x 8192        0       128 μs          0 μs      8  345 GB/s  67.3 %  22.1 TFLOPs   99.7 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized

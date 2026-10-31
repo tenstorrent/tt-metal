@@ -1,0 +1,64 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_SAMPLER_ONLY'.
+Using operations until 'PERF_SAMPLER_ONLY_END'.
+Detected data from 4 devices. Merging device data...
+Warning: Unclassified operation 'TopkRoutePrepDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopkLargeIndicesDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopkRouteFinishDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ManualSeedDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SamplingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PlusOneDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'IndexedFillDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+🚀 Performance Report 🚀
+========================
+
+ID       Total %  Bound  OP Code                          Device   Device Time  Op-to-Op Gap  Cores  DRAM  DRAM %  FLOPs  FLOPs %  Math Fidelity
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ 109263    3.9 %         TopkRoutePrepDeviceOperation           0        21 μs                   86                                            BF16 => BF16
+ 109296   52.7 %         TopkLargeIndicesDeviceOperation        1       284 μs          0 μs    110                                          BF16 => UINT32
+ 109329    1.0 %         TopkRouteFinishDeviceOperation         2         5 μs          0 μs      2                                    BF16, UINT32 => BF16
+ 109266    1.9 %         AllGatherDeviceOperation               0         9 μs          1 μs      2                                            BF16 => BF16
+ 109267    1.5 %         AllGatherDeviceOperation               0         7 μs          1 μs      2                                        UINT16 => UINT16
+ 109268    0.5 %         TypecastDeviceOperation                0         2 μs          1 μs      4                                         UINT16 => INT32
+ 109333    1.1 %         BinaryNgDeviceOperation                2         6 μs          0 μs    110                                  INT32, INT32 => UINT32
+ 109366    1.1 %         UntilizeDeviceOperation                3         4 μs          1 μs      1                                        UINT32 => UINT32
+ 109335    1.0 %         FillPadDeviceOperation                 2         5 μs          1 μs      4                                            BF16 => BF16
+ 109272    0.6 %         ReduceDeviceOperation                  0         2 μs          1 μs      1                                            BF16 => BF16
+ 109305    1.1 %         BinaryNgDeviceOperation                1         6 μs          0 μs    110                                      BF16, BF16 => BF16
+ 109338    1.1 %         BinaryNgDeviceOperation                2         6 μs          0 μs    110                                      BF16, BF16 => BF16
+ 109339    0.4 %         UnaryDeviceOperation                   2         2 μs          0 μs    110                                            BF16 => BF16
+ 109276    1.5 %         BinaryNgDeviceOperation                0         8 μs          0 μs    110                                            BF16 => BF16
+ 109341    0.6 %         BinaryNgDeviceOperation                2         3 μs          0 μs    110                                            BF16 => BF16
+ 109374    0.8 %         TypecastDeviceOperation                3         4 μs          1 μs      4                                         UINT32 => INT32
+ 109279    0.7 %         BinaryNgDeviceOperation                0         4 μs          0 μs    110                                            BF16 => BF16
+ 109344    0.6 %         TypecastDeviceOperation                2         3 μs          1 μs      4                                           BF16 => INT32
+ 109377    1.2 %         BinaryNgDeviceOperation                3         6 μs          0 μs    110                                   INT32, INT32 => INT32
+ 109346    0.8 %         ReduceDeviceOperation                  2         3 μs          1 μs      1                                          INT32 => INT32
+ 109347    1.9 %         BinaryNgDeviceOperation                2        10 μs          0 μs    110                                   INT32, INT32 => INT32
+ 109316    0.5 %         TypecastDeviceOperation                1         2 μs          1 μs      4                                           INT32 => BF16
+ 109381    1.2 %         BinaryNgDeviceOperation                3         6 μs          0 μs    110                                      BF16, BF16 => BF16
+ 109382    1.1 %         BinaryNgDeviceOperation                3         6 μs          0 μs    110                                      BF16, BF16 => BF16
+ 109351    1.2 %         BinaryNgDeviceOperation                2         6 μs          0 μs    110                                      BF16, BF16 => BF16
+ 109288    1.3 %         BinaryNgDeviceOperation                0         7 μs          0 μs    110                                      BF16, BF16 => BF16
+ 109289    3.5 %         ManualSeedDeviceOperation              0        18 μs          0 μs    110                                UINT32, UINT32 => UINT32
+ 109354   10.9 %         SamplingDeviceOperation                2        22 μs         37 μs     32                                  BF16, UINT32 => UINT32
+ 109323    0.4 %         PlusOneDeviceOperation                 1         1 μs          1 μs      1                                        UINT32 => UINT32
+ 109356    1.9 %         IndexedFillDeviceOperation             2        10 μs          0 μs    110                                 INT32, UINT32 => UINT32
+ 109293    1.7 %         CopyDeviceOperation                    0         9 μs          0 μs    110                                UINT32, UINT32 => UINT32
+ 109326    0.2 %         PlusOneDeviceOperation                 1         1 μs          1 μs      1                                          INT32 => INT32
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+         100.0 %         32 device ops, 0 host ops, 0 signposts                488 μs         52 μs
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 109354   10.9 %         SamplingDeviceOperation                2        22 μs         37 μs     32                                  BF16, UINT32 => UINT32
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 31 μs (5.8% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.

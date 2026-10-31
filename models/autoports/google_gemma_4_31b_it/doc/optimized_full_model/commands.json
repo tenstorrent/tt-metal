@@ -1,0 +1,40 @@
+{
+  "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+  "base_commit": "d3dcd354e6df404724721b2e0e3af2e1ff7db71d",
+  "environment": "eval output of installed tt-model-bringup/scripts/environment.py; python_env/bin/python; TP4 Ring; serialized device commands",
+  "commands": [
+    {
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=0 TT_METAL_DEVICE_PROFILER=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_optimized_full_readiness --long-context",
+      "log": "full_readiness_final.log"
+    },
+    {
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=0 TT_METAL_DEVICE_PROFILER=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.measure_optimized_full --batches 32 16 8",
+      "log": "full_clean_batches.log"
+    },
+    {
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_optimized_generator_state --batch {1,32,16,8} (serial)",
+      "log": "generator_state_b*.log"
+    },
+    {
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.probe_buffered_generation --tokens 1024",
+      "log": "buffered_capacity1024.log"
+    },
+    {
+      "command": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.check_optimized_generator_state --batch 32",
+      "log": "watcher_b32.log"
+    },
+    {
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.probe_sampling_contract --timing --semantic-greedy --batches 1 32 16 8",
+      "log": "sampler_timing.log"
+    },
+    {
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.probe_full_memory --buffered --batch {1,32} --result doc/optimized_full_model/reduced_memory_b{batch}.json (serial; result path autoport-relative here)",
+      "log": "reduced_memory_b*.log"
+    },
+    {
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=0 python_env/bin/python -m tracy -r -p -v --no-web-server --op-support-count 16384 -o models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/tracy_reduced -m models.autoports.google_gemma_4_31b_it.tests.profile_optimized_full_terminal --attribution --result models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/reduced_profile.json",
+      "log": "profile_reduced.log"
+    }
+  ],
+  "note": "Commands are provenance, not a pass manifest; results and final review establish completion. No full60-layer profiling, vLLM or push."
+}

@@ -1,0 +1,154 @@
+{
+  "scope": "reduced layers0,5",
+  "diagnostics": {
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0",
+    "TT_METAL_WATCHER": "0",
+    "TT_METAL_WATCHER_DISABLE_ETH": "0"
+  },
+  "batch": 1,
+  "outputs": [
+    [
+      514,
+      179,
+      179,
+      179
+    ]
+  ],
+  "feedback": [
+    {
+      "token_input": [
+        514
+      ],
+      "sampled": [
+        179
+      ],
+      "positions_before": [
+        31
+      ],
+      "positions_after": [
+        32
+      ]
+    },
+    {
+      "token_input": [
+        179
+      ],
+      "sampled": [
+        179
+      ],
+      "positions_before": [
+        32
+      ],
+      "positions_after": [
+        33
+      ]
+    },
+    {
+      "token_input": [
+        179
+      ],
+      "sampled": [
+        179
+      ],
+      "positions_before": [
+        33
+      ],
+      "positions_after": [
+        34
+      ]
+    }
+  ],
+  "positions": [
+    34
+  ],
+  "traces": [
+    "MeshTraceId(0)",
+    "MeshTraceId(1)",
+    "MeshTraceId(2)"
+  ],
+  "program_cache_entries": 1678,
+  "counters": {
+    "model_replays": 135,
+    "sample_replays": 156,
+    "token_refreshes": 0,
+    "position_refreshes": 21,
+    "page_refreshes": 8,
+    "readbacks": 114,
+    "captures": 3
+  },
+  "repeat_equal": true,
+  "page_remap_equal": true,
+  "greedy_after_sample_equal": true,
+  "chunk_boundary_repeat_outputs": {
+    "1023": [
+      [
+        231,
+        177,
+        177,
+        177
+      ]
+    ],
+    "1024": [
+      [
+        179,
+        177,
+        177,
+        177
+      ]
+    ],
+    "1025": [
+      [
+        514,
+        179,
+        179,
+        179
+      ]
+    ]
+  },
+  "seeded_sample_repeat_equal": true,
+  "buffered_sampled_matches_streaming": true,
+  "changed_seed_changes_output": true,
+  "sampled_outputs": [
+    [
+      514,
+      2138,
+      1852,
+      507,
+      569,
+      699,
+      677,
+      627,
+      627,
+      616,
+      734,
+      862,
+      862,
+      2572,
+      2454,
+      6979
+    ]
+  ],
+  "other_seed_outputs": [
+    [
+      16552,
+      1139,
+      214,
+      240108,
+      1291,
+      553,
+      527,
+      963,
+      627,
+      1013,
+      685,
+      65234,
+      3805,
+      2395,
+      936,
+      653
+    ]
+  ],
+  "zero_steady_token_refreshes": true,
+  "inactive_rows": false
+}

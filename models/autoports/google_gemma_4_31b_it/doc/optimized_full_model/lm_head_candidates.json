@@ -1,0 +1,546 @@
+[
+  {
+    "candidate": {
+      "kind": "interleaved"
+    },
+    "traced_host_us": 1181.0641562988167,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 8,
+      "readers": 1,
+      "block": 3
+    },
+    "traced_host_us": 1365.6797809744603,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 8,
+      "readers": 1,
+      "block": 7
+    },
+    "traced_host_us": 1288.4925781690981,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 8,
+      "readers": 1,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 2587776 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 8,
+      "readers": 2,
+      "block": 3
+    },
+    "traced_host_us": 1056.23665604071,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 8,
+      "readers": 2,
+      "block": 7
+    },
+    "traced_host_us": 1084.5836404769216,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 8,
+      "readers": 2,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3096: tt::exception\ninfo:\nStatically allocated dataflow buffers in program 214 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1371392 and static dataflow buffer region ends at 1392768\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xaaf4c3) [0x7fad8e6af4c3]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15P"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 4,
+      "readers": 1,
+      "block": 7
+    },
+    "traced_host_us": 1297.3295624760794,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 4,
+      "readers": 1,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 2587776 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 4,
+      "readers": 1,
+      "block": 42
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 4867200 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 4,
+      "readers": 2,
+      "block": 7
+    },
+    "traced_host_us": 1372.8288749916828,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 4,
+      "readers": 2,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3096: tt::exception\ninfo:\nStatically allocated dataflow buffers in program 228 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1262848 and static dataflow buffer region ends at 1392768\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xaaf4c3) [0x7fad8e6af4c3]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15P"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 8192,
+      "cores": 4,
+      "readers": 2,
+      "block": 42
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2575488 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 8,
+      "readers": 1,
+      "block": 3
+    },
+    "traced_host_us": 1293.5562817801838,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 8,
+      "readers": 1,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 1995904 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 8,
+      "readers": 1,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 4977792 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 8,
+      "readers": 2,
+      "block": 3
+    },
+    "traced_host_us": 1041.3138443254866,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 8,
+      "readers": 2,
+      "block": 7
+    },
+    "traced_host_us": 1069.5719065552112,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 8,
+      "readers": 2,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2587776 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 4,
+      "readers": 1,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 1995904 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 4,
+      "readers": 1,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 4977792 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 4,
+      "readers": 1,
+      "block": 42
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 9450624 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 4,
+      "readers": 2,
+      "block": 7
+    },
+    "traced_host_us": 1358.210562102613,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 4,
+      "readers": 2,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2587776 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 16384,
+      "cores": 4,
+      "readers": 2,
+      "block": 42
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 4867200 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 8,
+      "readers": 1,
+      "block": 3
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 2163840 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 8,
+      "readers": 1,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 3851392 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 8,
+      "readers": 1,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 9757824 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 8,
+      "readers": 2,
+      "block": 3
+    },
+    "traced_host_us": 1023.2325157630839,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 8,
+      "readers": 2,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 1995904 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 8,
+      "readers": 2,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 4977792 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 4,
+      "readers": 1,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 3851392 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 4,
+      "readers": 1,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 9757824 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 4,
+      "readers": 1,
+      "block": 42
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 18617472 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 4,
+      "readers": 2,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 1995904 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 4,
+      "readers": 2,
+      "block": 21
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 4977792 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 32768,
+      "cores": 4,
+      "readers": 2,
+      "block": 42
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 9450624 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7fad91dcd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x7fad90794498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x7fad90793f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x7fad907849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "interleaved"
+    },
+    "traced_host_us": 1180.6856255134335,
+    "pcc": 0.9999999403953552,
+    "weight_dtype": "bfloat8_b",
+    "fidelity": "HiFi2",
+    "scope": "LM_head_only_reduced_model_real_activation"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 8,
+      "readers": 1,
+      "block": 1
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 2524288 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 8,
+      "readers": 1,
+      "block": 3
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 4203648 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 8,
+      "readers": 1,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 7-9] grow to 7562368 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 8,
+      "readers": 2,
+      "block": 1
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3096: tt::exception\ninfo:\nStatically allocated dataflow buffers in program 190 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 912640 and static dataflow buffer region ends at 1320064\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xaaf4c3) [0x761492aaf4c3]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15Pr"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 8,
+      "readers": 2,
+      "block": 3
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2163840 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 8,
+      "readers": 2,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 3851392 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 4,
+      "readers": 1,
+      "block": 1
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 2524288 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 4,
+      "readers": 1,
+      "block": 3
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 4203648 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 4,
+      "readers": 1,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 6-9] grow to 7562368 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasilj"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 4,
+      "readers": 2,
+      "block": 1
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3096: tt::exception\ninfo:\nStatically allocated dataflow buffers in program 204 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 345344 and static dataflow buffer region ends at 1320064\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xaaf4c3) [0x761492aaf4c3]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15Pr"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 4,
+      "readers": 2,
+      "block": 3
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 2163840 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasil"
+  },
+  {
+    "candidate": {
+      "kind": "dram_sharded",
+      "width": 65536,
+      "cores": 4,
+      "readers": 2,
+      "block": 7
+    },
+    "error": "TT_THROW @ /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception\ninfo:\nStatically allocated dataflow buffers on core range [0-0 - 10-9] grow to 3851392 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29cd46a) [0x7614961cd46a]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1394498) [0x761494b94498]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1393f8b) [0x761494b93f8b]\n --- /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x12a) [0x761494b849ca]\n --- /home/mvasil"
+  }
+]

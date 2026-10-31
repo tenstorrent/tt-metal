@@ -22,7 +22,7 @@ def main():
     try:
         gen = Gemma4Generator(mesh, layer_indices=(0, 5), batch_size=a.batch, max_seq_len=4096)
         gen.prepare_decode()
-        trace_ids = (gen.model_trace, gen.sample_trace)
+        trace_ids = (gen.model_trace, gen.sample_trace, gen.buffered_sample_trace)
         baseline = mesh.num_program_cache_entries()
         prompts = [[2, 125, 89] * ((31 + slot * 17) // 3) + [2] * ((31 + slot * 17) % 3) for slot in range(a.batch)]
         if a.batch > 1:
@@ -56,7 +56,9 @@ def main():
         assert first == again, (first, again)
         assert gen.counters["token_refreshes"] == before["token_refreshes"]
         assert gen.counters["page_refreshes"] == middle["page_refreshes"]
-        assert (gen.model_trace, gen.sample_trace) == trace_ids and gen.counters["captures"] == 2
+        assert (gen.model_trace, gen.sample_trace, gen.buffered_sample_trace) == trace_ids and gen.counters[
+            "captures"
+        ] == 3
         assert mesh.num_program_cache_entries() == baseline
         current = ttnn.to_torch(ttnn.get_device_tensors(gen.positions)[0]).reshape(-1).tolist()
         assert current == [len(p) + 3 if p else -1 for p in prompts], current
@@ -87,7 +89,9 @@ def main():
 
         greedy = gen.generate_batch(prompts, 4)
         assert greedy == first
-        assert (gen.model_trace, gen.sample_trace) == trace_ids and gen.counters["captures"] == 2
+        assert (gen.model_trace, gen.sample_trace, gen.buffered_sample_trace) == trace_ids and gen.counters[
+            "captures"
+        ] == 3
         assert mesh.num_program_cache_entries() == baseline
         boundary_lengths = [1023, 1024, 1025]
         boundary_outputs = {}
@@ -97,7 +101,9 @@ def main():
                 boundary_prompts[-1] = None
             boundary = gen.generate_batch(boundary_prompts, 4, ignore_eos=True)
             assert boundary == gen.generate_batch(boundary_prompts, 4, ignore_eos=True)
-            assert (gen.model_trace, gen.sample_trace) == trace_ids and gen.counters["captures"] == 2
+            assert (gen.model_trace, gen.sample_trace, gen.buffered_sample_trace) == trace_ids and gen.counters[
+                "captures"
+            ] == 3
             assert mesh.num_program_cache_entries() == baseline
             boundary_outputs[length] = boundary
         report = dict(

@@ -1,0 +1,6 @@
+{
+  "models/autoports/google_gemma_4_31b_it/tt/model.py": "d55cfb0ab0dec255e530a375c1d1de579c5aef08e280232a1488e4a5b13f5986",
+  "models/autoports/google_gemma_4_31b_it/tt/generator.py": "e88ad21180c86c2c4b5b0383075dbccbfac80f949ece912cd86a4ef00a327af8",
+  "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837",
+  "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5f214129e788376ba3d43f773b49a39a6f30c593fec8d00637f8afcfcdbbef79"
+}

@@ -1,0 +1,107 @@
+{
+  "basis": "Two engineering layer-stack budgets: final selected stage05 warmed traced-host layer times, and separately complete profiled device windows. Each sums 50 sliding +10 full layers at4096 context. Neither is a same-run full-model device measurement; profiler overhead means the device-profile sum is non-additive with clean host timing.",
+  "rows": [
+    {
+      "batch": 1,
+      "sliding_layer_us": 475.2245136122647,
+      "full_layer_us": 527.8178151055796,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 29.03940383166903,
+      "layer_stack_tps": 34.43596865130703,
+      "selected_layer_traced_host_us": {
+        "sliding_attention": 427.0639060450776,
+        "full_attention": 475.06410146525013
+      },
+      "clean_traced_layer_stack_ms": 26.10383631690638,
+      "clean_traced_layer_stack_tps": 38.30854545131901,
+      "selected_layer_sources": [
+        "final_layer0_batch1.json",
+        "final_layer5_batch1.json"
+      ],
+      "full_model_e2e_ms": 29.162053535344064,
+      "full_model_overhead_vs_clean_layer_sum_ms": 3.058217218437683,
+      "gap_without_terminal_credit_pct": 11.715585331252631,
+      "terminal_traced_host_control_ms": 1.2108040937164333,
+      "sampler_traced_host_control_ms": 0.4821747347705241,
+      "clean_stack_plus_terminal_sampler_ms": 27.79681514539334,
+      "remaining_gap_pct": 4.91149213609452,
+      "remaining_gap_basis": "Cross-run engineering controls; remaining includes embedding, history write, trace submission/final read and measurement regime variation. Not same-run full-model device attribution."
+    },
+    {
+      "batch": 32,
+      "sliding_layer_us": 674.8565124183365,
+      "full_layer_us": 985.6259806469436,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 43.599085427386264,
+      "layer_stack_tps": 22.936260937525574,
+      "selected_layer_traced_host_us": {
+        "sliding_attention": 635.5703594635997,
+        "full_attention": 932.5268983957358
+      },
+      "clean_traced_layer_stack_ms": 41.103786957137345,
+      "clean_traced_layer_stack_tps": 24.32865859884859,
+      "selected_layer_sources": [
+        "final_layer0_batch32.json",
+        "final_layer5_batch32.json"
+      ],
+      "full_model_e2e_ms": 43.02483453556499,
+      "full_model_overhead_vs_clean_layer_sum_ms": 1.9210475784276468,
+      "gap_without_terminal_credit_pct": 4.673651068771112
+    },
+    {
+      "batch": 16,
+      "sliding_layer_us": 561.567810144126,
+      "full_layer_us": 742.3873482827249,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 35.50226399003355,
+      "layer_stack_tps": 28.167217738021645,
+      "selected_layer_traced_host_us": {
+        "sliding_attention": 512.5189450154721,
+        "full_attention": 691.6154688951792
+      },
+      "clean_traced_layer_stack_ms": 32.5421019397254,
+      "clean_traced_layer_stack_tps": 30.72942251401596,
+      "selected_layer_sources": [
+        "final_layer0_batch16.json",
+        "final_layer5_batch16.json"
+      ],
+      "full_model_e2e_ms": 34.23171073260651,
+      "full_model_overhead_vs_clean_layer_sum_ms": 1.6896087928811099,
+      "gap_without_terminal_credit_pct": 5.192070247984004
+    },
+    {
+      "batch": 8,
+      "sliding_layer_us": 519.6260342831646,
+      "full_layer_us": 620.933143360821,
+      "counts": {
+        "sliding_attention": 50,
+        "full_attention": 10
+      },
+      "nominal_stack_ms": 32.190633147766434,
+      "layer_stack_tps": 31.064937288112507,
+      "selected_layer_traced_host_us": {
+        "sliding_attention": 466.9377653954143,
+        "full_attention": 567.2384922945639
+      },
+      "clean_traced_layer_stack_ms": 29.019273192716355,
+      "clean_traced_layer_stack_tps": 34.45985684613884,
+      "selected_layer_sources": [
+        "final_layer0_batch8.json",
+        "final_layer5_batch8.json"
+      ],
+      "full_model_e2e_ms": 30.83556488992309,
+      "full_model_overhead_vs_clean_layer_sum_ms": 1.8162916972067364,
+      "gap_without_terminal_credit_pct": 6.258915187657466
+    }
+  ],
+  "source": "optimized_multichip_measurements in doc/agentic_serving.json; each source row links exact per-layer profile"
+}

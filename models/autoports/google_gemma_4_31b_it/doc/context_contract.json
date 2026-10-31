@@ -33,7 +33,7 @@
       ]
     }
   },
-  "reference_scope": "Top-level capacity now includes full60-layer execution. Historical layer_types and their PCC fields retain decoder-level HF comparisons. Full-model short AIME reference accuracy is in full_model/readiness_accuracy.json; maximum-context evidence is execution/capacity, not a new long-context HF score.",
+  "reference_scope": "Full60-layer optimized execution validates capacity262144, including nonaligned262143. Historical layer PCC fields retain decoder HF comparisons; optimized_full_model/readiness_accuracy.json supplies short full-model accuracy. Maximum-context evidence is execution/capacity, not a new long-context HF score.",
   "cache_bytes_per_token": {
     "sliding_attention": 8704,
     "full_attention": 4352
@@ -70,7 +70,7 @@
       ]
     }
   },
-  "validated_stage": "06-full-model",
+  "validated_stage": "07-optimized-full-model",
   "fused_persistent_weight_copies": {
     "sliding_attention": {
       "extra_bytes": 176160768,
@@ -243,13 +243,13 @@
         "full_attention_pool_tokens": 262144,
         "kv_bytes_per_device": 3074949120,
         "page_table_bytes_per_device": 15728640,
-        "constructed_bytes_per_device": 9696522752,
-        "prepared_bytes_per_device": 9736778240,
+        "constructed_bytes_per_device": 9696801792,
+        "prepared_bytes_per_device": 9737663488,
         "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 24307735040,
-        "headroom_after_transient_budget": 23502428672,
-        "largest_contiguous_bytes_free_per_bank": 3035638656,
-        "source": "full_model/memory_b1.json",
+        "free_bytes_after_prepare": 24306849792,
+        "headroom_after_transient_budget": 23501543424,
+        "largest_contiguous_bytes_free_per_bank": 3035544448,
+        "source": "optimized_full_model/memory_b1.json",
         "inventory": {
           "decoder_weights": 4411965440,
           "decoder_state": 299059200,
@@ -261,10 +261,10 @@
           "page_tables": 15728640,
           "sampler": 53248,
           "prepared_prefill": 1397248,
-          "generator_state": 8390144,
-          "sum_owned_dram_bytes": 9696178176,
-          "allocator_bytes": 9696522752,
-          "unattributed_allocator_bytes": 344576
+          "generator_state": 8521728,
+          "sum_owned_dram_bytes": 9696309760,
+          "allocator_bytes": 9696801792,
+          "unattributed_allocator_bytes": 492032
         }
       },
       {
@@ -273,13 +273,13 @@
         "full_attention_pool_tokens": 1048576,
         "kv_bytes_per_device": 18538823680,
         "page_table_bytes_per_device": 62914560,
-        "constructed_bytes_per_device": 25207632896,
-        "prepared_bytes_per_device": 25248052224,
+        "constructed_bytes_per_device": 25207911936,
+        "prepared_bytes_per_device": 25248937472,
         "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 8796461056,
-        "headroom_after_transient_budget": 7991154688,
-        "largest_contiguous_bytes_free_per_bank": 1092383616,
-        "source": "full_model/memory_clean_b32.json",
+        "free_bytes_after_prepare": 8795575808,
+        "headroom_after_transient_budget": 7990269440,
+        "largest_contiguous_bytes_free_per_bank": 1087964032,
+        "source": "optimized_full_model/memory_clean_b32.json",
         "inventory": {
           "decoder_weights": 4411965440,
           "decoder_state": 299059200,
@@ -291,10 +291,10 @@
           "page_tables": 62914560,
           "sampler": 53248,
           "prepared_prefill": 1397248,
-          "generator_state": 8390656,
-          "sum_owned_dram_bytes": 25207239168,
-          "allocator_bytes": 25207632896,
-          "unattributed_allocator_bytes": 393728
+          "generator_state": 8522240,
+          "sum_owned_dram_bytes": 25207370752,
+          "allocator_bytes": 25207911936,
+          "unattributed_allocator_bytes": 541184
         }
       },
       {
@@ -303,13 +303,13 @@
         "full_attention_pool_tokens": 524288,
         "kv_bytes_per_device": 9269411840,
         "page_table_bytes_per_device": 31457280,
-        "constructed_bytes_per_device": 15906763264,
-        "prepared_bytes_per_device": 15947321856,
+        "constructed_bytes_per_device": 15907042304,
+        "prepared_bytes_per_device": 15948239872,
         "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 18097191424,
-        "headroom_after_transient_budget": 17291885056,
-        "largest_contiguous_bytes_free_per_bank": 2251027328,
-        "source": "full_model/memory_clean_b16.json",
+        "free_bytes_after_prepare": 18096273408,
+        "headroom_after_transient_budget": 17290967040,
+        "largest_contiguous_bytes_free_per_bank": 2246603648,
+        "source": "optimized_full_model/memory_clean_b16.json",
         "inventory": {
           "decoder_weights": 4411965440,
           "decoder_state": 299059200,
@@ -321,10 +321,10 @@
           "page_tables": 31457280,
           "sampler": 53248,
           "prepared_prefill": 1397248,
-          "generator_state": 8390144,
-          "sum_owned_dram_bytes": 15906369536,
-          "allocator_bytes": 15906763264,
-          "unattributed_allocator_bytes": 393728
+          "generator_state": 8521728,
+          "sum_owned_dram_bytes": 15906501120,
+          "allocator_bytes": 15907042304,
+          "unattributed_allocator_bytes": 541184
         }
       },
       {
@@ -333,13 +333,13 @@
         "full_attention_pool_tokens": 262144,
         "kv_bytes_per_device": 4634705920,
         "page_table_bytes_per_device": 15728640,
-        "constructed_bytes_per_device": 11256328704,
-        "prepared_bytes_per_device": 11296866816,
+        "constructed_bytes_per_device": 11256607744,
+        "prepared_bytes_per_device": 11297784832,
         "usable_dram_bytes_per_device": 34044513280,
-        "free_bytes_after_prepare": 22747646464,
-        "headroom_after_transient_budget": 21942340096,
-        "largest_contiguous_bytes_free_per_bank": 2839278464,
-        "source": "full_model/memory_clean_b8.json",
+        "free_bytes_after_prepare": 22746728448,
+        "headroom_after_transient_budget": 21941422080,
+        "largest_contiguous_bytes_free_per_bank": 2837083008,
+        "source": "optimized_full_model/memory_clean_b8.json",
         "inventory": {
           "decoder_weights": 4411965440,
           "decoder_state": 299059200,
@@ -351,14 +351,14 @@
           "page_tables": 15728640,
           "sampler": 53248,
           "prepared_prefill": 1397248,
-          "generator_state": 8390144,
-          "sum_owned_dram_bytes": 11255934976,
-          "allocator_bytes": 11256328704,
-          "unattributed_allocator_bytes": 393728
+          "generator_state": 8521728,
+          "sum_owned_dram_bytes": 11256066560,
+          "allocator_bytes": 11256607744,
+          "unattributed_allocator_bytes": 541184
         }
       }
     ],
-    "evidence": "full_model/memory_plan.json",
+    "evidence": "optimized_full_model/memory_plan.json",
     "note": "Individual advertised context remains 262144. The default aggregate pool is sized for the agent workload; it does not promise all32 slots simultaneously at maximum context.",
     "validation": {
       "scope": "full60layers",
@@ -369,27 +369,40 @@
         262144
       ],
       "quality_scope": "Execution/capacity boundary test; no new long-context HF score claimed",
-      "evidence": "full_model/full_context_post_barrier.json",
+      "evidence": "optimized_full_model/full_context_post_barrier.json",
       "host_sampling_compatibility_equal": true
     },
-    "memory_ledger": "full_model/memory_plan.json",
+    "memory_ledger": "optimized_full_model/memory_plan.json",
     "reserves": {
-      "transient_peak": 425934848,
+      "transient_peak": 560168960,
       "transient_peak_scope": "Measured incremental DRAM peak on reduced real layers 0/5, both B1 and B32; not a full-stack peak. NORMAL graph allocation events reconcile exactly to allocator before/after readings.",
       "transient_peak_evidence": [
-        "full_model/reduced_memory_b1.json",
-        "full_model/reduced_memory_b32.json"
+        "optimized_full_model/reduced_memory_b1.json",
+        "optimized_full_model/reduced_memory_b32.json"
       ],
-      "warm_prefill_incremental_peak": 424673280,
-      "warm_decode_sampling_incremental_peak_b32": 16072704,
+      "warm_prefill_incremental_peak": 558891008,
+      "warm_decode_sampling_incremental_peak_b32": 19922944,
       "budget_bytes_per_device": 805306368,
       "budget_basis": "Conservative 768 MiB budget exceeds measured cold two-layer prefill peak plus 31 retained selected-logit tiles (31 * 4194304 bytes). Decoder layers execute sequentially and release transient activations. All-layer persistent buffers and trace allocations are accounted separately by prepared allocator snapshots; this budget is an analytical bound, not a measured full-stack peak."
     },
     "trace_region_bytes_per_device": 134217728,
     "trace_region_note": "Reserved separately and already excluded from allocator usable DRAM34044513280; never subtract twice.",
-    "model_weights_rope_ccl_bytes_per_device": 6595840000,
+    "model_weights_rope_ccl_bytes_per_device": 6595987456,
     "full_attention_kv_bytes_per_token_per_device": 10880,
-    "sliding_kv_bytes_per_slot_per_device": 222822400
+    "sliding_kv_bytes_per_slot_per_device": 222822400,
+    "buffered_generation": {
+      "default_output_capacity": 1024,
+      "configurable_before_capture": true,
+      "history_dtype": "uint32",
+      "history_shape": [
+        1024,
+        1,
+        1,
+        32
+      ],
+      "context_reduction": false,
+      "longer_outputs": "existing streaming API; or configure larger output_capacity before capture"
+    }
   },
   "historical_fields_note": "functional/fused/optimized/multichip layer fields retain earlier stage evidence. full_model_plan is the current full-stack allocation and context contract."
 }

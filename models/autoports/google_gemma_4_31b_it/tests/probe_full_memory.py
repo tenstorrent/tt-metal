@@ -78,6 +78,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", type=int, choices=(1, 8, 16, 32), default=1)
     parser.add_argument("--detailed-pages", action="store_true")
+    parser.add_argument("--buffered", action="store_true")
     parser.add_argument("--result", required=True)
     args = parser.parse_args()
     for name in ("TT_METAL_DEVICE_PROFILER", "TT_METAL_WATCHER", "TT_METAL_DPRINT_CORES"):
@@ -106,7 +107,7 @@ def main():
 
         def decode_sampling_setup():
             gen._decode()
-            gen._sample()
+            gen._sample(record=args.buffered)
 
         for name, operation in (
             ("prefill1024_all_logits", prefill_all_logits),

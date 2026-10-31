@@ -20,8 +20,9 @@ from .weights import HF_MODEL, HF_REVISION, PinnedWeights
 
 
 class Gemma4Model:
-    def __init__(self, mesh_device, *, layer_indices=None):
+    def __init__(self, mesh_device, *, layer_indices=None, head_mode="dram"):
         self.mesh = mesh_device
+        self.head_mode = head_mode
         self.config = AutoConfig.from_pretrained(HF_MODEL, revision=HF_REVISION).text_config
         c = self.config
         self.layer_indices = tuple(range(c.num_hidden_layers) if layer_indices is None else layer_indices)
@@ -58,6 +59,22 @@ class Gemma4Model:
         self.embedding = self.upload(embedding, layout=ttnn.ROW_MAJOR_LAYOUT, shard=1)
         record_memory("embedding")
         self.lm_head = self.upload(embedding.T.contiguous(), dtype=ttnn.bfloat8_b, shard=1)
+        if head_mode == "dram":
+            full_head = self.lm_head
+            dram = mesh_device.dram_grid_size()
+            grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, dram.y - 1))])
+            memory = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.DRAM,
+                ttnn.ShardSpec(grid, (c.hidden_size, 1024), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self.lm_head = []
+            for start in range(0, 65536, 8192):
+                chunk = ttnn.slice(full_head, (0, start), (c.hidden_size, start + 8192))
+                self.lm_head.append(ttnn.to_memory_config(chunk, memory))
+            del chunk, full_head
+        elif head_mode != "interleaved":
+            raise ValueError("Unknown head mode")
         record_memory("lm_head")
         self.norm_weight = self.upload(terminal[names[1]].to(torch.bfloat16).reshape(1, 1, 1, -1))
         record_memory("final_norm")
@@ -126,14 +143,49 @@ class Gemma4Model:
         x = ttnn.rms_norm(
             x, epsilon=self.config.rms_norm_eps, weight=self.norm_weight, compute_kernel_config=self.layers[0].kernel
         )
-        logits = ttnn.linear(
-            x,
-            self.lm_head,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.kernel,
-            core_grid=ttnn.CoreGrid(x=8, y=8),
-        )
+        if self.head_mode == "interleaved":
+            logits = ttnn.linear(
+                x,
+                self.lm_head,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.kernel,
+                core_grid=ttnn.CoreGrid(x=8, y=8),
+            )
+        else:
+            if x.shape[-2] <= 32:
+                x = ttnn.to_memory_config(x, self.layers[0]._working_memory(x, 8))
+                pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=3, per_core_M=1, per_core_N=32, num_workers_per_dram_bank=2
+                )
+                output_memory = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            else:
+                rows = math.ceil(x.shape[-2] / 32)
+                gy = min(8, rows)
+                pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, gy),
+                    in0_block_w=3,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    per_core_M=math.ceil(rows / gy),
+                    per_core_N=32,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+                output_memory = ttnn.DRAM_MEMORY_CONFIG
+            parts = []
+            for weight in self.lm_head:
+                part = ttnn.linear(
+                    x,
+                    weight,
+                    dtype=ttnn.bfloat16,
+                    memory_config=output_memory,
+                    program_config=pc,
+                    compute_kernel_config=self.kernel,
+                )
+                parts.append(ttnn.to_memory_config(part, ttnn.DRAM_MEMORY_CONFIG))
+                del part
+            logits = ttnn.concat(parts, dim=-1)
         cap = self.config.final_logit_softcapping
         if cap is not None:
             logits = ttnn.mul(ttnn.tanh(ttnn.mul(logits, 1.0 / cap)), cap)

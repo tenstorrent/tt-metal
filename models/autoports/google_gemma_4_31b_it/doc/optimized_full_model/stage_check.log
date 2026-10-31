@@ -1,0 +1,6 @@
+measured: tt free-running completion [models/autoports/google_gemma_4_31b_it/doc/full_model/autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 64, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0938}
+measured: hf/tt token agreement (informational) [models/autoports/google_gemma_4_31b_it/doc/full_model/autoregressive/autoregressive_meta.json] {'matching_tokens': 7, 'compared_tokens': 100}
+measured: tt free-running completion [models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 64, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0938}
+measured: hf/tt token agreement (informational) [models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/autoregressive/autoregressive_meta.json] {'matching_tokens': 7, 'compared_tokens': 100}
+
+No degenerate output detected.

@@ -1,0 +1,13 @@
+# AutoFix: terminal L1 geometry
+
+Failing contract: every supported prefill physical bucket32..1024 and traced decode must run with full generator residency, without changing BFP8/HiFi2 FP32 terminal precision.
+
+AutoDebug independently reconciled both failures from factory code:32K split static endpoint1143936 overlaps observed live frontier912640;16K prefill with default output block height3 at M544 needs1746048 bytes, exceeding physical1572864. Both isolated and integrated harnesses construct generator state. The exact historical live-buffer owner is unknown.
+
+Current repair: eight ascending8192-column local vocabulary splits, eight activation sender cores, two readers/bank, K-block3, and2D prefill with standard output-block defaults. The maximum M1024 prefill static endpoint is1156224 bytes in the diagnostic calculation, subject to the runtime live-allocation check. Weight dtype, math fidelity, FP32 accumulation, vocab order and decoder policy are unchanged.
+
+Rejected repair:16K splits with explicit prefill out_block_h=1 passed reduced tracking and a full short AIME/qualitative/performance run. AutoDebug's adversarial reader audit nevertheless found an out-of-bounds read risk for partially occupied last core rows (concrete M544 example). This shortcut was removed. Its evidence is archived under rejected_block1/ and is not final acceptance evidence. Physical padding or a generic reader fix could make this family safe, but adds complexity versus the measured8K alternative; no unsafe path is retained.
+
+Validation so far: `TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.probe_buffered_generation` exited0 with current8K config (buffered_head_8k.log). Every32-row physical bucket through1024 warmed; greedy→sampled→greedy sequences match streaming exactly. Program-cache allocations included, no exemptions. check_head_boundaries now compares all logits on every device for real reduced-model activations at32/512/544/768/800/1024 against the interleaved head.
+
+Changed production file: tt/model.py. Candidate errors remain in lm_head_candidates.json. No allocator validation was suppressed. Closure evidence: final full-stack AIME/context/qualitative and all-batch timings pass; all-batch tracking includes program-cache allocations, seeded buffered equality, page changes and boundary tails;1024-token history reuse and B32 watcher pass. Fresh memory peaks reconcile. Final reduced profile export and analysis pass (profile_analysis.md). Independent final stage review returned clean-pass; see stage_review.md.

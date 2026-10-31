@@ -1,0 +1,16 @@
+{
+  "status": "in_progress",
+  "active_device_job": null,
+  "pending_in_order": [
+    "Independent final stage review; fix/rereview any findings",
+    "Local stage-owned checkpoint commits; log SHAs; finalize telemetry and complete goal"
+  ],
+  "constraints": "Serialize every hardware job. No all-layer profiler. No vLLM or push. Preserve inherited decoder policy/layout. Raw profiler/log artifacts remain local, not in telemetry.",
+  "completed": [
+    "Final8K B1 full readiness, qualitative, context262143/262144 and4096/128 performance",
+    "B32 and B16 full-stack buffered exactness and warmed performance",
+    "Independent initial source review: no new correctness defect; final acceptance pending; qualitative EOS wording repaired",
+    "All batch state/tracking,1024-token capacity, watcher, sampler, memory, reduced profile and source checks pass",
+    "Advice-enabled tt-perf-report tables/CSV, actual dtype/fidelity row manifest, provenance hash and profile-analysis disposition complete"
+  ]
+}

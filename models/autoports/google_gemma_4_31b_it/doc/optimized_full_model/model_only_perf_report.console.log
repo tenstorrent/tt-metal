@@ -1,0 +1,14 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_MODEL_ONLY'.
+Using operations until 'PERF_MODEL_ONLY_END'.
+Detected data from 4 devices. Merging device data...
+Warning: Unclassified operation 'RotaryEmbeddingHfDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PagedFusedUpdateCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PlusOneDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV output to models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/model_only_perf_report.csv
+Overall DRAM roofline (modeled ops): 40.1% (205 GB/s)
+Writing CSV stacked report to models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/model_only_perf_report_stacked.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/model_only_perf_report_stacked.png

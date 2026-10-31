@@ -1,0 +1,200 @@
+{
+  "scope": "reduced real layers0/5 plus complete terminal and buffered sampling; not full-model device latency",
+  "source_csv": "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/tracy_reduced/reports/2026_10_31_05_24_07/ops_perf_results_2026_10_31_05_24_07.csv",
+  "window_basis": "max per-device FW end minus min FW start; includes all operations and gaps",
+  "windows": {
+    "PREFILL": {
+      "device_us": 1498632.6474074072,
+      "devices": {
+        "0": {
+          "device_us": 1498632.6474074072,
+          "cycles_per_ns": 1.35,
+          "ops": 467,
+          "trace_ids": [
+            "",
+            "3"
+          ]
+        },
+        "1": {
+          "device_us": 1498564.0179137522,
+          "cycles_per_ns": 1.3499992751837409,
+          "ops": 467,
+          "trace_ids": [
+            "",
+            "3"
+          ]
+        },
+        "2": {
+          "device_us": 1497855.8218933884,
+          "cycles_per_ns": 1.350000603158136,
+          "ops": 467,
+          "trace_ids": [
+            "",
+            "3"
+          ]
+        },
+        "3": {
+          "device_us": 1497778.1088888887,
+          "cycles_per_ns": 1.35,
+          "ops": 467,
+          "trace_ids": [
+            "",
+            "3"
+          ]
+        }
+      }
+    },
+    "DECODE": {
+      "device_us": 2991.231851851852,
+      "devices": {
+        "0": {
+          "device_us": 2986.9879262041713,
+          "cycles_per_ns": 1.3500014394515394,
+          "ops": 162,
+          "trace_ids": [
+            "1",
+            "3"
+          ]
+        },
+        "1": {
+          "device_us": 2991.231851851852,
+          "cycles_per_ns": 1.35,
+          "ops": 162,
+          "trace_ids": [
+            "1",
+            "3"
+          ]
+        },
+        "2": {
+          "device_us": 2989.600385200223,
+          "cycles_per_ns": 1.3499978190997255,
+          "ops": 162,
+          "trace_ids": [
+            "1",
+            "3"
+          ]
+        },
+        "3": {
+          "device_us": 2982.291851851852,
+          "cycles_per_ns": 1.35,
+          "ops": 162,
+          "trace_ids": [
+            "1",
+            "3"
+          ]
+        }
+      }
+    },
+    "MODEL_ONLY": {
+      "device_us": 2441.100600240855,
+      "devices": {
+        "0": {
+          "device_us": 2436.6166128753002,
+          "cycles_per_ns": 1.3499994141952214,
+          "ops": 130,
+          "trace_ids": [
+            "1"
+          ]
+        },
+        "1": {
+          "device_us": 2436.3499863657694,
+          "cycles_per_ns": 1.3500030859302863,
+          "ops": 130,
+          "trace_ids": [
+            "1"
+          ]
+        },
+        "2": {
+          "device_us": 2441.100600240855,
+          "cycles_per_ns": 1.3499988487466865,
+          "ops": 130,
+          "trace_ids": [
+            "1"
+          ]
+        },
+        "3": {
+          "device_us": 2432.944314676327,
+          "cycles_per_ns": 1.3500021271292266,
+          "ops": 130,
+          "trace_ids": [
+            "1"
+          ]
+        }
+      }
+    },
+    "SAMPLER_ONLY": {
+      "device_us": 539.6489934274158,
+      "devices": {
+        "0": {
+          "device_us": 539.6489934274158,
+          "cycles_per_ns": 1.3499997384836937,
+          "ops": 32,
+          "trace_ids": [
+            "3"
+          ]
+        },
+        "1": {
+          "device_us": 537.3850813971686,
+          "cycles_per_ns": 1.350000260732624,
+          "ops": 32,
+          "trace_ids": [
+            "3"
+          ]
+        },
+        "2": {
+          "device_us": 537.1674781886609,
+          "cycles_per_ns": 1.3500054069641698,
+          "ops": 32,
+          "trace_ids": [
+            "3"
+          ]
+        },
+        "3": {
+          "device_us": 535.1174949025474,
+          "cycles_per_ns": 1.349998844892113,
+          "ops": 32,
+          "trace_ids": [
+            "3"
+          ]
+        }
+      }
+    },
+    "TERMINAL": {
+      "device_us": 1237.016296296296,
+      "devices": {
+        "0": {
+          "device_us": 1224.787452887534,
+          "cycles_per_ns": 1.349999133402152,
+          "ops": 22,
+          "trace_ids": [
+            "0"
+          ]
+        },
+        "1": {
+          "device_us": 1231.0053623642932,
+          "cycles_per_ns": 1.3499998056939448,
+          "ops": 22,
+          "trace_ids": [
+            "0"
+          ]
+        },
+        "2": {
+          "device_us": 1237.016296296296,
+          "cycles_per_ns": 1.35,
+          "ops": 22,
+          "trace_ids": [
+            "0"
+          ]
+        },
+        "3": {
+          "device_us": 1233.0470154989055,
+          "cycles_per_ns": 1.3499979960832869,
+          "ops": 22,
+          "trace_ids": [
+            "0"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "scope": "full60layers",
+  "preparation_seconds": 150.25413410598412,
+  "prefill": [
+    {
+      "top1": 0.94,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 94,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  ],
+  "decode": [
+    {
+      "top1": 0.93,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 93,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 2.7384267669986,
+      "e2e_t/s/u": 36.51731760919174,
+      "ttft_ms": 95.48690501833335,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 2.6428057060111314,
+      "decode_t/s/u": 37.460188531764516
+    }
+  ],
+  "counters": {
+    "model_replays": 2013,
+    "sample_replays": 2029,
+    "token_refreshes": 109,
+    "position_refreshes": 23,
+    "page_refreshes": 480,
+    "readbacks": 904,
+    "captures": 3
+  },
+  "traces": {
+    "model": "MeshTraceId(0)",
+    "sampling": "MeshTraceId(1)"
+  }
+}

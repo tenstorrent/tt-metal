@@ -1,0 +1,38 @@
+{
+  "scope": "reduced real activation terminal only",
+  "results": [
+    {
+      "fidelity": "MathFidelity.HiFi2",
+      "traced_host_us": [
+        1251.920851700561,
+        1211.6997891098436,
+        1211.9969919694995
+      ],
+      "median_us": 1211.9969919694995,
+      "pcc": 1.0,
+      "greedy_equal": true
+    },
+    {
+      "fidelity": "MathFidelity.LoFi",
+      "traced_host_us": [
+        1210.3473673050757,
+        1210.0035078219662,
+        1209.6579298486176
+      ],
+      "median_us": 1210.0035078219662,
+      "pcc": 0.9998828172683716,
+      "greedy_equal": true
+    },
+    {
+      "fidelity": "MathFidelity.HiFi2",
+      "traced_host_us": [
+        1210.8040937164333,
+        1210.2876485187153,
+        1211.0357893106993
+      ],
+      "median_us": 1210.8040937164333,
+      "pcc": 1.0,
+      "greedy_equal": true
+    }
+  ]
+}

@@ -37,9 +37,9 @@ def performance(gen, root, *, repeats=3):
     prompt = json.loads((root / "aime24_prompt.json").read_text())["tokens"]
     prompt = (prompt * ((4096 + len(prompt) - 1) // len(prompt)))[:4096]
     run = (
-        (lambda: gen.generate(prompt, 128, ignore_eos=True))
+        (lambda: gen.generate(prompt, 128, ignore_eos=True, buffered=False))
         if gen.batch == 1
-        else (lambda: gen.generate_batch([prompt] * gen.batch, 128, ignore_eos=True))
+        else (lambda: gen.generate_batch([prompt] * gen.batch, 128, ignore_eos=True, buffered=False))
     )
     run()  # workload warmup, including request page ownership
     samples = []
