@@ -1925,6 +1925,7 @@ class TestConfig:
             fd.write(coverage_stream)
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
+    BRISC_JUST_BOOTED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
     # Max BRISC bring-up attempts after a reset. A board-wide `tt-smi -r 0`
     # can leave a core slow-to-boot or wedged; each attempt re-issues the
@@ -2012,6 +2013,7 @@ class TestConfig:
                         last_err = err
                         continue
                     TestConfig.BRISC_ELF_LOADED = True
+                    TestConfig.BRISC_JUST_BOOTED = True
                     break
                 else:
                     raise TimeoutError(

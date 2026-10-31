@@ -1037,6 +1037,11 @@ class PerfConfig(TestConfig):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+                if TestConfig.BRISC_JUST_BOOTED:
+                    TestConfig.BRISC_JUST_BOOTED = False
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
                 # Python NOC write is skipped to avoid L1 controller state change that
                 # causes ~7 cycle overhead on Float16 unpack operations.
