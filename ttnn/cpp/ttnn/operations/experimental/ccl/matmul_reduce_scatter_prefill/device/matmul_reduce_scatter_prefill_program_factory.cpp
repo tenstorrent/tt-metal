@@ -333,6 +333,19 @@ std::mutex& mrs_resource_mutex() {
     return mutex.get();
 }
 
+// The topology create_device_tensor gives a tensor allocated on a mesh of this shape: replicated on every axis, over
+// every coordinate (tensor_ops.cpp builds it the same way when no topology is passed).
+TensorTopology mrs_replicated_topology(const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
+        mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+    coords.reserve(mesh_shape.mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        coords.push_back(coord);
+    }
+    return TensorTopology{mesh_shape, std::move(placements), std::move(coords)};
+}
+
 std::optional<MatmulReduceScatterPrefillParams>& mrs_last_plan_slot() {
     static ttsl::Indestructible<std::optional<MatmulReduceScatterPrefillParams>> plan;
     return plan.get();
@@ -1031,18 +1044,23 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 }
 
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles) {
-    // The staging layout of a size is the same on every call: build it once (the sharded page mapping over the full
-    // grid is most of create_device_tensor's cost) and allocate only the buffer per call. Mesh ids are never reused,
-    // so a mesh's grid and shape are fixed under its key.
+    // The staging layout of a size on a grid is the same on every call and every mesh with that grid: build it once
+    // (the sharded page mapping over the full grid is most of create_device_tensor's cost) and allocate only the buffer
+    // per call. The key holds no mesh id: the layout is host data built from the size and the grid alone. The topology
+    // is the one thing that depends on the mesh (its shape, which reshape changes under the same id), so it is rebuilt
+    // from the mesh on every call, never cached.
+    // Temporary: a framework-side way to keep a spec's page mapping would let this go through create_device_tensor.
     struct StagingLayout {
         TensorSpec spec;
         tt::tt_metal::distributed::DeviceLocalBufferConfig device_local;
         tt::tt_metal::distributed::ReplicatedBufferConfig replicated;
-        tt::tt_metal::TensorTopology topology;
     };
-    static ttsl::Indestructible<std::map<std::pair<MeshKey, uint32_t>, StagingLayout>> layouts;
+    using Key = std::tuple<uint32_t, uint32_t, uint32_t>;  // (staging tiles, grid x, grid y)
+    static ttsl::Indestructible<std::map<Key, StagingLayout>> layouts;
     static std::mutex layouts_mutex;
-    const auto key = std::make_pair(mesh->id(), staging_tiles);
+    const CoreCoord g = mesh->compute_with_storage_grid_size();
+    const Key key{staging_tiles, static_cast<uint32_t>(g.x), static_cast<uint32_t>(g.y)};
+    TensorTopology topology = mrs_replicated_topology(mesh->shape());
     const StagingLayout* layout = nullptr;
     {
         const std::lock_guard<std::mutex> lock(layouts_mutex);
@@ -1062,25 +1080,13 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
             mesh,
             layout->spec.tensor_layout().get_memory_config());
         auto buffer = tt::tt_metal::distributed::MeshBuffer::create(layout->replicated, layout->device_local, mesh);
-        Tensor staging = set_tensor_id(Tensor(
-            tt::tt_metal::mesh_tensor_from_buffer_with_topology(std::move(*buffer), layout->spec, layout->topology)));
+        Tensor staging = set_tensor_id(Tensor(tt::tt_metal::mesh_tensor_from_buffer_with_topology(
+            std::move(*buffer), layout->spec, std::move(topology))));
         tt::tt_metal::GraphTracker::instance().track_function_end(staging);
         return staging;
     }
-    const CoreCoord g = mesh->compute_with_storage_grid_size();
-    const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
-    const auto n = static_cast<uint32_t>(g.x * g.y);
-    const MemoryConfig cfg(
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        BufferType::L1,
-        ShardSpec(
-            grid,
-            {staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR));
-    const TensorSpec spec(
-        ttnn::Shape({n * staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
-        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
-    Tensor first = create_device_tensor(spec, mesh);
+    const TensorSpec spec = staging_spec(g, staging_tiles);
+    Tensor first = create_device_tensor(spec, mesh, std::move(topology));
     const std::lock_guard<std::mutex> lock(layouts_mutex);
     layouts.get().try_emplace(
         key,
@@ -1090,9 +1096,23 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
                 {.page_size = spec.compute_page_size_bytes(),
                  .buffer_type = BufferType::L1,
                  .sharding_args = spec.compute_buffer_sharding_args()},
-            .replicated = {.size = spec.compute_packed_buffer_size_bytes()},
-            .topology = first.tensor_topology()});
+            .replicated = {.size = spec.compute_packed_buffer_size_bytes()}});
     return first;
+}
+
+TensorSpec staging_spec(const CoreCoord& grid_size, uint32_t staging_tiles) {
+    const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1)));
+    const auto n = static_cast<uint32_t>(grid_size.x * grid_size.y);
+    const MemoryConfig cfg(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(
+            grid,
+            {staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR));
+    return TensorSpec(
+        ttnn::Shape({n * staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
 }
 
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh) {
