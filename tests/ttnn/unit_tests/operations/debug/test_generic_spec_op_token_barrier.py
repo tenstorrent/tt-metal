@@ -6,7 +6,10 @@
 
 On Quasar a semaphore cannot be shared by compute and data movement kernels, so a DFB is the only way they
 synchronize. A token DFB carries no data: its producer reserves and pushes an entry, and its consumer waits for it and
-pops it. Implicit sync is off on every data movement kernel, as in blaze's lowering. Both tests run NUM_PHASES phases
+pops it. On Quasar the compute side must still issue an engine instruction between the two: dummy_pack()
+between reserve_back and push_back on PACK, and dummy_unpack() between wait_front and pop_front on UNPACK. Without it
+the tile-counter update is not ordered after the wait (TEN-4746), which LLK asserts catch but the functional simulators
+do not. Implicit sync is off on every data movement kernel, as in blaze's lowering. Both tests run NUM_PHASES phases
 on one core, with the buffers borrowed from an L1 arena tensor at planned offsets.
 
 RAW: compute copies input tile p into Y (which is not the token DFB), then pushes a "done" token from PACK. A data
@@ -45,6 +48,7 @@ DM_INCLUDES = """
 COMPUTE_INCLUDES = """
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -87,6 +91,7 @@ void kernel_main() {
         y.reserve_back(1);
 #ifdef TOKEN_FIRST
         done.reserve_back(1);
+        dummy_pack(dfb::done);
         done.push_back(1);
 #endif
         tile_regs_wait();
@@ -94,6 +99,7 @@ void kernel_main() {
         tile_regs_release();
 #ifndef TOKEN_FIRST
         done.reserve_back(1);
+        dummy_pack(dfb::done);
         done.push_back(1);
 #endif
         y.push_back(1);
@@ -198,10 +204,12 @@ void kernel_main() {
         o.push_back(1);
         s.pop_front(1);
         done.reserve_back(1);  // After the pack, so after the unpack of s.
+        dummy_pack(dfb::done);
         done.push_back(1);
     };
     for (uint32_t p = 0; p < num_phases; ++p) {
         go.wait_front(1);
+        dummy_unpack(dfb::go);
         go.pop_front(1);
         if (p % 2 == 0) {
             phase(s1, dfb::s1);
