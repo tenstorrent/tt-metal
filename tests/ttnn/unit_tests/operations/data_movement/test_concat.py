@@ -704,6 +704,39 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
 
 
 @pytest.mark.parametrize(
+    "shapes, layouts, rejected",
+    [
+        (((1, 2, 32, 50),) * 2, (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), True),
+        (((1, 2, 32, 50),) * 3, (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), True),
+        (((1, 2, 32, 50),) * 3, (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), True),
+        (((1, 1, 30, 50), (1, 1, 30, 64)), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), True),
+        (
+            ((1, 1, 30, 64), (1, 1, 30, 50), (1, 1, 30, 64)),
+            (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+            True,
+        ),
+        (((1, 2, 32, 50),) * 2, (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), True),
+        (((1, 1, 30, 64), (1, 1, 30, 50)), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), False),
+        (((1, 2, 32, 64), (1, 2, 32, 50)), (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), False),
+        (((1, 2, 30, 64),) * 2, (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), False),
+    ],
+)
+def test_concat_sub_core_grids_mixed_layout_last_dim(device, expect_error, shapes, layouts, rejected):
+    torch_inputs = [torch.randn(shape, dtype=torch.bfloat16) for shape in shapes]
+    inputs = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device, layout=layout)
+        for t, layout in zip(torch_inputs, layouts)
+    ]
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+    if rejected:
+        with expect_error(RuntimeError, "requires aligned last dim"):
+            ttnn.concat(inputs, dim=-1, sub_core_grids=sub_core_grids)
+    else:
+        output = ttnn.concat(inputs, dim=-1, sub_core_grids=sub_core_grids)
+        assert_equal(torch.concat(torch_inputs, dim=-1), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
     "shapes, dim",
     [
         ([[217413, 1]] * 4, 1),
@@ -921,6 +954,29 @@ def test_sharded_concat_rank3_width_multicore(device, layout, num_inputs, shape)
         (64, 32 * num_inputs),
         num_cores=4,
     )
+
+
+@pytest.mark.parametrize("width", [8, 24])
+@pytest.mark.parametrize(
+    "a_buffer, b_buffer, out_buffer",
+    [
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1, ttnn.BufferType.L1),
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
+    ],
+)
+def test_concat_row_major_mixed_buffer_types(device, width, a_buffer, b_buffer, out_buffer):
+    torch.manual_seed(0)
+    torch_a = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
+    torch_b = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
+    memory_config = {
+        buffer: ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer)
+        for buffer in (ttnn.BufferType.L1, ttnn.BufferType.DRAM)
+    }
+    a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[a_buffer])
+    b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[b_buffer])
+    output = ttnn.concat([a, b], dim=-2, memory_config=memory_config[out_buffer])
+    assert_equal(torch.cat([torch_a, torch_b], dim=-2), ttnn.to_torch(output))
 
 
 # Ragged height sharding: the flattened row count (prod of dims[:-1]) is not a multiple of the
