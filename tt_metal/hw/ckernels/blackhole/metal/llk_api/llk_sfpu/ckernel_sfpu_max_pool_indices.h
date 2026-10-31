@@ -34,7 +34,9 @@ template <
     DataLayout layout = DataLayout::TILE,
     bool accumulate = false>
 inline void _calculate_max_pool_with_indices_(
-    const std::uint32_t values_tile_idx, const std::uint32_t indices_tile_idx, const std::uint32_t chunk) {
+    const std::uint32_t values_tile_idx,
+    const std::uint32_t indices_tile_idx,
+    [[maybe_unused]] const std::uint32_t chunk) {
     // size of each tile in Dest is 64 rows
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t values_tile_offset = values_tile_idx * dst_tile_size;
@@ -383,7 +385,7 @@ template <
     DataLayout layout = DataLayout::TILE,
     bool accumulate = false>
 inline void calculate_max_pool_with_indices(
-    uint values_tile_idx, uint indices_tile_idx, uint unused_tile_idx, uint chunk) {
+    uint values_tile_idx, uint indices_tile_idx, [[maybe_unused]] uint unused_tile_idx, uint chunk) {
     if constexpr (num_rows <= 9) {
         _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, layout, accumulate>(
             values_tile_idx, indices_tile_idx, chunk);
