@@ -1006,6 +1006,8 @@ std::vector<std::optional<Tensor>> silu_bw(
     return result;
 }
 
+// Selu
+// result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
 std::vector<Tensor> selu_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
