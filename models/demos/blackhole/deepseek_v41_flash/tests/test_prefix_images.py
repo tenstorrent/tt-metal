@@ -214,3 +214,17 @@ def test_restore_wave_text_unchanged_and_image_continuation_jumps_ahead(monkeypa
     # switch off: the image user is left alone
     monkeypatch.setenv("DSV41_APC_IMAGES", "0")
     assert m._apc_restore_wave([(2, t, 0, 2000)], _Apc(c), {2: vs}) == [(2, t, 0, 2000)]
+
+
+def test_cache_salt_changes_the_image_key(monkeypatch):
+    from models.demos.blackhole.deepseek_v41_flash.tt.vision_state import VisionBook
+
+    k = "aa" * 20
+    assert VisionBook._salted(k, "a") != VisionBook._salted(k, "b") != k
+    assert VisionBook._salted(k, "a") == VisionBook._salted(k, "a")
+    monkeypatch.setenv("DSV41_APC_IMAGES", "1")
+    c = cache()
+    t = prompt()
+    vsA, vsB = vseq(t, [(600, 100)], [VisionBook._salted(k, "a")]), vseq(t, [(600, 100)], [VisionBook._salted(k, "b")])
+    put(c, c._keyed(t, 1024, vsA, 1024), t, 1024)
+    assert c.lookup(0, t, 4000, vs=vsA).s == 1024 and c.lookup(0, t, 4000, vs=vsB) is None

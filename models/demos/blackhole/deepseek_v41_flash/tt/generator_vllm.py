@@ -1052,6 +1052,14 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             return None, None
         return torch.cat([a for a, _ in pairs]), torch.stack([torch.as_tensor(b).reshape(3) for _, b in pairs])
 
+    @staticmethod
+    def _mm_salt(mm, i):
+        """the request's cache_salt of prefill row ``i`` (plugin kwarg ``mm_cache_salt``: one entry per item), or None."""
+        v = (mm or {}).get("mm_cache_salt")
+        if not v or i >= len(v) or not v[i]:
+            return None
+        return next((x for x in v[i] if x), None)
+
     def _prefill_interleaved(
         self,
         tokens,
@@ -1177,7 +1185,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         if self.vbook is not None:
             seqs = self.vbook.update_many(
                 [
-                    (p, toks[i], e, rows_mm[i][0], rows_mm[i][1], st)
+                    (p, toks[i], e, rows_mm[i][0], rows_mm[i][1], st, self._mm_salt(mm, i))
                     for i, (p, _, st, e) in enumerate(items)
                     if i not in skipped
                 ]

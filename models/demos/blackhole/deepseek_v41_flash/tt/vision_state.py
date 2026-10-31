@@ -115,17 +115,25 @@ class VisionBook:
 
         return hashlib.sha1(patches.contiguous().view(torch.int16).numpy().tobytes() + f"{h}x{w}".encode()).hexdigest()
 
+    @staticmethod
+    def _salted(key, salt):
+        import hashlib
+
+        return hashlib.sha1((key + "|salt:" + str(salt)).encode()).hexdigest()
+
     def update(self, p, tokens, end, pixel_values, grids, start):
         """-> the user's ``VisionSeq`` for positions < end (None: no image in the prompt so far)."""
         return self.update_many([(p, tokens, end, pixel_values, grids, start)])[p]
 
     def update_many(self, requests):
-        """requests [(user, prompt tokens, end, pixel_values, grids, start)] -> {user: ``VisionSeq`` for positions < end or None}."""
+        """requests [(user, prompt tokens, end, pixel_values, grids, start[, cache_salt])] -> {user: ``VisionSeq`` for positions < end or None}. ``cache_salt`` (optional) is folded into the
+        content hash of the request's images (``VisionSeq.keys``: prefix cache keys)."""
         from models.demos.blackhole.deepseek_v41_flash.tt import vision_prompt as VP
 
         a = self.vision.a
         plans, jobs = {}, {}  # jobs: key -> (patches, h, w, types) of the images that need the tower
-        for p, tokens, end, pixel_values, grids, start in requests:
+        for p, tokens, end, pixel_values, grids, start, *salt in requests:
+            salt = salt[0] if salt else None
             if start == 0:
                 self.drop(p)
             if pixel_values is None or grids is None or len(grids) == 0:
@@ -147,7 +155,8 @@ class VisionBook:
                     continue
                 h, w = vit[j]
                 patches = pv[offs[j] : offs[j + 1]].reshape(h * w, 3, a.patch, a.patch)
-                key = ikeys[j] = self._key(patches, h, w)
+                key = self._key(patches, h, w)
+                ikeys[j] = key if not salt else self._salted(key, salt)
                 if key in self._cache:
                     self._cache.move_to_end(key)
                     self.hits += 1
@@ -169,7 +178,7 @@ class VisionBook:
                 for j, key in todo.items():
                     self._rows[p][j] = done[key]
         out = {}
-        for p, tokens, end, pixel_values, grids, start in requests:
+        for p, tokens, end, pixel_values, grids, start, *_salt in requests:
             if p not in plans or not plans[p][1]:
                 out[p] = self.seqs.get(p)
                 continue
