@@ -196,11 +196,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 asm volatile("nop");
             }
+            // RC experiment (loop knock-out): byte 3 of L1 0x1FFE8 bit 2 -> the math RISC spins on the MATH_PACK semaphore
+            // register (no L1 access) until pack has released DEST, so its next-block code fetches do not overlap packing.
+            const bool rc_ko_math_spin = ((*reinterpret_cast<volatile std::uint32_t*>(0x1FFE8u) >> 24) & 0x4u) != 0;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
+                    if (rc_ko_math_spin)
+                    {
+                        while (ckernel::semaphore_read(semaphore::MATH_PACK) != 0)
+                        {
+                        }
+                    }
                     _llk_math_wait_for_dest_available_<dest_sync>();
                     LLK_ASSERT(
                         (NUM_TILES_IN_BLOCK <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
