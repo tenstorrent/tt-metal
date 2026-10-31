@@ -128,7 +128,10 @@ def test_no_hit_without_block_chain_or_halo():
     run(idx, "a", t)
     longer = np.concatenate([t, toks(13, 2000)])
     # halos exist at boundaries 3 and 6 (chunks 3,6) and the tip (6 * C): hits can only be at 1536 and 3072
-    assert idx.peek(longer[: 5 * C + 300], 5 * C + 300)[0] == 3 * C
+    assert (
+        idx.peek(longer[: 5 * C + 300], 5 * C + 300)[0] == 0
+    )  # donor zone start 512 > this prompt's 0: halo B at 1536 is not valid for it
+    assert idx.peek(longer[:3400], 3400, max_hit=2000)[0] == 3 * C  # p0 = 512 >= the donor's: valid
     assert idx.peek(longer, len(longer))[0] == 6 * C
 
 
@@ -167,6 +170,48 @@ def test_zone_rule_partial_halo_only_usable_before_p0():
     # e = 8000 with the same head: p0 = 6912: every boundary up to 4096 is below p0 -> A is enough: deepest = 4096 (tip halo present, full)
     n2 = np.concatenate([t, toks(19, 3904)])
     assert idx.peek(n2, 8000)[0] == 4096
+
+
+def test_halo_b_valid_only_if_its_zone_start_is_not_after_the_new_prompts():
+    # M0' finding: layers 21-39 state written by a replay that started its zone at z is valid for a new prompt only if z <= the new prompt's zone start
+    idx = mk(zone=1024, halo_a=16, halo_b=8, key_slots=64, pages_per_row=400)
+    t = toks(
+        150, 6000
+    )  # e = 6000: p0 = 4608 - 0 -> (6000-1024)//512*512 = 4608; B only on chunks 10, 11 (starts 4608, 5120)
+    run(idx, "a", t)
+    row = idx._rows[idx.peek(t, 6000)[1]]
+    by = {b.idx: b for b in row.blocks.values()}
+    assert [i for i in range(1, 12) if by[i].halo_b >= 0] == [10, 11] and by[10].b_zone == 4608
+    # a new prompt with an EARLIER zone start (e = 5800: p0 = 4608?  e = 5500: p0 = 4096): s = 5632 (block 11) > p0 needs B, z = 4608 > 4096 -> invalid; falls to s <= p0
+    n = t[:5500]
+    assert AP.zone_start(5500, 1024) == 4096 and idx.peek(n, 5500)[0] == 4096
+    # a new prompt with the same or a later zone start: the B record is usable past p0
+    m = np.concatenate([t[:5700], toks(152, 1200)])  # e = 6900: p0 = 5632 >= 4608: 5632 <= p0 anyway; B also valid
+    assert idx.peek(m, 6900)[0] == 5632
+    m2 = np.concatenate([t[:5200], toks(153, 1000)])  # e = 6200: p0 = 5120: s = 5120 (block 10): <= p0 -> hit 5120
+    assert idx.peek(m2, 6200)[0] == 5120
+    # the plan never hands out halo B that is not valid; s > p0 hits carry it
+    p = idx.plan_hit("p", np.concatenate([t, toks(154, 1000)]), 7000)  # p0 = 5888: the tip 5632 <= p0
+    assert p.hit_tokens == 5632 and p.halo_b == -1
+
+
+def test_dup_commit_replaces_halo_b_written_with_a_later_zone_start():
+    idx = mk(rows=1, zone=1024, halo_a=16, halo_b=8, key_slots=64, pages_per_row=400)
+    base = toks(160, 4096)
+    a = np.concatenate([base, toks(161, 2200)])  # e = 6296: p0 = 5120: block 8 (4096) is A-only
+    run(idx, "a", a, user=0)
+    row = idx._rows[0]
+    by = {b.idx: b for b in row.blocks.values()}
+    assert by[8].halo_b == -1
+    b = np.concatenate([base, toks(162, 600)])  # e = 4696: p0 = 3584: chunks 8 (start 3584) is full with z = 3584
+    run(idx, "b", b, user=0)
+    assert by[8].halo_b >= 0 and by[8].b_zone == 3584
+    c = np.concatenate([base, toks(163, 150)])  # e = 4246: p0 = 3072: a better (earlier) zone: replaces B
+    run(idx, "c", c, user=0)
+    assert by[8].halo_b >= 0 and by[8].b_zone == 3072
+    d = np.concatenate([base, toks(164, 500)])  # e = 4596 (p0 = 3072): s = 4096 > p0 needs B with z <= 3072: valid now
+    assert idx.peek(d, 4596)[0] == 4096
+    idx.check()
 
 
 def test_max_hit_bounds_the_answer():
@@ -615,11 +660,12 @@ class Oracle:
         d = AP.chain_digests(t, top=e // C * C)
         p0 = AP.zone_start(e, zone)
         for i, k in enumerate(d, 1):
-            self.rows[row].setdefault(k, [False, False])
+            self.rows[row].setdefault(k, [False, None])
             if i * C > s0 and (i == e // C or i % thin == 0):
                 h = self.rows[row][k]
                 h[0] = True
-                h[1] = h[1] or (i * C - C >= p0)
+                if i * C - C >= p0:  # B written by this prompt: valid for new prompts whose zone start is >= this one's
+                    h[1] = p0 if h[1] is None else min(h[1], p0)
 
     def hit(self, row, t, e, zone, max_hit=None):
         top = max(min(e - 128, max_hit if max_hit is not None else 1 << 60), 0) // C * C
@@ -630,7 +676,7 @@ class Oracle:
             h = self.rows[row].get(k)
             if h is None:
                 break
-            if h[0] and (i * C <= p0 or h[1]):
+            if h[0] and (i * C <= p0 or (h[1] is not None and h[1] <= p0)):
                 best = i * C
         return best
 
@@ -820,9 +866,51 @@ def test_thread_safety_scheduler_and_model_threads():
 SIM = _load("apc_paged_sim", "../tools/apc_paged_sim.py")
 
 
+class ZRow(SIM.Row):
+    """the design simulator's device row with the HONEST zone rule: a halo-B record stores the zone start of the prompt that wrote it, and is valid for a new prompt only if
+    that zone start <= the new prompt's (the design note's rule 'a full halo works at any s' was optimistic); A-only (None) works at s <= p0 only
+    """
+
+    def hit(self, t, e):
+        C, ZR = SIM.C, SIM.ZR
+        top = (e - 128) // C * C
+        ch = SIM.chain(t, top)
+        best = 0
+        p0 = max(0, (e - ZR) // C * C)
+        for s in range(C, top + 1, C):
+            if ch[s] not in self.blocks:
+                break
+            z = self.halos.get(ch[s], "absent")
+            if z != "absent" and (s <= p0 or (z is not None and z <= p0)):
+                best = s
+        return best, ch
+
+    def insert(self, t, e, s0):
+        C, ZR = SIM.C, SIM.ZR
+        ch = SIM.chain(t, e // C * C)
+        p0 = max(0, (e - ZR) // C * C)
+        for s, k in ch.items():
+            if k in self.blocks:
+                self.blocks.move_to_end(k)
+            else:
+                self.blocks[k] = None
+            if (s > s0 or s0 == 0) and (s == e // C * C or (s // C) % self.thin == 0):
+                z = p0 if s - C >= p0 else None
+                if k in self.halos:
+                    self.halos.move_to_end(k)
+                    old = self.halos[k]
+                    self.halos[k] = z if old is None else (old if z is None else min(old, z))
+                else:
+                    self.halos[k] = z
+        while len(self.halos) > self.H:
+            self.halos.popitem(last=False)
+        while len(self.blocks) > self.P:
+            self.blocks.popitem(last=False)
+
+
 def _hits_sim(reqs, H, P, p_busy, seed, thin):
     rng = np.random.default_rng(seed)
-    rows = [SIM.Row(H, P, thin) for _ in range(4)]
+    rows = [ZRow(H, P, thin) for _ in range(4)]
     out = []
     for t in reqs:
         e = len(t)

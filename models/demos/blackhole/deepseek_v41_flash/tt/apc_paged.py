@@ -98,6 +98,7 @@ class ChunkPlan:
     dup: bool = False  # the block exists already: this call can only add halo slots
     _blk: object = field(default=None, repr=False)
     _done: bool = field(default=False, repr=False)
+    zone: int = 0  # p0 of the prompt this chunk belongs to (recorded with halo B)
 
 
 class _Block:
@@ -111,6 +112,7 @@ class _Block:
         "key_slot",
         "halo_a",
         "halo_b",
+        "b_zone",
         "refs",
         "children",
         "halo_pins",
@@ -121,6 +123,9 @@ class _Block:
         self.id, self.row, self.idx, self.key, self.parent = bid, row, idx, key, parent
         self.pages, self.key_slot = pages, key_slot
         self.halo_a = self.halo_b = -1
+        self.b_zone = (
+            1 << 60
+        )  # zone start (p0) of the prompt whose replay wrote halo B: B is only valid for a new prompt with p0_new >= b_zone
         self.refs = self.children = self.halo_pins = 0
         self.state = "pending"  # pending -> live -> gone
 
@@ -358,7 +363,7 @@ class BlockIndex:
                 break
             cur.append(blk)
             s = i * self.chunk
-            if blk.halo_a >= 0 and (s <= p0 or blk.halo_b >= 0) and self._boundary_ok(s, spans):
+            if blk.halo_a >= 0 and (s <= p0 or (blk.halo_b >= 0 and blk.b_zone <= p0)) and self._boundary_ok(s, spans):
                 best, path = s, list(cur)
         return best, path
 
@@ -440,7 +445,9 @@ class BlockIndex:
             page_ids=tuple(p for b in path for p in b.pages),
             key_slots=tuple(b.key_slot for b in path),
             halo_a=tip.halo_a,
-            halo_b=tip.halo_b if hit > zone_start(num_tokens, self.zone, self.chunk) else -1,
+            halo_b=tip.halo_b
+            if hit > zone_start(num_tokens, self.zone, self.chunk)
+            else -1,  # (lookup guarantees b_zone <= p0 then)
         )
         self._reserved[user] = req_id
         self._reqs[req_id] = req
@@ -550,7 +557,8 @@ class BlockIndex:
         key = req.chain.digests[i - 1]
         ri = req.row
         row = self._rows[ri]
-        full = start >= zone_start(prompt_len, self.zone, c)
+        z_new = zone_start(prompt_len, self.zone, c)
+        full = start >= z_new
         tip = end == int(prompt_len) // c * c
         want_halo = tip or (i % self.halo_thin == 0)
         blk = row.blocks.get(key)
@@ -564,13 +572,17 @@ class BlockIndex:
                 ha = self._alloc_halo_a(ri)
                 if ha < 0:
                     return None
+            if full and blk.halo_b >= 0 and blk.b_zone > z_new and blk.halo_pins == 0:
+                self._drop_halo_b(
+                    ri, blk, "zone"
+                )  # B written by a prompt whose zone started later is valid for fewer prompts: replace it
             if full and blk.halo_b < 0 and (blk.halo_a >= 0 or ha >= 0):
                 hb = self._alloc_halo_b(ri)
             if ha < 0 and hb < 0:
                 return None
             blk.refs += 1  # (protects the block until finish/abort)
             req.held.append(blk)
-            cp = ChunkPlan(req_id, ri, i, -1, ha, hb, full, True, blk)
+            cp = ChunkPlan(req_id, ri, i, -1, ha, hb, full, True, blk, zone=z_new)
             req.cps.append(cp)
             return cp
         if key in row.pending:
@@ -593,7 +605,8 @@ class BlockIndex:
         blk.refs = 1  # the creator
         blk.halo_a, blk.halo_b = ha, hb
         row.pending[key] = blk
-        cp = ChunkPlan(req_id, ri, i, ks, ha, hb, full, False, blk)
+        blk.b_zone = z_new
+        cp = ChunkPlan(req_id, ri, i, ks, ha, hb, full, False, blk, zone=z_new)
         req.cps.append(cp)
         return cp
 
@@ -653,6 +666,7 @@ class BlockIndex:
                 row.a_lru[blk.id] = blk
             if cp.halo_b >= 0:
                 blk.halo_b = cp.halo_b
+                blk.b_zone = cp.zone
                 row.b_lru[blk.id] = blk
             self._touch(row, blk)
             self.counters["upgrades"] += 1

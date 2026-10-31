@@ -9,7 +9,7 @@ Everything below is what the model/device side may rely on. Changes after this d
 - chunk-block = 512 tokens = 4 pool pages of 128 = 1 key slot. Boundary `s` = a multiple of 512 (global grid). Block `i` (1-based) covers tokens `[512(i-1), 512 i)`; its key is the chained sha256 over the key tokens of `[0, 512 i)`.
 - Per mesh row (`row` 0..3, "rows" is a constructor arg): its own page pool (`pages_per_row`, default 2 x 8193 = 16386 at B=8), key slots (`key_slots`, 2048), halo-A slots (128) and halo-B slots (48). Pages/slots are ids local to the row; all 8 columns use the same id (SPMD).
 - halo record at boundary `s` = part A (layers 0-20, always) + part B (layers 21-39, only if the chunk that ended at `s` ran layers >= 21, i.e. its start >= `p0(e) = max(0, floor((e - zone)/512) * 512)`, `e` = prompt length, `zone` = `DSV41_PF_REPLAY` = 2560). A slot id of `-1` = "none / skip" everywhere.
-- Hit rule (`lookup`): deepest `s` on the grid with `s <= e - 128` (`margin`), all blocks `1..s/512` published on the row, halo A at `s`, and (`s <= p0(e)` or halo B at `s`). Never a hit with `s == 0`.
+- Hit rule (`lookup`): deepest `s` on the grid with `s <= e - 128` (`margin`), all blocks `1..s/512` published on the row, halo A at `s`, and (`s <= p0(e)` or (halo B at `s` AND its recorded zone start `b_zone <= p0(e)`)): halo B stores the zone start p0 of the prompt whose replay wrote it (layers 21-39 state is only valid for a new prompt whose zone starts no earlier). Never a hit with `s == 0`.
 
 ## 2. Calls the model makes (model thread unless noted)
 
@@ -96,3 +96,4 @@ idx.reset()                 # model.reset_prefix_cache(): all published blocks d
 - Switch off (`DSV41_APC_PAGED` unset): the model advertises `pow2` as today; the `model` branch is dead code.
 
 Changelog: v1 (initial). v2: `user` everywhere is the global physical id (`free_users` provider returns global ids too); code is `tt/apc_paged.py` (`BlockIndex`, `HitPlan`, `ChunkPlan`, `ApcPagedHook`, `Chain`, `chain_digests`, `zone_start`, `OutOfPages`); `halo_thin` ctor arg (halos only every n-th chunk end and the tip); a hit touches the LRU of the blocks on its path but the halo LRU only at the hit boundary; plan time `halo_b` is -1 when the hit boundary s <= p0.
+v3: halo-B validity needs b_zone <= p0(new prompt) (M0' finding); a dup commit with an earlier zone start replaces a B record written with a later one (the model writes the new slot; B slot ids can change for an existing block).
