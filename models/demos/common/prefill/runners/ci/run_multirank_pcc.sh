@@ -106,12 +106,11 @@ case "${MODEL}" in
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
-      SC1_MAX_SEQ_LEN=81920
-      SC1_REQUEST_LEN=${GOLDEN_LEN}
-      MTP_PCC_THRESHOLD=0.80
-      MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
-      PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k; \
-          export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
+      # 1M tail on CI SC4: MTP kvpe 0.955, MTP index 0.987 (GPU A-vs-A floor 0.985 / 0.994).
+      MTP_PCC_THRESHOLD=0.93
+      # Same 1M request and tail window as the trunk golden above, so the MTP compare reuses its window.
+      MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
+      PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
     fi
     ;;
@@ -174,8 +173,9 @@ if [ -n "${VARIANT}" ]; then
   [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
   [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
   export PIPELINE_DIR="${PIPELINE_DIR}${VARIANT}"
-  PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
-      export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
+  # A windowed (tail) golden rejects a length cap, so MTP, which compares the 1M tail, takes none.
+  [ "${MTP}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+  PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
   PERF_BASELINES=""
   REQUIRE_TPS=0
   EXPECTED_TPS=""

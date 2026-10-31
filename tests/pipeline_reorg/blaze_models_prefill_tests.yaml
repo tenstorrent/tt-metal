@@ -2037,7 +2037,7 @@
 # 4-galaxy (SC4) GLM-5.3 MTP KV share prefill KV accuracy and throughput: prefill computes MTP level 1 and
 # publishes its KV for all 4 of decode's MTP levels. Shares a launcher with the SC1 entry below. MTP is gated
 # against its own tail-trace golden, not the manifest golden the entries above use.
-- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2047,7 +2047,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4 --variant mtp_kv_share
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -2126,9 +2126,10 @@
   sp_config: sc1
 
 
-# Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy, same launcher as the SC4 entry above and the
-# control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill itself.
-- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, SC1"
+# Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy and throughput, same launcher as the SC4 entry
+# above and the control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill
+# itself. Runs the same 1M request as SC4, so the scaling summary has an SC1 baseline at every probe.
+- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2136,7 +2137,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, runner ====="
+    echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, runner ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant mtp_kv_share || exit $?
     echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
@@ -2155,7 +2156,7 @@
     ) || exit $?
     echo "===== both sections passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc1:
