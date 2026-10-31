@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <limits>
+#include <numeric>
 #include <vector>
 #include <type_traits>
 #include <sys/types.h>
@@ -587,3 +588,144 @@ INSTANTIATE_TEST_SUITE_P(
             std::make_pair(PhysicalSize{1, 16}, PhysicalSize{1, 16})),  // tile_shape.
         ::testing::Bool()                                               // transpose
         ));
+
+// Issue #60244: transposed tiles with non-square faces (for example Tile({16, 32}, {8, 16}, true))
+// must round-trip and agree across swizzled and nfaces paths. Square-face transpose and
+// non-transposed non-square faces are included as controls.
+struct TransposedFaceCase {
+    const char* name;
+    PhysicalSize shape;
+    PhysicalSize tile_shape;
+    PhysicalSize face_shape;
+    bool transpose_within_face;
+    bool transpose_of_faces;
+};
+
+const TransposedFaceCase kTransposedFaceCases[] = {
+    {"16x32 tile, 8x16 face, transpose", {32, 64}, {16, 32}, {8, 16}, true, true},
+    {"16x32 tile, 8x16 face, within-face only", {32, 64}, {16, 32}, {8, 16}, true, false},
+    {"16x16 tile, 16x8 face, transpose", {32, 32}, {16, 16}, {16, 8}, true, true},
+    {"32x16 tile, 16x8 face, transpose", {32, 32}, {32, 16}, {16, 8}, true, true},
+    {"16x32 tile, 8x16 face, no transpose", {32, 64}, {16, 32}, {8, 16}, false, false},
+    {"32x32 tile, 16x16 face, transpose", {32, 32}, {32, 32}, {16, 16}, true, true},
+    {"16x32 tile, 16x16 face, transpose", {32, 64}, {16, 32}, {16, 16}, true, true},
+};
+
+std::vector<uint32_t> IotaTensor(const PhysicalSize& shape) {
+    std::vector<uint32_t> data(static_cast<size_t>(shape[0]) * shape[1]);
+    std::iota(data.begin(), data.end(), 0u);
+    return data;
+}
+
+TEST(TransposedNonSquareFaces, RowMajorNfacesRoundTrip) {
+    for (const auto& c : kTransposedFaceCases) {
+        SCOPED_TRACE(c.name);
+        const auto input = IotaTensor(c.shape);
+        const auto nfaces = convert_layout<uint32_t>(
+            ttsl::make_const_span(input),
+            c.shape,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES,
+            c.tile_shape,
+            c.face_shape,
+            c.transpose_within_face,
+            c.transpose_of_faces);
+        const auto round_trip = convert_layout<uint32_t>(
+            ttsl::make_const_span(nfaces),
+            c.shape,
+            TensorLayoutType::TILED_NFACES,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            c.tile_shape,
+            c.face_shape,
+            c.transpose_within_face,
+            c.transpose_of_faces);
+        EXPECT_EQ(round_trip, input);
+    }
+}
+
+TEST(TransposedNonSquareFaces, SwizzledAgreesWithNfaces) {
+    for (const auto& c : kTransposedFaceCases) {
+        SCOPED_TRACE(c.name);
+        const auto input = IotaTensor(c.shape);
+        const auto nfaces = convert_layout<uint32_t>(
+            ttsl::make_const_span(input),
+            c.shape,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES,
+            c.tile_shape,
+            c.face_shape,
+            c.transpose_within_face,
+            c.transpose_of_faces);
+        const auto swizzled = convert_layout<uint32_t>(
+            ttsl::make_const_span(input),
+            c.shape,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_SWIZZLED,
+            c.tile_shape,
+            c.face_shape,
+            false,
+            false);
+        const auto nfaces_via_swizzled = convert_layout<uint32_t>(
+            ttsl::make_const_span(swizzled),
+            c.shape,
+            TensorLayoutType::TILED_SWIZZLED,
+            TensorLayoutType::TILED_NFACES,
+            c.tile_shape,
+            c.face_shape,
+            c.transpose_within_face,
+            c.transpose_of_faces);
+        EXPECT_EQ(nfaces_via_swizzled, nfaces);
+
+        const auto swizzled_from_nfaces = convert_layout<uint32_t>(
+            ttsl::make_const_span(nfaces),
+            c.shape,
+            TensorLayoutType::TILED_NFACES,
+            TensorLayoutType::TILED_SWIZZLED,
+            c.tile_shape,
+            c.face_shape,
+            c.transpose_within_face,
+            c.transpose_of_faces);
+        EXPECT_EQ(swizzled_from_nfaces, swizzled);
+    }
+}
+
+// Direct storage index, not only a round trip. Shape 32x64 with a 16x32 tile has two tile columns,
+// which is where the old transposed untilize origin used face_H instead of tile_W.
+TEST(TransposedNonSquareFaces, TransposedFaceStorageIndex) {
+    constexpr PhysicalSize shape{32, 64};
+    constexpr PhysicalSize tile_shape{16, 32};
+    constexpr PhysicalSize face_shape{8, 16};
+    constexpr bool transpose_within_face = true;
+    constexpr bool transpose_of_faces = true;
+    const auto input = IotaTensor(shape);
+    const auto nfaces = convert_layout<uint32_t>(
+        ttsl::make_const_span(input),
+        shape,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
+
+    const uint32_t face_h = face_shape[0];
+    const uint32_t face_w = face_shape[1];
+    const uint32_t tile_hw = tile_shape[0] * tile_shape[1];
+    const uint32_t tile_cols = shape[1] / tile_shape[1];
+    ASSERT_GT(tile_cols, 1u);
+
+    for (uint32_t tile_row = 0; tile_row < shape[0] / tile_shape[0]; ++tile_row) {
+        for (uint32_t tile_col = 0; tile_col < tile_cols; ++tile_col) {
+            const size_t face_base = (static_cast<size_t>(tile_row) * tile_cols + tile_col) * tile_hw;
+            const uint32_t origin_row = tile_row * tile_shape[0];
+            const uint32_t origin_col = tile_col * tile_shape[1];
+            for (uint32_t row = 0; row < face_h; ++row) {
+                for (uint32_t col = 0; col < face_w; ++col) {
+                    EXPECT_EQ(
+                        nfaces[face_base + col * face_h + row],
+                        input[(origin_row + row) * shape[1] + origin_col + col]);
+                }
+            }
+        }
+    }
+}
