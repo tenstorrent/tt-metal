@@ -1,0 +1,23 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// The matmul-core kernels' macros the reference wrote into their source text (se_engine3.SeEngine3.pieces, the `nd`
+// defines), here from host defines that carry no address.
+#pragma once
+
+// GROW(m, lr): the global row tile of chunk m's chunk-local row tile lr. With row chunks over TP shards (NCH > 1 and
+// shards > 1) chunk m is block m of every owner, so the owners' rows stay contiguous: the host defines
+// SE_GROW_OWN_CR = CR / shards and SE_GROW_OWN_RT = rows / 32 / shards; else chunk-major (CR is the kernel's own
+// constant at the expansion site).
+#ifdef SE_GROW_OWN_CR
+#define GROW(m, lr) (((lr) / SE_GROW_OWN_CR) * SE_GROW_OWN_RT + (m) * SE_GROW_OWN_CR + (lr) % SE_GROW_OWN_CR)
+#else
+#define GROW(m, lr) ((m) * CR + (lr))
+#endif
+
+// SE_EW: the router-phase words (SeEngine3.ewords, a persistent L1 tensor a core) - the reference baked its address as
+// a define. Here the BRISC / NCRISC read it from the common runtime args right past the shared span: their common args
+// are [span start, span length n, n words] (se_engine3._common_span; [0, 0] when nothing is shared), then this address
+// at index 2 + n. Only expanded under SE_RTR, by the dataflow kernels (the compute never names it).
+#define SE_EW (get_common_arg_val<uint32_t>(2 + get_common_arg_val<uint32_t>(1)))
