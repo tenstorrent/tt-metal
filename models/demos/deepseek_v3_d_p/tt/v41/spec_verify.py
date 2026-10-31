@@ -92,7 +92,11 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self.ring_slots = self.pool.ring_slots
         self.rows: dict[int, list[int]] = {}  # slot -> its tile rows this step
         self.live: list[tuple[int, int]] = []  # (row, user) of the live rows this step, in row order
-        self.histories: dict[int, list] = {}  # slot -> the Engram history after each of its block's tokens
+        self.histories: list = []  # per block row j: the Engram histories [U, n - 1] after the slots' row j
+        self.history_index: dict[int, int] = {}  # slot -> its row of ``histories``
+        self._layouts: dict[tuple, dict] = {}  # the step's row layout per (slot, block length) tuple (``_layout``)
+        self._ring_consts: tuple | None = None  # per layer: the slot rows and the ring row (``_host_inputs``)
+        self._no_draft_rows: tuple | None = None  # the fused call's rows when no fused call runs (constants)
         self.pending_carry: dict[int, int] = {}  # slot -> the scratch row to commit into its carry
         self.scratch = {
             src: tuple(self._replicated(torch.zeros(1, 1, ROWS, self.config.HEAD_DIM), ttnn.float32) for _ in range(2))
@@ -233,6 +237,43 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             ttnn.deallocate(idx)
 
     # --- host inputs ---------------------------------------------------------------------------------------------
+    def _layout(self, tokens: dict, order: list[int]) -> dict:
+        """The step's row layout for ``tokens`` (slot -> block; ``order`` the slots sorted): the slots' tile rows,
+        the live (row, user) pairs, the draft rows, and the entries' rank, row, block index and user as index
+        tensors (one entry a tile row)."""
+        users = self.users
+        rows_of, live, taken, entries = {}, [], set(), []
+        draft_rows = None
+        for slot in order:
+            block = tokens[slot]
+            r, u = divmod(slot, users)
+            k = len(block) - 1
+            assert len(block) == self.live_rows, "one (user, rows) layout on every live rank"
+            block_rows = self.block_rows(u, k, one_slot=len(tokens) == 1)
+            draft_rows = block_rows
+            rows = []
+            for j in range(len(block)):
+                row = block_rows[j]
+                assert (r, row) not in taken, f"slot {slot}: row {row} of rank {r} already live"
+                taken.add((r, row))
+                entries.append((r, row, j, u))
+                rows.append(row)
+            rows_of[slot] = rows
+            live += [(row, u) for row in rows if (row, u) not in live]  # one selection per tile row
+        e = torch.tensor(entries, dtype=torch.int64).view(-1, 4)
+        # the Engram rows' flat index, block row j of every slot in ``order`` for each j (``hash_.step``'s order)
+        flat = [(slot // users) * ROWS + rows_of[slot][j] for j in range(self.live_rows) for slot in order]
+        return {
+            "rows": rows_of,
+            "live": live,
+            "draft_rows": draft_rows,
+            "er": e[:, 0],
+            "erow": e[:, 1],
+            "ej": e[:, 2],
+            "eu": e[:, 3],
+            "flat": torch.tensor(flat, dtype=torch.int64),
+        }
+
     def _host_inputs(self, tokens: dict[int, list[int]], sampling: dict | None = None) -> dict:
         cfg, sp, users, pool = self.config, self.sp, self.users, self.pool
         tick = self._tick("in")
@@ -242,46 +283,36 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         user_of = torch.zeros(sp, ROWS, dtype=torch.int64)
         first = torch.zeros(sp, ROWS, dtype=torch.float32)
         carry_rows = {src: torch.full((sp, ROWS), SENTINEL32, dtype=torch.int32) for src in pool.carry}
-        self.rows, self.live = {}, []
-        taken = set()
-        entries = []
         c1sel = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
         c1put = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
         self.live_rows = max((len(block) for block in tokens.values()), default=1)
-        self.draft_rows = None
-        for slot in sorted(tokens):
-            block = tokens[slot]
-            r, u = divmod(slot, users)
-            k = len(block) - 1
-            p = self.slots[slot].position
-            rows = []
-            assert len(block) == self.live_rows, "one (user, rows) layout on every live rank"
-            block_rows = self.block_rows(u, k, one_slot=len(tokens) == 1)
-            self.draft_rows = block_rows
-            for j, token in enumerate(block):
-                row = block_rows[j]
-                assert (r, row) not in taken, f"slot {slot}: row {row} of rank {r} already live"
-                taken.add((r, row))
-                # one entry a row, the tensors filled at once below (an element write is microseconds each,: six a row at 96 rows)
-                entries.append((r, row, j, int(token), p + j, u))
-                rows.append(row)
-            self.rows[slot] = rows
-            self.live += [(row, u) for row in rows if (row, u) not in self.live]  # one selection per tile row
+        # the step's row layout depends on the slots and their block lengths alone: the entries' (rank, row, j,
+        # user) and the slots' rows are built once per layout and kept; the tokens and the
+        # positions are the step's
+        order = sorted(tokens)
+        key = tuple((slot, len(tokens[slot])) for slot in order)
+        layout = self._layouts.get(key)
+        if layout is None:
+            layout = self._layouts[key] = self._layout(tokens, order)
+        self.rows, self.live, self.draft_rows = layout["rows"], layout["live"], layout["draft_rows"]
+        for slot in order:
             committed = self.pending_carry.pop(slot, None)
             if committed is not None:
                 # scratch row ``committed`` -> the carry row ``_compress`` reads for this block's first row: its
                 # own tile row (``k0 * first`` is row-aligned), which is the slot's user row ``u`` in the c1
                 # geometry and ``u s`` with decoupled real rows
                 for src in carry_rows:
-                    carry_rows[src][r, committed] = rows[0]
-        if entries:
-            e = torch.tensor(entries, dtype=torch.int64)  # [rows, 6]: rank, row, j, token, position, user
-            er, erow, ej = e[:, 0], e[:, 1], e[:, 2]
+                    carry_rows[src][slot // users, committed] = self.rows[slot][0]
+        if order:
+            er, erow, ej, eu = layout["er"], layout["erow"], layout["ej"], layout["eu"]
+            tok = torch.tensor([int(t) for slot in order for t in tokens[slot]], dtype=torch.int32)
+            pos = torch.tensor([self.slots[slot].position for slot in order], dtype=torch.int64)
+            pos = pos.repeat_interleave(self.live_rows) + ej
             c1sel[er, ej], c1put[er, erow] = erow.to(torch.int32), ej.to(torch.int32)  # the c1 MoE's row maps
-            ids[er, 0, erow] = e[:, 3].to(torch.int32)
-            positions[er, erow] = e[:, 4]
+            ids[er, 0, erow] = tok
+            positions[er, erow] = pos
             active[er, erow] = True
-            user_of[er, erow] = e[:, 5]
+            user_of[er, erow] = eu
             first[er, erow] = (ej == 0).float()
         tick("rows")
         ints = {"token": ids.view(sp, ROWS)}
@@ -309,13 +340,20 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         rope["ropec"] = self.rope_tables.rows(True, positions)
         rope["ropeg"] = self.rope_tables.rows(True, positions // 2 * 2)
         tick("rope")
-        # the ring: a position's slot, as an absolute row of every layer's KV tensor (idle rows the sentinel)
+        # the ring: a position's slot, as an absolute row of every layer's KV tensor (idle rows the sentinel); the
+        # layers at once (forty ``where`` calls a step before)
         slot_of = positions % self.ring_slots
-        for layer in self.model.layers:
-            base = user_of * pool.slot_rows(layer) + pool.ring_row(layer)
-            ints[f"ring{layer}"] = torch.where(active, base + slot_of, torch.full_like(base, SENTINEL32)).to(
-                torch.int32
+        layers = self.model.layers
+        if self._ring_consts is None:
+            self._ring_consts = (
+                torch.tensor([pool.slot_rows(layer) for layer in layers], dtype=torch.int64).view(-1, 1, 1),
+                torch.tensor([pool.ring_row(layer) for layer in layers], dtype=torch.int64).view(-1, 1, 1),
             )
+        slot_rows_l, ring_row_l = self._ring_consts
+        base = user_of.unsqueeze(0) * slot_rows_l + ring_row_l + slot_of.unsqueeze(0)  # [layers, sp, ROWS]
+        ring = torch.where(active.unsqueeze(0), base, torch.full_like(base, SENTINEL32)).to(torch.int32)
+        for i, layer in enumerate(layers):
+            ints[f"ring{layer}"] = ring[i]
         # the window: each row's 128 slots (positions p - 127 .. p), offset on device by the user's row base per layer
         wslots = (positions.view(sp, ROWS, 1) - (RING - 1) + torch.arange(RING).view(1, 1, RING)) % self.ring_slots
         wslots = torch.where(active.view(sp, ROWS, 1), wslots, torch.zeros_like(wslots))
@@ -346,11 +384,24 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         tick("addresses")
         wide = {}
         self.draft_layout = self._fused_layout(tokens)
-        if self.drafter is not None:
-            # the fused draft call's rows (the packer's layout is fixed, so a plain step carries them too): every
-            # verify row's ring slot and fp32 RoPE pair (the ring write), the block rows' bf16 pair (block a's
-            # row i at p + a + 1 + i; the rows past the blocks at p + 1 + row)
-            user, blocks = self.draft_layout or (0, 1)
+        if self.drafter is not None and self.draft_layout is None:
+            # no fused call this step (the multi-slot round: the standalone call drafts after it): the packer's
+            # layout is fixed, so its rows travel as constants (the RoPE of 256 positions
+            # and the block rows were built and uploaded for nothing)
+            if self._no_draft_rows is None:
+                rope_dim = cfg.QK_ROPE_HEAD_DIM
+                self._no_draft_rows = (
+                    torch.full((sp, ROWS), SENTINEL32, dtype=torch.int32),
+                    torch.zeros(sp * ROWS, rope_dim),
+                    (torch.zeros(sp * ROWS, rope_dim, dtype=torch.bfloat16),) * 2,
+                )
+            ints["dring"], zeros, rope["dblock"] = self._no_draft_rows
+            wide["dcos"] = wide["dsin"] = zeros
+            tick("draft_rows")
+        elif self.drafter is not None:
+            # the fused draft call's rows: every verify row's ring slot and fp32 RoPE pair (the ring write), the
+            # block rows' bf16 pair (block a's row i at p + a + 1 + i; the rows past the blocks at p + 1 + row)
+            user, blocks = self.draft_layout
             # the ring row of every verify row's tap: the user's ring with rings per slot (``TtDSparkDrafter(users=)``)
             ring_row = slot_of + (user_of * self.drafter.ring_slots if self.drafter.users > 1 else 0)
             ints["dring"] = torch.where(active, ring_row, torch.full_like(slot_of, SENTINEL32)).to(torch.int32)
@@ -371,18 +422,17 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             # the hash of row j of every block at once (one ``step`` call a block row over the live slots, not
             # one a row), the histories after each of the block's tokens kept per slot
             hash_ = self.model.engram_hash
-            order = sorted(tokens)
             h = torch.stack([self.slots[slot].engram_history.view(-1) for slot in order])  # [U, n - 1]
-            self.histories = {slot: [] for slot in order}
-            flat, ids_rows = [], []
+            # the histories after row j of every block, one [U, n - 1] tensor a row (``step`` returns a fresh
+            # one); ``commit`` clones the accepted row's for its slot (128 clones a step before)
+            self.histories, self.history_index = [], {slot: i for i, slot in enumerate(order)}
+            ids_rows = []
             for j in range(self.live_rows):
-                row_ids, h = hash_.step(torch.tensor([int(tokens[slot][j]) for slot in order]), h)
-                for i, slot in enumerate(order):
-                    flat.append((slot // users) * ROWS + self.rows[slot][j])
-                    self.histories[slot].append(h[i].clone())
+                row_ids, h = hash_.step(tok[j :: self.live_rows], h)
+                self.histories.append(h)
                 ids_rows.append(row_ids)  # [U, n_layers, n_hash_cols]
             ids_rows = torch.cat(ids_rows, dim=0)
-            flat = torch.tensor(flat, dtype=torch.int64)
+            flat = layout["flat"]
             tick("engram_hash")
             inputs["engram"] = {}
             live = active.flatten().nonzero().flatten()
@@ -471,7 +521,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         assert 0 <= accepted < len(rows), (accepted, rows)
         self.slots[slot].position += accepted + 1
         if self.model.engram:
-            self.slots[slot].engram_history = self.histories[slot][accepted]
+            self.slots[slot].engram_history = self.histories[accepted][self.history_index[slot]].clone()
         self.pending_carry[slot] = rows[accepted]
 
     @staticmethod
