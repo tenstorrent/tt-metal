@@ -181,10 +181,15 @@ class Screen:
         tmp.replace(self.status_json)
 
 
+KEY_GROUPS = {"nd": "matmul:"}
+
+
 def skipped_keys(keys: list[str], skip: str, only: str) -> set[str]:
     """Step keys not to run: the --skip list, or everything outside the --only list."""
     flag, listed = ("--only", only) if only else ("--skip", skip)
-    picked = set(filter(None, listed.split(",")))
+    picked = set()
+    for k in filter(None, listed.split(",")):
+        picked |= {x for x in keys if x.startswith(KEY_GROUPS[k])} if k in KEY_GROUPS else {k}
     if unknown := picked - set(keys):
         raise ValueError(f"unknown {flag} keys: {', '.join(sorted(unknown))}; valid: {', '.join(keys)}")
     return set(keys) - picked if only else picked
@@ -194,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     keys = "\n".join(f"  {s.key}" for s in build_steps(list(MODEL_ENV)))
     ap = argparse.ArgumentParser(
         description=TOOL_NAME,
-        epilog=f"step keys for --skip / --only, in run order:\n{keys}",
+        epilog=f"step keys for --skip / --only, in run order:\n{keys}\n\ngroups:\n  nd  every matmul:* step",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--co", action="store_true", help="collect-only mockup: no device work")
