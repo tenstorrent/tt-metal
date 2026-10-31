@@ -291,6 +291,33 @@ ttnn::Tensor concat_native(
     // which don't currently support sub_core_grids
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
+        // A tiled concat along dim -2 places each input's whole tiles, so tile padding on that dim lands inside the
+        // output. Without sub_core_grids the massaged path strips it; here, strip it on the caller's grid instead.
+        const auto tile_height = first_tensor.tensor_spec().tile().get_height();
+        const bool padded_on_concat_dim =
+            first_tensor.layout() == Layout::TILE && rank >= 2 && dim == static_cast<int>(rank) - 2 &&
+            std::any_of(input_tensors.begin(), input_tensors.end(), [dim, tile_height](const ttnn::Tensor& t) {
+                return t.logical_shape()[dim] % tile_height != 0;
+            });
+        if (padded_on_concat_dim) {
+            std::vector<ttnn::Tensor> row_major_inputs;
+            row_major_inputs.reserve(input_tensors.size());
+            for (const auto& t : input_tensors) {
+                ttsl::SmallVector<uint32_t> end;
+                for (uint32_t i = 0; i < t.logical_shape().rank(); i++) {
+                    end.push_back(t.logical_shape()[i] - 1);
+                }
+                row_major_inputs.push_back(
+                    ttnn::untilize_with_unpadding(t, ttnn::Shape(end), mem_config, true, sub_core_grids));
+            }
+            auto row_major_out =
+                ttnn::operations::data_movement::concat_impl(row_major_inputs, dim, groups, mem_config, sub_core_grids);
+            ttsl::SmallVector<uint32_t> padded(logical_output_shape.cbegin(), logical_output_shape.cend());
+            padded[rank - 2] = tt::round_up(padded[rank - 2], tile_height);
+            padded[rank - 1] = tt::round_up(padded[rank - 1], first_tensor.tensor_spec().tile().get_width());
+            return ttnn::tilize_with_val_padding(
+                row_major_out, padded, ttnn::PadValue(0.0f), mem_config, std::nullopt, true, sub_core_grids);
+        }
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 
