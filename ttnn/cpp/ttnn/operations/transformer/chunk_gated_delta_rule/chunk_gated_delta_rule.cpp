@@ -136,8 +136,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    const std::optional<ttnn::Tensor>& snapshot_index,
+    const std::optional<ttnn::Tensor>& snapshot_state) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
+    TT_FATAL(
+        snapshot_index.has_value() == snapshot_state.has_value(),
+        "chunk_gated_delta_rule: snapshot_index and snapshot_state are given together");
+    const bool snapshots = snapshot_state.has_value();
     ttnn::prim::validate_gdn_chunk_size(chunk_size);
 
     auto* dev = q_in.device();
@@ -287,7 +293,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const ChunkGdnProgramConfig cfg = program_config.has_value() ? *program_config : [&]() -> ChunkGdnProgramConfig {
         const auto grid = dev->compute_with_storage_grid_size();
         const auto choice = ttnn::prim::choose_fused_geometry(grid.x, grid.y, BH, NC, V / tt::constants::TILE_WIDTH);
-        if (choice.nv >= 1 && choice.fused_pays) {
+        // Mid-scan snapshots are emitted by the fused receivers: take the fused program whenever a geometry fits,
+        // also where phased is predicted faster (fused == phased bit for bit).
+        if (choice.nv >= 1 && (choice.fused_pays || snapshots)) {
             // Geometry left free: the prim re-derives this same pick among the candidates of its kind.
             ChunkGdnFusedProgramConfig fused{};
             fused.producer_pool = choice.placement == 2;
@@ -302,6 +310,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     TT_FATAL(!flat_v || pad == 0, "OPT-A flat v requires T ({}) to be a multiple of chunk_size ({})", T, C);
     TT_FATAL(!flat_qk || qk_norm, "OPT-A flat q/k needs the in-kernel norm (chunk_size == 32)");
     TT_FATAL(!flat_qk || pad == 0, "OPT-A flat q/k requires T ({}) to be a multiple of chunk_size ({})", T, C);
+    TT_FATAL(
+        !snapshots || std::holds_alternative<ChunkGdnFusedProgramConfig>(cfg),
+        "chunk_gated_delta_rule: snapshot_index/snapshot_state need the fused program (no fused geometry fits this grid, "
+        "or an explicit phased / mono program config was given)");
     if (const auto* phased_cfg = std::get_if<ChunkGdnPhasedProgramConfig>(&cfg)) {
         auto prep = ttnn::prim::chunk_gdn_prep(
             q_c,
@@ -379,7 +391,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             qk_norm,
             scale,
             flat_qk,
-            H);
+            H,
+            snapshot_index,
+            snapshot_state);
         o_c = results[0];
         final_state = results[1];
     }

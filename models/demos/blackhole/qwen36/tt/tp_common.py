@@ -252,6 +252,66 @@ def prefill_mtp_lean_enabled():
     return _PREFILL_MTP_LEAN
 
 
+_PREFILL_INTRACE_SNAP = None
+
+
+def prefill_intrace_snap_enabled():
+    """QWEN36_PREFILL_INTRACE_SNAP (default "0"; "0" = today's planner and traces, byte for byte). The spec fast prefill
+    runs every prefill call as ONE segment and takes the GDN prefix-cache snapshots (learn / end-of-prompt / stride /
+    forced points) INSIDE the replays instead of splitting the prompt at them into 2048-row chunks and short traces:
+
+    * every prefill trace body (2048 / big chunk traces, spec short traces) also hands each GDN layer's
+      chunk_gated_delta_rule a persistent snapshot index page and an [S, Nv, Dk, Dv] snapshot buffer (the op copies
+      the carried state after the staged 32-row chunks, the same fp32 bytes a segment end would leave), and gathers
+      the three conv-input rows before each staged position out of the chunk's row-major conv input (an embedding
+      gather: the cross-chunk conv carry a segment ending there would keep). S = GDN_SNAP_SLOTS per replay;
+    * the host stages the snapshot rows of each replay with its other inputs and, after the replay, copies each staged
+      snapshot into its prefix-cache slot (GdnPrefixStateCache.save with a snapshot source); a point at a replay end
+      is saved from the bound state as before.
+
+    Prefill outputs, KV and drafter K/V do not change (the same rows run through the same per-row ops; a snapshot is a
+    copy of the scan state). A planner difference: the state at a former split point no longer passes through a masked
+    short-trace tail (whose trailing masked GDN chunks hand on a state re-packed by one more identity scan step), so
+    such a saved snapshot differs in its low bits; the downstream prefill outputs were bit-identical in every device
+    test (see the module docstring of prefill_plan.py). Needs the KDA conv (QWEN_GDN_CONV=kda) and the fused chunk op;
+    TP spec engine with B > 1 only. Read once (the traces capture whichever body is active at warm-up)."""
+    global _PREFILL_INTRACE_SNAP
+    if _PREFILL_INTRACE_SNAP is None:
+        _PREFILL_INTRACE_SNAP = os.environ.get("QWEN36_PREFILL_INTRACE_SNAP", "0") == "1"
+    return _PREFILL_INTRACE_SNAP
+
+
+# Snapshot slots per replay under QWEN36_PREFILL_INTRACE_SNAP: a prefill call saves at most two learn points, one
+# end-of-prompt point and one forced point, and a stride point always sits at a replay end.
+GDN_SNAP_SLOTS = 4
+
+
+def prefill_intrace_snap_min_rows():
+    """QWEN36_PREFILL_INTRACE_SNAP_MIN_ROWS (default 0): traced prefill bodies of fewer rows than this get no
+    in-replay snapshot ops (their GDN chunk op keeps the default dispatch: the phased program where it is predicted
+    faster), and the planner never snapshots inside such a replay. 0 = every trace body. Read when the snapshot
+    buffers are allocated."""
+    return int(os.environ.get("QWEN36_PREFILL_INTRACE_SNAP_MIN_ROWS", "0") or 0)
+
+_PREFILL_MASKED_BIG = None
+
+
+def prefill_masked_big_enabled():
+    """QWEN36_PREFILL_MASKED_BIG (default "0"; "0" = today's split, byte for byte; needs QWEN36_PREFILL_BIG_CHUNK=8192
+    and the spec fast prefill). After the full big-chunk replays of a fast-prefill segment, the remainder r rows run as
+    ONE masked 4096- or 8192-row spec short trace (padding rows: identity GDN updates, K/V to the trash block, MTP
+    padding to its scratch block) when the cost model (prefill_plan.plan_remainder, depth-aware) finds it cheaper than
+    r // 2048 chunk replays + a short-trace tail. Port of the masked-big remainder of atupe 3247d9311b9. The two extra
+    spec short traces are captured at warm-up with the default buckets (their persistent inputs and trace region are
+    the cost). Numerics: bit-identical where it replaces 2048-row chunks + a short-trace tail; where the split plan's
+    tail is 1-2 rows (the eager masked bucket, r % 2048 in {1, 2}) the prefill logits change (PCC 0.99978 measured at
+    2049 tokens). Read once."""
+    global _PREFILL_MASKED_BIG
+    if _PREFILL_MASKED_BIG is None:
+        _PREFILL_MASKED_BIG = os.environ.get("QWEN36_PREFILL_MASKED_BIG", "0") == "1"
+    return _PREFILL_MASKED_BIG
+
+
 def mtp_kv_only_enabled():
     """QWEN36_MTP_KV_ONLY (default "0"; "0" = today's drafter, byte for byte): an MTP KV-maintenance forward
     (Qwen36MTP.forward_decode with need_logits=False: the batched reseed inside the drafter trace, the eager reseeds and

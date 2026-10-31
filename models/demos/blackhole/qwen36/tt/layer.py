@@ -218,6 +218,7 @@ class Qwen36DecoderLayer:
         spec_ctrl=None,
         spec_pos_groups=None,
         kv_only=False,
+        gdn_snap=None,
     ):
         # spec_pos_groups (QWEN36_VERIFY_ATTN_LEAN): the verify's per-candidate-group KV positions, strided slices of the row
         # position buffer built ONCE per trace by the model instead of once per attention layer; None = slice in the layer.
@@ -362,6 +363,10 @@ class Qwen36DecoderLayer:
                     else:
                         # gdn_masks: persistent device masks of the traced masked-bucket prefill (None: unchanged call).
                         _gm = {"prefill_masks": gdn_masks} if gdn_masks is not None else {}
+                        # gdn_snap: QWEN36_PREFILL_INTRACE_SNAP snapshot index tensors of a traced prefill body (None:
+                        # unchanged call).
+                        if gdn_snap is not None:
+                            _gm["snap"] = gdn_snap
                         attn_output = self.attention.forward_prefill(
                             attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True, **_gm
                         )
