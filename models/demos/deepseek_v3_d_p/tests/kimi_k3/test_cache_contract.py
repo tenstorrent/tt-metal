@@ -20,7 +20,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
-from models.demos.deepseek_v3_d_p.tt.kda.weights import PROJECTION_ARTIFACTS as KDA_PROJECTION_ARTIFACTS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weights as kimi_k3_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
@@ -62,53 +61,67 @@ def test_g_proj_is_only_in_the_gated_name_list():
     assert "g_proj" in ttMLA.weight_names(has_output_gate=True)
 
 
-# --- KDA projection dtype --------------------------------------------------------------------
+# --- KDA cache format ------------------------------------------------------------------------
 #
-# A layer marker written before the KDA projections moved to `KIMI_K3_PROJECTION_DTYPE` vouches for
-# bfloat16 projection tensorbins that the layer no longer loads. Trusting it fails at the first KDA
-# layer with FileNotFoundError; so does an interrupted rebuild that wrote only some of them.
+# A layer marker written before a KDA cache format change vouches for tensorbins that the layer no
+# longer loads. Trusting it fails at the
+# first KDA layer with FileNotFoundError; so does an interrupted rebuild that wrote only some of them.
 
 _KDA_LAYER = 0
 _MLA_LAYER = KimiK3Config.mla_layer_ids()[0]
+_PROJECTIONS = ("input_projection_head_major", "decay_output_projection", "output_projection")
+_DECAY_TERMS = ("decay_scale_flat", "decay_bias_flat")
+_KDA_ARTIFACTS = _PROJECTIONS + _DECAY_TERMS + ("norm", "conv_tap_0", "conv_tap_1", "conv_tap_2", "conv_tap_3")
 
 
-def _write_projections(root, layer_idx, dtype, names=KDA_PROJECTION_ARTIFACTS):
+def _artifact_file(layer_idx, name, version, dtype):
+    return f"layer_{layer_idx}.kda.{name}.v{version}.0123456789abcdef.mesh8x4.tpaxis1_dtype_{dtype.name}_layout_TILE.tensorbin"
+
+
+def _write_kda_cache(root, layer_idx, *, version, projection_dtype, decay_dtype, names=_KDA_ARTIFACTS):
     for name in names:
-        (
-            root / f"layer_{layer_idx}.kda.{name}.v2.0123456789abcdef.mesh8x4.tpaxis1"
-            f"_dtype_{dtype.name}_layout_TILE.tensorbin"
-        ).touch()
+        if name in _PROJECTIONS:
+            dtype = projection_dtype
+        elif name in _DECAY_TERMS:
+            dtype = decay_dtype
+        else:
+            dtype = ttnn.bfloat16
+        (root / _artifact_file(layer_idx, name, version, dtype)).touch()
+
+
+_LEGACY_BF16 = dict(version=2, projection_dtype=ttnn.bfloat16, decay_dtype=ttnn.bfloat16)
+_BF16_DECAY = dict(version=2, projection_dtype=KIMI_K3_PROJECTION_DTYPE, decay_dtype=ttnn.bfloat16)
+_CURRENT = dict(version=3, projection_dtype=KIMI_K3_PROJECTION_DTYPE, decay_dtype=ttnn.float32)
 
 
 @pytest.mark.parametrize(
-    "projection_dtypes, cached",
+    "formats, cached",
     [
-        ((ttnn.bfloat16,), False),
-        ((KIMI_K3_PROJECTION_DTYPE,), True),
-        ((ttnn.bfloat16, KIMI_K3_PROJECTION_DTYPE), True),
+        ((_LEGACY_BF16,), False),
+        ((_BF16_DECAY,), False),
+        ((_CURRENT,), True),
+        ((_LEGACY_BF16, _BF16_DECAY, _CURRENT), True),
     ],
-    ids=["legacy_bf16", "migrated", "migrated_with_legacy_leftovers"],
+    ids=["legacy_bf16", "bf16_decay_terms", "current", "current_with_legacy_leftovers"],
 )
-def test_kda_layer_cache_requires_the_projection_dtype(tmp_path, projection_dtypes, cached):
+def test_kda_layer_cache_requires_the_current_format(tmp_path, formats, cached):
     mark_layer_cached(tmp_path, _KDA_LAYER)
-    for dtype in projection_dtypes:
-        _write_projections(tmp_path, _KDA_LAYER, dtype)
+    for cache_format in formats:
+        _write_kda_cache(tmp_path, _KDA_LAYER, **cache_format)
     assert layer_is_cached(tmp_path, _KDA_LAYER) is cached
     assert layer_is_stale(tmp_path, _KDA_LAYER) is not cached
 
 
-@pytest.mark.parametrize("missing", KDA_PROJECTION_ARTIFACTS)
+@pytest.mark.parametrize("missing", _KDA_ARTIFACTS)
 def test_partially_migrated_kda_layer_is_stale(tmp_path, missing):
     mark_layer_cached(tmp_path, _KDA_LAYER)
-    _write_projections(
-        tmp_path, _KDA_LAYER, KIMI_K3_PROJECTION_DTYPE, [n for n in KDA_PROJECTION_ARTIFACTS if n != missing]
-    )
+    _write_kda_cache(tmp_path, _KDA_LAYER, **_CURRENT, names=[n for n in _KDA_ARTIFACTS if n != missing])
     assert not layer_is_cached(tmp_path, _KDA_LAYER)
     assert layer_is_stale(tmp_path, _KDA_LAYER)
 
 
 def test_unmarked_layer_is_neither_cached_nor_stale(tmp_path):
-    _write_projections(tmp_path, _KDA_LAYER, KIMI_K3_PROJECTION_DTYPE)
+    _write_kda_cache(tmp_path, _KDA_LAYER, **_CURRENT)
     assert not layer_is_cached(tmp_path, _KDA_LAYER)
     assert not layer_is_stale(tmp_path, _KDA_LAYER)
 
@@ -123,7 +136,7 @@ def test_runtime_preflight_rejects_a_legacy_kda_cache(tmp_path):
     """Production passes state_dict={}, so preflight is the only place a stale layer can be caught."""
     for idx in (_KDA_LAYER, _KDA_LAYER + 1):
         mark_layer_cached(tmp_path, idx)
-        _write_projections(tmp_path, idx, KIMI_K3_PROJECTION_DTYPE)
+        _write_kda_cache(tmp_path, idx, **_CURRENT)
     assert TtKimiK3Transformer.check_cache_complete(tmp_path, num_layers=2, model_cfg=KimiK3Config)
     for path in tmp_path.glob(f"layer_{_KDA_LAYER + 1}.kda.output_projection.*"):
         path.unlink()
@@ -131,14 +144,14 @@ def test_runtime_preflight_rejects_a_legacy_kda_cache(tmp_path):
 
 
 def test_stale_layer_loads_only_its_kda_weights(monkeypatch, tmp_path):
-    """Rebuild the projections from the attention weights, not the layer's ~59 GB of experts."""
+    """Rebuild the KDA weights from the attention weights, not the layer's ~59 GB of experts."""
     mark_layer_cached(tmp_path, _KDA_LAYER)
-    _write_projections(tmp_path, _KDA_LAYER, ttnn.bfloat16)
+    _write_kda_cache(tmp_path, _KDA_LAYER, **_BF16_DECAY)
     sentinel = {"q_proj": object()}
     monkeypatch.setattr(kimi_k3_weights, "load_kda_layer_state_dict", lambda *a, **k: sentinel)
     monkeypatch.setattr(
         kimi_k3_weights, "load_layer_state_dict", lambda *a, **k: pytest.fail("opened the full layer checkpoint")
     )
     assert load_layer_state_dict_cached(tmp_path, _KDA_LAYER, tmp_path) == {"kda_weights": sentinel}
-    _write_projections(tmp_path, _KDA_LAYER, KIMI_K3_PROJECTION_DTYPE)
+    _write_kda_cache(tmp_path, _KDA_LAYER, **_CURRENT)
     assert load_layer_state_dict_cached(tmp_path, _KDA_LAYER, tmp_path) == {}
