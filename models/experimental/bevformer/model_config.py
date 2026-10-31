@@ -271,11 +271,11 @@ CODER_BISECTION_STEPS = 22
 # weights have no such channels and do not show it.
 FP32_ACC_STAGES = (2, 3)
 
-# Layers whose activations are kept in DRAM: all four. layer1, layer2 and layer4 do not fit in
-# L1 for base: layer1 and layer2 work on 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), and layer4's
-# 2048-channel 1x1 convs overflow L1 when sharded. layer3 would fit at bfloat16 accumulation,
-# but with FP32_ACC_STAGES' fp32 accumulation its L1-sharded convs fail to allocate (their
-# circular buffers clash with L1 buffers).
+# Layers whose whole-batch blocks keep their activations in DRAM, and whose 1x1 convs take Linear
+# weights: all four. On the whole batch none fits L1 for base: layer1 and layer2 work on
+# 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), layer4's 2048-channel 1x1 convs overflow L1
+# when sharded, and layer3's L1-sharded convs fail to allocate with FP32_ACC_STAGES' fp32
+# accumulation. CAMERA_GROUPS' layers keep a group's activations in L1 instead.
 DRAM_ACTIVATION_STAGES = tuple(sorted({0, 1, 3} | set(FP32_ACC_STAGES)))
 
 # The FPN levels C3 and C4 feed, which only base has: ResNet layers 1 and 2.
@@ -286,19 +286,28 @@ _C3_C4_LEVELS = tuple(level for level, layer in enumerate(_VARIANT.out_indices) 
 # fits.
 DRAM_ACTIVATION_LEVELS = _C3_C4_LEVELS
 
-# Width slices for the spatial convs of the DRAM layers and levels, lowered per conv to what
-# its output width allows. The tightest is the strided 1x1 downsample that opens layer2: its
-# 6 x 232 x 400 x 256 input is in DRAM, and each slice is read into L1 as bfloat16
-# ROW_MAJOR for the halo, 3.25 MB per L1 bank in total against 576 KB free, so it needs at
-# least 6 slices. 8 leaves margin over that. TTConv2D lowers the count per conv to its
-# output width in tiles, as a width slice is whole tiles wide: 7 for this conv's 200-wide output.
+# The most width slices for the spatial convs of the DRAM layers and levels without a count of
+# their own below. TTConv2D lowers it per conv to its output width in tiles, as a width slice is
+# whole tiles wide; every such conv here is narrower than 8 tiles, so it runs one slice per tile.
 DRAM_CONV_SLICES = 8
 
-# Layers whose downsample and non-DCN conv2s are block sharded (layer3, layer4) and FPN levels
-# whose output conv is (C3, C4). Height sharded, each core of tiny's layer4 conv2 would hold its
-# whole 512-channel 3x3 weight, more than L1.
+# Layers run on a group of cameras at a time with every activation in L1, by layer (0 is layer1): the
+# whole batch does not fit L1, so its blocks would move each tensor through DRAM, several times
+# over; a group's do fit. One camera for layer1 and layer2; three for layer3, whose DCN runs slower
+# per camera on fewer. A strided first block runs on the whole batch (TTResLayer) when its group
+# input would not fit, as base's layer3's does, or when its stride is on conv2, as in tiny's
+# pytorch-style layer2 and layer3. layer4 runs whole: for base and small its DCN alone takes about
+# 1.1 MB of L1 per core, which leaves no room for a group's activations. A listed layer is also in
+# DRAM_ACTIVATION_STAGES, whose weights it takes.
+CAMERA_GROUPS = {0: 1, 1: 1, 2: 3}
+
+# Layers whose non-DCN conv2s are block sharded (layer3, layer4): height sharded, each core of
+# tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
 BLOCK_SHARDED_STAGES = (2, 3)
-BLOCK_SHARDED_LEVELS = _C3_C4_LEVELS
+
+# Width slices for the DRAM levels' 3x3 output convs, by level, in place of DRAM_CONV_SLICES: height
+# sharded, C3 takes 4 slices and C4 fits L1 whole, so it runs on conv2d's L1 path (TTConv2D).
+FPN_OUTPUT_CONV_DRAM_CONV_SLICES = dict(zip(_C3_C4_LEVELS, (4, 1)))
 
 # Layers whose DCNs take their input height-sharded rather than interleaved in L1: most bilinear
 # corners then lie in the core's own shard or a neighbour's. Sharding pays where each core owns many
@@ -306,11 +315,18 @@ BLOCK_SHARDED_LEVELS = _C3_C4_LEVELS
 # do not amortize it.
 DCN_SHARDED_INPUT_STAGES = (2,)
 
-# conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
-# the block-sharded FPN output convs'. None of these, nor the sharding above, is tuned for 928x1600.
-STEM_ACT_BLOCK_H = 64
+# Height slices for the stem conv on base's 6 x 928 x 1600 images in DRAM, and for the max pool on
+# its output when layer1 runs on the whole batch: the fewest that fit L1. Height slices run faster
+# than width slices on both, and they leave room for STEM_ACT_BLOCK_H.
+STEM_CONV_HEIGHT_SLICES = 4
+STEM_MAXPOOL_HEIGHT_SLICES = 6
+
+# conv2d's act_block_h overrides: the stem conv's, the whole-batch non-DCN 3x3 conv2's of the
+# bottlenecks and the DRAM levels' FPN output convs'. The FPN's larger blocks overflow L1 at these
+# slice counts.
+STEM_ACT_BLOCK_H = 128
 CONV2_ACT_BLOCK_H = 32
-FPN_BLOCK_SHARDED_ACT_BLOCK_H = 128
+FPN_OUTPUT_CONV_ACT_BLOCK_H = 32
 
 
 def tt_resnet_kwargs():
@@ -320,10 +336,13 @@ def tt_resnet_kwargs():
     return dict(
         dram_activation_stages=DRAM_ACTIVATION_STAGES,
         dram_conv_slices=DRAM_CONV_SLICES,
+        camera_groups=CAMERA_GROUPS,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
         dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
+        stem_conv_height_slices=STEM_CONV_HEIGHT_SLICES,
+        stem_maxpool_height_slices=STEM_MAXPOOL_HEIGHT_SLICES,
         conv2_act_block_h=CONV2_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
@@ -335,8 +354,8 @@ def tt_fpn_kwargs():
     return dict(
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,
         dram_conv_slices=DRAM_CONV_SLICES,
-        block_sharded_levels=BLOCK_SHARDED_LEVELS,
-        block_sharded_act_block_h=FPN_BLOCK_SHARDED_ACT_BLOCK_H,
+        output_conv_dram_conv_slices=FPN_OUTPUT_CONV_DRAM_CONV_SLICES,
+        output_conv_act_block_h=FPN_OUTPUT_CONV_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
 

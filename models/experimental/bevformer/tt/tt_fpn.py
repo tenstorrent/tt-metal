@@ -12,6 +12,17 @@ import ttnn
 from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 
 
+def _to_dram(out):
+    """An output conv's level, interleaved in DRAM. A level that fits L1 comes out in conv2d's
+    shards; the levels live through the whole detector, and one left in L1 shrinks what the
+    encoder's attention can stage there."""
+    if not out.is_sharded():
+        return out
+    moved = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(out)
+    return moved
+
+
 class TTConvModule:
     """One FPN convolution.
 
@@ -24,7 +35,6 @@ class TTConvModule:
         conv_args,
         conv_pth,
         device=None,
-        is_blk=False,
         act_block_h=None,
         dealloc_act=True,
         dram_activation=False,
@@ -32,6 +42,7 @@ class TTConvModule:
         weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
     ):
         self.conv = TTConv2D(
             conv_args.conv,
@@ -40,12 +51,12 @@ class TTConvModule:
             weights_dtype=weights_dtype,
             dealloc_act=dealloc_act,
             fp32_dest_acc_en=True,
-            is_blk=is_blk,
             act_block_h=act_block_h,
             dram_activation=dram_activation,
             dram_conv_slices=dram_conv_slices,
             input_dtype=input_dtype,
             input_layout=input_layout,
+            output_layout=output_layout,
         )
 
     def __call__(self, x):
@@ -61,9 +72,9 @@ class TTFPN:
     ``input_dtypes`` are the dtypes of the backbone levels the FPN reads, in order.
     ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
     keep their activations in DRAM, for levels too large for L1; their 3x3 convs run in
-    ``dram_conv_slices`` width slices. ``block_sharded_levels`` lists the levels whose
-    output conv is block sharded, with act_block_h ``block_sharded_act_block_h``, None for
-    conv2d's own. ``weights_dtype`` is the convs' weight dtype.
+    ``dram_conv_slices`` width slices, or ``output_conv_dram_conv_slices[level]`` for a
+    level's output conv, with act_block_h ``output_conv_act_block_h``. ``weights_dtype``
+    is the convs' weight dtype.
     """
 
     def __init__(self, params, device, input_dtypes):
@@ -71,8 +82,8 @@ class TTFPN:
         config = params.tt_kwargs
         dram_activation_levels = config["dram_activation_levels"]
         dram_conv_slices = config["dram_conv_slices"]
-        block_sharded_levels = config["block_sharded_levels"]
-        block_sharded_act_block_h = config["block_sharded_act_block_h"]
+        output_conv_dram_conv_slices = config["output_conv_dram_conv_slices"]
+        output_conv_act_block_h = config["output_conv_act_block_h"]
         weights_dtype = config["weights_dtype"]
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
         self.lateral_convs = []
@@ -81,10 +92,12 @@ class TTFPN:
         num_levels = len(conv_args.lateral_convs)
         assert len(input_dtypes) == num_levels, f"{num_levels} levels, got {len(input_dtypes)} input dtypes"
         # Each level keeps its input's dtype through its lateral conv and the top-down add.
-        # The top-down pass turns every level but the lowest to ROW_MAJOR for the upsample,
-        # which also makes it bfloat16, since bfloat8_b exists only in TILE.
-        output_conv_layouts = [ttnn.TILE_LAYOUT] + [ttnn.ROW_MAJOR_LAYOUT] * (num_levels - 1)
-        output_conv_dtypes = [input_dtypes[0]] + [ttnn.bfloat16] * (num_levels - 1)
+        # The top-down pass turns every level but the lowest to ROW_MAJOR for the upsample, and
+        # the lowest goes to ROW_MAJOR for its output conv: the DRAM-sliced convs reshape their
+        # input to NHWC and their output back, which in TILE copies a tensor whose width is not a
+        # tile multiple. ROW_MAJOR also makes a level bfloat16, as bfloat8_b exists only in TILE.
+        output_conv_layouts = [ttnn.ROW_MAJOR_LAYOUT] * num_levels
+        output_conv_dtypes = [ttnn.bfloat16] * num_levels
         for i in range(num_levels):
             self.lateral_convs.append(
                 TTConvModule(
@@ -98,19 +111,19 @@ class TTFPN:
                 )
             )
         for i in range(num_levels):
-            block_sharded = i in block_sharded_levels
+            in_dram = i in dram_activation_levels
             self.fpn_convs.append(
                 TTConvModule(
                     conv_args.fpn_convs[i],
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,
-                    is_blk=block_sharded,
-                    act_block_h=block_sharded_act_block_h if block_sharded else None,
-                    dram_activation=i in dram_activation_levels,
-                    dram_conv_slices=dram_conv_slices,
+                    act_block_h=output_conv_act_block_h if in_dram else None,
+                    dram_activation=in_dram,
+                    dram_conv_slices=output_conv_dram_conv_slices.get(i, dram_conv_slices),
                     weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[i],
                     input_layout=output_conv_layouts[i],
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             )
         for i in range(num_levels, len(conv_args.fpn_convs)):
@@ -122,6 +135,7 @@ class TTFPN:
                     dealloc_act=False,
                     weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[-1],
+                    input_layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             )
 
@@ -159,16 +173,25 @@ class TTFPN:
             )
 
             laterals_sliced = ttnn.to_memory_config(laterals_sliced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            laterals_sliced = ttnn.to_layout(laterals_sliced, ttnn.TILE_LAYOUT)
-            laterals[i - 1] = ttnn.add(laterals[i - 1], laterals_sliced)
+            # Added in ROW_MAJOR, the layout the upsample emits and the output conv reads: the lower
+            # lateral untilizes once, where a TILE add would tilize the upsample and untilize the sum.
+            lower = ttnn.to_layout(laterals[i - 1], ttnn.ROW_MAJOR_LAYOUT)
+            laterals[i - 1] = ttnn.add(lower, laterals_sliced)
+        # Every level leaves L1 before the first output conv, whose circular buffers would clash
+        # with a level still there.
+        laterals = [ttnn.to_memory_config(lateral, memory_config=ttnn.DRAM_MEMORY_CONFIG) for lateral in laterals]
         for i in range(used_backbone_levels):
-            laterals[i] = ttnn.to_memory_config(laterals[i], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            output = self.fpn_convs[i](laterals[i])
-            outs.append(output)
+            lateral = ttnn.to_layout(laterals[i], ttnn.ROW_MAJOR_LAYOUT)
+            # Every backbone level comes out ROW_MAJOR (a single-slice DRAM conv runs on the L1 path
+            # for it, TTConv2D): its consumer splits the cameras in ROW_MAJOR anyway
+            # (TTPerceptionTransformer.camera_features), and the extra conv reshapes the last level
+            # to NHWC, which in TILE copies it, as its width is not a tile multiple.
+            # The extra conv's weights are prepared for an interleaved DRAM input.
+            outs.append(_to_dram(self.fpn_convs[i](lateral)))
         for i in range(used_backbone_levels, len(self.fpn_convs)):
             extra_source = outs[-1]
             if i > used_backbone_levels and self.relu_before_extra_convs:
                 extra_source = ttnn.relu(extra_source)
-            outs.append(self.fpn_convs[i](extra_source))
+            outs.append(_to_dram(self.fpn_convs[i](extra_source)))
         signpost(header="TTNN FPN Forward End")
         return tuple(outs)
