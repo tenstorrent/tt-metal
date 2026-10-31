@@ -285,26 +285,72 @@ def _page_bytes(tiles, tile_bytes):
 _BANK_WORKERS = {}
 
 
+def robust_readers(mesh_device):
+    """Harvest-robust reader placement (bank_workers and _BankStreamOp's growth): on for Blackhole 1x4, the mesh the
+    fused decode runs on. GPT_OSS_DECODE_ROBUST_READERS=0 keeps the previous placement (the furthest-east chip's
+    workers, readers growing east and west); =1 forces it on."""
+    knob = os.environ.get("GPT_OSS_DECODE_ROBUST_READERS")
+    if knob is not None:
+        assert knob in ("0", "1"), f"GPT_OSS_DECODE_ROBUST_READERS={knob!r}: 0 or 1"
+        return knob == "1"
+    return ttnn.device.is_blackhole(mesh_device) and tuple(mesh_device.shape) == (1, 4)
+
+
+def device_bank_workers(mesh_device):
+    """Each device's own optimal NOC0 reader core per DRAM bank (logical coordinates), one list per device."""
+    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
+    out = []
+    for coord in (ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)):
+        a = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0, coord)
+        out.append([a[b] for b in sorted(a)])
+    return out
+
+
 def bank_workers(mesh_device):
     """[logical worker core] per DRAM bank: the optimal NOC0 reader cores the streamed ops place their readers around.
-    Every device of the mesh runs the same placement, but the chips are harvested differently (QuietBox 2: the right
-    banks' worker column is 6 / 7 / 5 / 7 on chips 0 / 1 / 2 / 3), so the reference chip matters: it is the one whose
-    workers sit furthest east (largest column sum; ties: the first). Readers west of a chip's own bank worker read
-    slower and the slowest chip sets every all-reduce: plain batch-1 decode at 2.38 ms per token with a column-7 chip
-    as the reference vs 2.85 / 3.02 ms with the column-6 / column-5 chip, whatever the mesh's chip order."""
+
+    One program serves every device of the mesh, but the chips are harvested differently, and a device's optimal
+    reader for a bank is the first unharvested worker column physically east of the bank's DRAM column
+    (tt_metal/common/core_assignment.cpp). Logical columns skip harvested ones, so one logical column is a different
+    physical column per chip (QuietBox 2: the east banks' worker column is 6 / 7 / 5 / 7 on chips 0 / 1 / 2 / 3). A
+    reader physically west of the east DRAM column gets its NOC0 data the long way round the torus row, through the
+    west DRAM column, sharing links with the west banks' streams (up to 1.55x slower), and the slowest chip sets every
+    all-reduce. Robust (robust_readers, after gtobarTT): per bank the largest logical column over the devices, which is
+    at or east of the bank on every device, and so is every column past it (logical columns keep the physical order).
+    Otherwise the workers of the one chip whose workers sit furthest east (largest column sum; ties: the first): plain
+    batch-1 decode at 2.38 ms per token with a column-7 chip as the reference vs 2.85 / 3.02 ms with the column-6 /
+    column-5 chip. Banks keep their row on every device (Blackhole harvests columns only)."""
     key = id(mesh_device)
+    robust = robust_readers(mesh_device)
     cached = _BANK_WORKERS.get(key)
-    if cached is None or cached[0] is not mesh_device:
-        best = None
-        rows, cols = mesh_device.shape[0], mesh_device.shape[1]
-        for coord in (ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)):
-            a = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0, coord)
-            workers = [a[b] for b in sorted(a)]
-            east = sum(w.x for w in workers)
-            if best is None or east > best[0]:
-                best = (east, workers)
-        cached = _BANK_WORKERS[key] = (mesh_device, best[1])
-    return list(cached[1])
+    if cached is None or cached[0] is not mesh_device or cached[1] != robust:
+        per = device_bank_workers(mesh_device)
+        if robust:
+            workers = []
+            for bank in range(len(per[0])):
+                ys = {a[bank].y for a in per}
+                assert len(ys) == 1, f"bank {bank}: optimal worker rows differ across devices: {ys}"
+                workers.append(ttnn.CoreCoord(max(a[bank].x for a in per), ys.pop()))
+        else:
+            best = None
+            for w in per:
+                east = sum(c.x for c in w)
+                if best is None or east > best[0]:
+                    best = (east, w)
+            workers = best[1]
+        cached = _BANK_WORKERS[key] = (mesh_device, robust, workers, per)
+    return list(cached[2])
+
+
+def _bank_sides(mesh_device):
+    """(west, east): the west banks' worker column, and the smallest logical column any device places an east bank's
+    worker at. A west-bank reader at or past `east` sits east of the east DRAM column on that device, so its data
+    would cross that column and share the east banks' links."""
+    bank_workers(mesh_device)
+    per = _BANK_WORKERS[id(mesh_device)][3]
+    west = min(c.x for w in per for c in w)
+    east = min(c.x for w in per for c in w if c.x > west)
+    return west, east
 
 
 def row_placement(mesh_device, per_bank, exclude=()):
@@ -314,21 +360,39 @@ def row_placement(mesh_device, per_bank, exclude=()):
     5.689 -> 5.626 ms), then the row above (then below). Measured with every reader streaming one bank's share (16 KB
     trid-pipelined reads, one device): 490 GB/s (95.7 % of 512) vs 464 for the placement that spreads a bank's
     readers over neighbouring rows: readers off the bank's row lose NOC arbitration to the row's own and finish
-    their share late, and the bank finishes with its slowest reader. Returns {bank: [CoreCoord] * per_bank}."""
+    their share late, and the bank finishes with its slowest reader. Returns {bank: [CoreCoord] * per_bank}.
+
+    Harvest-robust (robust_readers): every reader stays on its bank's side of the DRAM columns on every device (east
+    banks: at or east of the bank worker; west banks: west of every device's east-bank worker, _bank_sides), and a
+    bank short of such cores on its own row takes them from the rows BELOW it. NOC0 moves data in +x then +y with
+    wraparound (tt_metal/impl/device/experimental/device.cpp noc_hop_distance), so a reader one row below the bank is
+    one extra hop, while a reader west of the DRAM column on its own row (what the non-robust placement does past its
+    segment on some chips) or one row above it waits for the data to go round the whole row or column: QuietBox 2
+    (17 x 12 grid) ~14 / ~13 hops vs 2-5. Logical row grid.y - 1 wraps to row 0 across the two non-worker rows."""
     opt = bank_workers(mesh_device)
     grid = mesh_device.compute_with_storage_grid_size()
     used = {tuple(c) for c in exclude}
     out = {}
     cand = {}
+    robust = robust_readers(mesh_device)
+    if robust:
+        west, east = _bank_sides(mesh_device)
     for b, w in enumerate(opt):
         mates = sorted(c.x for c in opt if c.y == w.y)
         k, n = mates.index(w.x), len(mates)
         lo = w.x if k else 0
         hi = mates[k + 1] if k + 1 < n else grid.x
-        # phases: own segment, what the row has left, the row above, the row below
-        cand[b] = [(w.y, range(lo, hi)), (w.y, range(grid.x)), (w.y - 1, range(grid.x)), (w.y + 1, range(grid.x))]
+        if robust:
+            side = range(w.x, grid.x) if w.x != west else range(west, east)
+            seg = range(max(lo, side.start), min(hi, side.stop))
+            # phases: own segment, the rest of the row's safe columns, then the safe columns of the rows below, nearest
+            # first (d rows below: d more NOC0 hops; still fewer than the row-long wrap of a wrong-side column)
+            cand[b] = [(w.y, seg), (w.y, side)] + [((w.y + d) % grid.y, side) for d in range(1, grid.y)]
+        else:
+            # phases: own segment, what the row has left, the row above, the row below
+            cand[b] = [(w.y, range(lo, hi)), (w.y, range(grid.x)), (w.y - 1, range(grid.x)), (w.y + 1, range(grid.x))]
         out[b] = []
-    for phase in range(4):  # every bank's segment before any bank takes leftovers
+    for phase in range(len(next(iter(cand.values())))):  # every bank's segment before any bank takes leftovers
         for b, w in enumerate(opt):
             y, xs = cand[b][phase]
             if not 0 <= y < grid.y:
@@ -368,13 +432,17 @@ class _BankStreamOp:
         placed = [] if explicit is None else list(explicit)
         if explicit is not None and readers:  # (readers None: a per-bank core count, e.g. the balanced down)
             assert len(placed) == len(workers) * readers
+        # Harvest-robust (robust_readers): readers grow east of the bank worker only. The worker is at or east of the
+        # bank's DRAM column on every device and so is every column past it; a column west of it can be physically
+        # west of that DRAM column on another device (bank_workers).
+        robust = robust_readers(mesh_device)
         for bank, core in enumerate(workers if explicit is None else []):
             cores = [] if (core.x, core.y) in exclude else [core]
             # along the row (+dx before -dx); with exclusions, nearest first (Manhattan) over the rows within 2
-            cand = [(dx, 0) for d in range(1, grid.x) for dx in (d, -d)]
+            cand = [(dx, 0) for d in range(1, grid.x) for dx in ((d,) if robust else (d, -d))]
             if exclude:
                 cand = sorted(
-                    ((dx, dy) for dx in range(-grid.x, grid.x) for dy in range(-2, 3)),
+                    ((dx, dy) for dx in range(0 if robust else -grid.x, grid.x) for dy in range(-2, 3)),
                     key=lambda p: (abs(p[0]) + abs(p[1]), abs(p[1]), abs(p[0]), p[0] < 0, p[1] < 0),
                 )
             for dx, dy in cand:
@@ -384,6 +452,12 @@ class _BankStreamOp:
                     used.add((x, y))
             assert len(cores) == readers, f"no room for {readers} readers next to bank {bank} worker {core}"
             placed += [(c, bank, r) for r, c in enumerate(cores)]
+        if robust and explicit is None:
+            # the west banks' readers must stay west of every device's east bank worker (_bank_sides)
+            west, east = _bank_sides(mesh_device)
+            assert all(
+                c.x < east for c, b, _ in placed if workers[b].x == west
+            ), f"west-bank readers reach column {east}: {sorted({(c.x, c.y) for c, b, _ in placed})}"
         vcs = []
         for i, (core, bank, r) in enumerate(placed):
             vc = (bank + r) & 0x3

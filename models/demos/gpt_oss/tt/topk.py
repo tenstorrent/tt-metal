@@ -50,6 +50,11 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
         return expert_indices, ttnn.scatter(dense_zeros, dim=1, index=expert_indices, src=expert_weights)
 
 
+# Rows of 32 per core of the batched router's full-K program (_batched_router_linear): bf16 in0 blocks of per_core_M x
+# 90 tiles (180 KiB per row of tiles) plus the 90-tile weight; 32 users x 128 tokens need 2 on 11x10 cores.
+_BATCHED_ROUTER_MAX_PER_CORE_M = 2
+
+
 class TopKRouter:
     def __init__(
         self, mesh_device, hf_config, state_dict, tensor_cache_path=None, indexed_decode=False, ccl_manager=None
@@ -80,6 +85,7 @@ class TopKRouter:
         # Keep compute_config=None for linear (known quality-safe default)
         # Custom compute configs were previously found to cause quality degradation
         self.compute_config = None
+        self._batched_router_kernel_config = None  # _batched_router_linear (built on first use)
 
         # Cache softmax compute config (same as what topk_router creates per-call)
         self.softmax_compute_config = ttnn.init_device_compute_kernel_config(
@@ -146,11 +152,135 @@ class TopKRouter:
                 cache_file_name=get_cache_file_name(self.tensor_cache_path, f"fused_bias_B{B}"),
             )
 
-    def __call__(self, hidden_states, use_throughput_experts):
+    def with_expert_order(self, order):
+        """A router whose output column v is this router's expert order[v] (order: a permutation of the experts).
+
+        Shares everything but the [hidden, E] weight and [1, E] bias, which are column-permuted copies (bf16 in and
+        out, replicated like the originals), so top-k returns the same experts renumbered (expert order[v] as id v) up
+        to rounding: the prefill logits come out of the linear in the input's bfloat8_b (one exponent per 16 columns
+        of a row), so permuting the columns regroups the shared exponents and near-tied logits can round, and then
+        rank, the other way (measured on layer 12: ~10% of logits differ by one bf16 ulp; 4.5% of tokens change one
+        top-4 expert, the MoE output matches HF equally well). Used by the routed prefill experts, whose devices hold
+        the experts in that order (experts/prefill_routed.py)."""
+        import copy
+
+        perm = torch.as_tensor(order, dtype=torch.long)
+        assert sorted(perm.tolist()) == list(range(self.num_experts)), f"not a permutation of the experts: {order}"
+        out = copy.copy(self)
+        for name in ("weight", "bias"):
+            t = getattr(self, name)
+            host = ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+            host = host.reshape(-1, host.shape[-1])[:, perm]
+            setattr(
+                out,
+                name,
+                ttnn.from_torch(
+                    host.contiguous(),
+                    device=t.device(),
+                    dtype=t.dtype,
+                    layout=t.layout,
+                    memory_config=t.memory_config(),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(t.device()),
+                ),
+            )
+        return out
+
+    def _batched_router_linear(self, x4):
+        """Router logits of a batched prefill of short users, x4 [B, 1, S, H] (S <= 128) -> [B, 1, S, E] in DRAM.
+
+        Bit-identical to the batch-1 linear of each user (L1 output: MatmulMultiCoreProgramConfig, one output tile per
+        step, all K tiles accumulated in the dest register, then the bias): a 1D in1-multicast program with
+        in0_block_w = all of K (one K block, so the same in-dest sum) and the batch-1 call's kernel config (HiFi2,
+        bf16 dest; ttnn's default for a user-given program differs). Measured on BH 1x4, 32 users x 128 tokens
+        (l20/mb_router2.py): 0.200 -> 0.118 ms per linear, 0 / 131072 logits differ; the DRAM output also keeps the
+        top-k's pad multi-core (from L1 it runs on one core, 80 us). Users of a partial tile of rows, or more rows per
+        core than _BATCHED_ROUTER_MAX_PER_CORE_M (L1 of the full-K blocks), keep the [B, 1, S, H] linear with the L1
+        output (ttnn picks the batch-1 call's program), copied to DRAM."""
+        M_tiles = x4.shape[0] * (x4.shape[-2] // ttnn.TILE_SIZE)
+        k_tiles = self.hidden_dim // ttnn.TILE_SIZE
+        grid = x4.device().compute_with_storage_grid_size()
+        per_core_M = -(-M_tiles // (grid.x * grid.y))
+        if (
+            x4.shape[-2] % ttnn.TILE_SIZE
+            or self.hidden_dim % ttnn.TILE_SIZE
+            or self.num_experts != ttnn.TILE_SIZE
+            or per_core_M > _BATCHED_ROUTER_MAX_PER_CORE_M
+        ):
+            logits = ttnn.linear(
+                x4,
+                self.weight,
+                bias=self.bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+            logits_dram = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(logits)
+            return logits_dram
+        if self._batched_router_kernel_config is None:
+            self._batched_router_kernel_config = ttnn.init_device_compute_kernel_config(
+                x4.device().arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=k_tiles,
+            out_subblock_h=max(h for h in (1, 2, 4) if per_core_M % h == 0),
+            out_subblock_w=1,
+            per_core_M=per_core_M,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+        return ttnn.linear(
+            x4,
+            self.weight,
+            bias=self.bias,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._batched_router_kernel_config,
+        )
+
+    def __call__(self, hidden_states, use_throughput_experts, batch_size=1):
         # Compute actual token count from the tensor volume before reshape,
         # since shape[0] after reshape returns the tile-padded dimension
         # (e.g. 8 tokens padded to 32 in TILE_LAYOUT).
         actual_tokens = hidden_states.volume() // self.hidden_dim
+        if batch_size > 1 and actual_tokens // batch_size <= 128:
+            # Batched prefill of short users: each user's rows must equal its batch-1 router (<= 128 tokens: a linear
+            # with an L1 output, which ttnn runs as MatmulMultiCoreProgramConfig: every output tile sums all K tiles
+            # in the dest register in order, HiFi2, bf16 dest). A B*S-row call with ttnn's default program would round
+            # differently. _batched_router_linear runs the same sum on a full-K 1D program (tests/unit/
+            # test_batched_prefill.py checks ids and weights against the batch-1 router of each user).
+            per_user = actual_tokens // batch_size
+            x4 = ttnn.reshape(hidden_states, (batch_size, 1, per_user, self.hidden_dim))
+            router_logits = ttnn.reshape(self._batched_router_linear(x4), (actual_tokens, self.num_experts))
+            expert_indices, expert_weights = topk_router(
+                router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
+            )
+            ttnn.deallocate(router_logits)
+            return expert_indices, expert_weights
+        if (
+            batch_size == 1
+            and 32 < actual_tokens <= 128
+            and actual_tokens % ttnn.TILE_SIZE == 0
+            and self.num_experts == ttnn.TILE_SIZE
+            and ttnn.device.is_blackhole(hidden_states.device())
+        ):
+            # Batch-1 prefill of up to 128 tokens: the same full-K program as the batched path above, bit-identical to
+            # the default linear (one K block summed in dest) and reading the K tiles in one block instead of one by
+            # one (measured 77.5 -> 12.3 us at 128 tokens). Not at 256 rows: there the default linear sums K in more
+            # than one block and the logits differ.
+            x4 = ttnn.reshape(hidden_states, (1, 1, actual_tokens, self.hidden_dim))
+            router_logits = ttnn.reshape(self._batched_router_linear(x4), (actual_tokens, self.num_experts))
+            expert_indices, expert_weights = topk_router(
+                router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
+            )
+            ttnn.deallocate(router_logits)
+            return expert_indices, expert_weights
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
 
         # Fused op only supports decode mode (B=32, seq_len=1 → shape [32, hidden_dim])
@@ -173,6 +303,29 @@ class TopKRouter:
         )
         ttnn.deallocate(router_logits)
         return expert_indices, expert_weights
+
+    def _dense_route(self, logits):
+        """[32, E] BF16 logits tile -> the dense routing weights (dense_route.cpp; K_SEL = top_k, every logit tied with
+        the top_k-th routed, as dense_decode's ge(logits, kth))."""
+        from .fused_decode.boundary import KERNEL_DIR
+
+        mesh = logits.device()
+        gx = mesh.compute_with_storage_grid_size().x
+        cores = ttnn.num_cores_to_corerangeset(ttnn.TILE_SIZE, mesh.compute_with_storage_grid_size(), row_wise=True)
+        w = ttnn.empty(list(logits.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
+                       memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        ct = [0, gx, self.top_k, self.num_experts]  # (up to every expert routed: ge(logits, kth) keeps every tie)
+        for t in (logits, w):
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        k = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dense_route.cpp"), core_ranges=cores, compile_time_args=ct,
+            runtime_args=[], common_runtime_args=[logits.buffer_address(), w.buffer_address()],
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+        )  # fmt: skip
+        cb = ttnn.CBDescriptor(total_size=128, core_ranges=cores, format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=128)])  # fmt: skip
+        ttnn.generic_op([logits, w], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb]))
+        return w
 
     def dense_decode(self, hidden_states):
         """Batched decode routing (one 32-token tile per device, fused_decode.config.dense_moe_decode_supported).
@@ -218,6 +371,12 @@ class TopKRouter:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
+        if tokens == ttnn.TILE_SIZE and self.num_experts == ttnn.TILE_SIZE:
+            # one program, one core per token (fused_decode/kernels/dense_route.cpp): the same selection, the softmax
+            # in fixed point on the RISC-V cores (as the DFlash verify's route program)
+            weights = self._dense_route(logits)
+            logits.deallocate(True)
+            return ttnn.reshape(weights, (tokens, self.num_experts))
         values, indices = ttnn.topk(logits, k=self.top_k, dim=-1, sorted=True)
         indices.deallocate(True)
         # Reductions, not column slices: a slice inside a tile becomes untilize + slice + tilize.

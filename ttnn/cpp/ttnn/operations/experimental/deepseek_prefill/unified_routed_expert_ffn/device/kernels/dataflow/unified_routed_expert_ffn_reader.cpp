@@ -33,6 +33,18 @@
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
 
+// x_indexed: read nbytes of the x_row_index page (UINT32 x-row ids) at offset_bytes into l1. A template so the
+// accessor at kOffset (absent from the compile-time args when x_indexed is off) is only built when enabled.
+template <bool kEnabled, uint32_t kOffset>
+FORCE_INLINE void read_x_row_idx(Noc& noc, uint32_t idx_addr, uint32_t l1, uint32_t nbytes, uint32_t offset_bytes) {
+    if constexpr (kEnabled) {
+        constexpr auto args = TensorAccessorArgs<kOffset>();
+        const auto acc = TensorAccessor(args, idx_addr);
+        noc.async_read(acc, CoreLocalMem<uint32_t>(l1), nbytes, {.page_id = 0, .offset_bytes = offset_bytes}, {});
+        noc.async_read_barrier();
+    }
+}
+
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
@@ -177,8 +189,11 @@ void kernel_main() {
     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+    // x_indexed: buffer row r of an expert region reads x row x_row_index[r] (x is the token-ordered input).
+    constexpr bool x_indexed = get_compile_time_arg_val(36) != 0;
+    constexpr uint32_t cb_x_row_idx = get_compile_time_arg_val(37);
 
-    constexpr uint32_t x_accessor_offset = 36;
+    constexpr uint32_t x_accessor_offset = 38;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -241,7 +256,19 @@ void kernel_main() {
     CircularBuffer cb_gate_bias_obj(cb_gate_bias);
     CircularBuffer cb_up_bias_obj(cb_up_bias);
     CircularBuffer cb_down_bias_obj(cb_down_bias);
+    constexpr uint32_t idx_rows_accessor_offset = down_bias_args.next_compile_time_args_offset();
+    constexpr uint32_t COMMON_ROW_IDX = COMMON_BIAS + 3 * experts_per_chip;
+#else
+    constexpr uint32_t idx_rows_accessor_offset = start_args.next_compile_time_args_offset();
+    constexpr uint32_t COMMON_ROW_IDX = COMMON_WEIGHTS + 3 * experts_per_chip;
 #endif
+    // x_row_index (x_indexed): one ROW_MAJOR page of UINT32 x-row ids, read in per-chunk slices.
+    uint32_t row_idx_l1 = 0;
+    if constexpr (x_indexed) {
+        CircularBuffer cb_x_row_idx_obj(cb_x_row_idx);
+        cb_x_row_idx_obj.reserve_back(1);
+        row_idx_l1 = cb_x_row_idx_obj.get_write_ptr();
+    }
 
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
     // `noc_read` forces NoC 0 for DRAM weight/page reads — the kernel issues
@@ -523,6 +550,22 @@ void kernel_main() {
         const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
         const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
 
+        // x_indexed: this M-row's x-row ids for the chunk, read once and reused by every gate/up K-block. Only the
+        // in0 sender reads x. Only the expert's own tile rows are read: the tail chunk's last core may own fewer than
+        // per_core_M of them, and past the last expert's rows the index vector ends.
+        if constexpr (x_indexed) {
+            if (is_in0_sender && this_core_first_row < count_tiles) {
+                const uint32_t remaining_tile_rows = count_tiles - this_core_first_row;
+                const uint32_t index_tile_rows = remaining_tile_rows < per_core_M ? remaining_tile_rows : per_core_M;
+                read_x_row_idx<x_indexed, idx_rows_accessor_offset>(
+                    noc_read,
+                    get_common_arg_val<uint32_t>(COMMON_ROW_IDX),
+                    row_idx_l1,
+                    index_tile_rows * TILE_HEIGHT * static_cast<uint32_t>(sizeof(uint32_t)),
+                    (x_start_stick + this_core_first_row * TILE_HEIGHT) * static_cast<uint32_t>(sizeof(uint32_t)));
+            }
+        }
+
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
         //
         // Per-K-block restructure for parallelism:
@@ -606,8 +649,15 @@ void kernel_main() {
                             for (uint32_t r = 0; r < real_r; ++r) {
                                 // x_start_stick offsets into this expert's region
                                 // of the shared row-major buffer (0 when x is a
-                                // standalone per-expert buffer).
-                                const uint32_t stick = x_start_stick + row_base + r;
+                                // standalone per-expert buffer). x_indexed: the row's
+                                // x row comes from the chunk's index slice.
+                                uint32_t stick;
+                                if constexpr (x_indexed) {
+                                    stick =
+                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_idx_l1)[m * TILE_HEIGHT + r];
+                                } else {
+                                    stick = x_start_stick + row_base + r;
+                                }
                                 noc_read.async_read(
                                     x_acc_rm,
                                     CoreLocalMem<uint32_t>(l1_x),

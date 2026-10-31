@@ -386,6 +386,29 @@ void move_common_entries(
     }
 }
 
+namespace {
+
+// Per DRAM bank, its NOC-optimal reader core: on the chip at coord (the chips of a mesh can be harvested differently,
+// and logical columns skip harvested ones, so the best reader's logical column can differ per chip), or on the first
+// chip when coord is nullptr.
+std::vector<tt::tt_metal::CoreCoord> dram_bank_workers(
+    const tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
+    if (coord == nullptr) {
+        return device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    }
+    const auto per_bank = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, *coord);
+    std::vector<tt::tt_metal::CoreCoord> workers(per_bank.size());
+    for (const auto& [bank, core] : per_bank) {
+        TT_FATAL(bank < workers.size(), "DRAM bank id {} out of range", bank);
+        workers[bank] = core;
+    }
+    return workers;
+}
+
+}  // namespace
+
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
@@ -403,10 +426,11 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
-    const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto primary_workers = dram_bank_workers(device, noc, coord);
     std::vector<DramBankReaderAssignment> assignments;
     assignments.reserve(primary_workers.size() * workers_per_bank);
 
@@ -446,7 +470,9 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // heuristic; bank addressing still uses each executing chip's allocator table.
                     const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
                         &device,
-                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
+                        coord != nullptr
+                            ? *coord
+                            : tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
                         candidate,
                         primary_workers[bank],
                         noc);

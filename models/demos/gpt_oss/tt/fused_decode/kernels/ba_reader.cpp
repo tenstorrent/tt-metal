@@ -4,9 +4,9 @@
 // Block attention, reader (NCRISC) (dflash/block_attention.py): one core per (kv head g, tile group t, history slice
 // s), fused into the QKV program. The M block rows' queries of kv head g are Tt = M / 4 packed tiles (tile t, rows
 // 8 i .. 8 i + 7 = block row 4 t + i's query heads 8 g .. 8 g + 7), each [32 rows, 64 dims] = 2 BF16 tiles; this core
-// runs packed Q tile t. The Tt = 2 tile-group cores of a (kv head, slice) share each K / V group's read (the leader
-// reads it from DRAM, its partner copies it from the leader's L1): every K / V chunk of the slice is read from DRAM
-// once for all M rows. Pushes:
+// runs packed Q tile t (M < 4: one tile, its first M row groups real). The Tt = 2 tile-group cores of a (kv head,
+// slice) share each K / V group's read (the leader reads it from DRAM, its partner copies it from the leader's L1):
+// every K / V chunk of the slice is read from DRAM once for all M rows. Pushes:
 //   cb_aux: [scaler (1.0 in row 0 of each face), the causal masks of the block's chunks c_block + e (tile 1 + e: row
 //            group i keeps the columns at positions <= pos[4 t + i]), the sink-column mask (tile 3: keeps column 0),
 //            the sink tile (tile 4; slice 0: column 0 of row group i = kv head g's 8 sink logits / scale), a zero tile
@@ -21,8 +21,14 @@
 // common runtime args: [q_addr, k_addr, v_addr, pos_addr, pt_addr, sink_addr, mask_lib_addr, core index table
 // (BA_NIDX words, ba_common.hpp), noc (x << 8 | y) per core (2 per word), (BA_PATCH..: k_src, v_src, noc (x << 8 | y)
 // per block row (2 per word))]
+// BA_USER_ARG (batch-32 verify, dflash/batched.py): the block of user u = common arg BA_USER_ARG + core index / (cores
+// per user: the program's users side by side, user-major core list): its positions are
+// pos[M u .. M u + M - 1], its page table row u, its Q rows in the heads layout [1, heads, rows, 64] (BA_Q_HEADS row
+// tiles per head) row r BA_Q_RSTRIDE + u.
 // BA_UNIFORM: every row attends [0, pos[M - 1]] (the drafter's block; [pos[M - 1] + 1 - BA_WINDOW, ..] with a window),
 // no sinks.
+// BA_SWIN: row r attends the sliding window [pos[r] + 1 - BA_SWIN, pos[r]] (and the sinks): 2 more mask tiles in cb_aux
+// (tiles 3, 4: the window's first 2 chunks), the sink-column mask, sink and zero tiles after them.
 // The slices of each tile group are their own merge tree.
 
 #include <stdint.h>
@@ -43,7 +49,7 @@ void kernel_main() {
     const uint32_t sink_addr = get_common_arg_val<uint32_t>(5);
     const uint32_t lib_addr = get_common_arg_val<uint32_t>(6);
     const uint32_t ci = ba_core_index(7);  // (kv head g, tile group t, slice s) = ((g BA_TQ + t) S + s)
-    const uint32_t g = ci / get_compile_time_arg_val(12) / BA_TQ;
+    const uint32_t g = (ci / get_compile_time_arg_val(12) / BA_TQ) % BA_NKV;
     const uint32_t s = ci % get_compile_time_arg_val(12);
     const uint32_t t = (ci / get_compile_time_arg_val(12)) % BA_TQ;  // this core's packed Q tile
 
@@ -71,9 +77,15 @@ void kernel_main() {
     constexpr auto pt_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto sink_args = TensorAccessorArgs<pt_args.next_compile_time_args_offset()>();
     constexpr auto lib_args = TensorAccessorArgs<sink_args.next_compile_time_args_offset()>();
+#ifdef BA_OUT_SPLIT
+    // (the second half of the root's output writes, BA_OUT_CONCAT: the output tensor, common arg BA_OUT_SPLIT)
+    constexpr auto out_args = TensorAccessorArgs<lib_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t tile = 2048;  // BF16 tile
-    constexpr uint32_t Tt = M / 4;   // packed Q tiles per kv head
+    constexpr uint32_t Tt = BA_TQ;   // packed Q tiles per kv head (M / 4, 1 for M < 4: the tile's first M row groups)
+    static_assert(Tt == (M + 3) / 4 && (M == 8 || M <= 4));
+    constexpr bool shared = Tt == 2;  // the 2 tile groups' cores share the K / V reads (leader / partner)
     constexpr uint32_t tpb = block / 32;
     const auto s_q = TensorAccessor(q_args, q_addr, tile);
     const auto s_k = TensorAccessor(k_args, k_addr, kv_tile_bytes);
@@ -81,14 +93,27 @@ void kernel_main() {
     const auto s_pos = TensorAccessor(pos_args, pos_addr, pos_page_bytes);
     const auto s_pt = TensorAccessor(pt_args, pt_addr, pt_page_bytes);
     const auto s_sink = TensorAccessor(sink_args, sink_addr, tile);
-    const auto s_lib = TensorAccessor(lib_args, lib_addr, 33 * 33 * 2 * 256);
+    const auto s_lib = TensorAccessor(lib_args, lib_addr, 256);  // one 256-byte segment per page
 
     cb_reserve_back(cb_scr, 1);
     const uint32_t scr = get_write_ptr(cb_scr);  // [pos page | page-table row]
+#ifdef BA_USER_ARG
+    // (several users per program: core list user-major, BA_NKV x BA_TQ x S cores per user)
+    const uint32_t user =
+        get_common_arg_val<uint32_t>(BA_USER_ARG) + ci / (get_compile_time_arg_val(12) * BA_TQ * BA_NKV);
+    // this user's M positions: the 64-byte aligned window holding them
+    const uint32_t pos_off = user * M * 4, pos_a = pos_off & ~63u;
+    noc_async_read(s_pos.get_noc_addr(0) + pos_a, scr, 64);
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    volatile tt_l1_ptr int32_t* pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr + (pos_off - pos_a));
+#else
+    constexpr uint32_t user = 0;
     noc_async_read(s_pos.get_noc_addr(0), scr, pos_page_bytes);
     noc_async_read_barrier();
     invalidate_l1_cache();
     volatile tt_l1_ptr int32_t* pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr);
+#endif
     {
         // the positions to this core's writer (BA_CB_POS): one DRAM read of them per core, not two
         cb_reserve_back(BA_CB_POS, 1);
@@ -99,6 +124,9 @@ void kernel_main() {
         cb_push_back(BA_CB_POS, 1);
     }
     uint32_t p0 = static_cast<uint32_t>(pos[0]);  // the block's first position (its K / V rows written by QKV)
+    // row group i of this core's tile is block row 4 t + i (M < 4: the rows past M take the last row's position; their
+    // queries are zero and their outputs are not written)
+    auto rowp = [&](uint32_t i) -> int32_t { return pos[4 * t + i < M ? 4 * t + i : M - 1]; };
 #ifdef BA_UNIFORM
     // every row attends [lo, hi = pos[M - 1]] (the drafter; lo = 0, or hi + 1 - BA_WINDOW with a window): the last
     // chunk masked past hi (mask e = 0), with a window the first chunk before lo (mask e = 1, slice 0's chunk 0), no
@@ -114,11 +142,23 @@ void kernel_main() {
 #endif
     const BaSlice sl = ba_slice(hi, hi, s, S, min_chunks, lo / 32);
     constexpr bool has_sink = false;
+#elif defined(BA_SWIN)
+    // BA_SWIN (the verify's sliding-window layers): row r attends [lo(r), pos[r]], lo(r) = pos[r] + 1 - BA_SWIN (0 at
+    // most): causal masks on the block's chunks, window masks (tiles 3, 4: row group i keeps the columns at positions
+    // >= lo(4 t + i)) on the window's first 2 chunks lo(0) / 32 + e; the history starts at chunk lo(0) / 32
+    static_assert(BA_SWIN >= 128, "the window's first 2 chunks lie before the block's chunks");
+    const uint32_t w_lo = static_cast<uint32_t>(pos[0]) + 1 >= BA_SWIN ? pos[0] + 1 - BA_SWIN : 0;
+    const BaSlice sl = ba_slice(p0, static_cast<uint32_t>(pos[M - 1]), s, S, min_chunks, w_lo / 32);
+    constexpr bool has_sink = true;
 #else
     const BaSlice sl = ba_slice(p0, static_cast<uint32_t>(pos[M - 1]), s, S, min_chunks);
     constexpr bool has_sink = true;
 #endif
+#ifdef BA_SWIN
+    constexpr uint32_t NM = 4;
+#else
     constexpr uint32_t NM = 2;
+#endif
     volatile tt_l1_ptr uint32_t* qkv_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_WAIT_SEM));
     auto kv_ready = [&]() {
         invalidate_l1_cache();
@@ -141,7 +181,7 @@ void kernel_main() {
     const uint32_t e0 = sl.c_lo * 32 / block, e1 = (sl.c_hi * 32 - 1) / block + 1;
     const uint32_t a0 = (e0 * 4) & ~63u;
     const uint32_t a1 = (e1 * 4 + 63) & ~63u;
-    noc_async_read(s_pt.get_noc_addr(0) + a0, scr + 256, (a1 < pt_page_bytes ? a1 : pt_page_bytes) - a0);
+    noc_async_read(s_pt.get_noc_addr(user) + a0, scr + 256, (a1 < pt_page_bytes ? a1 : pt_page_bytes) - a0);
     noc_async_read_barrier();
     const uint32_t pt_first = a0 / 4;  // the first entry read (pt[] below indexes entries from it)
     const uint32_t nc = sl.c_hi - sl.c_lo;
@@ -168,11 +208,12 @@ void kernel_main() {
     // mask tile: row group i keeps columns [from, keep[i]) (BF16 -1e30 elsewhere): its 8 segments (8 rows x 16
     // columns) copied from the mask library (segment (a, b, f) = half f of a row group keeping columns [a, b), a, b in
     // 0 .. 32)
-    const uint64_t lib = s_lib.get_noc_addr(0);
-    auto mask = [&](uint32_t a, const uint32_t* keep, uint32_t from = 0) {
+    // (from_i: per row group, overriding from)
+    auto mask = [&](uint32_t a, const uint32_t* keep, uint32_t from = 0, const uint32_t* from_i = nullptr) {
         for (uint32_t i = 0; i < 4; ++i) {
+            const uint32_t fr = from_i ? from_i[i] : from;
             for (uint32_t f = 0; f < 2; ++f) {
-                noc_async_read(lib + ((from * 33 + keep[i]) * 2 + f) * 256, aux + a * tile + rows8(i, f), 256);
+                noc_async_read(s_lib.get_noc_addr((fr * 33 + keep[i]) * 2 + f), aux + a * tile + rows8(i, f), 256);
             }
         }
     };
@@ -188,7 +229,7 @@ void kernel_main() {
 #ifdef BA_UNIFORM
             const int32_t k = pos[M - 1] - c0 + 1;
 #else
-            const int32_t k = pos[4 * t + i] - c0 + 1;
+            const int32_t k = rowp(i) - c0 + 1;
 #endif
             keep[i] = k < 0 ? 0 : (k > 32 ? 32 : static_cast<uint32_t>(k));
         }
@@ -204,6 +245,23 @@ void kernel_main() {
     if (sl.c_lo == lo / 32 && (lo % 32) && lo / 32 != hi / 32) {
         const uint32_t keep32[4] = {32, 32, 32, 32};
         mask(1 + 1, keep32, lo % 32);
+    }
+#endif
+#ifdef BA_SWIN
+    // the window masks of chunks w_lo / 32 + e this slice holds: row group i keeps [lo(4 t + i) - c0, 32)
+    for (uint32_t e = 0; e < 2; ++e) {
+        const uint32_t c = w_lo / 32 + e;
+        if (c < sl.c_lo || c >= sl.c_hi) {
+            continue;
+        }
+        const uint32_t keep32[4] = {32, 32, 32, 32};
+        uint32_t from[4];
+        for (uint32_t i = 0; i < 4; ++i) {
+            const int32_t lo_i = rowp(i) + 1 - static_cast<int32_t>(BA_SWIN);
+            const int32_t a = lo_i - static_cast<int32_t>(c * 32);
+            from[i] = a < 0 ? 0 : (a > 32 ? 32 : static_cast<uint32_t>(a));
+        }
+        mask(3 + e, keep32, 0, from);
     }
 #endif
     if (has_sink && s == 0) {
@@ -261,12 +319,47 @@ void kernel_main() {
     auto read_q = [&]() {
         cb_reserve_back(cb_q, 2);
         const uint32_t ql1 = get_write_ptr(cb_q);
+        if constexpr (M < 4) {  // the tile's rows past the block's M rows: zero queries
+#ifdef BA_Q_SPLIT
+            constexpr uint32_t zt = 1;  // (column tile 1: the writer's)
+#else
+            constexpr uint32_t zt = 2;
+#endif
+            for (uint32_t z = 0; z < zt * tile; z += MEM_ZEROS_SIZE) {
+                noc_async_read(get_noc_addr(MEM_ZEROS_BASE), ql1 + z, MEM_ZEROS_SIZE);
+            }
+            noc_async_read_barrier();
+        }
         noc_async_read_set_trid(15);
-#ifdef BA_Q_ROWS
+#ifdef BA_Q_HEADS
+        // Q in the heads layout [1, heads, rows, 64] (the RoPE output: head h's row tile rt at pages (h BA_Q_HEADS +
+        // rt) 2 + d, row R = block row r BA_Q_RSTRIDE + user): packed tile (t, d) row 8 i + j = row 4 t + i of head 8 g
+        // + j, one 32-byte face row per (i, j, f) (BA_Q_SPLIT: column tile 1 read by the writer, flag BA_Q_SEM)
+#ifdef BA_Q_SPLIT
+        constexpr uint32_t n_qd = 1;
+#else
+        constexpr uint32_t n_qd = 2;
+#endif
+        for (uint32_t d = 0; d < n_qd; ++d) {
+            for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
+                const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
+                for (uint32_t j = 0; j < 8; ++j) {
+                    const uint64_t src = s_q.get_noc_addr(((8 * g + j) * BA_Q_HEADS + R / 32) * 2 + d);
+                    const uint32_t pr = 8 * i + j;
+                    for (uint32_t f = 0; f < 2; ++f) {
+                        noc_async_read(
+                            src + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32,
+                            ql1 + d * tile + ((pr / 16) * 2 + f) * 512 + (pr % 16) * 32,
+                            32);
+                    }
+                }
+            }
+        }
+#elif defined(BA_Q_ROWS)
         // Q in the rows layout [1, M, heads, 64] (row r's tiles 2 r + d, heads in tile rows): gather packed tile (t, d)
         // rows 8 i .. 8 i + 7 = row 4 t + i's heads 8 g .. 8 g + 7 (256-byte segments per 16-column half f)
         for (uint32_t d = 0; d < 2; ++d) {
-            for (uint32_t i = 0; i < 4; ++i) {
+            for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
                 const uint64_t src = s_q.get_noc_addr(2 * (4 * t + i) + d);
                 for (uint32_t f = 0; f < 2; ++f) {
                     noc_async_read(src + rows8(g, f), ql1 + d * tile + rows8(i, f), 256);
@@ -280,6 +373,15 @@ void kernel_main() {
 #endif
         noc_async_read_set_trid(0);
         noc_async_read_barrier_with_trid(15);
+#ifdef BA_Q_SPLIT
+        {
+            volatile tt_l1_ptr uint32_t* qf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_Q_SEM));
+            while (*qf == 0) {
+                invalidate_l1_cache();
+            }
+            *qf = 0;
+        }
+#endif
         cb_push_back(cb_q, 2);
         q_done = true;
     };
@@ -323,15 +425,15 @@ void kernel_main() {
     // (only readable after QKV, on the critical path) the partner reads from DRAM itself. Program semaphores:
     // BA_LAND_SEM on the partner (groups landed in the leader), BA_COPY_SEM on the leader (groups the partner has
     // copied: a slot is reused after).
-    const bool leader = (ci / S) % BA_TQ == 0;
-    const uint32_t partner = leader ? ci + S : ci - S;
+    const bool leader = !shared || (ci / S) % BA_TQ == 0;
+    const uint32_t partner = !shared ? ci : leader ? ci + S : ci - S;  // (one tile per kv head: no partner)
     const uint32_t pnw = get_common_arg_val<uint32_t>(7 + BA_NIDX + partner / 2) >> (16 * (partner % 2));
     const uint32_t pnx = (pnw >> 8) & 0xFF, pny = pnw & 0xFF;
     volatile tt_l1_ptr uint32_t* land_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_LAND_SEM));
     volatile tt_l1_ptr uint32_t* copy_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_COPY_SEM));
     auto slot_free = [&](uint32_t gi) {  // the partner has copied what this slot held before
         invalidate_l1_cache();
-        return gi < cap_groups || *copy_sem >= gi - cap_groups + 1;
+        return !shared || gi < cap_groups || *copy_sem >= gi - cap_groups + 1;
     };
     if (!leader) {
         while (pushed < n_groups) {
@@ -394,7 +496,9 @@ void kernel_main() {
             cb_push_back(cb_k, group_pages);
             cb_push_back(cb_v, group_pages);
             ++pushed;
-            noc_semaphore_inc(get_noc_addr(pnx, pny, get_semaphore(BA_LAND_SEM)), 1);  // the partner may copy it
+            if (shared) {
+                noc_semaphore_inc(get_noc_addr(pnx, pny, get_semaphore(BA_LAND_SEM)), 1);  // the partner may copy it
+            }
         } else if (!q_done) {
             while (!kv_ready()) {  // nothing in flight: the next group needs the block's rows
             }
@@ -407,7 +511,7 @@ void kernel_main() {
         }
         read_q();
     }
-    if (leader) {  // the slots stay readable until the partner has copied the last groups
+    if (shared && leader) {  // the slots stay readable until the partner has copied the last groups
         while (true) {
             invalidate_l1_cache();
             if (*copy_sem >= n_groups) {
@@ -417,6 +521,10 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 
+    // the global read barrier too: the loops above wait on per-transaction-id counts only, and a read response still
+    // to be counted in the NOC's received count at kernel exit leaves the next kernel's global read barrier waiting
+    // forever (the same race hung the grouped MoE, gmoe_gu_reader.cpp)
+    noc_async_read_barrier();
     // the children's partials (their writers fill slot r of cb_recv and set bit r of the tree semaphore)
     volatile tt_l1_ptr uint32_t* tree_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_TREE_SEM));
     for (uint32_t i = 0; i < sl.recv_rounds; ++i) {
@@ -430,4 +538,29 @@ void kernel_main() {
     if (sl.recv_rounds) {
         noc_semaphore_set(tree_sem, 0);
     }
+#ifdef BA_OUT_SPLIT
+    // the root's output, column tile d = 1 of its packed tile (the writer writes d = 0; 64 32-byte writes each: the
+    // writer alone left a ~5 us tail after the compute's last tile); the writer pops cb_out after this core's flag
+    if (sl.send_round < 0) {
+        const auto s_out = TensorAccessor(out_args, get_common_arg_val<uint32_t>(BA_OUT_SPLIT), tile);
+        cb_wait_front(BA_CB_OUT, 2);
+        const uint32_t src = get_read_ptr(BA_CB_OUT);
+        constexpr uint32_t d = 1;
+        for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
+            const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
+            for (uint32_t j = 0; j < 8; ++j) {
+                const uint64_t dst = s_out.get_noc_addr((R / 32) * BA_OUT_CONCAT + 2 * (8 * g + j) + d);
+                const uint32_t pr = 8 * i + j;
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_write(
+                        src + d * tile + ((pr / 16) * 2 + f) * 512 + (pr % 16) * 32,
+                        dst + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32,
+                        32);
+                }
+            }
+        }
+        noc_async_write_barrier();
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_OUT_SEM)) = 1;
+    }
+#endif
 }

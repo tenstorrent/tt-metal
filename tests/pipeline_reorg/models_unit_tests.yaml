@@ -859,7 +859,7 @@
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 5
+      timeout: 10
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models

@@ -97,7 +97,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back,
-    bool row_broadcast_bias) {
+    bool row_broadcast_bias,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
     using namespace tt;
 
     ttsl::optional_reference<const tt::tt_metal::MeshTensor> bias;
@@ -149,7 +150,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         }
     } else {
         reader_assignments =
-            get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores);
+            get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores, coord);
     }
     uint32_t num_dram_banks = reader_assignments.size() / workers_per_bank;
 
@@ -1726,11 +1727,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
 
 }  // namespace reuse_dram_sharded_optimized_helpers
 
-ttnn::device_operation::ProgramArtifacts
-MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts(
+namespace {
+ttnn::device_operation::ProgramArtifacts create_dram_sharded_artifacts(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -1907,7 +1909,30 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
         skip_compute,
         skip_in0_mcast,
         skip_write_back,
-        row_broadcast_bias);
+        row_broadcast_bias,
+        coord);
+}
+}  // namespace
+
+// One program per chip, each with its own DRAM-bank reader placement: the mesh-wide placement is the first chip's,
+// and on a mesh of differently harvested chips it can put another chip's readers far from their banks (a QuietBox 2
+// batch-32 decode's dense MoE matmuls ran ~35-50% slower on two of its four chips).
+ttnn::device_operation::MeshWorkloadArtifacts
+MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_artifacts(
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto per_coord = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, &coord);
+        artifacts.programs.push_back({
+            .range = ttnn::MeshCoordinateRange(coord),
+            .spec = std::move(per_coord.spec),
+            .run_params = std::move(per_coord.run_params),
+        });
+    }
+    return artifacts;
 }
 
 }  // namespace ttnn::prim
