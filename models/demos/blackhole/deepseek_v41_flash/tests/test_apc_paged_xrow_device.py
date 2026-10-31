@@ -147,7 +147,7 @@ def test_cross_row_hit_equals_cold(mesh_device):
         pa.idx.bind("occ1", 0, user=1)  # row 0 is full
         plan = pa.idx.plan_hit(f"x-{e}", P.numpy(), e)
         log(f"[{tag}] plan: hit {plan.hit_tokens} row {plan.row} user {plan.user} xrow_src {plan.xrow_src}")
-        assert plan.hit_tokens >= s - CHUNK and plan.xrow_src == 0 and plan.row != 0, plan
+        assert 1024 <= plan.hit_tokens <= s and plan.xrow_src == 0 and plan.row != 0, plan
         t3_, l3, dt3 = run(plan.user, P, plan.hit_tokens, f"x-{e}")
         d3 = decode(plan.user, t3_, e)
         log(pa.line())
