@@ -25,6 +25,7 @@
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
+#include <llrt/llrt.hpp>
 
 namespace tt::tt_metal {
 
@@ -146,7 +147,8 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
     uint32_t router_sync_address,
     uint32_t timeout_ms,
     tt::tt_fabric::ControlPlane& control_plane,
-    Cluster& cluster) {
+    Cluster& cluster,
+    const Hal& hal) {
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
     const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& soc_desc = cluster.get_soc_desc(dev->id());
@@ -204,16 +206,27 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
         progress_name(classify_edm_status(expected_status)),
         router_sync_address);
 
+    // Coarse always-on eth firmware stage breadcrumb, which reveals whether each router core is even
+    // running the fabric kernel yet, or is still stuck in base FW / Metal application FW (in which case
+    // the EDMStatus above would be UNKNOWN/stale because the kernel never started).
     for (const auto& r : reports) {
         const bool is_laggard = min_stage && r.stage == *min_stage;
+        const CoreCoord virtual_core =
+            dev->ethernet_core_from_logical_core(CoreCoord{r.logical_core.x, r.logical_core.y});
+        const std::string eth_fw_stage = tt::llrt::format_eth_fw_stage_slots(
+            hal,
+            HalProgrammableCoreType::ACTIVE_ETH,
+            tt::llrt::read_eth_fw_stage_slots(
+                hal, cluster, dev->id(), virtual_core, HalProgrammableCoreType::ACTIVE_ETH));
         log_error(
             tt::LogMetal,
-            "  {} chan={:2d} logical={} status=0x{:08x} ({}){}",
+            "  {} chan={:2d} logical={} status=0x{:08x} ({}) eth_fw_stage=[{}]{}",
             r.is_master ? "master" : "sub   ",
             r.chan,
             r.logical_core.str(),
             r.raw_status,
             progress_name(r.stage),
+            eth_fw_stage,
             is_laggard ? "  <-- least progress" : "");
     }
 
@@ -526,7 +539,8 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                     router_sync_address,
                     timeout_ms,
                     control_plane_,
-                    cluster_);
+                    cluster_,
+                    hal_);
             }
         }
 

@@ -1296,6 +1296,22 @@ void RiscFirmwareInitializer::initialize_firmware(
                                                     : dev_msgs::DISPATCH_MODE_DEV;
             prepare_initial_launch_msg();
             write_initial_go_launch_msg();
+            // Initialize the always-on ethernet firmware stage breadcrumb to UNKNOWN (0) before the core
+            // starts. The Metal application FW stamps its own stage as it runs, so an erisc that never reaches
+            // application FW reads back as UNKNOWN. Only the slots of the eriscs Metal FW runs on are cleared: in single-erisc mode base FW keeps
+            // running on erisc0 and stamps its own stages into slot 0.
+            if (hal_.get_dev_size(core_type, HalL1MemAddrType::FW_STAGE) != 0) {
+                const DeviceAddr fw_stage_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::FW_STAGE);
+                const uint32_t unknown_stage = 0;
+                for (uint32_t processor = 0; processor < hal_.get_num_risc_processors(core_type); processor++) {
+                    const uint32_t slot = llrt::eth_fw_stage_slot(hal_, core_type, processor);
+                    cluster_.write_core(
+                        &unknown_stage,
+                        sizeof(unknown_stage),
+                        tt_cxy_pair(device_id, virtual_core),
+                        fw_stage_addr + (slot * sizeof(uint32_t)));
+                }
+            }
             if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
                 DeviceAddr mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
                 auto factory = hal_.get_dev_msgs_factory(core_type);
