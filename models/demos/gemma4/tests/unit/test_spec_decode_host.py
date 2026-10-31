@@ -1569,6 +1569,7 @@ def _bare_decoder(n_layers=3):
     spec._srv_captured = False
     spec._srv_shape_bufs = {}
     spec._srv_per_layer = None
+    spec._srv_lanes, spec._srv_lane_slots, spec._srv_lane_devices = 1, 0, [0]
     spec._srv_pool_v = spec._srv_pool_s = None
     spec._srv_uploaded = {}
     spec._srv_last = None
@@ -1707,6 +1708,11 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_slots, spec._srv_n_slots = serving_kv_group_slots(layer_types)
     spec._srv_flat_type = "full_attention"
     spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
+    spec._srv_lanes, spec._srv_lane_slots, spec._srv_lane_devices = (
+        1,
+        0,
+        [0],
+    )  # the constructor's lane geometry (front-packed)
     spec._srv_phase_ms, spec._srv_replay_blocking = {}, False  # the replay's sub-phases, the attribution knob off
     spec._srv_seed_traces, spec._srv_traced_seed = {}, True  # serving_capture adds one seed trace per shape
     spec._srv_sharded_draft_argmax, spec._srv_draft_consts = (
