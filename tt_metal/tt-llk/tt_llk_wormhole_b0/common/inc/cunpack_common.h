@@ -960,6 +960,8 @@ inline void wait_for_dest_available()
 // This pairs with set_dst_write_addr to bracket the unpack-to-dest section: rather than
 // snapshotting the prior register value into a GPR, we recompute the canonical baseline so the
 // restore is deterministic and order-independent.
+// It also issues the TEN-3868 dummy unpack to SrcA below, which leaves the UNP_A Z/W counters at 0.
+// Callers release UNPACK_SYNC after this returns, so configure_unpack_AB doesn't race these config writes.
 inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint32_t unpack_dst_format)
 {
     t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
@@ -978,10 +980,47 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint3
     }
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
 
-    // Due to a hardware bug (TEN-3868), we need to have one unpack-to-srcA instruction after the last unpack-to-dest instruction.
+    // Hardware bug (TEN-3868): SrcA tracks the bank the unpackers write in two places. The copy that steers
+    // unpacked datums only advances on a "SrcA done" when unpacker 0's most recent write went to SrcA, and
+    // after an unpack to dest that stays false until the next unpack to SrcA, across kernels too. A done with
+    // no datum write behind it (UNPACR_NOP set-dvalid, SETDVALID) then advances only one copy, and from then
+    // on each tile lands in one bank while its dvalid is set on the other, so math reads the bank the tile
+    // didn't go into. One unpack to SrcA after the last unpack to dest puts it back. It writes one row of the
+    // unpacker's own SrcA bank, without dvalid, which no math op reads: an unpack to SrcA overwrites it, and
+    // the paths that set SrcA's dvalid without unpacking either zero it first or don't read SrcA.
+
+    // SrcA cannot take FP32 or INT32 from the unpacker: save the two format words, then unpack Float16_b in and out
+    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG0_TileDescriptor_ADDR32);
+    TTI_RDCFG(p_gpr_unpack::TMP1, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0 /*Shamt*/, DATA_FORMAT_CONFIG_MASK>(to_underlying(DataFormat::Float16_b));
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(to_underlying(DataFormat::Float16_b));
+    // Z/W counters zeroed and one row of X: read 16 datums at the current base address into SrcA row 0
+    TTI_SETADCZW(p_setadc::UNP_A, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, SETADC_CH01(p_setadc::ZW));
     TTI_SETADCXX(p_setadc::UNP_A, FACE_C_DIM - 1, 0x0);
-    TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
+    // Context number 0, so the current context is used (CfgContextOffset already selects it)
+    TTI_UNPACR(
+        SrcA,
+        0 /*AddrMode*/,
+        0 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        1 /*OvrdThreadId*/,
+        0 /*SetDatValid*/,
+        p_unpacr::RAREFYB_DISABLE,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        0 /*SearchCacheFlush*/,
+        1 /*Last*/);
+    // Only the restore waits for the dummy unpack; the format writes above are already behind the
+    // UNPACK_TO_DEST post at the top, which waits for the last unpack to dest
+    TTI_STALLWAIT(p_stall::STALL_CFG | p_stall::STALL_TDMA, p_stall::UNPACK0);
+    // Restore the two format words and the face-sized X range. On WH an unpacker instruction needs at least two
+    // instructions between it and a WRCFG to a THCON_ field it reads, so the SETADCXX and NOP come after the WRCFGs
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32);
     TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    TTI_NOP;
 }
 
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
