@@ -127,3 +127,90 @@ def test_min_s_and_images_after_the_snapshot(monkeypatch):
     assert c.lookup(0, t, 4000, vs=vs, min_s=1024) is None  # a continuation already past it gains nothing
     kt, ok = key_tokens(t[:1024], image_spans(vs), IMG)
     assert ok and kt.shape[0] == 1024
+
+
+# ---- step 2: window_needs_sync and the restore wave (image users) ----
+def _load(name):
+    """a function / method of tt/dsv41_model.py compiled stand-alone (the module itself needs ttnn)."""
+    import ast
+    import os
+    import textwrap
+
+    src = open(os.path.join(os.path.dirname(__file__), "..", "tt", "dsv41_model.py")).read()
+    node = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == name)
+    ns = {"torch": torch}
+    exec(textwrap.dedent(ast.get_source_segment(src, node)), ns)
+    return ns[name]
+
+
+def test_window_needs_sync_image_users_only_with_the_switch():
+    window_needs_sync = _load("window_needs_sync")
+
+    wants = lambda s: s == 1024  # noqa: E731
+    users = [(3, 512, 4096)]  # a window ending at 1024, not the last of the call
+    vis = {3: object()}
+    assert (
+        window_needs_sync(users, 512, True, wants, None, None) is True
+    )  # text user: a wanted snapshot forces the sync (unchanged)
+    assert (
+        window_needs_sync(users, 512, True, wants, vis, None) is False
+    )  # image user, switch off: unchanged (never snapshotted)
+    assert window_needs_sync(users, 512, True, wants, vis, None, True) is True  # switch on: it is snapshotted too
+
+
+class _Pool:
+    def __init__(self):
+        self.grown = []
+
+    def grow(self, b, n):
+        self.grown.append((b, n))
+
+    def sync_page_table(self):
+        pass
+
+
+class _Apc:
+    def __init__(self, c):
+        self.c, self.restored = c, []
+
+    def images_enabled(self):
+        return self.c.images_enabled()
+
+    def lookup(self, *a, **k):
+        return self.c.lookup(*a, **k)
+
+    def restore_group(self, snap, bs):
+        self.restored.append((snap.s, list(bs)))
+
+
+class _Model:
+    _apc_restore_wave = _load("_apc_restore_wave")
+
+    def __init__(self):
+        self.pool = _Pool()
+
+
+def _model():
+    return _Model()
+
+
+def test_restore_wave_text_unchanged_and_image_continuation_jumps_ahead(monkeypatch):
+    c = cache()
+    t = prompt(spans=((600, 100),))
+    vs = vseq(t, [(600, 100)], ["aa" * 20])
+    txt = torch.arange(1, 4001) % 50000
+    monkeypatch.setenv("DSV41_APC_IMAGES", "1")
+    put(c, c._keyed(t, 1024, vs, 1024), t, 1024)
+    put(c, txt, txt, 1024)
+    apc = _Apc(c)
+    m = _model()
+    # new text prompt + continuation of text (st > 0: never looked up) + continuation of the image prompt at st = 512
+    wave = [(0, txt, 0, 2000), (1, txt, 512, 2000), (2, t, 512, 2000)]
+    out = m._apc_restore_wave(wave, apc, {2: vs})
+    assert out == [(0, txt, 1024, 2000), (1, txt, 512, 2000), (2, t, 1024, 2000)]
+    assert sorted(apc.restored) == [(1024, [0]), (1024, [2])] or sorted(apc.restored) == [(1024, [0, 2])]
+    # the image continuation already at 1024: nothing to gain
+    assert m._apc_restore_wave([(2, t, 1024, 2000)], _Apc(c), {2: vs}) == [(2, t, 1024, 2000)]
+    # switch off: the image user is left alone
+    monkeypatch.setenv("DSV41_APC_IMAGES", "0")
+    assert m._apc_restore_wave([(2, t, 0, 2000)], _Apc(c), {2: vs}) == [(2, t, 0, 2000)]

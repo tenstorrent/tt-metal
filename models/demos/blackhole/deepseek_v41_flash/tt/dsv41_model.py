@@ -103,7 +103,7 @@ class _UpOnly:
         self.ops = ops
 
 
-def window_needs_sync(users, C, async_win, apc_wants=None, vis=None, final=None):
+def window_needs_sync(users, C, async_win, apc_wants=None, vis=None, final=None, vis_apc=False):
     """Does the host have to wait for the device after the replay of a window of the interleaved prefill? ``users``: [(user, window start, end of its chunk)] of the users in the window.
     Yes when the window holds a user's last token of the call (the ragged head output is read), when a prefix snapshot the cache wants ends at the window (its device reads must precede the
     next replay), or when asynchronous windows are off; otherwise the window is only enqueued (``DSV41_PF_ASYNC_SERVER``).
@@ -114,7 +114,7 @@ def window_needs_sync(users, C, async_win, apc_wants=None, vis=None, final=None)
     for b, s0, e in users:
         if e <= s0 + C and (final is None or b in final):
             return True
-        if apc_wants is not None and s0 + C <= e and not (vis and b in vis) and apc_wants(s0 + C):
+        if apc_wants is not None and s0 + C <= e and (vis_apc or not (vis and b in vis)) and apc_wants(s0 + C):
             return True
     return False
 
@@ -1703,9 +1703,22 @@ class Model:
         """The users of ``wave`` that start at 0 (and are no image prompts) take the deepest snapshot of their token prefix (users that take the SAME snapshot are restored together);
         -> the wave with the new start positions."""
         found = {}
+        img_ok = (
+            apc.images_enabled()
+        )  # DSV41_APC_IMAGES=1: image prompts take part (keys carry the image content hashes); a continuation piece of one may jump ahead to a snapshot
         for b, t, st, e in wave:
-            if st == 0 and not (vis and b in vis):
-                snap = apc.lookup(b, t, e, zone=None if zone is None else zone.get(b))
+            is_img = bool(vis and b in vis)
+            if is_img and not img_ok:
+                continue
+            if st == 0 or (is_img and st > 0):
+                snap = apc.lookup(
+                    b,
+                    t,
+                    e,
+                    zone=None if zone is None else zone.get(b),
+                    vs=vis.get(b) if is_img else None,
+                    min_s=st if is_img else 0,
+                )
                 if snap is not None:
                     found.setdefault(id(snap), (snap, []))[1].append(b)
         start = {}
@@ -1939,12 +1952,20 @@ class Model:
             else:
                 waves = [grp]
             for wave in waves:
-                if apc is not None and any(it[2] == 0 for it in wave):
+                img_cont = (
+                    apc is not None and bool(vis) and apc.images_enabled()
+                )  # (image users: a continuation piece may also restore a deeper snapshot, DSV41_APC_IMAGES=1)
+                cand = [it for it in wave if it[2] == 0 or (img_cont and it[0] in vis)]
+                if apc is not None and cand:
                     t_apc += apc.finish_pending()  # (a lookup must see every snapshot taken so far)
                     new_ = self._apc_restore_wave(
-                        [it for it in wave if it[2] == 0], apc, vis, zone if rep else None
+                        cand, apc, vis, zone if rep else None
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
-                    wave = [it for it in wave if it[2] != 0] + new_ if per_row else new_
+                    wave = (
+                        [it for it in wave if not any(it is c_ for c_ in cand)] + new_
+                        if per_row or not all(it[2] == 0 for it in wave)
+                        else new_
+                    )
                 slot_of = self._slot_alloc(wave, resume) if general else {b: b for b, _, _, _ in wave}
                 if (
                     rep
@@ -2070,13 +2091,14 @@ class Model:
                     ):  # prefix snapshots of the users that just crossed a boundary the policy wants (the state of a user is complete and resumable here)
                         for it in part:
                             b, t, st, e = it
-                            if s0_of(it, k) + C <= e and not (vis and b in vis):
+                            if s0_of(it, k) + C <= e and (not (vis and b in vis) or apc.images_enabled()):
                                 t_apc0 = time.perf_counter()
                                 full_ = not rep or zone.get(b, 0) == 0
+                                vs_ = vis.get(b) if vis else None
                                 if apc_defer:
-                                    apc.begin_snapshot(b, s0_of(it, k) + C, t, full=full_)
+                                    apc.begin_snapshot(b, s0_of(it, k) + C, t, full=full_, vs=vs_)
                                 else:
-                                    apc.maybe_snapshot(b, s0_of(it, k) + C, t, full=full_)
+                                    apc.maybe_snapshot(b, s0_of(it, k) + C, t, full=full_, vs=vs_)
                                 t_apc += time.perf_counter() - t_apc0
 
                 bk_done = set()
@@ -2248,6 +2270,7 @@ class Model:
                         None if apc is None or apc_defer else apc.wants,
                         vis,
                         fin_users,
+                        apc is not None and apc.images_enabled(),
                     )
                     th, td = pm.replay_window(
                         tok,
