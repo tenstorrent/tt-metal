@@ -32,7 +32,7 @@ constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {
 /**
  * Performs local sort stage of TopK algorithm on the two data tiles and two
  * index tiles that are pre-loaded in DST register. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking
  * and is only available on the compute engine.
  *
  * The algorithm used to implement TopK is found here:
@@ -100,7 +100,7 @@ ALWI void topk_local_sort(
 /**
  * Performs merge stage of TopK algorithm on the two data tiles and two
  * index tiles that are pre-loaded in DST register. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking
  * and is only available on the compute engine.
  *
  * The merge stage combines length-K subsequences that are 2^m_iter apart,
@@ -166,7 +166,7 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
 /**
  * Performs rebuild stage of TopK algorithm on the two data tiles and two
  * index tiles that are pre-loaded in DST register. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking
  * and is only available on the compute engine.
  *
  * The rebuild stage sorts the length-K subsequences that are 2^(m_iter+1)

@@ -39,7 +39,8 @@ void kernel_main() {
     relu_tile_init();
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
         copy_tile(dfb_in.get_id(), 0, 0);
@@ -47,6 +48,7 @@ void kernel_main() {
         pack_tile(0, dfb_out.get_id());
         dfb_in.pop_front(1);
         dfb_out.push_back(1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
 }

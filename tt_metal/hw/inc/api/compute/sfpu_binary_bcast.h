@@ -20,7 +20,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Initialize SFPU state for {add,sub,mul}-with-column-broadcast. Must be
- * called once (before any acquire_dst / sfpu_*_bcast_col pair) to configure
+ * called once (before any tile_regs_acquire / sfpu_*_bcast_col pair) to configure
  * the persistent LREG_MASK and replay-buffer slot used by the broadcast
  * helper. A single init is shared across ADD / SUB / MUL because only the
  * broadcast state (which depends on BCAST_DIM) is persisted; the binop
@@ -60,7 +60,7 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
  * meaningful values only in column 0 of each row (e.g. a row-reduce max /
  * sum output); values in columns 1..31 are ignored. Output is FP32.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * Requires a prior call to the matching `sfpu_*_bcast_col_init` (or the
  * shared `sfpu_bcast_col_init`).
  *
@@ -285,7 +285,7 @@ ALWI void sfpu_normalize_bcast_scalar(
 // clang-format off
 /**
  * Initialize SFPU state for {add,sub,mul}-with-row-broadcast. Must be called
- * once (before any acquire_dst / sfpu_*_bcast_row pair). As with the column
+ * once (before any tile_regs_acquire / sfpu_*_bcast_row pair). As with the column
  * variant a single init is shared across ADD / SUB / MUL.
  *
  * On Quasar the init only checks the broadcast dim: each sfpu_*_bcast_*
@@ -322,7 +322,7 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  * meaningful values only in row 0 (e.g. layernorm gamma/beta); values in
  * rows 1..31 are ignored. Output is FP32.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * Requires a prior call to the matching `sfpu_*_bcast_row_init` (or the
  * shared `sfpu_bcast_row_init`).
  *

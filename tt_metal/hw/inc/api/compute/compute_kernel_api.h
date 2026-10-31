@@ -136,7 +136,7 @@ ALWI void sigmoid_tile_init() {
 /**
  * Performs element-wise computation of sigmoid on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -217,7 +217,7 @@ ALWI void tanh_tile_init() {
 /**
  * Performs element-wise computation of tanh on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
@@ -250,7 +250,7 @@ ALWI void tanh_tile(uint32_t idst) {
 /**
  * Performs element-wise computation of square value on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -314,7 +314,7 @@ ALWI void log_tile_init() {
 /**
  * Performs element-wise computation of logarithm on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Note: The base scale is the bit representation of the inverse of the log base.
@@ -352,7 +352,7 @@ ALWI void log_with_base_tile_init() {
 /**
  * Performs element-wise computation of logarithm with a specified base on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -405,7 +405,7 @@ ALWI void signbit_tile_init() {
 /**
  * Sets the sign bit of each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -431,7 +431,7 @@ ALWI void signbit_tile_int32_init() {
 /**
  * Sets the sign bit of each element of a tile (int32 datatype)
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -450,7 +450,7 @@ ALWI void signbit_tile_int32(uint32_t idst) {
 /**
  * Performs element-wise computation of absolute value on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -473,7 +473,7 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
 /**
  * Performs element-wise computation of absolute value on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Note: This version of the function is for int32 datatype
@@ -496,7 +496,7 @@ ALWI void abs_tile_int32(uint32_t idst) {
 // clang-format off
 /**
  * Will store in the output of the compute core the signum of the tile.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only
  * available on the compute engine.
  *
@@ -521,7 +521,7 @@ ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
 /**
  * Performs element-wise multiplication on each row of a tile.
  * The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -545,7 +545,7 @@ ALWI void tiled_prod_tile_init() { MATH(SFPU_UNARY_INIT(tiled_prod)); }
 /**
  * Performs element-wise computation of power operation (x ^(const param0)) value on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -580,7 +580,7 @@ ALWI void power_tile_init() {
 /**
  * Performs element-wise computation of power operation (x ^(const param0)) value on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Note: Unlike power_tile, power_iterative_tile() only supports positive integer scalars. It uses an iterative multiplication loop to compute values, and is faster than power_tile for small exponents (e.g. 1, 2, 3)
@@ -614,7 +614,7 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
 /**
  * Performs element-wise computation of 2^x value where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -648,7 +648,7 @@ ALWI void exp2_tile_init() {
 /**
  * Performs element-wise computation of:  y = 0 if x < 0 , 1 if x > 0 , y= value  where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -673,7 +673,7 @@ ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
 /**
  * Performs element-wise computation of exp(x) - 1, v where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -736,7 +736,7 @@ constexpr bool sfpu_reduce_format_supported(DataFormat format) {
 // clang-format off
 /**
  * Performs reduce operation (sum, average, max, min) on a 32x32 tile for column reduction and multiple tiles for row reduction, placing output values into the first row.
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Only 32x32 tile dimensions are supported
@@ -828,7 +828,7 @@ ALWI void sfpu_reduce_init() {
 /**
  * Performs MaxPool with indices algorithm on the data tile and index tile
  * that are pre-loaded in DST register. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * | Argument        | Description                                                                 | Type       | Valid Range                                           | Required |
@@ -877,7 +877,7 @@ ALWI void max_reduce_with_indices_init() {
  * Adds the top four rows of the tile at dst_tile_0 (rows 0-3 of faces 0 and 1) to the top four rows
  * of the tile at dst_tile_1, storing the result in the top four rows of the tile at dst_tile_out.
  * The remaining rows of dst_tile_out are left unchanged.
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Only 32x32 tile dimensions are supported.
@@ -962,7 +962,7 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
 /**
  * Performs element-wise computation of:  result = x if x > value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -1008,7 +1008,7 @@ ALWI void unary_max_uint32_tile_init() {
 /**
  * Performs element-wise computation of:  result = x if x > value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -1043,7 +1043,7 @@ ALWI void unary_max_uint32_tile_init() {
 /**
  * Performs element-wise computation of:  result = x if x > value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -1075,7 +1075,7 @@ ALWI void unary_max_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_max, sfpu::unary
  * Treats pairs of numbers as complex numbers and rotates them 90 degrees
  * in the complex plane. The operation is performed on a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -1100,7 +1100,7 @@ ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_ro
 /**
  * Performs element-wise computation of:  result = x if x < value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -1147,7 +1147,7 @@ ALWI void unary_min_uint32_tile_init() {
 /**
  * Performs element-wise computation of:  result = x if x < value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -1183,7 +1183,7 @@ ALWI void unary_min_uint32_tile_init() {
 /**
  * Performs element-wise computation of:  result = x if x < value , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None

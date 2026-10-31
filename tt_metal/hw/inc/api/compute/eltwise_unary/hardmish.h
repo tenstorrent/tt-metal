@@ -17,7 +17,7 @@ namespace ckernel {
  * Performs element-wise computation of hardmish(x) = x * clamp(x + 2, 0, 2) / 2
  * (equivalently, x * clamp(0.5 * x + 1, 0, 1)) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * For finite x, the piecewise form is:

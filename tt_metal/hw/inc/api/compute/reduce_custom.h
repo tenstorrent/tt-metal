@@ -77,7 +77,7 @@ ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
 /**
  * Performs block-based max row reduction operation on a block of tiles in the width dimension.
  * Reduces each row across the block of tiles and writes the result to DST register.
- * The DST register buffer must be in acquired state via acquire_dst call.
+ * The DST register buffer must be in acquired state via tile_regs_acquire call.
  *
  * This function works with the following assumptions:
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile

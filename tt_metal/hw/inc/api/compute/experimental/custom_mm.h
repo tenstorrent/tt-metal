@@ -120,7 +120,7 @@ ALWI void custom_mm_block_init_short(
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
  * different input CBs and writes the result to DST. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking and
  * is only available on the compute engine.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
@@ -169,7 +169,7 @@ ALWI void custom_mm_block(
 /**
  * Performs unpack part of block-sized matrix multiplication *C=A\*B* between the blocks in two
  * different input CBs and writes the result to DST. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking and
  * is only available on the compute engine.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
@@ -210,7 +210,7 @@ ALWI void custom_mm_block_unpack(
 /**
  * Performs math part of block-sized matrix multiplication *C=A\*B* between the blocks in two
  * different input CBs and writes the result to DST. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking and
  * is only available on the compute engine.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:

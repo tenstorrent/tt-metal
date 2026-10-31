@@ -36,7 +36,7 @@ namespace ckernel {
  * original integers (e.g. two distinct INT32 values that round to the same
  * float may compare as close even when rtol = atol = 0).
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once
  * when using 16-bit formats; this is reduced to 2 tiles for 32-bit formats.

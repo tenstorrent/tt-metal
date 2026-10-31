@@ -32,7 +32,7 @@ namespace ckernel {
  * ckernel::sfpu::SituGluConfigKimi and call ckernel::sfpu::calculate_situ_glu directly.
  *
  * Both operands stay in DST, so no intermediate is materialized to L1 or DRAM. The DST register
- * buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None

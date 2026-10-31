@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Performs element-wise rand on each element of a of a tile in DST register at index tile_index.
  * That is each element is overwritten with a randomly generated float.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  * This operation records replay slots 0-15 when scale is finite and at least
  * 2^-95, and slots 0-16 otherwise. Callers sharing the replay buffer with other
