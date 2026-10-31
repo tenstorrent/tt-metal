@@ -319,29 +319,38 @@ def end_graph_capture():
     capture session ends.  If Python stack traces were enabled by auto-capture they are disabled again.
     """
     global _python_io_recording_enabled, _python_stack_traces_auto_for_session
-    result = _cpp_end_graph_capture()
-    if not is_graph_capture_active():
-        _python_io_recording_enabled = False
-        if _python_stack_traces_auto_for_session:
-            disable_python_stack_traces()
-            _python_stack_traces_auto_for_session = False
+    try:
+        result = _cpp_end_graph_capture()
+    finally:
+        if not is_graph_capture_active():
+            _python_io_recording_enabled = False
+            if _python_stack_traces_auto_for_session:
+                disable_python_stack_traces()
+                _python_stack_traces_auto_for_session = False
     return result
 
 
 def end_graph_capture_to_file(report_path):
     """Wrapper that appends Python I/O data to the JSON report."""
     global _python_io_recording_enabled, _python_stack_traces_auto_for_session
-    result_str = _cpp_end_graph_capture_to_file(report_path)
-    if _python_io_data:
-        _write_python_io_sidecar(report_path)
-    if has_comparison_records():
-        _write_comparison_records_sidecar(report_path)
-        reset_comparison_records_data()
-    if not is_graph_capture_active():
-        _python_io_recording_enabled = False
-        if _python_stack_traces_auto_for_session:
-            disable_python_stack_traces()
-            _python_stack_traces_auto_for_session = False
+    try:
+        result_str = _cpp_end_graph_capture_to_file(report_path)
+        if _python_io_data:
+            _write_python_io_sidecar(report_path)
+        if has_comparison_records():
+            _write_comparison_records_sidecar(report_path)
+            reset_comparison_records_data()
+    finally:
+        # The C++ capture ends even when writing the report fails, so stop recording on that path too.
+        if not is_graph_capture_active():
+            _python_io_recording_enabled = False
+            if _python_stack_traces_auto_for_session:
+                disable_python_stack_traces()
+                _python_stack_traces_auto_for_session = False
+            # Written to the sidecar on success. When the outermost write fails they belong to a report that won't
+            # exist; kept, they would be flushed later along with another session's. A failed nested write leaves
+            # them for the outer capture, which can still write them.
+            reset_comparison_records_data()
     return json.loads(result_str)
 
 

@@ -7377,6 +7377,67 @@ class TestReportModesDuringTraceCapture:
         ttnn.synchronize_device(device)
 
 
+def _end_every_graph_capture():
+    """Clean-up for the failed-write tests: a capture left active would be inherited by every later test."""
+    while ttnn.graph.is_graph_capture_active():
+        ttnn.graph.end_graph_capture()
+
+
+def _comparison_records():
+    record = {"tensor_id": 1, "golden_tensor_id": 2, "matches": True, "desired_pcc": 0.99, "actual_pcc": 0.995}
+    return {"local_tensor_comparison_records": [record], "global_tensor_comparison_records": [], "tensors": []}
+
+
+_REPORT_WRITE_FAILS = "Failed to open graph report file for writing"
+
+
+def test_failed_report_write_still_ends_the_capture(tmp_path, expect_error):
+    """A report that can't be written (here the path is a directory) raises, but the capture still ends: left active,
+    it would record the caller's later operations and nest the next capture inside it."""
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run; ending captures here would end the fixture's too")
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        with expect_error(RuntimeError, _REPORT_WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        still_active = ttnn.graph.is_graph_capture_active()
+    finally:
+        _end_every_graph_capture()
+    assert not still_active
+    assert not ttnn.graph.is_python_io_recording_enabled()
+
+
+def test_failed_outermost_report_write_drops_comparison_records(tmp_path, expect_error, monkeypatch):
+    """Records for a report that was never written would otherwise be flushed later with another session's."""
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run; ending captures here would end the fixture's too")
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        with expect_error(RuntimeError, _REPORT_WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+    finally:
+        _end_every_graph_capture()
+    assert not ttnn.graph.has_comparison_records()
+
+
+def test_failed_nested_report_write_keeps_comparison_records_for_the_outer_capture(tmp_path, expect_error, monkeypatch):
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run; ending captures here would end the fixture's too")
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        with expect_error(RuntimeError, _REPORT_WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        outer_still_active = ttnn.graph.is_graph_capture_active()
+        records_kept = ttnn.graph.has_comparison_records()
+    finally:
+        _end_every_graph_capture()
+    assert outer_still_active
+    assert records_kept
+
+
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):

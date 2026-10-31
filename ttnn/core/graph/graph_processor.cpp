@@ -7,6 +7,7 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/common/guard.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
@@ -1299,17 +1300,25 @@ void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
 }
 
 nlohmann::json GraphProcessor::end_graph_capture() {
-    auto res = tt::tt_metal::GraphTracker::instance().get_processors().back()->end_capture();
-    tt::tt_metal::GraphTracker::instance().pop_processor();
-    return res;
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    TT_FATAL(!tracker.get_processors().empty(), "No active graph capture to end");
+    // End the capture even if finalizing it throws; see end_graph_capture_to_file.
+    auto pop_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
+    return tracker.get_processors().back()->end_capture();
 }
 
 nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::path& report_path) {
-    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
-    TT_ASSERT(!processors.empty(), "No active graph capture to end");
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    const auto& processors = tracker.get_processors();
+    TT_FATAL(!processors.empty(), "No active graph capture to end");
 
     auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
-    TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
+    TT_FATAL(processor != nullptr, "The innermost graph tracking processor is not a graph capture, so none can end");
+
+    // End the capture even if writing the report throws (unwritable path, full disk): a capture left active keeps
+    // recording the caller's later operations, nests the next begin_graph_capture inside itself, and on a multi-rank
+    // run leaves the other ranks waiting for this one.
+    auto pop_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
 
     // Finalize the graph, then build the report via the shared get_report() path
     auto graph_json = processor->end_capture();
@@ -1329,8 +1338,6 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     }
     file.close();
     log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
-
-    tt::tt_metal::GraphTracker::instance().pop_processor();
     return graph_json;
 }
 
