@@ -52,9 +52,20 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
 
     uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
 
+    // shard_spec() is set only when the sharding has a 2D form; an ND-sharded tensor carries its grid in
+    // nd_shard_spec() instead.
+    const auto& shard_spec = tensor.shard_spec();
+    const auto& nd_shard_spec = tensor.nd_shard_spec();
+    TT_FATAL(
+        core_ranges.has_value() || shard_spec.has_value() || nd_shard_spec.has_value(),
+        "Sharded tensor has no shard grid; pass core_ranges");
+    const CoreRangeSet grid = core_ranges.has_value()  ? *core_ranges
+                              : shard_spec.has_value() ? shard_spec->grid
+                                                       : nd_shard_spec->grid;
+
     return CBDescriptor{
         .total_size = effective_total_size,
-        .core_ranges = core_ranges.value_or(tensor.shard_spec()->grid),
+        .core_ranges = grid,
         .format_descriptors = {CBFormatDescriptor{
             .buffer_index = cb_index,
             .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),
