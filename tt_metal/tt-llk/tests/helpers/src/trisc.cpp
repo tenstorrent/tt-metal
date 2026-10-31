@@ -94,7 +94,10 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
-    llk_profiler::reset();
+    // RC memset knock-out b128: clear only the first 128 words of each profiler buffer (the host parser stops at the
+    // first word without the exists bit; a kernel writes far fewer entries).
+    llk_profiler::reset_state();
+    llk_profiler::clear_buffer(128);
     llk_profiler::sync_threads();
 #endif
 
