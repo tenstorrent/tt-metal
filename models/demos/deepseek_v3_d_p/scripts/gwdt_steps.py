@@ -443,6 +443,7 @@ def matmul_step(
     return pytest_step(f"matmul:{name}", f"matmul {name}", "matmul", None, ids, opts, details, env)
 
 
+MATMUL_ITERS = 5000
 SWEEP_GRID = "11x10"
 SINGLE_GALAXY_MGD = "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
@@ -450,7 +451,7 @@ SINGLE_GALAXY_MGD = "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mes
 def core_sweep_step() -> Step:
     """One TT_SWEEP_GRID window at (0,0), GXxGY: 11x10 is the 110-core worker budget of the run-to-run test."""
     ids = ["tests/didt/scratch_core_sweep.py::test_core_sweep[blackhole-galaxy]"]
-    env = {"TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": SWEEP_GRID}
+    env = {"TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": SWEEP_GRID, "TT_SWEEP_ITERS": str(MATMUL_ITERS)}
     inner = matmul_step("core-sweep", ids, ["-p", "no:randomly", "--timeout=0"], sweep_elements, env)
 
     def run(ctx: Ctx, state: State) -> Result:
@@ -482,7 +483,7 @@ def write_ack_step() -> Step:
             return failed
         log = d / "log_01"
         state.log = str(log)
-        sh(ctx, cmd, log, {"TMPDIR": str(d)}, timeout=1800)
+        sh(ctx, cmd, log, {"TMPDIR": str(d), "MATMUL_ITERS": str(MATMUL_ITERS)}, timeout=1800)
         save_smi(ctx, d)
         return write_ack_result(log.read_text(errors="replace"))
 
@@ -494,13 +495,13 @@ def matmul_steps() -> list[Step]:
         matmul_step(
             "minimal",
             ["tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"],
-            ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout", "1200"],
+            [f"--didt-workload-iterations={MATMUL_ITERS}", "--determinism-check-interval=50", "--timeout=0"],
             nd_outputs,
         ),
         matmul_step(
             "ff1",
             ["tests/didt/test_ff1_matmul.py::test_ff1_matmul[blackhole-galaxy-without_gelu]"],
-            ["--didt-workload-iterations=2000", "--determinism-check-interval=25", "--timeout", "1800"],
+            [f"--didt-workload-iterations={MATMUL_ITERS}", "--determinism-check-interval=25", "--timeout=0"],
             nd_outputs,
         ),
         # Each iteration is 1000 x (matmul + 5 cos) and one more matmul; only that last matmul is compared.
@@ -516,6 +517,7 @@ def matmul_steps() -> list[Step]:
             ["tests/didt/test_matmul_run_to_run_determinism.py::test_matmul_run_to_run_determinism[blackhole-galaxy]"],
             ["-p", "no:randomly", "--timeout=0"],
             run_to_run_cores,
+            {"TT_DET_SWEEP_ITERS": str(MATMUL_ITERS)},
         ),
         core_sweep_step(),
         write_ack_step(),

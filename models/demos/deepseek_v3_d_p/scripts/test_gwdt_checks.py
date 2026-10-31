@@ -210,10 +210,10 @@ def test_matmul_commands(tmp_path, monkeypatch):
         cmds[key] = calls[1]
     assert cmds == {
         "matmul:minimal": "pytest -vs -rA 'tests/didt/test_minimal_matmul.py::test_minimal_matmul"
-        "[blackhole-bf16_HiFi2-galaxy]' '--didt-workload-iterations=1000' '--determinism-check-interval=50' "
-        "'--timeout' '1200'",
+        "[blackhole-bf16_HiFi2-galaxy]' '--didt-workload-iterations=5000' '--determinism-check-interval=50' "
+        "'--timeout=0'",
         "matmul:ff1": "pytest -vs -rA 'tests/didt/test_ff1_matmul.py::test_ff1_matmul[blackhole-galaxy-without_gelu]' "
-        "'--didt-workload-iterations=2000' '--determinism-check-interval=25' '--timeout' '1800'",
+        "'--didt-workload-iterations=5000' '--determinism-check-interval=25' '--timeout=0'",
         "matmul:duty-cycle": "pytest -vs -rA 'tests/didt/test_duty_cycle.py::test_duty_cycle"
         "[blackhole-duty-5-rep-1000x-all]' '--didt-workload-iterations=10' '--determinism-check-interval=1' "
         "'--timeout' '1800'",
@@ -226,9 +226,15 @@ def test_matmul_commands(tmp_path, monkeypatch):
     assert seen[cmds["matmul:duty-cycle"]]["TT_MESH_GRAPH_DESC_PATH"] == (
         "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
     )
-    assert seen[cmds["matmul:core-sweep"]].items() >= {"TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": "11x10"}.items()
-    assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in seen[cmds["matmul:run-to-run"]]
-    assert seen[cmds["matmul:mcast-ack"]] == {"TMPDIR": str(tmp_path / "matmul" / "mcast-ack")}
+    assert seen[cmds["matmul:core-sweep"]].items() >= {
+        "TT_SWEEP_MODE": "grid",
+        "TT_SWEEP_GRID": "11x10",
+        "TT_SWEEP_ITERS": "5000",
+    }.items()
+    assert seen[cmds["matmul:run-to-run"]]["TT_DET_SWEEP_ITERS"] == "5000"
+    for key in MATMUL_KEYS[:-1]:
+        assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in seen[cmds[key]]
+    assert seen[cmds["matmul:mcast-ack"]] == {"TMPDIR": str(tmp_path / "matmul" / "mcast-ack"), "MATMUL_ITERS": "5000"}
 
 
 def test_matmul_nd_details_per_device(tmp_path, monkeypatch):
