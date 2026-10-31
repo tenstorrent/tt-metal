@@ -279,6 +279,9 @@ class Qwen36MLP:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
+        # QWEN36_PREFILL_STRIDED_RS: its shared L1 counters are allocated here, never inside a trace capture.
+        if tt_ccl is not None and self.num_devices == 8:
+            tpc.strided_rs_counters(mesh_device, tt_ccl)
         self.weights = load_mlp_weights(
             mesh_device,
             state_dict,
@@ -478,6 +481,13 @@ class Qwen36MLP:
         if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:
             partial = self._down_decode(hidden, ckc)
         else:
+            if decode_ar is None and hidden.shape[-2] > ttnn.TILE_SIZE and tpc.prefill_strided_rs_ok(
+                "down", hidden.shape[-2], self.device
+            ):
+                # QWEN36_PREFILL_STRIDED_RS: down-proj + reduce-scatter as one strided MMRS (not bit-identical).
+                out = tpc.strided_rs_prefill(hidden, w.w2, self.device, self.tt_ccl, ckc, args.ccl_topology())
+                ttnn.deallocate(hidden)
+                return out
             partial = weight_prefetch.linear(hidden, w.w2, w2_pc, compute_kernel_config=ckc, memory_config=mc_w2_out)
         ttnn.deallocate(hidden)
 
