@@ -40,6 +40,7 @@ POST_ATTENTION_READER = fp.kernel_source(NAME, "post_attention_reader.cpp")
 POST_ATTENTION_COMPUTE = fp.kernel_source(NAME, "post_attention_compute.cpp")
 WIDEN_COMPUTE = fp.kernel_source(NAME, "widen_compute.cpp")
 SELECTION_ROW = fp.kernel_source(NAME, "selection_row.cpp")
+SELECTION_ROW_SPREAD = fp.kernel_source(NAME, "selection_row_spread.cpp")
 LANE_SCORE_ROWS = fp.kernel_source(NAME, "lane_score_rows.cpp")
 LANE_COLUMNS = 8  # lane u's core sits in column u % 8 of its core row: up to 32 lanes on 4 core rows
 SCORE_MERGE = {role: fp.kernel_source(NAME, f"score_merge_{role}.cpp") for role in ("reader", "compute", "writer")}
@@ -1189,6 +1190,50 @@ MASKED_ID = 0xFFFFFFFF  # the sparse row's masked-slot sentinel
 SELECTION_SLICES = 8
 SELECTION_ROW_GROUPS = 8  # the lanes' rows spread over up to 8 core rows (row r on core row r % 8)
 
+# QWEN38_QSA_SEL_SPREAD (default "1"): with one row (rows == 1) and no page table the 2080 columns are cut into
+# 16-column blocks and shared by SEL_SPREAD_CORES cores (QWEN38_QSA_SEL_SPREAD_CORES), NCRISC and BRISC of each core
+# taking one contiguous share (selection_row_spread.cpp); the output is the same bytes.
+SEL_SPREAD_ENV = "QWEN38_QSA_SEL_SPREAD"
+SEL_SPREAD_CORES_ENV = "QWEN38_QSA_SEL_SPREAD_CORES"
+SEL_SPREAD_CORES = 16
+SEL_SPREAD_BLOCK = 16  # columns per block: 64 bytes, the DRAM alignment of every per-segment read and write
+SEL_SPREAD_GRID_WIDTH = 8
+
+
+def sel_spread_enabled(environ=None) -> bool:
+    """True when ``QWEN38_QSA_SEL_SPREAD`` is "1" in ``environ`` (default ``os.environ``)."""
+
+    return (os.environ if environ is None else environ).get(SEL_SPREAD_ENV, "1") == "1"
+
+
+def sel_spread_cores(environ=None) -> int:
+    """The core count of the spread program: ``QWEN38_QSA_SEL_SPREAD_CORES`` (1 .. 65) or ``SEL_SPREAD_CORES``."""
+
+    value = (os.environ if environ is None else environ).get(SEL_SPREAD_CORES_ENV)
+    return SEL_SPREAD_CORES if value is None else max(1, min(int(value), SELECTION_WIDTH // SEL_SPREAD_BLOCK // 2))
+
+
+def sel_spread_segments(cores: int) -> list[tuple[int, int]]:
+    """(first column, columns) of the 2 * cores segments (index 2k: core k's NCRISC, 2k + 1: its BRISC): whole blocks of
+    16 columns, shares within one block of each other, in column order."""
+
+    blocks = SELECTION_WIDTH // SEL_SPREAD_BLOCK
+    parts = 2 * cores
+    edges = [k * blocks // parts * SEL_SPREAD_BLOCK for k in range(parts + 1)]
+    return [(edges[k], edges[k + 1] - edges[k]) for k in range(parts)]
+
+
+def _grid_cores(count: int, width: int = SEL_SPREAD_GRID_WIDTH) -> tuple[ttnn.CoreRangeSet, list]:
+    """The first ``count`` cores of a ``width``-wide grid in row-major order: (core set, coords)."""
+
+    full, rest = divmod(count, width)
+    ranges = []
+    if full:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, full - 1)))
+    if rest:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full), ttnn.CoreCoord(rest - 1, full)))
+    return ttnn.CoreRangeSet(ranges), [ttnn.CoreCoord(i % width, i // width) for i in range(count)]
+
 
 def post_attention(attention, qg_ws, *, memory_config=None, qg_first: int = 0):
     """sigmoid(gate) x attention for the local heads (per device) -> the head-major [1, 1, rows, LOCAL_HEADS * 256] bf16 TILE row in
@@ -1401,18 +1446,39 @@ def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fil
         paged_args = [page_table.buffer_address(), page_shift(page_size), page_size, max_blocks]
         defines = [PAGED_DEFINE]
         cb_bytes = max(cb_bytes, 256 + 1024 + 128 + 3 * 1152 + PT_ALIGN_SLACK + max_blocks * 4)
-    kernel = fp.reader_kernel(
-        SELECTION_ROW,
-        cores,
-        compile_args,
-        [
-            (ttnn.CoreCoord(i, g), [*addresses, rows, i, offset_rows, g, row_groups, *paged_args])
-            for g in range(row_groups)
-            for i in range(SELECTION_SLICES)
-        ],
-        defines=defines,
-    )
-    cbs = [fp.cb_descriptor(0, ttnn.uint32, cb_bytes, 1, cores)]
+    spread = rows == 1 and page_table is None and sel_spread_enabled()
+    if spread:
+        n_cores = sel_spread_cores()
+        segments = sel_spread_segments(n_cores)
+        cores, coords = _grid_cores(n_cores)
+        max_cols = max(c for _, c in segments)
+        stride = 5 * ((max_cols * 4 + 64 + 63) // 64 * 64) + 192
+        kernels = [
+            make(
+                SELECTION_ROW_SPREAD,
+                cores,
+                compile_args,
+                [(coords[k], [*addresses[:6], rows, offset_rows, *segments[2 * k + half]]) for k in range(n_cores)],
+                defines=[("SEL_HALF", str(half)), ("SEL_MAXC", str(max_cols))],
+            )
+            for make, half in ((fp.reader_kernel, 0), (fp.writer_kernel, 1))
+        ]
+        cbs = [fp.cb_descriptor(0, ttnn.uint32, 2 * stride, 1, cores)]
+    else:
+        kernels = [
+            fp.reader_kernel(
+                SELECTION_ROW,
+                cores,
+                compile_args,
+                [
+                    (ttnn.CoreCoord(i, g), [*addresses, rows, i, offset_rows, g, row_groups, *paged_args])
+                    for g in range(row_groups)
+                    for i in range(SELECTION_SLICES)
+                ],
+                defines=defines,
+            )
+        ]
+        cbs = [fp.cb_descriptor(0, ttnn.uint32, cb_bytes, 1, cores)]
     meta = fp.program_meta(  # the block ids, offsets and sentinel rows, the rows' keep / fill rows in, the row out
         "qsa_selection_row",
         "selection_row",
@@ -1425,10 +1491,10 @@ def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fil
             *(() if page_table is None else ((page_table, rows * max_blocks * 4),)),
         ),
         flops=4 * rows * SELECTION_WIDTH,
-        cores=SELECTION_SLICES * row_groups,
+        cores=n_cores if spread else SELECTION_SLICES * row_groups,
     )
     io = [*tensors[:-1], *(() if page_table is None else (page_table,)), out]
-    return fp.run_program(io, fp.program_descriptor([kernel], cbs=cbs), meta=meta)
+    return fp.run_program(io, fp.program_descriptor(kernels, cbs=cbs), meta=meta)
 
 
 def paged_rows_composed(values, page_table, page_size: int):
