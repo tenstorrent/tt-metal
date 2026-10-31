@@ -512,6 +512,7 @@ class MiMoV2ForCausalLM:
         self._steps = 0
         self.chain_stats["dflash_resets"] = 0
         self.chain_stats["width_changes"] = 0
+        self.chain_stats["width_holds"] = 0
         # Per lane and slot: where the slot's last prefill chunk ended (a chunk starting there continues its request).
         self.prefill_ends = [{} for _ in range(self.dp)]
 
@@ -1237,7 +1238,7 @@ class MiMoV2ForCausalLM:
             self._seen(lane, live)
             # The pass's group width (adaptive draft groups: from its request count); a row whose drafts came from a
             # wider step verifies the first width - 1 of them (the rest count as rejected).
-            width = self._set_width(lane, len(live))
+            width = self._set_width(lane, len(live), hold=any(first <= r < last for r in relayed))
             active = [(r, tok, pos, min(n, width - 1)) for r, tok, pos, n in active]
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
@@ -1674,11 +1675,16 @@ class MiMoV2ForCausalLM:
         mtp.enqueue(slot_tokens, plan)
         return [plan.anchor]
 
-    def _set_width(self, lane, live):
+    def _set_width(self, lane, live, hold=False):
         """The draft-group width of the lane's next pass, for ``live`` requests (reference.spec_decode.pass_width). A
         change empties every group (the requests take groups again; their MTP rings and stash backfill before their
-        next draft) and points the MTP drafter's page table at the new groups."""
+        next draft) and points the MTP drafter's page table at the new groups. ``hold``: the pass relays chain rows,
+        whose relay step reads the commit of the group each row held in the pass it chains onto, so the width (and
+        the groups) stay; the next pass the host builds changes it."""
         width = pass_width(live)
+        if width != self.lane_width[lane] and hold:
+            self.chain_stats["width_holds"] += 1
+            return self.lane_width[lane]
         if width != self.lane_width[lane]:
             self.lane_width[lane] = width
             self.group_owners[lane] = [None] * DRAFT_GROUPS
