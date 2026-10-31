@@ -43,7 +43,7 @@ class ReduceFpu(Fpu):
 
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}>({compute_unit.src_a.tile_shape.cpp_value});\n"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, ({math_fidelity} != ckernel::MathFidelity::LoFi)>({compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
     def calculate(

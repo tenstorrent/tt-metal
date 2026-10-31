@@ -323,7 +323,7 @@ void kernel_main() {
 #endif
             tile_regs_release();
         }
-        reduce_uninit();
+        reduce_uninit<PoolType::SUM, ReduceDim::REDUCE_ROW>();
         DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
             .push_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
         if (dfb_reduction_out == dfb_out) {

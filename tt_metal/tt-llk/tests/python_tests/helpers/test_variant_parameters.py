@@ -851,6 +851,17 @@ class REDUCE_BLOCK_CT_DIM(TemplateParameter):
 
 
 @dataclass
+class REDUCE_CALLS(TemplateParameter):
+    """Calls of a reduce-to-one test on one init: n > 0 is a block call of n tiles, -n is n single-tile calls."""
+
+    calls: list
+
+    def convert_to_cpp(self) -> str:
+        items = ", ".join(str(c) for c in self.calls)
+        return f"constexpr int REDUCE_CALLS[] = {{{items}}};"
+
+
+@dataclass
 class USE_RUNTIME(TemplateParameter):
     """Selects the runtime (dynamic block_ct_dim) reduce_block_max_row LLK family."""
 

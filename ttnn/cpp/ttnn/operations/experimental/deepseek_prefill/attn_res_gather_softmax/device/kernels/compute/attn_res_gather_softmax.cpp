@@ -26,6 +26,9 @@
 // has parked every row, so no tile can fold before all of them have been produced.
 // `running_sum` is therefore read twice, once per pass, over different rows.
 
+// The reduce scaler is 1.0: on Blackhole the row sums run at the fewest fidelity phases that keep the bits
+#define REDUCE_POW2_SCALER
+
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_hw_startup.h"

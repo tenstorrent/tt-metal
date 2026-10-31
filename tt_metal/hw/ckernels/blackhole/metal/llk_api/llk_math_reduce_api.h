@@ -17,7 +17,8 @@ template <
     ReduceDim dim,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    bool is_int_fpu_en = false>
+    bool is_int_fpu_en = false,
+    int col_pair_static = -1>
 inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape) {
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
@@ -31,7 +32,8 @@ inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::Tensor
         StateDiscard<bool>(is_fp32_dest_acc_en),
         StateDiscard<bool>(is_int_fpu_en)));
 
-    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, col_pair_static>(
+        dst_index, tensor_shape);
 }
 
 template <
@@ -39,7 +41,8 @@ template <
     ReduceDim dim,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    bool is_int_fpu_en = false>
+    bool is_int_fpu_en = false,
+    int col_pair_static = -1>
 inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t dst_index) {
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
@@ -56,13 +59,51 @@ inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t op
         StateDiscard<bool>(is_fp32_dest_acc_en),
         StateDiscard<bool>(is_int_fpu_en)));
 
-    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, col_pair_static>(
+        dst_index, tensor_shape);
+}
+
+template <
+    PoolType type,
+    ReduceDim dim,
+    bool is_fp32_dest_acc_en,
+    MathFidelity math_fidelity,
+    bool is_int_fpu_en = false>
+inline void llk_math_reduce_block(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t dst_index,
+    const std::uint32_t num_tiles,
+    const std::uint32_t dst_stride,
+    const bool scalar_pair = false) {
+    LLK_ASSERT(
+        (num_tiles == 0) || (dst_index + (num_tiles - 1) * dst_stride <
+                             get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "");
+
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    // The state is identical for every tile, so one execute covers the block.
+    SAN_HOOK(execute<OperationFpuReduce>(
+        StateVal<OperationFpuReduce::PoolType>(to_underlying(type)),
+        StateVal<OperationFpuReduce::ReduceDim>(to_underlying(dim)),
+        StateVal<OperationFpuReduce::MathFidelity>(to_underlying(math_fidelity)),
+        StateVal<OperationFpuReduce::NumFacesRDim>(tensor_shape.num_faces_r_dim),
+        StateVal<OperationFpuReduce::NumFacesCDim>(tensor_shape.num_faces_c_dim),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(is_fp32_dest_acc_en),
+        StateDiscard<bool>(is_int_fpu_en)));
+
+    // Pair block reprograms ADDR_MOD_2..6 (SETC16 takes immediates only): re-init SFPU ops after it.
+    _llk_math_reduce_block_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(
+        dst_index, num_tiles, dst_stride, tensor_shape, scalar_pair);
 }
 
 // Unified init core (explicit shape), shared by the CB-id API and the LLKOperand API (experimental/2_0/).
 // Reduce math is FORMAT-FREE: it consumes only operand A's tile geometry. The reduce math EXECUTE already has
 // an explicit-shape overload (llk_math_reduce(dst_index, tensor_shape)) reused directly by the id-free path.
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool col_pair = false>
 inline void llk_math_reduce_init_impl(const ckernel::TensorShape& tensor_shape) {
     SAN_HOOK(init<OperationFpuReduce>(
         StateVal<OperationFpuReduce::PoolType>(to_underlying(type)),
@@ -72,17 +113,18 @@ inline void llk_math_reduce_init_impl(const ckernel::TensorShape& tensor_shape) 
         StateVal<OperationFpuReduce::NumFacesCDim>(tensor_shape.num_faces_c_dim),
         StateDiscard<bool>(is_fp32_dest_acc_en)));
 
-    _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, math_fidelity>(tensor_shape);
+    _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, math_fidelity, col_pair>(tensor_shape);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool col_pair = false>
 inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operand_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    llk_math_reduce_init_impl<type, dim, is_fp32_dest_acc_en, math_fidelity>(tensor_shape);
+    llk_math_reduce_init_impl<type, dim, is_fp32_dest_acc_en, math_fidelity, col_pair>(tensor_shape);
 }
 
+template <PoolType type = PoolType::MAX, ReduceDim dim = ReduceDim::REDUCE_ROW>
 inline void llk_math_reduce_uninit() {
     SAN_HOOK(uninit<OperationFpuReduce>());
-    _llk_math_reduce_uninit_();
+    _llk_math_reduce_uninit_<type, dim>();
 }

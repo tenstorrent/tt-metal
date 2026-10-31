@@ -342,6 +342,28 @@ def test_group_norm_DRAM(
     )
 
 
+# One core: the statistics reduce is a single SCALAR SUM block call of out_block_h * block_w resident tiles (3 to 15, odd and
+# even), so the tile-pair path and its odd last tile run.
+GROUP_NORM_DRAM_BLOCK_TILES = [
+    (1, 32, 1, 96, 1, 1, 1, 1),  # 3 rows x 1
+    (1, 64, 1, 96, 2, 1, 1, 1),  # 3 x 2
+    (1, 96, 1, 96, 3, 1, 1, 1),  # 3 x 3
+    (1, 96, 1, 128, 3, 1, 1, 1),  # 4 x 3
+    (1, 64, 1, 160, 2, 1, 1, 1),  # 5 x 2
+    (1, 96, 1, 160, 3, 1, 1, 1),  # 5 x 3
+    (1, 96, 1, 96, 3, 3, 1, 1),  # 3 out blocks of 1 x 3
+    (1, 64, 1, 192, 2, 3, 1, 1),  # 3 out blocks of 2 x 2
+]
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_BLOCK_TILES)
+def test_group_norm_DRAM_reduce_block_tiles(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
+    run_group_norm_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, "tile_reduction", use_input_mask=True
+    )
+
+
 # Post-commit smoke coverage for the ROW_MAJOR path; the full sweep over GROUP_NORM_ROW_MAJOR_SHAPES
 # lives in nightly. Tests across all three layout combinations that involve ROW_MAJOR.
 @skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")

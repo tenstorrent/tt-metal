@@ -106,7 +106,7 @@ inline void accumulate_compute_loop(
         (accumulate_cb(dfb_additional), ...);
     }
 
-    reduce_uninit();
+    reduce_uninit<reduce_type, reduce_dim>();
     reconfig_data_format(dfb_in.get_id(), dfb_scalar.get_id());
 }
 

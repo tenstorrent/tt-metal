@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Resident rows: on Blackhole the helper sums a row of at least 4 tiles with one block call at LoFi
+#define REDUCE_ROW_SUM_BLOCK
+
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -350,7 +353,7 @@ void kernel_main() {
             pack_tile(dst0, dfb_ex_id);
             tile_regs_release();
         }
-        reduce_uninit();
+        reduce_uninit<PoolType::AVG, ReduceDim::REDUCE_ROW>();
         dfb_ex.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_ex_external_id, dfb_scaler_global_id);
     }
@@ -525,7 +528,7 @@ void kernel_main() {
             pack_tile(dst0, dfb_var_id);
             tile_regs_release();
         }
-        reduce_uninit();
+        reduce_uninit<PoolType::AVG, ReduceDim::REDUCE_ROW>();
         dfb_var.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
 
