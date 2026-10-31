@@ -49,3 +49,5 @@ Final-source default refresh completed exit0:93% top1,100% top5/top100; tracedTF
 Final checks: strict context contract exits0 at262144; host policy tests7/7; source/report hooks pass. Agentic-serving checker exits1 with only the documented tied-weight two-representation ADVISORY (not a hard error); measured allocator ledger accounts for BF16 embedding plus smaller BFP4 transposed head. Both Pareto PNGs visually inspected. validation_summary.json records exact outcomes.
 
 Independent stage-review returned clean-pass; no required work remains (stage_review.md). Final staged pre-commit exits0 (final_staged_checks.log). Stage-owned source and compact evidence are checkpointed locally; raw logs, exact rendered prompts and unrelated earlier-stage profiler files remain local and excluded from the checkpoint. No push or vLLM integration performed.
+
+Local implementation/evidence checkpoint: 8ba944f9752bcb6e87c0eed02085644f5da8fc5f, repository /home/mvasiljevic/tt-metal-gemma4-31b-pipeline, branch mvasiljevic/gemma4-31b-fresh-pipeline-v0811. Commit hooks pass. No remote configured and no push. This following bookkeeping commit records the checkpoint SHA.
