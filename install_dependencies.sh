@@ -382,7 +382,13 @@ configure_compiler_alternatives() {
             update-alternatives --install /usr/bin/$tool $tool /usr/bin/${tool}-20 100 || true
             update-alternatives --set $tool /usr/bin/${tool}-20 2>/dev/null || true
         done
-        if [ -x /usr/bin/clang-tidy-20 ]; then
+        # clang-tidy defaults to v23 (not v20, unlike clang/clang++ above) so
+        # local clang-tidy runs match what CI enforces; falls back to v20 if
+        # v23 isn't installed.
+        if [ -x /usr/bin/clang-tidy-23 ]; then
+            update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-23 100 || true
+            update-alternatives --set clang-tidy /usr/bin/clang-tidy-23 2>/dev/null || true
+        elif [ -x /usr/bin/clang-tidy-20 ]; then
             update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-20 100 || true
             update-alternatives --set clang-tidy /usr/bin/clang-tidy-20 2>/dev/null || true
         fi
