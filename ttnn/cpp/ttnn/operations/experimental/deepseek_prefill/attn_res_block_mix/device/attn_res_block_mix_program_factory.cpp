@@ -60,6 +60,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     const uint32_t num_candidates = stats.padded_shape()[1];
     const uint32_t num_partials = stats.padded_shape()[3] / TILE_WIDTH;
     const uint32_t num_sites = operation_attributes.num_sites;
+    const uint32_t num_closed_sites = operation_attributes.num_closed_sites;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -93,15 +94,16 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     const uint32_t max_run = (Wt + chunks_per_row - 1) / chunks_per_row;
     const uint32_t value_tiles = max_run * num_candidates;
     const uint32_t weight_tiles = 2 * sites_per_group * num_candidates;
-    const uint32_t l1_per_core = num_candidates * num_partials * stats_tile_size  // gathered statistics
-                                 + 3 * num_candidates * stats_tile_size           // summed, rsqrt, scores
-                                 + 5 * stats_tile_size                            // shift, shift and mass out
-                                 + num_candidates * value_tile_size               // packed exponentials
-                                 + value_tiles * value_tile_size                  // the run's candidate tiles
-                                 + weight_tiles * value_tile_size                 // per-site weights
-                                 + 2 * sites_per_group * value_tile_size          // even groups' partials
-                                 + sites_per_group * max_run * value_tile_size    // an odd group's partials
-                                 + num_sites * stats_tile_size;                   // scalar staging
+    const uint32_t l1_per_core = num_candidates * num_partials * stats_tile_size      // gathered statistics
+                                 + 3 * num_candidates * stats_tile_size               // summed, rsqrt, scores
+                                 + 5 * stats_tile_size                                // shift, shift and mass out
+                                 + num_candidates * value_tile_size                   // packed exponentials
+                                 + value_tiles * value_tile_size                      // the run's candidate tiles
+                                 + weight_tiles * value_tile_size                     // per-site weights
+                                 + 2 * sites_per_group * value_tile_size              // even groups' partials
+                                 + sites_per_group * max_run * value_tile_size        // an odd group's partials
+                                 + num_sites * stats_tile_size                        // scalar staging
+                                 + (num_closed_sites > 0 ? 3 * stats_tile_size : 0);  // normalizing closed sites
     TT_FATAL(
         l1_per_core <= device->l1_size_per_core(),
         "AttnResBlockMix needs {} B of L1 per core for {} sites over {} candidates; the core has {} B",
@@ -133,6 +135,14 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     cb(CBIndex::c_18, 2 * sites_per_group, value_tile_size, value_format);        // even groups
     cb(CBIndex::c_19, sites_per_group * max_run, value_tile_size, value_format);  // odd groups
     cb(CBIndex::c_24, num_sites, stats_tile_size, stats_format);            // scalar staging, never pushed
+    if (num_closed_sites > 0) {
+        // A closed site's weights are its exponentials over its mass: compute keeps the mass,
+        // and turns it into a per-site factor that is 1 / mass in the closed sites' columns
+        // and 1 in the rest, through a mask the reader builds once.
+        cb(CBIndex::c_8, 1, stats_tile_size, stats_format);   // mass, for compute
+        cb(CBIndex::c_9, 1, stats_tile_size, stats_format);   // closed-column mask
+        cb(CBIndex::c_10, 1, stats_tile_size, stats_format);  // per-site factor
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Kernels
@@ -140,7 +150,8 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     // A core finds its items from its own position, so a launch ships no per-core args.
     const std::vector<uint32_t> split_ct_args = {grid.x, num_cores, num_items, chunks_per_row, Wt};
 
-    std::vector<uint32_t> reader_ct_args = {num_candidates, num_partials, Ht, num_sites, sites_per_group, num_groups};
+    std::vector<uint32_t> reader_ct_args = {
+        num_candidates, num_partials, Ht, num_sites, sites_per_group, num_groups, num_closed_sites};
     reader_ct_args.insert(reader_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
     TensorAccessorArgs(*stats.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*first.buffer()).append_to(reader_ct_args);
@@ -159,7 +170,8 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
         std::bit_cast<uint32_t>(operation_attributes.inv_hidden_size),
         std::bit_cast<uint32_t>(operation_attributes.eps),
         sites_per_group,
-        num_groups};
+        num_groups,
+        num_closed_sites};
     compute_ct_args.insert(compute_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
     // Each candidate is a (snapshot address, first page) pair: the snapshot that holds it and
@@ -191,11 +203,15 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     writer.config = WriterConfigDescriptor{};
     writer.emplace_common_runtime_args({partials.buffer(), shift.buffer(), mass.buffer()});
 
-    // The scores and the shift are only ever copied into dest, never fed to the FPU, so they
-    // unpack straight to it rather than being cut to tf32 on the way through srcA.
+    // The scores, the shift and the closed sites' mass, mask and factor are only ever copied
+    // into dest, never fed to the FPU, so they unpack straight to it rather than being cut to
+    // tf32 on the way through srcA.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dest_mode[CBIndex::c_2] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[CBIndex::c_3] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
 
     KernelDescriptor compute;
     compute.kernel_source = std::string(kKernelDir) + "attn_res_block_mix.cpp";

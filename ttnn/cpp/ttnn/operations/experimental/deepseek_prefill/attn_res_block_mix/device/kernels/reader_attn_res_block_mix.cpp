@@ -24,7 +24,8 @@ void kernel_main() {
     constexpr uint32_t num_sites = get_compile_time_arg_val(3);
     constexpr uint32_t sites_per_group = get_compile_time_arg_val(4);
     constexpr uint32_t num_groups = get_compile_time_arg_val(5);
-    constexpr uint32_t kSplitArgs = 6;
+    constexpr uint32_t num_closed_sites = get_compile_time_arg_val(6);
+    constexpr uint32_t kSplitArgs = 7;
     constexpr uint32_t Wt = get_compile_time_arg_val(kSplitArgs + 4);
     constexpr auto stats_args = TensorAccessorArgs<kSplitArgs + 5>();
     constexpr auto sealed_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
@@ -38,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t cb_exp = 5;
     constexpr uint32_t cb_values = 6;
     constexpr uint32_t cb_weights = 7;
+    constexpr uint32_t cb_closed_mask = 9;
     constexpr uint32_t cb_partials = 19;
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_stats);
     constexpr uint32_t value_tile_bytes = get_tile_size(cb_values);
@@ -50,6 +52,25 @@ void kernel_main() {
     CircularBuffer cb_partials_obj(cb_partials);
     auto stats_accessor = TensorAccessor(stats_args, get_common_arg_val<uint32_t>(0));
     auto partials_accessor = TensorAccessor(partials_args, get_common_arg_val<uint32_t>(1));
+
+    if constexpr (num_closed_sites > 0) {
+        // 1.0f in every token's closed-site columns, 1 + r for site r, and 0 elsewhere: compute
+        // holds it for every row.
+        constexpr uint32_t kFaceDim = 16;
+        CircularBuffer cb_mask_obj(cb_closed_mask);
+        cb_mask_obj.reserve_back(1);
+        auto* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_mask_obj.get_write_ptr());
+        for (uint32_t i = 0; i < stats_tile_bytes / sizeof(uint32_t); ++i) {
+            mask[i] = 0;
+        }
+        for (uint32_t col = 1; col <= num_closed_sites; ++col) {
+            for (uint32_t row = 0; row < 2 * kFaceDim; ++row) {
+                const uint32_t face = (row / kFaceDim) * 2 + col / kFaceDim;
+                mask[(face * kFaceDim + row % kFaceDim) * kFaceDim + col % kFaceDim] = 0x3F800000;
+            }
+        }
+        cb_mask_obj.push_back(1);
+    }
 
     for_each_attn_res_block_mix_item<kSplitArgs>([&](const AttnResBlockMixItem& item) {
         // The row's statistics, candidate-major with the partials innermost: a candidate's

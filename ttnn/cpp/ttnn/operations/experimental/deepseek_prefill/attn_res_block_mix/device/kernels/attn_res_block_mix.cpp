@@ -15,6 +15,9 @@
 //   e_c      = exp(scores_c - shift)
 //   mass     = sum_c e_c
 //
+// A closed site has no live stream to fold in, so its weights are e_c / mass and its partial
+// is the read's value.
+//
 // The mixture MACs each candidate tile into one dest accumulator per site, the weight a
 // column broadcast of the site's own weight tile. The run's candidate tiles are read from
 // DRAM once and stay in their buffer until every site group has used them.
@@ -26,6 +29,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -45,6 +49,9 @@ constexpr auto cb_summed = tt::CBIndex::c_4;
 constexpr auto cb_exp = tt::CBIndex::c_5;
 constexpr auto cb_values = tt::CBIndex::c_6;
 constexpr auto cb_weights = tt::CBIndex::c_7;
+constexpr auto cb_mass = tt::CBIndex::c_8;
+constexpr auto cb_closed_mask = tt::CBIndex::c_9;
+constexpr auto cb_factor = tt::CBIndex::c_10;
 constexpr auto cb_shift_out = tt::CBIndex::c_16;
 constexpr auto cb_mass_out = tt::CBIndex::c_17;
 constexpr auto cb_partials = tt::CBIndex::c_18;      // even site groups, for the writer
@@ -58,7 +65,9 @@ constexpr uint32_t inv_hidden_size = get_compile_time_arg_val(3);
 constexpr uint32_t eps = get_compile_time_arg_val(4);
 constexpr uint32_t sites_per_group = get_compile_time_arg_val(5);
 constexpr uint32_t num_groups = get_compile_time_arg_val(6);
-constexpr uint32_t kSplitArgs = 7;
+constexpr uint32_t num_closed_sites = get_compile_time_arg_val(7);
+constexpr uint32_t kSplitArgs = 8;
+constexpr uint32_t kOne = 0x3F800000;  // 1.0f
 
 constexpr uint32_t dst_a = 0;
 constexpr uint32_t dst_b = 1;
@@ -86,6 +95,35 @@ ALWI void centred_exp(uint32_t c, uint32_t dst) {
     exp_tile(dst);
 }
 
+// Per site, what its exponentials are scaled by: 1 / mass in a closed site's column, 1 in
+// the rest. The mask is 1 in the closed sites' columns and 0 elsewhere.
+void closed_site_factor() {
+    CircularBuffer cb_mass_obj(cb_mass);
+    CircularBuffer cb_factor_obj(cb_factor);
+
+    cb_mass_obj.wait_front(1);
+    cb_factor_obj.reserve_back(1);
+    pack_reconfig_data_format(cb_factor);
+    tile_regs_acquire();
+    copy_init(cb_mass);
+    copy_tile(cb_mass, 0, dst_a);
+    recip_tile_init();
+    recip_tile(dst_a);
+    binop_with_scalar_tile_init();
+    sub_unary_tile(dst_a, kOne);
+    copy_tile(cb_closed_mask, 0, dst_b);
+    mul_binary_tile_init();
+    mul_binary_tile(dst_a, dst_b, dst_a);
+    binop_with_scalar_tile_init();
+    add_unary_tile(dst_a, kOne);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(dst_a, cb_factor);
+    tile_regs_release();
+    cb_factor_obj.push_back(1);
+    cb_mass_obj.pop_front(1);
+}
+
 // The row's exponentials (packed, one tile per candidate) for the writer to spread into
 // per-site weights, and its shift and mass for the writer to scatter.
 void score_row() {
@@ -97,6 +135,7 @@ void score_row() {
     CircularBuffer cb_exp_obj(cb_exp);
     CircularBuffer cb_shift_out_obj(cb_shift_out);
     CircularBuffer cb_mass_out_obj(cb_mass_out);
+    CircularBuffer cb_mass_obj(cb_mass);
 
     pack_reconfig_data_format(cb_summed);
 
@@ -159,19 +198,13 @@ void score_row() {
     cb_shift_obj.push_back(1);
     cb_shift_out_obj.push_back(1);
 
-    // The exponentials, in the weights' dtype.
+    // The mass, summed in fp32 dest from the exponentials: recomputing them below is a few
+    // SFPU passes, where the packed ones are bf16 and drained by the reader.
     cb_shift_obj.wait_front(1);
-    cb_exp_obj.reserve_back(num_candidates);
-    pack_reconfig_data_format(cb_exp);
-    per_candidate(cb_exp, [](uint32_t c) {
-        copy_tile(cb_shift, 0, dst_b);
-        centred_exp(c, dst_a);
-    });
-    cb_exp_obj.push_back(num_candidates);
-
-    // The mass, summed in fp32 dest from the same exponentials: recomputing them is a few
-    // SFPU passes, where the packed ones are bf16 and drained by the writer.
     cb_mass_out_obj.reserve_back(1);
+    if constexpr (num_closed_sites > 0) {
+        cb_mass_obj.reserve_back(1);
+    }
     pack_reconfig_data_format(cb_mass_out);
     tile_regs_acquire();
     copy_tile(cb_shift, 0, dst_b);
@@ -184,9 +217,34 @@ void score_row() {
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(dst_a, cb_mass_out);
+    if constexpr (num_closed_sites > 0) {
+        pack_tile(dst_a, cb_mass);
+    }
     tile_regs_release();
     cb_mass_out_obj.push_back(1);
 
+    if constexpr (num_closed_sites > 0) {
+        cb_mass_obj.push_back(1);
+        closed_site_factor();
+    }
+
+    // The exponentials, in the weights' dtype; a closed site's over its mass.
+    cb_exp_obj.reserve_back(num_candidates);
+    pack_reconfig_data_format(cb_exp);
+    per_candidate(cb_exp, [](uint32_t c) {
+        copy_tile(cb_shift, 0, dst_b);
+        centred_exp(c, dst_a);
+        if constexpr (num_closed_sites > 0) {
+            copy_tile(cb_factor, 0, dst_c);
+            mul_binary_tile_init();
+            mul_binary_tile(dst_a, dst_c, dst_a);
+        }
+    });
+    cb_exp_obj.push_back(num_candidates);
+
+    if constexpr (num_closed_sites > 0) {
+        CircularBuffer(cb_factor).pop_front(1);
+    }
     cb_shift_obj.pop_front(1);
     cb_scores_obj.pop_front(num_candidates);
 }
@@ -242,6 +300,10 @@ void mix_run(uint32_t num_tiles) {
 
 void kernel_main() {
     compute_kernel_hw_startup(cb_stats, cb_summed, cb_scores);
+    if constexpr (num_closed_sites > 0) {
+        // Built once by the reader and held for every row.
+        CircularBuffer(cb_closed_mask).wait_front(1);
+    }
     for_each_attn_res_block_mix_item<kSplitArgs>([](const AttnResBlockMixItem& item) {
         score_row();
         mix_run(item.num_tiles());

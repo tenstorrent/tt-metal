@@ -25,6 +25,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix {
 // Returns `{partials, shift, mass}`: `[R, 1, N, d]` in the sealed set's dtype and
 // `[R, 1, N, 1]` float32 twice, the layouts `attn_res_gather_softmax` reads per site.
 //
+// The leading `num_closed_sites` sites have no live stream to fold in, so their read is the
+// mixture alone: their partials come out divided by their mass, `partial[r] / mass[r]`, which
+// is the read's value.
+//
 // `sealed` is the sealed set as it was sealed, one or more `[1, S_i, N, d]` tensors whose
 // planes in order are the C candidates. Each candidate tile is read once for all R sites.
 std::array<ttnn::Tensor, 3> attn_res_block_mix(
@@ -33,6 +37,7 @@ std::array<ttnn::Tensor, 3> attn_res_block_mix(
     uint32_t num_sites,
     float inv_hidden_size,
     float eps,
+    uint32_t num_closed_sites,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 

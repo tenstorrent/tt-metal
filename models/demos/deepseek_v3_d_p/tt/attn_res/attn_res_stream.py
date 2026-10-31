@@ -195,6 +195,12 @@ class TtAttnResWalk(object):
         Nothing statistical crosses the boundary: `inter_block` is a pure function of
         `(sealed set, queries)`, and this rank owns `q_pre[0]`, so the batch is
         recomputed here rather than shipped. Ownership of the tensor transfers in.
+
+        The owed read is taken in `open_layer(0)`, which seals first. The live stream it
+        reads arrives complete, and a seal right after the read is what layer 0 owes
+        anyway, so scoring `q_pre[0]` against the set *with* that stream sealed is the same
+        read — and it puts `q_pre[0]` in the batch of the block that opens there, over one
+        sealed set, instead of a batch of its own over the set before it.
         """
         self.op = op
         self.block_size = block_size
@@ -204,10 +210,7 @@ class TtAttnResWalk(object):
         self._blocks = iter(_block_sites(num_layers, q_pre, q_post, q_out, block_size))
         self._pending = iter(())
         self._partials = self._shifts = self._masses = None
-        if inherited_block_residual is not None:
-            boundary = [q_pre[0]]
-            self._partials, self._shifts, self._masses = op.inter_block(self.stream.sealed, boundary)
-            self._pending = enumerate(boundary)
+        self._owed = q_pre[0] if inherited_block_residual is not None else None
 
     def read(self):
         """The next read site, in the order the schedule issues them."""
@@ -225,6 +228,9 @@ class TtAttnResWalk(object):
         the live stream itself and the caller must not free what it got — every later layer
         owns its `h`.
         """
+        if self._owed is not None:
+            return self._open_owing(), False
+
         borrowed = self.stream.num_sealed == 0
         h = self.stream.running_sum if borrowed else self.read()
 
@@ -237,6 +243,18 @@ class TtAttnResWalk(object):
             self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries)
             self._pending = enumerate(queries)
         return h, borrowed
+
+    def _open_owing(self):
+        """The rank's first layer: seal the inherited live stream, then batch the owed read
+        with the block it opens. With nothing live left to fold in, the owed read is closed.
+        """
+        self.stream.seal()
+        queries = [self._owed, *next(self._blocks)]
+        self._owed = None
+        self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries, num_closed=1)
+        self._pending = enumerate(queries)
+        next(self._pending)
+        return self.op.read_closed(self._partials, 0)
 
     def finish(self):
         """The single model-level read, and the end of the walk.

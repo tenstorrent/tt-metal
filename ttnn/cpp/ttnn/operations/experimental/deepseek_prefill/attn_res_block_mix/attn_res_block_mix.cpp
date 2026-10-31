@@ -16,6 +16,7 @@ std::array<ttnn::Tensor, 3> attn_res_block_mix(
     uint32_t num_sites,
     float inv_hidden_size,
     float eps,
+    uint32_t num_closed_sites,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(!sealed.empty(), "AttnResBlockMix needs at least one sealed snapshot tensor");
@@ -34,6 +35,7 @@ std::array<ttnn::Tensor, 3> attn_res_block_mix(
         num_sites,
         inv_hidden_size,
         eps,
+        num_closed_sites,
         memory_config.value_or(sealed.front().memory_config()),
         kernel_config_val);
 }
