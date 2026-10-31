@@ -43,9 +43,10 @@ inline void calculate_heaviside(std::uint32_t value) {
     // |v| != 0, so -0.0 keeps `value`; then 0.0 to those of them that SFPSETCC LT0 leaves
     // enabled, the ones whose sign bit is set (SFPSETCC only writes the flags of enabled lanes).
     // SFPLZ with NOSGN|CC_NE0 makes the same test in one slot and can replace the pair once
-    // ttsim runs it; today ttsim aborts the worker on that form. The row dispatches on the sign
-    // bit rather than a float compare, so NaN is classified by its sign bit: a NaN with a clear
-    // sign bit is 1.0, with a set one 0.0. Device coverage of those classes, bit-exact:
+    // ttsim runs it; ttsim v1.15.0 aborts with "UnimplementedFunctionality: tensix_sfplz:
+    // instr_mod1=6". The row dispatches on the sign bit rather than a float compare, so NaN is
+    // classified by its sign bit: a NaN with a clear sign bit is 1.0, with a set one 0.0.
+    // Device coverage of those classes, bit-exact:
     // test_vif_equiv_sweep.py's test_equiv_float_nonfinite (+-inf, NaN) and
     // test_equiv_signed_zero (-0.0, +0.0).
     _sfpu_load_imm32_(p_sfpu::LREG4, value);
