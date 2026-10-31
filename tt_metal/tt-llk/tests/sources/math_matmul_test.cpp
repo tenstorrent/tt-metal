@@ -280,6 +280,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 asm volatile("nop");
             }
+            // RC experiment (loop knock-out): byte 3 of L1 0x1FFE8 bit 0 -> before every tile, wait until all packers are idle
+            const bool rc_ko_pack_idle = ((*reinterpret_cast<volatile std::uint32_t*>(0x1FFE8u) >> 24) & 0x1u) != 0;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 TIMESTAMP_DATA("RC_IT", loop) // RC experiment: timeline marker
@@ -288,6 +290,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_packer_wait_for_math_done_();
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
+                        if (rc_ko_pack_idle)
+                        {
+                            TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON | p_stall::STALL_PACK, p_stall::PACK); // RC experiment
+                        }
                         const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
                     }
