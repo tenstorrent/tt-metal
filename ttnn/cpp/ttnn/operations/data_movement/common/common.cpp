@@ -250,9 +250,61 @@ const std::map<uint32_t, std::array<float, 2>> noc_l1_local_bw = {
     {32768, {27.805, 50.123}},
     {65536, {27.84, 50.21}}};
 
-float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_local, bool is_read, tt::ARCH arch) {
+// Busy AICLK that OpPerformanceModelGeneral divides by:
+// tt::umd::wormhole::AICLK_BUSY_VAL (1000 MHz), tt::umd::blackhole::AICLK_BUSY_VAL (1350 MHz).
+struct NocBwArchParams {
+    int table_index;
+    float clock_hz;
+    float l1_peak_gbps;
+    uint32_t dram_latency;
+    uint32_t local_latency;
+    uint32_t write_latency;
+    uint32_t read_latency;
+};
+
+constexpr NocBwArchParams kWormholeNocBw{
+    .table_index = WormholeIndex,
+    .clock_hz = 1.0e9f,
+    .l1_peak_gbps = 32.0f,
+    .dram_latency = 358,
+    .local_latency = 56,
+    .write_latency = 256,
+    .read_latency = 259,
+};
+
+constexpr NocBwArchParams kBlackholeNocBw{
+    .table_index = BlackholeIndex,
+    .clock_hz = 1.35e9f,
+    .l1_peak_gbps = 50.0f,
+    .dram_latency = 529,
+    .local_latency = 88,
+    .write_latency = 404,
+    .read_latency = 403,
+};
+
+NocBwArchParams noc_bw_arch_params(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return kWormholeNocBw;
+        case tt::ARCH::BLACKHOLE: return kBlackholeNocBw;
+        default: TT_THROW("Unsupported architecture for NOC bandwidth model: {}", arch);
+    }
+}
+
+uint32_t noc_latency_cycles(const NocBwArchParams& params, bool is_dram, bool is_local, bool is_write) {
+    if (is_dram) {
+        return params.dram_latency;
+    }
+    if (is_local) {
+        return params.local_latency;
+    }
+    if (is_write) {
+        return params.write_latency;
+    }
+    return params.read_latency;
+}
+
+float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_local, bool is_read, int table_index) {
     const auto& dict = is_dram ? noc_dram_bw : is_local ? noc_l1_local_bw : is_read ? noc_l1_read_bw : noc_l1_write_bw;
-    const int index = (arch == tt::ARCH::WORMHOLE_B0) ? WormholeIndex : BlackholeIndex;
 
     uint32_t lower_pow2 = std::pow(2, std::floor(std::log2(transaction_size)));
 
@@ -270,8 +322,8 @@ float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_lo
     if (upper_it == dict.end()) {
         upper_it = std::prev(dict.end());
     }
-    float lower_bw = lower_it->second[index];
-    float upper_bw = upper_it->second[index];
+    float lower_bw = lower_it->second[table_index];
+    float upper_bw = upper_it->second[table_index];
 
     if (transaction_size - lower_pow2 < upper_pow2 - transaction_size) {
         return lower_bw;
@@ -281,19 +333,20 @@ float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_lo
 
 uint32_t get_effective_l1_cores(
     uint32_t transaction_size, tt::ARCH arch, bool is_write, uint32_t num_nocs, uint32_t num_cores) {
-    float max_bw = (arch == tt::ARCH::WORMHOLE_B0) ? 32.0f : 50.0f;
-    auto aggregate_bw = max_bw * num_nocs;
-    float achieved_l1_bw =
-        get_transaction_noc_bw(transaction_size, /*is_dram=*/false, /*is_local=*/false, /*is_read=*/!is_write, arch);
+    const auto params = noc_bw_arch_params(arch);
+    auto aggregate_bw = params.l1_peak_gbps * num_nocs;
+    float achieved_l1_bw = get_transaction_noc_bw(
+        transaction_size, /*is_dram=*/false, /*is_local=*/false, /*is_read=*/!is_write, params.table_index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
     effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
 uint32_t get_effective_dram_cores(uint32_t transaction_size, tt::ARCH arch, bool single_noc, uint32_t num_cores) {
+    const auto params = noc_bw_arch_params(arch);
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
-    float achieved_dram_bw =
-        get_transaction_noc_bw(transaction_size, /*is_dram=*/true, /*is_local=*/false, /*is_read=*/true, arch);
+    float achieved_dram_bw = get_transaction_noc_bw(
+        transaction_size, /*is_dram=*/true, /*is_local=*/false, /*is_read=*/true, params.table_index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
     effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
@@ -303,25 +356,18 @@ uint32_t get_effective_dram_cores(uint32_t transaction_size, tt::ARCH arch, bool
 
 std::pair<uint32_t, uint32_t> get_cycles_for_transaction_size(
     uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, tt::ARCH arch, bool is_read) {
-    bool is_write = !is_read;
-    // measured initial latency based on the transaction and device types
-    uint32_t latency_cyles = 1;
-    if (is_dram) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 358 : 529;
-    } else if (is_local) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 56 : 88;
-    } else if (is_write) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 256 : 404;
-    } else {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 259 : 403;
-    }
+    const bool is_write = !is_read;
+    const auto params = noc_bw_arch_params(arch);
+    const uint32_t latency_cycles = noc_latency_cycles(params, is_dram, is_local, is_write);
 
     transaction_size = std::max(transaction_size, 16u);
-    auto transaction_bw = get_transaction_noc_bw(transaction_size, is_dram, is_local, is_read, arch);
-    float device_frequency_hz = (arch == tt::ARCH::WORMHOLE_B0) ? 1e9 : 1.2e9;
-    uint32_t cycles =
-        std::ceil((float)(num_transactions * transaction_size * device_frequency_hz) / (float)(transaction_bw * 1e9));
-    return {cycles, latency_cyles};
+    const auto transaction_bw =
+        get_transaction_noc_bw(transaction_size, is_dram, is_local, is_read, params.table_index);
+    const float device_frequency_hz = params.clock_hz;
+    const uint32_t cycles = static_cast<uint32_t>(std::ceil(
+        static_cast<float>(num_transactions * transaction_size * device_frequency_hz) /
+        static_cast<float>(transaction_bw * 1e9)));
+    return {cycles, latency_cycles};
 }
 
 int common_tm_bw_model(
@@ -346,9 +392,7 @@ int common_tm_bw_model(
     uint32_t num_nocs = device_rows + device_cols;
 
     auto arch = input_tensor.device()->arch();
-    if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        TT_THROW("Unsupported architecture for common_bw_model: {}", arch);
-    }
+    noc_bw_arch_params(arch);  // Throw for an unsupported arch before the roofline math.
     uint32_t num_cores = device_rows * device_cols;
 
     uint32_t total_num_cores = num_cores;
