@@ -534,8 +534,15 @@ def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(
             ),
             "packer_l1_acc=true is unsupported",
         ),
+        (
+            ttnn.types.BlackholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=False,
+            ),
+            "fp32_dest_acc_en=false is unsupported",
+        ),
     ],
-    ids=["packer-l1-acc"],
+    ids=["packer-l1-acc", "bf16-dest"],
 )
 def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
     device: ttnn.Device,
