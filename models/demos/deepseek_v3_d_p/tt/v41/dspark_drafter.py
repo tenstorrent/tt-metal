@@ -276,6 +276,8 @@ class TtDSparkDrafter:
         self.embedding = embedding
         self.trace, self.warmup = trace, warmup
         self.buffers: dict = {}
+        self._zero_tap = None  # the host zero tap of the standalone call (built once)
+        self._tap_is_zero = False  # the ``tap`` buffer holds the zero tap (no copy needed for a zero host tap)
         self.captures: dict[int, tuple] = {}  # the standalone call's capture per block count
         self.eager_counts: dict[int, int] = {}
         self.blocks = 1  # the staged standalone call's block count
@@ -503,19 +505,19 @@ class TtDSparkDrafter:
         inputs = {"token": self._per_rank(t["ids"].view(sp, 1, ROWS), ttnn.uint32, rm)}
         tick("token")
         if main_hidden is None:
-            main_hidden = torch.zeros(len(cfg.DSPARK_TARGET_LAYER_IDS) * cfg.EMB_SIZE)
-        inputs["tap"] = ttnn.from_torch(
-            self.tap_rows(main_hidden),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(None, 3)),
-        )
+            # no host tap (the served and harness calls select the step's tap tile on device): the zero tap, one
+            # host tensor for the drafter's life; ``stage`` copies it once and skips it while the buffer holds it
+            if self._zero_tap is None:
+                self._zero_tap = self._host_tap(torch.zeros(len(cfg.DSPARK_TARGET_LAYER_IDS) * cfg.EMB_SIZE))
+            inputs["tap"] = self._zero_tap
+        else:
+            inputs["tap"] = self._host_tap(main_hidden)
         tick("tap")
         # the row selector of a device tap tile (``stage(..., tap32=)``: the target step's taps of every tile row):
         # ``sel @ tap32`` puts the selected tap row on each writing row (one nonzero term a row: exact); without
         # a device tile the host tap is used (use_tap32 0)
         inputs["sel"] = self._per_rank(t["sel"].view(sp, 1, ROWS, ROWS), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-        inputs["use_tap32"] = self._replicated(torch.full((1, 1, 1, 1), 0.0), ttnn.bfloat16, device=False)
+        inputs["use_tap32"] = self._use_tap32(False)
         tick("sel")
         main = cos_sin(cfg, False, t["main_pos"].flatten())
         inputs["rope_main"] = tuple(
@@ -530,6 +532,22 @@ class TtDSparkDrafter:
         inputs["index_rows"] = self._per_rank(t["index"].view(sp, 1, ROWS, INDEX_WIDTH), ttnn.uint32, rm)
         tick("index")
         return inputs
+
+    def _host_tap(self, main_hidden: torch.Tensor):
+        """``tap_rows(main_hidden)`` as the host tensor of the ``tap`` buffer (sharded over TP on its columns)."""
+        return ttnn.from_torch(
+            self.tap_rows(main_hidden),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(None, 3)),
+        )
+
+    def _use_tap32(self, use: bool):
+        """The ``use_tap32`` host constant (0 or 1), one host tensor each for the drafter's life."""
+        key = ("use_tap32", use)
+        if key not in self._consts:
+            self._consts[key] = self._replicated(torch.full((1, 1, 1, 1), float(use)), ttnn.bfloat16, device=False)
+        return self._consts[key]
 
     def _per_rank(self, host: torch.Tensor, dtype, layout):
         """``host`` ``[sp, ...]`` -> each mesh row its slice, replicated over its TP chips (a host tensor)."""
@@ -560,23 +578,28 @@ class TtDSparkDrafter:
         tap tile of every row (``TtV41VerifyDecoder.taps``), copied into its buffer and selected by ``sel`` in the
         graph (``use_tap32`` set to 1)."""
         if tap32 is not None:
-            inputs = dict(
-                inputs, use_tap32=self._replicated(torch.full((1, 1, 1, 1), 1.0), ttnn.bfloat16, device=False)
-            )
+            inputs = dict(inputs, use_tap32=self._use_tap32(True))
         tick = self._tick("stage")
+        zero = inputs["tap"] is self._zero_tap and self._zero_tap is not None
         if not self.buffers:
             self.buffers = self.to_device(inputs)
             self.buffers["tap32"] = ttnn.clone(self.buffers["tap"]) if tap32 is None else ttnn.clone(tap32)
+            self._tap_is_zero = zero
         else:
             for k, v in inputs.items():
+                if k == "tap" and zero and self._tap_is_zero:
+                    continue  # the buffer already holds the zero tap (0.5 MB a chip, 32 chips, every round)
                 if isinstance(v, tuple):
                     for host, dev in zip(v, self.buffers[k]):
                         ttnn.copy_host_to_device_tensor(host, dev)
                 else:
                     ttnn.copy_host_to_device_tensor(v, self.buffers[k])
+                    if k == "tap":
+                        self._tap_is_zero = zero
                 tick(k)
         if tap is not None:
             ttnn.copy(tap, self.buffers["tap"])
+            self._tap_is_zero = False
         if tap32 is not None:
             ttnn.copy(tap32, self.buffers["tap32"])
         tick("tap32")
