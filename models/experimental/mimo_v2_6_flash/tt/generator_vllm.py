@@ -2217,6 +2217,14 @@ class MiMoV2ForCausalLM:
                 if any(t["id"] is None for t in model.chunk_traces.values()):
                     if model.capture_prefill_chunk_traces():
                         logger.info(f"MiMo vLLM: replica {lane} later-chunk prefill traces {list(model.chunk_traces)}")
+                trace = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.TRACE)
+                dram = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
+                logger.info(
+                    f"MiMo vLLM: replica {lane} trace region {trace.total_bytes_allocated_per_bank * trace.num_banks / 1e6:.0f}"
+                    f" of {trace.total_bytes_per_bank * trace.num_banks / 1e6:.0f} MB used; DRAM free "
+                    f"{dram.total_bytes_free_per_bank * dram.num_banks / 1e6:.0f} MB, largest block "
+                    f"{dram.largest_contiguous_bytes_free_per_bank * dram.num_banks / 1e6:.0f} MB"
+                )
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))

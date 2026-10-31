@@ -63,9 +63,10 @@ def prompts(path, n, users):
     return out
 
 
-def breakdown(m, mesh, n=20):
+def breakdown(m, n=20):
     """Each captured trace replayed ``n`` times on idle inputs (every position -1: no K / V written, no request's
     work): the fixed cost of each program of a step."""
+    mesh = m.mesh_device  # the row's submesh, which owns the traces
     m.spec_inputs.reset()
     traces = []
     if m.decode_trace is not None:
@@ -267,7 +268,7 @@ def main():
                 f"tokens_per_step={tps:.2f} tok_s={tps / statistics.mean(t):.1f}"
             )
         if a.breakdown:
-            breakdown(model.models[0], mesh)
+            breakdown(model.models[0])
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
