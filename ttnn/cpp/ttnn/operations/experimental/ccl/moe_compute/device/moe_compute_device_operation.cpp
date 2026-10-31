@@ -519,8 +519,10 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
             matmul_output_tensor};
     }
 
-    const auto& combine_output_tensor = tensor_args.optional_output_tensor.value_or(
-        create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device()));
+    const auto& combine_output_tensor =
+        tensor_args.optional_output_tensor.has_value()
+            ? *tensor_args.optional_output_tensor
+            : create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device());
 
     return {
         create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),

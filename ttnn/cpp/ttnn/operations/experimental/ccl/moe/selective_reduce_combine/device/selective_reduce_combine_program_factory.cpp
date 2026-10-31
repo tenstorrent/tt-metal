@@ -343,8 +343,10 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);
 
-    auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type));
+    auto final_barrier_semaphore =
+        operation_attributes.optional_cross_device_semaphore.has_value()
+            ? *operation_attributes.optional_cross_device_semaphore
+            : ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);
 
     workload.semaphores.push_back(init_barrier_semaphore);
     workload.semaphores.push_back(final_barrier_semaphore);
