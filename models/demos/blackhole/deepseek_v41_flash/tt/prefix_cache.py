@@ -820,6 +820,18 @@ class PrefixCache:
         self.margin = int(os.environ.get("DSV41_APC_MARGIN", "128"))
         self.image_token_id = None  # set when image input is on: prompts with image placeholders bypass the cache
         self.stats = dict(restores=0, restored_tokens=0, snapshots=0, snap_s=0.0, restore_s=0.0, skipped_vision=0)
+        self.grid = None  # APC M0' (tt/apc_grid.py): DSV41_APC_GRID=512 adds a tip / divergence snapshot per prompt
+        self.plans, self.serial = {}, 0
+        if os.environ.get("DSV41_APC_GRID", "0") not in ("", "0"):
+            from models.demos.blackhole.deepseek_v41_flash.tt.apc_grid import GridPolicy
+
+            g = int(os.environ["DSV41_APC_GRID"])
+            if g == self.chunk and self.defer():
+                self.grid = GridPolicy(self.chunk, self.margin, tips=int(os.environ.get("DSV41_APC_GRID_TIPS", "2")))
+            else:
+                self.log(
+                    f"prefix cache: DSV41_APC_GRID={g} ignored (needs grid == chunk {self.chunk} and DSV41_APC_DEFER=1)"
+                )
 
     def active(self):
         import os
@@ -879,6 +891,40 @@ class PrefixCache:
         kt, ok = key_tokens(torch.as_tensor(tokens).reshape(-1)[:n], spans, self.image_token_id)
         return kt if ok else None
 
+    def new_prompt(self, b, tokens, total):
+        """APC M0': a prompt starts on user ``b``: choose its extra snapshot boundaries (``GridPolicy.plan``: tip / divergence); continuation pieces reuse the plan."""
+        self.serial += 1
+        if self.grid is not None and self.active() and not self._has_image(tokens, int(total)):
+            self.plans[b] = (self.serial, self.grid.plan(tokens, total))
+        else:
+            self.plans.pop(b, None)
+
+    def wants_user(self, b, B):
+        """``wants`` plus the grid points planned for user ``b``'s prompt."""
+        return self.wants(B) or B in self.plans.get(b, (0, {}))[1]
+
+    def _thin(self, snap):
+        """A new tip supersedes the tips of OLDER prompts on its own token chain (the conversation moved on): they cost host RAM and are rarely hit again. Power-of-two and divergence points stay."""
+        if (
+            self.grid is None
+            or getattr(snap, "kind", "") not in ("tip", "tip2")
+            or os.environ.get("DSV41_APC_GRID_THIN", "1") != "1"
+        ):
+            return
+        chain = self.store._chain(
+            getattr(snap, "ktoks", None) if getattr(snap, "ktoks", None) is not None else snap.toks, snap.s
+        )  # (ktoks: image-extended key tokens of the APC-images branch)
+        for key, old in list(self.store.snaps.items()):
+            if (
+                getattr(old, "kind", "") in ("tip", "tip2")
+                and getattr(old, "serial", 0) < snap.serial
+                and old.s < snap.s
+                and chain.get(old.s) == key
+            ):
+                self.store.bytes -= old.nbytes
+                del self.store.snaps[key]
+                self.stats["thinned"] = self.stats.get("thinned", 0) + 1
+
     def _has_image(self, tokens, n):
         return self.image_token_id is not None and bool(
             (torch.as_tensor(tokens).reshape(-1)[:n] == self.image_token_id).any()
@@ -893,7 +939,7 @@ class PrefixCache:
         return os.environ.get("DSV41_APC_DEFER", "1") == "1"
 
     def begin_snapshot(self, b, B, tokens, full=True, vs=None):
-        if not self.active() or not self.wants(B):
+        if not self.active() or not self.wants_user(b, B):
             return
         kt = self._keyed(tokens, B, vs, B)
         if kt is None:
@@ -912,6 +958,10 @@ class PrefixCache:
             return
         if kt is not tokens:
             p.snap.ktoks = torch.as_tensor(kt).long().reshape(-1)[:B].clone()
+        p.kind = (
+            "pow2" if self.wants(B) else self.plans.get(b, (0, {}))[1].get(B, "")
+        )  # (M0': what chose this boundary; tips of older prompts are thinned)
+        p.serial = self.plans.get(b, (self.serial, {}))[0]
         pend.append((p, key, (b, B, time.perf_counter() - t0, bool(full))))
 
     def finish_pending(self):
@@ -924,7 +974,9 @@ class PrefixCache:
         for p, key, (b, B, t_b, full) in pend:
             snap = snapshot_finish(self.m, p)
             snap.full = full
+            snap.kind, snap.serial = getattr(p, "kind", ""), getattr(p, "serial", 0)
             self._store(snap, b, B, t_b, "deferred")
+            self._thin(snap)
         return time.perf_counter() - t0
 
     def _store(self, snap, b, B, t_dev, how=""):

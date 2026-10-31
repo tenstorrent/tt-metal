@@ -1958,6 +1958,13 @@ class Model:
                 cand = [it for it in wave if it[2] == 0 or (img_cont and it[0] in vis)]
                 if apc is not None and cand:
                     t_apc += apc.finish_pending()  # (a lookup must see every snapshot taken so far)
+                    if (
+                        apc.grid is not None
+                    ):  # M0': tip / divergence boundaries of each new prompt (total length: plugin prefill_total, or the end of a row that ends here)
+                        for b_, t_, st_, e_ in wave:
+                            if st_ == 0 and not (vis and b_ in vis):
+                                tot_ = None if totals is None else totals.get(b_)
+                                apc.new_prompt(b_, t_, e_ if tot_ is None else tot_)
                     new_ = self._apc_restore_wave(
                         cand, apc, vis, zone if rep else None
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
@@ -2826,6 +2833,11 @@ class Model:
         b, chunk = 0, apc.chunk
         top = min(int(max_size or os.environ.get("DSV41_WARM_APC_MAX", "32768")), self.max_ctx - 1)
         sizes = [chunk * 2**k for k in range(32) if chunk * 2**k <= top]
+        if (
+            apc.grid is not None
+        ):  # M0': hits and snapshots at every multiple of the chunk (up to DSV41_WARM_APC_GRID_MAX)
+            gtop = min(top, int(os.environ.get("DSV41_WARM_APC_GRID_MAX", "32768")))
+            sizes = sorted(set(sizes) | set(range(chunk, gtop + 1, chunk)))
         resume = self.__dict__.setdefault("pf_resume", {})
         try:
             for s_ in sizes:

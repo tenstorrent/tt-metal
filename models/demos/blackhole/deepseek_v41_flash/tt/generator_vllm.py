@@ -154,7 +154,9 @@ def _chunked_prefill_capabilities():
         caps["prefill_lookahead"] = True
     if _apc_on():
         # the scheduler rounds vLLM's prefix-cache hits down to the grid of the snapshot policy (a hit the model cannot resume from would make it recompute the whole prompt in one call)
-        caps["prefix_cache_hit_policy"] = os.environ.get("DSV41_APC_POLICY", "pow2")
+        caps["prefix_cache_hit_policy"] = os.environ.get(
+            "DSV41_APC_POLICY", "all" if os.environ.get("DSV41_APC_GRID", "0") not in ("", "0") else "pow2"
+        )  # (APC M0': the model snapshots tip / divergence points of the 512 grid, the scheduler may round hits to any multiple of 512)
     return caps
 
 
