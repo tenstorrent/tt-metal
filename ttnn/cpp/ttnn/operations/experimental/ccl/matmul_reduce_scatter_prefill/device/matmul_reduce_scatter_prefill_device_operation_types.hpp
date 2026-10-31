@@ -28,7 +28,7 @@ struct MatmulReduceScatterPrefillParams {
     bool math_approx_mode = false;
     tt::tt_metal::MemoryConfig output_memory_config;
     // The plan's inputs, not the plan: the solve is a pure function of them (memoized by solve_plan), so the default
-    // program hash over these 14 scalars keys the program exactly, and a hot call neither copies nor hashes the plan's
+    // program hash over these 15 scalars keys the program exactly, and a hot call neither copies nor hashes the plan's
     // per-chip schedules. plan() looks the solved plan up.
     detail::PlanInputs plan_inputs;
 
