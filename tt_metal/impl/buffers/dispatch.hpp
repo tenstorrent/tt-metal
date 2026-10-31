@@ -108,6 +108,18 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     CoreCoord core;
 };
 
+// True when write_to_device_buffer can read an interleaved-layout write straight out of pinned host memory: the
+// buffer is not sharded and its pages carry no padding.
+bool pinned_interleaved_write_layout_supported(const Buffer& buffer);
+
+// True when the device can read a pinned write whose first source byte is at `src_region_start`: the prefetcher
+// relays the data to the dispatcher in L1, so the source must meet the L1 read alignment.
+bool pinned_write_source_aligned(const Buffer& buffer, const void* src_region_start);
+
+// Writes `buffer` (for a view, its region of the root buffer) from host memory starting at `src`. With
+// `pinned_memory` covering that host memory, the device may read it directly, at src's offset within the pin;
+// otherwise the bytes are copied through the command queue. Either way `src` is the host address of the first byte
+// written.
 // Returns true if pinned memory was used for the transfer
 // If logical_core_filter is non-null, only cores contained in the set are written (sharded buffers only).
 bool write_to_device_buffer(

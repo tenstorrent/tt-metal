@@ -6,6 +6,7 @@
 #include "mesh_command_queue_base.hpp"
 
 #include <mesh_device.hpp>
+#include <mesh_device_view.hpp>
 #include <mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <optional>
@@ -288,8 +289,10 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     if (blocking) {
         this->finish_nolock();
     } else if (any_pinned_used.load(std::memory_order_relaxed)) {
-        // If any transfer used pinned memory, add barrier event to all pinned memory objects
-        auto event = this->enqueue_record_event_to_host_nolock();
+        // If any transfer used pinned memory, add barrier event to all pinned memory objects. Waiting on an event
+        // looks up the device at each coordinate of its range, so it covers only the devices this host owns.
+        auto event =
+            this->enqueue_record_event_to_host_nolock({}, mesh_device_->get_view().get_local_mesh_coord_range());
         for (const auto& shard_data_transfer : shard_data_transfers) {
             if (mesh_device_->is_local(shard_data_transfer.shard_coord())) {
                 auto pinned_memory = experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer);
@@ -363,7 +366,8 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     this->submit_memcpy_request(num_txns_per_device, blocking, std::move(memory_pins));
 
     if (!blocking && has_pinned_memory) {
-        auto event = this->enqueue_record_event_to_host_nolock();
+        auto event =
+            this->enqueue_record_event_to_host_nolock({}, mesh_device_->get_view().get_local_mesh_coord_range());
         for (const auto& shard_data_transfer : shard_data_transfers) {
             if (mesh_device_->is_local(shard_data_transfer.shard_coord())) {
                 auto pinned_memory = experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer);

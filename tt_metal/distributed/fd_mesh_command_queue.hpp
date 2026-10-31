@@ -327,6 +327,7 @@ public:
     void finish_and_reset_in_use() override;
     void throw_if_reader_failed() override;
     bool in_use() override { return in_use_.load(); }
+    bool completion_reader_failed() const override { return thread_exception_state_.load(); }
 };
 
 }  // namespace tt::tt_metal::distributed
