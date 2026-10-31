@@ -495,6 +495,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
         std::vector<uint32_t> rt_raw{1u};  // num_connections
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            *args.device,
             args.device->get_fabric_node_id(coord),
             std::vector<tt::tt_fabric::FabricNodeId>{self.downstream_node},
             std::vector<uint32_t>{stream / 2},

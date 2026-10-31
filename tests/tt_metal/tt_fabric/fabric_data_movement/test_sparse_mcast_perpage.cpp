@@ -105,6 +105,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = sender_ct_args});
     append_routing_plane_connection_manager_rt_args(
+        *sender_device,
         src_fabric_node_id,
         dest_fabric_node_ids,
         {},

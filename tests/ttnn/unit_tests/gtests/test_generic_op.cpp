@@ -1627,6 +1627,7 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     // Append fabric connection args - this modifies sender_runtime_args and adds semaphores/defines to descriptor
     tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(0);
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args<ProgramDescriptor>(
+        *sender_device,
         sender_fabric_node_id,
         std::vector<tt::tt_fabric::eth_chan_directions>{tt::tt_fabric::eth_chan_directions::EAST},
         std::vector<uint32_t>{},

@@ -283,6 +283,7 @@ void append_fabric_connection_rt_args(
 
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
@@ -290,8 +291,7 @@ void append_fabric_connection_rt_args(
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
-    // TODO(#52020): resolves the default context; take a const MeshDevice& instead.
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = mesh_device.impl().metal_env().get_control_plane().get_fabric_context();
     append_fabric_connection_rt_args<ProgramOrDescriptor>(
         fabric_context,
         src_fabric_node_id,
@@ -334,6 +334,7 @@ std::vector<eth_chan_directions> get_neighbor_eth_directions(
 // convenience function using RoutingDirection's
 template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<eth_chan_directions>& attempted_directionss,
     const std::vector<uint32_t>& connection_link_indices,
@@ -343,7 +344,7 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type,
     CoreType core_type) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
 
     std::vector<FabricNodeId> dst_nodes;
     dst_nodes.reserve(attempted_directionss.size());
@@ -364,6 +365,7 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     }
 
     append_routing_plane_connection_manager_rt_args<ProgramOrDescriptor>(
+        mesh_device,
         src_fabric_node_id,
         dst_nodes,
         connection_link_indices,
@@ -381,9 +383,10 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 // Template: ProgramDescriptor appends to .defines vector; Program calls add_defines().
 template <typename ProgramOrDescriptor>
 void inject_fabric_kernel_defines(
-    ProgramOrDescriptor& worker_program_or_desc, tt::tt_metal::KernelHandle& kernel_id, FabricApiType api_type) {
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-
+    const FabricContext& fabric_context,
+    ProgramOrDescriptor& worker_program_or_desc,
+    tt::tt_metal::KernelHandle& kernel_id,
+    FabricApiType api_type) {
     auto add_kernel_defines = [&, kernel_ref = [&]() {
         if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
             return &worker_program_or_desc.kernels[kernel_id];
@@ -414,6 +417,7 @@ void inject_fabric_kernel_defines(
 // Use inject_fabric_kernel_defines() separately when defines are needed on the kernel.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args_impl(
+    const ControlPlane& control_plane,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
@@ -427,8 +431,14 @@ void append_routing_plane_connection_manager_rt_args_impl(
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
+    const auto get_eth_direction = [&](const FabricNodeId& dst_node) -> std::optional<eth_chan_directions> {
+        const auto routing_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
+        if (!routing_direction.has_value()) {
+            return std::nullopt;
+        }
+        return control_plane.routing_direction_to_eth_direction(routing_direction.value());
+    };
 
     // TODO: Remove this restriction once multiple ethernet cores per direction are supported
     // https://github.com/tenstorrent/tt-metal/issues/27221
@@ -436,7 +446,7 @@ void append_routing_plane_connection_manager_rt_args_impl(
     // direction
     std::unordered_set<eth_chan_directions> used_directions;
     for (const auto& dst_node : dst_nodes) {
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+        auto dir_opt = get_eth_direction(dst_node);
         if (dir_opt.has_value()) {
             TT_FATAL(
                 !used_directions.contains(dir_opt.value()),
@@ -449,7 +459,7 @@ void append_routing_plane_connection_manager_rt_args_impl(
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+        auto dir_opt = get_eth_direction(dst_node);
         TT_FATAL(
             dir_opt.has_value(),
             "Could not determine forwarding direction from src {} to first hop {}",
@@ -472,7 +482,14 @@ void append_routing_plane_connection_manager_rt_args_impl(
         }
 
         append_fabric_connection_rt_args<ProgramOrDescriptor>(
-            src_fabric_node_id, dst_node, link_idx, worker_program_or_desc, worker_core, worker_args, core_type);
+            fabric_context,
+            src_fabric_node_id,
+            dst_node,
+            link_idx,
+            worker_program_or_desc,
+            worker_core,
+            worker_args,
+            core_type);
     }
 
     // 2) Append additional info for 2D Mesh
@@ -494,6 +511,7 @@ void append_routing_plane_connection_manager_rt_args_impl(
 // Original API — injects defines + semaphores + RT args into the PD.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
@@ -503,7 +521,9 @@ void append_routing_plane_connection_manager_rt_args(
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type,
     CoreType core_type) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     append_routing_plane_connection_manager_rt_args_impl(
+        control_plane,
         src_fabric_node_id,
         dst_nodes,
         connection_link_indices,
@@ -511,7 +531,7 @@ void append_routing_plane_connection_manager_rt_args(
         worker_core,
         worker_args,
         core_type);
-    inject_fabric_kernel_defines(worker_program_or_desc, kernel_id, api_type);
+    inject_fabric_kernel_defines(control_plane.get_fabric_context(), worker_program_or_desc, kernel_id, api_type);
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
@@ -675,6 +695,7 @@ template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
     CoreType);
 
 template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const FabricNodeId&,
     const FabricNodeId&,
     const uint32_t,
@@ -684,6 +705,7 @@ template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
     CoreType);
 
 template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const FabricNodeId&,
     const FabricNodeId&,
     const uint32_t,
@@ -693,6 +715,7 @@ template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
     CoreType);
 
 template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const FabricNodeId&,
     const std::vector<eth_chan_directions>&,
     const std::vector<uint32_t>&,
@@ -704,6 +727,7 @@ template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::
     CoreType);
 
 template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::Program>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const FabricNodeId&,
     const std::vector<eth_chan_directions>&,
     const std::vector<uint32_t>&,
@@ -715,6 +739,7 @@ template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::
     CoreType);
 
 template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const FabricNodeId&,
     const std::vector<FabricNodeId>&,
     const std::vector<uint32_t>&,
@@ -726,6 +751,7 @@ template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Prog
     CoreType);
 
 template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Program>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const FabricNodeId&,
     const std::vector<FabricNodeId>&,
     const std::vector<uint32_t>&,
@@ -785,11 +811,10 @@ size_t fabric_connection_rt_args_size(const tt::tt_fabric::FabricContext& fabric
 
 }  // namespace
 
-size_t fabric_connection_rt_args_size(size_t num_connections) {
-    // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
-    // parameter to resolve from.
+size_t fabric_connection_rt_args_size(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t num_connections) {
     return fabric_connection_rt_args_size(
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context(), num_connections);
+        mesh_device.impl().metal_env().get_control_plane().get_fabric_context(), num_connections);
 }
 
 // Compute fabric connection RT args without any PD mutation.
@@ -941,6 +966,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 // Use with get_fabric_kernel_defines() when defines must be set before kernel compilation.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_rt_args_no_defines(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
@@ -953,6 +979,7 @@ void append_routing_plane_connection_rt_args_no_defines(
     (void)kernel_id;
     (void)api_type;
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args_impl(
+        mesh_device.impl().metal_env().get_control_plane(),
         src_fabric_node_id,
         dst_nodes,
         connection_link_indices,
@@ -963,6 +990,7 @@ void append_routing_plane_connection_rt_args_no_defines(
 }
 
 template void append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const tt::tt_fabric::FabricNodeId&,
     const std::vector<tt::tt_fabric::FabricNodeId>&,
     const std::vector<uint32_t>&,
@@ -974,6 +1002,7 @@ template void append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::P
     CoreType);
 
 template void append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::Program>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const tt::tt_fabric::FabricNodeId&,
     const std::vector<tt::tt_fabric::FabricNodeId>&,
     const std::vector<uint32_t>&,
