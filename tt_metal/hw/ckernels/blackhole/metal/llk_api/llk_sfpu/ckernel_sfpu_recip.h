@@ -113,11 +113,15 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
     // store(y)
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
-        TT_SFPLOADMACRO(
-            /*lreg_ind*/ (0 << 2) | y,
-            /*instr_mod0*/ InstrModLoadStore::DEFAULT,
-            /*sfpu_addr_mode*/ ADDR_MOD_7,
-            /*dest_reg_addr*/ 0);
+        // Macro 0 reads L7 to select x, and writes only x and y.
+        TT_LLK_SFPU_ISSUE_TT_MACRO(
+            TT_OP_SFPLOADMACRO(
+                /*lreg_ind*/ (0 << 2) | y,
+                /*instr_mod0*/ InstrModLoadStore::DEFAULT,
+                /*sfpu_addr_mode*/ ADDR_MOD_7,
+                /*dest_reg_addr*/ 0),
+            1u << p_sfpu::LREG7,
+            (1u << y) | (1u << x));
         // Macro 0 schedules y = arecip(y) and x = y for the next SFPU issue.
         // Wait before writing y's low 16 bits directly.
         TTI_SFPNOP;
@@ -249,19 +253,19 @@ inline void _init_reciprocal_fast_7b_() {
 inline void _init_reciprocal_fast_8b_3c_() {
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
-    TTI_SFPARECIP(
+    TT_LLK_SFPU_ISSUE_TTI_TEMPLATE(TT_OP_SFPARECIP(
         /*imm12_math*/ 0,
         /*lreg_c*/ 0,
         /*lreg_dest*/ 12,
-        /*instr_mod1*/ sfpi::SFPARECIP_MOD1_RECIP);
+        /*instr_mod1*/ sfpi::SFPARECIP_MOD1_RECIP));
 
     // InstructionTemplate[1]
-    TTI_SFPMAD(
+    TT_LLK_SFPU_ISSUE_TTI_TEMPLATE(TT_OP_SFPMAD(
         /*lreg_src_a*/ p_sfpu::LCONST_0,
         /*lreg_src_b*/ p_sfpu::LCONST_0,
         /*lreg_src_c*/ 0,
         /*lreg_dest*/ 13,
-        /*instr_mod1*/ 8);  // SFPMAD_MOD1_INDIRECT_VD
+        /*instr_mod1*/ 8));  // SFPMAD_MOD1_INDIRECT_VD
 
     // Macro 0: [y]
     // Loads y, schedules y = arecip(y), and copies y to L[LREG7].
