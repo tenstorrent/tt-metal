@@ -295,7 +295,12 @@ void get_optimal_dram_bank_to_reader_assignment(
     std::vector<CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt_metal::NOC noc) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto bank_to_core = device->get_optimal_dram_bank_to_logical_worker_assignment(
+        noc, tt_metal::distributed::MeshCoordinate::zero_coordinate(device->shape().dims()));
+    all_worker_cores_ordered.resize(bank_to_core.size());
+    for (const auto& [bank, core] : bank_to_core) {
+        all_worker_cores_ordered.at(bank) = core;
+    }
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));
