@@ -240,11 +240,14 @@ def test_scatter_add_zero_volume(input_shape, dim, index_shape, device):
             6,
         ),
         ([50, 20], 0, [50, 20], [200, 80], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 5),
-        ([10, 10, 10], 1, [2, 30, 10], [2, 30, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 8),
+        # bfloat16 TILE rows with an int32 or uint32 index route to codegen (ttnn::scatter() in
+        # scatter.cpp; the gate is codegen/scatter_codegen_supported.hpp): TILE stays TILE, so
+        # native's to_layout legs never run and the count is lower than native's.
+        ([10, 10, 10], 1, [2, 30, 10], [2, 30, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 4),
         ([10, 30, 6, 10], -1, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 2),
         ([10, 30, 6, 10], 2, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 6),
         ([50, 200], 0, [49, 199], [51, 201], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 10),
-        ([10, 20], 0, [9, 19], [11, 21], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE, 10),
+        ([10, 20], 0, [9, 19], [11, 21], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE, 6),
     ],
 )
 def test_scatter_partial(
@@ -313,7 +316,10 @@ def test_scatter_partial(
 @pytest.mark.parametrize(
     "input_dtype, index_dtype, layout",
     [
+        # bfloat16 with an int32 or uint32 index routes to the codegen kernels, whose readers fold the
+        # same page coordinates; every other row stays on the native kernels.
         (ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        (ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
         (ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
         (ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
     ],
@@ -405,7 +411,12 @@ def test_scatter_singleton_operand(input_shape, dim, index_shape, source_shape, 
     ],
 )
 @pytest.mark.parametrize("reduction", ["add", "multiply"])
-def test_scatter_reduction_high_rank_unequal_leading_dims(input_shape, dim, index_and_source_shape, reduction, device):
+# int32 lands on the codegen bf16-reduce factory, uint16 on native's; each carries its own copy of
+# the coordinate walk this test guards.
+@pytest.mark.parametrize("index_dtype", [ttnn.int32, ttnn.uint16])
+def test_scatter_reduction_high_rank_unequal_leading_dims(
+    input_shape, dim, index_and_source_shape, reduction, index_dtype, device
+):
     # Deliberately randint rather than rand_scatter_index, unlike every non-reduction test in this
     # file. Duplicate indices are the whole point here: they are what makes the reduce path combine
     # anything at all. Unique indices write each output slot exactly once, which turns add and
@@ -419,7 +430,7 @@ def test_scatter_reduction_high_rank_unequal_leading_dims(input_shape, dim, inde
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
 
     torch_index = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch.int64)
-    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=ttnn.Layout.ROW_MAJOR, device=device)
 
     torch_src = torch.randn(index_and_source_shape, dtype=torch.bfloat16)
     ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
@@ -443,11 +454,14 @@ def test_scatter_reduction_high_rank_unequal_leading_dims(input_shape, dim, inde
         ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 3),
         ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 1),
         ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 4),
-        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 6),
+        # bfloat16 TILE rows with an int32 or uint32 index route to codegen (ttnn::scatter() in
+        # scatter.cpp; the gate is codegen/scatter_codegen_supported.hpp): TILE stays TILE, so
+        # native's to_layout legs never run and the count is lower than native's.
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 3),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
-        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 6),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 3),
         ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
-        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 7),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 4),
         ##################
         # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
         # ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
@@ -480,7 +494,7 @@ def test_scatter_normal_with_callback(
     torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
     ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
 
-    for _ in range(2):
+    for iteration in range(2):
         torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
         ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
 
@@ -491,6 +505,10 @@ def test_scatter_normal_with_callback(
             assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
         else:
             assert_allclose(torch_result_from_ttnn, torch_result)
+        if iteration == 0:
+            entries_after_first_call = device.num_program_cache_entries()
+    # The second call hits every program the first one cached, whichever route served it.
+    assert device.num_program_cache_entries() == entries_after_first_call
     assert device.num_program_cache_entries() == expected_num_cache_entries
 
 
@@ -606,7 +624,7 @@ def test_scatter_reduction_row_major_int32_with_callback_and_sub_cores(
     torch_src = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch_dtype)
     ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
 
-    for _ in range(2):
+    for iteration in range(2):
         torch_result = torch.scatter_add(torch_input, dim, index=torch_index, src=torch_src)
         ttnn_result = ttnn.scatter_add(ttnn_input, dim, ttnn_index, ttnn_src, sub_core_grids=sub_core_grids)
 
@@ -616,6 +634,10 @@ def test_scatter_reduction_row_major_int32_with_callback_and_sub_cores(
             assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
         else:
             assert_allclose(torch_result_from_ttnn, torch_result)
+        if iteration == 0:
+            entries_after_first_call = device.num_program_cache_entries()
+    # The second call hits every program the first one cached, whichever route served it.
+    assert device.num_program_cache_entries() == entries_after_first_call
     assert device.num_program_cache_entries() == expected_num_cache_entries
 
 

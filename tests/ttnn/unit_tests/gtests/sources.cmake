@@ -19,6 +19,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_scalar_lhs_binary.cpp
     test_add_int.cpp
     test_broadcast_to.cpp
+    test_scatter_codegen_prim.cpp
     test_convert_to_hwc_gather.cpp
     test_eltwise.cpp
     test_gelu_bw_ulp.cpp
