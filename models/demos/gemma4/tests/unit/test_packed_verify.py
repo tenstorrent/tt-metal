@@ -26,6 +26,102 @@ import ttnn
 from ...tests.test_factory import parametrize_mesh_with_fabric
 
 
+def test_device_pli_rejects_non_pli_target(expect_error):
+    from models.demos.gemma4.tt.model import Gemma4Model
+
+    model = Gemma4Model.__new__(Gemma4Model)
+    model.hidden_size_per_layer_input = 0
+    model.per_layer_input_weights = {}
+    with expect_error(ValueError, "requires a PLI target"):
+        model.init_pli_device_weights()
+
+
+def test_device_pli_requires_uploaded_weights(expect_error):
+    from models.demos.gemma4.tt.model import Gemma4Model
+
+    model = Gemma4Model.__new__(Gemma4Model)
+    with expect_error(RuntimeError, "must be initialized before compute_pli_device"):
+        model.compute_pli_device(None, None)
+
+
+def _load_pli_target(mesh_device):
+    """Load a PLI checkpoint only after checking its config cheaply."""
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL to run device PLI tests")
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    text_config = getattr(config, "text_config", config)
+    if not getattr(text_config, "hidden_size_per_layer_input", 0):
+        pytest.skip("requires a PLI checkpoint")
+    if _is_moe_model(model_path):
+        pytest.skip(_MOE_UNSUPPORTED_REASON)
+
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    max_seq_len, block_size = 1024, 64
+    generator, _, _ = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        num_layers=None,
+        paged_attention_config=PagedAttentionConfig(
+            block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size)
+        ),
+        bounded_sliding_kv_cache=False,
+        multimodal=False,
+    )
+    return generator.model[0]
+
+
+def _device_pli_for_ids(model, mesh_device, ids):
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None
+    ids_tt = ttnn.from_torch(
+        ids, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper
+    )
+    embeds = model.embed_tokens(ids_tt)
+    if len(embeds.shape) == 3:
+        embeds = ttnn.unsqueeze_to_4D(embeds)
+    embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
+    output = model.compute_pli_device(ids_tt, embeds)
+    replica = ttnn.get_device_tensors(output)[0] if mesh_device.get_num_devices() > 1 else output
+    return ttnn.to_torch(replica).float()
+
+
+@parametrize_mesh_with_fabric()
+def test_pli_device_matches_host_scaled_embedding(mesh_device, reset_seeds):
+    model = _load_pli_target(mesh_device)
+    ids = torch.tensor([[1408, 22202, 529, 107182]], dtype=torch.int64)
+    host = model.compute_host_pli_batch(ids).float()
+    model.init_pli_device_weights()
+    first_table = model._pli_embed_tt
+    model.init_pli_device_weights()
+    assert model._pli_embed_tt is first_table
+    device = _device_pli_for_ids(model, mesh_device, ids)
+    assert device.shape == host.shape
+    pcc = torch.corrcoef(torch.stack([host.flatten(), device.flatten()]))[0, 1].item()
+    max_diff = (host - device).abs().max().item()
+    logger.info("device PLI versus host PLI: PCC={} max|diff|={}", pcc, max_diff)
+    assert pcc > 0.9999
+    # Device PLI rounds each intermediate to bf16 and the host rounds once, so they differ by 1-2 bf16
+    # steps (0.25 at |x| = 33.25). PCC dilutes a wrong scale on one layer's slice across all 35 layers;
+    # an elementwise relative bound does not.
+    assert torch.allclose(device, host, rtol=2**-6, atol=0.05), f"max|diff|={max_diff}"
+
+
+@parametrize_mesh_with_fabric()
+def test_pli_device_row_count_invariant(mesh_device, reset_seeds):
+    model = _load_pli_target(mesh_device)
+    ids = torch.tensor([[1408, 22202, 529, 107182]], dtype=torch.int64)
+    model.init_pli_device_weights()
+    one = _device_pli_for_ids(model, mesh_device, ids[:, :1])
+    four = _device_pli_for_ids(model, mesh_device, ids)
+    assert torch.equal(one[:, :, 0, :], four[:, :, 0, :])
+
+
 def _is_moe_model(model_path):
     """True for Mixture-of-Experts checkpoints (e.g. gemma-4-26B-A4B).
 
@@ -57,36 +153,6 @@ _MOE_UNSUPPORTED_REASON = (
 )
 
 
-def _is_pli_model(model_path):
-    """True for per-layer-input (MatFormer) checkpoints (e.g. gemma-4-E2B/E4B).
-
-    These models carry a per-layer input embedding (``hidden_size_per_layer_input``)
-    that must be fed to every layer. Packed verify drives ``self(...)`` through
-    ``ttnn_packed_verify_forward`` without threading PLI, so a PLI model falls into
-    ``Gemma4Model._compute_per_layer_inputs(None, None)`` and raises. PLI is not
-    wired through the speculative-verify path yet, so packed verify is unsupported
-    on these checkpoints (tracked in #49022). Dense non-PLI targets (12B, 31B) are
-    unaffected. Detect it cheaply from the config (no weights loaded) so we can skip
-    before ``from_pretrained`` — which also avoids writing the weight cache on the
-    read-only NAS mount used by CI e2e.
-    """
-    try:
-        from transformers import AutoConfig
-
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        tc = getattr(cfg, "text_config", cfg)
-        return bool(getattr(tc, "hidden_size_per_layer_input", 0))
-    except Exception:
-        return False
-
-
-_PLI_UNSUPPORTED_REASON = (
-    "packed verify does not thread per-layer inputs (PLI) through the verify forward, so "
-    "PLI/MatFormer checkpoints (e.g. gemma-4-E2B/E4B) hit _compute_per_layer_inputs(None, None) "
-    "and raise. Unsupported until PLI is wired through the speculative-verify path (see #49022). "
-    "Dense non-PLI targets (12B, 31B) run this test."
-)
-
 _L1_OVERFLOW_REASON = (
     "packed-verify global-layer SDPA (head_dim=512, fp32-accum, P candidates folded into "
     "heads) exceeds this core's L1 at the current TP. The per-core footprint shrinks ~TP×, "
@@ -116,9 +182,6 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
 
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
-
-    if _is_pli_model(model_path):
-        pytest.skip(_PLI_UNSUPPORTED_REASON)
 
     # Single-device (TP=1) is unsupported for packed verify on the 12B model: the
     # global layers (global_head_dim=512) run the packed SDPA with fp32_dest_acc_en
@@ -150,6 +213,7 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
         num_layers=None,
         paged_attention_config=paged_attention_config,
         bounded_sliding_kv_cache=False,
+        multimodal=False,
     )
     target = generator.model[0]
     page_table = create_tt_page_table(1, paged_attention_config)
@@ -271,8 +335,6 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
 
-    if _is_pli_model(model_path):
-        pytest.skip(_PLI_UNSUPPORTED_REASON)
     if mesh_device.get_num_devices() == 1:
         pytest.skip("single-device L1 limit: use a TP mesh (e.g. 1x4)")
 
@@ -318,6 +380,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         num_layers=None,
         paged_attention_config=paged_attention_config,
         bounded_sliding_kv_cache=False,
+        multimodal=False,
     )
     target = generator.model[0]
     page_table_torch = create_tt_page_table(Bmax, paged_attention_config)  # [Bmax, blocks_per_user], distinct per user
@@ -426,6 +489,15 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     logger.info(
         f"=== packed-verify batch bench | ctx={ctx} P={P} (K={K}) reps={reps} tp={tp} H_local={H} S_k={S_k} ==="
     )
+    # PLI targets need a PLI source on these direct model calls; mirror the
+    # mechanism SpeculativeDecoder._verify selects.
+    device_pli = spec.target_has_pli and spec._pli_dev_host
+    if device_pli:
+        target.init_pli_device_weights()
+
+    def _pli(token_ids):
+        return {"pli_on_device": device_pli, "token_ids_host": None if device_pli else token_ids}
+
     rows = []
     for B in Bs:
         pt_b = page_table_torch[:B].to(torch.int32)
@@ -450,6 +522,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
                 embed_idx_full=None,
                 embed_idx_sliding=None,
                 hot_pt=None,
+                **_pli([t for u in range(B) for t in tokens_per_user]),
             )
 
         try:
@@ -464,13 +537,19 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         # ── batch-alias baseline ──────────────────────────────────────────────
         if B * P <= 32:
             # single-pass: B*P pseudo-users, each user's row replicated P times.
-            x_a = spec._tokens_tensor([tokens_per_user[p] for u in range(B) for p in range(P)])
+            alias_ids = [tokens_per_user[p] for u in range(B) for p in range(P)]
+            x_a = spec._tokens_tensor(alias_ids)
             pu_a, pi_a = spec._pos_tensors([c + p for u in range(B) for p in range(P)])
             pt_alias = _from(pt_b.repeat_interleave(P, dim=0), ttnn.int32)
 
             def _alias_call():
                 return target.ttnn_verify_forward(
-                    x=x_a, current_pos=pu_a, current_pos_cache=pi_a, page_table=pt_alias, kv_cache=spec.tt_kv_cache
+                    x=x_a,
+                    current_pos=pu_a,
+                    current_pos_cache=pi_a,
+                    page_table=pt_alias,
+                    kv_cache=spec.tt_kv_cache,
+                    **_pli(alias_ids),
                 )
 
             alias_ms, alias_lh = _run(_alias_call, B * P)
@@ -495,13 +574,19 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         else:
             # batch-alias can't fit B*(K+1)>32 users in one decode pass; the
             # no-packing cost is P sequential batch-B decodes.
-            x_a = spec._tokens_tensor([tokens_per_user[0]] * B)
+            alias_ids = [tokens_per_user[0]] * B
+            x_a = spec._tokens_tensor(alias_ids)
             pu_a, pi_a = spec._pos_tensors([c] * B)
             pt_alias = _from(pt_b, ttnn.int32)
 
             def _alias_call():
                 return target.ttnn_verify_forward(
-                    x=x_a, current_pos=pu_a, current_pos_cache=pi_a, page_table=pt_alias, kv_cache=spec.tt_kv_cache
+                    x=x_a,
+                    current_pos=pu_a,
+                    current_pos_cache=pi_a,
+                    page_table=pt_alias,
+                    kv_cache=spec.tt_kv_cache,
+                    **_pli(alias_ids),
                 )
 
             one_ms, _ = _run(_alias_call, B)
