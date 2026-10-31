@@ -94,8 +94,25 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    // RC memset knock-out c4 = c2 + c3: clear unchanged; in the barrier action the pack TRISC makes one L1 load (port 3
+    // last grant = pack) and releases only in the first half of a 1,024-cycle wall-clock window; every thread then
+    // spins on the wall clock (register read, not L1) to the same deadline.
     llk_profiler::reset();
-    llk_profiler::sync_threads();
+    llk_barrier::rendezvous(
+        llk_barrier::is_action_thread(),
+        []
+        {
+            (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(mailboxes_start));
+            while ((ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) & 1023) >= 512)
+            {
+            }
+        });
+    {
+        const std::uint32_t deadline = (ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) & ~1023u) + 2048;
+        while (static_cast<std::int32_t>(ckernel::reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L) - deadline) < 0)
+        {
+        }
+    }
 #endif
 
     {
