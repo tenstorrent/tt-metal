@@ -566,7 +566,10 @@ inline void calculate_typecast_int32_to_uint16() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP |
+        sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);;
         TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
     }
 #else
