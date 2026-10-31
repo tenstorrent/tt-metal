@@ -11,6 +11,7 @@
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
+#include <tt-metalium/bfloat16.hpp>
 
 using namespace tt::tt_metal;
 namespace {
@@ -628,16 +629,39 @@ TernaryCorePartition compute_core_partition(
     return p;
 }
 
+bool uses_fp32_dest(
+    const TernaryDeviceOperation::tensor_args_t& tensor_args,
+    const TernaryDeviceOperation::tensor_return_value_t& output) {
+    const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
+    const auto is_32bit = [](DataType dtype) {
+        return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
+    };
+    return is_32bit(output.dtype()) || is_32bit(predicate_tensor.dtype()) ||
+           (value_true_tensor.has_value() && is_32bit(value_true_tensor->dtype())) ||
+           (value_false_tensor.has_value() && is_32bit(value_false_tensor->dtype()));
+}
+
 // Single source of truth for packing the (hash-excluded, dynamic) compute-kernel scalar arg.
 uint32_t pack_compute_scalar_arg(
-    const TernaryDeviceOperation::operation_attributes_t& operation_attributes, DataType output_dtype) {
+    const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
+    DataType output_dtype,
+    bool fp32_dest_acc_en) {
     TernaryVariant variant = operation_attributes.ternary_variant;
+    const auto op_type = operation_attributes.ternary_op_type;
+    const bool round_scalar = !fp32_dest_acc_en && output_dtype == DataType::BFLOAT16 &&
+                              op_type != TernaryOpType::ADDCMUL && op_type != TernaryOpType::ADDCDIV;
+    const auto pack = [&](const auto& scalar) {
+        const uint32_t bits = pack_scalar_runtime_arg(scalar, output_dtype);
+        return round_scalar ? std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(bits)))) : bits;
+    };
     if (variant == TernaryVariant::TTS) {
-        return pack_scalar_runtime_arg(operation_attributes.scalar_input_b.value(), output_dtype);
+        return pack(operation_attributes.scalar_input_b.value());
     }
-    if (variant == TernaryVariant::TST || ((operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL ||
-                                            operation_attributes.ternary_op_type == TernaryOpType::ADDCDIV) &&
-                                           operation_attributes.scalar_input_a.has_value())) {
+    if (variant == TernaryVariant::TST) {
+        return pack(operation_attributes.scalar_input_a.value());
+    }
+    if ((op_type == TernaryOpType::ADDCMUL || op_type == TernaryOpType::ADDCDIV) &&
+        operation_attributes.scalar_input_a.has_value()) {
         return pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output_dtype);
     }
     return 0u;
@@ -707,6 +731,7 @@ TernaryPerCoreArgs build_per_core_runtime_args(
     TernaryVariant variant = operation_attributes.ternary_variant;
 
     TernaryPerCoreArgs result;
+    const bool fp32_dest_acc_en = uses_fp32_dest(tensor_args, output);
 
     // Which reader/writer slots carry a buffer base address depends only on the variant, not on the
     // core, so record it once.  Kept in lockstep with the slot assignments in the core loop below.
@@ -918,7 +943,7 @@ TernaryPerCoreArgs build_per_core_runtime_args(
         // Compute runtime args.  scalar_arg is the packed scalar_input_a/scalar_input_b; it is
         // EXCLUDED from compute_program_hash and therefore DYNAMIC -- like every other arg here it is
         // re-derived by this builder on each cache hit. Packed via the shared single-source-of-truth helper.
-        const uint32_t scalar_arg = pack_compute_scalar_arg(operation_attributes, output.dtype());
+        const uint32_t scalar_arg = pack_compute_scalar_arg(operation_attributes, output.dtype(), fp32_dest_acc_en);
         auto [freq, counter] = [&] {
             switch (broadcast_type) {
                 case TernaryBroadcastType::ROW_COL_BCAST:
@@ -1351,8 +1376,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     auto is_32bit_format = [](tt::DataFormat format) {
         return format == tt::DataFormat::UInt32 || format == tt::DataFormat::Int32 || format == tt::DataFormat::Float32;
     };
-    bool fp32_dest_acc_en = is_32bit_format(output_data_format) || is_32bit_format(predicate_data_format) ||
-                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format);
+    bool fp32_dest_acc_en = CMAKE_UNIQUE_NAMESPACE::uses_fp32_dest(tensor_args, output);
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
