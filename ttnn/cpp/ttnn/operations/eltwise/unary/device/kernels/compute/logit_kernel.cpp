@@ -15,6 +15,8 @@ namespace ckl = compute_kernel_lib;
 // Formula: logit(x) = log(x/(1-x)) -- calls clamp, rsub, div, and log tiles.
 
 constexpr bool kDoClamp = get_arg(args::do_clamp) == 1;
+constexpr auto kPackReconfig =
+    get_arg(args::pack_reconfig) == 1 ? ckl::DataFormatReconfig::Enabled : ckl::DataFormatReconfig::Disabled;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
@@ -25,8 +27,6 @@ void kernel_main() {
     DataflowBuffer dfb_tmp0_obj(dfb::tmp0);
     DataflowBuffer dfb_out_obj(dfb::out);
 
-    // The legacy kernel boots unpack from the input and pack for the final output once;
-    // tmp0 has the same element format and is only an in-kernel handoff.
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
     // The temporary DFB holds only two tiles, and this kernel is both its producer and consumer.
@@ -39,8 +39,7 @@ void kernel_main() {
                     dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 ckl::Dst::D0>{dfb_in_obj},
             ckl::Optional<kDoClamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
-            ckl::PackTile<ckl::output(
-                dfb::tmp0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            ckl::PackTile<ckl::output(dfb::tmp0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kPackReconfig)>{
                 dfb_tmp0_obj});
 
         ckl::eltwise_chain(
@@ -56,8 +55,7 @@ void kernel_main() {
             ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
             ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(
-                dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kPackReconfig)>{
                 dfb_out_obj});
     }
 }

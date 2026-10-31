@@ -2533,6 +2533,25 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
         assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.parametrize("input_shape", [(32, 32), (1, 3, 64, 96)])
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype",
+    [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)],
+    ids=["bf16_to_fp32", "fp32_to_bf16"],
+)
+@pytest.mark.parametrize("eps", [None, 0.1])
+def test_unary_logit_output_tensor_other_dtype(device, input_shape, in_dtype, out_dtype, eps):
+    torch.manual_seed(0)
+    in_data = torch.rand(input_shape) * 0.98 + 0.01
+    input_tensor = ttnn.from_torch(in_data, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.from_torch(torch.zeros(input_shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.logit(input_tensor, eps=eps, output_tensor=output_tensor)
+    golden_tensor = ttnn.get_golden_function(ttnn.logit)(ttnn.to_torch(input_tensor).float(), eps=eps)
+
+    assert_allclose(ttnn.to_torch(output_tensor).float(), golden_tensor, rtol=1e-2, atol=1e-2)
+
+
 @pytest.mark.parametrize("eps", [None, 0.25])
 def test_unary_logit_streams_temporary_tiles(device, eps):
     grid = device.compute_with_storage_grid_size()
