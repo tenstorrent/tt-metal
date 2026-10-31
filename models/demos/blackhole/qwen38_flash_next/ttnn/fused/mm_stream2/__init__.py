@@ -15,6 +15,9 @@ from .. import program as fp
 
 NAME = "mm_stream2"
 FLAG = "QWEN38_MM_STREAM2"
+OPTIMAL_FLAG = "QWEN38_MM2_OPTIMAL"
+# (K, N) shapes whose readers sit on the DRAM banks' optimal NOC0 workers when QWEN38_MM2_OPTIMAL is "1" (the default)
+OPTIMAL_SHAPES = frozenset({(2560, 2304)})  # the QSA merged projection
 MAX_PACKET_BYTES = 16384
 _WORKERS: dict = {}
 
@@ -22,6 +25,10 @@ _WORKERS: dict = {}
 def enabled() -> bool:
     # default on: bitwise to the stock DRAM-sharded program; e2e A/B on the 1x8 line 16.28/16.54 -> 15.76/15.75 ms/token
     return os.environ.get(FLAG, "1") == "1"
+
+
+def optimal_enabled() -> bool:
+    return os.environ.get(OPTIMAL_FLAG, "1") == "1"
 
 
 def bank_workers(mesh) -> list:
@@ -207,7 +214,12 @@ def _plan(mesh, groups, act_cores, exclude, place="rect"):
     key = (id(mesh), tuple(groups), tuple(sorted(map(tuple, exclude))), tuple(act_cores), place)
     if key in _PLANS:
         return _PLANS[key]
-    taken = set(map(tuple, exclude)) | set(map(tuple, act_cores)) | set(placement.reserved_cores(mesh))
+    reserved = set(placement.reserved_cores(mesh))
+    if (
+        place == "optimal"
+    ):  # the readers may take the reference die's bank worker cores (never the storage / drain cores)
+        reserved -= {(w.x, w.y) for w in bank_workers(mesh)}
+    taken = set(map(tuple, exclude)) | set(map(tuple, act_cores)) | reserved
     per_bank = [sum(1 for g in groups if g[0] == b) for b in range(BANKS)]
     placed, assign = [], {}
     seen = [0] * BANKS
@@ -598,6 +610,9 @@ def linear(act, weight, *, memory_config, program_config, compute_kernel_config,
     nb = weight.memory_config().shard_spec.shape[1] // TILE
     out = fp.allocate(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, out_cfg)
     exclude = moe_experts.model_exclude(mesh)
+    if (k, n) in OPTIMAL_SHAPES and optimal_enabled():
+        place = "optimal"
+        exclude = frozenset(set(exclude) - {(w.x, w.y) for w in bank_workers(mesh)})
     fp.run_program(
         [act, hit[1], out],
         mm_stream2_program(act, hit[1], out, k=k, n=n, nb=nb, blk=blk, cols=cols, exclude=exclude, place=place),
