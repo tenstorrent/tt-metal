@@ -257,7 +257,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     std::map<std::string, std::string> writer_defines;
     if (stride[-1] != 1) {
         writer_defines["LAST_DIM_STRIDED"] = "1";
-        uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
+        uint32_t output_row_size_bytes = output.padded_shape()[-1] * output.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
         tt::tt_metal::CircularBufferConfig cb_dst0_config =
             tt::tt_metal::CircularBufferConfig(
