@@ -5,7 +5,7 @@
 """
 Smaller prefill chunks plus packed forwards vs today's big chunks, on one workload: real tokens per second.
 
-The question behind smaller chunks / N users per forward vs today's 8x4 / 5K / 1 user: a short request padded
+The question behind 4x4 / 2.5K chunks / N users per forward vs 8x4 / 5K / 1 user: a short request padded
 up to a big chunk wastes compute, a small chunk wastes less but runs the MoE on fewer tokens per call,
 and packing several users' chunks into one forward wins that back.
 
@@ -16,6 +16,9 @@ new request, traced, in the configuration's forwards (cK-fF: K-token chunks, F c
   galaxy 8x4   c5120-f1 (today's production shape), c5120-f2 / f4 (packing alone, same padding),
                c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560 would be 80 rows per TP rank, not
                whole tiles, which the indexer refuses)
+  galaxy 4x4   c2560-f1 / f2 / f4 (the proposed stage: 640 rows/chip, 16 experts/chip). Needs the
+               subtorus carve: TT_VISIBLE_DEVICES and TT_MESH_GRAPH_DESC_PATH as test_prefill_block_perf's
+               _SUBTORUS_XY4_ENV, set before pytest starts.
   LoudBox 2x4  everything at half scale (history, requests and chunks): c2560-f1, c1280-f1 / f2 / f4. A
                fixed-mesh comparison: TP and experts/chip stay as they are.
 
@@ -44,6 +47,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    torus_x_device_params,
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
@@ -80,6 +84,10 @@ def _workload(scale):
     return PRODUCTION_HISTORY // scale, [n // scale for n in PRODUCTION_REQUEST_LENGTHS]
 
 
+# mesh id -> (mesh shape, device params, topology, links, workload scale, (chunk, chunks per forward) configs,
+# SP mesh axis). A 4x4 stage (a galaxy tray half) runs SP on its axis-1 ring; 1,280-token chunks there would be
+# 80 rows per TP rank, which the indexer refuses. The LoudBox 4x2 runs the 2x4's SP=2 / TP=4 with the axes
+# swapped, so its KV must match the 2x4's config for config (test_glm_chunk_batching_workload_kv_sp_axis_agree).
 _MESHES = {
     "galaxy-8x4": (
         (8, 4),
@@ -88,7 +96,9 @@ _MESHES = {
         2,
         1,
         [(5120, 1), (5120, 2), (5120, 4), (2048, 1), (2048, 2), (2048, 4)],
+        0,
     ),
+    "galaxy-4x4": ((4, 4), torus_x_device_params, "mesh-4x4", 2, 1, [(5120, 1), (2560, 1), (2560, 2), (2560, 4)], 1),
     "loudbox-fabric2d-2x4": (
         (2, 4),
         fabric2d_device_params,
@@ -96,6 +106,16 @@ _MESHES = {
         1,
         2,
         [(2560, 1), (1280, 1), (1280, 2), (1280, 4)],
+        0,
+    ),
+    "loudbox-fabric2d-4x2-sp1": (
+        (4, 2),
+        fabric2d_device_params,
+        "mesh-4x2",
+        1,
+        2,
+        [(2560, 1), (1280, 1), (1280, 2), (1280, 4)],
+        1,
     ),
 }
 
@@ -140,7 +160,7 @@ def _forwards(chunk_lists, forward_chunks):
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, scale, chunk, forward_chunks",
+    "mesh_device, device_params, num_links, scale, chunk, forward_chunks, sp_axis",
     [
         pytest.param(
             mesh_shape,
@@ -153,17 +173,18 @@ def _forwards(chunk_lists, forward_chunks):
             scale,
             chunk,
             forward_chunks,
+            sp_axis,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh_shape, topology=topology),
             id=f"{mesh_id}-c{chunk}-f{forward_chunks}",
         )
-        for mesh_id, (mesh_shape, make_device_params, topology, num_links, scale, configs) in _MESHES.items()
+        for mesh_id, (mesh_shape, make_device_params, topology, num_links, scale, configs, sp_axis) in _MESHES.items()
         for chunk, forward_chunks in configs
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 def test_glm_chunk_batching_workload(
-    variant, config_only, mesh_device, device_params, num_links, scale, chunk, forward_chunks
+    variant, config_only, mesh_device, device_params, num_links, scale, chunk, forward_chunks, sp_axis
 ):
     history_len, request_lengths = _workload(scale)
     big_chunk = 5120 // scale  # the largest chunk any config of this scale uses
@@ -190,6 +211,8 @@ def test_glm_chunk_batching_workload(
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
         use_trace=True,
         tp_shard_kv=True,
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
     )
     mesh_device.enable_program_cache()
     state_dict = glm_random_transformer_state_dict(
@@ -207,8 +230,8 @@ def test_glm_chunk_batching_workload(
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=NUM_LAYERS,
             num_users=slots,
         ),
@@ -217,8 +240,8 @@ def test_glm_chunk_batching_workload(
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=index_layers,
             num_users=slots,
             dtype=ttnn.bfloat8_b,
@@ -274,7 +297,9 @@ def test_glm_chunk_batching_workload(
         # Control: each user's KV in natural order, for the cross-config comparison.
         saved = {}
         for name, cache, layers in (("kvpe", caches.kvpe, NUM_LAYERS), ("indexer_k", caches.index, index_layers)):
-            full, stripes = gather_cache_natural(cache, mesh_device, tp_shard_kv=True)  # [slots*layers, S, D]
+            full, stripes = gather_cache_natural(
+                cache, mesh_device, tp_shard_kv=True, sp_axis=sp_axis
+            )  # [slots*layers, S, D]
             pos = blockcyclic_positions(stripes, chunk, seq_cache)
             saved[name] = [
                 torch.stack(
@@ -305,19 +330,24 @@ def test_glm_chunk_batching_workload(
 
 
 # Host only: compares what the configs above saved, each against its mesh's small-chunk, one-chunk-per-forward
-# config. Packing changes only the MoE's batch (and with it which routed-expert kernel runs); on the LoudBox
-# the KV drifts from layer 7 on, to 0.985 at layer 9, the same for every user and position, as flipped top-8
-# choices under the synthetic router would. A different chunk size should be no further off: attention sees
-# the same tokens. (On the LoudBox c2560-f1 is: 0.89 at layer 7, 0.69 at layer 9. Unexplained.)
+# config. Packing changes only the MoE's batch: two layers exact, then a slow drift (0.983 by layer 9 on 8x4).
+# A different chunk size changes attention's numerics; both sizes match a CPU reference equally
+# (sparse_mla/test_sparse_mla.py::test_sparse_mla_chunk_size_vs_reference), but synthetic weights make top-k and
+# routing near-ties, so the two answers drift apart (0.68 by layer 9 at 40K history) and fail this gate.
 _KV_PCC = 0.98
-_KV_REFERENCE = {"galaxy-8x4": (2048, 1), "loudbox-fabric2d-2x4": (1280, 1)}
+_KV_REFERENCE = {
+    "galaxy-8x4": (2048, 1),
+    "galaxy-4x4": (2560, 1),
+    "loudbox-fabric2d-2x4": (1280, 1),
+    "loudbox-fabric2d-4x2-sp1": (1280, 1),
+}
 
 
 @pytest.mark.parametrize(
     "mesh, other",
     [
         pytest.param(mesh_id, config, id=f"{mesh_id}-c{config[0]}-f{config[1]}")
-        for mesh_id, (_, _, _, _, _, configs) in _MESHES.items()
+        for mesh_id, (_, _, _, _, _, configs, _) in _MESHES.items()
         for config in configs
         if config != _KV_REFERENCE[mesh_id]
     ],
@@ -330,6 +360,13 @@ def test_glm_chunk_batching_workload_kv_agree(mesh, other):
     if missing:
         pytest.skip(f"run test_glm_chunk_batching_workload first; missing {missing}")
     ref, got = (torch.load(p) for p in paths)
+    label = f"mesh={mesh_shape[0]}x{mesh_shape[1]} c{other[0]}-f{other[1]} vs c{reference[0]}-f{reference[1]}"
+    failures = _compare_kv(label, ref, got, _KV_PCC)
+    assert not failures, "\n".join(failures)
+
+
+def _compare_kv(label, ref, got, threshold):
+    """Per-layer, per-user PCC of two saved KV dumps; logs the worst per cache and returns the failures."""
     failures = []
     for name in ("kvpe", "indexer_k"):
         worst = 1.0
@@ -337,10 +374,33 @@ def test_glm_chunk_batching_workload_kv_agree(mesh, other):
             for layer in range(ref[name][u].shape[0]):
                 _, pcc = comp_pcc(ref[name][u][layer].float(), got[name][u][layer].float())
                 worst = min(worst, float(pcc))
-                if pcc < _KV_PCC:
-                    failures.append(f"{name} user {u} layer {layer}: PCC {float(pcc):.6f} < {_KV_PCC}")
-        logger.warning(
-            f"GLM_WORKLOAD_KV mesh={mesh_shape[0]}x{mesh_shape[1]} c{other[0]}-f{other[1]} vs "
-            f"c{reference[0]}-f{reference[1]} {name}: min PCC {worst:.6f}"
-        )
+                if pcc < threshold:
+                    failures.append(f"{name} user {u} layer {layer}: PCC {float(pcc):.6f} < {threshold}")
+        logger.warning(f"GLM_WORKLOAD_KV {label} {name}: min PCC {worst:.6f}")
+    return failures
+
+
+# Host only: SP on mesh axis 1 must compute what SP on axis 0 does. The LoudBox 4x2 (SP on axis 1) and 2x4
+# (SP on axis 0) both run SP=2 and TP=4, so each config's KV must match across them; only which physical chip
+# holds which stripe, and the order rings visit them, differ.
+_SP_AXIS_PAIRS = [("loudbox-fabric2d-4x2-sp1", "loudbox-fabric2d-2x4")]
+_SP_AXIS_KV_PCC = 0.999
+
+
+@pytest.mark.parametrize(
+    "mesh, other_mesh, config",
+    [
+        pytest.param(mesh, other, config, id=f"{mesh}-vs-{other}-c{config[0]}-f{config[1]}")
+        for mesh, other in _SP_AXIS_PAIRS
+        for config in _MESHES[mesh][5]
+    ],
+)
+def test_glm_chunk_batching_workload_kv_sp_axis_agree(mesh, other_mesh, config):
+    paths = [_kv_path(_MESHES[m][0], *config) for m in (other_mesh, mesh)]
+    missing = [p for p in paths if not os.path.exists(p)]
+    if missing:
+        pytest.skip(f"run test_glm_chunk_batching_workload on both meshes first; missing {missing}")
+    ref, got = (torch.load(p) for p in paths)
+    label = f"{mesh} vs {other_mesh} c{config[0]}-f{config[1]}"
+    failures = _compare_kv(label, ref, got, _SP_AXIS_KV_PCC)
     assert not failures, "\n".join(failures)

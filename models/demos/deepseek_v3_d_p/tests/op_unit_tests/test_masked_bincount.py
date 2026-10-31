@@ -46,45 +46,54 @@ def torch_masked_bincount(
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, sp_axis",
     [
         pytest.param(
             (1, 1),
             {"fabric_config": ttnn.FabricConfig.DISABLED},
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
             id="single",
         ),
         pytest.param(
             (1, 4),
             torus_x_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
             fabric2d_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): the dispatch axis is mesh axis 1.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 def test_masked_bincount(
     mesh_device,
+    sp_axis,
     sp_dim,
     topk,
     n_routed_experts,
 ):
     """Test ttnn.masked_bincount against PyTorch reference on each device."""
-    mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    assert sp_axis == 0
-
     logger.info(
-        f"Testing masked_bincount: {mesh_device.shape=}, {sp_dim=}, {topk=}, "
+        f"Testing masked_bincount: {mesh_device.shape=}, {sp_axis=}, {sp_dim=}, {topk=}, "
         f"{n_routed_experts=}, {num_dispatch_groups=}"
     )
     ttnn.visualize_mesh_device(mesh_device)
@@ -139,10 +148,11 @@ def test_masked_bincount(
         dtype=ttnn.int32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        # One table row per dispatch group, sharded along the group axis (the one SP does not use).
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=(None, 0),
+            dims=(None, 0) if sp_axis == 0 else (0, None),
         ),
     )
 
@@ -159,7 +169,7 @@ def test_masked_bincount(
 
     # Compose TTNN output using EP mesh composer
     tt_histograms_4d = ttnn.unsqueeze_to_4D(tt_histograms)
-    composer = get_ep_mesh_composer(mesh_device)
+    composer = get_ep_mesh_composer(mesh_device, sp_axis)
     composed = ttnn.to_torch(tt_histograms_4d, mesh_composer=composer).squeeze(2).to(torch.int32)
 
     # Trim to n_routed_experts in case of padding

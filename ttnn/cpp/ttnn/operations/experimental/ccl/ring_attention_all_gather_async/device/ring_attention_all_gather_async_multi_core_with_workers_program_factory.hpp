@@ -55,6 +55,8 @@ namespace ttnn {
 
 struct RingAttentionRankMapping {
     bool full_mesh = false;
+    // Full mesh only: tensor ranks are column-major (mesh axis 1 outermost) instead of row-major.
+    bool column_major = false;
     ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;

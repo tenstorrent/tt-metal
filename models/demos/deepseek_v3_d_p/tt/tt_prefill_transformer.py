@@ -463,9 +463,11 @@ class TtPrefillTransformer(LightweightModule):
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
+        # Sequence concatenates over the SP axis and the embedding over the TP axis.
+        dims = (-2, -1) if self.sp_axis == 0 else (-1, -2)
         host = ttnn.to_torch(
             tt_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=self.mesh_device.shape),
         ).to(torch.bfloat16)
         if len(tt_tensor.shape) == 4:
             host = host.squeeze(0)

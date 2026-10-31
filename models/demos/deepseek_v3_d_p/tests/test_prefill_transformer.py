@@ -39,10 +39,12 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
+from models.demos.deepseek_v3_d_p.tests.chunk_params import is_4x4
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    torus_x_device_params,
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, resolve_has_indexer
@@ -55,6 +57,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import token_normalized
@@ -179,6 +182,7 @@ def run_model(
     tokenizer,
     request,
     thresholds: PrefillTransformerThresholds | None = None,
+    sp_axis: int = 0,
 ):
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
@@ -192,8 +196,7 @@ def run_model(
     profiler.start("total_test_time")
     config.max_seq_len = isl_total
 
-    sp_axis = 0
-    tp_axis = 1
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     sp_factor = mesh_shape[sp_axis]
     tp_factor = mesh_shape[tp_axis]
@@ -203,8 +206,7 @@ def run_model(
 
     # Only enable weight caching for pretrained runs
     if use_pretrained and weight_cache_path is not None:
-        rows, cols = mesh_shape
-        effective_cache_path = weight_cache_path / f"{rows}x{cols}"
+        effective_cache_path = weight_cache_path / mesh_cache_key(mesh_shape, sp_axis)
         effective_cache_path.mkdir(parents=True, exist_ok=True)
     else:
         effective_cache_path = None
@@ -454,6 +456,8 @@ def run_model(
         seq_len=isl_total,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
+        # The sparse (DSA) path always dedups KV over TP, so its caches are SP*TP-striped like the write op.
+        tp_axis=tp_axis if has_indexer else None,
         num_kvpe_cache_layers=num_layers,
     )
 
@@ -472,6 +476,7 @@ def run_model(
             seq_len=isl_total,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
+            tp_axis=tp_axis,
             num_kvpe_cache_layers=index_cache_layers,
             num_users=1,
             dtype=ttnn.bfloat8_b,
@@ -493,7 +498,10 @@ def run_model(
         dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
+        # dim 0 is the SP shard; the TP axis replicates.
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None) if sp_axis == 0 else (None, 0)
+        ),
     )
 
     # --- Determinism check (isolated from the pcc_validation path below) ---
@@ -636,7 +644,10 @@ def run_model(
         if do_return_kv and ref_kvpe_list is not None:
             tt_kvpe_all = ttnn.to_torch(
                 tt_kvpe_cache.storage,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+                # SP onto the seq dim (2), TP onto dim 1, whichever mesh axis each runs on.
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(2, 1) if sp_axis == 0 else (1, 2), mesh_shape=mesh_device.shape
+                ),
             ).to(torch.bfloat16)
             # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
             tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
@@ -1079,7 +1090,14 @@ def test_kimi_prefill_transformer(
     [
         5,
         12,
-        pytest.param(78, marks=pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer prefill only on Galaxy")),
+        # The whole model, which a 4x4 stage never holds (a stage is ~10 layers).
+        pytest.param(
+            78,
+            marks=[
+                pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer prefill only on Galaxy"),
+                pytest.mark.uncollect_if(pred=is_4x4),
+            ],
+        ),
     ],
     ids=["5_layers", "12_layers", "78_layers"],
 )
@@ -1091,14 +1109,25 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
 @pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (8, 4),
             torus_xy_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config)),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring, TP=4
+        # on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1117,6 +1146,7 @@ def test_glm_prefill_transformer(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
+    sp_axis,
     pcc_validation,
     determinism_check,
     num_iterations,
@@ -1156,6 +1186,7 @@ def test_glm_prefill_transformer(
         is_ci_v2_env,
         tokenizer,
         request,
+        sp_axis=sp_axis,
     )
 
 
@@ -1176,22 +1207,39 @@ def test_glm_prefill_transformer(
     "num_layers",
     [
         5,
-        pytest.param(78, marks=pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer cache only on Galaxy")),
+        12,
+        pytest.param(
+            78,
+            marks=[
+                pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer cache only on Galaxy"),
+                pytest.mark.uncollect_if(pred=is_4x4),
+            ],
+        ),
     ],
-    ids=["5_layers", "78_layers"],
+    ids=["5_layers", "12_layers", "78_layers"],
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode", [(256, GateComputeMode.DEVICE_FP32)], ids=["e256_device"]
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (8, 4),
             torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # A 4x4 stage's cache (SP on axis 1), at the path the 4x4 runner reads (mesh_cache_key).
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1208,6 +1256,7 @@ def test_glm_build_ttnn_cache(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
+    sp_axis,
     weight_cache_path,
     request,
 ):
@@ -1220,7 +1269,7 @@ def test_glm_build_ttnn_cache(
     config.max_seq_len = isl_total
 
     rows, cols = list(mesh_device.shape)
-    effective_cache_path = weight_cache_path / f"{rows}x{cols}"
+    effective_cache_path = weight_cache_path / mesh_cache_key((rows, cols), sp_axis)
     effective_cache_path.mkdir(parents=True, exist_ok=True)
     experts_per_chip = n_routed_experts // (rows * cols)
 
@@ -1257,8 +1306,8 @@ def test_glm_build_ttnn_cache(
         seq_len=isl_total,
         num_links=num_links,
         topology=topology,
-        sp_axis=0,
-        tp_axis=1,
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
         gate_fallback_mode=gate_fallback_mode,
     )
 
