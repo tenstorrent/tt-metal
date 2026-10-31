@@ -60,11 +60,11 @@
 - name: "(all prefill gate models) MoE gate accuracy"
   fabric_profile: torus_xy
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/blaze/deepseek-ai/DeepSeek-R1-0528/
-    export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
-    export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
-    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
-    export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
+    export DEEPSEEK_V3_HF_MODEL=/mnt/weka/model-weights/llm/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1/
+    export DEEPSEEK_V3_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/CI
+    export TT_DS_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-R1-0528-Cache-prefill_secure
+    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/
+    export DEEPSEEK_V3_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
@@ -539,8 +539,8 @@
       export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_TORUS_XY_CERTIFIED=1
       export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-DSpark
-      export PREFILL_DFLASH_GOLDEN_KV_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/structured_kv
-      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      export PREFILL_DFLASH_GOLDEN_KV_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/structured_kv
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
       timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
@@ -559,7 +559,7 @@
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
       timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_dspark_taps.py -k "L25" -vvv --tb=short
@@ -591,7 +591,7 @@
   cmd: |
     glm_dsa_mla() (
       export MESH_DEVICE=TG
-      export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
+      export GLM52_MLA_REF_CACHE=/mnt/weka/model-cache/stable/deepseek-prefill-cache/glm_5_2_mla_ref_cache
       export DS_SPARSE_FABRIC=fabric2d
       # Still GLM-5.2, not GLM-5.3: this compares against a cached MLACPU reference and only GLM-5.2 has a
       # populated one. Same architecture and random weights, so it covers the GLM-5.3 sparse path too.
@@ -1157,9 +1157,9 @@
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export HF_MODEL=google/gemma-4-31B-it
-    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
@@ -1187,10 +1187,10 @@
     export TT_METAL_HOME=/home/user/tt-metal
     export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export HF_MODEL=google/gemma-4-31B-it
-    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
-    export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
     mpirun --bind-to none --pernode --tag-output \
       python3 -m pytest \
@@ -1218,9 +1218,9 @@
     export TT_METAL_HOME=/home/user/tt-metal
     export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export HF_MODEL=google/gemma-4-31B-it
-    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     # The Weka copy of the traces reads much faster than /mnt/models.
     export GEMMA4_GPU_TRACE_ROOT=/mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
@@ -1247,9 +1247,9 @@
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export HF_MODEL=google/gemma-4-31B-it
-    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
@@ -1275,9 +1275,9 @@
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export HF_MODEL=google/gemma-4-31B-it
-    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
@@ -1439,8 +1439,8 @@
     section_start 1 "Mistral-Small-4-119B MLA accuracy 5k, 25k + llama4 query scale"
     rc=0
     (
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export MISTRAL4_MLA_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/mla_ref
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export MISTRAL4_MLA_REF_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/mla_ref
 
       timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
         rc=0
@@ -1459,8 +1459,8 @@
     (
       export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_TORUS_XY_CERTIFIED=1
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export MISTRAL4_MLA_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/mla_ref
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export MISTRAL4_MLA_REF_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/mla_ref
 
       timeout -k 2m 44m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -1472,8 +1472,8 @@
     section_start 3 "Mistral-Small-4-119B prefill block accuracy 5k"
     rc=0
     (
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -1495,9 +1495,9 @@
     section_start 5 "Mistral-Small-4-119B prefill transformer accuracy 5k"
     rc=0
     (
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
-      export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/host_ref
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
+      export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/host_ref
 
       timeout -k 2m 28m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -1513,8 +1513,8 @@
       export PREFILL_TORUS_XY_CERTIFIED=1
       export MESH_DEVICE=TG
       export LOGURU_LEVEL=INFO
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
       timeout -k 2m 52m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
@@ -1531,8 +1531,8 @@
       export PREFILL_TORUS_XY_CERTIFIED=1
       export MESH_DEVICE=TG
       export LOGURU_LEVEL=INFO
-      export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+      export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+      export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
       timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
@@ -1569,8 +1569,8 @@
   # conftest skips every row before device open.
   fabric_profile: torus_xy
   cmd: |
-    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+    export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -eo pipefail
@@ -1605,8 +1605,8 @@
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+    export MISTRAL4_HF_MODEL=/mnt/weka/model-weights/llm/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/mistralai/Mistral-Small-4-Cache/CI
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -eo pipefail
@@ -1651,11 +1651,11 @@
     export PREFILL_SP=4
     export PREFILL_TP=8
     export PREFILL_NUM_LAYERS=36
-    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-    export PREFILL_HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-    export PREFILL_TTNN_CACHE=/mnt/models/blaze/openai/gpt-oss-120b
-    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+    export HF_MODEL=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+    export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+    export PREFILL_TTNN_CACHE=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+    export PREFILL_TRACE_DIR=/mnt/weka/model-weights/llm/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
     export GPT_OSS_WEIGHTS_FROM_CACHE=1
     export EXPERT_DTYPE=bf8
     export PREFILL_STANDALONE_CHUNKED_PCC=0.85
@@ -1692,12 +1692,12 @@
 # runtime build or small-chunk ring path breaking. Auto-SKIPs off-galaxy; no PREFILL_TRACE_DIR.
 #
 # Requires staged mounts:
-#   HF_MODEL          -> /mnt/models/blaze/openai/gpt-oss-120b (config only here: with
+#   HF_MODEL          -> /mnt/weka/model-weights/llm/openai/gpt-oss-120b (config only here: with
 #                        GPT_OSS_WEIGHTS_FROM_CACHE=1 weights come from the tilized cache)
-#   TT_CACHE_PATH     -> /mnt/models/blaze/openai/gpt-oss-120b
+#   TT_CACHE_PATH     -> /mnt/weka/model-weights/llm/openai/gpt-oss-120b
 #                        must hold "tensor_cache_bfp8_MeshShape([4, 8])"; without it the run
 #                        cold-tilizes from safetensors and will blow the timeout
-#   PREFILL_TRACE_DIR -> /mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+#   PREFILL_TRACE_DIR -> /mnt/weka/model-weights/llm/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
 #                        (KV accuracy section only)
 # fabric_profile torus_xy: every chunk drives the SP ring cache-read (FABRIC_1D_RING), which
 # needs the certified TorusXY wraparound links the impl workflow provides.
@@ -1715,9 +1715,9 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-      export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+      export HF_MODEL=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export PREFILL_TRACE_DIR=/mnt/weka/model-weights/llm/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       export EXPERT_DTYPE=bf8
       export PREFILL_CHUNKED=1
@@ -1734,8 +1734,8 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+      export HF_MODEL=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       export EXPERT_DTYPE=bf8
       export VARCHUNK_SMALL=1024
@@ -1836,7 +1836,7 @@
     t0=$SECONDS
     rc=0
     (
-      export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
+      export LLAMA31_8B_CHECKPOINT=/mnt/weka/model-weights/llm/meta-llama/Llama-3.1-8B-Instruct
       # No set -e: the unit tests run even if the host tests fail; exit 1 if either failed.
       timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=16
@@ -1856,7 +1856,7 @@
     t0=$SECONDS
     rc=0
     (
-      export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
+      export LLAMA31_8B_CHECKPOINT=/mnt/weka/model-weights/llm/meta-llama/Llama-3.1-8B-Instruct
       timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=16
@@ -1901,7 +1901,7 @@
     cd "${TT_METAL_HOME}"
     export PREFILL_MAX_SEQ_LEN=32768
     export PREFILL_PRODUCER_NUM_USERS=1
-    export PREFILL_PRODUCER_SLOT_TRACES=/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_131072_32L
+    export PREFILL_PRODUCER_SLOT_TRACES=/mnt/weka/model-cache/stable/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_131072_32L
     exec bash models/demos/llama_3p1_8b_d_p/scripts/ci/run_prefill_acceptance.sh
   test_type: llama31_prefill_runner
   test_tags: [llama31, runner, kv_cache]
