@@ -363,11 +363,29 @@ FORCE_INLINE void dfb_publish_producer_ready(
 
 #ifndef COMPILE_FOR_TRISC
 
+// Clear the DFB halves of the per-id interrupt enables (read buffer upper word, write buffer lower word), dropping
+// any pending bit a prior launch latched (zeroing a count doesn't); otherwise a re-armed id fires on stale state.
+FORCE_INLINE void disarm_dfb_implicit_sync() {
+    disable_dfb_tile_isr();
+    uint64_t reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET / 8);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET / 8,
+        reg_val & 0x00000000FFFFFFFFULL);
+    reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET / 8);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET / 8,
+        reg_val & 0xFFFFFFFF00000000ULL);
+}
+
 FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
-    // No DFB config was serialized; host will not read timing slots. Still disarm ISR
-    // so a prior launch cannot leak into this one.
+    disarm_dfb_implicit_sync();
+    // No DFB config was serialized; host will not read timing slots. The prior launch's ISR
+    // state is already disarmed above.
     if (num_dfbs == 0) {
-        disable_dfb_tile_isr();
         return;
     }
 
@@ -376,7 +394,6 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
     const uint8_t has_dm0_isr = *dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, has_dm0_isr));
     if (has_dm0_isr == 0) {
-        disable_dfb_tile_isr();
         // Header is valid; preserve prior "DM0 finished setup" signaling for consumers
         // that only gate on has_dm0_isr (they will not wait on ready).
         *dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, dm0_isr_ready)) = 1u;
@@ -498,10 +515,6 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     if ((producer_txn_id_mask | consumer_txn_id_mask) != 0) {
         const uint32_t t_isr_start = rdcycle();
         enable_dfb_tile_isr();
-        hw_reg_write_cycles += rdcycle() - t_isr_start;
-    } else {
-        const uint32_t t_isr_start = rdcycle();
-        disable_dfb_tile_isr();
         hw_reg_write_cycles += rdcycle() - t_isr_start;
     }
     const uint32_t end_isr_enable_time = rdcycle();
