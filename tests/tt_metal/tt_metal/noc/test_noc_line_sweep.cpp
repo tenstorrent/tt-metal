@@ -515,7 +515,11 @@ std::vector<uint32_t> payload(uint32_t words, uint32_t seed = 1) {
 // Apply `mask` to flit word `w` of every flit: mode 's' sets, 'c' clears, 'f' flips.
 std::vector<uint32_t> corrupt(std::vector<uint32_t> p, uint32_t w, uint32_t mask, char mode) {
     for (uint32_t i = w; i < p.size(); i += kFlitWords) {
-        p[i] = mode == 's' ? (p[i] | mask) : mode == 'c' ? (p[i] & ~mask) : (p[i] ^ mask);
+        switch (mode) {
+            case 's': p[i] |= mask; break;
+            case 'c': p[i] &= ~mask; break;
+            default: p[i] ^= mask; break;
+        }
     }
     return p;
 }
