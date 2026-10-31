@@ -1488,15 +1488,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         if (fill_with_value_int && compute_kernel != CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         }
-        // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
-        // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
-        // exact same DataFormat the legacy BINARY_SFPU_OP macro baked in.
-        // Match DEST: with fp32 DEST (e.g. a float32 output), bf16 inputs are held as Float32.
+        // where_tile<DataFormat::X> selector, the single source for both the broadcast kernels
+        // (BINARY_SFPU_OP) and the no-bcast kernel's eltwise_chain `Where` element (WHERE_DATA_FORMAT).
+        // Match DEST: with fp32 DEST (e.g. a float32 output), bf16 inputs are held as Float32, and the
+        // Float16_b variant would address 16-bit halves of each DEST word.
         const char* where_df = (a_dtype == DataType::INT32)                         ? "Int32"
                                : (a_dtype == DataType::UINT32)                      ? "UInt32"
                                : (a_dtype == DataType::FLOAT32 || fp32_dest_acc_en) ? "Float32"
                                                                                     : "Float16_b";
         compute_kernel_defines["WHERE_DATA_FORMAT"] = where_df;
+        compute_kernel_defines["BINARY_SFPU_OP"] = fmt::format("where_tile<DataFormat::{}>", where_df);
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
