@@ -1,0 +1,11 @@
+# Collective contract
+
+Each O/down boundary retains Ring RS(dim3) followed by AG(dim3), two links, two workers/link, one channel buffer. Decode partial width5376 and reduced shard1344 use BF16; physical M=32 for logicalB1/8/16/32. A full partial is344064 bytes/device. Ideal per-rank RS+AG payload is1.5×344064=516096 bytes/boundary, excluding packet/control overhead. No CCL is inserted between decoder layers.
+
+RS input/output/staging are DRAM. AG input is DRAM and output is8-core width-sharded L1. The output memory contract is shared with the post norm, avoiding a DRAM→L1 conversion. Each role owns one688128/2-byte physical backing shared across all batch views and, via the explicit constructor dictionary, all sequential layers. RS intermediates remain per-layer/signature. See README.md for the lifetime invariant and shared_workspace.json for alias/replay evidence.
+
+Prefill CCL uses BFP8, with BF16 restored before norms. The removed identity cast does not change payload or precision. Combined BFP8 decode CCL was tested with reduced-type RS staging and pooled L1 AG outputs; it passes PCC but loses against BF16 in both layer kinds. The previous stage's isolated compression rejection is not used in place of this combined test.
+
+`chunks_per_sync=None` selects the pinned factory calculation: AG min(max(worker_page_count/packet_page_count,1),160); Ring RS min(80,max(chunks_per_step/2,1)) with dim1–3 cap. These are packet scheduling values, not public sequence alignment. Final profile performance.json records actual runtime attributes and row times; these per-op rows never replace the whole-layer timing denominator.
+
+Comparison families: prior replicated full-reduction versus carried-sharded residual/distributed norms, fused input-AG-MM, and fused MM-RS are in stage04 numerical artifacts. This pass adds output-sharded AG-MM with weights physically repacked to localN1536 (1344 useful), shape/layout adaptation and BF16 fused input. Both replicated and carried-sharded variants pass and lose. The latter continues through distributed post norms and next input norms before any gather, so its rejection is not an immediate replication penalty. See candidate_summary.json and work_log.md.

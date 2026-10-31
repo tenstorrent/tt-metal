@@ -1,0 +1,28 @@
+{
+  "command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "tracy",
+    "-r",
+    "-p",
+    "-v",
+    "--no-web-server",
+    "--op-support-count",
+    "16384",
+    "-o",
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/readers/sliding_attention/profile",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.profile_multichip_readers",
+    "--layer",
+    "0",
+    "--result",
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/readers/sliding_attention/host.json"
+  ],
+  "source_hashes": {
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5267f1ee57d0f077e71357445e96e15b3851b022c5846eeb10b77566eb4b6ff6",
+    "models/autoports/google_gemma_4_31b_it/tests/profile_multichip_readers.py": "6ff926ed178b039bd0e23616ee436edc3e4969bb382e7669e10574fbd97a50c5"
+  },
+  "watcher": false,
+  "profiler": true
+}

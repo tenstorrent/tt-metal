@@ -1,0 +1,106 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "seq": 33,
+    "batch": 1,
+    "before_prefill_host_us": 1634.7530181519687,
+    "after_prefill_host_us": 1613.1559968926013,
+    "before_decode_host_us": 407.16896091907984,
+    "after_decode_host_us": 403.2778438158857,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_length33.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer0_length33.json"
+    ]
+  },
+  {
+    "layer_type": "sliding_attention",
+    "seq": 1024,
+    "batch": 1,
+    "before_prefill_host_us": 2664.775005541742,
+    "after_prefill_host_us": 2656.8460161797702,
+    "before_decode_host_us": 429.5177732274169,
+    "after_decode_host_us": 423.4597581671551,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_length1024.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer0_length1024.json"
+    ]
+  },
+  {
+    "layer_type": "sliding_attention",
+    "seq": 1025,
+    "batch": 1,
+    "before_prefill_host_us": 4201.9219836220145,
+    "after_prefill_host_us": 3967.1339909546077,
+    "before_decode_host_us": 429.3367264835979,
+    "after_decode_host_us": 423.52252330601914,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_length1025.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer0_length1025.json"
+    ]
+  },
+  {
+    "layer_type": "sliding_attention",
+    "seq": 2049,
+    "batch": 1,
+    "before_prefill_host_us": 7136.019004974514,
+    "after_prefill_host_us": 6585.114984773099,
+    "before_decode_host_us": 429.66751561834826,
+    "after_decode_host_us": 423.5819214954972,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer0_length2049.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer0_length2049.json"
+    ]
+  },
+  {
+    "layer_type": "full_attention",
+    "seq": 33,
+    "batch": 1,
+    "before_prefill_host_us": 1748.3989940956235,
+    "after_prefill_host_us": 1650.3860242664814,
+    "before_decode_host_us": 427.2209062037291,
+    "after_decode_host_us": 420.65347679454135,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer5_length33.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer5_length33.json"
+    ]
+  },
+  {
+    "layer_type": "full_attention",
+    "seq": 1024,
+    "batch": 1,
+    "before_prefill_host_us": 2919.0689674578607,
+    "after_prefill_host_us": 2887.976006604731,
+    "before_decode_host_us": 451.870031611179,
+    "after_decode_host_us": 446.21480446949136,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer5_length1024.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer5_length1024.json"
+    ]
+  },
+  {
+    "layer_type": "full_attention",
+    "seq": 1025,
+    "batch": 1,
+    "before_prefill_host_us": 4740.798030979931,
+    "after_prefill_host_us": 4428.1320297159255,
+    "before_decode_host_us": 452.06039840195444,
+    "after_decode_host_us": 446.26183625950944,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer5_length1025.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer5_length1025.json"
+    ]
+  },
+  {
+    "layer_type": "full_attention",
+    "seq": 2049,
+    "batch": 1,
+    "before_prefill_host_us": 8082.721964456141,
+    "after_prefill_host_us": 7665.783981792629,
+    "before_decode_host_us": 461.5404059222783,
+    "after_decode_host_us": 455.91170328407316,
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/multichip_decoder/final_layer5_length2049.json",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer5_length2049.json"
+    ]
+  }
+]

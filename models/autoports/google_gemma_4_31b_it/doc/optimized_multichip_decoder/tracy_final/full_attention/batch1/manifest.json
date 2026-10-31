@@ -1,0 +1,31 @@
+{
+  "command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "tracy",
+    "-r",
+    "-p",
+    "-v",
+    "--no-web-server",
+    "--op-support-count",
+    "16384",
+    "-o",
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/tracy_final/full_attention/batch1/profile",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.profile_multichip_decoder",
+    "--layer",
+    "5",
+    "--batch",
+    "1",
+    "--replicated",
+    "--result",
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/tracy_final/full_attention/batch1/host.json"
+  ],
+  "source_hashes": {
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "5267f1ee57d0f077e71357445e96e15b3851b022c5846eeb10b77566eb4b6ff6",
+    "models/autoports/google_gemma_4_31b_it/tests/profile_multichip_decoder.py": "fde48e743333cbc3957c73c22c07ba3b04c5d0a44438c7638164cb4a39d9035f"
+  },
+  "watcher": false,
+  "profiler": true
+}

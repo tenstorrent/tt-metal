@@ -1,0 +1,25 @@
+{
+  "status": "pass",
+  "correctness_cases": 54,
+  "profile_count": 8,
+  "original_queue": "acceptance_queue.json",
+  "historical_failure": "The original queue ended with a profiler marker error on full_attention batch8, after all correctness groups passed.",
+  "resolution": "Identical profile rerun passed; profiler_anomaly.json. Original failure history retained.",
+  "profiles": [
+    "tracy_final/sliding_attention/batch1/performance.json",
+    "tracy_final/sliding_attention/batch32/performance.json",
+    "tracy_final/sliding_attention/batch16/performance.json",
+    "tracy_final/sliding_attention/batch8/performance.json",
+    "tracy_final/full_attention/batch1/performance.json",
+    "tracy_final/full_attention/batch32/performance.json",
+    "tracy_final/full_attention/batch16/performance.json",
+    "tracy_final/full_attention/batch8/performance.json"
+  ],
+  "supplemental": "supplemental_queue.json",
+  "stack": "stack.json",
+  "shared_workspace": "shared_workspace.json",
+  "production_source_sha256": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837",
+  "limitations": [
+    "Worker-core watcher only; Ethernet instrumentation capacity failure documented."
+  ]
+}

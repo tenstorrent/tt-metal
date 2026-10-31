@@ -1,0 +1,9 @@
+{
+  "observed": "First final full-attention batch8 profile completed 4096/128 device execution, then profiler processing aborted: End marker found without a corresponding start marker.",
+  "affected_marker": "Chip1, core(12,6), TRISC_2, SdpaDecodeDeviceOperation, replay118",
+  "evidence": "tracy_final/full_attention/batch8_failed_marker/profile.log",
+  "health": "No /proc device-fd owners after exit; timeout60 tt-smi -ls --local reported all4 p300c devices. No reset required.",
+  "action": "Preserved failed capture; rerun only full-attention batch8 with identical harness.",
+  "resolution": "controlled: identical retry passed with complete128-replay device windows",
+  "retry_evidence": "tracy_final/full_attention/batch8/performance.json"
+}

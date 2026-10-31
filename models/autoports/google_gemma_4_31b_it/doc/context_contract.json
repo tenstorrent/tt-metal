@@ -178,5 +178,58 @@
         }
       ]
     }
+  },
+  "optimized_multichip_contract": {
+    "status": "validated",
+    "logical_context_tokens": 262144,
+    "kv_dtype": "bfloat8_b",
+    "sliding_physical_tokens": 2048,
+    "decode_residual": "TP4 replicated BF16, local8-core L1 width-sharded",
+    "inter_layer_collectives": 0,
+    "shared_decode_gather_pool_bytes_per_device": 688128,
+    "shared_decode_gather_pool_bytes_per_core": 86016,
+    "pool_ownership": "One decode_gather_buffers dict per mesh, shared by sequential layers/signatures, retained through live traces. Independent per-layer pools are not the stack contract.",
+    "memory_change": "AG output moved from8 per-layer DRAM allocations to2 shared L1 physical buffers. RS staging unchanged; KV and advertised context unchanged.",
+    "evidence": "optimized_multichip_decoder/README.md",
+    "decoder_setup_overhead_bytes_per_device": 305940480,
+    "memory_evidence": "optimized_multichip_decoder/memory_plan.json",
+    "validation": {
+      "sliding_attention": [
+        {
+          "prefill_tokens": 262143,
+          "decode_position": 262143,
+          "prefill_pcc": 0.9999199927546228,
+          "decode_pcc": 0.999954665618289,
+          "comparison": "Last32 prefill rows and decode after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer0_context262143.json"
+        },
+        {
+          "prefill_tokens": 262144,
+          "decode_position": 262143,
+          "prefill_pcc": 0.9999198200090135,
+          "decode_pcc": 0.9999566158380623,
+          "comparison": "Last32 prefill rows and decode after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer0_context262144.json"
+        }
+      ],
+      "full_attention": [
+        {
+          "prefill_tokens": 262143,
+          "decode_position": 262143,
+          "prefill_pcc": 0.9999812656811736,
+          "decode_pcc": 0.9999937808004872,
+          "comparison": "Last32 prefill rows and decode after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer5_context262143.json"
+        },
+        {
+          "prefill_tokens": 262144,
+          "decode_position": 262143,
+          "prefill_pcc": 0.9999810740229924,
+          "decode_pcc": 0.9999937808004872,
+          "comparison": "Last32 prefill rows and decode after complete prefill execution",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/final_layer5_context262144.json"
+        }
+      ]
+    }
   }
 }

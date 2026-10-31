@@ -1,0 +1,52 @@
+{
+  "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": {
+    "before_sha256": "0d0e17af9216f88a46ddae644c589014798c225b16535361f604cb3928c81362",
+    "after_sha256": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py": {
+    "before_sha256": "7e43f44a77fb09de877847bcdb156450b047bcbd66e045e5e37289dbf9585925",
+    "after_sha256": "42f635abf2fe8df77beab3ced7d377644bc0a3e8bbe9be04c71637fdf7b82588",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_multichip_profiles.py": {
+    "before_sha256": "fe2e3ec75a97c83fd775475a68e4c769fec193ab6f9a12ba9d731b0c9acfe9ef",
+    "after_sha256": "fe2e3ec75a97c83fd775475a68e4c769fec193ab6f9a12ba9d731b0c9acfe9ef",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_multichip_validation.py": {
+    "before_sha256": "d4eb429b1b334f274eb88f40959e2d45781507539387141db64b59da0ef5937f",
+    "after_sha256": "76e49659c372c07350fe6b39c44166249211ccd7990ddcf51f1cb1ee0f23c900",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/check_multichip_stack.py": {
+    "before_sha256": "dc75467c5ed4206111f412b33dfafae5e367fce9efc3305afd2a970e4166a302",
+    "after_sha256": "2c0fe77a11ffeb4f1b222e71d961ccaa537e3b4fdb8163e2bd637c3e926e96a9",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/check_multichip_shared_workspace.py": {
+    "before_sha256": "c406b0ec99916d00519753e52ff70a534993327b6918bd8176306b3a57e169e2",
+    "after_sha256": "efb958828705181b71e389df55c37830c5729755e544967eca88115f175b8009",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/optimized_multichip_candidate.py": {
+    "before_sha256": "89606c41d682def45cda662d0977ec7650e10d34c8ac552c02c6741d29643103",
+    "after_sha256": "8f561300e86347df72588fdb7bfd929768025850f12bf734ca66ea1642f34bab",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_optimized_multichip_candidates.py": {
+    "before_sha256": "91917049c9cc2f8fb3bc273bef64b1304a111d773d6f81667ec043c89c3db7ca",
+    "after_sha256": "febef1bff4fa844bde18397253dcd2c8e60572f10a862b0fce73af10410c924c",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_optimized_multichip_acceptance.py": {
+    "before_sha256": "44e8682ff534b9c27986c3544df02c9718e63e288e7cf10bcadb87249dff9139",
+    "after_sha256": "6a50f67d152e284d5352cb715d0943587497ab7f164b2273b15b8db1c8bdba45",
+    "non_import_ast_equal": true
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/summarize_optimized_multichip_stage.py": {
+    "before_sha256": "69a51fd067f77e0f3fd2ddd64ab647372606f4c614e93de6de5e60086da4be71",
+    "after_sha256": "f712721965c434806d85680baae95486d8c55aded797dcef66031050f5e610f6",
+    "non_import_ast_equal": true
+  }
+}

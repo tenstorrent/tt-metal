@@ -1,0 +1,78 @@
+{
+  "1": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 34396608,
+      "largest_contiguous_bytes_free_per_bank": 4200786304
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 38992320,
+      "largest_contiguous_bytes_free_per_bank": 4200786304
+    },
+    "decode_eager_host_us": 1194.8863393627107,
+    "prefill_warm_host_us": 22454.98599950224,
+    "decode_trace_host_us": 916.6611644104705,
+    "trace_replays": 129
+  },
+  "4": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 10004928,
+      "largest_contiguous_bytes_free_per_bank": 4253712256
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 10588096,
+      "largest_contiguous_bytes_free_per_bank": 4253712256
+    },
+    "decode_eager_host_us": 1423.8023237946134,
+    "prefill_warm_host_us": 11163.746996317059,
+    "decode_trace_host_us": 435.4345001047477,
+    "trace_replays": 129
+  },
+  "runtime_fallback_audit": {
+    "throw_exception_on_fallback": true,
+    "prefill_decode_host_conversion_guard": true
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    1.0,
+    1.0
+  ],
+  "unused_pages_unchanged": true,
+  "prefill_pcc": 0.9999195872825545,
+  "decode_pcc": 0.9999235243213381,
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "stage05": true,
+    "ring_all": true,
+    "row_direct": true,
+    "no_identity_cast": true,
+    "geometry": {
+      "self_attn.o_proj": {
+        "cores": 4,
+        "block": 16,
+        "readers": 2
+      }
+    }
+  }
+}

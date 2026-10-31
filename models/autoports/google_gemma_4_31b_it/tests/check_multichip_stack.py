@@ -40,7 +40,17 @@ for n in [1, 4]:
             return ttnn.to_device(h, mesh)
 
         cls = OptimizedDecoder if n == 1 else MultichipDecoder
-        layers = [cls.from_state_dict(states[i], hf_config=c, layer_idx=i, mesh_device=mesh) for i in [0, 5]]
+        shared = {}
+        layers = [
+            cls.from_state_dict(
+                states[i],
+                hf_config=c,
+                layer_idx=i,
+                mesh_device=mesh,
+                **({"decode_gather_buffers": shared} if n == 4 else {}),
+            )
+            for i in [0, 5]
+        ]
         pages = tt((torch.randperm((a.seq + 32) // 32) + 3)[None].to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         caches = [m.allocate_cache(num_blocks=(a.seq + 32) // 32 + 3) for m in layers]
         pref = tt(x[:, : a.seq, None].transpose(1, 2))

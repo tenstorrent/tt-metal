@@ -1,0 +1,48 @@
+[
+  {
+    "label": "shared_workspace_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.check_multichip_shared_workspace",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/shared_workspace.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "label": "prefill_trace_layer0",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.check_multichip_prefill_trace",
+      "--layer",
+      "0",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/prefill_trace_layer0.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "label": "prefill_trace_layer5",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.check_multichip_prefill_trace",
+      "--layer",
+      "5",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/optimized_multichip_decoder/prefill_trace_layer5.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "label": "readers",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_multichip_readers"
+    ],
+    "exit_code": 0
+  }
+]

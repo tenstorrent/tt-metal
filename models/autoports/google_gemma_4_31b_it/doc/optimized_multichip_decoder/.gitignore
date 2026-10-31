@@ -1,0 +1,5 @@
+# Large raw captures remain local; compact tables and provenance are checkpointed.
+tracy_final/**/profile/
+tracy_final/**/decode_replay.csv
+final_*_watcher_logs/
+readers/**/profile/

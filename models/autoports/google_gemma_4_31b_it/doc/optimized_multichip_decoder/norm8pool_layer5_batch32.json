@@ -1,0 +1,75 @@
+{
+  "1": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 38418880,
+      "largest_contiguous_bytes_free_per_bank": 4188727680
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 110331328,
+      "largest_contiguous_bytes_free_per_bank": 4116815232
+    },
+    "decode_eager_host_us": 3024.824991977463,
+    "prefill_warm_host_us": 1021078.6829702556,
+    "decode_trace_host_us": 2792.6427496822726,
+    "trace_replays": 129
+  },
+  "4": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 10671552,
+      "largest_contiguous_bytes_free_per_bank": 4250696576
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 28649664,
+      "largest_contiguous_bytes_free_per_bank": 4232718464
+    },
+    "decode_eager_host_us": 1636.1499826113384,
+    "prefill_warm_host_us": 385338.8309944421,
+    "decode_trace_host_us": 932.3436484010017,
+    "trace_replays": 129
+  },
+  "runtime_fallback_audit": {
+    "throw_exception_on_fallback": true,
+    "prefill_decode_host_conversion_guard": true
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    0.9998407624151685,
+    0.9998454999712453
+  ],
+  "unused_pages_unchanged": true,
+  "prefill_pcc": 0.9999898525353806,
+  "decode_pcc": 0.999990302465445,
+  "layer_type": "full_attention",
+  "batch": 32,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "stage05": true,
+    "ring_all": true,
+    "row_direct": true,
+    "no_identity_cast": true,
+    "prefill_norm": true,
+    "row_l1_slice": true,
+    "ccl_l1": true,
+    "pool_ccl": true
+  }
+}

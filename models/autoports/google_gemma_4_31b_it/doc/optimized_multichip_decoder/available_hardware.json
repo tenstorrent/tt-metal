@@ -1,0 +1,25 @@
+{
+  "architecture": "Blackhole",
+  "marketing_name": "P300_X2",
+  "available_device_count": 4,
+  "available_mesh": [
+    1,
+    4
+  ],
+  "device_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "usable_worker_grid": [
+    11,
+    10
+  ],
+  "dram_banks_per_device": 8,
+  "evidence": [
+    "Startup mesh discovery recorded in work_log.md",
+    "recovery_watcher_eth_0.log: tt-smi -ls --local lists four p300c ASICs",
+    "recovery_watcher_eth_3.log: successful 1x4 mesh open/close"
+  ]
+}

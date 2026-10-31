@@ -1,0 +1,78 @@
+{
+  "1": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 34396608,
+      "largest_contiguous_bytes_free_per_bank": 4200786304
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 106361280,
+      "largest_contiguous_bytes_free_per_bank": 4128821632
+    },
+    "decode_eager_host_us": 1827.912327523033,
+    "prefill_warm_host_us": 349608.3919890225,
+    "decode_trace_host_us": 1596.2758047862735,
+    "trace_replays": 129
+  },
+  "4": {
+    "empty_allocated_per_bank": 0,
+    "weight_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 9660864,
+      "largest_contiguous_bytes_free_per_bank": 4253712256
+    },
+    "cache_memory": {
+      "num_banks": 8,
+      "total_bytes_per_bank": 4272341376,
+      "total_bytes_allocated_per_bank": 18599872,
+      "largest_contiguous_bytes_free_per_bank": 4249242752
+    },
+    "decode_eager_host_us": 1633.6660094869633,
+    "prefill_warm_host_us": 171253.84701648727,
+    "decode_trace_host_us": 512.0159762554977,
+    "trace_replays": 129
+  },
+  "runtime_fallback_audit": {
+    "throw_exception_on_fallback": true,
+    "prefill_decode_host_conversion_guard": true
+  },
+  "finite": {
+    "1": {
+      "prefill": true,
+      "decode": true
+    },
+    "4": {
+      "prefill": true,
+      "decode": true
+    }
+  },
+  "cache_pcc": [
+    1.0,
+    0.9999999999999998
+  ],
+  "unused_pages_unchanged": true,
+  "prefill_pcc": 0.9999240443955472,
+  "decode_pcc": 0.9999416325438173,
+  "layer_type": "sliding_attention",
+  "batch": 16,
+  "seq": 4096,
+  "residual": "replicated",
+  "candidate": {
+    "stage05": true,
+    "ring_all": true,
+    "row_direct": false,
+    "no_identity_cast": true,
+    "prefill_input_l1": [
+      "self_attn.o_proj"
+    ],
+    "prefill_mblock": 1,
+    "prefill_kblock": 8,
+    "prefill_nblock": 16,
+    "prefill_shared_mlp_input_l1": false
+  }
+}

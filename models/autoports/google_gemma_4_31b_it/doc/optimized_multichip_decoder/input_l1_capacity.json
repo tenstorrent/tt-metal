@@ -1,0 +1,93 @@
+{
+  "observed_banks": 110,
+  "observed_total_bytes_per_bank": 1461120,
+  "observed_initial_largest_contiguous_free_per_bank": 1372800,
+  "total_capacity_bytes": 160723200,
+  "basis": "INPUT_L1_CAPACITY in input_l1_q_layer0_batch8.log. Tile headers included; input-only lower bounds, before matmul CB or other live allocations. Below total capacity is not evidence of runtime fit.",
+  "rows": [
+    {
+      "batch": 8,
+      "role": "Q/MLP input",
+      "bytes_per_device": 88080384,
+      "tile_rounded_bytes_per_bank": 800768,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 8,
+      "role": "sliding O input",
+      "bytes_per_device": 33554432,
+      "tile_rounded_bytes_per_bank": 305152,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 8,
+      "role": "full O input",
+      "bytes_per_device": 67108864,
+      "tile_rounded_bytes_per_bank": 610304,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 8,
+      "role": "down input",
+      "bytes_per_device": 49020928,
+      "tile_rounded_bytes_per_bank": 446080,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 16,
+      "role": "Q/MLP input",
+      "bytes_per_device": 176160768,
+      "tile_rounded_bytes_per_bank": 1601536,
+      "exceeds_total_bank_capacity": true
+    },
+    {
+      "batch": 16,
+      "role": "sliding O input",
+      "bytes_per_device": 67108864,
+      "tile_rounded_bytes_per_bank": 610304,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 16,
+      "role": "full O input",
+      "bytes_per_device": 134217728,
+      "tile_rounded_bytes_per_bank": 1220608,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 16,
+      "role": "down input",
+      "bytes_per_device": 98041856,
+      "tile_rounded_bytes_per_bank": 892160,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 32,
+      "role": "Q/MLP input",
+      "bytes_per_device": 352321536,
+      "tile_rounded_bytes_per_bank": 3203072,
+      "exceeds_total_bank_capacity": true
+    },
+    {
+      "batch": 32,
+      "role": "sliding O input",
+      "bytes_per_device": 134217728,
+      "tile_rounded_bytes_per_bank": 1220608,
+      "exceeds_total_bank_capacity": false
+    },
+    {
+      "batch": 32,
+      "role": "full O input",
+      "bytes_per_device": 268435456,
+      "tile_rounded_bytes_per_bank": 2441216,
+      "exceeds_total_bank_capacity": true
+    },
+    {
+      "batch": 32,
+      "role": "down input",
+      "bytes_per_device": 196083712,
+      "tile_rounded_bytes_per_bank": 1783232,
+      "exceeds_total_bank_capacity": true
+    }
+  ]
+}

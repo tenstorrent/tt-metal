@@ -67,6 +67,12 @@ def run(a):
                 from models.autoports.google_gemma_4_31b_it.tests.multichip_candidate import MultichipCandidate
 
                 cls = MultichipCandidate
+                if json.loads(a.candidate).get("stage05"):
+                    from models.autoports.google_gemma_4_31b_it.tests.optimized_multichip_candidate import (
+                        OptimizedMultichipCandidate,
+                    )
+
+                    cls = OptimizedMultichipCandidate
             print("SETUP", count, flush=True)
             model = cls.from_state_dict(
                 state,
@@ -302,6 +308,7 @@ if __name__ == "__main__":
         Path(__file__).parents[1] / "tt/multichip_decoder.py",
         Path(__file__).parents[1] / "tt/optimized_decoder.py",
         Path(__file__).with_name("multichip_candidate.py"),
+        Path(__file__).with_name("optimized_multichip_candidate.py"),
     ]
     Path(args.result).with_suffix(".manifest.json").write_text(
         json.dumps(

@@ -11,13 +11,14 @@ from pathlib import Path
 p = argparse.ArgumentParser()
 p.add_argument("--layer", type=int, choices=[0, 5])
 p.add_argument("--batches", nargs="+", type=int, default=[1, 32, 16, 8])
+p.add_argument("--output-root", default="models/autoports/google_gemma_4_31b_it/doc/multichip_decoder")
 a = p.parse_args()
 base = Path("models/autoports/google_gemma_4_31b_it")
 module = "models.autoports.google_gemma_4_31b_it.tests."
 for layer in [a.layer] if a.layer is not None else [0, 5]:
     kind = "sliding_attention" if layer == 0 else "full_attention"
     for batch in a.batches:
-        out = base / "doc/multichip_decoder/tracy_final" / kind / f"batch{batch}"
+        out = Path(a.output_root) / "tracy_final" / kind / f"batch{batch}"
         out.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, TT_METAL_DEVICE_PROFILER="1", TT_METAL_TRACE_ALLOC_TRACKING="0")
         env.pop("TT_METAL_WATCHER", None)

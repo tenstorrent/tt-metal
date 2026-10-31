@@ -22,6 +22,7 @@ class MultichipDecoder(OptimizedDecoder):
         if mesh_device.get_num_devices() != 4:
             raise ValueError("Multichip decoder requires this run's TP4 mesh")
         candidate_baseline = kwargs.pop("_candidate_baseline", False)
+        obj.decode_gather_buffers = kwargs.pop("decode_gather_buffers", {})
         obj.topology = ttnn.Topology.Linear if candidate_baseline else ttnn.Topology.Ring
         obj.residual_sharded = kwargs.pop("residual_sharded", False)
         obj.prefill_ccl_bfp8 = not candidate_baseline
@@ -244,9 +245,9 @@ class MultichipDecoder(OptimizedDecoder):
         }
         obj.persistent_ccl = {}
         if not candidate_baseline and not obj.residual_sharded:
-            # Separate storage per projection and supported decode signature.
-            # Every replay overwrites these buffers before consuming them; they
-            # remain owned by the decoder for the lifetime of all its traces.
+            # RS staging is per projection/signature. AG output storage is
+            # shared across batch views and may be shared by sequential layers.
+            # Every replay overwrites it before the consuming norm reads it.
             for batch in (1, 8, 16, 32):
                 for name in ("self_attn.o_proj", "mlp.down_proj"):
                     full = ttnn.zeros(
@@ -266,33 +267,73 @@ class MultichipDecoder(OptimizedDecoder):
                     staging = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
                         full, 3, topology=obj.topology
                     )
-                    obj.persistent_ccl[(batch, name)] = ([staging[0], local, staging[1]], full)
+                    if name not in obj.decode_gather_buffers:
+                        obj.decode_gather_buffers[name] = ttnn.zeros(
+                            (1, 1, 32, 5376),
+                            device=mesh_device,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=obj._working_memory(full, 8),
+                        )
+                    backing = obj.decode_gather_buffers[name]
+                    if tuple(backing.shape) != (1, 1, 32, 5376) or backing.dtype != ttnn.bfloat16:
+                        raise ValueError("Expected BF16 32-row decode gather workspace")
+                    # All supported logical batches occupy one physical tile row.
+                    # The next norm consumes this storage before another gather
+                    # can overwrite it; returned residuals never alias it.
+                    output = obj._sequence_view(backing, batch)
+                    obj.persistent_ccl[(batch, name)] = ([staging[0], local, staging[1]], output)
         return obj
 
     def _gather(self, x, *, group=None):
+        output = self.persistent_ccl.get((x.shape[-2], group), (None, None))[1] if self.decoding else None
         compressed = self.prefill_ccl_bfp8 and not self.decoding and x.shape[-1] > 128
-        if compressed:
+        if compressed and x.dtype != ttnn.bfloat8_b:
             x = ttnn.typecast(x, ttnn.bfloat8_b)
         out = ttnn.experimental.all_gather_async(
             x,
             dim=3,
-            persistent_output_buffer=(
-                self.persistent_ccl[(x.shape[-2], group)][1]
-                if self.decoding and (x.shape[-2], group) in self.persistent_ccl
-                else None
-            ),
+            persistent_output_buffer=output,
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(),
             topology=self.topology,
             num_links=2,
             num_workers_per_link=2 if self.decoding else None,
             num_buffers_per_channel=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=output.memory_config() if output is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return ttnn.typecast(out, ttnn.bfloat16) if compressed else out
 
     def _norm(self, x, name=None):
+        rows = math.prod(tuple(x.padded_shape)[:-1])
+        if not self.decoding and name and "layernorm" in name and x.shape[-1] == 5376 and rows <= 1024:
+            height = math.ceil(rows / 256) * 32
+            gy = math.ceil(rows / height)
+            memory = ttnn.create_sharded_memory_config(
+                (height, 672),
+                ttnn.CoreGrid(x=8, y=gy),
+                ttnn.ShardStrategy.BLOCK,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # Conversion owns a private buffer; the residual input stays intact.
+            sharded = ttnn.to_memory_config(x, memory)
+            out = ttnn.rms_norm(
+                sharded,
+                epsilon=self.config.rms_norm_eps,
+                weight=self.weights[name + ".weight"],
+                compute_kernel_config=self.kernel,
+                program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(8, gy),
+                    subblock_w=3,
+                    block_h=height // 32,
+                    block_w=21,
+                    inplace=True,
+                ),
+                memory_config=memory,
+            )
+            return ttnn.to_memory_config(out, x.memory_config())
         if not (self.residual_sharded and name and "layernorm" in name):
             return super()._norm(x, name)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -310,7 +351,27 @@ class MultichipDecoder(OptimizedDecoder):
         return ttnn.to_memory_config(out, self._working_memory(out, 7)) if self.decoding else out
 
     def _linear(self, x, name):
-        out = super()._linear(x, name)
+        if self.decoding and name in self.output_padding and x.shape[-2] <= 32:
+            role = self.geometry[name]
+            weight = self.weights[name + ".weight"]
+            x = ttnn.to_memory_config(x, self._working_memory(x, role["cores"]))
+            out = ttnn.linear(
+                x,
+                weight,
+                program_config=ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=role["block"],
+                    per_core_M=1,
+                    per_core_N=math.ceil(weight.shape[-1] / 32 / role["cores"]),
+                    num_workers_per_dram_bank=role["readers"],
+                ),
+                compute_kernel_config=self.linear_kernels["attention" if name.startswith("self_attn.") else "down"],
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+            out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
+            out = ttnn.slice(out, [0] * len(out.shape), [*tuple(out.shape)[:-1], self.hidden])
+        else:
+            out = super()._linear(x, name)
         if name not in self.output_padding:
             return out
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)

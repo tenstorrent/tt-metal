@@ -1,0 +1,72 @@
+{
+  "passed": true,
+  "model": "google/gemma-4-31B-it",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "layers": [
+    0,
+    5
+  ],
+  "batches": [
+    1,
+    32
+  ],
+  "seq": 33,
+  "rounds": 8,
+  "captures": 4,
+  "replays": 32,
+  "all_devices_bitwise_equal_to_eager": true,
+  "outputs_consumed_immediately_after_own_replay": true,
+  "output_addresses": {
+    "layer0_batch1": [
+      1218048,
+      1218048,
+      1218048,
+      1218048
+    ],
+    "layer0_batch32": [
+      1175040,
+      1175040,
+      1175040,
+      1175040
+    ],
+    "layer5_batch1": [
+      1267200,
+      1267200,
+      1267200,
+      1267200
+    ],
+    "layer5_batch32": [
+      1132032,
+      1132032,
+      1132032,
+      1132032
+    ]
+  },
+  "acknowledged_corruptible_buffers": "captured outputs only",
+  "shared_addresses": {
+    "self_attn.o_proj": [
+      1527552,
+      1527552,
+      1527552,
+      1527552
+    ],
+    "mlp.down_proj": [
+      1484544,
+      1484544,
+      1484544,
+      1484544
+    ]
+  },
+  "identity_checked_batches": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "allocation_tracking": true,
+  "skip_program_cache": false,
+  "source_hashes": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/check_multichip_shared_workspace.py": "efb958828705181b71e389df55c37830c5729755e544967eca88115f175b8009",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "7c21e0d36423a4305bd8b07cf8a805909b3145168ecba3703500cdabb9304837"
+  }
+}

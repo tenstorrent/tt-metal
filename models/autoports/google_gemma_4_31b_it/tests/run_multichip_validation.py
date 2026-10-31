@@ -9,14 +9,21 @@ import sys
 from pathlib import Path
 
 p = argparse.ArgumentParser()
-p.add_argument("--group", choices=["boundaries", "batches", "stress", "context", "watcher"], required=True)
+p.add_argument(
+    "--group", choices=["boundaries", "batches", "stress", "context", "watcher", "norm_boundaries"], required=True
+)
 p.add_argument("--layer", type=int, choices=[0, 5])
+p.add_argument("--output-root", default="models/autoports/google_gemma_4_31b_it/doc/multichip_decoder")
 a = p.parse_args()
-root = Path("models/autoports/google_gemma_4_31b_it/doc/multichip_decoder")
+root = Path(a.output_root)
 for layer in [a.layer] if a.layer is not None else [0, 5]:
     cases = []
     if a.group == "boundaries":
-        cases = [(f"length{s}", s, 1, []) for s in [31, 32, 33, 1023, 1024, 1025, 2049]]
+        cases = [(f"length{s}", s, 1, []) for s in [1, 31, 32, 33, 255, 256, 257, 1023, 1024, 1025, 2049]]
+    if a.group == "norm_boundaries":
+        cases = [
+            (f"normboundary{b}_{s}", s, b, []) for b, s in [(8, 127), (8, 129), (16, 63), (16, 65), (32, 31), (32, 33)]
+        ]
     if a.group == "batches":
         cases = [(f"batch{b}", 4096, b, ["--cyclic"]) for b in [1, 32, 16, 8]]
     if a.group == "stress":

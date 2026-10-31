@@ -1,0 +1,42 @@
+{
+  "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": {
+    "sha256": "0d0e17af9216f88a46ddae644c589014798c225b16535361f604cb3928c81362",
+    "semantic": "c8d7b8631ba69442a9ec247dcdb76ddcfdd80dce52c40d06e410717ad587cd10"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_multichip_decoder.py": {
+    "sha256": "7e43f44a77fb09de877847bcdb156450b047bcbd66e045e5e37289dbf9585925",
+    "semantic": "d02a4ae67fd49394df77f93b067d1141ad03e3687d04e4b315f8924494f50982"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_multichip_profiles.py": {
+    "sha256": "fe2e3ec75a97c83fd775475a68e4c769fec193ab6f9a12ba9d731b0c9acfe9ef",
+    "semantic": "c32d88cdca0b4e490a1a5e765623dec7504226b993042ad88ed4d7eb785f68ba"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_multichip_validation.py": {
+    "sha256": "d4eb429b1b334f274eb88f40959e2d45781507539387141db64b59da0ef5937f",
+    "semantic": "2143fc12d5ef0a82bd78bd81c94bb9ef14827057b41cef9d00fb971574ad769d"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/check_multichip_stack.py": {
+    "sha256": "dc75467c5ed4206111f412b33dfafae5e367fce9efc3305afd2a970e4166a302",
+    "semantic": "fff84ff6b25328f6c8016e06f929b3f4142fb28c07c073e5eb3ffd94dcbebc98"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/check_multichip_shared_workspace.py": {
+    "sha256": "c406b0ec99916d00519753e52ff70a534993327b6918bd8176306b3a57e169e2",
+    "semantic": "943126da2ea7dec6e05d55223e3b25ec70c29d12f59e723aa4af15f5a80d650c"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/optimized_multichip_candidate.py": {
+    "sha256": "89606c41d682def45cda662d0977ec7650e10d34c8ac552c02c6741d29643103",
+    "semantic": "7b552ea72ab71b9cbda24420244629933f76873f54578db88672d0d066a26f98"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_optimized_multichip_candidates.py": {
+    "sha256": "91917049c9cc2f8fb3bc273bef64b1304a111d773d6f81667ec043c89c3db7ca",
+    "semantic": "9cc74a2940ae28dca22c5347ecb9b8f43f51d68ef7c3d79c2aeeed4bc14b93b7"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/run_optimized_multichip_acceptance.py": {
+    "sha256": "44e8682ff534b9c27986c3544df02c9718e63e288e7cf10bcadb87249dff9139",
+    "semantic": "4475f758a61d398923ee74e3e986d0a30c6494848ab95bae262ac300e4c628ac"
+  },
+  "models/autoports/google_gemma_4_31b_it/tests/summarize_optimized_multichip_stage.py": {
+    "sha256": "69a51fd067f77e0f3fd2ddd64ab647372606f4c614e93de6de5e60086da4be71",
+    "semantic": "4a8964de8eb9ae82c9bc4f1696b1fb82c739961f79f2aceb3828113d3538be59"
+  }
+}

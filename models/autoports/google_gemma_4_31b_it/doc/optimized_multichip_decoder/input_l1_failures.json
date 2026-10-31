@@ -1,0 +1,73 @@
+[
+  {
+    "artifact": "input_l1_down_layer0_batch8.log",
+    "exit_code": 1,
+    "overlap": {
+      "live_buffer_start": 688256,
+      "static_buffer_end": 722048
+    },
+    "capacity_lines": [
+      "INPUT_L1_CAPACITY mlp.down_proj (8, 1, 1024, 5632) DataType.BFLOAT8_B {'num_banks': 110, 'total_bytes_per_bank': 1461120, 'total_bytes_allocated_per_bank': 88320, 'largest_contiguous_bytes_free_per_bank': 1372800}"
+    ],
+    "allocation_errors": []
+  },
+  {
+    "artifact": "input_l1_down_m1n8_layer0_batch16.log",
+    "exit_code": 1,
+    "overlap": {
+      "live_buffer_start": 225792,
+      "static_buffer_end": 252032
+    },
+    "capacity_lines": [
+      "INPUT_L1_CAPACITY mlp.down_proj (16, 1, 1024, 5632) DataType.BFLOAT8_B {'num_banks': 110, 'total_bytes_per_bank': 1461120, 'total_bytes_allocated_per_bank': 88320, 'largest_contiguous_bytes_free_per_bank': 1372800}"
+    ],
+    "allocation_errors": []
+  },
+  {
+    "artifact": "input_l1_o_layer5_batch8.log",
+    "exit_code": 1,
+    "overlap": {
+      "live_buffer_start": 616192,
+      "static_buffer_end": 783488
+    },
+    "capacity_lines": [
+      "INPUT_L1_CAPACITY self_attn.o_proj (8, 1, 1024, 4096) DataType.BFLOAT16 {'num_banks': 110, 'total_bytes_per_bank': 1461120, 'total_bytes_allocated_per_bank': 88320, 'largest_contiguous_bytes_free_per_bank': 1372800}"
+    ],
+    "allocation_errors": []
+  },
+  {
+    "artifact": "input_l1_o_tiny_layer5_batch16.log",
+    "exit_code": 1,
+    "overlap": null,
+    "capacity_lines": [
+      "INPUT_L1_CAPACITY self_attn.o_proj (16, 1, 1024, 4096) DataType.BFLOAT16 {'num_banks': 110, 'total_bytes_per_bank': 1461120, 'total_bytes_allocated_per_bank': 88320, 'largest_contiguous_bytes_free_per_bank': 1372800}"
+    ],
+    "allocation_errors": [
+      "Out of Memory: Not enough space to allocate 134217728 B L1 buffer across 110 banks, where each bank needs to store 1220608 B, but bank size is 1461120 B (allocated: 131328 B, free: 1329792 B, largest free block: 1114752 B)."
+    ]
+  },
+  {
+    "artifact": "input_l1_q_layer0_batch8.log",
+    "exit_code": 1,
+    "overlap": {
+      "live_buffer_start": 683776,
+      "static_buffer_end": 783488
+    },
+    "capacity_lines": [
+      "INPUT_L1_CAPACITY self_attn.qkv_proj (8, 1, 1024, 5376) DataType.BFLOAT16 {'num_banks': 110, 'total_bytes_per_bank': 1461120, 'total_bytes_allocated_per_bank': 88320, 'largest_contiguous_bytes_free_per_bank': 1372800}"
+    ],
+    "allocation_errors": []
+  },
+  {
+    "artifact": "input_l1_q_m1_layer0_batch8.log",
+    "exit_code": 1,
+    "overlap": {
+      "live_buffer_start": 333568,
+      "static_buffer_end": 390272
+    },
+    "capacity_lines": [
+      "INPUT_L1_CAPACITY self_attn.qkv_proj (8, 1, 1024, 5376) DataType.BFLOAT16 {'num_banks': 110, 'total_bytes_per_bank': 1461120, 'total_bytes_allocated_per_bank': 88320, 'largest_contiguous_bytes_free_per_bank': 1372800}"
+    ],
+    "allocation_errors": []
+  }
+]

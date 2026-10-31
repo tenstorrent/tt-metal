@@ -1,0 +1,348 @@
+{
+  "layer": 5,
+  "source": "real decoder projection operands, isolated matmul; not headline layer performance",
+  "alternating_order": true,
+  "records": [
+    {
+      "role": "self_attn.qk_proj",
+      "readers": 1,
+      "shape": [
+        32,
+        5376,
+        4608
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        64.52050001826137,
+        443.4434958966449,
+        442.5218721735291,
+        222.08324662642553
+      ],
+      "geometry": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 672], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 672],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5376, 576], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5376, 576],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 18,
+      "per_reader_physical_row_bytes": 10368,
+      "physical_weight_bytes": 13934592,
+      "logical_weight_bytes": 12386304.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "self_attn.qk_proj",
+      "readers": 2,
+      "shape": [
+        32,
+        5376,
+        4608
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        450.60600677970797,
+        444.7136234375648,
+        444.6133752935566,
+        445.2771245269105
+      ],
+      "geometry": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 672], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 672],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5376, 576], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5376, 576],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 18,
+      "per_reader_physical_row_bytes": 5184,
+      "physical_weight_bytes": 13934592,
+      "logical_weight_bytes": 12386304.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "self_attn.qk_proj",
+      "readers": 3,
+      "shape": [
+        32,
+        5376,
+        4608
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        445.43875264935195,
+        431.5483747632243,
+        443.0290064192377,
+        438.9474997879006
+      ],
+      "geometry": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 672], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 672],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5376, 576], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5376, 576],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 18,
+      "per_reader_physical_row_bytes": 3456,
+      "physical_weight_bytes": 13934592,
+      "logical_weight_bytes": 12386304.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "self_attn.o_proj",
+      "readers": 1,
+      "shape": [
+        32,
+        4096,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        436.6081266198307,
+        182.92599997948855,
+        442.54687963984907,
+        444.3102516233921
+      ],
+      "geometry": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 512], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 512],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[4096, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[4096, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 12672,
+      "physical_weight_bytes": 12976128,
+      "logical_weight_bytes": 11534336.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "self_attn.o_proj",
+      "readers": 2,
+      "shape": [
+        32,
+        4096,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        432.4213805375621,
+        443.05412302492186,
+        439.45974903181195,
+        99.02112651616335
+      ],
+      "geometry": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 512], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 512],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[4096, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[4096, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 6336,
+      "physical_weight_bytes": 12976128,
+      "logical_weight_bytes": 11534336.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "mlp.gate_proj",
+      "readers": 1,
+      "shape": [
+        32,
+        5376,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        445.82687405636534,
+        448.17887828685343,
+        442.8762476891279,
+        446.22275163419545
+      ],
+      "geometry": {
+        "cores": 28,
+        "block": 6,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}], shape=[32, 192], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 192],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5376, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5376, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 12672,
+      "physical_weight_bytes": 17031168,
+      "logical_weight_bytes": 15138816.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "mlp.gate_proj",
+      "readers": 2,
+      "shape": [
+        32,
+        5376,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        444.83874808065593,
+        445.02537639345974,
+        442.7648746059276,
+        441.55499927001074
+      ],
+      "geometry": {
+        "cores": 28,
+        "block": 6,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}], shape=[32, 192], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 192],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5376, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5376, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 6336,
+      "physical_weight_bytes": 17031168,
+      "logical_weight_bytes": 15138816.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "mlp.up_proj",
+      "readers": 1,
+      "shape": [
+        32,
+        5376,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 0.9999999999999999,
+      "host_us": [
+        441.40725367469713,
+        449.8644993873313,
+        443.02913011051714,
+        442.24999874131754
+      ],
+      "geometry": {
+        "cores": 28,
+        "block": 6,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}], shape=[32, 192], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 192],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5376, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5376, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 12672,
+      "physical_weight_bytes": 17031168,
+      "logical_weight_bytes": 15138816.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "mlp.up_proj",
+      "readers": 2,
+      "shape": [
+        32,
+        5376,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 0.9999999999999999,
+      "host_us": [
+        443.81812040228397,
+        101.32050374522805,
+        444.6646271389909,
+        441.94575457368046
+      ],
+      "geometry": {
+        "cores": 28,
+        "block": 6,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}], shape=[32, 192], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 192],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":6,\"y\":3}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5376, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5376, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 6336,
+      "physical_weight_bytes": 17031168,
+      "logical_weight_bytes": 15138816.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "mlp.down_proj",
+      "readers": 1,
+      "shape": [
+        32,
+        5632,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        442.8248721524142,
+        457.0433738990687,
+        444.05850348994136,
+        433.3217511884868
+      ],
+      "geometry": {
+        "cores": 8,
+        "block": 11,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5632, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5632, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 12672,
+      "physical_weight_bytes": 17842176,
+      "logical_weight_bytes": 15859712.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    },
+    {
+      "role": "mlp.down_proj",
+      "readers": 2,
+      "shape": [
+        32,
+        5632,
+        5632
+      ],
+      "logical_batch": 1,
+      "stored_weight_dtype": "DataType.BFLOAT4_B",
+      "fidelity": "LoFi",
+      "pcc": 1.0,
+      "host_us": [
+        442.9451219039038,
+        306.49887048639357,
+        434.30861842352897,
+        609.4573764130473
+      ],
+      "geometry": {
+        "cores": 8,
+        "block": 11,
+        "readers": 2
+      },
+      "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5632, 704], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5632, 704],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0)",
+      "per_bank_tiles": 22,
+      "per_reader_physical_row_bytes": 6336,
+      "physical_weight_bytes": 17842176,
+      "logical_weight_bytes": 15859712.0,
+      "peak_dram_bytes_per_s": 512000000000.0
+    }
+  ]
+}
