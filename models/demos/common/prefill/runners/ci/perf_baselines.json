@@ -142,18 +142,18 @@
         },
         "14kw": {
           "@5k": {
-            "throughput_tok_s": 17978,
-            "chunk_time_ms": 293
+            "throughput_tok_s": 19579,
+            "chunk_time_ms": 279
           },
           "@50k": {
-            "throughput_tok_s": 16817,
-            "ttft_s": 2.85,
-            "chunk_time_ms": 284
+            "throughput_tok_s": 18640,
+            "ttft_s": 2.61,
+            "chunk_time_ms": 255
           },
           "@100k": {
-            "throughput_tok_s": 15654,
-            "ttft_s": 6.08,
-            "chunk_time_ms": 339
+            "throughput_tok_s": 16702,
+            "ttft_s": 5.56,
+            "chunk_time_ms": 302
           },
           "@255k": {
             "throughput_tok_s": 11536,
