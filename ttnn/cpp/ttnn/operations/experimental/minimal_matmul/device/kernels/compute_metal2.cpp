@@ -476,6 +476,7 @@ void matmul_blocks_swiglu(
     const uint32_t subblock_h,
     const uint32_t subblock_w,
     const bool add_partials) {
+#ifndef ARCH_QUASAR  // Wormhole/Blackhole LLK internals; kernel_main refuses fused SwiGLU on Quasar
     const uint32_t out_full_N_block_tiles = full_N_block_tiles >> 1;
     uint32_t in0_index_offset = 0;
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
@@ -542,6 +543,7 @@ void matmul_blocks_swiglu(
         }
         in0_index_offset += subblock_h * K_block_tiles;
     }
+#endif
 }
 #endif  // !ARCH_QUASAR
 
@@ -590,6 +592,9 @@ void kernel_main() {
 #endif
 
     matmul_init(dfb::in0, dfb::in1);
+#ifdef ARCH_QUASAR
+    static_assert(!swiglu_in_k_loop, "fused SwiGLU (matmul_blocks_swiglu) is not ported to Quasar");
+#endif
     if constexpr (swiglu_in_k_loop) {
         PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
     }

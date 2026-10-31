@@ -8,7 +8,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -134,10 +134,13 @@ struct FabricRouterDiagnosticBufferMap {
 };
 
 struct FabricEriscDatamoverConfig {
-    static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
-    static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
-    static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-    static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
+    // The NoC command buffer a router uses for a kind of transfer.
+    enum class NocCmdBuf : uint32_t {
+        WR_CMD_BUF = 0,      // for large writes
+        RD_CMD_BUF = 1,      // for all reads
+        WR_REG_CMD_BUF = 2,  // for small writes (e.g., registers, semaphores)
+        AT_CMD_BUF = 3,      // for atomics
+    };
     static constexpr uint32_t DEFAULT_NOC_VC = 2;
     static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
@@ -166,6 +169,7 @@ struct FabricEriscDatamoverConfig {
 
     // Performance telemetry buffer address (16B aligned)
     std::size_t perf_telemetry_buffer_address = 0;
+    static constexpr std::size_t perf_telemetry_buffer_size = 32;
 
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
@@ -221,6 +225,8 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
+    // One past the last byte the router places below max_l1_loading_size.
+    std::size_t allocated_l1_end_address = 0;
     std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
@@ -242,6 +248,9 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
+    // Senders and receivers transmit on separate Ethernet TX queues, which two-ERISC mode enables. The kernel derives
+    // the same flag from SENDER_TXQ_ID and RECEIVER_TXQ_ID.
+    bool multi_txq_enabled() const { return sender_txq_id != receiver_txq_id; }
     std::size_t num_riscv_cores = 0;
     tt::ARCH arch = tt::ARCH::Invalid;
 
@@ -254,15 +263,13 @@ struct FabricEriscDatamoverConfig {
 
     // add the noc-usage and cmd_buf-usage here
     std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids =
-        {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids =
-        {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids = {};
     std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
 
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
     // emd vcs
     std::size_t edm_noc_vc = 0;
@@ -460,6 +467,9 @@ public:
 
     size_t get_configured_risc_count() const;
 
+    // One past the last byte the router places below config.max_l1_loading_size.
+    size_t get_allocated_l1_end_address() const { return config.allocated_l1_end_address; }
+
     // Returns the resolved kernel build optimization level for this router.
     // This opt-level is per-builder/router, and should not be shared across builders.
     [[nodiscard]] tt::tt_metal::KernelBuildOptLevel get_kernel_opt_level() const;
@@ -478,6 +488,10 @@ public:
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
+    // The channel trimming profile entry that turned off this router's unused channels, if one was applied.
+    const std::optional<ChannelTrimmingOverrides>& get_channel_trimming_overrides() const {
+        return channel_trimming_overrides_;
+    }
 
     //    protected:
     const FabricContext& fabric_context_;

@@ -1,0 +1,44 @@
+# Llama-8b + audio 4-mesh line (RELAXED inter-mesh) (no loopback): 1x2 -> 1x2 -> 4x2 -> 4x2.
+# 80 chips (32+32+8+8); maps on 3 galaxies. Per-mesh dim_types defaults: the 4x8 RING,LINE meshes
+# default to FABRIC_2D_TORUS_Y, the 4x2 LINE,LINE meshes to FABRIC_2D.
+mesh_descriptors {
+  name: "1x2"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 4, 4 ] }
+  channels { count: 2 policy: RELAXED }
+}
+mesh_descriptors {
+  name: "4x2"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "1x2" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "1x2" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "4x2" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "4x2" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "1x2" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "1x2" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "1x2" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "4x2" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "4x2" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "4x2" mesh_id: 3 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

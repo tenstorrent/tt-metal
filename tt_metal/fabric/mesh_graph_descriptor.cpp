@@ -205,7 +205,9 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
-    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
+    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {
+    file_path_ = text_proto_file_path;
+}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
@@ -677,6 +679,38 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Me
 
 FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc) {
     return infer_declared_fabric_type_from_dim_types(switch_desc);
+}
+
+// Derive a mesh's default FabricConfig from its dim_types. Always 2D-family (1D is only ever requested explicitly);
+// torus follows the ring axes: dim 0 => TORUS_Y, dim 1 => TORUS_X, both => TORUS_XY.
+FabricConfig MeshGraphDescriptor::default_fabric_config_from_dim_types(MeshId mesh_id) const {
+    // Switches share the MeshId space with meshes and can be owned by a process the same way.
+    const auto has_mesh_id = [&](GlobalNodeId id) { return MeshId{get_instance(id).local_id} == mesh_id; };
+    const auto mesh_it = std::find_if(all_meshes().begin(), all_meshes().end(), has_mesh_id);
+    const auto switch_it = std::find_if(all_switches().begin(), all_switches().end(), has_mesh_id);
+    TT_FATAL(
+        mesh_it != all_meshes().end() || switch_it != all_switches().end(),
+        "MeshGraphDescriptor: no mesh or switch instance for mesh_id {}",
+        *mesh_id);
+    const auto& dim_types =
+        mesh_it != all_meshes().end()
+            ? std::get<const proto::MeshDescriptor*>(get_instance(*mesh_it).desc)->device_topology().dim_types()
+            : std::get<const proto::SwitchDescriptor*>(get_instance(*switch_it).desc)->device_topology().dim_types();
+    const auto is_ring = [&](int axis) {
+        return axis < dim_types.size() && dim_types[axis] == proto::TorusTopology::RING;
+    };
+    const bool y_ring = is_ring(0);
+    const bool x_ring = is_ring(1);
+    if (y_ring && x_ring) {
+        return FabricConfig::FABRIC_2D_TORUS_XY;
+    }
+    if (y_ring) {
+        return FabricConfig::FABRIC_2D_TORUS_Y;
+    }
+    if (x_ring) {
+        return FabricConfig::FABRIC_2D_TORUS_X;
+    }
+    return FabricConfig::FABRIC_2D;
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {

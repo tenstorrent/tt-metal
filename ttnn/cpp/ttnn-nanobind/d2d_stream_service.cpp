@@ -69,7 +69,8 @@ D2DStreamConfig make_config(
     bool share_fabric_links,
     std::string fabric_link_group,
     std::optional<D2DStageGateConfig> stage_gate = std::nullopt,
-    std::vector<ttnn::D2DStreamTensorConfig> extra_tensors = {}) {
+    std::vector<ttnn::D2DStreamTensorConfig> extra_tensors = {},
+    bool relay = false) {
     return D2DStreamConfig{
         .global_spec = global_spec,
         .mapper = std::move(mapper),
@@ -81,6 +82,7 @@ D2DStreamConfig make_config(
         .share_fabric_links = share_fabric_links,
         .fabric_link_group = std::move(fabric_link_group),
         .stage_gate = stage_gate,
+        .relay = relay,
     };
 }
 
@@ -370,7 +372,8 @@ void py_module_types(nb::module_& mod) {
                bool share_fabric_links,
                const std::string& fabric_link_group,
                const std::optional<D2DStageGateConfig>& stage_gate,
-               const nb::list& extra_tensors) {
+               const nb::list& extra_tensors,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -382,7 +385,8 @@ void py_module_types(nb::module_& mod) {
                     share_fabric_links,
                     fabric_link_group,
                     stage_gate,
-                    make_extra_tensors(*sender_mesh, extra_tensors));
+                    make_extra_tensors(*sender_mesh, extra_tensors),
+                    relay);
                 return D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
             },
             nb::arg("sender_mesh"),
@@ -398,6 +402,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("fabric_link_group") = "",
             nb::arg("stage_gate") = nb::none(),
             nb::arg("extra_tensors") = nb::list(),
+            nb::arg("relay") = false,
             R"doc(
                 Build a sender+receiver pair in a SINGLE process (both meshes owned here).
 
@@ -425,7 +430,8 @@ void py_module_types(nb::module_& mod) {
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
                const std::string& fabric_link_group,
-               const nb::list& extra_tensors) {
+               const nb::list& extra_tensors,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -437,7 +443,8 @@ void py_module_types(nb::module_& mod) {
                     share_fabric_links,
                     fabric_link_group,
                     std::nullopt,
-                    make_extra_tensors(*sender_mesh, extra_tensors));
+                    make_extra_tensors(*sender_mesh, extra_tensors),
+                    relay);
                 // distributed_context left null -> the service uses get_current_world().
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
@@ -458,6 +465,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("share_fabric_links") = true,
             nb::arg("fabric_link_group") = "",
             nb::arg("extra_tensors") = nb::list(),
+            nb::arg("relay") = false,
             R"doc(
                 Build the SENDER endpoint in this (sender-rank) process. Must be called on
                 the rank equal to `sender_rank`; the matching `create_receiver` runs in the
@@ -487,7 +495,8 @@ void py_module_types(nb::module_& mod) {
                bool share_fabric_links,
                const std::string& fabric_link_group,
                const std::optional<D2DStageGateConfig>& stage_gate,
-               const nb::list& extra_tensors) {
+               const nb::list& extra_tensors,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -499,7 +508,8 @@ void py_module_types(nb::module_& mod) {
                     share_fabric_links,
                     fabric_link_group,
                     stage_gate,
-                    make_extra_tensors(*receiver_mesh, extra_tensors));
+                    make_extra_tensors(*receiver_mesh, extra_tensors),
+                    relay);
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
                     .receiver_rank = Rank{receiver_rank},
@@ -520,6 +530,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("fabric_link_group") = "",
             nb::arg("stage_gate") = nb::none(),
             nb::arg("extra_tensors") = nb::list(),
+            nb::arg("relay") = false,
             R"doc(
                 Build the RECEIVER endpoint in this (receiver-rank) process. Must be called
                 on the rank equal to `receiver_rank`; the matching `create_sender` runs in

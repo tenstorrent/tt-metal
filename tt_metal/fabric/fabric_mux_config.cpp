@@ -8,7 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_mux_program_local_l1.hpp"

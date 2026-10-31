@@ -225,7 +225,7 @@ private:
 class TaskQueue {
 public:
     // Producer. Stalls while the ring is full.
-    void push(std::function<void()>&& task) {
+    void push(ttsl::move_only_function<void()>&& task) {
         const uint64_t tail = tail_.load(std::memory_order_relaxed);
         if (tail - head_.load(std::memory_order_acquire) == CAPACITY) {
             ttsl::nice_spin_until([&] { return tail - head_.load(std::memory_order_acquire) < CAPACITY; });
@@ -239,7 +239,7 @@ public:
     bool empty() const { return head_.load(std::memory_order_relaxed) == tail_.load(std::memory_order_seq_cst); }
 
     // Consumer. The queue must not be empty.
-    std::function<void()> pop() {
+    ttsl::move_only_function<void()> pop() {
         const uint64_t head = head_.load(std::memory_order_relaxed);
         auto task = std::move(slots_[head % CAPACITY]);
         slots_[head % CAPACITY] = nullptr;
@@ -249,7 +249,7 @@ public:
 
 private:
     static constexpr uint64_t CAPACITY = 65536;
-    std::array<std::function<void()>, CAPACITY> slots_;
+    std::array<ttsl::move_only_function<void()>, CAPACITY> slots_;
     alignas(64) std::atomic<uint64_t> head_ = 0;
     alignas(64) std::atomic<uint64_t> tail_ = 0;
 };
@@ -304,7 +304,7 @@ public:
         worker.join();
     }
 
-    void enqueue(std::function<void()>&& f) {
+    void enqueue(ttsl::move_only_function<void()>&& f) {
         tasks_.push(std::move(f));
         wake();
     }
@@ -407,7 +407,8 @@ public:
     // Caller: plans one call of fn per device id, each for the executor `executor_of` returns. A plan for the same
     // devices as the job's last use is kept, so that the caller does not rewrite lines the workers read.
     template <typename ExecutorOf>
-    void plan(const std::function<void(size_t)>& fn, ttsl::Span<const uint32_t> device_ids, ExecutorOf executor_of) {
+    void plan(
+        ttsl::move_only_function<void(size_t)>& fn, ttsl::Span<const uint32_t> device_ids, ExecutorOf executor_of) {
         if (fn_ != &fn) {
             fn_ = &fn;
         }
@@ -524,7 +525,7 @@ private:
     uint64_t use_ = 0;         // Counts the job's uses, for claims; set by the caller on acquire, read by holders.
     const uint32_t slot_;
     // Valid until the caller returns, which happens only after every claimed call has finished.
-    const std::function<void(size_t)>* fn_ = nullptr;
+    ttsl::move_only_function<void(size_t)>* fn_ = nullptr;
     std::vector<Claim> claims_;  // Indexed by participant.
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     Participants participants_;
@@ -584,7 +585,7 @@ using threading_primitives::Completion;
 using threading_primitives::NumaAwareExecutor;
 using threading_primitives::ParallelJob;
 
-void run_on_caller(size_t num_calls, const std::function<void(size_t)>& fn) {
+void run_on_caller(size_t num_calls, ttsl::move_only_function<void(size_t)>& fn) {
     std::exception_ptr exception;
     for (size_t call = 0; call < num_calls; call++) {
         try {
@@ -645,7 +646,7 @@ public:
         }
     }
 
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
+    void enqueue(ttsl::move_only_function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
         // If the user does not provide the Device ID tied to this task, determine the thread to use
         // based on the internally stored thread_idx. Tasks will get round-robined across threads,
         // when relying on the thread_idx.
@@ -657,7 +658,7 @@ public:
         workers_[thread_id]->enqueue(std::move(f));
     }
 
-    void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) override {
+    void parallel_for(ttsl::Span<const uint32_t> device_ids, ttsl::move_only_function<void(size_t)>&& fn) override {
         if (device_ids.empty()) {
             return;
         }
@@ -781,9 +782,11 @@ private:
 class PassThroughThreadPool : public ThreadPool {
 public:
     PassThroughThreadPool() = default;
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
+    void enqueue(ttsl::move_only_function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override {
+        f();
+    }
     void wait() override {}
-    void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) override {
+    void parallel_for(ttsl::Span<const uint32_t> device_ids, ttsl::move_only_function<void(size_t)>&& fn) override {
         run_on_caller(device_ids.size(), fn);
     }
 };

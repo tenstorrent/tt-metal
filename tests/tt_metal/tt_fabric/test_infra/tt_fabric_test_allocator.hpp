@@ -18,7 +18,7 @@
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_memory_map.hpp"
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 

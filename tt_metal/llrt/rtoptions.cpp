@@ -61,6 +61,8 @@ enum class EnvVarID {
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
+    TT_MESH_ID,                               // Mesh this process binds to in the mesh graph descriptor
+    TT_MESH_HOST_RANK,                        // Host rank of this process within its mesh
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
 
@@ -257,6 +259,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
     TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
+    TT_METAL_FABRIC_DISABLE_INTERMESH_VC,    // Carry inter-mesh traffic on VC0, with no VC1
     TT_TOPOLOGY_SOLVER_ENGINE,               // sat|dfs: topology mapping backend (fabric)
 
     // ========================================
@@ -587,6 +590,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_MESH_GRAPH_DESC_PATH:
             this->is_custom_fabric_mesh_graph_desc_path_set = true;
             this->custom_fabric_mesh_graph_desc_path = std::string(value);
+            break;
+
+        // Mesh this process binds to in the mesh graph descriptor. Set per rank by tt-run; default mesh 0.
+        case EnvVarID::TT_MESH_ID:
+            this->fabric_mesh_id = tt::tt_fabric::MeshId{static_cast<uint32_t>(std::stoul(value))};
+            break;
+
+        // Host rank of this process within its mesh. Set per rank by tt-run; default host rank 0.
+        case EnvVarID::TT_MESH_HOST_RANK:
+            this->fabric_mesh_host_rank = tt::tt_fabric::MeshHostRankId{static_cast<uint32_t>(std::stoul(value))};
             break;
 
         // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH
@@ -1938,6 +1951,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
         }
+
+        // TT_METAL_FABRIC_DISABLE_INTERMESH_VC: carry inter-mesh traffic on VC0 (no VC1) and turn on
+        // the D2D stream relay. Only safe if inter-mesh traffic cannot form a buffer cycle. Default: 0
+        case EnvVarID::TT_METAL_FABRIC_DISABLE_INTERMESH_VC:
+            this->disable_fabric_intermesh_vc = is_env_enabled(value);
+            break;
 
         // TT_TOPOLOGY_SOLVER_ENGINE
         // If set to sat/1/true/yes, topology mapping uses the SAT backend when solver_engine is Auto (same rule as

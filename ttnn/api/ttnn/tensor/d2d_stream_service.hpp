@@ -169,6 +169,11 @@ struct D2DStreamConfig {
 
     // Receiver only.
     std::optional<D2DStageGateConfig> stage_gate;
+
+    // Relay mode: packets cross meshes only on a cable, through an exit and an entry relay kernel.
+    // Both sides must match. Needs a 2D fabric, share_fabric_links and no stage_gate.
+    // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 turns it on for every stream.
+    bool relay = false;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -436,6 +441,12 @@ private:
         const std::vector<Tensor>& backings,
         const D2DStreamConfig& cfg,
         const std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t>& sender_lanes);
+
+    // Relay mode: finalize_* only allocates, because each side's relay programs need the peer's
+    // addresses. The factory swaps those (RelayInfo), then these build the programs.
+    struct RelayInfo;
+    static void build_relay_sender(D2DStreamServiceSender& sender, const RelayInfo& peer);
+    static void build_relay_receiver(D2DStreamServiceReceiver& receiver, const RelayInfo& peer);
 };
 
 }  // namespace ttnn
