@@ -235,7 +235,8 @@ class MatmulCustomCompressed:
         if impl in ("runtime", "runtime barrier"):
             # Runtime path: create per-tile metadata tensor in L1
             # Each tile gets one uint32: [abs_addr:24 | fmt:8], precomputed with absolute addresses.
-            all_cores = ttnn.corerange_to_cores(core_grid)
+            # fmt_tensor is sharded ROW_MAJOR, so its rows must follow row-major core order.
+            all_cores = ttnn.corerange_to_cores(core_grid, row_wise=True)
             num_tiles = num_tiles_k * out_w
             # fifo_rd_ptr - 1: the -1 is a HW convention for THCON address registers
             base_addr_shifted = (data_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
@@ -261,7 +262,8 @@ class MatmulCustomCompressed:
             fmt_l1_addr = fmt_tensor.buffer_address()
             named_compile_time_args.append(("fmt_l1_addr", fmt_l1_addr))
         elif impl == "new":
-            all_cores = ttnn.corerange_to_cores(core_grid)
+            # fmt_tensor is sharded ROW_MAJOR, so its rows must follow row-major core order.
+            all_cores = ttnn.corerange_to_cores(core_grid, row_wise=True)
 
             shard_data = []
             meta_len = []
