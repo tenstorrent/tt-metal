@@ -417,7 +417,7 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
 // Split a logical-row transfer across shards when a BLOCK/WIDTH-sharded buffer's row
 // spans multiple cores. Falls through to a single noc_async_{read,write} for interleaved
 // buffers, HEIGHT-sharded RM (whole row stays on one core), and shards whose width covers
-// the full row.
+// the full row; on a rank-1 spec that transfer continues into the following pages.
 //
 // pages_per_row = ceil(tensor_W_pages / shard_W_pages); HEIGHT-sh collapses to 1 for any W·E.
 // Split-branch stride is exact iff shard_W_pages == 1 (RM B/W-sh: one shard-row = one page).
@@ -432,18 +432,19 @@ FORCE_INLINE void noc_async_write_sharded(
         const uint32_t r = dspec.rank();
         const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
         const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
-        if (pages_per_row <= 1) {
+        const uint32_t page_size = tensor.get_aligned_page_size();
+        // A rank-1 spec keeps its pages in order, so a transfer that runs past its page continues into the next ones.
+        if (pages_per_row <= 1 && (r > 1 || offset + size <= page_size)) {
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
             return;
         }
-        const uint32_t page_size = tensor.get_aligned_page_size();
         uint32_t sharded_dest_id = dest_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
         uint32_t remaining = size;
-        for (uint32_t i = 0; i < num_pages; i++) {
+        for (uint32_t i = 0; i < num_pages && sharded_dest_id < dspec.tensor_volume(); i++) {
             uint32_t write_size = std::min(remaining, page_size - sharded_offset);
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr),
@@ -494,18 +495,19 @@ FORCE_INLINE void noc_async_read_sharded(
         const uint32_t r = dspec.rank();
         const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
         const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
-        if (pages_per_row <= 1) {
+        const uint32_t page_size = tensor.get_aligned_page_size();
+        // A rank-1 spec keeps its pages in order, so a transfer that runs past its page continues into the next ones.
+        if (pages_per_row <= 1 && (r > 1 || offset + size <= page_size)) {
             noc.async_read(
                 tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});
             return;
         }
-        const uint32_t page_size = tensor.get_aligned_page_size();
         uint32_t sharded_src_id = src_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
         uint32_t remaining = size;
-        for (uint32_t i = 0; i < num_pages; i++) {
+        for (uint32_t i = 0; i < num_pages && sharded_src_id < dspec.tensor_volume(); i++) {
             uint32_t read_size = std::min(remaining, page_size - sharded_offset);
             noc.async_read(
                 tensor,
