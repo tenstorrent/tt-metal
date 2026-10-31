@@ -75,19 +75,23 @@ make install -j"$(nproc)"
 cd /
 rm -rf "${WORKDIR}"
 
-# Create mpirun-ulfm wrapper for compatibility with scripts expecting this name.
-# The wrapper calls mpirun with --with-ft ulfm and forwards all remaining arguments.
+# Provide mpirun-ulfm for scripts expecting this name, as a plain symlink to mpirun. This matches the
+# tenstorrent/ompi .deb used by install_dependencies.sh (its postinst symlinks /usr/local/bin/mpirun-ulfm
+# to <prefix>/bin/mpirun).
+#
+# It must NOT be a wrapper that adds "--with-ft ulfm". That flag marks the job recoverable: a rank killed by
+# a signal no longer aborts the job, surviving ranks keep waiting, and mpirun exits 0 even when every rank
+# crashed, so CI steps report success after fatal rank failures and the next command starts on a wedged
+# device (https://github.com/tenstorrent/tt-metal/issues/57698). Nothing after "--with-ft ulfm" on the
+# command line can turn it back off. Programs that handle rank failures themselves (the fault-tolerance
+# tests) pass "--with-ft ulfm" explicitly.
 if [ -e "${OMPI_PREFIX}/bin/mpirun-ulfm" ]; then
-    echo "[WARNING] mpirun-ulfm already exists at ${OMPI_PREFIX}/bin/mpirun-ulfm, skipping wrapper creation"
+    echo "[WARNING] mpirun-ulfm already exists at ${OMPI_PREFIX}/bin/mpirun-ulfm, skipping symlink creation"
 elif [ ! -x "${OMPI_PREFIX}/bin/mpirun" ]; then
-    echo "[ERROR] mpirun not found or not executable at ${OMPI_PREFIX}/bin/mpirun, cannot create mpirun-ulfm wrapper" >&2
+    echo "[ERROR] mpirun not found or not executable at ${OMPI_PREFIX}/bin/mpirun, cannot create mpirun-ulfm symlink" >&2
     exit 1
 else
-    cat > "${OMPI_PREFIX}/bin/mpirun-ulfm" <<'EOF'
-#!/bin/bash
-exec "$(dirname "$0")/mpirun" --with-ft ulfm "$@"
-EOF
-    chmod +x "${OMPI_PREFIX}/bin/mpirun-ulfm"
+    ln -s mpirun "${OMPI_PREFIX}/bin/mpirun-ulfm"
 fi
 
 # Guard: ensure no munge runtime dependency leaked into libmpi.so.
