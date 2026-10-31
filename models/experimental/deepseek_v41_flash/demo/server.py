@@ -1062,10 +1062,22 @@ class V41ChatEngine(ChatEngine):
             # max_seq may be rounded above --max-context; every session still has to fit the pools.
             total_tokens=max(args.total_context, self.max_seq),
             block_size=_PAGE_BLOCK_SIZE,
+            device_sampling=bool(getattr(args, "device_sampling", False)),
         )
         if self.model.context_limit is not None and self.model.context_limit < self.max_seq:
             logger.warning(f"context capped at {self.model.context_limit} tokens by the compressed KV")
             self.max_seq = self.model.context_limit
+        if self.model.device_sampler is not None:
+            # ``--temperature`` is the one temperature every turn samples at (a request cannot set its
+            # own), and ``--seed`` seeds the PRNGs, which still advance from step to step. This engine
+            # does not run ``ChatEngine.__init__``, so the sampler is switched here.
+            self.temperature = float(getattr(args, "temperature", None) or 0.0)
+            self.seed = int(getattr(args, "seed", 0) or 0)
+            self.model.device_sampler.set_sampling(self.temperature, self.seed)
+            logger.info(
+                f"device sampling: the output stage picks the token "
+                f"(temperature {self.temperature}, seed {self.seed}); requests cannot set their own"
+            )
 
         self.users = [UserSession(self, i, args) for i in range(args.num_users)]
         self.active = 0
@@ -1209,8 +1221,11 @@ def parse_args(argv: list[str] | None = None):
         # None means "no reply cap": a request runs until EOS or the context is full.
         # ``--max-new-tokens N`` still caps a reply at N.
         max_new_tokens=None,
-        # Requests that omit temperature sample at 1. 0, or a request's own temperature, still wins.
+        # Requests that omit temperature sample at 1; a request's own temperature, or 0, still wins. With
+        # --device-sampling this is the temperature the device sampler is left at, since a request cannot
+        # set its own there.
         temperature=1.0,
+        device_sampling=os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "1") not in ("0", "", "false", "False"),
     )
     p.add_argument(
         "--prefill-kv-only",
