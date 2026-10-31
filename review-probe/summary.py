@@ -1,16 +1,22 @@
 """Review probe helper for run.sh (not for main), standard library only.
 
-  summary.py modules '<json>'              check the modules input, print "func|perf" per module
-  summary.py failed <junit.xml> <module>   print the ids that failed or errored, one per line (none without the xml)
-  summary.py summary <out dir> <fail>      print summary.json from the files run.sh left in <out dir>
-                                           (env ARCH, REPS, SIDES, MODULES, <SIDE>_SHA)
+  summary.py modules '<json>'                 check the modules input, print "func|perf" per module
+  summary.py rerun <log> <junit.xml> <module> print what to rerun after a functional run, one per line: its failing
+                                              ids (the first RERUN_MAX), or the module when the run crashed, or nothing
+  summary.py summary <out dir> <fail>         print summary.json from the files run.sh left in <out dir>
+                                              (env ARCH, REPS, SIDES, MODULES, <SIDE>_SHA)
 
 summary.json: {"arch", "runner", "reps", "fail", "sides": {side: {"sha", "setup_rc"}},
  "modules": [{"func", "perf", "sides": {side: {
-   "func": {"summary", "rc", "failed_ids", "rerun": {"summary", "rc", "failed_ids"} or null} or null,
+   "func": {"summary", "rc", "failed_ids", "crashed", "rerun_truncated",
+            "rerun": {"summary", "rc", "failed_ids", "crashed"} or null} or null,
    "perf_build": {"summary", "rc"} or null, "perf": [{"rep", "summary", "rc"}]}}}]}
 "summary" is pytest's last summary line ("16 passed, 22 skipped in 3.28s"), "rc" its exit code, null when the
-step did not run; "failed_ids" null when the run left no junit xml. The rerun's failed_ids still fail.
+step did not run. "failed_ids" lists the ids that failed or errored, null when the run left no junit xml.
+"crashed": no junit xml and an rc other than 0, 4 (usage) or 5 (nothing collected), i.e. pytest died or was
+killed; a crashed run is rerun as the whole module, a failed one as its failing ids (at most RERUN_MAX, the
+first ones; "rerun_truncated" when there were more). The rerun's failed_ids still fail; a crash reproduces
+when the rerun crashed too.
 """
 import json
 import os
@@ -19,6 +25,8 @@ import socket
 import sys
 import xml.etree.ElementTree as ET
 
+RERUN_MAX = 50
+NOT_A_CRASH = (0, 4, 5)  # pytest rc: passed, usage error, no tests collected
 MODULE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*\.py")
 SUMMARY = re.compile(r"^=*\s*((?:\d+ \w+|no tests ran)(?:, \d+ \w+)* in [0-9.]+s(?: \([0-9:]+\))?)\s*=*$")
 
@@ -80,6 +88,35 @@ def step(log):
     return {"summary": line, "rc": rc}
 
 
+def crashed(result, ids):
+    """A run.sh step result without a junit xml (ids None) whose rc says pytest did not end normally."""
+    return ids is None and result is not None and result["rc"] not in NOT_A_CRASH
+
+
+def rerun_args(log, xml_path, module):
+    """What run.sh reruns after a functional run: the first RERUN_MAX failing ids, the whole module
+    when the run crashed, else nothing."""
+    ids = failed_ids(xml_path, module)
+    if ids is None:
+        return [module] if crashed(step(log), ids) else []
+    return ids[:RERUN_MAX]
+
+
+def func_result(base, module):
+    """The functional step at <base>.log/.xml and its rerun at <base>.rerun.log/.xml, or None."""
+    f = step(f"{base}.log")
+    if f is None:
+        return None
+    ids = failed_ids(f"{base}.xml", module)
+    f.update(failed_ids=ids, crashed=crashed(f, ids), rerun_truncated=ids is not None and len(ids) > RERUN_MAX)
+    rerun = step(f"{base}.rerun.log")
+    if rerun is not None:
+        rids = failed_ids(f"{base}.rerun.xml", module)
+        rerun.update(failed_ids=rids, crashed=crashed(rerun, rids))
+    f["rerun"] = rerun
+    return f
+
+
 def summary(out, fail):
     sides, reps = os.environ["SIDES"].split(), int(os.environ["REPS"])
     doc = {"arch": os.environ["ARCH"], "runner": socket.gethostname(), "reps": reps, "fail": fail,
@@ -89,15 +126,7 @@ def summary(out, fail):
     for i, (func, perf) in enumerate(modules(os.environ["MODULES"]), 1):
         per_side = {}
         for s in sides:
-            b = f"{out}/m{i}_func_{s}"
-            f = step(f"{b}.log") if func else None
-            if f is not None:
-                f["failed_ids"] = failed_ids(f"{b}.xml", func)
-                rerun = step(f"{b}.rerun.log")
-                if rerun is not None:
-                    rerun["failed_ids"] = failed_ids(f"{b}.rerun.xml", func)
-                f["rerun"] = rerun
-            per_side[s] = {"func": f,
+            per_side[s] = {"func": func_result(f"{out}/m{i}_func_{s}", func) if func else None,
                            "perf_build": step(f"{out}/m{i}_perf_build_{s}.log") if perf else None,
                            "perf": [{"rep": r, **(step(f"{out}/m{i}_perf_{s}_r{r}.log") or {"summary": None, "rc": None})}
                                     for r in range(1, reps + 1)] if perf else []}
@@ -112,8 +141,8 @@ def main(argv):
         except ValueError as e:
             sys.exit(f"modules: {e}")
         sys.stdout.write("".join(f"{f}|{p}\n" for f, p in pairs))
-    elif argv[:1] == ["failed"] and len(argv) == 3:
-        sys.stdout.write("".join(f"{i}\n" for i in failed_ids(argv[1], argv[2]) or []))
+    elif argv[:1] == ["rerun"] and len(argv) == 4:
+        sys.stdout.write("".join(f"{i}\n" for i in rerun_args(*argv[1:])))
     elif argv[:1] == ["summary"] and len(argv) == 3:
         print(json.dumps(summary(argv[1], int(argv[2])), indent=1))
     else:
