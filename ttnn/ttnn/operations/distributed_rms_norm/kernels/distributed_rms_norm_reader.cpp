@@ -302,12 +302,36 @@ void kernel_main() {
     auto unpack_x = [](uint32_t v) { return v >> 16; };
     auto unpack_y = [](uint32_t v) { return v & 0xFFFF; };
 
-    // ---- load cursor (interleaved) ----
+    // ---- load cursor (interleaved), non-blocking: one tile-row's reads in flight; a later pass pushes it once the
+    // reads have landed, so the sends / publishes of the waves already reduced are not held behind a row's DRAM
+    // latency (measured: a member's wave-0 partial waited ~1.6 us in the row-1 read barrier at 640x1792). ----
     uint32_t lb = 0, lr = 0;
+    bool load_inflight = false;
     auto try_load = [&]() -> bool {
         if constexpr (sharded) {
             return false;
         } else {
+            if (load_inflight) {
+                if (!ncrisc_noc_reads_flushed(noc_index)) {
+                    return false;
+                }
+                DRMS_ZONE("rd_land");
+                invalidate_l1_cache();
+                if constexpr (w_valid_last < TILE_DIM && es != 0) {
+                    if (w0 + V == Wt) {
+                        zero_tile_w_padding<es>(noc, x_cb, (V - 1) * T_in, w_valid_last);
+                    }
+                }
+                x_cb.push_back(WS);
+                const uint32_t rem = rows - lb * R;
+                const uint32_t rb = rem < R ? rem : R;
+                if (++lr == rb) {
+                    lr = 0;
+                    ++lb;
+                }
+                load_inflight = false;
+                return true;
+            }
             if (lb >= num_blocks || !x_cb.pages_reservable_at_back(WS)) {
                 return false;
             }
@@ -319,19 +343,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < V; ++j) {
                 noc_async_read_tile(row_page + j, input_accessor, l1 + j * T_in);
             }
-            noc_async_read_barrier();
-            if constexpr (w_valid_last < TILE_DIM && es != 0) {
-                if (w0 + V == Wt) {
-                    zero_tile_w_padding<es>(noc, x_cb, (V - 1) * T_in, w_valid_last);
-                }
-            }
-            x_cb.push_back(WS);
-            const uint32_t rem = rows - lb * R;
-            const uint32_t rb = rem < R ? rem : R;
-            if (++lr == rb) {
-                lr = 0;
-                ++lb;
-            }
+            load_inflight = true;
             return true;
         }
     };
@@ -562,6 +574,7 @@ void kernel_main() {
     // ---- the poll loop ----
     while (true) {
         invalidate_l1_cache();
+        try_load();
         if (is_root) {
             // Downstream first: a ready distribute / collect of wave w is on the critical chain to the output
             // write, while the next wave's gather / publish only feeds the exchange (which is still in flight).
@@ -577,7 +590,6 @@ void kernel_main() {
             try_send();
             try_receive();
         }
-        try_load();
         bool done = sharded || lb >= num_blocks;
         if (is_root) {
             done = done && wp >= num_waves_total && wc >= own_waves;
