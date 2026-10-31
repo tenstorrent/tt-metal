@@ -18,6 +18,11 @@ struct TileDescriptor;
 
 namespace ttnn::operations::data_movement {
 
+// Fp32 unpack-to-dest hint for the input CB. UINT8 keeps the int-FPU path, not fp32-to-dest.
+inline bool needs_fp32_unpack_to_dest(bool fp32_dest_acc_en, tt::tt_metal::DataType dtype) {
+    return fp32_dest_acc_en && dtype != tt::tt_metal::DataType::UINT8;
+}
+
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);

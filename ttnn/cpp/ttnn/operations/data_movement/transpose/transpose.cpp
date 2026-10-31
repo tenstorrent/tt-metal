@@ -239,44 +239,42 @@ ttnn::Tensor transpose_impl(
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
-    {
-        // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
-        // Unshard until the kernel-side helpers handle irregular RM geometries.
-        const bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
-        const bool in_sharded = detail::is_block_or_width_sharded_mc(input_tensor.memory_config());
-        const auto& input_logical = input_tensor.logical_shape();
-        const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
-                                                                input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
-        if (rm && in_sharded && irregular_hw) {
-            // Snapshot orientation before the L1-interleaved staging hop strips it.
-            std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
-            if (input_tensor.shard_spec().has_value()) {
-                input_orientation_hint = input_tensor.shard_spec()->orientation;
-            }
-            auto resolved_mc = memory_config_arg;
-            if (memory_config_arg.has_value() && detail::needs_shard_spec_synthesis(*memory_config_arg)) {
-                const auto& input_padded = input_tensor.padded_shape();
-                const uint32_t n1 = input_logical.get_normalized_index(dim1);
-                const uint32_t n2 = input_logical.get_normalized_index(dim2);
-                ttsl::SmallVector<uint32_t> out_padded_vec(input_padded.cbegin(), input_padded.cend());
-                std::swap(out_padded_vec[n1], out_padded_vec[n2]);
-                auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
-                // Composite path opts into RM-safe synth; TILE inputs still tile-inflate.
-                auto spec = generate_transpose_shard_spec(
-                    input_tensor,
-                    output_padded_shape,
-                    memory_config_arg->memory_layout(),
-                    input_orientation_hint,
-                    input_tensor.layout() == Layout::TILE ? OutputTiling::Tile : OutputTiling::RowMajor);
-                resolved_mc = tt::tt_metal::MemoryConfig(
-                    memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
-                copy_experimental_allocation_flags(*memory_config_arg, *resolved_mc);
-            }
-            const auto interleaved_l1 =
-                tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
-            Tensor x = ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt);
-            return transpose_impl(x, dim1, dim2, resolved_mc, pad_value);
+    // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
+    // Unshard until the kernel-side helpers handle irregular RM geometries.
+    const bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
+    const bool in_sharded = detail::is_block_or_width_sharded_mc(input_tensor.memory_config());
+    const auto& input_logical = input_tensor.logical_shape();
+    const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
+                                                            input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
+    if (rm && in_sharded && irregular_hw) {
+        // Snapshot orientation before the L1-interleaved staging hop strips it.
+        std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
+        if (input_tensor.shard_spec().has_value()) {
+            input_orientation_hint = input_tensor.shard_spec()->orientation;
         }
+        auto resolved_mc = memory_config_arg;
+        if (memory_config_arg.has_value() && detail::needs_shard_spec_synthesis(*memory_config_arg)) {
+            const auto& input_padded = input_tensor.padded_shape();
+            const uint32_t n1 = input_logical.get_normalized_index(dim1);
+            const uint32_t n2 = input_logical.get_normalized_index(dim2);
+            ttsl::SmallVector<uint32_t> out_padded_vec(input_padded.cbegin(), input_padded.cend());
+            std::swap(out_padded_vec[n1], out_padded_vec[n2]);
+            auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
+            // Composite path opts into RM-safe synth; TILE inputs still tile-inflate.
+            auto spec = generate_transpose_shard_spec(
+                input_tensor,
+                output_padded_shape,
+                memory_config_arg->memory_layout(),
+                input_orientation_hint,
+                input_tensor.layout() == Layout::TILE ? OutputTiling::Tile : OutputTiling::RowMajor);
+            resolved_mc = tt::tt_metal::MemoryConfig(
+                memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
+            copy_experimental_allocation_flags(*memory_config_arg, *resolved_mc);
+        }
+        const auto interleaved_l1 =
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        Tensor x = ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt);
+        return transpose_impl(x, dim1, dim2, resolved_mc, pad_value);
     }
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
