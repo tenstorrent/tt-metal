@@ -493,8 +493,14 @@ std::vector<Tensor> log_sigmoid_bw(
     // NaN: the marker materialises as an infinity there, so on bf16 this op
     // returns inf rather than NaN. Both are non-finite, which is what the
     // tests and callers check for.
+    // Select the input itself where it is NaN rather than materialising a NaN
+    // scalar. A scalar NaN in a select that is evaluated arithmetically
+    // (pred*scalar + (1-pred)*tensor) would turn 0*NaN into NaN and poison
+    // every element, including the ones where the predicate is false. Taking
+    // the NaN from the data avoids that entirely, and is what makes this safe
+    // for the non-NaN nightly shapes.
     Tensor is_nan = ttnn::isnan(input, output_mem_config);
-    grad_result = ttnn::where(is_nan, std::nanf(""), grad_result, output_mem_config);
+    grad_result = ttnn::where(is_nan, input, grad_result, output_mem_config);
     is_nan.deallocate();
     grad_tensor.emplace_back(std::move(grad_result));
     return grad_tensor;
@@ -805,12 +811,20 @@ std::vector<Tensor> square_bw(
 std::vector<Tensor> hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    grad_tensor.reserve(1);
-    Tensor abs_input = ttnn::abs(input_tensor, output_mem_config);
-    Tensor outside = ttnn::gt(abs_input, lambd, std::nullopt, output_mem_config);
-    abs_input.deallocate();
-    Tensor result = ttnn::where(outside, grad, 0.0f, output_mem_config);
-    outside.deallocate();
+    // Same construction as softshrink_bw: |x| > lambd expressed as
+    // (x < -lambd) || (x > lambd). Doing it this way keeps the predicate
+    // identical to the sibling op that already passes CI, and avoids the
+    // extra abs() kernel. A NaN input compares false on both sides, so the
+    // gradient is zeroed, which is what the domain test expects.
+    Tensor result = ttnn::where(
+        ttnn::logical_or(
+            ttnn::lt(input_tensor, -lambd, std::nullopt, output_mem_config),
+            ttnn::gt(input_tensor, lambd, std::nullopt, output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        grad,
+        0.f,
+        output_mem_config);
     grad_tensor.emplace_back(std::move(result));
     return grad_tensor;
 }
