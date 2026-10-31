@@ -30,6 +30,7 @@ BALANCE_FLAG = (
 BALANCE_SHAPES = frozenset(
     {(2560, 2112)}
 )  # GDN in-proj: gate_up gains nothing (kernel fixed cost), the others are even
+ROBUST_FLAG = "QWEN38_ROBUST_PLACE"  # default "1": the QSA merged projection's readers sit on cores chosen for ALL dies (min worst hops)
 MAX_PACKET_BYTES = 16384
 _WORKERS: dict = {}
 
@@ -41,6 +42,10 @@ def enabled() -> bool:
 
 def balance_enabled(k: int | None = None, n: int | None = None) -> bool:
     return os.environ.get(BALANCE_FLAG, "1") == "1" and (k is None or (k, n) in BALANCE_SHAPES)
+
+
+def robust_enabled() -> bool:
+    return os.environ.get(ROBUST_FLAG, "1") == "1"
 
 
 def plekv_enabled() -> bool:
@@ -357,12 +362,15 @@ def _plan(mesh, groups, act_cores, exclude, place="rect"):
     """Per group: its core (row placement next to the group's bank, never on excluded / activation / output cores), the hub core, the
     VCs, the compute ranges (the cores' merged range set, each with its core count)."""
     place = os.environ.get("X60_PLACE", place)
+    if place == "optimal" and robust_enabled():
+        place = "optimal_robust"
     key = (id(mesh), tuple(groups), tuple(sorted(map(tuple, exclude))), tuple(act_cores), place)
     if key in _PLANS:
         return _PLANS[key]
     reserved = set(placement.reserved_cores(mesh))
-    if (
-        place == "optimal"
+    if place in (
+        "optimal",
+        "optimal_robust",
     ):  # the readers may take the reference die's bank worker cores (never the storage / drain cores)
         reserved -= {(w.x, w.y) for w in bank_workers(mesh)}
     taken = set(map(tuple, exclude)) | set(map(tuple, act_cores)) | reserved
@@ -431,6 +439,16 @@ def _plan(mesh, groups, act_cores, exclude, place="rect"):
             )
         else:
             a_, _ = m1._assign(rect_cores_, groups, list(range(BANKS)), m1.bank_workers(mesh))
+        for i, g in enumerate(groups):
+            core = ttnn.CoreCoord(*a_[i])
+            placed.append((core, g[0], seen[g[0]]))
+            assign[i] = core
+            seen[g[0]] += 1
+    elif place == "optimal_robust":  # any free core: the all-die worst hop count first, then the total (robust_assign)
+        grid0 = mesh.compute_with_storage_grid_size()
+        pool = [(x, y) for y in range(grid0.y) for x in range(grid0.x) if (x, y) not in taken]
+        a_, worst, total = robust_assign(mesh, pool, [g[0] for g in groups])
+        logger.info(f"mm_stream2 robust placement (pool {len(pool)}): worst {worst} hops, total {total} hops")
         for i, g in enumerate(groups):
             core = ttnn.CoreCoord(*a_[i])
             placed.append((core, g[0], seen[g[0]]))
