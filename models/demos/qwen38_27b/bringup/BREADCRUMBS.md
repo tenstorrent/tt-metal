@@ -147,3 +147,13 @@
   transfers, 55 ops per layer. kv_layout passes. hybrid_chunk_starts: every state PCC >= 0.99937, and the restart
   at 1024 is refused. The C.linear.attention, C.attn.attention, S.*.02 and S.*.06 gates still pass.
 - Re-run: `bfw job check --task M.1 --gate-only`.
+
+## L.s5120: ladder s5120 (one chunk of 5120)
+- Failure: the ladder calls `new_state(5120)`, so the KV cache had 640 rows per chip, the same as Q. ring_joint SDPA
+  with `kv_actual_isl` (the KV-pad rotation path) needs Q.seq < K.seq per chip, so it hit `TT_FATAL is_chunked
+  (N_local_q=640, N_local_kv=640)`.
+- Fix (tt/model.py `TtModelState`): the KV cache always uses the model's `max_seq` (target seq, 56320, which gives
+  7040 rows per chip, the served size) whatever max_seq the request passes. `state.max_seq` is still the request's
+  and still drives the GDN snapshot points. `to_torch` reads only `[0, length)`, so the graded state is unchanged.
+- Results: PCC per layer >= 0.99998, rel <= 0.0067, bias <= 2e-4, state PCC 0.99969, 55 ops per layer.
+- Re-run: `bfw job check --task L.s5120 --gate-only`.

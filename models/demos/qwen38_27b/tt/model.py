@@ -77,11 +77,13 @@ class TtModelState:
         self.attn_layers = [i for i in model.layers if model.is_attn(i)]
         self.kv = None
         if self.attn_layers:
+            # the served cache (7040 rows per chip) whatever the request length: the ring SDPA's cache read
+            # (kv_actual_isl) needs more cache rows per chip than one chunk's 640 (Q.seq < K.seq)
             self.kv = TtKVCache(
                 model.mesh,
                 cfg.n_kv,
                 cfg.head_dim,
-                max_seq,
+                model.max_seq,
                 model.chunk,
                 num_slots=self.num_slots,
                 num_layers=len(self.attn_layers),
