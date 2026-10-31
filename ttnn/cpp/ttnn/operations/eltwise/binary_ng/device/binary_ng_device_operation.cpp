@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cmath>
 
@@ -376,6 +377,15 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
+
+    auto validate_activations = [](const auto& activations, DataType dtype) {
+        unary::validate_integer_input_dtype({activations.begin(), activations.end()}, dtype);
+    };
+    validate_activations(attributes.lhs_activations, input_tensor_a.dtype());
+    if (input_tensor_b.has_value()) {
+        validate_activations(attributes.rhs_activations, input_tensor_b->dtype());
+    }
+    validate_activations(attributes.post_activations, attributes.dtype.value_or(input_tensor_a.dtype()));
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
