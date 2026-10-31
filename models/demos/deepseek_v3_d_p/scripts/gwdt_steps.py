@@ -444,6 +444,8 @@ def matmul_step(
 
 
 MATMUL_ITERS = 5000
+# Iterations per window, 8 windows: ~1.75 s per iteration on a Galaxy, so 300 keeps the step near 10 min.
+RUN_TO_RUN_ITERS = 300
 SWEEP_GRID = "11x10"
 SINGLE_GALAXY_MGD = "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
@@ -517,7 +519,7 @@ def matmul_steps() -> list[Step]:
             ["tests/didt/test_matmul_run_to_run_determinism.py::test_matmul_run_to_run_determinism[blackhole-galaxy]"],
             ["-p", "no:randomly", "--timeout=0"],
             run_to_run_cores,
-            {"TT_DET_SWEEP_ITERS": str(MATMUL_ITERS)},
+            {"TT_DET_SWEEP_ITERS": str(RUN_TO_RUN_ITERS)},
         ),
         core_sweep_step(),
         write_ack_step(),

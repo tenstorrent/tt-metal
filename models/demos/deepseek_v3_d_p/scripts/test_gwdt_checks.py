@@ -231,7 +231,7 @@ def test_matmul_commands(tmp_path, monkeypatch):
         "TT_SWEEP_GRID": "11x10",
         "TT_SWEEP_ITERS": "5000",
     }.items()
-    assert seen[cmds["matmul:run-to-run"]]["TT_DET_SWEEP_ITERS"] == "5000"
+    assert seen[cmds["matmul:run-to-run"]]["TT_DET_SWEEP_ITERS"] == "300"
     for key in MATMUL_KEYS[:-1]:
         assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in seen[cmds[key]]
     assert seen[cmds["matmul:mcast-ack"]] == {"TMPDIR": str(tmp_path / "matmul" / "mcast-ack"), "MATMUL_ITERS": "5000"}
