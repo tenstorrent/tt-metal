@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
 from helpers.format_config import DataFormat
+from helpers.tile_shape import cpp_tensor_shape
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
@@ -25,18 +26,14 @@ def hw_configure_unpack(
     unpack_B_dst: DataFormat,
 ) -> str:
     operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
-    face_r_dim_a = operand_a.tile_shape.face_r_dim
-    num_faces_a = operand_a.tile_shape.total_num_faces()
     tile_size_a = operand_a.tile_size
-    face_r_dim_b = operand_b.tile_shape.face_r_dim
-    num_faces_b = operand_b.tile_shape.total_num_faces()
     tile_size_b = operand_b.tile_size
 
     return (
         f"_llk_unpack_hw_configure_<{dest_acc}>(\n"
         f"    {unpack_A_src.cpp_underlying_value}, {unpack_B_src.cpp_underlying_value},\n"
         f"    {unpack_A_dst.cpp_underlying_value}, {unpack_B_dst.cpp_underlying_value},\n"
-        f"    {face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b},\n"
+        f"    {cpp_tensor_shape(operand_a.tile_shape)}, {cpp_tensor_shape(operand_b.tile_shape)},\n"
         f"    {tile_size_a}, {tile_size_b}\n"
         f");\n"
     )
@@ -60,9 +57,6 @@ def configure_unpack(
     operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
 
     if srca_changed:
-        new_face_r_dim_a = operand_a.tile_shape.face_r_dim
-        new_num_faces_a = operand_a.tile_shape.total_num_faces()
-
         to_from_int8 = (
             "true"
             if old_A_src.needs_int8_math_config() or new_A_src.needs_int8_math_config()
@@ -78,13 +72,11 @@ def configure_unpack(
             f"    {new_A_src.cpp_underlying_value}, {new_A_dst.cpp_underlying_value}, {operand_a.tile_size}"
         )
         if srca_tile_changed:
-            code += f", {new_face_r_dim_a}, {new_num_faces_a}"
+            code += f", {cpp_tensor_shape(operand_a.tile_shape)}"
         code += "\n);\n"
 
     if srcb_changed:
         srcb_tile_size = operand_b.tile_size
-        new_face_r_dim_b = operand_b.tile_shape.face_r_dim
-        new_num_faces_b = operand_b.tile_shape.total_num_faces()
 
         to_from_int8 = (
             "true"
@@ -101,7 +93,7 @@ def configure_unpack(
             f"    {new_B_src.cpp_underlying_value}, {new_B_dst.cpp_underlying_value}, {srcb_tile_size}"
         )
         if srcb_tile_changed:
-            code += f", {new_face_r_dim_b}, {new_num_faces_b}"
+            code += f", {cpp_tensor_shape(operand_b.tile_shape)}"
         code += "\n);\n"
 
     return code

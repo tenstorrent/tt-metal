@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "llk_assert.h"
+#include "tensor_shape.h"
 
 namespace ckernel::unpacker
 {
@@ -759,12 +760,16 @@ inline void configure_unpack_AB(
     const std::uint32_t unpB_src_format,
     const std::uint32_t unpA_dst_format,
     const std::uint32_t unpB_dst_format,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const bool transpose_xy_srca_en     = false,
-    const std::uint32_t unpA_num_faces  = 4,
-    const std::uint32_t unpB_num_faces  = 4)
+    const TensorShape unpA_tensor_shape = DEFAULT_TENSOR_SHAPE,
+    const TensorShape unpB_tensor_shape = DEFAULT_TENSOR_SHAPE,
+    const bool transpose_xy_srca_en     = false)
 {
+    // Only the face height and the total face count are programmed (x_dim and z_dim); the face grid is not.
+    const std::uint32_t unpA_face_r_dim = unpA_tensor_shape.face_r_dim;
+    const std::uint32_t unpB_face_r_dim = unpB_tensor_shape.face_r_dim;
+    const std::uint32_t unpA_num_faces  = unpA_tensor_shape.total_num_faces();
+    const std::uint32_t unpB_num_faces  = unpB_tensor_shape.total_num_faces();
+
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
 
@@ -1194,10 +1199,8 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
  * @param unpA_dst_format   Expected output data format for unpacker A (context 0)
  * @param unpB_src_format   Expected input data format for unpacker B (context 1)
  * @param unpB_dst_format   Expected output data format for unpacker B (context 1)
- * @param unpA_face_r_dim   Expected face row dimension for unpacker A (default FACE_R_DIM)
- * @param unpB_face_r_dim   Expected face row dimension for unpacker B (default FACE_R_DIM)
- * @param unpA_num_faces    Expected number of faces for unpacker A (default TILE_NUM_FACES)
- * @param unpB_num_faces    Expected number of faces for unpacker B (default TILE_NUM_FACES)
+ * @param unpA_tensor_shape Expected tile shape for unpacker A; checks face_r_dim and total_num_faces() (default 32x32)
+ * @param unpB_tensor_shape Expected tile shape for unpacker B; checks face_r_dim and total_num_faces() (default 32x32)
  * @param nop_count         Number of nop operations to ensure configuration writes complete (default 80)
  */
 template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile>
@@ -1206,12 +1209,16 @@ __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
     const std::uint32_t unpA_dst_format,
     const std::uint32_t unpB_src_format,
     const std::uint32_t unpB_dst_format,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces  = TILE_NUM_FACES,
-    const std::uint32_t unpB_num_faces  = TILE_NUM_FACES,
+    const TensorShape unpA_tensor_shape = DEFAULT_TENSOR_SHAPE,
+    const TensorShape unpB_tensor_shape = DEFAULT_TENSOR_SHAPE,
     const std::uint32_t nop_count       = 10)
 {
+    // ProgramByTile checks only the face heights, ProgramByFace only the face counts.
+    [[maybe_unused]] const std::uint32_t unpA_face_r_dim = unpA_tensor_shape.face_r_dim;
+    [[maybe_unused]] const std::uint32_t unpB_face_r_dim = unpB_tensor_shape.face_r_dim;
+    [[maybe_unused]] const std::uint32_t unpA_num_faces  = unpA_tensor_shape.total_num_faces();
+    [[maybe_unused]] const std::uint32_t unpB_num_faces  = unpB_tensor_shape.total_num_faces();
+
     // Ensure configuration writes complete before subsequent operations
     tensix_sync();
     for (std::uint32_t i = 0; i < nop_count; i++)

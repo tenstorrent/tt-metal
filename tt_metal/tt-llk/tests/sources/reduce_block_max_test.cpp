@@ -101,10 +101,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            tensor_shape.total_num_faces(),
-            tensor_shape.total_num_faces(),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, tensor_shape.total_num_faces()),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, tensor_shape.total_num_faces()),
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
 
@@ -279,7 +277,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
 #endif
     TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
-    constexpr bool sync_with_pack                                      = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
+    constexpr bool sync_with_pack = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
 
     {
         START_PERF_MEASURE("INIT")

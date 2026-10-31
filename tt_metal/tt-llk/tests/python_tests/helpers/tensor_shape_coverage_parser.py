@@ -111,6 +111,8 @@ UNPACK_FUNCTIONS = (
     "_llk_unpack_AB_matmul_init_",
     "_llk_unpack_AB_matmul_mop_config_",
     "_llk_unpack_AB_matmul_",
+    "_llk_unpack_reconfig_tile_shape_srca_",
+    "_llk_unpack_reconfig_tile_shape_srcb_",
 )
 
 # Predicate name used when seeding from a checked-in TRISC header.

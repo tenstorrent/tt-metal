@@ -50,10 +50,8 @@ inline void llk_unpack_AB_init(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        get_operand_face_r_dim(operandA_id),
-        get_operand_face_r_dim(operandB_id),
-        get_operand_num_faces(operandA_id),
-        get_operand_num_faces(operandB_id)));
+        get_operand_tensor_shape(operandA_id),
+        get_operand_tensor_shape(operandB_id)));
 
     SAN_HOOK(init<OperationUnpackBinary>(
         StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BType)),
@@ -99,10 +97,8 @@ inline void llk_unpack_AB(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        get_operand_face_r_dim(operandA_id),
-        get_operand_face_r_dim(operandB_id),
-        get_operand_num_faces(operandA_id),
-        get_operand_num_faces(operandB_id)));
+        get_operand_tensor_shape(operandA_id),
+        get_operand_tensor_shape(operandB_id)));
 
     SAN_HOOK(execute<OperationUnpackBinary>(
         StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BType)),

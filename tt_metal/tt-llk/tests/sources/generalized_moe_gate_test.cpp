@@ -74,7 +74,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
 
     // Each section feeds one DEST half. Under DstSync::Half the second lands at
     // get_dest_buffer_base() == DEST_REGISTER_HALF_SIZE, which is the only way to reach the upper

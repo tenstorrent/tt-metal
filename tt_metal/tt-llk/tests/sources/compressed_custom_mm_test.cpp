@@ -48,10 +48,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src, // SrcB <- in0 (partial tile, bf16)
         formats.unpack_B_dst,
         formats.unpack_A_dst,
-        FACE_R_DIM,
-        params.in0_face_r_dim, // in0 partial-tile face row dim (rows in {1, 2, 4, 8})
-        params.num_faces_B /* unpA_num_faces: in1, a full 4-face tile */,
-        params.num_faces_A /* unpB_num_faces: in0, only the top two faces */,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces_B),
+        ckernel::make_tensor_shape_from_legacy(params.in0_face_r_dim, params.num_faces_A),
         params.TILE_SIZE_UNPACK_B,  // SrcA tile size (in1)
         params.TILE_SIZE_UNPACK_A); // SrcB tile size (in0)
 

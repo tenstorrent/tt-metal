@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "sanitizer/api.h"
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
@@ -27,7 +28,7 @@
 /**
  * Configure the unpacker hardware for operands A and B.
  *
- * Face geometry (face_r_dim, num_faces) and tile size for both operands are
+ * Tile shape (get_operand_tensor_shape) and tile size for both operands are
  * derived from the CB metadata associated with each operand id. This is the
  * primary entry point: callers no longer need to thread face geometry through
  * the API, since per-CB face geometry is recorded in the CB descriptor at
@@ -41,20 +42,22 @@ template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     // In0 -> unpA
     // In1 -> unpB
-    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
+    const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
+    const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
     // unpA -> srcA
     // unpB -> srcB
-    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-    const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+    const std::uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
+    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
+    const std::uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
+    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+    const ckernel::TensorShape unpA_tensor_shape = get_operand_tensor_shape(unpA_operand_id);
+    const ckernel::TensorShape unpB_tensor_shape = get_operand_tensor_shape(unpB_operand_id);
 
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
-    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
+    const std::uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
+    const std::uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
 
     SAN_HOOK(configure(
         StateVal<Operand<Exu::Unpack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -73,10 +76,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
         unpack_dst_format[unpB_operand_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
+        unpA_tensor_shape,
+        unpB_tensor_shape,
         unpA_tile_size,
         unpB_tile_size);
 }
@@ -145,6 +146,8 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         StateDiscard<std::uint32_t>(tile_size),
         StateDiscard<std::uint32_t>(face_r_dim),
         StateDiscard<std::uint32_t>(num_faces)));
+    // Old-argument call on purpose: the experimental hybrid_llk_shims.hpp (deepseek_prefill) renames this LLK by
+    // macro to a shim that takes face_r_dim/num_faces. Move it to TensorShape together with that shim.
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
 }
@@ -175,6 +178,8 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         StateDiscard<std::uint32_t>(tile_size),
         StateDiscard<std::uint32_t>(face_r_dim),
         StateDiscard<std::uint32_t>(num_faces)));
+    // Old-argument call on purpose: the experimental hybrid_llk_shims.hpp (deepseek_prefill) renames this LLK by
+    // macro to a shim that takes face_r_dim/num_faces. Move it to TensorShape together with that shim.
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }
@@ -293,11 +298,9 @@ inline void llk_unpack_reconfig_data_format(
 inline void llk_unpack_reconfig_tile_shape_srca(const std::uint32_t srca_new_operand) {
     SAN_HOOK(unsupported());
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
-    const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
     // A tile-shape change is a tile-size (CB page size) change too; refresh the tile-size GPR alongside geometry.
     const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
-    _llk_unpack_reconfig_tile_shape_srca_(tile_size, face_r_dim, num_faces);
+    _llk_unpack_reconfig_tile_shape_srca_(tile_size, get_operand_tensor_shape(srca_operand_id));
 }
 
 /**
@@ -330,11 +333,9 @@ inline void llk_unpack_reconfig_tile_shape_srca(
 inline void llk_unpack_reconfig_tile_shape_srcb(const std::uint32_t srcb_new_operand) {
     SAN_HOOK(unsupported());
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
-    const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
     // A tile-shape change is a tile-size (CB page size) change too; refresh the tile-size GPR alongside geometry.
     const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
-    _llk_unpack_reconfig_tile_shape_srcb_(tile_size, face_r_dim, num_faces);
+    _llk_unpack_reconfig_tile_shape_srcb_(tile_size, get_operand_tensor_shape(srcb_operand_id));
 }
 
 /**
