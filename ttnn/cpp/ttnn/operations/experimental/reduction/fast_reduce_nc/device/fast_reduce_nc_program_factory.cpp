@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
 
+#include <bit>
+
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -78,6 +80,98 @@ decltype(tt::tt_metal::experimental::ProgramRunArgs::tensor_args) build_tensor_r
     return tensor_run_args;
 }
 
+struct CoreSplit {
+    uint32_t num_cores_to_be_used;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_cols_per_core_group_1;
+    uint32_t num_cols_per_core_group_2;
+    uint32_t shard_factor;
+    bool use_sub_core_grids;
+};
+
+// Output-tile work split. override_runtime_arguments recomputes it to know whether the second compute group exists.
+CoreSplit split_output_tiles(
+    const FastReduceNCParams& operation_attributes,
+    const FastReduceNCInputs& tensor_args,
+    const std::vector<Tensor>& outputs) {
+    const bool split_output = operation_attributes.split_output_width.has_value();
+    const auto& input_shape = tensor_args.input.padded_shape();
+    const auto num_output_tiles =
+        (outputs.front().physical_volume() + (split_output ? outputs.at(1).physical_volume() : 0)) / TILE_HW;
+    const auto grid = tensor_args.input.device()->compute_with_storage_grid_size();
+    const auto num_cores_x = grid.x;
+    const auto num_cores_y = grid.y;
+    uint32_t shard_factor = 1;
+
+    // When dim=0, nd sharded, tile sizes are the same, the shards are compatible
+    // with the kernel accesses, tensor shape is divisible by shard shape, and
+    // number of shards is larger than core count, divide the work by shards.
+    uint32_t output_shard_size = 1;
+    auto input_tile = tensor_args.input.tensor_spec().tile().get_tile_shape();
+    auto output_tile = outputs.front().tensor_spec().tile().get_tile_shape();
+    bool nd_sharded = tensor_args.input.nd_shard_spec().has_value() && outputs.front().nd_shard_spec().has_value();
+    bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
+    bool divide_by_shards = false;
+    const auto& dspec = *outputs.front().buffer()->buffer_distribution_spec();
+    if (nd_sharded && same_tiles && operation_attributes.dim == 0) {
+        const NdShardSpec& input_nd_shard_spec = tensor_args.input.nd_shard_spec().value();
+        const NdShardSpec& output_nd_shard_spec = outputs.front().nd_shard_spec().value();
+        const Shape& input_shard_shape = input_nd_shard_spec.shard_shape;
+        bool compatible_shards =
+            input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
+            input_nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D &&
+            output_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
+            output_nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D;
+        if (compatible_shards && is_tensor_divisible_by_shard(input_shape, input_shard_shape)) {
+            uint32_t num_output_shards = dspec.num_shards();
+            output_shard_size = dspec.shard_shape_in_pages().volume();
+            bool more_shards_than_cores = num_output_shards > (num_cores_x * num_cores_y);
+            if (more_shards_than_cores) {
+                divide_by_shards = true;
+                shard_factor = output_shard_size;
+            }
+        }
+    }
+    const bool use_sub_core_grids = operation_attributes.sub_core_grids.has_value() && !divide_by_shards;
+    auto
+        [num_cores_to_be_used,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_cols_per_core_group_1,
+         num_cols_per_core_group_2] =
+            divide_by_shards
+                ? dspec.core_groups_tuple()
+                : (use_sub_core_grids ? tt::tt_metal::split_work_to_cores(
+                                            *operation_attributes.sub_core_grids, num_output_tiles, /*row_wise=*/true)
+                                      : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
+    num_cols_per_core_group_1 *= shard_factor;
+    num_cols_per_core_group_2 *= shard_factor;
+    return CoreSplit{
+        .num_cores_to_be_used = num_cores_to_be_used,
+        .all_cores = all_cores,
+        .core_group_1 = core_group_1,
+        .core_group_2 = core_group_2,
+        .num_cols_per_core_group_1 = num_cols_per_core_group_1,
+        .num_cols_per_core_group_2 = num_cols_per_core_group_2,
+        .shard_factor = shard_factor,
+        .use_sub_core_grids = use_sub_core_grids};
+}
+
+void append_compute_run_args(
+    ProgramRunArgs& run_args, const FastReduceNCParams& operation_attributes, bool group_2_present) {
+    const KernelRunArgs::CommonRuntimeArgValues post_mul_args{
+        {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}};
+    run_args.kernel_run_args.push_back(
+        KernelRunArgs{.kernel = FRNC_COMPUTE_G1, .common_runtime_arg_values = post_mul_args});
+    if (group_2_present) {
+        run_args.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = FRNC_COMPUTE_G2, .common_runtime_arg_values = post_mul_args});
+    }
+}
+
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_program_artifacts(
@@ -96,7 +190,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // Input and output CBs may differ when the Sum precision chain requests FP32 packing.
+    // Input and output CBs may differ when the Sum/Mean precision chain requests FP32 packing.
     const auto input_data_format = datatype_to_dataformat_converter(tensor_args.input.dtype());
     const auto input_tile_size = tt::tile_size(input_data_format);
     const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
@@ -108,8 +202,6 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(operation_attributes.dim));
     const auto num_reduce_input_tile = input_shape[operation_attributes.dim];
-    const auto num_output_tiles =
-        (tensor_return_value.physical_volume() + (split_output ? outputs.at(1).physical_volume() : 0)) / TILE_HW;
     const bool fp32_dest_acc_en =
         std::get<2>(ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config));
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
@@ -124,59 +216,20 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
-    const auto num_cores_x = grid.x;
-    const auto num_cores_y = grid.y;
+    const auto num_cores_x = device->compute_with_storage_grid_size().x;
 
     const uint32_t in0_t = input_granularity * 2;  // input
     const uint32_t in1_t = 1;                      // zero
     const uint32_t out0_t = 2;                     // output
-    uint32_t shard_factor = 1;
-
-    // When dim=0, nd sharded, tile sizes are the same, the shards are compatible
-    // with the kernel accesses, tensor shape is divisible by shard shape, and
-    // number of shards is larger than core count, divide the work by shards.
-    uint32_t output_shard_size = 1;
-    auto input_tile = tensor_args.input.tensor_spec().tile().get_tile_shape();
-    auto output_tile = tensor_return_value.tensor_spec().tile().get_tile_shape();
-    bool nd_sharded = tensor_args.input.nd_shard_spec().has_value() && tensor_return_value.nd_shard_spec().has_value();
-    bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
-    bool divide_by_shards = false;
-    const auto& dspec = *tensor_return_value.buffer()->buffer_distribution_spec();
-    if (nd_sharded && same_tiles && operation_attributes.dim == 0) {
-        const NdShardSpec& input_nd_shard_spec = tensor_args.input.nd_shard_spec().value();
-        const NdShardSpec& output_nd_shard_spec = tensor_return_value.nd_shard_spec().value();
-        const Shape& input_shard_shape = input_nd_shard_spec.shard_shape;
-        bool compatible_shards =
-            input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
-            input_nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D &&
-            output_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
-            output_nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D;
-        if (compatible_shards && is_tensor_divisible_by_shard(input_shape, input_shard_shape)) {
-            uint32_t num_output_shards = dspec.num_shards();
-            output_shard_size = dspec.shard_shape_in_pages().volume();
-            bool more_shards_than_cores = num_output_shards > (num_cores_x * num_cores_y);
-            if (more_shards_than_cores) {
-                divide_by_shards = true;
-                shard_factor = output_shard_size;
-            }
-        }
-    }
-    bool use_sub_core_grids = operation_attributes.sub_core_grids.has_value() && !divide_by_shards;
-    auto
+    const auto
         [num_cores_to_be_used,
          all_cores,
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] =
-            divide_by_shards
-                ? dspec.core_groups_tuple()
-                : (use_sub_core_grids ? tt::tt_metal::split_work_to_cores(
-                                            *operation_attributes.sub_core_grids, num_output_tiles, /*row_wise=*/true)
-                                      : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
-    num_cols_per_core_group_1 *= shard_factor;
-    num_cols_per_core_group_2 *= shard_factor;
+         num_cols_per_core_group_2,
+         shard_factor,
+         use_sub_core_grids] = split_output_tiles(operation_attributes, tensor_args, outputs);
 
     ////////////////////////////////////////////////////////////////////////////
     //                            ProgramSpec
@@ -278,8 +331,12 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
+    const bool sfpu_accumulate = input_data_format == tt::DataFormat::Int32 ||
+                                 (input_data_format == tt::DataFormat::Float32 && operation_attributes.use_sfpu_reduce);
     const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
+        sfpu_accumulate
+            ? "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc_sfpu.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
 
     KernelSpec::CompilerOptions::Defines compute_defines;
     if (fp32_dest_acc_en) {
@@ -289,13 +346,14 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     // Style A: op resolves a TTNN ComputeKernelConfig, so the arch-agnostic helper
     // carries the four knobs (math_fidelity / math_approx_mode / fp32_dest_acc_en /
     // dst_full_sync_en) to their Metal 2.0 equivalents.
-    ComputeHardwareConfig compute_hw =
-        ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
     // Float32 DFB with enable_32_bit_dest = true. Legacy set no unpack_to_dest_mode (Default),
     // which maps to UnpackToSrc. Only the input DFB (c_0) can be Float32; the zero DFB is BF16.
     // unpack_modes is a plain member of the (single, generation-agnostic) ComputeHardwareConfig.
-    if (fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32) {
+    if (sfpu_accumulate) {
+        compute_hw.unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToDest);
+    } else if (fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32) {
         compute_hw.unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToSrc);
     }
 
@@ -315,6 +373,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
                 {{"num_output_tiles", num_cols_per_core_group},
                  {"num_input_tiles", num_reduce_input_tile},
                  {"input_granularity", input_granularity}},
+            .runtime_arg_schema = {.common_runtime_arg_names = {"post_mul_scaler_bits"}},
             .hw_config = compute_hw,
         };
     };
@@ -414,19 +473,23 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     }
 
     run_args.kernel_run_args = {reader_run, writer_run};
+    append_compute_run_args(run_args, operation_attributes, group_2_present);
     run_args.tensor_args = build_tensor_run_args(tensor_args, outputs);
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// Only the tensor bindings carry per-dispatch state (buffer addresses); every other runtime arg derives
-// from the operation attributes and the TensorSpecs, which the program hash covers.
+// Cache-hit hook: re-applies the buffer addresses and post_mul_scaler, which compute_program_hash excludes.
 tt::tt_metal::experimental::ProgramRunArgs FastReduceNCProgramFactory::override_runtime_arguments(
-    const FastReduceNCParams& /*operation_attributes*/,
+    const FastReduceNCParams& operation_attributes,
     const FastReduceNCInputs& tensor_args,
     std::vector<Tensor>& outputs,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     ProgramRunArgs run_args;
+    append_compute_run_args(
+        run_args,
+        operation_attributes,
+        !split_output_tiles(operation_attributes, tensor_args, outputs).core_group_2.ranges().empty());
     run_args.tensor_args = build_tensor_run_args(tensor_args, outputs);
     return run_args;
 }
