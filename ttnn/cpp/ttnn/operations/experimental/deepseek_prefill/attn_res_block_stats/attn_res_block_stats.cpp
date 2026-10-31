@@ -13,6 +13,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_stats
 ttnn::Tensor attn_res_block_stats(
     const std::vector<ttnn::Tensor>& sealed,
     const ttnn::Tensor& queries,
+    const std::optional<ttnn::Tensor>& gathered,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<ttnn::ccl::Topology> topology,
+    uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(!sealed.empty(), "AttnResBlockStats needs at least one sealed snapshot tensor");
@@ -26,7 +30,14 @@ ttnn::Tensor attn_res_block_stats(
         /*default_fp32_acc=*/true);
 
     return ttnn::prim::attn_res_block_stats(
-        sealed, queries, memory_config.value_or(queries.memory_config()), kernel_config_val);
+        sealed,
+        queries,
+        gathered,
+        cluster_axis,
+        topology.value_or(ttnn::ccl::Topology::Linear),
+        num_links,
+        memory_config.value_or(queries.memory_config()),
+        kernel_config_val);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_stats

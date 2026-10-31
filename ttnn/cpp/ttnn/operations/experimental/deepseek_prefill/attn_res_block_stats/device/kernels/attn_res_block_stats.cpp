@@ -12,7 +12,8 @@
 //
 // A core takes a run of a row (see attn_res_block_stats_items.hpp), so where a row is cut,
 // these are partial sums over the run: a run's core hands them to the row's leader, whose
-// own go to `cb_local`, and the leader sums the row's in fp32 dest.
+// own go to `cb_local`, and the leader sums the row's in fp32 dest a candidate at a time, so
+// each candidate's row can leave while the next is still being reduced.
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
@@ -85,37 +86,37 @@ void run_statistics(uint32_t num_tiles, uint32_t out) {
     cb_v_obj.pop_front(max_run);
 }
 
-// A row leader's: each candidate's own partial plus the row's other runs', which arrive
-// run-major.
-void sum_row() {
+// A row leader's: one candidate's own partial plus the row's other runs' for it, which
+// arrive candidate-major.
+void sum_candidate() {
     CircularBuffer cb_local_obj(cb_local);
     CircularBuffer cb_received_obj(cb_received);
     CircularBuffer cb_out_obj(cb_out);
 
-    cb_local_obj.wait_front(num_candidates);
-    cb_received_obj.wait_front((chunks_per_row - 1) * num_candidates);
+    cb_local_obj.wait_front(1);
+    cb_received_obj.wait_front(chunks_per_row - 1);
+    cb_out_obj.reserve_back(1);
     // The partials are fp32 where the runs were bf16: the copy's init does not move the
     // unpacker off the format the matmuls left it in.
     reconfig_data_format_srca(cb_v, cb_local);
     copy_init(cb_local);
     pack_reconfig_data_format(cb_out);
-    for (uint32_t c = 0; c < num_candidates; ++c) {
-        cb_out_obj.reserve_back(1);
-        tile_regs_acquire();
-        copy_tile(cb_local, c, 0);
-        add_binary_tile_init();
-        for (uint32_t r = 1; r < chunks_per_row; ++r) {
-            copy_tile(cb_received, (r - 1) * num_candidates + c, 1);
-            add_binary_tile(0, 1, 0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_out);
-        tile_regs_release();
-        cb_out_obj.push_back(1);
+    tile_regs_acquire();
+    copy_tile(cb_local, 0, 0);
+    add_binary_tile_init();
+    for (uint32_t r = 0; r + 1 < chunks_per_row; ++r) {
+        copy_tile(cb_received, r, 1);
+        add_binary_tile(0, 1, 0);
     }
-    cb_received_obj.pop_front((chunks_per_row - 1) * num_candidates);
-    cb_local_obj.pop_front(num_candidates);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_out);
+    tile_regs_release();
+    cb_out_obj.push_back(1);
+    cb_received_obj.pop_front(chunks_per_row - 1);
+    cb_local_obj.pop_front(1);
+    // Back to the runs' format for the next candidate's squares and matmuls.
+    reconfig_data_format_srca(cb_local, cb_v);
 }
 
 }  // namespace
@@ -136,9 +137,9 @@ void kernel_main() {
         const uint32_t num_tiles = Split::unit(u).num_tiles();
         for (uint32_t c = 0; c < num_candidates; ++c) {
             run_statistics(num_tiles, sums_row ? cb_local : cb_out);
-        }
-        if (sums_row) {
-            sum_row();
+            if (sums_row) {
+                sum_candidate();
+            }
         }
     }
 }

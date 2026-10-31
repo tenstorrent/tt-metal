@@ -33,6 +33,10 @@ namespace ttnn::prim {
 Tensor attn_res_block_stats(
     const std::vector<Tensor>& sealed,
     const Tensor& queries,
+    const std::optional<Tensor>& gathered,
+    std::optional<uint32_t> cluster_axis,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 
