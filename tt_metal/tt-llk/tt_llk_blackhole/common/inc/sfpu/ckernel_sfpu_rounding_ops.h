@@ -142,6 +142,54 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
     return v;
 }
 
+// Round v to a multiple of exact scale = 10^(-decimals), decimals in [-10, -1].
+//
+// torch.round computes nearbyint(v / scale) * scale. Multiplying by fl(10^decimals)
+// does not: the reciprocal is not dyadic, so 50.000004f * 0.01f == 0.5f and
+// round-half-even yields 0 instead of 1. n is that estimate. The remainder
+// r = v - n * scale says which way it missed: step toward v when |r| > scale/2,
+// and also on an exact tie when n is odd (half to even).
+//
+// Only lanes with |v| < 2^24 are adjusted. Through there, float32 division by
+// the exact power of ten rounds the same way as the real quotient, so the
+// remainder test matches torch.round. At |v| >= 2^24 the float32 quotient can
+// sit on the other side of a tie from the real one, and torch follows that
+// float32 division; stepping from the real remainder would diverge from it.
+sfpi_inline sfpi::vFloat _round_negative_decimals_(
+    sfpi::vFloat v, sfpi::vFloat inv_scale, sfpi::vFloat scale, sfpi::vFloat half)
+{
+    sfpi::lreg_pressure _;
+
+    sfpi::vFloat n = _round_even_(v * inv_scale);
+    v_if (sfpi::exexp(v) < 24)
+    {
+        sfpi::vFloat r    = (-n) * scale + v;
+        sfpi::vFloat step = 1.0f;
+        step              = sfpi::copysgn(step, r);
+        sfpi::vFloat ar   = sfpi::setsgn(r, 0);
+
+        v_if (ar > half)
+        {
+            n = n + step;
+        }
+        v_endif;
+        v_if (ar == half)
+        {
+            // Exact ties in this range have |n| < 2^23, so abs(n) + 2^23 has ulp 1
+            // and the mantissa LSB is the parity of n.
+            sfpi::vInt parity = sfpi::as<sfpi::vInt>(sfpi::setsgn(n, 0) + 8388608.0f);
+            v_if ((parity & 1) != 0)
+            {
+                n = n + step;
+            }
+            v_endif;
+        }
+        v_endif;
+    }
+    v_endif;
+    return n * scale;
+}
+
 template <bool APPROXIMATE, int ITERATIONS = 8>
 void _calculate_round_(const int decimals)
 {
@@ -163,12 +211,26 @@ void _calculate_round_(const int decimals)
     const sfpi::vFloat coeff   = exp10i(decimals);
     const sfpi::vFloat inverse = exp10i(-decimals);
 
-    for (int d = 0; d < ITERATIONS; ++d)
+    // 10^k is an exact float32 for k = 1..10. decimals >= 0, and decimals < -10
+    // where that power of ten no longer fits in 24 bits, keep the original scaling.
+    if (decimals < 0 && decimals >= -10)
     {
-        sfpi::vFloat v      = sfpi::dst_reg[0];
-        sfpi::vFloat result = inverse * _round_even_(v * coeff);
-        sfpi::dst_reg[0]    = result;
-        sfpi::dst_reg++;
+        const sfpi::vFloat half = exp10i(-decimals) * 0.5f;
+        for (int d = 0; d < ITERATIONS; ++d)
+        {
+            sfpi::dst_reg[0] = _round_negative_decimals_(sfpi::dst_reg[0], coeff, inverse, half);
+            sfpi::dst_reg++;
+        }
+    }
+    else
+    {
+        for (int d = 0; d < ITERATIONS; ++d)
+        {
+            sfpi::vFloat v      = sfpi::dst_reg[0];
+            sfpi::vFloat result = inverse * _round_even_(v * coeff);
+            sfpi::dst_reg[0]    = result;
+            sfpi::dst_reg++;
+        }
     }
 }
 
