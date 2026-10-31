@@ -133,7 +133,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     auto* device = param.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     // Determine data formats based on param dtype
     tt::DataFormat param_data_format = datatype_to_dataformat_converter(param.dtype());
