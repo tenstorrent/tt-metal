@@ -150,19 +150,37 @@ ttnn::Tensor hybrid_routed_expert_moe(
             tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, grid.y - 1}));
         const auto free_l1 = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
         const uint32_t arena_bytes =
-            std::min<uint32_t>(
-                hybrid_l1_arena_bytes(device), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
+            std::min<uint32_t>(hybrid_l1_arena_bytes(device), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
             ~static_cast<uint32_t>(63);
         const uint32_t cols = arena_bytes / 2;
-        l1_arena = ttnn::empty(
-            ttnn::Shape({static_cast<uint32_t>(grid.x * grid.y), cols}),
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::Layout::ROW_MAJOR,
-            device,
-            tt::tt_metal::MemoryConfig{
-                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                tt::tt_metal::BufferType::L1,
-                tt::tt_metal::ShardSpec{all_workers, {1, cols}, tt::tt_metal::ShardOrientation::ROW_MAJOR}});
+        const uint32_t num_workers = static_cast<uint32_t>(grid.x * grid.y);
+        if (device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1) == num_workers) {
+            // One L1 bank per worker core, so an interleaved buffer of one arena-sized row per bank lays the same
+            // [address, address + arena_bytes) on every core -- what the height-sharded one below does, at a tenth
+            // of the host cost: building the sharded buffer's page mapping took ~0.2 ms a call.
+            l1_arena = ttnn::empty(
+                ttnn::Shape({num_workers, cols}),
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::Layout::ROW_MAJOR,
+                device,
+                tt::tt_metal::MemoryConfig{
+                    tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1});
+        } else {
+            l1_arena = ttnn::empty(
+                ttnn::Shape({num_workers, cols}),
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::Layout::ROW_MAJOR,
+                device,
+                tt::tt_metal::MemoryConfig{
+                    tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                    tt::tt_metal::BufferType::L1,
+                    tt::tt_metal::ShardSpec{all_workers, {1, cols}, tt::tt_metal::ShardOrientation::ROW_MAJOR}});
+        }
+        TT_FATAL(
+            l1_arena->buffer()->aligned_size_per_bank() >= arena_bytes,
+            "hybrid routed expert overlapped with combine: the L1 arena holds {} B a core, {} B were asked for",
+            l1_arena->buffer()->aligned_size_per_bank(),
+            arena_bytes);
     } else if (fused_half_runs) {
         auto* device = dispatched_buffer.device();
         const uint32_t arena_bytes = hybrid_l1_arena_bytes(device);

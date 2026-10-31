@@ -44,6 +44,59 @@
 #include <limits>
 #include "hybrid_half_merge.hpp"
 
+namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
+namespace {
+
+// Every buffer base the dataflow kernels of both halves read, as ONE block of COMMON runtime args: [0] x, [1] counts,
+// [2] global_expert_idx_table, [3] start (expert_region_offsets, or what the half reads in its place), [4] output,
+// [5] expert_offsets (0 here; the routed expert overlapped with combine sets it, see append_far_run), then from
+// kCommonWeightsBase the per-expert weight and bias bases, role-major with experts_per_chip per role: gate, up, down,
+// and (fuse_bias) gate, up and down bias. The kernels read the same layout; the per-core slots these used to take
+// stay, zeroed, so no other offset moved.
+//
+// Common rather than per core because every core reads the same addresses. Per core they were ~11k buffer bindings
+// a program, every one re-patched on each program-cache hit, and the routed expert overlapped with combine carries a
+// copy of the program per chip: untraced, that patching made the overlap host-bound. One block serves both halves
+// of the merged kernel; see merge_kernel.
+constexpr uint32_t kCommonWeightsBase = 6;
+
+tt::tt_metal::KernelDescriptor::RTArgList routed_expert_common_args(
+    Buffer* x,
+    Buffer* counts,
+    Buffer* global_expert_idx_table,
+    Buffer* start,
+    Buffer* output,
+    const std::vector<Tensor>& gate,
+    const std::vector<Tensor>& up,
+    const std::vector<Tensor>& down,
+    const std::vector<Tensor>& gate_biases,
+    const std::vector<Tensor>& up_biases,
+    const std::vector<Tensor>& down_biases,
+    bool fuse_bias) {
+    tt::tt_metal::KernelDescriptor::RTArgList args;
+    args.reserve(kCommonWeightsBase + ((fuse_bias ? 6 : 3) * gate.size()));
+    for (Buffer* buffer : {x, counts, global_expert_idx_table, start, output}) {
+        args.push_back(buffer);
+    }
+    args.push_back(0u);  // expert_offsets, set by append_far_run
+    for (const auto* role : {&gate, &up, &down}) {
+        for (const auto& tensor : *role) {
+            args.push_back(tensor.buffer());
+        }
+    }
+    if (fuse_bias) {
+        for (const auto* role : {&gate_biases, &up_biases, &down_biases}) {
+            for (const auto& tensor : *role) {
+                args.push_back(tensor.buffer());
+            }
+        }
+    }
+    return args;
+}
+
+}  // namespace
+}  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
+
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::fused {
 namespace {
 constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
@@ -676,6 +729,9 @@ void append_to_descriptor(
         compute_descriptor.defines.emplace_back("SWIGLU_OAI", "1");
     }
 
+    // h's rectangle and rotating sender list span the whole grid, so they are the same on every core: one copy in the
+    // reader's common runtime args, after the shared block. Per core it was most of the program's runtime args.
+    const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
     for (uint32_t y = 0; y < kgroups; ++y) {
         for (uint32_t x = 0; x < hgroups; ++x) {
             const CoreCoord core{x, OY + y};
@@ -683,16 +739,15 @@ void append_to_descriptor(
             const uint32_t group_index = (y % blocking.mgroup_rows) * hgroups + x;
             KernelDescriptor::RTArgList reader_args;
             const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY + y, hgroups - 1, OY + y);
-            const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
             reader_args.reserve(
-                17 + 2 * kgroups + x_mcast_args.size() + h_mcast_args.size() +
-                h_group_rect_args[y / blocking.mgroup_rows].size() + 2u * experts_per_chip);
+                17 + 2 * kgroups + x_mcast_args.size() + h_group_rect_args[y / blocking.mgroup_rows].size());
+            // Slots 1-5 and 16 once held buffer bases, which are common runtime args now (see
+            // routed_expert_common_args). Kept, zeroed, so the offsets after them stay put; plain values, so no
+            // binding re-patches them on a program-cache hit.
             reader_args.push_back(0u);  // reserved runtime slot
-            reader_args.push_back(tensor_arguments.activations.buffer());
-            reader_args.push_back(tensor_arguments.w_gates[0].buffer());
-            reader_args.push_back(tensor_arguments.w_downs[0].buffer());
-            reader_args.push_back(tensor_arguments.counts.buffer());
-            reader_args.push_back(tensor_arguments.global_expert_idx_table.buffer());
+            for (uint32_t slot = 1; slot <= 5; ++slot) {
+                reader_args.push_back(0u);
+            }
             reader_args.push_back(blocking.kr_sizes[y]);
             reader_args.push_back(blocking.kr_starts[y]);
             reader_args.push_back(blocking.hn_starts[x]);
@@ -703,44 +758,25 @@ void append_to_descriptor(
             reader_args.push_back(blocking.ec_group_starts[group_index]);
             reader_args.push_back(x);
             reader_args.push_back(y);
-            reader_args.push_back(start_tensor.buffer());
+            reader_args.push_back(0u);  // 16, start: a common runtime arg
             for (uint32_t row = 0; row < kgroups; ++row) {
                 const auto [vx, vy] = virtual_core(device, x, OY + row);
                 reader_args.push_back(vx);
                 reader_args.push_back(vy);
             }
             reader_args.append(x_mcast_args);
-            reader_args.append(h_mcast_args);
             for (const uint32_t arg : h_group_rect_args[y / blocking.mgroup_rows]) {
                 reader_args.push_back(arg);
-            }
-            // Per-expert weight bases, role-major, at the END of the list: every earlier offset the
-            // kernels derive from HGROUPS/KGROUPS stays where it was, so only one new constexpr
-            // offset per kernel tracks this table.
-            for (const auto& w_gate : tensor_arguments.w_gates) {
-                reader_args.push_back(w_gate.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                reader_args.push_back(w_down.buffer());
-            }
-            // Per-expert bias bases, role-major, after the weight table for the same reason it sits
-            // last: one new constexpr offset in the reader and nothing above it moves.
-            if (operation_arguments.fuse_bias) {
-                for (const auto* list :
-                     {&tensor_arguments.gate_biases, &tensor_arguments.up_biases, &tensor_arguments.down_biases}) {
-                    for (const auto& bias : *list) {
-                        reader_args.push_back(bias.buffer());
-                    }
-                }
             }
             reader_descriptor.emplace_runtime_args(core, reader_args);
 
             KernelDescriptor::RTArgList writer_args;
-            writer_args.reserve(17 + 2 * kgroups + 4 + 2u * experts_per_chip);
+            writer_args.reserve(17 + 2 * kgroups + 4);
             writer_args.push_back(0u);  // reserved runtime slot
-            writer_args.push_back(tensor_arguments.w_ups[0].buffer());
-            writer_args.push_back(tensor_return_value.buffer());
-            writer_args.push_back(tensor_arguments.w_downs[0].buffer());
+            // Slots 1-3 once held buffer bases (2 the output), common runtime args now; kept, zeroed.
+            writer_args.push_back(0u);
+            writer_args.push_back(0u);
+            writer_args.push_back(0u);
             writer_args.push_back(blocking.kr_sizes[y]);
             writer_args.push_back(blocking.kr_starts[y]);
             writer_args.push_back(blocking.hn_starts[x]);
@@ -763,12 +799,6 @@ void append_to_descriptor(
             for (uint32_t arg = 0; arg < 4; ++arg) {
                 writer_args.push_back(h_mcast_noc1_args[arg]);
             }
-            for (const auto& w_up : tensor_arguments.w_ups) {
-                writer_args.push_back(w_up.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                writer_args.push_back(w_down.buffer());
-            }
             writer_descriptor.emplace_runtime_args(core, writer_args);
 
             compute_descriptor.emplace_runtime_args(
@@ -782,6 +812,24 @@ void append_to_descriptor(
                  y});
         }
     }
+
+    const auto common_args = routed_expert_common_args(
+        tensor_arguments.activations.buffer(),
+        tensor_arguments.counts.buffer(),
+        tensor_arguments.global_expert_idx_table.buffer(),
+        start_tensor.buffer(),
+        tensor_return_value.buffer(),
+        tensor_arguments.w_gates,
+        tensor_arguments.w_ups,
+        tensor_arguments.w_downs,
+        tensor_arguments.gate_biases,
+        tensor_arguments.up_biases,
+        tensor_arguments.down_biases,
+        operation_arguments.fuse_bias);
+    auto reader_common_args = common_args;
+    reader_common_args.append(h_mcast_args);
+    reader_descriptor.emplace_common_runtime_args(reader_common_args);
+    writer_descriptor.emplace_common_runtime_args(common_args);
 
     descriptor.kernels.push_back(std::move(reader_descriptor));
     descriptor.kernels.push_back(std::move(writer_descriptor));
@@ -2391,11 +2439,11 @@ void append_to_descriptor(
         //  30..36: COUNTS_BCAST (is_counts_reader, rect x0,y0,x1,y1, sem, receivers)
         //  37..38: DOWN_SPLIT go/done sem ids
         //  39..39+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
-        //  39+2*GRID_X: start_addr (expert_region_offsets)
+        //  39+2*GRID_X: 0 (start: common runtime arg 3)
         tt::tt_metal::KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(x_buffer);
-        reader_args.push_back(counts_buffer);
-        reader_args.push_back(idx_buffer);
+        // 0-2 and the start slot once held buffer bases, common runtime args now (see routed_expert_common_args).
+        // Kept, zeroed, so no offset moves; plain values, so no binding re-patches them on a program-cache hit.
+        reader_args.append(std::vector<uint32_t>{0u, 0u, 0u});
         reader_args.append(std::vector<uint32_t>{
             my_mt,
             my_nt_gu,
@@ -2457,65 +2505,31 @@ void append_to_descriptor(
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
-        // start_addr — reader arg at M_ROW_NOC_RT_OFFSET + 2*GRID_X (see layout
-        // comment). Same buffer the writer gets. Always read (x is the shared
-        // buffer; each expert's rows begin at start[global_id]).
-        reader_args.push_back(start_buffer);
-        // Per-expert weight base addresses, appended after start_addr in three
-        // contiguous blocks of experts_per_chip each: gate[0..N), up[0..N),
-        // down[0..N).
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            reader_args.push_back(t.gate_projs[e].buffer());
-        }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            reader_args.push_back(t.up_projs[e].buffer());
-        }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            reader_args.push_back(t.down_projs[e].buffer());
-        }
-        // FUSE_BIAS: per-expert bias base addresses in three further blocks
-        // (gate_bias[0..N), up_bias[0..N), down_bias[0..N)) after the weights.
-        if (fuse_bias) {
-            for (uint32_t e = 0; e < experts_per_chip; ++e) {
-                reader_args.push_back(t.gate_biases[e].buffer());
-            }
-            for (uint32_t e = 0; e < experts_per_chip; ++e) {
-                reader_args.push_back(t.up_biases[e].buffer());
-            }
-            for (uint32_t e = 0; e < experts_per_chip; ++e) {
-                reader_args.push_back(t.down_biases[e].buffer());
-            }
-        }
+        // The start slot, at M_ROW_NOC_RT_OFFSET + 2*GRID_X: its base is a common runtime arg now.
+        reader_args.push_back(0u);
         reader_descriptor.emplace_runtime_args(core, reader_args);
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
-        //   0: output_addr  1: my_mt  2: my_nt_d
-        //   3: start_addr (expert_region_offsets)
+        //   0: 0 (output: common runtime arg 4)  1: my_mt  2: my_nt_d
+        //   3: 0 (start: common runtime arg 3)
         //   4: my_nt_gu  5: is_up_sender (gy==0)
         //   6: up_go_sem_id  7: up_done_sem_id  (UP_SPLIT local same-core handshake)
-        //   8..8+N-1: per-expert `up` base addresses
+        //   8, 9: down_go/down_done sem ids  10..18: IN1_WRITER_MCAST
+        // The per-expert `up` and `down` bases are common runtime args; see expert_weight_common_args.
         tt::tt_metal::KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(out_buffer);  // 0
+        writer_args.push_back(0u);  // 0, output: a common runtime arg
         writer_args.append(std::vector<uint32_t>{
             my_mt,    // 1
             my_nt_d,  // 2
         });
-        writer_args.push_back(start_buffer);  // 3
+        writer_args.push_back(0u);  // 3, start: a common runtime arg
         writer_args.append(std::vector<uint32_t>{
             my_nt_gu,                              // 4
             static_cast<uint32_t>(is_in1_sender),  // 5 is_up_sender
             up_go_sem_id,                          // 6
             up_done_sem_id,                        // 7
         });
-        // Per-expert `up` base addresses (UP_SPLIT)
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            writer_args.push_back(t.up_projs[e].buffer());
-        }
-        // DOWN_SPLIT: per-expert down base addresses follow the up block (DOWN_RT),
-        // then the two dedicated go/done sem ids.
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            writer_args.push_back(t.down_projs[e].buffer());
-        }
+        // DOWN_SPLIT: the two dedicated go/done sem ids.
         writer_args.push_back(down_go_sem_id);
         writer_args.push_back(down_done_sem_id);
         // IN1_WRITER_MCAST (9): the NoC-0 rectangle (the writer swaps the corners for
@@ -2550,6 +2564,22 @@ void append_to_descriptor(
             {(valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
              (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w});   // 1 down valid N subblocks
     }
+
+    const auto common_args = routed_expert_common_args(
+        x_buffer,
+        counts_buffer,
+        idx_buffer,
+        start_buffer,
+        out_buffer,
+        t.gate_projs,
+        t.up_projs,
+        t.down_projs,
+        t.gate_biases,
+        t.up_biases,
+        t.down_biases,
+        fuse_bias);
+    reader_descriptor.emplace_common_runtime_args(common_args);
+    writer_descriptor.emplace_common_runtime_args(common_args);
 
     descriptor.kernels.push_back(std::move(reader_descriptor));
     descriptor.kernels.push_back(std::move(writer_descriptor));

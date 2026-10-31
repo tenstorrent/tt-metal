@@ -11,6 +11,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <ttnn/global_semaphore.hpp>
 
+#include "hybrid_half_merge.hpp"
 #include "hybrid_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 #include "combine/combine_fabric2d_program_factory.hpp"
@@ -21,7 +22,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert
 
 tt::tt_metal::ProgramDescriptor HybridSoloProgramFactory::create_descriptor(
     const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, ttnn::Tensor& output) {
-    return create_hybrid_program_descriptor(op, t, output);
+    auto desc = create_hybrid_program_descriptor(op, t, output);
+    compact_runtime_args(desc);
+    return desc;
 }
 
 combine::CombineFabric2dParams combine_attributes(
@@ -50,6 +53,9 @@ combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs&
 
 namespace {
 
+// Where routed_expert_common_args leaves room for expert_offsets' base; the unified reader reads it there.
+constexpr uint32_t kFarRunCommonSlot = 5;
+
 // The unified reader's view of where combine's walks open: expert_offsets' row for the ring chip diametrically
 // opposite this one, which both of combine's walk directions take first. Appended past every other argument.
 // The reader is the merged one when the fused pass runs and the unified half's own when it does not (threshold 0),
@@ -66,13 +72,18 @@ void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer*
     }
     for (auto& [core, args] : reader->runtime_args) {
         args.resize(base, 0);
-        args.push_back(static_cast<uint32_t>(expert_offsets->address()));
+        args.push_back(0u);  // the base is common runtime arg kFarRunCommonSlot, below
         args.push_back(static_cast<uint32_t>(expert_offsets->aligned_page_size()));
         args.push_back(dg_far);
-        // The address is re-patched on every program-cache hit: the tensor may live elsewhere next call.
-        reader->buffer_bindings.push_back(
-            tt::tt_metal::BufferBinding{.core = core, .arg_idx = base, .buffer = expert_offsets});
     }
+    // One copy for every core, as the routed expert's other buffer bases (routed_expert_common_args), and re-patched
+    // on every program-cache hit: the tensor may live elsewhere next call.
+    TT_FATAL(
+        reader->common_runtime_args.size() > kFarRunCommonSlot && reader->common_runtime_args[kFarRunCommonSlot] == 0,
+        "hybrid routed expert: the reader's common runtime args carry no free expert_offsets slot");
+    reader->common_runtime_args[kFarRunCommonSlot] = static_cast<uint32_t>(expert_offsets->address());
+    reader->common_buffer_bindings.push_back(
+        tt::tt_metal::CommonBufferBinding{.arg_idx = kFarRunCommonSlot, .buffer = expert_offsets});
     reader->defines.emplace_back("URE_FAR_RT_BASE", std::to_string(base));
 }
 
@@ -87,8 +98,17 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
     // follows gets that L1 back; its address is hashed, so a cached program is only reused over the same layout.
     // Without the fused pass there is none, and neither op needs one: each keeps static circular buffers on its own
     // rows.
+    //
+    // The circular buffers on it are backed by the arena's backing buffer, not by the tensor's own buffer: same
+    // address and per-core layout, but not a tensor buffer, so the cache-hit path pins them instead of re-pointing
+    // all of them on every call (which re-sends each one's config). A hit already means the same arena address.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
-    tt::tt_metal::Buffer* arena = run_fused_pass ? t.l1_arena->buffer() : nullptr;
+    tt::tt_metal::Buffer* arena = run_fused_pass ? t.l1_arena->mesh_buffer().get_backing_buffer() : nullptr;
+    TT_FATAL(
+        arena == nullptr || arena->address() == op.l1_arena_addr,
+        "hybrid routed expert: the arena's backing buffer is at {}, the hashed arena at {}",
+        arena == nullptr ? 0 : arena->address(),
+        op.l1_arena_addr);
     const auto go_addr = static_cast<uint32_t>(op.expert_go->address());
 
     ttnn::Tensor re_output = t.output;
@@ -142,6 +162,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
             append_far_run(
                 re, t.expert_offsets->buffer(), (cf::my_dg_index(combine_args, coord) + extent / 2) % extent);
         }
+        compact_runtime_args(re);
         program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
     }
 

@@ -4,16 +4,21 @@
 #include "hybrid_half_merge.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <limits>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <variant>
+#include <vector>
 
 #include <fmt/format.h>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
+#include "kernels/hybrid_rt_table.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_geometry.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
@@ -300,9 +305,23 @@ KernelDescriptor merge_kernel(
         merged.buffer_bindings.push_back(
             tt::tt_metal::BufferBinding{binding.core, binding.arg_idx + fused_block, binding.buffer});
     }
-    TT_FATAL(
-        unified.common_runtime_args.empty() && fused.common_runtime_args.empty(),
-        "a half grew common runtime args; the merge does not rebase them yet");
+    // Common runtime args are not rebased: both halves read the same buffer bases from one block of one layout
+    // (routed_expert_common_args), so the merged kernel keeps a single copy -- `merged` already holds the fused half's,
+    // which may run on past the shared block with arguments only the fused half reads (the fused reader's sender
+    // list). A role that only one half carries (the compute kernels carry none) contributes its own.
+    if (merged.common_runtime_args.empty()) {
+        merged.common_runtime_args = unified.common_runtime_args;
+        merged.common_buffer_bindings = unified.common_buffer_bindings;
+    } else if (!unified.common_runtime_args.empty()) {
+        const auto& shared = unified.common_runtime_args;
+        TT_FATAL(
+            shared.size() <= fused.common_runtime_args.size() &&
+                std::equal(shared.begin(), shared.end(), fused.common_runtime_args.begin()),
+            "the unified half's {} common runtime args are not the head of the fused half's {}; the merged kernel has "
+            "one block both read unrebased",
+            shared.size(),
+            fused.common_runtime_args.size());
+    }
 
     reconcile_config(fused, unified, merged);
     // Both halves of a dataflow kernel sit in one binary and the kernel config ring, not instruction
@@ -446,6 +465,179 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     }
     mark_unified_pack_precision(unified, *unified_by_role.at(compute_role()), merged);
     return merged;
+}
+
+void compact_runtime_args(tt::tt_metal::ProgramDescriptor& desc) {
+    for (auto& kernel : desc.kernels) {
+        if (!kernel.kernel_source.ends_with("hybrid_reader.cpp") &&
+            !kernel.kernel_source.ends_with("hybrid_writer.cpp")) {
+            continue;
+        }
+        auto& per_core = kernel.runtime_args;
+        if (per_core.empty()) {
+            continue;
+        }
+        size_t count = 0;
+        for (const auto& [core, args] : per_core) {
+            count = std::max(count, args.size());
+        }
+        // A list shorter than the longest reads nothing past its own end, so padding it does not change what it reads.
+        for (auto& [core, args] : per_core) {
+            args.resize(count, 0);
+        }
+        // A buffer-bound slot is re-patched on a program-cache hit. Bound to one buffer on every core it is shared and
+        // re-patched once as a common binding; otherwise it stays per core.
+        std::vector<uint32_t> bound_cores(count, 0);
+        std::vector<tt::tt_metal::Buffer*> bound_buffer(count, nullptr);
+        std::vector<bool> mixed(count, false);
+        for (const auto& binding : kernel.buffer_bindings) {
+            const uint32_t i = binding.arg_idx;
+            mixed[i] = mixed[i] || (bound_cores[i] != 0 && bound_buffer[i] != binding.buffer);
+            bound_buffer[i] = binding.buffer;
+            ++bound_cores[i];
+        }
+        std::vector<bool> bound(count, false);
+        for (size_t i = 0; i < count; ++i) {
+            bound[i] = bound_cores[i] != 0 && (mixed[i] || bound_cores[i] != per_core.size());
+        }
+
+        // A value that varies only along one axis of cores is a function of the core's logical y (or x), which the
+        // kernel knows: kept as a common table over that axis -- or, linear in it, as the line's two coefficients --
+        // it is no longer part of every core's list. The common arguments share the kernel-config ring with the
+        // binaries, so the cheaper form wins and identical tables are stored once.
+        uint32_t axis_min[2] = {std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max()};
+        uint32_t axis_max[2] = {0, 0};
+        for (const auto& [core, args] : per_core) {
+            const uint32_t at[2] = {static_cast<uint32_t>(core.y), static_cast<uint32_t>(core.x)};
+            for (int axis = 0; axis < 2; ++axis) {
+                axis_min[axis] = std::min(axis_min[axis], at[axis]);
+                axis_max[axis] = std::max(axis_max[axis], at[axis]);
+            }
+        }
+        // The value of slot i for each position along `axis` (0: rows, 1: columns), if it depends on nothing else.
+        const auto along = [&](size_t i, int axis) -> std::optional<std::vector<uint32_t>> {
+            std::vector<uint32_t> line(axis_max[axis] - axis_min[axis] + 1, 0);
+            std::vector<bool> seen(line.size(), false);
+            for (const auto& [core, args] : per_core) {
+                const uint32_t at = (axis == 0 ? core.y : core.x) - axis_min[axis];
+                if (seen[at] && line[at] != args[i]) {
+                    return std::nullopt;
+                }
+                seen[at] = true;
+                line[at] = args[i];
+            }
+            return line;
+        };
+        // a, b with line[k] == a + b * (axis_min + k) for every position a core sits at, in uint32 arithmetic.
+        const auto linear = [&](int axis, const std::vector<uint32_t>& line) -> std::optional<std::array<uint32_t, 2>> {
+            std::vector<bool> present(line.size(), false);
+            for (const auto& [core, args] : per_core) {
+                present[(axis == 0 ? core.y : core.x) - axis_min[axis]] = true;
+            }
+            std::optional<size_t> first;
+            std::optional<uint32_t> slope;
+            for (size_t k = 0; k < line.size(); ++k) {
+                if (!present[k]) {
+                    continue;
+                }
+                if (!first) {
+                    first = k;
+                    continue;
+                }
+                if (!slope) {
+                    slope = (line[k] - line[*first]) / static_cast<uint32_t>(k - *first);
+                }
+                if (line[k] != line[*first] + *slope * static_cast<uint32_t>(k - *first)) {
+                    return std::nullopt;
+                }
+            }
+            if (!slope) {
+                return std::nullopt;
+            }
+            const uint32_t origin = axis_min[axis] + static_cast<uint32_t>(*first);
+            return std::array<uint32_t, 2>{line[*first] - *slope * origin, *slope};
+        };
+
+        const auto table_base = static_cast<uint32_t>(kernel.common_runtime_args.size());
+        const auto shared_base = table_base + static_cast<uint32_t>(count);
+        std::vector<uint32_t> table(count);
+        std::vector<uint32_t> shared;
+        std::map<std::pair<int, std::vector<uint32_t>>, uint32_t> stored_lines;
+        std::vector<int64_t> compact_slot(count, -1);
+        uint32_t next_slot = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t value = per_core.front().second[i];
+            const bool same_everywhere =
+                !bound[i] && std::all_of(per_core.begin(), per_core.end(), [&](const auto& entry) {
+                    return entry.second[i] == value;
+                });
+            const auto slot = shared_base + static_cast<uint32_t>(shared.size());
+            if (same_everywhere) {
+                table[i] = hybrid_rt_entry(kHybridRtShared, slot);
+                shared.push_back(value);
+                if (bound_cores[i] != 0) {
+                    kernel.common_buffer_bindings.push_back({slot, bound_buffer[i]});
+                }
+                continue;
+            }
+            bool placed = false;
+            for (int axis = 0; axis < 2 && !placed && bound_cores[i] == 0; ++axis) {
+                const auto line = along(i, axis);
+                if (!line) {
+                    continue;
+                }
+                if (const auto ab = linear(axis, *line)) {
+                    table[i] = hybrid_rt_entry(axis == 0 ? kHybridRtLinearInRow : kHybridRtLinearInColumn, slot);
+                    shared.insert(shared.end(), ab->begin(), ab->end());
+                    placed = true;
+                    continue;
+                }
+                // The kernel indexes the table by its absolute coordinate, so the entry points axis_min before it.
+                auto [stored, inserted] = stored_lines.emplace(std::pair{axis, *line}, slot);
+                if (inserted) {
+                    shared.insert(shared.end(), line->begin(), line->end());
+                }
+                TT_FATAL(
+                    stored->second >= axis_min[axis], "hybrid routed expert: a common table starts before its axis");
+                table[i] =
+                    hybrid_rt_entry(axis == 0 ? kHybridRtPerRow : kHybridRtPerColumn, stored->second - axis_min[axis]);
+                placed = true;
+            }
+            if (!placed) {
+                compact_slot[i] = next_slot;
+                table[i] = hybrid_rt_entry(kHybridRtPerCore, next_slot++);
+            }
+        }
+        TT_FATAL(
+            (shared_base + shared.size()) <= kHybridRtSlotMask,
+            "hybrid routed expert: {} common runtime args do not fit the table",
+            shared_base + shared.size());
+
+        for (auto& [core, args] : per_core) {
+            std::vector<uint32_t> compact;
+            compact.reserve(next_slot);
+            for (size_t i = 0; i < count; ++i) {
+                if (compact_slot[i] >= 0) {
+                    compact.push_back(args[i]);
+                }
+            }
+            args = std::move(compact);
+        }
+        auto& bindings = kernel.buffer_bindings;
+        bindings.erase(
+            std::remove_if(
+                bindings.begin(),
+                bindings.end(),
+                [&](const auto& binding) { return compact_slot[binding.arg_idx] < 0; }),
+            bindings.end());
+        for (auto& binding : kernel.buffer_bindings) {
+            binding.arg_idx = static_cast<uint32_t>(compact_slot[binding.arg_idx]);
+        }
+        kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), table.begin(), table.end());
+        kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), shared.begin(), shared.end());
+        kernel.defines.emplace_back("HYB_RTX_CRT", std::to_string(table_base));
+        kernel.defines.emplace_back("HYB_RTX_COUNT", std::to_string(count));
+    }
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
