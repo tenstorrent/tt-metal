@@ -8,6 +8,7 @@ set(UNIT_TESTS_LLK_SRC
     test_copy_block_matmul_partials.cpp
     test_csa_index_remap_compute.cpp
     test_cumsum.cpp
+    test_custom_mm_n16.cpp
     test_custom_mm_operands.cpp
     test_deepseek_binary_dest_reuse.cpp
     test_dropout_sfpu_compute.cpp
