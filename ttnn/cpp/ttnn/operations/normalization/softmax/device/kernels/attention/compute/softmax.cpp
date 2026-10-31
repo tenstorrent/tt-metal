@@ -195,6 +195,12 @@ void kernel_main() {
 #else
     [[maybe_unused]] constexpr bool causal_mask = false;
 #endif
+#ifdef MASK_FULL_ROWS
+    // the mask holds one value per query row, so it is added tile by tile instead of broadcasting its row 0
+    [[maybe_unused]] constexpr bool mask_full_rows = true;
+#else
+    [[maybe_unused]] constexpr bool mask_full_rows = false;
+#endif
 #ifdef NUMERIC_STABLE
     [[maybe_unused]] constexpr bool numeric_stable = true;
 #else
@@ -241,7 +247,7 @@ void kernel_main() {
             dfb_fused_attn_obj.wait_front(Wt);
         }
 #endif
-        constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
+        constexpr auto mask_bcast = (causal_mask || mask_full_rows) ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
         constexpr auto attn_wait = causal_mask ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::None;
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(Wt).block_size(ndst),

@@ -1452,3 +1452,58 @@ def test_scale_mask_softmax_causal_mask_height_differs_from_width(device, op, ba
         atol=0.01,
         frobenius_threshold=0.05,
     )
+
+
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize("mask_rows", [32, 1])
+@pytest.mark.parametrize("batch, heads, Wt", [(3, 2, 3), (1, 1, 1001)])  # Wt 1001 selects the large-tensor kernel
+def test_scale_mask_softmax_mask_rows(device, batch, heads, Wt, mask_rows, in_place):
+    """A [B, 1, 32, W] mask for 32 query rows is added row by row; a [B, 1, 1, W] mask is broadcast over the rows."""
+    torch.manual_seed(0)
+
+    W = Wt * 32
+    scale = 0.75
+    torch_input = torch.randn((batch, heads, 32, W), dtype=torch.bfloat16)
+    attention_mask = (torch.randn((batch, 1, mask_rows, W), dtype=torch.float32) * 2).to(torch.bfloat16)
+    torch_output = F.softmax(torch_input * scale + attention_mask, dim=-1, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
+    if in_place:
+        ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask)
+    else:
+        ttnn_output = ttnn.scale_mask_softmax(ttnn_input, scale, ttnn_mask)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
+
+
+def test_scale_mask_softmax_causal_mask_rows(device):
+    """Control: the causal path adds the mask tile by tile and is unchanged."""
+    torch.manual_seed(0)
+
+    scale = 0.75
+    torch_input = torch.randn((2, 1, 96, 96), dtype=torch.bfloat16)
+    attention_mask = torch.triu(torch.full((2, 1, 96, 96), float("-inf"), dtype=torch.bfloat16), diagonal=1)
+    torch_output = F.softmax(torch_input * scale + attention_mask, dim=-1, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask, is_causal_mask=True)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
