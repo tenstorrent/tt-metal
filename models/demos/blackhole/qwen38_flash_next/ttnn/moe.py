@@ -673,10 +673,10 @@ class Qwen38TTNNMoE:
                 # NoC differently, keeps the four programs (a production default never raises on such a mesh)
                 warnings.warn(f"MoE dense composite not placed on this mesh; the four programs serve: {error}")
                 self.moe_dense_fused = False
-        # QWEN38_MOE_FUSE=1 (default off): the routed experts run as kernel groups of the moe_dense program (one row, the
+        # QWEN38_MOE_FUSE (default "1"): the routed experts run as kernel groups of the moe_dense program (one row, the
         # two-core fast top-k), prefetching the hidden rows under the top-k and waiting for its indices on a semaphore
         self.moe_fuse_on = (
-            os.environ.get("QWEN38_MOE_FUSE", "0") == "1"
+            os.environ.get("QWEN38_MOE_FUSE", "1") == "1"
             and self.moe_experts_on
             and self.moe_dense_fused
             and self.rows == 1
