@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// Allocates and returns the combined output: (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim)
+// Allocates, zeroes and returns the combined output: (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim)
 // BFLOAT16 ROW_MAJOR per device. See the nanobind docstring for what each tensor carries.
 ttnn::Tensor combine_fabric2d(
     const ttnn::Tensor& dispatched_buffer,

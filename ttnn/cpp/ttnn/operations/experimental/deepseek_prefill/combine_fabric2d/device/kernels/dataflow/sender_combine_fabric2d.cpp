@@ -38,8 +38,9 @@ constexpr bool LAUNCH_CREDIT = false;
 constexpr bool LAUNCH_CREDIT = true;
 #endif
 
-// Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
-// regardless, so this only sets how finely that reader can pipeline within a chunk.
+// Forwarded tokens per channel between `vc_arrived` bumps to the downstream reader. Whatever is left of a batch
+// is announced as soon as this sender runs out of slots to send, so this only sets how finely that reader can
+// pipeline a channel.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
 // Final writes between bumps of the downstream reader's receive count. Nothing waits on that count until
 // the end of the stream, so this only bounds how many header-only packets it costs; the tail is bumped when
@@ -50,8 +51,8 @@ constexpr ::cmbf2d::SenderCtArgs ct{};
 // One prebuilt header per packet of each ring slot. Every send is a single hop, so the route is constant for
 // the whole run; only the write address varies per token, and a slot's headers are untouched until the ring
 // wraps.
-volatile PACKET_HEADER_TYPE* slot_hdr(uint32_t slot, uint32_t packet) {
-    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+volatile tt_l1_ptr PACKET_HEADER_TYPE* slot_hdr(uint32_t slot, uint32_t packet) {
+    return reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
         ct.pkt_hdr_ring_addr + (slot * ct.packets_per_token() + packet) * sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -64,7 +65,7 @@ void prebuild_routes() {
     for (uint32_t slot = 0; slot < ct.num_l1_slots; slot++) {
         for (uint32_t packet = 0; packet < ct.packets_per_token(); packet++) {
             fabric_set_unicast_route(
-                (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot, packet),
+                (volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot, packet),
                 ct.peer_chip_id,
                 ct.peer_mesh_id);
         }
@@ -72,13 +73,13 @@ void prebuild_routes() {
     // pkt_hdr_drain is used by grant_launch_credit before the send loop, by bump_downstream during it and by
     // drain_fabric after it.
     fabric_set_unicast_route(
-        reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_drain_addr),
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_drain_addr),
         ct.peer_chip_id,
         ct.peer_mesh_id);
     // Credits go to a different CORE on the same chip this sender already talks to, so the route is the
     // same one and is built once here too.
     fabric_set_unicast_route(
-        reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_credit_addr),
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_credit_addr),
         ct.peer_chip_id,
         ct.peer_mesh_id);
 }
@@ -108,7 +109,8 @@ struct Courier {
             if (n == 0) {
                 continue;
             }
-            volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_credit_addr);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr =
+                reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ct.pkt_hdr_credit_addr);
             hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 get_noc_addr(ct.credit_noc_x, ct.credit_noc_y, ct.vc_freed_addr(v)), /*val=*/n, /*flush=*/true});
             fabric.wait_for_empty_write_slot();
@@ -156,9 +158,8 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
         // the bump batch is FWD_BUMP_EVERY, so a producer that fills a channel without completing a batch
         // would never tell the consumer those pages are there -- and that consumer is the only source of
-        // the credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward
-        // used to rule out by forcing a bump on a chunk's last page. Channels have no chunk ends, so this
-        // announce is what rules it out instead.
+        // the credits the producer is now waiting on: deadlock. A channel has no chunk end to force a bump
+        // at, so this announce is what rules it out.
         //
         // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
@@ -183,7 +184,8 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
 // launch making progress.
 template <typename FabricSender>
 void grant_launch_credit(FabricSender& fabric) {
-    volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
     hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.credit_noc_x, ct.credit_noc_y, ct.launch_credit_addr), /*val=*/1, /*flush=*/true});
     fabric.wait_for_empty_write_slot();
@@ -198,13 +200,13 @@ void take_launch_credit() {
     noc_semaphore_inc(get_noc_addr(ct.launch_credit_addr), 0u - 1u);
 }
 
-// Add `count` to a semaphore on the downstream reader's core: `fwd_arrived` for pages of its forwarding
-// region, `final_arrived` for tokens written straight into its chip's output. A chunk's last page always
-// forces a `fwd_arrived` bump: that reader consumes a whole chunk before moving on, so leaving the tail
-// uncounted would strand it. The flush makes the far router drain the writes ahead of the bump first.
+// Add `count` to a semaphore on the downstream reader's core: `vc_arrived[v]` for pages of its channel v,
+// `final_arrived` for tokens written straight into its chip's output. The flush makes the far router drain the
+// writes ahead of the bump first.
 template <typename FabricSender>
 void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
-    volatile PACKET_HEADER_TYPE* hdr_bump = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_bump =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
     // Header-only atomic inc, NOT the fused write+inc: that is documented to hang Blackhole when the payload
     // destination is DRAM, and the forwarding buffer is DRAM.
     hdr_bump->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -231,7 +233,7 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t* fwd_since_bump
     uint32_t offset = 0;
     for (uint32_t packet = 0; packet < ct.packets_per_token(); packet++) {
         const uint32_t bytes = packet + 1 < ct.packets_per_token() ? ct.first_packet_bytes : payload_bytes - offset;
-        volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot, packet);
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = slot_hdr(slot, packet);
         // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap,
         // and reversing the two costs ~8% of the bandwidth.
         hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst + offset}, bytes);
@@ -321,18 +323,19 @@ uint32_t pump_stream(FabricSender& fabric) {
 // further free slot forces credits_returned >= sent: every payload packet has reached the destination chip.
 // It does NOT prove the destination DRAM write retired — the far eRISC may ack on write issue.
 //
-// The fillers are header-only atomic incs of value ZERO aimed at a drain sink on the peer chip: real fabric
-// packets (there is no NOP send type) that change nothing. Their own completion is never awaited. Reaching a
-// free slot cannot deadlock, since the reverse direction is a different eth channel.
+// The fillers are header-only atomic incs of value ZERO: real fabric packets (there is no NOP send type) that
+// change nothing. Their own completion is never awaited, so one can land after the peer's program has exited;
+// they target the downstream reader's `final_arrived`, a semaphore that outlives every launch and is only ever
+// changed by NoC atomics, rather than L1 the next op on that core may own. Reaching a free slot cannot
+// deadlock, since the reverse direction is a different eth channel.
 template <typename FabricSender>
 void drain_fabric(FabricSender& fabric) {
-    volatile PACKET_HEADER_TYPE* hdr_drain = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
-    // Any legal L1 address on the chip across our cable will do; the downstream worker we already address for
-    // semaphore bumps sits on exactly that chip.
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_drain =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
     hdr_drain->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.drain_sink_addr), /*val=*/0, /*flush=*/false});
+        get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, ct.final_sem_addr), /*val=*/0, /*flush=*/false});
     fabric_set_unicast_route(
-        (volatile tt::tt_fabric::HybridMeshPacketHeader*)hdr_drain, ct.peer_chip_id, ct.peer_mesh_id);
+        (volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader*)hdr_drain, ct.peer_chip_id, ct.peer_mesh_id);
     for (uint32_t d = 0; d + 1 < fabric.num_buffers_per_channel; d++) {
         fabric.wait_for_empty_write_slot();
         fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_drain, sizeof(PACKET_HEADER_TYPE));

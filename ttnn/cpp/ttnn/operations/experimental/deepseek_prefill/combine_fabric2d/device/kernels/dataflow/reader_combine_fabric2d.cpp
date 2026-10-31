@@ -42,8 +42,7 @@
 // Two monotonic single-writer counters, each bumped by a NoC atomic to our OWN core. `filled` is ours,
 // `freed` is the sender's, and each side keeps its own local count and works on the difference, so there is
 // no read-modify-write to race. The atomic is what makes a bump visible to the other RISC; the slot metadata
-// it announces rides on plain stores, ordered ahead of it in the same store stream, exactly as cb_push_back
-// announces tile data.
+// it announces rides on plain stores, so a fence retires them before the atomic is issued.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -341,6 +340,7 @@ struct Reader {
 
     void flush_publish() {
         if (pending_publish > 0) {
+            asm volatile("fence" ::: "memory");
             noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(ct.filled_ptr())), pending_publish);
             pending_publish = 0;
         }

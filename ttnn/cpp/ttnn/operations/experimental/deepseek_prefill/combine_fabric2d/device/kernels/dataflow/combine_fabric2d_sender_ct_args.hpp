@@ -22,7 +22,6 @@ struct SenderCtArgs {
     uint32_t ring_addr;
     uint32_t pkt_hdr_ring_addr;
     uint32_t pkt_hdr_drain_addr;
-    uint32_t drain_sink_addr;
     uint32_t batch;
     uint32_t filled_slot;
     uint32_t freed_slot;
@@ -68,7 +67,6 @@ struct SenderCtArgs {
         ring_addr(l1.ring),
         pkt_hdr_ring_addr(l1.pkt_hdr_ring),
         pkt_hdr_drain_addr(l1.pkt_hdr_drain),
-        drain_sink_addr(l1.drain_sink),
         batch(BATCH),
         filled_slot(plan.ring_filled_slot),
         freed_slot(plan.ring_freed_slot),
@@ -94,29 +92,13 @@ struct SenderCtArgs {
     }
 
     std::vector<uint32_t> to_ct_word_arr() const {
-        std::vector<uint32_t> word_arr{
-            num_l1_slots,
-            token_size_bytes,
-            forwarding_metadata_size,
-            peer_chip_id,
-            peer_mesh_id,
-            ring_addr,
-            pkt_hdr_ring_addr,
-            pkt_hdr_drain_addr,
-            drain_sink_addr,
-            batch,
-            filled_slot,
-            freed_slot,
-            fwd_sem_noc_x,
-            fwd_sem_noc_y,
-            final_sem_addr,
-            first_packet_bytes,
-            credit_noc_x,
-            credit_noc_y,
-            launch_credit_addr,
-            num_vcs,
-            pkt_hdr_credit_addr,
-            credit_done_addr};
+        std::vector<uint32_t> word_arr{num_l1_slots,      token_size_bytes,    forwarding_metadata_size,
+                                       peer_chip_id,      peer_mesh_id,        ring_addr,
+                                       pkt_hdr_ring_addr, pkt_hdr_drain_addr,  batch,
+                                       filled_slot,       freed_slot,          fwd_sem_noc_x,
+                                       fwd_sem_noc_y,     final_sem_addr,      first_packet_bytes,
+                                       credit_noc_x,      credit_noc_y,        launch_credit_addr,
+                                       num_vcs,           pkt_hdr_credit_addr, credit_done_addr};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -135,24 +117,23 @@ public:
         ring_addr(get_compile_time_arg_val(5)),
         pkt_hdr_ring_addr(get_compile_time_arg_val(6)),
         pkt_hdr_drain_addr(get_compile_time_arg_val(7)),
-        drain_sink_addr(get_compile_time_arg_val(8)),
-        batch(get_compile_time_arg_val(9)),
-        filled_slot(get_compile_time_arg_val(10)),
-        freed_slot(get_compile_time_arg_val(11)),
-        fwd_sem_noc_x(get_compile_time_arg_val(12)),
-        fwd_sem_noc_y(get_compile_time_arg_val(13)),
-        final_sem_addr(get_compile_time_arg_val(14)),
-        first_packet_bytes(get_compile_time_arg_val(15)),
-        credit_noc_x(get_compile_time_arg_val(16)),
-        credit_noc_y(get_compile_time_arg_val(17)),
-        launch_credit_addr(get_compile_time_arg_val(18)),
-        num_vcs(get_compile_time_arg_val(19)),
-        pkt_hdr_credit_addr(get_compile_time_arg_val(20)),
-        credit_done_addr(get_compile_time_arg_val(21)) {}
+        batch(get_compile_time_arg_val(8)),
+        filled_slot(get_compile_time_arg_val(9)),
+        freed_slot(get_compile_time_arg_val(10)),
+        fwd_sem_noc_x(get_compile_time_arg_val(11)),
+        fwd_sem_noc_y(get_compile_time_arg_val(12)),
+        final_sem_addr(get_compile_time_arg_val(13)),
+        first_packet_bytes(get_compile_time_arg_val(14)),
+        credit_noc_x(get_compile_time_arg_val(15)),
+        credit_noc_y(get_compile_time_arg_val(16)),
+        launch_credit_addr(get_compile_time_arg_val(17)),
+        num_vcs(get_compile_time_arg_val(18)),
+        pkt_hdr_credit_addr(get_compile_time_arg_val(19)),
+        credit_done_addr(get_compile_time_arg_val(20)) {}
 
     // Words per channel in the block that follows the scalars.
     static constexpr uint32_t VC_WORDS = 3;
-    static constexpr uint32_t vc_base = 22;
+    static constexpr uint32_t vc_base = 21;
     uint32_t vc_arrived_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 0]; }
     uint32_t vc_freed_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 1]; }
     uint32_t vc_outbox_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 2]; }

@@ -44,11 +44,10 @@ constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
 // The courier's header is its own, not the drain's: a credit can be posted from inside the send loop's
 // wait, where the drain header may already hold a bump the EDM has not taken yet.
 constexpr uint32_t PKT_HDR_CREDIT_OFF = 0x0200;
-constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
+static_assert(PKT_HDR_DRAIN_OFF == 0, "the stream cores' L1 reservation starts at the drain packet header");
 static_assert(PKT_HDR_DRAIN_OFF < PKT_HDR_CREDIT_OFF, "credit header overlaps the drain packet header");
-static_assert(PKT_HDR_CREDIT_OFF < DRAIN_SINK_OFF, "drain sink overlaps the credit packet header");
-static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
+static_assert(PKT_HDR_CREDIT_OFF < PROD_BUF_OFF, "token ring overlaps the credit packet header");
 
 // Forwarding buffer: Sending data farther than to the immediate neighboring chip (e.g. 1 -> 2 -> 3)
 // is not left to fabric to do. Op manages it. Multihop data movement is broken down to single hops.
@@ -101,6 +100,26 @@ uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
 
+// Circular buffers no kernel uses. They make the hand-placed L1 the program's own: the framework checks a
+// program's circular buffers against live L1 buffers on every dispatch, cache hits included.
+constexpr uint8_t STREAM_L1_CB = 0;
+constexpr uint8_t UNT_CONTROL_CB = 3;
+static_assert(
+    UNT_CONTROL_CB != cmbf2d::UNT_CB_OUT && UNT_CONTROL_CB != cmbf2d::UNT_CB_IN &&
+        UNT_CONTROL_CB != cmbf2d::UNT_CB_BATCHES,
+    "the untilizer control reservation reuses an index the untilize kernels use");
+
+tt::tt_metal::CBDescriptor l1_reservation(uint8_t index, uint32_t bytes, const CoreRangeSet& cores) {
+    return tt::tt_metal::CBDescriptor{
+        .total_size = bytes,
+        .core_ranges = cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = index,
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = bytes,
+        }}}};
+}
+
 // Where an untilizer core's circular buffers end. The framework lays a program's circular buffers out from
 // the L1 allocator base in declaration order, DRAM-aligned, so this is both what cb_out's address is and
 // what the hand-placed control tables have to clear.
@@ -123,7 +142,6 @@ L1Layout compute_l1_layout(
     L1Layout l;
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
-    l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
     // One prebuilt header per packet of each ring slot, past the ring itself. A slot is the token plus its
     // metadata tail.
@@ -133,13 +151,13 @@ L1Layout compute_l1_layout(
     // 64-byte aligned: DRAM reads need a DRAM_ALIGNMENT-aligned L1 destination on Blackhole
     // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and the control region is read straight out of DRAM.
     l.control = align_l1(l.pkt_hdr_ring + hdr_ring_bytes);
-    uint32_t end = l.control + control_bytes;
+    uint32_t end = align_l1(l.control + control_bytes);
     if (dispatched_is_tiled(tensor_args)) {
         // Untilizer cores share no hand-placed memory with the cores above, so their layout starts over at
         // the base -- it has to, because that is where the framework puts cb_out and cb_out IS the batch ring.
         l.unt_ring = align_l1(base);
         l.unt_control = untilizer_cb_end(base, token_size_bytes, tensor_args);
-        end = std::max(end, l.unt_control + control_bytes);
+        end = std::max(end, align_l1(l.unt_control + control_bytes));
     }
     TT_FATAL(
         end <= sem_floor,
@@ -373,8 +391,12 @@ uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFa
 
 // cb_out FIRST: the framework lays these out from the L1 allocator base in declaration order, which is what
 // makes cb_out the same memory as L1Layout::unt_ring and so lets a reader address a row by core and offset.
+// The control reservation comes last, which puts it at untilizer_cb_end: L1Layout::unt_control.
 void add_untilizer_cbs(
-    tt::tt_metal::ProgramDescriptor& desc, const CombineFabric2dInputs& tensor_args, const CoreRangeSet& core) {
+    tt::tt_metal::ProgramDescriptor& desc,
+    const CombineFabric2dInputs& tensor_args,
+    const CoreRangeSet& core,
+    uint32_t control_bytes) {
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token_size_bytes(tensor_args),
         .core_ranges = core,
@@ -400,6 +422,7 @@ void add_untilizer_cbs(
             .data_format = dispatched_data_format(tensor_args),
             .page_size = tile_size_bytes(tensor_args),
         }}}});
+    desc.cbs.push_back(l1_reservation(UNT_CONTROL_CB, align_l1(control_bytes), core));
 }
 
 ReaderUntilizers untilizers_for_stream(
@@ -506,13 +529,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rt.append(rt_raw);
         desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, rt);
     }
+    {
+        std::set<CoreRange> stream_cores;
+        for (const auto& [stream, self] : placement.at(coord).streams) {
+            stream_cores.insert(CoreRange(self.worker_logical));
+        }
+        const uint32_t base = l1.pkt_hdr_drain;
+        const uint32_t end = align_l1(l1.control + control_region_bytes(args, tensor_args));
+        desc.cbs.push_back(l1_reservation(STREAM_L1_CB, end - base, CoreRangeSet(stream_cores)));
+    }
 
     // One kernel per untilizer core rather than one over a core range: they differ by their index in the
     // group, which is what deals the group's batches out between them.
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
         for (uint32_t j = 0; j < groups[g].size(); j++) {
             const CoreRangeSet core(CoreRange(groups[g][j].logical));
-            add_untilizer_cbs(desc, tensor_args, core);
+            add_untilizer_cbs(desc, tensor_args, core, control_region_bytes(args, tensor_args));
 
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;

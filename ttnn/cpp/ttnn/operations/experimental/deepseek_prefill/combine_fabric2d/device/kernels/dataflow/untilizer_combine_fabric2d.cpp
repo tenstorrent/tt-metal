@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Untilizer kernel (reader RISC, NOC_0). Stages the tokens one ring direction's senders are about to want
-// into its own L1, and hands them over a batch at a time.
+// Untilizer kernel (reader RISC; NOC_0 standalone, NOC_1 overlapped). Stages the tokens one ring direction's
+// senders are about to want into its own L1, and hands them over a batch at a time.
 //
 // What a batch is and which ones exist is combine_fabric2d_group_walk.hpp; this core takes those where
 // batch % num_peers == my_index. The rest of the group takes the others, and since every core of the group

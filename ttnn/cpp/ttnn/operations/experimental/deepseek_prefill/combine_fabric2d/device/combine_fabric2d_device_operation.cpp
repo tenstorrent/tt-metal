@@ -9,6 +9,7 @@
 #include "combine_fabric2d_device_operation.hpp"
 #include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
@@ -262,7 +263,12 @@ CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperati
 
 CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.dispatched_buffer.device());
+    // Zeroed because the op writes only the slots it delivers: a pick routed to another dispatch group, or one
+    // dispatch dropped for capacity, keeps whatever the buffer held. The reduce after it skips the first kind
+    // but reads the second. The fill finishes on this chip before this op starts here, and no other chip
+    // writes this output before this chip grants its launch credit, which it does only once started.
+    auto output = create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.dispatched_buffer.device());
+    return ttnn::fill(output, 0.0f, std::nullopt, output);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

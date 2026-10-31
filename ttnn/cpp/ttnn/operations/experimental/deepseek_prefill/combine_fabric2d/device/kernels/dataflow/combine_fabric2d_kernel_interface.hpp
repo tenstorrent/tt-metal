@@ -115,7 +115,6 @@ inline uint32_t my_dg_index(const CombineFabric2dParams& args, const ttnn::MeshC
 struct L1Layout {
     uint32_t pkt_hdr_drain;
     uint32_t pkt_hdr_credit;  // the courier's own header, so a credit never races the drain's
-    uint32_t drain_sink;
     uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_ring;  // one prebuilt payload header per packet of each ring slot
     // The reader's copy of the control tensors, read once at startup and then indexed from L1.

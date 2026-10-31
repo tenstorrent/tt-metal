@@ -257,8 +257,7 @@ class TtCombine2dModule(LightweightModule):
             output: Combined token embeddings, shape per device
                 (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim), BFLOAT16 ROW_MAJOR.
                 A slot whose pick went to another dispatch group, or that dispatch dropped because its
-                page fell past the end of dispatched_buffer, is not written and holds whatever the
-                buffer held before; the output is never zeroed.
+                page fell past the end of dispatched_buffer, is not written and stays zero.
         """
         if not self._ring_checked:
             check_axis_wired_into_ring(dispatched_buffer, self.cluster_axis)

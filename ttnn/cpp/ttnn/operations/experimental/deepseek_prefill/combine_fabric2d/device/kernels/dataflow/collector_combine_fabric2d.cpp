@@ -49,6 +49,9 @@ void kernel_main() {
     // The word past the array is the source of the `go` multicast.
     const uint32_t go_src_addr = ct.counts_addr + ct.num_steps * sizeof(uint32_t);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_src_addr) = 1;
+    // `go` lets the writers' atomics into the arrays zeroed above, and the NIU reads `go_src` from L1: both
+    // need the stores retired first.
+    asm volatile("fence" ::: "memory");
     noc_semaphore_set_multicast(
         go_src_addr, get_noc_multicast_addr(ct.re_x0, ct.re_y0, ct.re_x1, ct.re_y1, ct.go_addr), ct.re_cores);
 

@@ -51,11 +51,13 @@ constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
 // The courier's header is its own, not the drain's: a credit can be posted from inside the send loop's wait,
 // where the drain header may already hold a bump the EDM has not taken yet.
 constexpr uint32_t PKT_HDR_CREDIT_OFF = 0x0200;
-constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
+static_assert(PKT_HDR_DRAIN_OFF == 0, "the stream cores' L1 reservation starts at the drain packet header");
 static_assert(PKT_HDR_DRAIN_OFF < PKT_HDR_CREDIT_OFF, "credit header overlaps the drain packet header");
-static_assert(PKT_HDR_CREDIT_OFF < DRAIN_SINK_OFF, "drain sink overlaps the credit packet header");
-static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
+static_assert(PKT_HDR_CREDIT_OFF < PROD_BUF_OFF, "token ring overlaps the credit packet header");
+// The collector's L1 from its base: the per-step counts and `go` source, then the per-(step, chunk) counts and
+// chunk sizes. Mirrors hybrid_expert_done.hpp: 1024 + 2 x 64 steps x 16 chunks x 4 B.
+constexpr uint32_t COLLECTOR_L1_BYTES = 1024 + 2 * 64 * 16 * 4;
 
 // Forwarding buffer: Sending data farther than to the immediate neighboring chip (e.g. 1 -> 2 -> 3)
 // is not left to fabric to do. Op manages it. Multihop data movement is broken down to single hops.
@@ -103,6 +105,27 @@ uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
 
+// Circular buffers no kernel uses. Without an arena they make the hand-placed L1 the program's own: the
+// framework checks a program's circular buffers against live L1 buffers on every dispatch, cache hits included.
+constexpr uint8_t STREAM_L1_CB = 0;
+constexpr uint8_t COLLECTOR_L1_CB = 0;
+constexpr uint8_t UNT_CONTROL_CB = 3;
+static_assert(
+    UNT_CONTROL_CB != cmbf2d::UNT_CB_OUT && UNT_CONTROL_CB != cmbf2d::UNT_CB_IN &&
+        UNT_CONTROL_CB != cmbf2d::UNT_CB_BATCHES,
+    "the untilizer control reservation reuses an index the untilize kernels use");
+
+tt::tt_metal::CBDescriptor l1_reservation(uint8_t index, uint32_t bytes, const CoreRangeSet& cores) {
+    return tt::tt_metal::CBDescriptor{
+        .total_size = bytes,
+        .core_ranges = cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = index,
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = bytes,
+        }}}};
+}
+
 // Where an untilizer core's circular buffers end. The framework lays a program's circular buffers out from
 // the L1 allocator base in declaration order, DRAM-aligned, so this is both what cb_out's address is and
 // what the hand-placed control tables have to clear.
@@ -138,7 +161,6 @@ L1Layout compute_l1_layout(
     l.collector_counts = base;
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
-    l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
     // One prebuilt header per packet of each ring slot, past the ring itself. A slot is the token plus its
     // metadata tail.
@@ -148,14 +170,15 @@ L1Layout compute_l1_layout(
     // 64-byte aligned: DRAM reads need a DRAM_ALIGNMENT-aligned L1 destination on Blackhole
     // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and the control region is read straight out of DRAM.
     l.control = align_l1(l.pkt_hdr_ring + hdr_ring_bytes);
-    uint32_t end = l.control + control_bytes;
+    uint32_t end = align_l1(l.control + control_bytes);
     {
         // Untilizer cores share no hand-placed memory with the cores above, so their layout starts over at
         // the base -- it has to, because that is where the framework puts cb_out and cb_out IS the batch ring.
         l.unt_ring = align_l1(base);
         l.unt_control = untilizer_cb_end(base, token_size_bytes, tensor_args);
-        end = std::max(end, l.unt_control + control_bytes);
+        end = std::max(end, align_l1(l.unt_control + control_bytes));
     }
+    end = std::max(end, align_l1(l.collector_counts + COLLECTOR_L1_BYTES));
     TT_FATAL(
         end <= sem_floor,
         "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at "
@@ -294,14 +317,18 @@ RingSemaphores allocate_ring_semaphores(
         channel_semaphore_count_for_vcs(vcs));
     const auto grid = mesh->compute_with_storage_grid_size();
     const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    // Only a semaphore made here needs the Synchronize below, and a caller that hands over every one may be
+    // building this program inside a trace capture, where a Synchronize is not allowed.
+    bool made_any = false;
+    auto make = [&] {
+        made_any = true;
+        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+    };
     auto make_or_take = [&](const tt::tt_metal::GlobalSemaphore* sem) {
         if (sem != nullptr) {
             return *sem;
         }
-        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
-    };
-    auto make = [&] {
-        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+        return make();
     };
     // The channels in the order channel_semaphore_count documents, taken one at a time so the walk below reads
     // the same whether they were handed over or made here.
@@ -329,7 +356,9 @@ RingSemaphores allocate_ring_semaphores(
         kSemaphoresPerCore,
         untilizers_per_group,
         num_links);
-    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    if (made_any) {
+        tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    }
     return sems;
 }
 
@@ -426,12 +455,14 @@ uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFa
 // cb_out FIRST: the framework lays these out from the L1 allocator base in declaration order, which is what
 // makes cb_out the same memory as L1Layout::unt_ring and so lets a reader address a row by core and offset.
 //
-// Over an arena they sit at the same offsets from its start, so untilizer_cb_end holds for both.
+// Over an arena they sit at the same offsets from its start, so untilizer_cb_end holds for both. Without one the
+// control reservation comes last, which puts it at untilizer_cb_end: L1Layout::unt_control.
 void add_untilizer_cbs(
     tt::tt_metal::ProgramDescriptor& desc,
     const CombineFabric2dInputs& tensor_args,
     const CoreRangeSet& core,
-    tt::tt_metal::Buffer* arena) {
+    tt::tt_metal::Buffer* arena,
+    uint32_t control_bytes) {
     const size_t first = desc.cbs.size();
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token_size_bytes(tensor_args),
@@ -464,6 +495,8 @@ void add_untilizer_cbs(
             desc.cbs[i].address_offset = offset;
             offset = align_l1(offset + desc.cbs[i].total_size);
         }
+    } else {
+        desc.cbs.push_back(l1_reservation(UNT_CONTROL_CB, align_l1(control_bytes), core));
     }
 }
 
@@ -495,7 +528,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto& groups = placement.at(coord).untilizers;
 
     // TT_CMBF2D_IDLE=1 is a measurement mode: only the collector is built, so the routed expert is timed as
-    // overlapped, released and reporting as usual, but with no combine traffic beside it.
+    // overlapped, released and reporting as usual, but with no combine traffic beside it. Read once per process,
+    // so it needs no place in the program hash: every program a process builds agrees with its cached ones.
     static const bool idle =
         std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
 
@@ -520,6 +554,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .core_type = tt::CoreType::WORKER,
             .core_ranges = CoreRangeSet(combine_cores),
             .initial_value = 0});
+    }
+
+    if (arena == nullptr) {
+        desc.cbs.push_back(l1_reservation(
+            COLLECTOR_L1_CB, COLLECTOR_L1_BYTES, CoreRangeSet(CoreRange(placement.at(coord).collector.value()))));
     }
 
     if (idle) {
@@ -618,13 +657,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rt.append(rt_raw);
         desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, rt);
     }
+    if (arena == nullptr) {
+        std::set<CoreRange> stream_cores;
+        for (const auto& [stream, self] : placement.at(coord).streams) {
+            stream_cores.insert(CoreRange(self.worker_logical));
+        }
+        const uint32_t base = l1.pkt_hdr_drain;
+        const uint32_t end = align_l1(l1.control + control_region_bytes(args, tensor_args));
+        desc.cbs.push_back(l1_reservation(STREAM_L1_CB, end - base, CoreRangeSet(stream_cores)));
+    }
 
     // One kernel per untilizer core rather than one over a core range: they differ by their index in the
     // group, which is what deals the group's batches out between them.
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
         for (uint32_t j = 0; j < groups[g].size(); j++) {
             const CoreRangeSet core(CoreRange(groups[g][j].logical));
-            add_untilizer_cbs(desc, tensor_args, core, arena);
+            add_untilizer_cbs(desc, tensor_args, core, arena, control_region_bytes(args, tensor_args));
 
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;
@@ -749,6 +797,36 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         "combine_fabric2d: the number of routed-expert writer cores must be set");
     const auto placement = decide_placement(
         mesh_device, operation_attributes.axis, operation_attributes.num_links, per_group, /*with_collector=*/true);
+    // Combine lays its L1 out at the same base the routed expert's circular buffers start at, so a combine core
+    // inside the routed expert's rectangle would overwrite them.
+    for (const auto& [coord, chip] : placement) {
+        const auto& re_cores = operation_attributes.routed_expert_cores;
+        for (const auto& [stream, self] : chip.streams) {
+            TT_FATAL(
+                !re_cores.contains(self.worker_logical),
+                "combine_fabric2d {}: stream {} core {} lies inside the routed expert's cores {}",
+                coord,
+                stream,
+                self.worker_logical,
+                re_cores);
+        }
+        for (const auto& group : chip.untilizers) {
+            for (const auto& untilizer : group) {
+                TT_FATAL(
+                    !re_cores.contains(untilizer.logical),
+                    "combine_fabric2d {}: untilizer core {} lies inside the routed expert's cores {}",
+                    coord,
+                    untilizer.logical,
+                    re_cores);
+            }
+        }
+        TT_FATAL(
+            !re_cores.contains(chip.collector.value()),
+            "combine_fabric2d {}: collector core {} lies inside the routed expert's cores {}",
+            coord,
+            chip.collector.value(),
+            re_cores);
+    }
     const auto fwd =
         allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args, l1_resources.forwarding);
 

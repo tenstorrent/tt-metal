@@ -177,8 +177,9 @@ The metadata appended to each L1 slot is:
 ```text
 final_addr   final destination's output page address
 dst_chip     final destination chip ID
-cmd          FINAL_WRITE | FORWARD | FORWARD_END | END
+cmd          FINAL_WRITE | FORWARD | END
 this_addr    address this hop should write to
+vc           channel the token lands in on the next chip (local to this hop, never sent)
 ```
 
 An adjacent destination uses `FINAL_WRITE`: the sender transfers only the token
@@ -187,9 +188,11 @@ the sender transfers the token plus `final_addr` and `dst_chip` to the next
 chip's forwarding-buffer page.  The next reader can re-read those three values
 in one DRAM transaction and make the same next-hop decision.
 
-`FORWARD_END` marks the final token in a chunk.  It causes an immediate
-arrival-counter update, so the downstream reader is not stuck waiting for a
-partial counter batch.
+There is no chunk-ending command.  The forwarding region is split into
+channels by movement class, and a channel has no chunk boundaries.  The sender
+bumps the downstream reader's per-channel `vc_arrived[v]` every 32 forwarded
+pages, and announces whatever is left of a batch as soon as it has no slot to
+send, so the downstream reader is never stuck waiting for a partial batch.
 
 ---
 
@@ -205,14 +208,16 @@ sender observes `filled` → sends packet → flushes L1 read → increments `fr
 
 DRAM forwarding region (one region per stream)
 
-upstream sender writes dense pages → increments downstream `fwd_arrived`
-downstream reader waits for pages → consumes chunks sequentially
+upstream sender writes dense pages of channel v → increments downstream `vc_arrived[v]`
+downstream reader waits per channel → serves whichever channel can move
+downstream reader frees pages → `vc_freed[v]` credit back upstream, carried by the opposite stream's sender
 ```
 
 The reader and sender use monotonically increasing counters during a launch;
 neither needs a shared read-modify-write.  The sender resets its `filled` and
-`freed` counters after consuming `END`; the reader resets the forwarding arrival
-counter only after it has consumed its entire region.
+`freed` counters after consuming `END`; the reader subtracts what this launch
+consumed from each `vc_arrived[v]`, after waiting for every `vc_freed[v]` credit
+it is owed, because the upstream chip may already be bumping for the next launch.
 
 The sender sends a final credit-drain sequence before completion.  It ensures
 Fabric credits indicate remote receipt of payload packets, rather than merely
