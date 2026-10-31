@@ -183,7 +183,7 @@ class BankStreamMatmul:
         ([1, 1, 32, n * rows / 32] bf16 DRAM tiles: rows rows * c .. of compact tile t % compact_tiles hold the user
         rows of tile column t, c = t / compact_tiles) and return it."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
-        assert _is_interleaved(x) and rows in (4, 8)
+        assert _is_interleaved(x) and rows in (4, 8, 16)
         compact_tiles = 0
         if compact_out is not None:
             compact_tiles = self.n // TILE // (TILE // rows)
@@ -299,7 +299,7 @@ class RouterScoreStream:
     def __init__(self, plan, k, n, bias, rows=4):
         """``bias``: the experts' score-correction bias, torch [n]. ``rows``: the user rows (4 or 8)."""
         device = plan.mesh_device
-        assert rows in (4, 8), rows
+        assert rows in (4, 8, 16), rows
         self.plan, self.k, self.n, self.rows = plan, k, n, rows
         self.banks = device.dram_grid_size().x
         self.kt = k // TILE

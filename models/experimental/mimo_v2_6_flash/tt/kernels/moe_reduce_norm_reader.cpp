@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(8);
     constexpr uint32_t cores = get_compile_time_arg_val(9);
     constexpr uint32_t sem_id = get_compile_time_arg_val(10);
-    constexpr uint32_t rows = get_compile_time_arg_val(11);          // user rows per block: 4 or 8
+    constexpr uint32_t rows = get_compile_time_arg_val(11);          // user rows per block: 4, 8 or 16
     constexpr uint32_t gather_tiles = get_compile_time_arg_val(12);  // tiles of every core's partial rows
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t fp32_tile_bytes = 4096;

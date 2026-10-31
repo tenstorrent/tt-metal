@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// BRISC: the user rows 0..rows-1 (rows 4 or 8) of this core's kq bf16 x tiles [k0, k0 + kq) into cb_x (one read per
+// BRISC: the user rows 0..rows-1 (rows 4, 8 or 16) of this core's kq bf16 x tiles [k0, k0 + kq) into cb_x (one read per
 // tile covers those rows of faces 0 and 1; every read in flight at once). A non-leader then sends the user rows of its
 // partial logits tile (faces 0 and 1) to slot q - 1 of its leader's cb_gather and increments the leader's semaphore.
 // The leader reads the bias tile, hands compute the group's partials once all have landed, and writes the user rows of
@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(6);
     constexpr uint32_t group = get_compile_time_arg_val(7);
     constexpr uint32_t sem_id = get_compile_time_arg_val(8);
-    constexpr uint32_t rows = get_compile_time_arg_val(9);  // the user rows: 4 or 8
+    constexpr uint32_t rows = get_compile_time_arg_val(9);  // the user rows: 4, 8 or 16
     constexpr uint32_t x_tile_bytes = 2048;                 // bf16 32x32
     constexpr uint32_t x_face_bytes = 512;                  // bf16 16x16
     constexpr uint32_t x_user_bytes = rows * 32;            // the user rows of a bf16 face

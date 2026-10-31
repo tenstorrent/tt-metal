@@ -104,9 +104,10 @@ def bank_vcs(cores):
 
 
 def user_rows(users):
-    """The rows the decode streams carry for ``users`` users: tiny [4, 32] tiles up to 4 users, [8, 32] up to 8."""
-    assert 1 <= users <= 8, users
-    return 4 if users <= 4 else 8
+    """The rows the decode streams carry for ``users`` users: tiny [4, 32] tiles up to 4 users, [8, 32] up to 8, 16
+    rows (two halves of 8: FusedStream) up to 16."""
+    assert 1 <= users <= 16, users
+    return 4 if users <= 4 else (8 if users <= 8 else 16)
 
 
 def stick_bytes(num_pairs):
@@ -614,17 +615,31 @@ class FusedStream:
     DRAM round trip, and with its weights already prefetched. Down accumulates all of a core's output tiles in fp32
     dest at once (the Compact layout), so its blocks are each expert's contiguous slice, two K rows of ``cols``
     tiles: the gate|up block's tile count, so one weight ring serves both. Routing, the expert list, the h values and
-    the compact output are the two streams' (same order, same arithmetic)."""
+    the compact output are the two streams' (same order, same arithmetic).
+
+    ``halves`` = 2 (16 users, the 16-slot verify): ``gate_up`` and ``down`` are 8-user streams (their [8, 32] tiles,
+    their per-expert blocks), and the launch serves two row halves of 8 users. Core b routes users b and b + 8; each
+    half lists its own distinct experts (half 0's first; an expert both halves selected streams twice) and its listings
+    multiply only that half's 8 x rows, so the matmuls stay 8-row (the FPU's cost per weight tile doubles with 16-row
+    tiles, and gate|up is compute-bound as much as DRAM-bound); down accumulates each half's listings into its own
+    output tiles, rows 0-7 and 8-15 of the compact output's 16-row blocks."""
 
     DOWN_ROWS = 2  # K rows of w_down per block
     CB_HALL, CB_OUT, CB_TABLE = 10, 11, 12
     READY_SEM, DONE_SEM, ROUTE_SEM = 0, 1, 2
     ENTRY_BYTES = 128  # a routing-table entry: [active, ids[topk], weight bits[topk]], 16-byte aligned
 
-    def __init__(self, plan, gate_up, down):
+    def __init__(self, plan, gate_up, down, halves=1):
         assert gate_up.dedup and down.dedup and gate_up.rows == down.rows
         assert gate_up.cores == down.cores and gate_up.num_pairs == down.num_pairs
-        self.gu, self.dn = gate_up, down
+        assert halves == 1 or (halves == 2 and gate_up.rows == 8 and gate_up.users == 8), (halves, gate_up.rows)
+        self.gu, self.dn, self.halves = gate_up, down, halves
+        self.users = gate_up.users * halves
+        self.num_pairs = gate_up.num_pairs * halves  # the most expert listings: every pair distinct
+        self.rows = gate_up.rows * halves  # the compact output's user rows
+        nt = down.hidden // TILE
+        self.compact_tiles = nt // (TILE // self.rows)
+        self.compact_width = self.compact_tiles * TILE
         self.cols = down.cols
         assert self.DOWN_ROWS * self.cols == gate_up.block_tiles, (self.cols, gate_up.block_tiles)
         assert down.kt % self.DOWN_ROWS == 0
@@ -641,16 +656,45 @@ class FusedStream:
             )
             return ttnn.CBDescriptor(total_size=pages * page, core_ranges=gate_up.core_ranges, format_descriptors=[fmt])
 
-        assert gate_up.users <= len(gate_up.cores) and (2 * gate_up.topk + 1) * 4 <= self.ENTRY_BYTES
-        table_bytes = len(gate_up.cores) * self.ENTRY_BYTES
+        assert self.users <= halves * len(gate_up.cores) and (2 * gate_up.topk + 1) * 4 <= self.ENTRY_BYTES
+        table_bytes = halves * len(gate_up.cores) * self.ENTRY_BYTES
         table = ttnn.CBDescriptor(
             total_size=table_bytes,
             core_ranges=gate_up.core_ranges,
             format_descriptors=[ttnn.CBFormatDescriptor(self.CB_TABLE, ttnn.uint32, table_bytes)],
         )
-        self.cbs = list(gate_up.cbs) + [
-            cb(self.CB_HALL, gate_up.num_pairs * down.kt),
-            cb(self.CB_OUT, self.cols),
+        # The routing stage holds every user's score rows (16 with two halves).
+        stage_bytes = 2 * gate_up.expert_tiles * 2 * self.rows * 64 + 512 + gate_up.stick_bytes
+        self.stage_pages = math.ceil(stage_bytes / gate_up.FP32_TILE_BYTES)
+        full = ttnn.Tile([TILE, TILE])
+
+        def gu_cb(index, dtype, tile, pages):
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index,
+                data_format=dtype,
+                page_size=tile.get_tile_size(dtype),
+                tile=ttnn.TileDescriptor(tile),
+            )
+            return ttnn.CBDescriptor(
+                total_size=pages * tile.get_tile_size(dtype), core_ranges=gate_up.core_ranges, format_descriptors=[fmt]
+            )
+
+        # gate_up's CBs, sized for every half (the writer's stage is unused here: the reader routes)
+        resized = {
+            gate_up.cb_x: gu_cb(gate_up.cb_x, ttnn.bfloat16, tiny, halves * gate_up.kt),
+            gate_up.cb_h: gu_cb(gate_up.cb_h, ttnn.bfloat16, tiny, self.num_pairs),
+            gate_up.cb_rstage: gu_cb(gate_up.cb_rstage, ttnn.float32, full, self.stage_pages),
+            gate_up.cb_wt: gu_cb(gate_up.cb_wt, ttnn.bfloat16, full, self.num_pairs),
+        }
+        base = []
+        for desc in gate_up.cbs:
+            index = desc.format_descriptors[0].buffer_index
+            if index == gate_up.cb_wstage:
+                continue
+            base.append(resized.get(index, desc))
+        self.cbs = base + [
+            cb(self.CB_HALL, self.num_pairs * down.kt),
+            cb(self.CB_OUT, halves * self.cols),
             table,
         ]
         self.semaphores = [
@@ -658,8 +702,13 @@ class FusedStream:
             for i in (self.READY_SEM, self.DONE_SEM, self.ROUTE_SEM)
         ]
 
+    def compact_output(self, plan):
+        """Persistent [1, 1, 32, hidden * rows / 32] bf16 DRAM tiles (DownStream.compact_output at this stream's
+        rows); every call rewrites all of it."""
+        return zero_output(plan, self.compact_width)
+
     def __call__(self, x, scores, biased, token_mask, w_gate_up, w_down, out, signal=None, launch=True):
-        """GateUpStream's inputs plus w_down [1, E, I, H] BFP4 and ``out`` from DownStream.compact_output; fills
+        """GateUpStream's inputs plus w_down [1, E, I, H] BFP4 and ``out`` from ``compact_output``; fills
         ``out`` and returns it. ``signal`` / ``launch=False``: as DownStream (a section for a merged program)."""
         gu, dn = self.gu, self.dn
         for t in (x, scores, biased, w_gate_up, w_down, out):
@@ -667,7 +716,7 @@ class FusedStream:
         assert x.dtype == ttnn.bfloat16 and w_gate_up.dtype == ttnn.bfloat4_b and w_down.dtype == ttnn.bfloat4_b
         assert scores.dtype == ttnn.float32 and biased.dtype == ttnn.float32
         assert w_down.shape[-2] == dn.inter_local and w_down.shape[-1] == dn.hidden
-        assert out.dtype == ttnn.bfloat16 and out.shape[-2] == TILE and out.shape[-1] == dn.compact_width
+        assert out.dtype == ttnn.bfloat16 and out.shape[-2] == TILE and out.shape[-1] == self.compact_width
         has_mask = token_mask is not None
         if has_mask:
             assert token_mask.layout == ttnn.TILE_LAYOUT and token_mask.dtype == ttnn.bfloat16
@@ -680,7 +729,7 @@ class FusedStream:
             gu.cb_w,
             gu.cb_rstage,
             self.CB_TABLE,
-            gu.num_pairs,
+            self.num_pairs,
             gu.topk,
             gu.block_bytes,
             gu.block_tiles,
@@ -690,24 +739,25 @@ class FusedStream:
             gu.expert_bytes,
             gu.NUM_BUFFERS,
             gu.IN_FLIGHT,
-            gu.stage_pages,
+            self.stage_pages,
             *route_ct,
-            gu.rows,
+            self.rows,
             self.down_blocks,
             dn.expert_bytes,
             banks,
             self.ROUTE_SEM,
             self.ENTRY_BYTES,
             STREAM_DEBUG,
+            self.halves,
         ]
         writer_ct = [
             gu.cb_x,
             gu.cb_h,
             gu.kt,
-            gu.num_pairs,
+            self.num_pairs,
             gu.topk,
             self.CB_TABLE,
-            gu.users,
+            self.users,
             self.ROUTE_SEM,
             self.ENTRY_BYTES,
             gu.cb_cnt,
@@ -720,10 +770,11 @@ class FusedStream:
             self.DONE_SEM,
             self.CB_OUT,
             self.cols,
-            dn.compact_tiles,
+            self.compact_tiles,
             3 + 2 * banks if signal else 0,  # signal args follow the writer's other runtime args
             0,
             gu.expert_tiles * TILE,
+            self.halves,
         ]
         compute_ct = [
             gu.cb_x,
@@ -741,6 +792,7 @@ class FusedStream:
             self.DOWN_ROWS,
             self.cols,
             STREAM_DEBUG,
+            self.halves,
         ]
         peers = [v for c in self.peers for v in (c.x, c.y)]
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -810,9 +862,9 @@ class ReduceExpand:
     CORE_ROW = 5
 
     def __init__(self, plan, hidden, chips, compute_config, rows=4):
-        """``rows``: the user rows of the compact tiles, 4 or 8."""
+        """``rows``: the user rows of the compact tiles, 4, 8 or 16."""
         device = plan.mesh_device
-        assert rows in (4, 8), rows
+        assert rows in (4, 8, 16), rows
         self.rows = rows
         self.cores = [ttnn.CoreCoord(x, self.CORE_ROW) for x in range(device.dram_grid_size().x)]
         self.hidden = hidden
@@ -1165,7 +1217,7 @@ class FabricRowGather:
         self.cores = list(reduce.cores)
         self.tiles_per_core = reduce.tiles_per_core
         self.compact_tiles = reduce.compact_tiles
-        assert self.tiles_per_core in (2, 4) and len(self.cores) * self.tiles_per_core == self.compact_tiles
+        assert self.tiles_per_core in (2, 4, 8) and len(self.cores) * self.tiles_per_core == self.compact_tiles
         self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
         tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
         self.phase_tiles = self.tiles_per_core * self.chips

@@ -270,7 +270,10 @@ class TtMiMoMoE:
             mesh_mapper=rep,
         )
         stream_users = GateUpStream.MAX_USERS_DEDUP if DEDUP else GateUpStream.MAX_USERS
-        if self.expert_dtype == ttnn.bfloat4_b and num_users <= stream_users:
+        # 16 users (the 16-slot verify): FusedStream's two row halves of 8, on 8-user streams.
+        halves = 2 if FUSED and DEDUP and num_users == 2 * GateUpStream.MAX_USERS_DEDUP else 1
+        if self.expert_dtype == ttnn.bfloat4_b and (num_users <= stream_users or halves == 2):
+            pairs //= halves
             # BFP4 decode: top-k routing, gate|up, SwiGLU and the routing weight in one bank-local DRAM-streaming
             # program. It writes only row u of pair (u, k) into this persistent zeroed activation (the other rows
             # stay zero) and the pairs' uint16 expert ids into ids_buf for the down sparse_matmul.
@@ -298,7 +301,12 @@ class TtMiMoMoE:
             # Deduplicated: gate|up and down in one launch, h exchanged between the bank cores' L1 (FusedStream).
             self.fused_stream = None
             if FUSED and self.gate_up_stream.dedup:
-                self.fused_stream = FusedStream(self.plan, self.gate_up_stream, self.down_stream)
+                self.fused_stream = FusedStream(self.plan, self.gate_up_stream, self.down_stream, halves)
+                rows = self.fused_stream.rows
+                if halves == 2:
+                    self.out_buf.deallocate(True)
+                    self.out_buf = self.fused_stream.compact_output(self.plan)
+            assert halves == 1 or self.fused_stream is not None
             self.reduce_expand = ReduceExpand(
                 self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, rows
             )

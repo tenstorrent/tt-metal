@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t cb_part = get_compile_time_arg_val(6);
     constexpr uint32_t cb_gather = get_compile_time_arg_val(7);
     constexpr uint32_t group = get_compile_time_arg_val(8);
-    constexpr uint32_t rows = get_compile_time_arg_val(9);  // the user rows: 4 or 8
+    constexpr uint32_t rows = get_compile_time_arg_val(9);  // the user rows: 4, 8 or 16
     constexpr uint32_t kq = num_blocks * block_rows;
     const bool leader = get_arg_val<uint32_t>(0) == 1;
 

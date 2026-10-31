@@ -81,6 +81,7 @@ from .common import TILE, as_weight, cache_fill, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
 from .proj_stream import BankStreamMatmul
+from .moe_stream import user_rows
 from .mtp_backfill import MtpHistory
 from .spec_chain import SpecChain
 
@@ -291,7 +292,7 @@ class TtMiMoMTP:
         hn.deallocate(True)
         stream = self._eh_bank_stream()
         if stream is not None:
-            xs = stream(cat, layer.eh_proj, rows=4 if m.decode_users <= 4 else 8)
+            xs = stream(cat, layer.eh_proj, rows=user_rows(m.decode_users))
         else:
             xs = ttnn.linear(
                 cat,

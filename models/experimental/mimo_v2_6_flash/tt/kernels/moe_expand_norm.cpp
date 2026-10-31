@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t cb_h = get_compile_time_arg_val(7);
     constexpr uint32_t cores = get_compile_time_arg_val(8);
     constexpr uint32_t sem_id = get_compile_time_arg_val(9);
-    constexpr uint32_t rows = get_compile_time_arg_val(10);  // user rows per block: 4 or 8
+    constexpr uint32_t rows = get_compile_time_arg_val(10);  // user rows per block: 4, 8 or 16
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t fp32_tile_bytes = 4096;
     constexpr uint32_t face_bytes = mimo_moe::kBf16FaceBytes;
@@ -58,7 +58,9 @@ void kernel_main() {
             const uint32_t src = l1 + (c / blocks_per_face) * 2 * face_bytes + (c % blocks_per_face) * rows_bytes;
             const uint32_t xt = x_l1 + (i * row_blocks + c) * tile_bytes;
             noc_async_write(src, out_gen.get_noc_addr(page, 0), rows_bytes);
-            noc_async_write(xt + rows_bytes, out_gen.get_noc_addr(page, rows_bytes), gap_bytes);
+            if constexpr (gap_bytes > 0) {  // 16 user rows fill face 0
+                noc_async_write(xt + rows_bytes, out_gen.get_noc_addr(page, rows_bytes), gap_bytes);
+            }
             noc_async_write(src + face_bytes, out_gen.get_noc_addr(page, face_bytes), rows_bytes);
             noc_async_write(
                 xt + face_bytes + rows_bytes, out_gen.get_noc_addr(page, face_bytes + rows_bytes), tail_bytes);

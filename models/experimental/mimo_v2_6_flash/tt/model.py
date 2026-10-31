@@ -203,7 +203,7 @@ class TtMiMoModel:
         self.pair_context_blocks = pad_to(-(-(max_seq_len + kv_lib.PREFILL_MAX_PAD) // (2 * block_size)), 8)
         if cache_dir is not None:
             os.makedirs(cache_dir, exist_ok=True)
-        if decode_users is not None and decode_users <= 8 and self._fabric_gather_enabled():
+        if decode_users is not None and decode_users <= 16 and self._fabric_gather_enabled():
             # The first L1 allocation: the gather buffer then sits at the top of L1 (see _set_decode_users).
             fabric_row_gather(
                 plan,
@@ -331,7 +331,7 @@ class TtMiMoModel:
     def _set_decode_users(self, num_users):
         """Size the decode programs for ``num_users`` users: the MoE streams and the compact attention rows (4 up to 4
         users, 8 up to 8)."""
-        rows = user_rows(num_users) if num_users <= 8 else 4
+        rows = user_rows(num_users) if num_users <= 16 else 4
         for layer in self.layers:
             if layer.is_moe:
                 layer.mlp.set_decode_users(num_users)
@@ -658,7 +658,7 @@ class TtMiMoModel:
                 zero_output(self.plan, self.cfg.hidden_size),
             )
         for i, layer in enumerate(self.layers):
-            if layer.attn_reduce is None and self.decode_users <= 8 and layer.can_compact_attention():
+            if layer.attn_reduce is None and self.decode_users <= 16 and layer.can_compact_attention():
                 layer.set_compact_attention(self.plan)
             if layer.fused_norm is not None or not layer.can_fuse_norms():
                 continue
