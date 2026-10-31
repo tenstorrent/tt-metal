@@ -45,14 +45,17 @@ inputs from it and the device stash. pack_mtp's idle upload has a zero row 0: it
 
 import torch
 
-from .spec_decode import ADAPTIVE, DRAFT_GROUPS, GROUP_SLOTS, SERIAL_WRITES, SPEC_SLOTS, mtp_cache_position
+from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, SERIAL_WRITES, SPEC_SLOTS, mtp_cache_position
 
 TILE = 32
 INT32_MAX = 2**31 - 1
-# tokens, positions, the chain row (reference/spec_chain.py); with ADAPTIVE draft groups the chain row's four blocks
-# fill it and the history's slots spill into a fourth row.
-VERIFY_ROWS = 4 if ADAPTIVE else 3
-MTP_ROWS = 7  # tokens; fill, step2, step3 cache positions; fill, step2, step3 RoPE indices
+# tokens, positions, the chain rows (reference/spec_chain.py): the draft groups' chain blocks, then the history's slots,
+# in as many 32-wide rows as they take (B = 32: one with a single group, two with 4 groups of 4 slots in 8, three with
+# 16 slots in 8 groups).
+_CHAIN_WORDS = DRAFT_GROUPS * (4 + GROUP_SLOTS) + SPEC_SLOTS  # reference.spec_chain CHAIN_HSLOTS + SPEC_SLOTS
+VERIFY_ROWS = 2 + -(-_CHAIN_WORDS // TILE)
+# tokens; fill, step2, step3 cache positions; fill, step2, step3 RoPE indices (pack_mtp_layers: a row per draft group)
+MTP_ROWS = max(7, DRAFT_GROUPS)
 # pack_mtp_layers' row g, draft group g's commit: drafting (0: idle, else the group's width in slots), m, A, the
 # source's slots [GROUP_SLOTS] (-1 past m), committed tokens [GROUP_SLOTS] (0 past m).
 DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS = 0, 1, 2, 3
