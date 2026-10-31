@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
-import torch.nn as nn
-import ttnn
 
+import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
@@ -95,3 +93,115 @@ def test_l1_loss(device, input_shapes, loss_mode):
         assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=3)
     else:
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [1, 1, 32, 32],
+        [2, 64, 32, 32],
+    ],
+)
+@pytest.mark.parametrize(
+    "loss_mode",
+    [
+        ["none", ttnn.LossReductionMode.NONE],
+        ["mean", ttnn.LossReductionMode.MEAN],
+        ["sum", ttnn.LossReductionMode.SUM],
+    ],
+)
+def test_mse_loss_with_output_tensor(device, input_shapes, loss_mode):
+    torch_input_tensor_a = torch.randn((input_shapes), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((input_shapes), dtype=torch.bfloat16)
+    golden_fn = ttnn.get_golden_function(ttnn.mse_loss)
+    torch_output_tensor = golden_fn(
+        torch_input_tensor_a.to(torch.float32), torch_input_tensor_b.to(torch.float32), reduction=loss_mode[0]
+    )
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_shape = input_shapes if loss_mode[0] == "none" else []
+    preallocated_out = ttnn.empty(out_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    returned_tensor = ttnn.mse_loss(
+        input_tensor_a, input_tensor_b, reduction=loss_mode[1], output_tensor=preallocated_out
+    )
+
+    actual_res = ttnn.to_torch(returned_tensor)
+    actual_out = ttnn.to_torch(preallocated_out)
+
+    if loss_mode[0] in ("mean", "sum"):
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_res, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_out, ulp_threshold=3)
+    else:
+        assert_with_pcc(torch_output_tensor, actual_res, 0.9999)
+        assert_with_pcc(torch_output_tensor, actual_out, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [1, 1, 32, 32],
+        [2, 64, 32, 32],
+    ],
+)
+@pytest.mark.parametrize(
+    "loss_mode",
+    [
+        ["none", ttnn.LossReductionMode.NONE],
+        ["mean", ttnn.LossReductionMode.MEAN],
+        ["sum", ttnn.LossReductionMode.SUM],
+    ],
+)
+def test_l1_loss_with_output_tensor(device, input_shapes, loss_mode):
+    torch_input_tensor_a = torch.randn((input_shapes), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((input_shapes), dtype=torch.bfloat16)
+    golden_fn = ttnn.get_golden_function(ttnn.l1_loss)
+    torch_output_tensor = golden_fn(
+        torch_input_tensor_a.to(torch.float32), torch_input_tensor_b.to(torch.float32), reduction=loss_mode[0]
+    )
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_shape = input_shapes if loss_mode[0] == "none" else []
+    preallocated_out = ttnn.empty(out_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    returned_tensor = ttnn.l1_loss(
+        input_tensor_a, input_tensor_b, reduction=loss_mode[1], output_tensor=preallocated_out
+    )
+
+    actual_res = ttnn.to_torch(returned_tensor)
+    actual_out = ttnn.to_torch(preallocated_out)
+
+    if loss_mode[0] in ("mean", "sum"):
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_res, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_out, ulp_threshold=3)
+    else:
+        assert_with_pcc(torch_output_tensor, actual_res, 0.9999)
+        assert_with_pcc(torch_output_tensor, actual_out, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "loss_fn, loss_mode",
+    [
+        [ttnn.mse_loss, ttnn.LossReductionMode.MEAN],
+        [ttnn.mse_loss, ttnn.LossReductionMode.SUM],
+        [ttnn.l1_loss, ttnn.LossReductionMode.MEAN],
+        [ttnn.l1_loss, ttnn.LossReductionMode.SUM],
+    ],
+)
+def test_loss_with_mismatched_output_tensor_shape(device, loss_fn, loss_mode):
+    input_shape = [1, 1, 32, 32]
+    torch_input_tensor_a = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Passing rank-4 [1, 1, 32, 32] instead of rank-0 [] should trigger TT_FATAL
+    mismatched_out = ttnn.empty([1, 1, 32, 32], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with pytest.raises(RuntimeError, match="produces a tensor with logical shape"):
+        loss_fn(input_tensor_a, input_tensor_b, reduction=loss_mode, output_tensor=mismatched_out)
