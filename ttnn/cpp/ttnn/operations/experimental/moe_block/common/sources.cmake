@@ -7,6 +7,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/port_placement.hpp
     ${CMAKE_CURRENT_LIST_DIR}/moe_block_resources.hpp
     ${CMAKE_CURRENT_LIST_DIR}/l1_budget.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/address_patches.hpp
 )
 list(
     APPEND
@@ -16,5 +17,6 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/port_placement.cpp
     ${CMAKE_CURRENT_LIST_DIR}/moe_block_resources.cpp
     ${CMAKE_CURRENT_LIST_DIR}/l1_budget.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/address_patches.cpp
 )
 list(APPEND TTNN_OP_EXPERIMENTAL_MOE_BLOCK_NANOBIND_SRCS ${CMAKE_CURRENT_LIST_DIR}/common_nanobind.cpp)

@@ -52,10 +52,10 @@ SA_YRING`); everything else is compile-time args.
 | Rows, metadata, plan, stage, debug CBs | as the reference (`2 group row_bytes`, `2 group 16`, `plan_bytes`, `3 x 2 x manifest_batch x 16`, 64). |
 
 `compute_program_hash` covers the resources' `plan_key()`, the placement, `group`, `manifest_batch`, `pack`,
-`spin_limit` and the tensor specs; no address. Every address in the runtime args is a tensor base bound as a
-`Buffer*`, so a cache hit is the hash lookup plus the binding patch (no `override_runtime_arguments` is needed:
-nothing hash-excluded is not an address). The mesh plan, port cores and semaphore words are computed once per
-resources object.
+`spin_limit` and the tensor specs; no address. Every address in the runtime args is a tensor base (xbuf, route, the
+semaphore words, debug); the mesh workload factory records where each sits (`common/address_patches.hpp`), and a
+cache hit rewrites a tensor's arguments only when its address moved - with nothing moved, one runtime-arg lookup per
+tensor a chip. The mesh plan, port cores and semaphore words are computed once per resources object.
 
 ### Differences from the reference
 

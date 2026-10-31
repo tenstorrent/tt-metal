@@ -4,22 +4,33 @@
 
 #pragma once
 
-#include <tt-metalium/workload_descriptor.hpp>
-
 #include "sparse_dispatch_2d_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/experimental/moe_block/common/address_patches.hpp"
 
 namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d {
 
 // One program a chip (its ports differ): per port core a reader (RISCV_1, NoC0) and a sender (RISCV_0, NoC1, the
-// port's fabric link). Every address in the runtime args is a tensor's base, bound as a Buffer*, so a cache hit only
-// patches those bindings; nothing else is hash-excluded (no override_runtime_arguments needed).
+// port's fabric link). Every address in the runtime args is a tensor's base (xbuf, route, sems, debug); a cache hit
+// rewrites a tensor's arguments only when its address moved (address_patches.hpp). Nothing else is hash-excluded.
 struct SparseDispatch2dProgramFactory {
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+    struct shared_variables_t {
+        AddressPatches patches;
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const SparseDispatch2dParams& args,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const SparseDispatch2dInputs& tensor_args,
+        Tensor& output);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached,
         const SparseDispatch2dParams& args,
         const SparseDispatch2dInputs& tensor_args,
-        Tensor& output,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+        Tensor& output);
 };
 
 }  // namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d

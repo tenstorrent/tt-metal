@@ -4,7 +4,9 @@
 
 #include "sparse_dispatch_2d_program_factory.hpp"
 
+#include <array>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <fmt/format.h>
@@ -12,8 +14,10 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "sparse_dispatch_2d_plan.hpp"
@@ -55,14 +59,13 @@ tt::tt_metal::CBDescriptor cb(uint8_t index, uint32_t size, tt::DataFormat fmt, 
     };
 }
 
-}  // namespace sparse_dispatch_2d_detail
+// The buffers the runtime args address, by source (address_patches.hpp); without debug its args take route's.
+std::array<tt::tt_metal::Buffer*, 4> sources_of(const SparseDispatch2dInputs& t) {
+    return {t.xbuf.buffer(), t.route.buffer(), t.sems.buffer(), t.debug.has_value() ? t.debug->buffer() : nullptr};
+}
 
-tt::tt_metal::WorkloadDescriptor SparseDispatch2dProgramFactory::create_workload_descriptor(
-    const SparseDispatch2dParams& args,
-    const SparseDispatch2dInputs& t,
-    Tensor& /*output*/,
-    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
-    using namespace sparse_dispatch_2d_detail;
+// Every chip's program descriptor.
+tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& args, const SparseDispatch2dInputs& t) {
     using tt::tt_metal::Buffer;
     using tt::tt_metal::KernelDescriptor;
 
@@ -211,6 +214,37 @@ tt::tt_metal::WorkloadDescriptor SparseDispatch2dProgramFactory::create_workload
         workload.programs.push_back({ttnn::MeshCoordinateRange(coord, coord), std::move(desc)});
     }
     return workload;
+}
+
+}  // namespace sparse_dispatch_2d_detail
+
+SparseDispatch2dProgramFactory::cached_mesh_workload_t SparseDispatch2dProgramFactory::create_mesh_workload(
+    const SparseDispatch2dParams& args,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
+    const SparseDispatch2dInputs& t,
+    Tensor& /*output*/) {
+    using namespace sparse_dispatch_2d_detail;
+    const auto sources = sources_of(t);
+    auto descriptors = build_workload(args, t);
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
+    for (auto& [range, desc] : descriptors.programs) {
+        shared_variables_t sv{.patches = take_address_patches(desc, sources)};
+        workload.add_program(range, tt::tt_metal::Program(desc));
+        shared.emplace(range, std::move(sv));
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared)};
+}
+
+void SparseDispatch2dProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached,
+    const SparseDispatch2dParams& /*args*/,
+    const SparseDispatch2dInputs& t,
+    Tensor& /*output*/) {
+    const auto sources = sparse_dispatch_2d_detail::sources_of(t);
+    for (auto& [range, sv] : cached.shared_variables) {
+        apply_address_patches(cached.workload.get_programs().at(range), sv.patches, sources);
+    }
 }
 
 }  // namespace ttnn::operations::experimental::moe_block::sparse_dispatch_2d

@@ -51,7 +51,8 @@ Ethernet core):
 The plans (`fused_tail/engine_plan`, `fused_tail/a2a_plan`: geometry, schedules, port cores) are built once per
 `MoEBlockResources`. The program hash is `(kind, resources.plan_key(), fidelity, NSLOT, output memory config, input
 specs)`; no address. Every address a kernel takes is a tensor's base (inputs, output, the resources' persistent
-tensors) bound with `emplace_runtime_args(Buffer*)`, so a cache hit only patches those (WorkloadDescriptor fast path).
+tensors); the mesh workload factory records where each sits (`common/address_patches.hpp`), and a cache hit rewrites a
+tensor's arguments only when its address moved (nothing when none did).
 Counters only count up or are re-armed by their waiters: traced replays need no reset.
 
 ## Tests

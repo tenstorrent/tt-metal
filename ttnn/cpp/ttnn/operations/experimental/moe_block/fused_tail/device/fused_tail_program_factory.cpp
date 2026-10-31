@@ -14,14 +14,18 @@
 #include "fused_tail_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <set>
+#include <unordered_map>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -128,14 +132,94 @@ uint32_t index_of(const std::vector<uint32_t>& v, uint32_t x) {
     return static_cast<uint32_t>(std::find(v.begin(), v.end(), x) - v.begin());
 }
 
+// The buffers the runtime args address, by source (address_patches.hpp; nullptr: absent).
+std::array<Buffer*, 9> sources_of(const FusedTailInputs& a, const Tensor& output) {
+    const auto opt = [](const std::optional<Tensor>& t) { return t.has_value() ? t->buffer() : nullptr; };
+    return {
+        a.y_own.buffer(),
+        opt(a.shared_expert),
+        opt(a.w_up),
+        output.buffer(),
+        a.ready.buffer(),
+        a.words.buffer(),
+        opt(a.port_epoch),
+        opt(a.arrival),
+        opt(a.staging)};
+}
+
+// The cached workload of one chip's program descriptors, with each program's address patches.
+TailEngineFactory::cached_mesh_workload_t to_cached(
+    tt::tt_metal::WorkloadDescriptor descriptors, const FusedTailInputs& args, const Tensor& output) {
+    const auto sources = sources_of(args, output);
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, TailEngineFactory::shared_variables_t> shared;
+    for (auto& [range, desc] : descriptors.programs) {
+        TailEngineFactory::shared_variables_t sv{.patches = take_address_patches(desc, sources)};
+        workload.add_program(range, tt::tt_metal::Program(desc));
+        shared.emplace(range, std::move(sv));
+    }
+    return {std::move(workload), std::move(shared)};
+}
+
+void patch_cached(
+    TailEngineFactory::cached_mesh_workload_t& cached, const FusedTailInputs& args, const Tensor& output) {
+    const auto sources = sources_of(args, output);
+    for (auto& [range, sv] : cached.shared_variables) {
+        apply_address_patches(cached.workload.get_programs().at(range), sv.patches, sources);
+    }
+}
+
+tt::tt_metal::WorkloadDescriptor engine_workload(
+    const FusedTailParams& attrs,
+    const FusedTailInputs& args,
+    Tensor& output,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords);
+tt::tt_metal::WorkloadDescriptor a2a_workload(
+    const FusedTailParams& attrs,
+    const FusedTailInputs& args,
+    Tensor& output,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
 }  // namespace fused_tail_factory_detail
 using namespace fused_tail_factory_detail;
+
+TailEngineFactory::cached_mesh_workload_t TailEngineFactory::create_mesh_workload(
+    const FusedTailParams& attrs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const FusedTailInputs& tensor_args,
+    Tensor& output) {
+    return to_cached(engine_workload(attrs, tensor_args, output, tensor_coords), tensor_args, output);
+}
+
+void TailEngineFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached,
+    const FusedTailParams& /*attrs*/,
+    const FusedTailInputs& tensor_args,
+    Tensor& output) {
+    patch_cached(cached, tensor_args, output);
+}
+
+TailA2AFactory::cached_mesh_workload_t TailA2AFactory::create_mesh_workload(
+    const FusedTailParams& attrs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const FusedTailInputs& tensor_args,
+    Tensor& output) {
+    return to_cached(a2a_workload(attrs, tensor_args, output, tensor_coords), tensor_args, output);
+}
+
+void TailA2AFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached,
+    const FusedTailParams& /*attrs*/,
+    const FusedTailInputs& tensor_args,
+    Tensor& output) {
+    patch_cached(cached, tensor_args, output);
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // TailEngine
 // ---------------------------------------------------------------------------------------------------------------------
 
-tt::tt_metal::WorkloadDescriptor TailEngineFactory::create_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::engine_workload(
     const FusedTailParams& attrs,
     const FusedTailInputs& args,
     Tensor& output,
@@ -411,7 +495,7 @@ tt::tt_metal::WorkloadDescriptor TailEngineFactory::create_workload_descriptor(
 // TailA2A
 // ---------------------------------------------------------------------------------------------------------------------
 
-tt::tt_metal::WorkloadDescriptor TailA2AFactory::create_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor fused_tail_factory_detail::a2a_workload(
     const FusedTailParams& attrs,
     const FusedTailInputs& args,
     Tensor& output,
