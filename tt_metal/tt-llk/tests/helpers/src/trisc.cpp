@@ -120,13 +120,12 @@ int main(void)
     // made its last L1 store (its completion mailbox), lets it settle into its end loop (that runs from the icache),
     // then loads one L1 word. The packer is idle here (tensix_sync). The first kernel after a tile reset still
     // starts from pointer 0.
-    // RC experiment: the host picks the last requester per run in overlay stream 4 scratch (LLK_PORT3_MODE):
+    // RC experiment: the host picks the last requester per run in overlay stream 0 SCRATCH_1 (LLK_PORT3_MODE):
     // 1 = math TRISC, 2 = pack TRISC, anything else = no fix. Same ELFs for every mode.
-    constexpr std::uint32_t PORT3_MODE_ADDR =
-        host_signal::NOC_OVERLAY_START_ADDR + 4 * host_signal::NOC_STREAM_REG_SPACE_SIZE + host_signal::STREAM_SCRATCH_REG_INDEX * 4;
-    constexpr std::uint32_t me   = mailbox_offset / sizeof(std::uint32_t); // 1 math, 2 pack
-    constexpr std::uint32_t peer = 3 - me;
-    const bool port3_last        = (*reinterpret_cast<volatile std::uint32_t*>(PORT3_MODE_ADDR) & 0xFF) == me;
+    constexpr std::uint32_t PORT3_MODE_ADDR = host_signal::NOC_OVERLAY_START_ADDR + (host_signal::STREAM_SCRATCH_REG_INDEX + 1) * 4; // stream 0 SCRATCH_1
+    constexpr std::uint32_t me              = mailbox_offset / sizeof(std::uint32_t);                                                // 1 math, 2 pack
+    constexpr std::uint32_t peer            = 3 - me;
+    const bool port3_last                   = (*reinterpret_cast<volatile std::uint32_t*>(PORT3_MODE_ADDR) & 0xFF) == me;
     if (port3_last)
     {
         mailbox_t peer_mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start) + peer;

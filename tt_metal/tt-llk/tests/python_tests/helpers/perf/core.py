@@ -1007,19 +1007,20 @@ class PerfConfig(TestConfig):
         # kernel starts from that arbiter state, except the first one on a core in this process: it follows
         # whatever ran there before. The first test runs its first kernel once unrecorded so that one does too.
         # RC experiment: LLK_PORT3_MODE = pack (default) | math | none picks the last port-3 requester at the end
-        # of each kernel (trisc.cpp reads it from overlay stream 4 scratch). Same ELFs for every mode.
+        # of each kernel (trisc.cpp reads it from overlay stream 0 SCRATCH_1, written once per process). Same ELFs for every mode.
         port3_mode = {"none": 0, "math": 1, "pack": 2}[
             os.environ.get("LLK_PORT3_MODE", "pack")
         ]
         if (
-            not TestConfig.TEST_TARGET.run_simulator
+            PerfConfig.TEST_COUNTER == 1
+            and not TestConfig.TEST_TARGET.run_simulator
             and get_chip_architecture() == ChipArchitecture.WORMHOLE
         ):
             from helpers.device_io import write_words_to_device
 
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
-                0xFFB40000 + 4 * 0x1000 + 248 * 4,
+                0xFFB40000 + 249 * 4,
                 [port3_mode],
                 safe_mode=False,
             )
