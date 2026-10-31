@@ -1041,3 +1041,28 @@ def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloa
     if buffer_type == ttnn.BufferType.L1:
         return l1_cfg
     return ttnn.MemoryConfig(l1_cfg.memory_layout, buffer_type, l1_cfg.shard_spec)
+
+
+def assert_program_cache_flat(mesh_device, run, variants, *, warm_index=0, miss_indices=()):
+    """Warm the program cache with run(variants[warm_index]), then require every other variant
+    to hit it. Variants at `miss_indices` must instead add at least one entry. Returns the entry count."""
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    run(variants[warm_index])
+    entries = mesh_device.num_program_cache_entries()
+    try:
+        for i, variant in enumerate(variants):
+            if i == warm_index:
+                continue
+            must_miss = i in miss_indices
+            mesh_device.set_program_cache_misses_allowed(must_miss)
+            run(variant)
+            now = mesh_device.num_program_cache_entries()
+            if must_miss:
+                assert now > entries, f"variant {i} ({variant}) was expected to miss but added no program"
+            else:
+                assert now == entries, f"variant {i} ({variant}) added {now - entries} program(s)"
+            entries = now
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    return entries

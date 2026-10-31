@@ -259,6 +259,7 @@ set(TTNNCPP_API_HEADERS
     cpp/ttnn/operations/creation/creation.hpp
     cpp/ttnn/operations/functions.hpp
     cpp/ttnn/operations/compute_throttle_utils.hpp
+    cpp/ttnn/operations/common/hash_without_rows.hpp
     cpp/ttnn/operations/cb_utils.hpp
     cpp/ttnn/operations/math.hpp
     cpp/ttnn/operations/trace.hpp
