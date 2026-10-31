@@ -30,10 +30,11 @@ void kernel_main() {
     constexpr auto stats_args = TensorAccessorArgs<kSplitArgs + 5>();
     constexpr auto sealed_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto partials_args = TensorAccessorArgs<sealed_args.next_compile_time_args_offset()>();
+    constexpr auto closed_args = TensorAccessorArgs<partials_args.next_compile_time_args_offset()>();
 
-    // Common args: the statistics, the partials, then one (address, first page) pair per
-    // candidate.
-    constexpr uint32_t kCandidateArgs = 2;
+    // Common args: the statistics, the partials, the closed sites' reads, then one
+    // (address, first page) pair per candidate.
+    constexpr uint32_t kCandidateArgs = 3;
 
     constexpr uint32_t cb_stats = 0;
     constexpr uint32_t cb_exp = 5;
@@ -52,6 +53,7 @@ void kernel_main() {
     CircularBuffer cb_partials_obj(cb_partials);
     auto stats_accessor = TensorAccessor(stats_args, get_common_arg_val<uint32_t>(0));
     auto partials_accessor = TensorAccessor(partials_args, get_common_arg_val<uint32_t>(1));
+    auto closed_accessor = TensorAccessor(closed_args, get_common_arg_val<uint32_t>(2));
 
     if constexpr (num_closed_sites > 0) {
         // 1.0f in every token's closed-site columns, 1 + r for site r, and 0 elsewhere: compute
@@ -118,8 +120,8 @@ void kernel_main() {
         auto write_group = [&](uint32_t group) {
             const uint32_t first_site = group * sites_per_group;
             const uint32_t sites = first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
-            write_partials_group<Ht, Wt>(
-                noc, cb_partials_obj, partials_accessor, value_tile_bytes, item, first_site, sites);
+            write_partials_group<Ht, Wt, num_closed_sites>(
+                noc, cb_partials_obj, partials_accessor, closed_accessor, value_tile_bytes, item, first_site, sites);
         };
         for (uint32_t group = 0; group < num_groups; ++group) {
             const uint32_t first_site = group * sites_per_group;

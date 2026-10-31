@@ -46,7 +46,7 @@ def run_mix(device, planes, num_sites, num_partials, num_tokens, num_closed=0):
     gathered = torch.cat(list(stats * shares / shares.sum(dim=0)), dim=-1)
 
     to_device = lambda t, dtype: ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_partials, tt_shift, tt_mass = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+    outputs = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
         [to_device(s, ttnn.bfloat16) for s in snapshots],
         to_device(gathered, ttnn.float32),
         num_sites=num_sites,
@@ -54,11 +54,15 @@ def run_mix(device, planes, num_sites, num_partials, num_tokens, num_closed=0):
         eps=EPS,
         num_closed_sites=num_closed,
     )
-    assert tuple(tt_partials.shape) == (num_sites, 1, num_tokens, SHARD_WIDTH)
-    assert tuple(tt_shift.shape) == tuple(tt_mass.shape) == (num_sites, 1, num_tokens, 1)
+    num_open = num_sites - num_closed
+    assert len(outputs) == (4 if num_closed else 3)
+    assert tuple(outputs[0].shape) == (num_open, 1, num_tokens, SHARD_WIDTH)
+    assert tuple(outputs[1].shape) == tuple(outputs[2].shape) == (num_open, 1, num_tokens, 1)
+    if num_closed:
+        assert tuple(outputs[3].shape) == (num_closed, 1, num_tokens, SHARD_WIDTH)
 
     partials, shift, mass = reference(stats, torch.cat(snapshots, dim=1).float(), num_sites)
-    got = tuple(ttnn.to_torch(t).float() for t in (tt_partials, tt_shift, tt_mass))
+    got = tuple(ttnn.to_torch(t).float() for t in outputs)
     return got, (partials, shift, mass)
 
 
@@ -80,14 +84,18 @@ def test_attn_res_block_mix(device, planes, num_sites, num_partials, num_tokens)
 
 
 @pytest.mark.parametrize("planes", [[1], [6, 1]], ids=lambda p: "+".join(map(str, p)))
-@pytest.mark.parametrize("num_sites, num_closed", [(1, 1), (25, 1), (25, 3)])
+@pytest.mark.parametrize("num_sites, num_closed", [(2, 1), (25, 1), (25, 3)])
 def test_attn_res_block_mix_closed_sites(device, planes, num_sites, num_closed):
-    """A closed site's partial is its read, the mixture over its mass; the rest are unchanged."""
-    (out, _, _), (partials, _, mass) = run_mix(device, planes, num_sites, 4, 640, num_closed=num_closed)
+    """A closed site comes back as its read, the mixture over its mass; the open sites' batch is unchanged."""
+    (out, shift_out, mass_out, closed), (partials, shift, mass) = run_mix(
+        device, planes, num_sites, 4, 640, num_closed=num_closed
+    )
 
     reads = partials[:num_closed] / mass[:num_closed]
-    passed, pcc = comp_pcc(reads, out[:num_closed], 0.9999)
+    passed, pcc = comp_pcc(reads, closed, 0.9999)
     assert passed, f"closed reads PCC {pcc}"
     # A weighted mean of unit-scale values, its weights bf16 at the MAC: ~2^-8 of a few units.
-    torch.testing.assert_close(out[:num_closed], reads, rtol=2e-2, atol=3e-2)
-    torch.testing.assert_close(out[num_closed:], partials[num_closed:], rtol=2e-2, atol=1e-1)
+    torch.testing.assert_close(closed, reads, rtol=2e-2, atol=3e-2)
+    torch.testing.assert_close(out, partials[num_closed:], rtol=2e-2, atol=1e-1)
+    torch.testing.assert_close(shift_out, shift[num_closed:], rtol=3e-3, atol=3e-3)
+    torch.testing.assert_close(mass_out, mass[num_closed:], rtol=3e-2, atol=3e-2)

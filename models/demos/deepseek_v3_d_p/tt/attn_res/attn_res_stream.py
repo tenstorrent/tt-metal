@@ -249,12 +249,13 @@ class TtAttnResWalk(object):
         with the block it opens. With nothing live left to fold in, the owed read is closed.
         """
         self.stream.seal()
-        queries = [self._owed, *next(self._blocks)]
+        queries = next(self._blocks)
+        self._partials, self._shifts, self._masses, owed = self.op.inter_block(
+            self.stream.sealed, [self._owed, *queries], num_closed=1
+        )
         self._owed = None
-        self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries, num_closed=1)
         self._pending = enumerate(queries)
-        next(self._pending)
-        return self.op.read_closed(self._partials, 0)
+        return owed
 
     def finish(self):
         """The single model-level read, and the end of the walk.

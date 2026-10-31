@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix {
 
-std::array<ttnn::Tensor, 3> attn_res_block_mix(
+std::vector<ttnn::Tensor> attn_res_block_mix(
     const std::vector<ttnn::Tensor>& sealed,
     const ttnn::Tensor& stats,
     uint32_t num_sites,
