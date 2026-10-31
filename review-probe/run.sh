@@ -2,8 +2,9 @@
 # Review probe (not for main): A/B of LLK test modules on this runner's card, every side on the same card.
 # env: ARCH, REPS, SIDES ("base head" or "base head main"), MODULES (JSON list of {"func": file, "perf": file}, "" when
 # absent), <SIDE>_SHA; checkouts in $GITHUB_WORKSPACE/<side>, results in $GITHUB_WORKSPACE/out.
-# Per module and side: the functional module once, then once more only its failing ids (at most 50, 120 s per test),
-# or the whole module when pytest crashed (no junit xml); then the perf module is built and its reps run interleaved
+# Per module and side: the functional module once, then once more only its failing ids (at most 50, at the first run's
+# 300 s per test, so a slow test does not count as reproduced by a shorter timeout), or the whole module when pytest
+# crashed (no junit xml); then the perf module is built and its reps run interleaved
 # over the sides. out/summary.json (summary.py) lists every step's pytest summary line, rc and failing ids.
 # The job fails when any step does.
 set -u
@@ -50,7 +51,7 @@ for pair in "${MODS[@]}"; do
             mapfile -t ids < "$b.rerun.txt"
             if [ "${#ids[@]}" -gt 0 ]; then
                 step "m$i func rerun $side ${#ids[@]} ids, first ${ids[0]}"
-                PROBE_HASH_OUT=$b.rerun.hash.tsv pyt "$side" "$b.rerun.log" -p probe_hash -q -rA --timeout=120 \
+                PROBE_HASH_OUT=$b.rerun.hash.tsv pyt "$side" "$b.rerun.log" -p probe_hash -q -rA --timeout=300 \
                     --junitxml="$b.rerun.xml" "${ids[@]}"
             fi
         done
