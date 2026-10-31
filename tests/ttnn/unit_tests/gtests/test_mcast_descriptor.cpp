@@ -355,7 +355,7 @@ TEST_F(McastHostFixture, NoHandshakeLeavesExchangeCreditAcrossConstructionPaths)
         for (const auto& target : spec.kernels) {
             EXPECT_EQ(target.semaphore_bindings.size(), 1u);
         }
-        attach_unplaced(mcast, program);
+        mcast.append_semaphores(program);
         ASSERT_EQ(program.impl().semaphores().size(), 15u);
         EXPECT_EQ(program.impl().semaphores().back().id(), 14u);
         // The final hardware slot remains available for the operation's exchange credit.
