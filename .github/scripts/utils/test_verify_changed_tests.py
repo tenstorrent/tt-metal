@@ -187,8 +187,8 @@ def test_timeout_change_needs_hardware(repo: Repo):
     code, payload, _ = repo.scope()
     assert code == 0
     assert payload["status"] == "run"
-    # A touched entry runs every SKU it declares.
-    assert sorted(leg["sku"] for leg in payload["run_legs"]) == ["wh_n150_civ2", "wh_n300_civ2"]
+    # Only the SKU whose own timeout changed scopes; its untouched sibling does not.
+    assert [leg["sku"] for leg in payload["run_legs"]] == ["wh_n150_civ2"]
 
 
 def test_removed_entry_needs_no_hardware(repo: Repo):
@@ -287,7 +287,8 @@ def test_rename_is_add_plus_delete(repo: Repo):
     assert all(leg["reason"] == "added" for leg in payload["run_legs"])
 
 
-def test_adding_a_sku_runs_the_entry(repo: Repo):
+def test_adding_a_sku_runs_only_that_sku(repo: Repo):
+    """bh_p150's own config is untouched, so it needs nothing re-proven."""
     repo.write(
         "tests/pipeline_reorg/sample_unit_tests.yaml",
         BASE_TESTS_YAML.replace(
@@ -298,7 +299,36 @@ def test_adding_a_sku_runs_the_entry(repo: Repo):
     code, payload, _ = repo.scope()
     assert code == 0
     assert payload["status"] == "run"
-    assert {leg["sku"] for leg in legs_for(payload, "unit beta")} == {"bh_p150", "wh_n150_civ2"}
+    assert [leg["sku"] for leg in legs_for(payload, "unit beta")] == ["wh_n150_civ2"]
+    assert all(leg["reason"] == "added" for leg in legs_for(payload, "unit beta"))
+
+
+def test_removing_a_sku_leaves_its_untouched_sibling_alone(repo: Repo):
+    """The PR #62528 case: dropping one SKU from an entry must not force its
+    still-unchanged siblings to re-run -- there is nothing left to prove for the
+    removed SKU, and the remaining one was never touched."""
+    repo.write(
+        "tests/pipeline_reorg/sample_unit_tests.yaml",
+        BASE_TESTS_YAML.replace("    wh_n300_civ2:\n      timeout: 10\n", ""),
+    )
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["status"] == "no_op"
+    assert payload["run_legs"] == []
+
+
+def test_removing_one_sku_does_not_block_a_genuine_change_to_another(repo: Repo):
+    """Removing wh_n300_civ2 and reconfiguring wh_n150_civ2 in the same push: only
+    the reconfigured SKU scopes, the removed one needs nothing."""
+    edited = BASE_TESTS_YAML.replace("    wh_n300_civ2:\n      timeout: 10\n", "").replace(
+        "    wh_n150_civ2:\n      timeout: 10\n", "    wh_n150_civ2:\n      timeout: 15\n"
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", edited)
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["status"] == "run"
+    assert [leg["sku"] for leg in legs_for(payload, "unit alpha")] == ["wh_n150_civ2"]
+    assert all(leg["reason"] == "changed" for leg in legs_for(payload, "unit alpha"))
 
 
 def test_per_sku_tier_change_runs(repo: Repo):
@@ -1665,9 +1695,13 @@ def test_dropped_legs_are_reported_not_silent(repo: Repo):
 
 
 def test_mixed_entry_reports_the_dropped_half(repo: Repo):
+    """Both SKUs are touched here -- wh_galaxy's own timeout changed and bh_p150
+    is new -- so wh_galaxy is still reported as dropped rather than silently
+    excluded, even though an untouched unsupported SKU would no longer scope at
+    all (see test_unsupported_skus_are_dropped_but_runnable_ones_survive)."""
     mixed = BASE_GALAXY_YAML.replace(
         "    wh_galaxy:\n      timeout: 30\n",
-        "    wh_galaxy:\n      timeout: 30\n    bh_p150:\n      timeout: 30\n",
+        "    wh_galaxy:\n      timeout: 31\n    bh_p150:\n      timeout: 30\n",
     )
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", mixed)
     code, payload, _ = repo.scope()
