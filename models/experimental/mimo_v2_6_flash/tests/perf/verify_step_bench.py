@@ -37,8 +37,9 @@ from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import BLOCK_SIZE, MiMoV2ForCausalLM
 
 CORPUS = "ttnn/cpp/ttnn/operations/**/*.[hc]pp"
-# Under tracy (TT_METAL_DEVICE_PROFILER=1) the device's profiler buffer is read after every step: a verify replays
-# thousands of programs, more than the buffer holds.
+# Under tracy (TT_METAL_DEVICE_PROFILER=1) the device's profiler buffer is read after every step, on the row's
+# submesh (it owns the traces): a verify replays thousands of programs, more than the buffer holds by default (raise
+# TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT).
 PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
 
@@ -176,7 +177,7 @@ def main():
             last.append(int(logits[0, -1].argmax()))
         say(f"prefilled {users} x {a.ctx} tokens in {time.time() - t0:.0f} s")
         if PROFILING:
-            ttnn.ReadDeviceProfiler(mesh)
+            ttnn.ReadDeviceProfiler(model.models[0].mesh_device)
 
         k = a.k
         for plain, n in [(m == "plain", n) for m in a.modes.split(",") for n in users_list]:
@@ -197,7 +198,7 @@ def main():
                     )
                     times.append(time.perf_counter() - t1)
                     if PROFILING:
-                        ttnn.ReadDeviceProfiler(mesh)
+                        ttnn.ReadDeviceProfiler(model.models[0].mesh_device)
                     for r in range(n):
                         tok[r], pos[r] = int(logits[r, 0].argmax()), pos[r] + 1
                     per_step_tokens.append(1.0)
@@ -250,7 +251,7 @@ def main():
                     drafts = model.propose_draft_tokens(k, committed, cpos, counts)
                     times.append(time.perf_counter() - t1)
                     if PROFILING:
-                        ttnn.ReadDeviceProfiler(mesh)
+                        ttnn.ReadDeviceProfiler(model.models[0].mesh_device)
                     got = []
                     for r in range(n):
                         c = int(counts[r])
