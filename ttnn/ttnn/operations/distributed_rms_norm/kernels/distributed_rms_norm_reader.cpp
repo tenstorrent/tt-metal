@@ -246,7 +246,9 @@ void kernel_main() {
     a += G;
     const uint32_t entry_slot_idx = a;  // n_in_fwd + n_in_bwd slot ids: entry i of a direction (landing order)
     a += n_in_fwd + n_in_bwd;
-    const uint32_t member_idx = a;  // G_w - 1 packed member coords (root only)
+    // root only: the members as row-runs (logical rectangles of one row): [n_runs, then per run lo, hi (packed
+    // virtual coords), count]
+    const uint32_t member_idx = a;
 
     const auto input_accessor = TensorAccessor(input_args, input_addr, T_in);
     Noc noc;
@@ -503,6 +505,7 @@ void kernel_main() {
     };
 
     uint32_t wd = 0;
+    uint32_t inv_sent = 0;  // waves distributed (the value set on the members' SEM_INV)
     auto try_distribute = [&]() -> bool {
         while (wd < own_waves && wave_n(wd) == 0) {
             ++wd;
@@ -523,15 +526,34 @@ void kernel_main() {
         noc_async_read(get_noc_addr(src), inv_cb.get_write_ptr(), n * T_i);
         noc_async_read_barrier();
         inv_cb.push_back(n);
-        for (uint32_t m = 0; m + 1 < G_w; ++m) {
-            const uint32_t mm = get_arg_val<uint32_t>(member_idx + m);
-            write_faces_0_2<T_i>(src, unpack_x(mm), unpack_y(mm), dst, n);
+        // Members: per row-run (a logical rectangle of one row; lamp L6) one multicast of faces 0 / 2 of each tile,
+        // LINKED to the multicast set of the cumulative wave count on SEM_INV (the root's own SEM_INV word, unused on
+        // a root, holds the value): the linked chain to one rectangle arrives in order, so no ack barrier sits between
+        // the data and the flag. The source pages are released after the writes have left L1 (flushed).
+        const uint32_t n_runs = get_arg_val<uint32_t>(member_idx);
+        constexpr uint32_t F = T_i / 4;
+        const uint32_t sem_inv = get_semaphore(SEM_INV);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_inv) = ++inv_sent;
+        for (uint32_t r = 0; r < n_runs; ++r) {
+            const uint32_t lo = get_arg_val<uint32_t>(member_idx + 1 + 3 * r);
+            const uint32_t hi = get_arg_val<uint32_t>(member_idx + 2 + 3 * r);
+            const uint32_t cnt = get_arg_val<uint32_t>(member_idx + 3 + 3 * r);
+            auto mc = [&](uint32_t l1) -> uint64_t {
+                if constexpr (noc_index == 1) {
+                    return get_noc_multicast_addr(unpack_x(hi), unpack_y(hi), unpack_x(lo), unpack_y(lo), l1);
+                } else {
+                    return get_noc_multicast_addr(unpack_x(lo), unpack_y(lo), unpack_x(hi), unpack_y(hi), l1);
+                }
+            };
+            for (uint32_t t = 0; t < n; ++t) {
+                for (uint32_t f = 0; f < 4; f += 2) {
+                    const uint32_t off = t * T_i + f * F;
+                    noc_async_write_multicast(src + off, mc(dst + off), F, cnt, true);
+                }
+            }
+            noc_semaphore_set_multicast(sem_inv, mc(sem_inv), cnt);
         }
-        noc_async_write_barrier();
-        for (uint32_t m = 0; m + 1 < G_w; ++m) {
-            const uint32_t mm = get_arg_val<uint32_t>(member_idx + m);
-            noc_semaphore_inc(get_noc_addr(unpack_x(mm), unpack_y(mm), get_semaphore(SEM_INV)), 1);
-        }
+        noc_async_writes_flushed();
         rms_root_cb.pop_front(n);
         ++wd;
         return true;

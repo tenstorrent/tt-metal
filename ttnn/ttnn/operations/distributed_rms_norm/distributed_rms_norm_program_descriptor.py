@@ -63,6 +63,9 @@ NUM_WAVES = 2
 # Lamp L4: the ports notify the roots per landed entry (True) or once per wave (False). The root collects slot by
 # slot either way; per entry it reads each slot while the next one is still relaying.
 NOTIFY_PER_ENTRY = True
+# The ports send wave w+1's own segment ahead of wave w's relays when it is ready (True), or in strict (wave, item)
+# order (False). Measured null alone at 640x1792 (the roots' collect / finalize / distribute chain binds).
+PORT_OWN_AHEAD = False
 R3_ROWS_PER_GROUP = 2
 R3_MAX_GROUP_CORES = 24
 R3_MIN_SLICE_TILES = 4
@@ -953,7 +956,7 @@ def create_mesh_program_descriptor(
         if gamma is not None
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
-    port_ct = [G, num_waves, payload, MAX_HEADERS, SEM_OWN_STATS, SEM_OWN_COUNTED]
+    port_ct = [G, num_waves, payload, MAX_HEADERS, SEM_OWN_STATS, SEM_OWN_COUNTED, int(PORT_OWN_AHEAD)]
 
     inv_w_bits = _fp32_bits(1.0 / (G * g.W))
     eps_bits = _fp32_bits(epsilon)
@@ -961,10 +964,19 @@ def create_mesh_program_descriptor(
     out_addr = output_tensor.buffer_address()
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
 
-    # row-group members (virtual coords) per root
-    members = {}
-    for w in plan.work:
-        members.setdefault((w.root.x, w.root.y), {})[w.index] = virt(w.core)
+    # row-group members per root as row-runs: logical cores of one row with consecutive x (a logical rectangle, one
+    # multicast each; lamp L6). The members are consecutive cores of `available`, so a group is <= a few runs.
+    member_runs = {}
+    for w in sorted(plan.work, key=lambda w: w.index):
+        if w.index == 0:
+            member_runs.setdefault((w.core.x, w.core.y), [])
+            continue
+        runs = member_runs.setdefault((w.root.x, w.root.y), [])
+        c = w.core
+        if runs and runs[-1][1].y == c.y and runs[-1][1].x + 1 == c.x:
+            runs[-1] = (runs[-1][0], c, runs[-1][2] + 1)
+        else:
+            runs.append((c, c, 1))
 
     compute_cfg = _compute_config(compute_kernel_config, fp32_acc)
     base_key = "|".join(
@@ -993,6 +1005,7 @@ def create_mesh_program_descriptor(
             cluster_axis,
             sorted(port_set),
             NOTIFY_PER_ENTRY,
+            PORT_OWN_AHEAD,
             fp32_acc,
             compute_kernel_config.math_fidelity,
             compute_kernel_config.math_approx_mode,
@@ -1058,8 +1071,11 @@ def create_mesh_program_descriptor(
             ]
             args += [_pack(virt(slot_port(q, l))) for q in range(G)]
             args += list(ch["entries"][FWD]) + list(ch["entries"][BWD])  # slot of entry i per direction
-            mem = members[(w.root.x, w.root.y)]
-            args += [_pack(mem[i]) if (is_root and i in mem) else 0 for i in range(1, g.G_w)]
+            runs = member_runs[(w.root.x, w.root.y)] if is_root else []
+            args += [len(runs)]
+            for lo, hi, cnt in runs:
+                args += [_pack(virt(lo)), _pack(virt(hi)), cnt]
+            args += [0, 0, 0] * (g.G_w - 1 - len(runs))  # uniform RT-arg length on every core
             reader_rt[core.x][core.y] = args
             masked_core = int(g.masked and w.w0 + w.V == g.Wt)
             compute_rt[core.x][core.y] = [w.rows, inv_w_bits, eps_bits, w.V, int(is_root), masked_core]

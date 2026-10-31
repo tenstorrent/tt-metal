@@ -67,6 +67,8 @@ void kernel_main() {
     constexpr uint32_t num_headers = get_compile_time_arg_val(3);
     constexpr uint32_t sem_own_stats_id = get_compile_time_arg_val(4);
     constexpr uint32_t sem_counted_id = get_compile_time_arg_val(5);
+    // Own segment of wave w+1 may go ahead of wave w's relays (true) or strictly (w, k) order (false).
+    constexpr bool own_ahead = get_compile_time_arg_val(6) != 0;
     static_assert(num_headers >= 1 && num_headers <= 12, "packet header pool: <= 12 headers per RISC");
 
     size_t a = 0;
@@ -225,36 +227,44 @@ void kernel_main() {
                 conn.send_current_slot_non_blocking(src + off, n, reinterpret_cast<uint32_t>(hdr));
             }
         };
-        // Sends advance in (w, k) order, notifies in (w, i) order, each whenever ready (with WAVE_PIPELINE the roots
-        // publish wave w+1 while wave w is still arriving, and its own segment should not wait for wave w's last
-        // arrival).
+        // Two send cursors: the own segment (item 0) by wave, and the relays (items 1..n_send-1) in (w, k) order. Each
+        // destination entry has its own arrival counter, so the two streams are independent. own_ahead: the own segment
+        // of wave w+1 need not queue behind wave w's relays (lower wave first when both are ready); otherwise the
+        // strict (w, k) order of the relay transport (host knob PORT_OWN_AHEAD).
         const uint32_t send_waves = n_send > 0 ? num_waves : 0;
-        uint32_t sw = 0, si = 0;
+        const uint32_t relay_waves = n_send > 1 ? num_waves : 0;
+        uint32_t ow = 0;          // own cursor: next wave of item 0
+        uint32_t rw = 0, rk = 1;  // relay cursor: (wave, item)
         {
             DeviceZoneScopedN("prt_exchange");
-            while (sw < send_waves || notified < notify_total) {
+            while (ow < send_waves || rw < relay_waves || notified < notify_total) {
                 invalidate_l1_cache();
-                if (sw < send_waves) {
-                    const uint32_t item = send_idx + si * SEND_WORDS;
-                    const uint32_t wait = get_arg_val<uint32_t>(item + 3);
-                    const bool ready_to_send =
-                        wait == 0 ? *own_stats >= (sw + 1) * n_roots : *arrived(wait - 1) >= sw + 1;
-                    if (ready_to_send) {
-                        if (si == 0 && sw + 1 < num_waves) {
-                            // Wave sw counted (item 0 is always the own segment): release the roots' wave-(sw+1)
-                            // increments (SEM_OWN_COUNTED on the host).
-                            for (uint32_t k = 0; k < n_counted; ++k) {
-                                const uint32_t r = get_arg_val<uint32_t>(roots_idx + k);
-                                noc_semaphore_inc(get_noc_addr(r >> 16, r & 0xFFFF, counted_sem_addr), 1);
-                            }
+                const bool own_ready =
+                    ow < send_waves && (own_ahead || relay_waves == 0 || ow <= rw) && *own_stats >= (ow + 1) * n_roots;
+                bool relay_ready = false;
+                if (rw < relay_waves && (own_ahead || rw < ow)) {
+                    const uint32_t wait = get_arg_val<uint32_t>(send_idx + rk * SEND_WORDS + 3);
+                    relay_ready = *arrived(wait - 1) >= rw + 1;
+                }
+                if (own_ready && !(relay_ready && rw < ow)) {
+                    if (ow + 1 < num_waves) {
+                        // Wave ow counted: release the roots' wave-(ow+1) increments (SEM_OWN_COUNTED on the host).
+                        for (uint32_t k = 0; k < n_counted; ++k) {
+                            const uint32_t r = get_arg_val<uint32_t>(roots_idx + k);
+                            noc_semaphore_inc(get_noc_addr(r >> 16, r & 0xFFFF, counted_sem_addr), 1);
                         }
-                        const uint32_t q = get_arg_val<uint32_t>(item);
-                        DeviceZoneScopedN("prt_send");
-                        send_item(si, landing + (sw * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + sw));
-                        if (++si == n_send) {
-                            si = 0;
-                            ++sw;
-                        }
+                    }
+                    const uint32_t q = get_arg_val<uint32_t>(send_idx);
+                    DeviceZoneScopedN("prt_send");
+                    send_item(0, landing + (ow * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + ow));
+                    ++ow;
+                } else if (relay_ready) {
+                    const uint32_t q = get_arg_val<uint32_t>(send_idx + rk * SEND_WORDS);
+                    DeviceZoneScopedN("prt_send");
+                    send_item(rk, landing + (rw * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + rw));
+                    if (++rk == n_send) {
+                        rk = 1;
+                        ++rw;
                     }
                 }
                 poll_notify();
