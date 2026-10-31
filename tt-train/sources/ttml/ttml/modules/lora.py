@@ -151,7 +151,11 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
-        h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
+        # Each device's grad of the replicated lora_A only carries its own
+        # lora_B shard's output columns; broadcast (identity forward, all_reduce
+        # backward) sums it across TP so every copy gets the full grad.
+        lora_A = ttml.ops.distributed.broadcast(self.lora_A.tensor, self.cluster_axis)
+        h = ttml.ops.linear.linear(lora_input, lora_A, None)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
             lora_update = ttml.ops.distributed.all_gather(
