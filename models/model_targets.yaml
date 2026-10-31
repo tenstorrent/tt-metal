@@ -1860,8 +1860,10 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
+            # decode_t/s/u re-centred 19.5 -> 20.6: scheduled T2 e2e 10-23..10-31 measured
+            # 21.36-21.65 on f10cs08 and 19.57-20.05 on f10cs09 (f10cs06 at ~13.9 is a slow host).
             perf:
-              decode_t/s/u: 19.5
+              decode_t/s/u: 20.6
               decode_t_s_u_tolerance: 0.10
               prefill_time_to_first_token: 141
               prefill_time_to_first_token_tolerance: 0.15
@@ -2760,8 +2762,10 @@ targets:
       bh_quietbox_2:
         entries:
           - status: active
+            # Re-centred 0.0192 -> 0.0221: scheduled T2 e2e 10-22..10-31 measured
+            # 0.0218-0.0223 on six QB2 hosts, above the old +15% ceiling (0.02208).
             perf:
-              fps: 0.0192
+              fps: 0.0221
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
