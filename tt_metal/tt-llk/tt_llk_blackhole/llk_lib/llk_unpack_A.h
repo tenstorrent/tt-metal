@@ -81,8 +81,8 @@ constexpr bool _llk_unpack_A_asserts_check_unpacker_B_()
  * whether data is unpacked straight to the dest register, covering transpose-of-faces and
  * 32-bit-to-dest paths.
  *
- * @note On the plain path, a face shorter than 16 rows zeroes both SrcA banks here, because datacopy moves all
- * 16 rows.
+ * @note On the plain path, a face shorter than 16 rows zeroes the unpacker's own SrcA bank before each face,
+ * because datacopy moves all 16 rows.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
@@ -269,8 +269,14 @@ inline void _llk_unpack_A_mop_config_(
                 constexpr std::uint32_t innerloop = 1;
                 if (tensor_shape.face_r_dim < FACE_R_DIM)
                 {
-                    // Datacopy moves all 16 rows of a face.
-                    _llk_unpack_clear_src_banks_<SrcA>();
+                    // Datacopy moves all 16 rows of a face. Zero the unpacker's own SrcA bank before each face, so the
+                    // rows past the face hold zeros and not the previous op's data.
+                    static constexpr std::uint32_t clear_srca =
+                        TT_OP_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0 /*Bank_Clr_Ctrl*/, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                    ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb_set_dvalid);
+                    tmp.set_start_op(clear_srca);
+                    tmp.program();
+                    return;
                 }
                 ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
                 tmp.set_start_op(unpack_srca);
@@ -295,9 +301,8 @@ inline void _llk_unpack_A_mop_config_(
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
- * @note On the plain path, a face shorter than 16 rows waits for math and zeroes both SrcA banks
- *       (see @ref _llk_unpack_A_mop_config_). Re-run this init after any op that writes SrcA, for example a
- *       MOVD2A or MOVB2A.
+ * @note On the plain path, a face shorter than 16 rows zeroes the unpacker's own SrcA bank before each face
+ *       (see @ref _llk_unpack_A_mop_config_).
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
