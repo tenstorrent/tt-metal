@@ -128,9 +128,9 @@ def _ranges(cores):
 
 class DeviceSampler:
     def __init__(self, plan, vocab_local, users, max_batch, scan_cores=SCAN_CORES):
-        assert vocab_local % TILE == 0 and 1 <= users <= 8 and max_batch * 4 <= 1024
+        assert vocab_local % TILE == 0 and 1 <= users <= 16 and max_batch * 4 <= 1024
         self.plan, self.vocab_local, self.users, self.max_batch = plan, vocab_local, users, max_batch
-        self.slots = 4 if users <= 4 else 8  # user slots of a scan core's partials block
+        self.slots = 4 if users <= 4 else (8 if users <= 8 else 16)  # user slots of a scan core's partials block
         self.k = CANDIDATES_PER_CHIP
         self.candidates = self.k * plan.tp
         device = plan.mesh_device
@@ -155,12 +155,13 @@ class DeviceSampler:
 
         # Scan partials: ``slots`` user slots of K (key, index) pairs per scan core, and ``slots`` uint64 sums per scan
         # core, as raw 4096-byte pages. The chip candidates page: the users' sorted lists, then their normalizers at
-        # byte 2048.
-        assert scan_cores * self.slots * 8 <= 4096 and self.users * self.k * 8 <= 2048
+        # byte 2048 (more than 8 users: the lists fill the page, the normalizers go to a second one).
+        assert scan_cores * self.slots * 8 <= 4096 and self.users * self.k * 8 <= 4096
         partial_pages = scan_cores * self.slots * self.k * 8 // 4096
         self.partials = persistent((1, 1, TILE, TILE * partial_pages), ttnn.uint32)
         self.sums = persistent((1, 1, TILE, TILE), ttnn.uint32)
-        self.chip_cands = persistent((1, 1, TILE, TILE), ttnn.uint32)
+        cand_pages = 2 if self.users * self.k * 8 > 2048 else 1
+        self.chip_cands = persistent((1, 1, TILE, TILE * cand_pages), ttnn.uint32)
         # Per-row parameters, rewritten in place (``set_params``); rows default to greedy.
         dram_rm = {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
         self.params = persistent(

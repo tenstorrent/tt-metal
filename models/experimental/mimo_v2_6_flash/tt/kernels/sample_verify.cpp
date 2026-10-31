@@ -73,16 +73,21 @@ void kernel_main() {
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(7);
     constexpr uint32_t group_words = get_compile_time_arg_val(8);
     constexpr uint32_t out_words = get_compile_time_arg_val(9);
-    static_assert(users >= 1 && users <= 8 && tp <= 32 && max_batch * 4 <= 1024 && users * K * 8 <= 2048);
+    static_assert(users >= 1 && users <= 16 && tp <= 32 && max_batch * 4 <= 1024 && users * K * 8 <= 4096);
     static_assert(groups <= users && D + 1 <= users && 6 + 2 * D <= group_words && 3 + D <= out_words);
     constexpr uint32_t slot_bytes = K * 8;
     constexpr uint32_t cand_bytes = users * slot_bytes;     // every slot's list of a chip page
-    constexpr uint32_t norm_bytes = users <= 4 ? 64 : 128;  // every slot's normalizer of a chip page
+    constexpr uint32_t norm_bytes =
+        users <= 4 ? 64 : (users <= 8 ? 128 : 256);  // every slot's normalizer of a chip page
     constexpr uint32_t params_bytes = max_batch * 32;
     constexpr uint32_t argmax_bytes = max_batch * 4;
     constexpr uint32_t ctrl_bytes = groups * group_words * 4;
     constexpr uint32_t out_bytes = groups * out_words * 4;
     constexpr uint32_t max_cands = tp * K;
+    // A chip's candidates: its users' lists then (at byte 2048) their normalizers in one page, or with more than 8
+    // users the lists in one page and the normalizers in the next (sample_chip_merge.cpp).
+    constexpr uint32_t cand_pages = cand_bytes > 2048 ? 2 : 1;
+    constexpr uint32_t norm_at = cand_pages == 1 ? 2048 : 0;
 
     cb_reserve_back(cb_scratch, 1);
     const uint32_t cands_l1 = get_write_ptr(cb_scratch);
@@ -96,8 +101,12 @@ void kernel_main() {
     const uint32_t order_l1 = ids_l1 + max_cands * 4;
 
     for (uint32_t ch = 0; ch < tp; ++ch) {
-        noc_async_read(page_addr(cands_is_dram, cands_addr, ch, 4096), cands_l1 + ch * cand_bytes, cand_bytes);
-        noc_async_read(page_addr(cands_is_dram, cands_addr, ch, 4096, 2048), norms_l1 + ch * norm_bytes, norm_bytes);
+        noc_async_read(
+            page_addr(cands_is_dram, cands_addr, ch * cand_pages, 4096), cands_l1 + ch * cand_bytes, cand_bytes);
+        noc_async_read(
+            page_addr(cands_is_dram, cands_addr, ch * cand_pages + cand_pages - 1, 4096, norm_at),
+            norms_l1 + ch * norm_bytes,
+            norm_bytes);
     }
     noc_async_read(page_addr<true>(params_addr, 0, params_bytes), params_l1, params_bytes);
     noc_async_read(page_addr(argmax_is_dram, argmax_addr, 0, argmax_bytes), argmax_l1, argmax_bytes);

@@ -6,7 +6,8 @@
 // Inputs (interleaved):
 // - cands: the row all-gather of the chip candidates (sample_chip_merge.cpp), uint32 TILE with tp pages; page ch
 //   holds chip ch's sorted K (key, local index) pairs of user u at byte offset u * K * 8 and its normalizer (the sum
-//   of exp((logit - chip ch's largest) / T), uint64 Q30) at byte offset 2048 + u * 16.
+//   of exp((logit - chip ch's largest) / T), uint64 Q30) at byte offset 2048 + u * 16 (more than 8 users: two
+//   pages per chip, the lists in page 2 ch and the normalizers at u * 16 of page 2 ch + 1).
 // - params: uint32 row-major [1, max_batch * 8]: per row log2(e) / T as fp32 bits, top_p in Q24, top_k (0: none),
 //   greedy, 1 / T as fp32 bits, three unused words.
 // - rng: uint32 row-major [1, max_batch * 2]: per row a 64-bit splitmix64 state (low word first), seeded by the host;
@@ -56,13 +57,18 @@ void kernel_main() {
     constexpr uint32_t vocab_local = get_compile_time_arg_val(3);
     constexpr uint32_t max_batch = get_compile_time_arg_val(4);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(5);
-    static_assert(users >= 1 && users <= 8 && tp <= 32 && max_batch * 4 <= 1024 && users * K * 8 <= 2048);
+    static_assert(users >= 1 && users <= 16 && tp <= 32 && max_batch * 4 <= 1024 && users * K * 8 <= 4096);
     constexpr uint32_t slot_bytes = K * 8;
     constexpr uint32_t cand_bytes = users * slot_bytes;     // every user's list of a chip page
-    constexpr uint32_t norm_bytes = users <= 4 ? 64 : 128;  // every user's normalizer of a chip page
+    constexpr uint32_t norm_bytes =
+        users <= 4 ? 64 : (users <= 8 ? 128 : 256);  // every user's normalizer of a chip page
     constexpr uint32_t params_bytes = max_batch * 32;
     constexpr uint32_t rng_bytes = max_batch * 8;
     constexpr uint32_t max_cands = tp * K;
+    // A chip's candidates: its users' lists then (at byte 2048) their normalizers in one page, or with more than 8
+    // users the lists in one page and the normalizers in the next (sample_chip_merge.cpp).
+    constexpr uint32_t cand_pages = cand_bytes > 2048 ? 2 : 1;
+    constexpr uint32_t norm_at = cand_pages == 1 ? 2048 : 0;
 
     cb_reserve_back(cb_scratch, 1);
     const uint32_t cands_l1 = get_write_ptr(cb_scratch);
@@ -74,8 +80,12 @@ void kernel_main() {
     const uint32_t tokens_l1 = ids_l1 + max_cands * 4;
 
     for (uint32_t ch = 0; ch < tp; ++ch) {
-        noc_async_read(page_addr(cands_is_dram, cands_addr, ch, 4096), cands_l1 + ch * cand_bytes, cand_bytes);
-        noc_async_read(page_addr(cands_is_dram, cands_addr, ch, 4096, 2048), norms_l1 + ch * norm_bytes, norm_bytes);
+        noc_async_read(
+            page_addr(cands_is_dram, cands_addr, ch * cand_pages, 4096), cands_l1 + ch * cand_bytes, cand_bytes);
+        noc_async_read(
+            page_addr(cands_is_dram, cands_addr, ch * cand_pages + cand_pages - 1, 4096, norm_at),
+            norms_l1 + ch * norm_bytes,
+            norm_bytes);
     }
     noc_async_read(page_addr<true>(params_addr, 0, params_bytes), params_l1, params_bytes);
     noc_async_read(page_addr<true>(rng_addr, 0, rng_bytes), rng_l1, rng_bytes);

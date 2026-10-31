@@ -49,8 +49,8 @@ void kernel_main() {
     constexpr uint32_t cb_a = get_compile_time_arg_val(5);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t cb_ready = get_compile_time_arg_val(7);
-    constexpr uint32_t slots = get_compile_time_arg_val(8);  // user slots of a core's block: 4, or 8
-    static_assert(users >= 1 && users <= slots && (slots == 4 || slots == 8), "users in rows 0-7");
+    constexpr uint32_t slots = get_compile_time_arg_val(8);  // user slots of a core's block: 4, 8 or 16
+    static_assert(users >= 1 && users <= slots && (slots == 4 || slots == 8 || slots == 16), "users in rows 0-15");
     constexpr uint32_t half = slots / 2;  // the reader's slots
     constexpr uint32_t tile_bytes = 4096;
     constexpr uint32_t slot_bytes = K * 8;
