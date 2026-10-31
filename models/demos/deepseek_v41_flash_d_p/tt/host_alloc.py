@@ -120,8 +120,9 @@ def _reserve_attention(model) -> None:
     from .attention import WINDOW, WINDOW_BLOCK_BYTES
 
     rm = ttnn.ROW_MAJOR_LAYOUT
-    if model.tables.carry_local() is not None:
+    if model.tables.carry_local() is not None or model.tables.region_index is not None:  # (+ bfp8_tiles, P.18)
         ccl.reserve(mesh, "attn.carry_rows", [1, 1, WINDOW, 512], ttnn.bfloat16, rm)
+    if model.tables.carry_local() is not None:
         ccl.reserve(mesh, "attn.carry_mine", [1, 1, WINDOW // 32, WINDOW_BLOCK_BYTES], ttnn.uint8, rm)
 
 

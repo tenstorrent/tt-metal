@@ -116,6 +116,12 @@ def window_bfp8() -> bool:
     return settings.get("WINDOW_KV_FORMAT") == "bfp8_blocks"
 
 
+def window_region() -> bool:
+    """WINDOW_KV_FORMAT=bfp8_tiles (P.18): each chip's own window region [carry 128 | its q_rows rows] as bfloat8_b
+    tile rows (``TtWindowAttention.region``), the carry by one neighbour send (tt/window_send.py)."""
+    return settings.get("WINDOW_KV_FORMAT") == "bfp8_tiles"
+
+
 SENTINEL = -1  # uploaded as int32 -1, read through uint32: 0xFFFFFFFF, sparse_sdpa's "no key"
 SDPA_K_CHUNK = 128
 
@@ -203,6 +209,23 @@ class WindowTables:
         # of the SP row's own rows (the pad mask) and the packed buffers, {(kind, n): (local, gathered)}: "rows" =
         # bfloat4_b row records (compressed KV), "blocks" = bfloat8_b window blocks of 32 rows
         self._sp_iota, self._packed, self._carry = {}, {}, None
+        # WINDOW_KV_FORMAT=bfp8_tiles (P.18), load time: the region index lists, the chip's own rows' pad-mask iota,
+        # the SP row's iota for the served write's mask (``mask_local``) and the neighbour send
+        self.region_index, self._chip_iota, self.send = None, None, None
+        if window_region():
+            assert (
+                g.q_rows >= WINDOW and g.q_rows % 32 == 0
+            ), f"WINDOW_KV_FORMAT=bfp8_tiles: {g.q_rows} query rows a chip; the carry must be the previous chip's"
+            self.region_index = self.region_lists()
+            d = g.query_offsets().unsqueeze(-1).to(torch.float32)  # [SP, TP, q_rows, 1]
+            self._chip_iota = _upload(mesh, d, ttnn.float32, ttnn.TILE_LAYOUT, (0, 1))
+            if g.sp > 1 and g.w % 32 == 0:
+                ids = torch.arange(g.sp * g.w, dtype=torch.float32).view(g.sp, 1, g.w, 1)
+                self._sp_iota[g.w] = _upload(mesh, ids, ttnn.float32, ttnn.TILE_LAYOUT, (0, None))
+            if g.n > 1:
+                from .window_send import WindowSend
+
+                self.send = WindowSend(mesh, self.region_pages(), WINDOW_BLOCK_BYTES)
         if pack_before_gather() and g.sp > 1:
             ns = sorted({n for n in (g.w, g.w // 2) if n % 32 == 0 and g.w % n == 0})
             for n in ns:
@@ -303,6 +326,37 @@ class WindowTables:
             )
         return self._blocks
 
+    def region_pages(self) -> int:
+        """WINDOW_KV_FORMAT=bfp8_tiles: pages (32-row blocks) of a chip's window region [carry 128 | q_rows]."""
+        return (WINDOW + self.geo.q_rows) // 32
+
+    def region_lists(self) -> dict:
+        """WINDOW_KV_FORMAT=bfp8_tiles: ``index_lists`` in each chip's own region (load time): region row 0 is
+        position start + d0 - 128 (d0 the chip's first query offset), so query d reads region rows d - d0 + 1 + j;
+        positions < 0 dropped (chip 0 at starts < 128), the valid ids first, a sentinel tail. {class: [SP, TP, q_rows,
+        128] uint32 ROW_MAJOR, chip (r, c) its own}."""
+        d = self.geo.query_offsets().unsqueeze(-1)  # [SP, TP, q, 1]
+        d0 = d[:, :, :1]
+        j = torch.arange(WINDOW)
+        out = {}
+        for cls in range(0, WINDOW + 1, 32):
+            lo = torch.clamp(d + 1, min=WINDOW - cls)
+            n = d + WINDOW - lo + 1
+            ids = torch.where(j < n, lo - d0 + j, torch.full_like(lo + j, SENTINEL))
+            assert int(ids.max()) < self.region_pages() * 32, int(ids.max())
+            out[cls] = _upload(self.mesh, ids.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (0, 1))
+        return out
+
+    def mask_chip(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:
+        """WINDOW_KV_FORMAT=bfp8_tiles: t [1, 1, q_rows, w] bf16 TILE, the chip's own rows: rows at or past chunk
+        offset ``valid`` zeroed (exact). Returns ``t`` when every row is valid."""
+        if valid >= self.geo.chunk:
+            return t
+        keep = ttnn.lt(self._chip_iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
+        out = ttnn.multiply(t, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(t))
+        dealloc(keep)
+        return out
+
     def index_lists(self, base: int) -> dict:
         """The window index lists per start class with the window region at table row ``base`` (load time): query d
         reads rows base + d + 1 + j; positions < 0 dropped, the valid ids first, a sentinel tail. {class: [SP, TP,
@@ -372,6 +426,17 @@ class TtWindowCache:
         # (allocated here, at load time, and written in place: a buffer allocated mid-forward and kept shifts the
         # later steps' addresses, DS41-146)
         self._tail_buf = None
+        # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the kept tail (load time; written by the last chip only): the carry of
+        # chip 0's region, [1, 1, 4, WINDOW_BLOCK_BYTES] uint8, and the start it is the carry of (None: not valid)
+        self.rtail, self.rtail_end = None, None
+        if window_region():
+            self.rtail = ttnn.zeros(
+                [1, 1, WINDOW // 32, WINDOW_BLOCK_BYTES],
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+            )
         if tables.carry_local() is not None:
             self._tail_buf = ttnn.zeros(
                 [1, 1, WINDOW // 32, WINDOW_BLOCK_BYTES],
@@ -450,6 +515,7 @@ class TtWindowCache:
 
     def _drop_tail(self) -> None:
         self._tail_blocks = None  # (its buffer is the cache's own, kept)
+        self.rtail_end = None  # (likewise)
         if self._tail is not None:
             if self._tail[1].is_allocated():
                 dealloc(self._tail[1])
@@ -623,6 +689,9 @@ class TtWindowCache:
         if self._tail_buf is not None and self._tail_buf.is_allocated():
             dealloc(self._tail_buf)
         self._tail_buf = None
+        if self.rtail is not None and self.rtail.is_allocated():
+            dealloc(self.rtail)
+        self.rtail = None
         self.slab.free()
 
 
@@ -674,6 +743,19 @@ class TtWindowAttention:
         # WINDOW_KV_FORMAT=bfp8_blocks (DS41-150): the window region as bfloat8_b blocks, rows as stored
         self.win8 = window_bfp8()
         assert not self.win8 or self.INTERLEAVED, "WINDOW_KV_FORMAT=bfp8_blocks reads the rows as stored (ATTN_GLUE=on)"
+        # WINDOW_KV_FORMAT=bfp8_tiles (P.18): this layer's own window region on every chip (load time, per layer: a
+        # sender writes a receiver's region of the same layer only, tt/window_send.py), rows as stored
+        self.region = None
+        if window_region():
+            assert self.INTERLEAVED, "WINDOW_KV_FORMAT=bfp8_tiles reads the rows as stored (ATTN_GLUE=on)"
+            assert tables.send is not None, "WINDOW_KV_FORMAT=bfp8_tiles needs a mesh of more than one chip"
+            self.region = ttnn.zeros(
+                [1, 1, tables.region_pages(), WINDOW_BLOCK_BYTES],
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+            )
         perm = torch.arange(self.d) if self.stock else deinterleave_perm(self.d, self.rd)
         # wq_b [heads * 512, q_lora] -> each head's rope rows de-interleaved -> [q_lora, heads * 512], columns split
         # over TP (chip c: heads [c H/TP, (c+1) H/TP)); bf16 exact (e4m3 x 2^k)
@@ -861,6 +943,103 @@ class TtWindowAttention:
         cache.keep_blocks(gat, start, end)  # the next chunk's carry: this chunk's last 4 blocks (whole chunks)
         if not tables.is_kept(gat):
             dealloc(gat)
+
+    def _window_region(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache) -> None:
+        """WINDOW_KV_FORMAT=bfp8_tiles (P.18): the chunk's window rows into the served cache (unchanged: kv gathered
+        over TP, the SP row's block written locally at chunk-aligned starts; else gathered over the mesh and written
+        in the server's order) and into this layer's per-chip region ``region`` [carry 128 | own q_rows] (bfloat8_b
+        blocks of 32 rows, nearest even, as bfp8_blocks): the chip's own rows rounded at row 128 (ckv_bfp4), the
+        carry by ONE neighbour send (tt/window_send.py): chip q's last 128 rows -> chip q + 1, the last chip's kept
+        tail (``cache.rtail``: positions [start - 128, start)) -> chip 0. The kept tail is this layer's previous
+        chunk when it ended at ``start`` (whole chunks); else the carry rows are read from the served cache into it:
+        on the owner chip alone when the owner is the last chip (every chunk-aligned start: the previous chunk's last
+        stripe), else gathered over the mesh (``carry``). Does not consume ``kv``."""
+        g, tables = self.geo, self.tables
+        prepared = settings.get("CKV_BFP4_PREPARED") == "on"
+        own = kv
+        if g.tp > 1 and kv.shape[-2] != g.q_rows:  # (ATTN_SP32=off: the SP row's block, TP-replicated)
+            own = ttnn.mesh_partition(kv, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+        # 1. the served cache, as before (its TP gather and write)
+        if start % g.chunk == 0 and g.w in tables._sp_iota:
+            full = kv
+            if g.tp > 1 and kv.shape[-2] == g.q_rows:
+                full = ccl.all_gather(kv, 2, TP_AXIS, site="attn.kv_tp")  # [1, 1, W, 512] bf16
+            masked = tables.mask_local(full, end - start)
+            if masked is not full and full is not kv:
+                dealloc(full)
+            rm = to_rm(masked, memory_config=DRAM)
+            if masked is not kv:
+                dealloc(masked)
+            cache.write_local(rm, start, end)
+            dealloc(rm)
+        else:  # (prefix hits at other starts: every chip needs other rows of the chunk)
+            full = kv
+            if g.tp > 1 and kv.shape[-2] == g.q_rows:
+                full = ccl.all_gather(kv, 2, TP_AXIS)
+            if g.sp > 1:
+                nxt = ccl.all_gather(full, 2, SP_AXIS)
+                if full is not kv:
+                    dealloc(full)
+                full = nxt
+            keep = ttnn.lt(tables.iota, float(end - start), dtype=ttnn.bfloat16, memory_config=DRAM)
+            masked = ttnn.multiply(full, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(full))
+            dealloc(keep)
+            if full is not kv:
+                dealloc(full)
+            kv_rm = to_rm(masked, memory_config=DRAM)
+            dealloc(masked)
+            cache.write(kv_rm, start, end)
+            dealloc(kv_rm)
+        # 2. the chip's own rows -> region rows [128, 128 + q_rows) (pad rows zero, as the served rows)
+        om = tables.mask_chip(own, end - start)
+        ttnn.bringup.ckv_bfp4(
+            om,
+            self.region,
+            WINDOW,
+            dtype=ttnn.bfloat8_b,
+            blocks=True,
+            memory_config=DRAM,
+            prepared=prepared,
+            compact=True,
+            max_grid=max_grid(),
+        )
+        if om is not own:
+            dealloc(om)
+        if own is not kv:
+            dealloc(own)
+        # 3. chip 0's carry: the kept tail, or the served rows packed into it (start 0: no carry is read)
+        if cache.rtail_end != start and start > 0:
+            owner = cache.carry_owner(start)
+            if owner is not None and owner[0] == g.n - 1:
+                loc = owner[1]
+                rm16 = ttnn.ROW_MAJOR_LAYOUT
+                sl = cache.slab.slice_rows(  # (HOST_ALLOC=on, P.15: into a load-time output)
+                    loc,
+                    loc + WINDOW,
+                    host_alloc.out(self.mesh, "attn.carry_rows", [1, 1, WINDOW, 512], ttnn.bfloat16, rm16),
+                )
+                ct = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
+                dealloc(sl)
+            else:
+                carry = cache.carry(start)
+                ct = ttnn.to_layout(carry, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(carry))
+                if carry is not tables.zero_carry:
+                    dealloc(carry)
+            ttnn.bringup.ckv_bfp4(
+                ct,
+                cache.rtail,
+                0,
+                dtype=ttnn.bfloat8_b,
+                blocks=True,
+                memory_config=DRAM,
+                prepared=prepared,
+                compact=True,
+                max_grid=max_grid(),
+            )
+            dealloc(ct)
+        # 4. the neighbour send; the last chip keeps its own last rows: the next chunk's carry when this one is whole
+        tables.send(self.region, cache.rtail)
+        cache.rtail_end = end if end == start + g.chunk else None
 
     def _put_blocks(self, rows_tile: ttnn.Tensor, row0: int, prefix: ttnn.Tensor | None = None) -> None:
         """WINDOW_KV_FORMAT=bfp8_blocks: bf16 TILE rows (replicated, not consumed) at row0 of the window blocks,
@@ -1231,7 +1410,11 @@ class TtWindowAttention:
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
         cos, sin = self._rope_rows(start, s)
-        if self.win8:  # WINDOW_KV_FORMAT=bfp8_blocks: the window blocks, read as kv_format ROW_BFP8
+        index = self.tables.index[g.start_class(start)]
+        if self.region is not None:  # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the chip's own region, ROW_BFP8
+            self._window_region(kv, start, end, cache)
+            table, index = self.region, self.tables.region_index[g.start_class(start)]
+        elif self.win8:  # WINDOW_KV_FORMAT=bfp8_blocks: the window blocks, read as kv_format ROW_BFP8
             if self._packs(start):  # CKV_PACK_BEFORE_GATHER=on (P.11)
                 self._window_packed(kv, start, end, cache)
             else:
@@ -1241,9 +1424,9 @@ class TtWindowAttention:
         else:
             table = self._table(kv, start, end, cache)
         q_rm = self._q(q_resid, cos, sin)
-        o = self._sdpa(q_rm, table, self.tables.index[g.start_class(start)])
+        o = self._sdpa(q_rm, table, index)
         dealloc(q_rm)
-        if not self.win8:
+        if not self.win8 and table is not self.region:
             dealloc(table)
         out = self._out(o, cos, sin)
         dealloc(o)
