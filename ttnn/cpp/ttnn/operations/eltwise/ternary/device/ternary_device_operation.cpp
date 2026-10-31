@@ -133,7 +133,7 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
                 b_dim);
         }
 
-        uint32_t out_dim = std::max<uint32_t>(a_dim, b_dim);
+        uint32_t out_dim = (a_dim == 1) ? b_dim : a_dim;
         output_shape[i + largest_rank] = out_dim;
     }
     return ttnn::Shape(output_shape);
@@ -166,8 +166,7 @@ static ShardSpec generate_shard_spec_specless(
     const Shape& padded_out_shape,
     const TensorMemoryLayout& memory_layout,
     Layout output_layout) {
-    // Ternary TTT rejects zero dims (ternary_op_utils.cpp:840); TTS/TST use compute_broadcasted_output_binary
-    // (ternary_device_operation.cpp:109) which allows a_dim==b_dim==0, so the synthesizer's zero-vol guard fires.
+    // Output shapes with a zero dim reach here, so the synthesizer's zero-vol guard fires.
     return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
         input_tensor_a.device()->compute_with_storage_grid_size(),
         padded_out_shape,
