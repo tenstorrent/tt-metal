@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define LLK_PORT3_LAST_MATH 1 // RC experiment: math TRISC last on L1 port 3
 #include <algorithm>
 #include <cstdint>
 
