@@ -110,6 +110,7 @@ def conv_silu(qkv, state, taps, key_dim: int, value_dim: int, num_value_heads: i
         _cb(1, K * per_core, ttnn.bfloat16, cores),  # K state rows, same channels
         _cb(2, K * per_core, ttnn.bfloat16, cores),  # K diagonal-tap rows, same channels
         _cb(3, 2 * per_core, ttnn.bfloat16, cores),  # conv+silu output, double buffered
+        _cb(4, K * per_core, ttnn.bfloat16, cores),  # the shifted ring, for the writer only
     ]
 
     coord_to_head = {(c.x, c.y): h for h, c in enumerate(head_cores)}

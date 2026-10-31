@@ -15,7 +15,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t cb_qkv = 0, cb_state = 1, cb_diag = 2, cb_work = 3;
+constexpr uint32_t cb_qkv = 0, cb_state = 1, cb_diag = 2, cb_work = 3, cb_shift = 4;
 
 void kernel_main() {
     constexpr uint32_t kd_t = get_compile_time_arg_val(0);
@@ -45,8 +45,7 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer work(cb_work);
-    CircularBuffer st(cb_state);
-    CircularBuffer qkv(cb_qkv);
+    CircularBuffer shift(cb_shift);
 
     // ---- conv + silu row ----------------------------------------------------
     // cb_work arrives one group at a time (compute pushes a group, we pop it), which is what breaks
@@ -66,13 +65,11 @@ void kernel_main() {
 
     // ---- the shifted ring ---------------------------------------------------
     // row j <- old state row j+1 for j < K-1; row K-1 <- the new input row.
-    st.wait_front(K * per_core);
-    qkv.wait_front(per_core);
+    shift.wait_front(K * per_core);
     for (uint32_t j = 0; j < K; j++) {
         const uint32_t dst_base = j * c_t;
-        const bool from_state = (j + 1) < K;
-        CircularBuffer& src = from_state ? st : qkv;
-        const uint32_t src_row0 = from_state ? (j + 1) * per_core : 0;
+        const uint32_t src_row0 = j * per_core;
+        CircularBuffer& src = shift;
         const auto& acc_dst = sh;
         for (uint32_t i = 0; i < kd_t; i++) {
             noc.async_write(src, acc_dst, tb, {.offset_bytes = (src_row0 + i) * tb}, {.page_id = dst_base + q_col + i});
@@ -87,6 +84,5 @@ void kernel_main() {
         }
     }
     noc.async_write_barrier();
-    st.pop_front(K * per_core);
-    qkv.pop_front(per_core);
+    shift.pop_front(K * per_core);
 }

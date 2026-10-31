@@ -14,8 +14,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t cb_qkv = 0, cb_state = 1, cb_diag = 2, cb_work = 3;
-constexpr uint32_t cb_q = 4, cb_k = 5, cb_v = 6, cb_shift = 7;
+constexpr uint32_t cb_qkv = 0, cb_state = 1, cb_diag = 2, cb_work = 3, cb_shift = 4;
 
 void kernel_main() {
     constexpr uint32_t kd_t = get_compile_time_arg_val(0);
@@ -85,6 +84,36 @@ void kernel_main() {
         cb.push_back(K * per_core);
     };
     k_rows(st_acc, cb_state);
+
+    // The shifted ring for the writer: row j <- state row j+1 for j < K-1, row K-1 <- the new input.
+    // Filled here (re-reading those rows) so cb_state has ONE consumer: the compute kernel. When the
+    // writer shared cb_state instead, compute's pop drained it and the writer blocked forever.
+    {
+        CircularBuffer cb(cb_shift);
+        cb.reserve_back(K * per_core);
+        for (uint32_t j = 0; j < K; j++) {
+            const bool from_state = (j + 1) < K;
+            const uint32_t row = from_state ? (j + 1) : 0;
+            uint32_t d = j * per_core;
+            for (uint32_t i = 0; i < kd_t; i++) {
+                noc.async_read(from_state ? st_acc : qkv_acc, cb, tb,
+                               {.page_id = from_state ? (row * c_t + q_col + i) : (q_col + i)},
+                               {.offset_bytes = d++ * tb});
+            }
+            for (uint32_t i = 0; i < kd_t; i++) {
+                noc.async_read(from_state ? st_acc : qkv_acc, cb, tb,
+                               {.page_id = from_state ? (row * c_t + k_col + i) : (k_col + i)},
+                               {.offset_bytes = d++ * tb});
+            }
+            for (uint32_t i = 0; i < v_t; i++) {
+                noc.async_read(from_state ? st_acc : qkv_acc, cb, tb,
+                               {.page_id = from_state ? (row * c_t + v_col + i) : (v_col + i)},
+                               {.offset_bytes = d++ * tb});
+            }
+        }
+        noc.async_read_barrier();
+        cb.push_back(K * per_core);
+    }
 
     // The diagonals are [K, c_t, 32, 32]: one real 32x32 tile per channel, so tile (row j, channel ch)
     // is at page j*c_t + ch and each read is a whole tile (unlike state, which packs 32 channels in

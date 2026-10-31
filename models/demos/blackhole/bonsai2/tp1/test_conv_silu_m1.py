@@ -98,6 +98,15 @@ def test_conv_silu_matches_torch(mesh_device):
         logger.info(f"first non-finite at {idx.tolist()}; value {conv[tuple(idx)].item()}")
     logger.info(f"conv row0[0:8] = {conv[0,0,:8].tolist()}")
     logger.info(f"want row0[0:8] = {want[0,0,:8].tolist()}")
+    # Is it a scale/offset on the right values, or scrambled? Check the ratio and a correlation.
+    _m = (want[0,0,:].abs() > 1e-3)
+    if _m.any():
+        _ratio = (conv[0,0,:][_m] / want[0,0,:][_m])
+        logger.info(f"conv/want ratio: median {_ratio.median():.4f} p10 {_ratio.quantile(0.1):.4f} p90 {_ratio.quantile(0.9):.4f}")
+    _a = conv[0,0,:].flatten().double(); _b = want[0,0,:].flatten().double()
+    _a = _a - _a.mean(); _b = _b - _b.mean()
+    _pcc = float((_a*_b).sum() / ((_a*_a).sum().sqrt() * (_b*_b).sum().sqrt()))
+    logger.info(f"conv vs want PCC over the whole row: {_pcc:.6f}")
     err = (conv - want).abs()
     logger.info(f"conv: max err {err.max():.4e}, mean {err.mean():.4e}")
     logger.info(f"shift: max err {(shift - want_shift).abs().max():.4e}")
