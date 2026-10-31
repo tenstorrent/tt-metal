@@ -89,6 +89,8 @@ def base_env(repo: Path) -> dict[str, str]:
         "VIRTUAL_ENV": str(venv),
         "PATH": f"{venv / 'bin'}:{os.environ.get('PATH', '')}",
         "DS_PERF_IGNORE_POWER": "1",
+        # Pinned host-memory H2D makes weight load ~10x slower; 0 keeps the copy path (#52893).
+        "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES": "0",
     }
 
 
