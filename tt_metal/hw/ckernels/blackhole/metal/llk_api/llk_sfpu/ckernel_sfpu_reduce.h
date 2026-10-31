@@ -1166,6 +1166,19 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
     }
 }
 
+template <InstrModLoadStore INSTRUCTION_MODE>
+inline void clear_row_reduce_faces_1_3(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    for (std::uint32_t i = 0; i < block_rt_dim; i++) {
+        const std::uint32_t tile_row_offset = ROWS_PER_TILE * block_ct_dim * i;
+        for (std::uint32_t face = 1; face < 4; face += 2) {
+            for (std::uint32_t row = 0; row < ROWS_PER_FACE; row += ROWS_PER_LOAD) {
+                TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face * ROWS_PER_FACE + row);
+            }
+        }
+    }
+}
+
 /**
  * @brief Runtime validation helper for supported data formats for reduce sfpu kernel
  */
@@ -2066,6 +2079,10 @@ inline void calculate_reduce(
             pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
                 pool_type == PoolType::MIN,
             "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN");
+    }
+
+    if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
+        clear_row_reduce_faces_1_3<INSTRUCTION_MODE>(block_ct_dim, block_rt_dim);
     }
 }
 
