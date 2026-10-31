@@ -64,8 +64,9 @@ NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 # One adapter file serves both; the keyframe is the only difference between the two tasks.
 TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
 
-# 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
-DEVICE_BOUND_TARGETS = 52 * 4
+# 50 transformer blocks and 2 refiner blocks, each with to_q, to_k, to_v, to_out.0, ff.net.0.proj and ff.net.2.
+# The merge runs on the checkpoint's unfused layout, so q/k/v count separately.
+HYPERFLOW_MERGED_TARGETS = 52 * 6
 
 
 def _assert_two_time_temb_matches_host(pipeline, mesh_device) -> None:
@@ -161,15 +162,13 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         profiler=benchmark_profiler,
     )
 
-    # `load_h3_adapter_into` raises on unplaceable targets; confirm something (and for HyperFlow, all) bound.
-    handle = pipeline.adapter
-    assert handle is not None and len(handle) > 0, "the transformer was built without an adapter bound"
-    logger.info(f"adapter {handle.name}: {len(handle)} bound targets")
+    # A cache hit merged nothing this run; its entry is keyed on this adapter's digest and strength.
+    merged = pipeline.merged_targets
+    logger.info(f"merged adapter targets: {'none, weights from cache' if merged is None else merged}")
     if pipeline.hyperflow is not None:
         assert pipeline.hyperflow.num_forwards == NUM_FORWARDS
-        assert (
-            len(handle) == DEVICE_BOUND_TARGETS
-        ), f"bound {len(handle)} device targets, expected {DEVICE_BOUND_TARGETS}"
+        if merged is not None:
+            assert merged == HYPERFLOW_MERGED_TARGETS, f"merged {merged} targets, expected {HYPERFLOW_MERGED_TARGETS}"
         _assert_two_time_temb_matches_host(pipeline, mesh_device)
 
     log_pipeline_perf(
