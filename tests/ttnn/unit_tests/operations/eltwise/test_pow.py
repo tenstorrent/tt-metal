@@ -604,6 +604,30 @@ def test_binary_pow_fp32_overflow_to_inf(exponent, device):
     assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
 
 
+@pytest.mark.parametrize("exponent", [1e30, 1e32, 3e38, -1e30, -1e32, -3e38])
+@pytest.mark.parametrize("binary", [True, False], ids=["tensor_exponent", "scalar_exponent"])
+def test_pow_bf16_huge_exponent_overflows_to_inf(exponent, binary, device):
+    base = torch.arange(0x0080, 0x7F80, dtype=torch.int16).view(torch.bfloat16)
+    base = base[base > 1.0] if exponent > 0 else base[base < 1.0]
+    base = base[: base.numel() // 32 * 32].reshape(-1, 32)
+    golden = torch.pow(base.double(), exponent)
+    assert torch.isinf(golden).all() and (golden > 0).all()
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    if binary:
+        exp = torch.full_like(base, exponent)
+        tt_exp = ttnn.from_torch(exp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+    else:
+        result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+
+    bad = ~(torch.isinf(result) & (result > 0))
+    assert not bad.any(), (
+        f"{int(bad.sum())} of {bad.numel()} lanes are not +inf, "
+        f"e.g. pow({base[bad][0].item():g}, {exponent:g}) = {result[bad][0].item():g}"
+    )
+
+
 @pytest.mark.parametrize("exponent", [0.25, 0.5, 0.75, -0.25, -0.5, -0.75])
 def test_pow_arange_masking_fp32(exponent, device):
     tt_input = generate_clean_bf16_tensor(torch.float32)
