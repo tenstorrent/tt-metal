@@ -25,6 +25,25 @@
  *************************************************************************/
 
 /**
+ * @brief Whether an operand's unpack destination format can be delivered into SrcA/SrcB.
+ *
+ * Float32, Int32 and UInt32 are the unpacker output formats that only the Dest path supports (the
+ * unpack_to_dest cases of is_unpacker_format_conversion_supported_dest in cunpack_common.h). The host
+ * assigns them to a Float32 CB marked UnpackToDestMode::UnpackToDestFp32 (a marked Float16_b or Bfp8_b CB
+ * keeps its SrcA/SrcB destination format), to every RawUInt32 CB, and to Int32 and UInt32 CBs. Such an
+ * operand is read with copy_tile and the other unpack_A paths and cannot feed the FPU, whose operands come
+ * from SrcA/SrcB; the SrcA/SrcB unpack entry points (AB, matmul, reduce, tilizeA_B) assert this for both
+ * operands.
+ *
+ * @param operand_id: Operand id resolved with get_operand_id.
+ * @return True when the operand's unpack destination format has a SrcA/SrcB encoding.
+ */
+inline bool operand_unpacks_to_src(const std::uint32_t operand_id) {
+    const DataFormat unpack_dst = static_cast<DataFormat>(unpack_dst_format[operand_id]);
+    return unpack_dst != DataFormat::Float32 && unpack_dst != DataFormat::Int32 && unpack_dst != DataFormat::UInt32;
+}
+
+/**
  * Configure the unpacker hardware for operands A and B.
  *
  * Face geometry (face_r_dim, num_faces) and tile size for both operands are

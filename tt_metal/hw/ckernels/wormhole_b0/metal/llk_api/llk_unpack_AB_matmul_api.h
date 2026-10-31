@@ -40,6 +40,13 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
     const uint32_t unpB_num_faces = get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "in1 (SrcA operand) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "in0 (SrcB operand) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
@@ -101,6 +108,13 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "in0 (SrcB operand) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "in1 (SrcA operand) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandB_id],
