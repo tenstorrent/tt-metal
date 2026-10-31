@@ -9,6 +9,7 @@
 #include <climits>
 #include <cstring>
 #include <numeric>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "tt-metalium/bfloat16.hpp"
@@ -310,9 +311,43 @@ nb::object make_numpy_tensor(
     return dispatch_conversion(tensor_type, target_type, impl, t);
 }
 
+// True when the array's element strides are those of a C-ordered array (a size-1 dimension may have any stride).
+bool is_c_contiguous(const nb::ndarray<nb::numpy, nb::ro>& array) {
+    int64_t expected_stride = 1;
+    for (size_t dimension = array.ndim(); dimension-- > 0;) {
+        if (array.shape(dimension) != 1 && array.stride(dimension) != expected_stride) {
+            return false;
+        }
+        expected_stride *= static_cast<int64_t>(array.shape(dimension));
+    }
+    return true;
+}
+
+// Copies a strided array (a slice, transpose, step or Fortran-ordered array; strides may be negative) into C order.
+template <typename T>
+std::vector<T> gather_c_order(const T* data, const nb::ndarray<nb::numpy, nb::ro>& array) {
+    const size_t rank = array.ndim();
+    std::vector<T> c_order;
+    c_order.reserve(array.size());
+    std::vector<size_t> index(rank, 0);
+    int64_t offset = 0;
+    for (size_t element = 0; element < array.size(); ++element) {
+        c_order.push_back(data[offset]);
+        for (size_t dimension = rank; dimension-- > 0;) {
+            if (++index[dimension] < array.shape(dimension)) {
+                offset += array.stride(dimension);
+                break;
+            }
+            offset -= static_cast<int64_t>(array.shape(dimension) - 1) * array.stride(dimension);
+            index[dimension] = 0;
+        }
+    }
+    return c_order;
+}
+
 // Fast path: standard NumPy dtypes validated by nanobind
 ttnn::Tensor make_metal_tensor(
-    nb::ndarray<nb::numpy> numpy_data,
+    nb::ndarray<nb::numpy, nb::ro> numpy_data,
     tt::tt_metal::Layout target_layout,
     std::optional<tt::tt_metal::DataType> new_type,
     const ttnn::distributed::TensorToMesh* mapper) {
@@ -361,8 +396,14 @@ ttnn::Tensor make_metal_tensor(
             std::accumulate(shape_container.begin(), shape_container.end(), size_t(1), std::multiplies<size_t>());
 
         // Fast path: get data pointer directly from ndarray (no Python attribute lookup)
-        const void* data_ptr = numpy_data.data();
-        std::span<const NumpyType> numpy_data_span(static_cast<const NumpyType*>(data_ptr), data_size);
+        const auto* data_ptr = static_cast<const NumpyType*>(numpy_data.data());
+        // The pointer addresses the array's first element, not a C-ordered buffer, unless the strides say so.
+        std::vector<NumpyType> c_order;
+        if (!is_c_contiguous(numpy_data)) {
+            c_order = gather_c_order(data_ptr, numpy_data);
+            data_ptr = c_order.data();
+        }
+        std::span<const NumpyType> numpy_data_span(data_ptr, data_size);
 
         // Dispatch based on target data type
         switch (tensor_data_type) {
@@ -449,6 +490,11 @@ ttnn::Tensor make_metal_tensor(
             nb::exception_type::type_error,
             "Unsupported custom dtype '{}'. Only ml_dtypes.bfloat16 is supported.",
             dtype_name);
+    }
+
+    // The data pointer below is read as a C-ordered buffer, so copy any other layout into C order first.
+    if (!nb::cast<bool>(numpy_data_obj.attr("flags")["C_CONTIGUOUS"])) {
+        numpy_data_obj = numpy_data_obj.attr("copy")("C");
     }
 
     // Force bfloat16 type if not already specified

@@ -118,7 +118,7 @@ void py_module(nb::module_& m) {
             nb::arg("other"));
         py_tensor.def_static(
             "from_numpy",
-            [](nb::ndarray<nb::numpy> numpy_tensor,
+            [](nb::ndarray<nb::numpy, nb::ro> numpy_tensor,
                tt::tt_metal::Layout layout,
                std::optional<tt::tt_metal::DataType> new_type,
                ttnn::distributed::TensorToMesh* mapper) {
