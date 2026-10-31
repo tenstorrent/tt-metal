@@ -1652,7 +1652,8 @@ class TtMiMoModel:
 
         With a DeviceSampler (vLLM mode) a second trace on the same inputs, ``sampled``, also draws the sampled rows'
         tokens; a step replays it only when a row samples, so greedy batches skip the sampler. Both steps compile
-        before either capture: a program compiled after a capture may keep buffers the replays overwrite."""
+        before either capture: a program compiled after a capture may keep buffers the replays overwrite. A third,
+        ``sampler``, is the DeviceSampler alone on the greedy step's logits (``sample_enqueue``)."""
         assert self.decode_trace is None
         if greedy_only and self.greedy_head is None:
             # Persistent buffers, allocated before any capture.
@@ -1715,6 +1716,16 @@ class TtMiMoModel:
                 phase if phase is not None else 0
             ), "odd fabric reductions per step"
             captured.append({"id": trace_id, "output": output})
+        sampler = None
+        if len(captured) > 1:
+            # The sampled step's draw split from its forward: the greedy trace, then this one over the greedy tokens it
+            # wrote. Its programs are the sampled step's (a generic op's program keys on no buffer address), so it
+            # compiles nothing after the captures above.
+            assert written, "the sampler writes its draw into the next step's token input"
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            output = self.sampler(captured[0]["output"]["logits"], token_input=inputs[0])
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            sampler = {"id": trace_id, "output": output}
         ttnn.synchronize_device(self.mesh_device)
         self.decode_trace = {
             **captured[0],
@@ -1722,6 +1733,7 @@ class TtMiMoModel:
             "history": history,
             "greedy_only": greedy_only,
             "sampled": captured[1] if len(captured) > 1 else None,
+            "sampler": sampler,
         }
 
     def _history(self):
@@ -1743,8 +1755,9 @@ class TtMiMoModel:
     def release_decode_trace(self):
         if self.decode_trace is not None:
             ttnn.release_trace(self.mesh_device, self.decode_trace["id"])
-            if self.decode_trace["sampled"] is not None:
-                ttnn.release_trace(self.mesh_device, self.decode_trace["sampled"]["id"])
+            for key in ("sampled", "sampler"):
+                if self.decode_trace[key] is not None:
+                    ttnn.release_trace(self.mesh_device, self.decode_trace[key]["id"])
             self.decode_trace = None
 
     def _decode_replay(self, sample):
@@ -1762,6 +1775,21 @@ class TtMiMoModel:
             ttnn.synchronize_device(self.mesh_device)
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return trace["output"]
+
+    def sample_enqueue(self, handle):
+        """After a greedy decode step (``decode_enqueue`` or ``decode_enqueue_resident``, ``sample`` False; ``handle``
+        its output): the DeviceSampler's draw from that step's logits with the parameters, streams and grammar mask set
+        since. After a greedy replay it replays the sampler trace, which writes the draw over the greedy tokens in the
+        next step's input: the two replays leave what the sampled replay would. It replays on an empty queue, as the
+        sampled trace does (``_decode_replay``): the drain waits for the forward. After an untraced step it draws
+        eagerly (that step's inputs are gone; the next one reloads them). Non-blocking; returns the sampler's tokens."""
+        trace = self.decode_trace
+        if trace is None or handle is not trace["output"]:
+            return self.sampler(handle["logits"])
+        assert trace["sampler"] is not None, "a split sampled step needs the sampler trace (vLLM mode)"
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.execute_trace(self.mesh_device, trace["sampler"]["id"], cq_id=0, blocking=False)
+        return trace["sampler"]["output"]
 
     # ------------------------------------------------------------------ speculative decoding (reference/spec_decode.py)
     def setup_mtp(self, ckpt, cache_dir, layers=(0,), backfill=False):
