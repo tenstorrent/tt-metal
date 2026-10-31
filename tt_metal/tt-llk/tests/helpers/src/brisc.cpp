@@ -46,7 +46,14 @@ enum class BriscCommandState : std::uint32_t
     START_TRISCS                      = 1,
     RESET_TRISCS                      = 2,
     UPDATE_START_ADDR_CACHE_AND_START = 3,
+    POKE_TRISCS                       = 4, // RC experiment: one L1 fetch by the TRISCs in poke_mask, nothing else
 };
+
+// RC experiment (L1 port 3 arbiter state): POKE_TRISCS releases only the TRISCs in poke_mask (bit i = TRISC i)
+// from reset with their reset PC pointed at a JAL x0,0 at poke_loop, waits, and puts them back in reset. Each poked
+// TRISC makes one instruction fetch from L1 through its own L1 port (TRISC1/2: port 3) and then spins in its icache.
+static const mailbox_t poke_mask = mailboxes_arr + 8;                             // 0x1FFD8
+static const mailbox_t poke_loop = reinterpret_cast<mailbox_t>(0x1FFE0U);       // own 16-B line
 
 // Written to `brisc_counter` as the LAST step of firmware init. The host polls
 // for this value after deasserting BRISC reset to confirm the firmware has
@@ -144,6 +151,42 @@ int main()
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
                 break;
+
+#ifdef ARCH_WORMHOLE
+            case BriscCommandState::POKE_TRISCS:
+            {
+                const std::uint32_t mask = ckernel::load_blocking(poke_mask) & 0x7;
+                commit_store(poke_loop, 0x0000006FU); // JAL x0, 0
+                volatile std::uint32_t tt_reg_ptr* cfg_regs = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE);
+                for (int i = 0; i < 3; i++)
+                {
+                    if (mask & (1u << i))
+                    {
+                        cfg_regs[TRISC_CONFIG_REGS[i]] = reinterpret_cast<std::uint32_t>(poke_loop);
+                    }
+                }
+                cfg_regs[TRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0b111;
+                const std::uint32_t sr   = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
+                const std::uint32_t bits = mask << 12;
+                ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, (sr | TRISC_SOFT_RESET_MASK) & ~bits);
+                for (std::uint32_t i = 0; i < 2000; ++i)
+                {
+                    asm volatile("nop");
+                }
+                ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, sr | TRISC_SOFT_RESET_MASK);
+                do
+                {
+                    asm volatile("nop");
+                } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != (sr | TRISC_SOFT_RESET_MASK));
+                for (int i = 0; i < 3; i++)
+                {
+                    cfg_regs[TRISC_CONFIG_REGS[i]] = TRISC_ADDR_CACHE[i];
+                }
+                reset_state(counter);
+                commit_store(brisc_bread1, counter);
+                break;
+            }
+#endif
 
             case BriscCommandState::RESET_TRISCS:
                 set_triscs_soft_reset();

@@ -711,6 +711,7 @@ class BriscCmd(Enum):
     START_TRISCS = 1
     RESET_TRISCS = 2
     UPDATE_START_ADDR_CACHE_AND_START = 3
+    POKE_TRISCS = 4  # RC experiment
 
 
 format_tile_sizes = {
