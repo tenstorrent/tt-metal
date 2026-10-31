@@ -286,11 +286,12 @@ def strided_rs_prefill(x, weight, mesh, tt_ccl, compute_cfg, topology):
     x4 = x if len(x.shape) == 4 and x.shape[0] == 1 and x.shape[1] == 1 else ttnn.reshape(x, (1, 1, M, K_local))
     g = mesh.compute_with_storage_grid_size()
     gx, gy = min(12, g.x), _STRIDED_RS_GRID_ROWS
+    mb = _strided_rs_m_block(M, c["small_m"])
     cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=_strided_rs_m_block(M, c["small_m"]),
+        M_block_size=mb,
         K_block_size=c["kb"],
         N_block_size=8,
-        subblock_h=2,
+        subblock_h=min(2, mb),  # the op needs M_block % subblock_h == 0 (M block 1 at 256 rows)
         subblock_w=2,
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
     )
