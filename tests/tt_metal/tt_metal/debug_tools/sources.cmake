@@ -35,6 +35,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_waypoint.cpp
     watcher/test_runtime_args_known_garbage.cpp
     watcher/test_tile_counters_log.cpp
+    watcher/test_trisc_irq_mret_alias.cpp
     watcher/test_zero_mode_guard.cpp
 )
 
