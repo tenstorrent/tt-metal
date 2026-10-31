@@ -173,6 +173,12 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
+    // NEXTAFTER: the sign mask its NaN classifier applies to both operands, held in an LREG
+    // across the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
+    sfpi::vInt abs_mask;
+    if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+        abs_mask = 0x7FFFFFFF;
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -208,20 +214,31 @@ inline void calculate_sfpu_binary(
             // bfloat16 keeps its mantissa in the top 16 bits of the fp32 dest register, so one of
             // its ULPs is 0x10000 there.
             constexpr int kUlpStep = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
-            // Kept flat, with every value declared up front: the sfpi predication pass does not
-            // survive a v_if nested inside a v_else here.
+            // Every value is declared up front and nothing nests inside a v_else: the sfpi
+            // predication pass does not survive a v_if nested inside a v_else here.
             sfpi::vInt bits = sfpi::as<sfpi::vInt>(in0);
             // A step of zero leaves in0 alone, which is what in0 == in1 wants.
             sfpi::vInt step = 0;
             // The bit pattern grows away from zero for either sign, so the direction of the step
-            // depends on in0's sign as well as on which side in1 lies.
-            v_if(in0 < in1 && in0 >= 0.0f) { step = kUlpStep; }
+            // depends on in0's sign as well as on which side in1 lies. The two sides are not
+            // written symmetrically, and the asymmetry is load-bearing: sfpi lowers `in0 < 0.0f`
+            // to an SFPSETCC on in0's bits, but `in0 <= 0.0f` has no SETCC mode and goes through
+            // an SFPMAD negation, which flushes a denormal in0 to zero. The nested test below
+            // keeps that flush-based arm for the in0 > in1 side, so a denormal in0 steps exactly
+            // as it always has (bit-identical on silicon, every edge class); a bits-only sign flip
+            // for both sides would be cheaper still but sends (+denormal, negative) lanes the
+            // other way. The in0 < in1 side needs only the sign bit, so it is one arm plus a flip.
+            v_if(in0 < in1) { step = kUlpStep; }
             v_endif;
-            v_if(in0 < in1 && in0 < 0.0f) { step = -kUlpStep; }
+            v_if(in0 < 0.0f) { step = -step; }
             v_endif;
-            v_if(in0 > in1 && in0 > 0.0f) { step = -kUlpStep; }
-            v_endif;
-            v_if(in0 > in1 && in0 <= 0.0f) { step = kUlpStep; }
+            v_if(in0 > in1) {
+                step = -kUlpStep;
+                // Nested on purpose: the inner SETCC narrows the outer predicate, so the
+                // in1 - in0 difference is formed once for both arms.
+                v_if(in0 <= 0.0f) { step = kUlpStep; }
+                v_endif;
+            }
             v_endif;
             result = sfpi::as<sfpi::vFloat>(bits + step);
             // Zeros need their own path: neither zero reaches its neighbour by stepping its own
@@ -250,11 +267,12 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
+            // The mask is abs_mask, bound once above the loop; kInfBits stays a literal because
+            // holding it in an LREG as well spills.
             constexpr int32_t kInfBits = 0x7F800000;
-            constexpr int32_t kAbsMask = 0x7FFFFFFF;
-            v_if((bits & kAbsMask) > kInfBits) { result = nan; }
+            v_if((bits & abs_mask) > kInfBits) { result = nan; }
             v_endif;
-            v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+            v_if((sfpi::as<sfpi::vInt>(in1) & abs_mask) > kInfBits) { result = nan; }
             v_endif;
         }
 
