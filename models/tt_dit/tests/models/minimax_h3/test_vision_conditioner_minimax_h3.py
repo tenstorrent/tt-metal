@@ -31,6 +31,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from .common_av import is_host
 
@@ -132,7 +133,7 @@ def _conditioner_dir() -> str:
         elif not ref and os.path.isdir(_LOCAL_MIRROR):
             root = _LOCAL_MIRROR
         else:
-            repo_id = ref or _HF_REPO
+            repo_id = ensure_cached(ref or _HF_REPO)
             logger.info(f"MiniMax-H3 conditioner not local; fetching {_PATTERNS} from {repo_id}")
             root = snapshot_download(repo_id=repo_id, allow_patterns=_PATTERNS)
         return os.path.join(root, _SUBFOLDER)

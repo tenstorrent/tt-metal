@@ -1675,9 +1675,11 @@
 # ── WAN 2.2 (Black Hole quad galaxy, bh_sc4 / exabox-multihost-ci-sc4) ──
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
@@ -1708,9 +1710,11 @@
 
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad perf tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
@@ -1745,9 +1749,11 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B multihost quad e2e tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
@@ -1778,9 +1784,11 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B multihost quad perf tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
@@ -1816,11 +1824,12 @@
 # ── WAN 2.2 (Black Hole single galaxy, bh_sc1) ───────────────────
 - name: TT-DiT Wan2.2-T2V-A14B single galaxy perf tests
   cmd: |
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1844,11 +1853,12 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B single galaxy perf tests
   cmd: |
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1877,7 +1887,8 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1900,7 +1911,8 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     # Keep five seeds and every frame. Appearance metrics use the original clips;
     # temporal metrics use lossless 960x544 copies, scored concurrently after pytest.
@@ -1935,13 +1947,14 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
-    export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    export LTX_I2V_IMAGE=models/sample_data/ltx_i2v_guitar_room.jpg
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-pro-i2v
@@ -1959,7 +1972,8 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1968,7 +1982,10 @@
     # Condition on a fixed image so distilled_i2v takes the single-i2v path and SKIPS the in-process
     # t2v pre-gen -- on 4x8 that chain reloads the encoder over captured traces and wedges (the test
     # documents this at test_pipeline_ltx_distilled.py: "t2v->i2v chain in one process ... wedges").
-    export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    export LTX_I2V_IMAGE=models/sample_data/ltx_i2v_guitar_room.jpg
+    # Keep the rendered clip: everything under PIPELINE_DIR is uploaded as the job artifact (the seam check
+    # is intermittent, so a failing clip is the only way to see what it flagged).
+    export LTX_I2V_OUT="${PIPELINE_DIR}/i2v.mp4"
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
   model: ltx-2.3-fast-i2v

@@ -1687,10 +1687,11 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     # Resolve the adapter before pytest opens any devices; keep the tests offline. A hit in the
-    # shared /mnt/models cache is used in place; only a missing adapter is fetched into job storage.
+    # shared Weka cache is used in place; only a missing adapter is fetched into job storage.
     LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
       env HF_HUB_OFFLINE=0 python3 -m models.tt_dit.utils.ltx_lora_asset \
       --download-dir "${PIPELINE_DIR:?CI staging directory required}/.lora") || exit 1
@@ -1699,10 +1700,10 @@
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     # test_audio_ltx discovers its checkpoint via the DEFAULT hf cache (~/.cache/huggingface), not
-    # HF_HOME -- symlink it to the pre-staged /mnt/models cache so it resolves offline (no-op for the rest).
-    mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/models/huggingface ~/.cache/huggingface' || true
+    # HF_HOME -- symlink it to the pre-staged Weka cache so it resolves offline (no-op for the rest).
+    mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/weka/model-weights/video/huggingface ~/.cache/huggingface' || true
     # One multihost-ci-sc1 leg runs every LTX component test on the 4x8 galaxy (bh_sc1).
-    # Block tests use random weights; audio/upsampler resolve offline from /mnt/models.
+    # Block tests use random weights; the 22B av model case, audio and upsampler resolve offline from the Weka cache.
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || exit $?; }
     # Cheap/CPU/block tests first so a slow later test can never starve them out of the leg timeout.
@@ -1711,7 +1712,8 @@
     run models/tt_dit/tests/models/ltx/test_rope_ltx.py
     run models/tt_dit/tests/models/ltx/test_attention_ltx.py     -k "4x8sp1tp0nl2_line_is_fsdp0"
     # video block; ckpt_fast pins one checkpoint_variant (video ignores it -> avoids redundant skips).
-    run models/tt_dit/tests/models/ltx/test_transformer_ltx.py   -k "4x8sp1tp0nl2_ring_is_fsdp0 and video and ckpt_fast"
+    # One av case (model, stage_1) loads the real 22B distilled checkpoint and checks PCC against diffusers.
+    run models/tt_dit/tests/models/ltx/test_transformer_ltx.py   -k "4x8sp1tp0nl2_ring_is_fsdp0 and ckpt_fast and (video or (av and stage_1 and test_ltx_transformer_model))"
     run models/tt_dit/tests/models/ltx/test_ltx_lora_ondevice.py -k "bh_4x8sp1tp0"
     run models/tt_dit/tests/models/ltx/test_latent_upsampler.py  -k "4x8h0w1nl2_line"
     # heavier last. VAE: drop the 145-frame full-res decode (e2e-scale, >20 min); 9f-2K still covers decode.
@@ -1740,10 +1742,11 @@
     # Multihost jobs skip setup-job's watcher env; DISABLE_ETH avoids the ACTIVE_ETH overflow.
     export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
@@ -1770,10 +1773,11 @@
     # Multihost jobs skip setup-job's watcher env; DISABLE_ETH avoids the ACTIVE_ETH overflow.
     export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
@@ -1804,8 +1808,10 @@
     # tt-run forwards TT_* variables to every rank, so all four galaxies are watched.
     export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     UNIT_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_transformer_wan.py"
     TTRUN_PY="${TTRUN_PY:-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py}"
