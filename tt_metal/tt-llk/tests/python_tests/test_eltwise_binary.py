@@ -267,6 +267,7 @@ def _run_eltwise_binary_test(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    test_name="sources/eltwise_binary_test.cpp",
 ):
     if transpose_srca == Transpose.Yes and broadcast_type == BroadcastType.Scalar:
         pytest.skip("SrcA transpose is not supported with scalar broadcast")
@@ -404,7 +405,7 @@ def _run_eltwise_binary_test(
         run_types = [PerfRunType.L1_TO_L1]
 
     test_config_kwargs = {
-        "test_name": "sources/eltwise_binary_test.cpp",
+        "test_name": test_name,
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),

@@ -164,6 +164,7 @@ def _run_reduce_test(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    narrow_scaler=False,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
     skip_ttsim_partial_face_bfp_zero_write(
@@ -181,6 +182,10 @@ def _run_reduce_test(
     )
     # One resident scaler tile, as in production.
     src_B = _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type)
+    if narrow_scaler:
+        # A [1,32] scaler is its first 32 datums (two one-row faces); the rest of the buffer is poison
+        # that changes the result if the unpacker reads past the scaler.
+        src_B[_NARROW_SCALER_DATUMS:] = _NARROW_SCALER_POISON
 
     output_tile_count = 1 if is_reduce_to_one else tile_cnt_A
 
@@ -197,7 +202,11 @@ def _run_reduce_test(
         raise ValueError("perf_report must be provided when is_perf=True")
 
     test_config_kwargs = {
-        "test_name": "sources/reduce_test.cpp",
+        "test_name": (
+            "sources/reduce_narrow_scaler_test.cpp"
+            if narrow_scaler
+            else "sources/reduce_test.cpp"
+        ),
         "formats": formats,
         "templates": [
             MATH_OP(mathop=mathop_mapping[reduce_dim], pool_type=pool_type),
@@ -344,4 +353,46 @@ def test_reduce_bfp4_b(
         math_fidelity,
         is_reduce_to_one,
         tile_dimensions,
+    )
+
+
+_NARROW_SCALER_DATUMS = 32
+_NARROW_SCALER_POISON = 2
+
+
+def _narrow_scaler_pool_types(reduce_dim):
+    # SUM/AVG REDUCE_ROW swaps the scaler into SrcA, which still needs a scaler shaped like the data.
+    if reduce_dim == ReduceDimension.Row:
+        return [ReducePool.Max]
+    return [ReducePool.Max, ReducePool.Sum]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+    reduce_dim=REDUCE_DIMS,
+    pool_type=_narrow_scaler_pool_types,
+    math_fidelity=[MathFidelity.HiFi4],
+    is_reduce_to_one=[False],
+    tile_dimensions=[[32, 32]],
+)
+def test_reduce_narrow_scaler(
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    math_fidelity,
+    is_reduce_to_one,
+    tile_dimensions,
+):
+    """A [1,32] scaler with a 32x32 data tile: faces 2 and 3 must reuse the scaler's two faces."""
+    _run_reduce_test(
+        formats,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        math_fidelity,
+        is_reduce_to_one,
+        tile_dimensions,
+        narrow_scaler=True,
     )

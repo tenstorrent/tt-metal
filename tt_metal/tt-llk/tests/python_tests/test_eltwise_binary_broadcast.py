@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from helpers.constraints import get_valid_eltwise_binary_math_fidelities
+from helpers.format_config import DataFormat
 from helpers.llk_params import BroadcastType, DestAccumulation, DestSync, Transpose
-from helpers.param_config import parametrize
+from helpers.param_config import input_output_formats, parametrize
 from test_eltwise_binary import (
     BFP4_MATH_OPS,
     _get_valid_formats,
@@ -120,4 +121,55 @@ def test_eltwise_binary_bfp4_b_broadcast(
         input_dimensions,
         tile_dimensions,
         acc_to_dest,
+    )
+
+
+@parametrize(
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=input_output_formats([DataFormat.Float16_b]),
+    broadcast_type=[BroadcastType.Scalar],
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
+        formats, math_op
+    ),
+    transpose_srca=Transpose.No,
+    tile_dimensions=[[32, 32], [16, 32]],
+    input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_eltwise_binary_input_dimensions(
+        dest_acc,
+        dest_sync,
+        formats,
+        tile_dimensions,
+        existing_dimensions=[[64, 32]],
+    ),
+    acc_to_dest=get_eltwise_binary_acc_to_dest,
+)
+def test_eltwise_binary_broadcast_narrow_scalar(
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    broadcast_type,
+    math_op,
+    math_fidelity,
+    transpose_srca,
+    input_dimensions,
+    tile_dimensions,
+    acc_to_dest,
+):
+    """Scalar broadcast with SrcB declared as a [1,32] tile: the unpack reads its row, not A's face height."""
+    _run_eltwise_binary_test(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        broadcast_type,
+        math_op,
+        math_fidelity,
+        transpose_srca,
+        input_dimensions,
+        tile_dimensions,
+        acc_to_dest,
+        test_name="sources/eltwise_binary_narrow_scalar_test.cpp",
     )
