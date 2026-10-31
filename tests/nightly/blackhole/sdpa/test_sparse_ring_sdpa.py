@@ -4,19 +4,23 @@
 
 """Functional correctness of the block-sparse ring SDPA (`ttnn.transformer.sparse_ring_sdpa`) on Blackhole.
 
-The block mask and the pooled K / V are built in torch, so the cases control density and structure exactly.
-Each case runs the sparse op and the dense `ring_joint_scaled_dot_product_attention` on the same inputs, and
-checks the sparse output against:
+The block mask and the pooled K / V are built in torch, so the cases control density and structure exactly. Each case
+runs the sparse op (and, where it is compared, the dense `ring_joint_scaled_dot_product_attention`) on the same
+inputs and checks the sparse output against:
 
-  dense      the dense ring op. A keep-all mask makes the sparse op dense attention, so it must match closely;
-             at lower densities it must stay close.
-  reference  fp32 torch block-sparse attention with the same mask: kept 64-token blocks exact, every other valid
-             block one pooled entry (mean K, mean V) weighted by its token count. This is what the op computes,
-             so it separates kernel errors from the approximation. The kept-only tests omit pooled K / V (the
-             VSA fine-branch mode); their reference drops the pooled entries and normalizes over the kept blocks.
+  reference  fp64 torch block-sparse attention with the same mask: kept 64-token blocks exact, every other valid
+             block one pooled entry (mean K, mean V) weighted by its token count (Sol). The kept-only tests omit
+             pooled K / V (VSA's fine branch); their reference drops the pooled entries and normalizes over the kept
+             blocks. This is what the op computes, so it separates kernel errors from the approximation.
+  dense      the dense ring op. A keep-all mask without partial blocks makes the sparse op dense attention, so it
+             must match closely; otherwise dense is logged.
 
-Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring). The 5 s MiniMax-H3 geometry is skipped
-on CI.
+Small geometries gate on 0.999 PCC to the reference. Production lengths (MiniMax-H3 5 / 10 / 15 s) gate against the
+dense op's own accuracy on the same inputs (_check_vs_dense_floor). The cases cover: keep-all, random densities,
+partial last blocks and a logical_n tail, mask structures (random, band, clustered, uneven rows), minimal masks,
+per-head masks, determinism, new inputs on a cached program, several Q passes, pair steps (r1024k256: three blocks of
+one head per core) and the kept-only mode. Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring);
+production lengths are skipped on CI.
 """
 
 import math
@@ -195,6 +199,19 @@ def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled
     return out
 
 
+def dense_reference(q, k, v, logical_n, scale, heads, shards, rows):
+    """fp64 exact attention over the logical_n real tokens for the given heads / shards (NaN elsewhere), in 512-row
+    chunks: the dense op's own accuracy floor on the same inputs."""
+    out = torch.full(q.shape, float("nan"))
+    for h in heads:
+        kh, vh = k[0, h, :logical_n].double(), v[0, h, :logical_n].double()
+        for s, r0 in ((s, r0) for s in shards for r0 in range(0, rows, 512)):
+            sl = slice(s * rows + r0, s * rows + min(r0 + 512, rows))
+            w = torch.softmax((q[0, h, sl].double() @ kh.T) * scale, dim=1)
+            out[0, h, sl] = (w @ vh).float()
+    return out
+
+
 @pytest.fixture(scope="module")
 def runtime():
     rt = open_ring_joint_sdpa_runtime(MESH_CONFIG)
@@ -262,8 +279,11 @@ class Case:
         total = HEADS_PER_DEVICE * self.geo.nb()
         return -(-total // cores), max(1, total // cores)
 
-    def run(self, q, k, v, mask, *, want_dense=True, want_ref=True, q_blocks_per_pass=None, pooled=True):
-        """pooled=False omits pooled K / V: kept blocks only (the VSA fine-branch mode)."""
+    def run(
+        self, q, k, v, mask, *, want_dense=True, want_ref=True, q_blocks_per_pass=None, pooled=True, dense_floor=False
+    ):
+        """pooled=False omits pooled K / V: kept blocks only (the VSA fine-branch mode). dense_floor=True (with
+        want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"])."""
         rt, geo = self.rt, self.geo
         tq, tk, tv = (self._upload(x, self.seq_dims) for x in (q, k, v))
         pooled_k, pooled_v = (pool(x, geo, self.S).bfloat16().float() for x in (k, v))
@@ -319,10 +339,13 @@ class Case:
         # Reference coverage (fp64 on the host dominates the test time):
         #   True / "sample": heads first, second, middle, last on every shard (every device, the head boundaries);
         #   "slice": first and last head of the first and last shard (production sizes); "full": everything.
+        dense_ref = None
         if want_ref == "full":
             sl = {}
         elif want_ref == "slice":
             sl = dict(heads=[0, self.H - 1], shards=[0, self.S - 1])
+            if dense_floor:
+                dense_ref = dense_reference(q, k, v, geo.logical_n, self.scale, rows=geo.rows, **sl)
         else:
             sl = dict(heads=sorted({0, 1, self.H // 2, self.H - 1}))
         ref = (
@@ -335,6 +358,7 @@ class Case:
             "sparse": sparse[:, :, :n],
             "dense": None if dense is None else dense[:, :, :n],
             "ref": None if ref is None else ref[:, :, :n],
+            "dense_ref": None if dense_ref is None else dense_ref[:, :, :n],
         }
 
 
@@ -352,6 +376,21 @@ def _check(tag, r, density, *, dense_min, ref_min):
         assert p_dense > dense_min, f"{tag}: pcc vs dense {p_dense:.5f}"
     if ref_min is not None:
         assert p_ref > ref_min, f"{tag}: pcc vs reference {p_ref:.5f}"
+
+
+# Production lengths are gated against the dense op's accuracy on the same inputs: bf16 inputs and accumulators bound
+# how close either op gets to an fp64 reference, and the bound drops with the number of keys. The sparse op may not
+# lose more than DENSE_FLOOR_MARGIN of PCC to its exact (block-sparse) reference than the dense op loses to exact
+# attention.
+DENSE_FLOOR_MARGIN = 5e-4
+
+
+def _check_vs_dense_floor(tag, r, density):
+    p_ref = _pcc(r["ref"], r["sparse"])
+    p_floor = _pcc(r["dense_ref"], r["dense"])
+    logger.info(f"[{tag}] block density {density:.3f}: pcc vs reference {p_ref:.5f}, dense vs exact {p_floor:.5f}")
+    assert torch.isfinite(r["sparse"]).all(), f"{tag}: non-finite output"
+    assert p_ref > p_floor - DENSE_FLOOR_MARGIN, f"{tag}: pcc vs reference {p_ref:.5f}, dense floor {p_floor:.5f}"
 
 
 # rows 512: few pieces per head; 1024: about two Q blocks per core, cores straddling heads; k 256 / 512: 4 / 8
@@ -460,14 +499,14 @@ def test_fresh_inputs_per_call(runtime, geom):
 @pytest.mark.parametrize("density", [KEEP_ALL, 0.15])
 @pytest.mark.parametrize("k_chunk", [256, 384])
 def test_production_5s(runtime, k_chunk, density):
-    """MiniMax-H3 at 5 s: 4736 rows per device, the dense op at its measured chunks (320, 384). Gated on a sliced fp64
-    reference (first / last head of the first / last shard); dense is logged: at 37,888 random keys dense attention
-    is nearly flat, so bf16 rounding in either op dominates its PCC."""
+    """MiniMax-H3 at 5 s: 4736 rows per device (one pass, pair steps), the dense op at its measured chunks (320, 384).
+    Gated on a sliced fp64 reference (first / last head of the first / last shard) against the dense op's accuracy
+    floor on the same inputs."""
     geo = Geometry(4736, 4736 * MESH_CONFIG.sp_size, k_chunk, dense_chunks=(320, 384))
     case = Case(runtime, geo)
     mask = make_mask(geo, case.S, case.H, density=density, seed=6)
-    r = case.run(*case.inputs(6), mask, want_ref="slice")
-    _check(f"5s k{k_chunk} d{density}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    r = case.run(*case.inputs(6), mask, want_ref="slice", dense_floor=True)
+    _check_vs_dense_floor(f"5s k{k_chunk} d{density}", r, _density(mask, geo, case.S))
 
 
 @pytest.mark.parametrize("passes", [2, 3])
@@ -501,16 +540,29 @@ def test_forced_passes(runtime, geom, passes):
 @SLOW
 @pytest.mark.parametrize("density", [KEEP_ALL, 0.15])
 def test_production_10s(runtime, density):
-    """MiniMax-H3 at 10 s: 9184 rows per device, more Q blocks per core than fit L1 at once, so the op picks
-    several passes (logged by the program factory). Gated on a sliced fp64 reference; dense is logged (each shard's
+    """MiniMax-H3 at 10 s: 9184 rows per device, more Q blocks per core than fit L1 at once, so the op picks two
+    passes with pair steps (logged by the program factory). Gated against the dense op's accuracy floor (each shard's
     32-token last block is pooled even with every full block kept)."""
     geo = Geometry(9184, 9184 * MESH_CONFIG.sp_size, 256, dense_chunks=(256, 512))
     case = Case(runtime, geo)
     most, _ = case.blocks_per_core()
     logger.info(f"[10s] {most} Q blocks per core at most")
     mask = make_mask(geo, case.S, case.H, density=density, seed=8)
-    r = case.run(*case.inputs(8), mask, want_ref="slice")
-    _check(f"10s d{density}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    r = case.run(*case.inputs(8), mask, want_ref="slice", dense_floor=True)
+    _check_vs_dense_floor(f"10s d{density}", r, _density(mask, geo, case.S))
+
+
+@SLOW
+@pytest.mark.parametrize("density", [0.17])
+def test_production_15s(runtime, density):
+    """MiniMax-H3 at 15 s: 13664 rows per device, two passes of 14 Q blocks per core and no pair steps: the
+    configuration with the most resident blocks per core (the compute threads' stack sizing case). Gated against the
+    dense op's accuracy floor."""
+    geo = Geometry(13664, 13664 * MESH_CONFIG.sp_size, 256, dense_chunks=(256, 512))
+    case = Case(runtime, geo)
+    mask = make_mask(geo, case.S, case.H, density=density, seed=16)
+    r = case.run(*case.inputs(16), mask, want_ref="slice", dense_floor=True)
+    _check_vs_dense_floor(f"15s d{density}", r, _density(mask, geo, case.S))
 
 
 # Kept blocks only (no pooled K / V): the mode the VSA fine branch needs. The softmax normalizes over the kept blocks,
@@ -552,3 +604,15 @@ def test_kept_only_forced_passes(runtime, geom):
     p_one = _pcc(one["sparse"], r["sparse"])
     _check(f"kept-only passes {geom}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
     assert p_one > 0.9999, f"2 passes vs one pass: pcc {p_one:.6f}"
+
+
+@SLOW
+@pytest.mark.parametrize("density", [0.1])
+def test_production_kept_only_10s(runtime, density):
+    """No pooled route (VSA's fine branch) at MiniMax-H3 10 s: kept blocks only, two passes. Gated on the sliced
+    kept-only reference against the dense op's accuracy floor."""
+    geo = Geometry(9184, 9184 * MESH_CONFIG.sp_size, 256, dense_chunks=(256, 512))
+    case = Case(runtime, geo)
+    mask = make_mask(geo, case.S, case.H, density=density, seed=17)
+    r = case.run(*case.inputs(17), mask, want_ref="slice", dense_floor=True, pooled=False)
+    _check_vs_dense_floor(f"kept-only 10s d{density}", r, _density(mask, geo, case.S))
