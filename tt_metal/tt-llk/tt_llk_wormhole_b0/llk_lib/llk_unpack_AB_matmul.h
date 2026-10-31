@@ -16,9 +16,24 @@
 #include "llk_unpack_common.h"
 #include "lltt.h"
 #include "sfpi.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+/**
+ * @brief Whether matmul unpacks this operand one face at a time.
+ *
+ * A tile with one row of faces (fewer than 32 rows) is unpacked face by face, so each face lands in its
+ * own 16-row slot of the source register. Same rule as the host-side Tile::partial_face (tile height < 32).
+ *
+ * @param tensor_shape: Operand tile shape.
+ */
+constexpr bool matmul_unpack_face_by_face(const ckernel::TensorShape& tensor_shape)
+{
+    return tensor_shape.total_row_dim() < TILE_R_DIM;
+}
 
 /**
  * @brief Set the SrcA address step used to stream matmul in1 columns.
@@ -46,15 +61,19 @@ inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t til
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
- * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
- * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
+ * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB).
+ * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA).
  */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
-    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
+    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const ckernel::TensorShape in0_tensor_shape, const ckernel::TensorShape in1_tensor_shape)
 {
     // in0/inA - loaded to SrcB
     // in1/inB - loaded to SrcA
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_mop_config_", in0_tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_mop_config_", in1_tensor_shape);
+    const bool unpA_partial_face = matmul_unpack_face_by_face(in1_tensor_shape);
+    const bool unpB_partial_face = matmul_unpack_face_by_face(in0_tensor_shape);
 
     const bool reuse_a                      = ct_dim >= rt_dim;
     const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 16 : ((!reuse_a && unpB_partial_face) ? 16 : 10);
@@ -194,29 +213,31 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
- * @param unpA_face_r_dim: Rows per face for operand A.
- * @param unpB_face_r_dim: Rows per face for operand B.
- * @param unpA_num_faces: Number of faces for operand A, valid values = <1, 2, 4>.
- * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
- * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
- * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
+ * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB). A tile shorter than 32 rows is unpacked face by face.
+ * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA). A tile shorter than 32 rows is unpacked face by face.
  * @note Call @ref _llk_unpack_AB_matmul_uninit_ after this function to restore the modified datum-count state.
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
-    const std::uint32_t transpose       = 0,
-    const std::uint32_t ct_dim          = 1,
-    const std::uint32_t rt_dim          = 1,
-    const std::uint32_t kt_dim          = 1,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces  = 4,
-    const std::uint32_t unpB_num_faces  = 4,
-    const bool unpA_partial_face        = false,
-    const bool unpB_partial_face        = false)
+    const std::uint32_t transpose               = 0,
+    const std::uint32_t ct_dim                  = 1,
+    const std::uint32_t rt_dim                  = 1,
+    const std::uint32_t kt_dim                  = 1,
+    const ckernel::TensorShape in0_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape in1_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_init_", in0_tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_init_", in1_tensor_shape);
+    // Unpacker A feeds SrcA from in1; unpacker B feeds SrcB from in0.
+    const std::uint32_t unpA_face_r_dim = in1_tensor_shape.face_r_dim;
+    const std::uint32_t unpB_face_r_dim = in0_tensor_shape.face_r_dim;
+    const std::uint32_t unpA_num_faces  = in1_tensor_shape.total_num_faces();
+    const std::uint32_t unpB_num_faces  = in0_tensor_shape.total_num_faces();
+    const bool unpA_partial_face        = matmul_unpack_face_by_face(in1_tensor_shape);
+    const bool unpB_partial_face        = matmul_unpack_face_by_face(in0_tensor_shape);
+
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
@@ -258,7 +279,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
-    _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+    _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, in0_tensor_shape, in1_tensor_shape);
 }
 
 /**
@@ -288,8 +309,8 @@ inline void _llk_unpack_AB_matmul_uninit_()
  * @param tile_index_b: Starting tile index into operand B.
  * @param tile_size_a: Size of one operand A tile, used to compute per-tile offsets.
  * @param tile_size_b: Size of one operand B tile, used to compute per-tile offsets.
- * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
- * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
+ * @param in0_tensor_shape: Tile shape of in0 (operand A, loaded to SrcB); must match the init call.
+ * @param in1_tensor_shape: Tile shape of in1 (operand B, loaded to SrcA); must match the init call.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
@@ -305,16 +326,20 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t tile_index_b,
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
-    const bool unpA_partial_face = false,
-    const bool unpB_partial_face = false,
-    std::uint32_t ct_dim         = 1,
-    const std::uint32_t rt_dim   = 1,
-    const std::uint32_t kt_dim   = 1)
+    const ckernel::TensorShape in0_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape in1_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    std::uint32_t ct_dim                        = 1,
+    const std::uint32_t rt_dim                  = 1,
+    const std::uint32_t kt_dim                  = 1)
 {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_", in0_tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_", in1_tensor_shape);
+    const bool unpA_partial_face = matmul_unpack_face_by_face(in1_tensor_shape);
+    const bool unpB_partial_face = matmul_unpack_face_by_face(in0_tensor_shape);
 
-    volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile std::uint32_t* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;

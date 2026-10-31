@@ -13,40 +13,39 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 struct OutputCBs {
-    uint32_t l_cb;
-    uint32_t s_cb;
-    uint32_t m_cb;
+    std::uint32_t l_cb;
+    std::uint32_t s_cb;
+    std::uint32_t m_cb;
 };
 
-template <uint32_t scale_fp32, uint32_t Sq_chunk_t, uint32_t vDHt>
+template <std::uint32_t scale_fp32, std::uint32_t Sq_chunk_t, std::uint32_t vDHt>
 inline OutputCBs reduce_fct(
-    uint32_t cb_out_o,
-    uint32_t cb_out_accumulate_im_2,
-    uint32_t cb_out_accumulate_im,
-    uint32_t cb_prev_sum_2,
-    uint32_t cb_m_in,
-    uint32_t cb_prev_max,
-    uint32_t cb_cur_max,
-    uint32_t cb_exp_max_diff_2,
-    uint32_t cb_prev_sum,
-    uint32_t cb_exp_max_diff,
-    uint32_t cb_cur_sum,
-    uint32_t cb_m_temp,
-    uint32_t cb_s_temp,
-    uint32_t cb_s1_temp,
-    uint32_t cb_s2_temp,
-    uint32_t cb_l1_temp,
-    uint32_t cb_l2_temp,
-    uint32_t loop_size) {
+    std::uint32_t cb_out_o,
+    std::uint32_t cb_out_accumulate_im_2,
+    std::uint32_t cb_out_accumulate_im,
+    std::uint32_t cb_prev_sum_2,
+    std::uint32_t cb_m_in,
+    std::uint32_t cb_prev_max,
+    std::uint32_t cb_cur_max,
+    std::uint32_t cb_exp_max_diff_2,
+    std::uint32_t cb_prev_sum,
+    std::uint32_t cb_exp_max_diff,
+    std::uint32_t cb_cur_sum,
+    std::uint32_t cb_m_temp,
+    std::uint32_t cb_s_temp,
+    std::uint32_t cb_s1_temp,
+    std::uint32_t cb_s2_temp,
+    std::uint32_t cb_l1_temp,
+    std::uint32_t cb_l2_temp,
+    std::uint32_t loop_size) {
     constexpr VectorMode mode = VectorMode::R;
-    const uint32_t out_tiles = Sq_chunk_t * vDHt;
+    const std::uint32_t out_tiles = Sq_chunk_t * vDHt;
 
     // Wait for all inputs to be available
     cb_wait_front(cb_m_in, Sq_chunk_t);
@@ -90,30 +89,30 @@ inline OutputCBs reduce_fct(
     return {cb_l1_temp, cb_s1_temp, cb_m_temp};
 }
 
-constexpr uint32_t cb_out_o = get_compile_time_arg_val(0);                // l (output)
-constexpr uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (input)
-constexpr uint32_t cb_out_accumulate_im = get_compile_time_arg_val(2);    // l1 (input)
-constexpr uint32_t cb_prev_sum_2 = get_compile_time_arg_val(3);           // s2 (input)
-constexpr uint32_t cb_m_in = get_compile_time_arg_val(4);                 // m1 (input)
-constexpr uint32_t cb_prev_max = get_compile_time_arg_val(5);             // m2 (input)
-constexpr uint32_t cb_cur_max = get_compile_time_arg_val(6);              // m (output)
-constexpr uint32_t cb_exp_max_diff_2 = get_compile_time_arg_val(7);       // exp((m1-m)*scale) (P1)
-constexpr uint32_t cb_prev_sum = get_compile_time_arg_val(8);             // s1 (input)
-constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(9);         // exp((m2-m)*scale) (P2)
-constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(10);             // s (output)
-constexpr uint32_t cb_m_temp = get_compile_time_arg_val(11);              // temp for m
-constexpr uint32_t cb_s_temp = get_compile_time_arg_val(12);              // temp for s
-constexpr uint32_t cb_s1_temp = get_compile_time_arg_val(13);             // temp for s1
-constexpr uint32_t cb_s2_temp = get_compile_time_arg_val(14);             // temp for s2
-constexpr uint32_t cb_l1_temp = get_compile_time_arg_val(15);             // temp for l1
-constexpr uint32_t cb_l2_temp = get_compile_time_arg_val(16);             // temp for l2
-constexpr uint32_t scale_fp32 = get_compile_time_arg_val(17);
-constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(18);
-constexpr uint32_t vDHt = get_compile_time_arg_val(19);
-constexpr uint32_t loop_size = get_compile_time_arg_val(20);
-constexpr uint32_t int_l_cb = get_compile_time_arg_val(21);
-constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);
-constexpr uint32_t int_m_cb = get_compile_time_arg_val(23);
+constexpr std::uint32_t cb_out_o = get_compile_time_arg_val(0);                // l (output)
+constexpr std::uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (input)
+constexpr std::uint32_t cb_out_accumulate_im = get_compile_time_arg_val(2);    // l1 (input)
+constexpr std::uint32_t cb_prev_sum_2 = get_compile_time_arg_val(3);           // s2 (input)
+constexpr std::uint32_t cb_m_in = get_compile_time_arg_val(4);                 // m1 (input)
+constexpr std::uint32_t cb_prev_max = get_compile_time_arg_val(5);             // m2 (input)
+constexpr std::uint32_t cb_cur_max = get_compile_time_arg_val(6);              // m (output)
+constexpr std::uint32_t cb_exp_max_diff_2 = get_compile_time_arg_val(7);       // exp((m1-m)*scale) (P1)
+constexpr std::uint32_t cb_prev_sum = get_compile_time_arg_val(8);             // s1 (input)
+constexpr std::uint32_t cb_exp_max_diff = get_compile_time_arg_val(9);         // exp((m2-m)*scale) (P2)
+constexpr std::uint32_t cb_cur_sum = get_compile_time_arg_val(10);             // s (output)
+constexpr std::uint32_t cb_m_temp = get_compile_time_arg_val(11);              // temp for m
+constexpr std::uint32_t cb_s_temp = get_compile_time_arg_val(12);              // temp for s
+constexpr std::uint32_t cb_s1_temp = get_compile_time_arg_val(13);             // temp for s1
+constexpr std::uint32_t cb_s2_temp = get_compile_time_arg_val(14);             // temp for s2
+constexpr std::uint32_t cb_l1_temp = get_compile_time_arg_val(15);             // temp for l1
+constexpr std::uint32_t cb_l2_temp = get_compile_time_arg_val(16);             // temp for l2
+constexpr std::uint32_t scale_fp32 = get_compile_time_arg_val(17);
+constexpr std::uint32_t Sq_chunk_t = get_compile_time_arg_val(18);
+constexpr std::uint32_t vDHt = get_compile_time_arg_val(19);
+constexpr std::uint32_t loop_size = get_compile_time_arg_val(20);
+constexpr std::uint32_t int_l_cb = get_compile_time_arg_val(21);
+constexpr std::uint32_t int_s_cb = get_compile_time_arg_val(22);
+constexpr std::uint32_t int_m_cb = get_compile_time_arg_val(23);
 
 void kernel_main() {
     // this kernel receives l, m, s tensors from the reader and perform the following computations
@@ -127,10 +126,9 @@ void kernel_main() {
 
     // for last round of device 1 add extra compute:
     // out = l / s
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    constexpr std::uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);
-    matmul_init(cb_out_accumulate_im, cb_out_accumulate_im);
 
     OutputCBs output_cbs = reduce_fct<scale_fp32, Sq_chunk_t, vDHt>(
         cb_out_o,

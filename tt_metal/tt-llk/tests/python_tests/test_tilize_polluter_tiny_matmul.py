@@ -130,14 +130,13 @@ def test_tilize_polluter_tiny_matmul(
         num_faces=face.num_faces_in0,
         stimuli_format=formats.input_format,
         input_dimensions=in0_dimensions,
-        is_matrix_A=True,  # SrcB uses f0,f1
+        wide_tile=True,  # tiny in0 is 32 wide: keeps f0,f1
         face_r_dim=(in0_tile_r_dim if in0_tile_r_dim < 16 else 16),
     )
     in1 = generate_face_matmul_data(
         num_faces=face.num_faces_in1,
         stimuli_format=formats.input_format,
         input_dimensions=in1_dimensions,
-        is_matrix_A=False,  # SrcA uses f0,f2
     )
 
     generate_golden = get_golden_generator(MatmulGolden)
