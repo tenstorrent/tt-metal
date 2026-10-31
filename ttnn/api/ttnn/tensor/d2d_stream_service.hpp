@@ -232,6 +232,10 @@ public:
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
+    // Service-core L1 address of the socket config buffer, the same on every coord. The receiver
+    // atomic-incs its bytes_acked word once per consumed transfer.
+    tt::tt_metal::DeviceAddr get_socket_config_addr() const;
+
     // Fabric-link lease (only meaningful when Config::share_fabric_links == true;
     // TT_FATALs otherwise). The two halves of a per-transfer handshake over fabric-
     // link ownership between this service and the model-graph ops on the same links:
@@ -304,6 +308,13 @@ public:
     // after each transfer lands. Same address across the mesh. TT_FATALs if
     // metadata was not configured (Config::metadata_size_bytes == 0).
     tt::tt_metal::DeviceAddr get_metadata_addr() const;
+
+    // Service-core L1 address of the socket config buffer, the same on every coord. Each sender
+    // lane atomic-incs its bytes_sent word once per landed transfer.
+    tt::tt_metal::DeviceAddr get_socket_config_addr() const;
+
+    // Sender lanes feeding this coord: bytes_sent advances by this much per transfer.
+    uint32_t get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Fabric-link lease — receiver-side mirror of the sender's (only meaningful when
     // Config::share_fabric_links == true; TT_FATALs otherwise). The receiver kernel

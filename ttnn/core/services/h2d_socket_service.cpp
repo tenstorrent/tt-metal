@@ -1169,6 +1169,19 @@ CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& 
     return it->second;
 }
 
+DeviceAddr H2DStreamService::get_socket_config_addr(const distributed::MeshCoordinate& coord) const {
+    require_owner(is_owner_, "H2DStreamService::get_socket_config_addr");
+    for (const auto& s : sockets_) {
+        if (s->get_active_cores()[0].device_coord == coord) {
+            return s->get_config_buffer_address();
+        }
+    }
+    TT_THROW(
+        "H2DStreamService::get_socket_config_addr: no socket at coord {} (does this coord participate in this "
+        "service?).",
+        coord);
+}
+
 DeviceAddr H2DStreamService::get_metadata_addr() const {
     require_owner(is_owner_, "H2DStreamService::get_metadata_addr");
     TT_FATAL(

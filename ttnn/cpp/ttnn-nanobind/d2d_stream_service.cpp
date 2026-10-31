@@ -229,6 +229,13 @@ void py_module_types(nb::module_& mod) {
             nb::arg("coord"),
             "L1 address of the metadata buffer on this coord's service core (metadata mode).")
         .def(
+            "get_socket_config_addr",
+            &D2DStreamServiceSender::get_socket_config_addr,
+            R"doc(
+                L1 address of the socket config buffer, the same on every sender service
+                core. Its bytes_acked word counts transfers the receiver has consumed.
+            )doc")
+        .def(
             "wait_for_fabric_links",
             &D2DStreamServiceSender::wait_for_fabric_links,
             R"doc(
@@ -290,6 +297,18 @@ void py_module_types(nb::module_& mod) {
             "get_metadata_addr",
             &D2DStreamServiceReceiver::get_metadata_addr,
             "L1 address of the metadata buffer on every worker core (metadata mode).")
+        .def(
+            "get_socket_config_addr",
+            &D2DStreamServiceReceiver::get_socket_config_addr,
+            R"doc(
+                L1 address of the socket config buffer, the same on every receiver service
+                core. Its bytes_sent word advances by get_num_lanes(coord) per landed transfer.
+            )doc")
+        .def(
+            "get_num_lanes",
+            &D2DStreamServiceReceiver::get_num_lanes,
+            nb::arg("coord"),
+            "Sender lanes (fabric links) feeding this coord; one data-landed increment each per transfer.")
         .def(
             "wait_for_fabric_links",
             &D2DStreamServiceReceiver::wait_for_fabric_links,
