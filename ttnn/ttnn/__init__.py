@@ -629,6 +629,12 @@ experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
 experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
 
+# Command lists (Metal 2.0 replacement for trace). Experimental-only surface.
+from ttnn._ttnn.operations import command_list as _command_list
+
+experimental.CommandListBuilder = _command_list.CommandListBuilder
+experimental.CommandList = _command_list.CommandList
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import (

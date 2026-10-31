@@ -98,6 +98,17 @@ add_library(TTNN::Core ALIAS ttnn_core)
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
+# These declare ttnn::experimental and include tt-metalium/experimental/command_list.hpp, which declares
+# tt::tt_metal::experimental::detail. Either changes unqualified `experimental::` / `detail::` lookup in files that
+# share a unity translation unit with them.
+set_source_files_properties(
+    core/command_list.cpp
+    cpp/ttnn-nanobind/operations/command_list.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_compile_definitions(ttnn_core PRIVATE "TT_METAL_BUILD_TYPE=\"$<CONFIG>\"")
 
