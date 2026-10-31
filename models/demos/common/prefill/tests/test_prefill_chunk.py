@@ -4,6 +4,7 @@
 """Host-only: packed-forward metadata codec, the order contract and the packed H2D token layout."""
 
 import struct
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -19,6 +20,7 @@ from models.demos.common.prefill.prefill_chunk import (
     forward_metadata_words,
     metadata_size_bytes,
     pack_forward_metadata,
+    packed_forward_capabilities,
     packed_forward_refusals,
     pad_chunks,
     sentinel_metadata,
@@ -245,7 +247,20 @@ def test_packed_forward_refusals():
     lifted = {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": True}
     assert packed_forward_refusals(4, use_trace=True, d2h_acks=True, **lifted) == []
     assert len(packed_forward_refusals(4, use_trace=True, d2h_acks=True, mtp_levels=1, dflash=True, **lifted)) == 2
-    assert len(packed_forward_refusals(4, supports_packed_forward=True, use_trace=True, forward_d2h_acks=True)) == 1
-    assert len(packed_forward_refusals(4, supports_packed_forward=True, d2h_acks=True, traced_forward=True)) == 1
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=True, use_trace=True, forward_d2h_acks=True)
+    assert "USE_TRACE" in reason
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=True, d2h_acks=True, traced_forward=True)
+    assert "LAYER_ACK_D2H" in reason
     # Without prefill_forward the runner runs chunks one by one, which is not traced.
-    assert len(packed_forward_refusals(4, supports_packed_forward=False, use_trace=True, traced_forward=True)) == 1
+    (reason,) = packed_forward_refusals(4, supports_packed_forward=False, use_trace=True, traced_forward=True)
+    assert "USE_TRACE" in reason
+
+
+def test_packed_forward_capabilities_name_every_flag():
+    adapter = SimpleNamespace(
+        supports_packed_forward=True, supports_packed_forward_trace=True, supports_packed_forward_d2h_acks=False
+    )
+    caps = packed_forward_capabilities(adapter)
+    assert caps == {"supports_packed_forward": True, "traced_forward": True, "forward_d2h_acks": False}
+    (reason,) = packed_forward_refusals(4, use_trace=True, d2h_acks=True, **caps)
+    assert "LAYER_ACK_D2H" in reason

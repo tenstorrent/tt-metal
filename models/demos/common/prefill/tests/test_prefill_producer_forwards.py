@@ -324,21 +324,22 @@ def test_slot_lengths_from_env(monkeypatch, expect_error):
     monkeypatch.setattr(producer, "MAX_SEQ_LEN", 32768)
     monkeypatch.setattr(producer, "CHUNK_SIZE", 2048)
     monkeypatch.delenv("PREFILL_PRODUCER_SLOT_LENGTHS", raising=False)
-    assert producer._slot_lengths_from_env(4) is None
+    assert producer._slot_lengths_from_env(4, 16) is None
     monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "32768,2048")
-    assert producer._slot_lengths_from_env(4) == {0: 32768, 1: 2048}  # slots 2 and 3 keep random lengths
-    for bad in ("1,2,3,4,5", "2048,abc", "2048,0", "2048,", "32769"):  # 32769: past MAX_SEQ_LEN
+    assert producer._slot_lengths_from_env(4, 16) == {0: 32768, 1: 2048}  # slots 2 and 3 keep random lengths
+    # 32769: past 16 chunks; "²" is a Unicode digit int() rejects.
+    for bad in ("1,2,3,4,5", "2048,abc", "2048,0", "2048,", "32769", "2048,²"):
         monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", bad)
         with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
-            producer._slot_lengths_from_env(4)
+            producer._slot_lengths_from_env(4, 16)
     # The last chunk is padded: with 5120-token chunks a 262144-token cache holds 51 whole chunks (261120 tokens).
     monkeypatch.setattr(producer, "CHUNK_SIZE", 5120)
     monkeypatch.setattr(producer, "MAX_SEQ_LEN", 262144)
     monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261120")
-    assert producer._slot_lengths_from_env(1) == {0: 261120}
+    assert producer._slot_lengths_from_env(1, 51) == {0: 261120}
     monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "261121")
     with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
-        producer._slot_lengths_from_env(1)
+        producer._slot_lengths_from_env(1, 51)
 
 
 def test_slot_lengths_next_turn_needs_whole_chunks(env):
@@ -359,7 +360,11 @@ def test_resolve_slot_prompts_keeps_slot_lengths(env, monkeypatch, expect_error)
     monkeypatch.delenv("PREFILL_PRODUCER_SLOT_TRACES", raising=False)
     monkeypatch.setattr(producer, "resolve_trace_dir", lambda d: d)
     monkeypatch.setattr(producer, "_load_token_pool", lambda trace, n: n)
+    monkeypatch.setattr(producer, "load_trace_token_ids", lambda trace, n=None: [0] * (3 * C))
     assert producer._resolve_slot_prompts(cfg)[1] == {0: 2 * C}
+    # Past the trace the pool would repeat it, with no golden for the repeated tokens.
+    with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
+        producer._resolve_slot_prompts(make_cfg(slot_lengths={0: 2 * C, 1: 3 * C + 1}))
     # Per-slot traces set each slot's length, so they would silently override PREFILL_PRODUCER_SLOT_LENGTHS.
     monkeypatch.setenv("PREFILL_PRODUCER_SLOT_TRACES", "/no/such/trace")
     with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_TRACES"):

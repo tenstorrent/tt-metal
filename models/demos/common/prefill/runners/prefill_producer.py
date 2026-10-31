@@ -27,6 +27,7 @@ from models.demos.common.prefill.prefill_chunk import (
     check_packed_forward_support,
     metadata_size_bytes,
     pack_forward_metadata,
+    packed_forward_capabilities,
     pad_chunks,
     sentinel_metadata,
 )
@@ -489,16 +490,15 @@ def _config_from_env() -> ProducerConfig:
     if interleave not in ("random", "round_robin"):
         raise ValueError(f"PREFILL_PRODUCER_INTERLEAVE must be 'random' or 'round_robin', got {interleave!r}")
     p_burst = float(os.environ.get("PREFILL_PRODUCER_P_BURST", "0.0"))
-    check_packed_forward_support(
-        FORWARD_CHUNKS, supports_packed_forward=ADAPTER.supports_packed_forward, mtp_levels=MTP_LEVELS
-    )
+    check_packed_forward_support(FORWARD_CHUNKS, mtp_levels=MTP_LEVELS, **packed_forward_capabilities(ADAPTER))
     if FORWARD_CHUNKS > 1 and p_burst > 0:
         raise ValueError(
             "PREFILL_PRODUCER_P_BURST must be 0 with more than one chunk per forward (packing already bursts)"
         )
 
+    num_users = int(os.environ.get("PREFILL_NUM_USERS", "1"))
     return ProducerConfig(
-        num_users=int(os.environ.get("PREFILL_NUM_USERS", "1")),
+        num_users=num_users,
         chunks_min=chunks_min,
         chunks_max=chunks_max,
         max_requests=int(os.environ.get("PREFILL_PRODUCER_MAX_REQUESTS", "1")),
@@ -512,27 +512,31 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
-        slot_lengths=_slot_lengths_from_env(int(os.environ.get("PREFILL_NUM_USERS", "1"))),
+        slot_lengths=_slot_lengths_from_env(num_users, max_chunks),
         forward_chunks=FORWARD_CHUNKS,
     )
 
 
-def _slot_lengths_from_env(num_users: int):
+def _slot_lengths_from_env(num_users: int, max_chunks: int):
     """PREFILL_PRODUCER_SLOT_LENGTHS=n0,n1,...: slot s's prompts are n_s tokens (one shared trace), else None.
     Slots past the list keep random lengths."""
     spec = os.environ.get("PREFILL_PRODUCER_SLOT_LENGTHS", "").strip()
     if not spec:
         return None
     entries = spec.split(",")
+    try:
+        lengths = [int(e) for e in entries]
+    except ValueError:
+        lengths = None
     # The last chunk is padded to CHUNK_SIZE, so a prompt must fit in whole chunks: a padded chunk past
     # MAX_SEQ_LEN would reach the runner, whose validation stops the device-owning process.
-    max_len = MAX_SEQ_LEN // CHUNK_SIZE * CHUNK_SIZE
-    if len(entries) > num_users or not all(e.strip().isdigit() and 0 < int(e) <= max_len for e in entries):
+    max_len = max_chunks * CHUNK_SIZE
+    if len(entries) > num_users or lengths is None or not all(0 < n <= max_len for n in lengths):
         raise ValueError(
             f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} token counts in [1, {max_len}]"
             " (whole PREFILL_CHUNK_SIZE chunks within PREFILL_MAX_SEQ_LEN), comma-separated"
         )
-    return {slot: int(n) for slot, n in enumerate(entries)}
+    return dict(enumerate(lengths))
 
 
 class _Slot:
@@ -1607,7 +1611,13 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
         slot_traces = {s: trace for s in range(cfg.num_users)}
         pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
         if cfg.slot_lengths:
-            pool_tokens = max(pool_tokens, max(cfg.slot_lengths.values()))
+            longest, trace_tokens = max(cfg.slot_lengths.values()), len(load_trace_token_ids(trace))
+            # Past the trace the pool repeats it, and the golden has nothing to check those tokens against.
+            if longest > trace_tokens:
+                raise ValueError(
+                    f"PREFILL_PRODUCER_SLOT_LENGTHS asks for {longest} tokens, but the trace {trace} has {trace_tokens}"
+                )
+            pool_tokens = max(pool_tokens, longest)
         return slot_traces, cfg.slot_lengths, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
