@@ -374,6 +374,12 @@ UnifiedRoutedExpertFfnDeviceOperation::create_output_tensors(const operation_att
     return t.output;
 }
 
+ttsl::hash::hash_t UnifiedRoutedExpertFfnDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const auto [per_core_M, in0_block_w_gu] = UnifiedRoutedExpertFfnProgramFactory::select_l1_plan(attrs, t);
+    return ttsl::hash::hash_objects_with_default_seed(attrs, t, per_core_M, in0_block_w_gu);
+}
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
 namespace ttnn::prim {

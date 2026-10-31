@@ -27,6 +27,13 @@ struct UnifiedRoutedExpertFfnDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // The default key (attributes + tensor specs) plus the L1 plan: the program factory sizes its
+    // circular buffers to the L1 below the lowest allocated L1 buffer, so a program built with
+    // more L1 free must not be reused once that L1 no longer fits it. Keyed on the chosen
+    // (per_core_M, in0_block_w_gu), not the free byte count, so an allocation that leaves the
+    // plan unchanged still hits the cache.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
