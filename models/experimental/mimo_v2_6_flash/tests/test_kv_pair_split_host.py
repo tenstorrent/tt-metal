@@ -85,7 +85,7 @@ def test_positions_step_is_the_scalar_functions():
         assert write == [kps.write_position(p, c) for p in positions]
         assert sdpa == [kps.sdpa_position(p, c) for p in positions]
         for j, row in enumerate(serial):
-            assert row == [write[j] if k == j else -1 for k in range(len(positions))]
+            assert row == [write[k] if k % 4 == j else -1 for k in range(len(positions))]
     w, s = kps.chip_positions(torch.tensor(positions, dtype=torch.int32), TP)
     assert w.shape == s.shape == (TP, len(positions)) and w.dtype == torch.int32
     for chip in range(TP):

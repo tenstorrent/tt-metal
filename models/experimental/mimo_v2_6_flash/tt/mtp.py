@@ -64,7 +64,15 @@ import ttnn
 from ..reference.mtp import load_mtp_weights
 from ..reference.mtp_backfill import MTP_WINDOW
 from ..reference.spec_chain import stash_page
-from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_table_row, planned_drafts
+from ..reference.spec_decode import (
+    DRAFT_GROUPS,
+    GROUP_SLOTS,
+    MAX_DRAFTS,
+    SERIAL_WRITES,
+    SPEC_SLOTS,
+    mtp_table_row,
+    planned_drafts,
+)
 from ..reference.spec_inputs import pack_mtp_commits
 from .common import TILE, as_weight, cache_fill, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
@@ -109,7 +117,7 @@ class TtMtpLayer:
 @dataclass
 class LayerInputs:
     """The every-layer draft program's persistent inputs, written by the plan and tokens steps on every replay
-    (reference/spec_chain.py ``plan_step``): ring cache positions ``pos`` int32 [B], ``serial`` SPEC_SLOTS int32 [B]
+    (reference/spec_chain.py ``plan_step``): ring cache positions ``pos`` int32 [B], ``serial`` SERIAL_WRITES int32 [B]
     (slot j's alone), ``rope`` RoPE indices uint32 [1, B], ``hidden`` the hidden table's rows uint32 [1, B], ``tokens``
     each pass's tokens uint32 [1, B]; and the stash: its page int32 [B] (positions, layer-0 tokens) and its hidden rows
     ``stash_hidden`` bf16 row-major [1, 1, table_rows, hidden] (slot k's at row k), the table's second part."""
@@ -144,7 +152,7 @@ def make_layer_inputs(plan, max_batch, hidden_size):
     b = max_batch
     return LayerInputs(
         pos=rows(-1, ttnn.int32, (b,)),
-        serial=[rows(-1, ttnn.int32, (b,)) for _ in range(SPEC_SLOTS)],
+        serial=[rows(-1, ttnn.int32, (b,)) for _ in range(SERIAL_WRITES)],
         rope=rows(0, ttnn.uint32, (1, b)),
         hidden=rows(0, ttnn.uint32, (1, b)),
         tokens=[rows(0, ttnn.uint32, (1, b)) for _ in range(MAX_DRAFTS)],
@@ -290,11 +298,11 @@ class TtMiMoMTP:
 
     def _body(self, inputs):
         """The one-layer draft program: its inputs written from the packed upload, the three passes, then the drafts
-        step (the anchor's drafts into the result page). ``inputs``: tokens, fill, SPEC_SLOTS serial fill positions,
+        step (the anchor's drafts into the result page). ``inputs``: tokens, fill, SERIAL_WRITES serial fill positions,
         step2, step3, then the RoPE inputs (three table indices, or the three passes' host cos / sin)."""
         tokens, fill, *rest = inputs
-        serial = list(rest[:SPEC_SLOTS])
-        step2, step3, *rope = rest[SPEC_SLOTS:]
+        serial = list(rest[:SERIAL_WRITES])
+        step2, step3, *rope = rest[SERIAL_WRITES:]
         tables = self.model.rope_tables is not None
         self.model.spec_inputs.derive_mtp(tokens, fill, serial, step2, step3, rope if tables else None)
         (cs1, cs2, cs3), made = self._rope(rope)
@@ -398,7 +406,7 @@ class TtMiMoMTP:
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
 
         tokens = host(torch.zeros(1, m.max_batch, dtype=torch.int32), ttnn.uint32)
-        idle = [host(torch.full((m.max_batch,), -1, dtype=torch.int32), ttnn.int32) for _ in range(SPEC_SLOTS + 3)]
+        idle = [host(torch.full((m.max_batch,), -1, dtype=torch.int32), ttnn.int32) for _ in range(SERIAL_WRITES + 3)]
         if m.rope_tables is None:
             rope = self._rope_host()
         else:

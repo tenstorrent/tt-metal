@@ -63,6 +63,10 @@ assert DRAFT_GROUPS == 1 or (
 ), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or 2 / 4 with MIMO_SPEC_SLOTS=8"
 GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
 MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and drafts fill one draft group
+# K / V writes of a verify pass (and of an MTP pass): only one request's slots share cache tiles, and with draft groups
+# a request's slots are consecutive inside its group, so write k takes every slot j with j % SERIAL_WRITES == k: one
+# write per column of a group (2 or 4) instead of one per slot (serial_positions). MIMO_SERIAL_COLUMNS=0: per slot.
+SERIAL_WRITES = GROUP_SLOTS if DRAFT_GROUPS > 1 and os.environ.get("MIMO_SERIAL_COLUMNS", "1") == "1" else SPEC_SLOTS
 
 
 def planned_drafts(layers):
@@ -129,12 +133,15 @@ def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SL
     return passes
 
 
-def serial_positions(positions, slots=SPEC_SLOTS):
-    """One position list per slot with only that slot's position kept: a verify pass writes K / V slot by slot."""
+def serial_positions(positions, slots=SPEC_SLOTS, writes=SERIAL_WRITES):
+    """One position list per serial write, list k keeping the positions of slots j < ``slots`` with j % ``writes`` ==
+    k: a verify pass writes K / V one column of its draft groups at a time (one slot at a time when ``writes`` ==
+    ``slots``)."""
     out = []
-    for j in range(slots):
+    for k in range(writes):
         one = [-1] * len(positions)
-        one[j] = positions[j]
+        for j in range(k, slots, writes):
+            one[j] = positions[j]
         out.append(one)
     return out
 

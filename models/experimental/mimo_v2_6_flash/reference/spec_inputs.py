@@ -45,7 +45,7 @@ inputs from it and the device stash. pack_mtp's idle upload has a zero row 0: it
 
 import torch
 
-from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, SPEC_SLOTS, mtp_cache_position
+from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, SERIAL_WRITES, SPEC_SLOTS, mtp_cache_position
 
 TILE = 32
 INT32_MAX = 2**31 - 1
@@ -71,10 +71,12 @@ def owned_slot_columns(max_batch, tp, rep):
     return (owned_slot_caps(max_batch, tp, rep) >= 0).to(torch.bfloat16).reshape(tp, 1, 1, max_batch, 1)
 
 
-def slot_caps(max_batch, slots=SPEC_SLOTS):
-    """int32 [slots, B]: row j INT32_MAX at slot j, -1 elsewhere."""
-    out = torch.full((slots, max_batch), -1, dtype=torch.int32)
-    out[torch.arange(slots), torch.arange(slots)] = INT32_MAX
+def slot_caps(max_batch, slots=SPEC_SLOTS, writes=SERIAL_WRITES):
+    """int32 [writes, B]: row k INT32_MAX at the slots j < ``slots`` with j % ``writes`` == k (serial_positions), -1
+    elsewhere."""
+    out = torch.full((writes, max_batch), -1, dtype=torch.int32)
+    for j in range(slots):
+        out[j % writes, j] = INT32_MAX
     return out
 
 

@@ -109,11 +109,14 @@ void kernel_main() {
     // The MTP drafter's planned program (reference.spec_decode.planned_drafts: per-group commit descriptions, the plan
     // step, the hidden gather): every MTP layer, or the one layer of one-draft groups. 0: the one-layer program.
     constexpr uint32_t planned = get_compile_time_arg_val(30);
+    // Mode 3's serial position rows: row k holds the slots j with j % SR == k (reference/spec_decode.py SERIAL_WRITES).
+    constexpr uint32_t SR = get_compile_time_arg_val(31);
     constexpr uint32_t GS = S / G;                                  // a draft group's slots
     constexpr uint32_t cgw = 4 + GS;                                // a chain block's words
     constexpr uint32_t draft_words = 1 + D;                         // a group's drafts section
     static_assert(G >= 1 && G * GS == S && D + 1 == GS && G * out_words <= accept_words);
     static_assert(S <= B && B * 4 <= 1024 && mtp_rows == 7 && chain_row < verify_rows && G <= mtp_rows);
+    static_assert(SR >= 1 && S % SR == 0 && GS % SR == 0);
     static_assert(chain_relay == 3 + GS && G * cgw + S <= B && ctrl_drafts + D <= group_words);
     static_assert(G * group_words <= ctrl_words && 3 + 2 * GS <= B && 2 * S <= B && B <= table_rows);
     static_assert(layer < layers + (layers == 1) && (planned == 1 || drafter == 1 || G == 1));
@@ -365,11 +368,11 @@ void kernel_main() {
             noc_async_write_barrier();
         }
     } else if constexpr (mode == 3) {
-        // Runtime args: mtp, stash, then the outputs: positions, RoPE indices, hidden rows, layer-0 tokens, S serial.
+        // Runtime args: mtp, stash, then the outputs: positions, RoPE indices, hidden rows, layer-0 tokens, SR serial.
         const uint32_t mtp_addr = get_arg_val<uint32_t>(0);
         const uint32_t stash_addr = get_arg_val<uint32_t>(1);
         constexpr uint32_t row_l1 = align64(row_bytes);
-        constexpr uint32_t outs = 4 + S;
+        constexpr uint32_t outs = 4 + SR;
         const uint32_t desc_l1 = base;  // G description rows
         const uint32_t stash_l1 = desc_l1 + G * row_l1;
         const uint32_t out_l1 = stash_l1 + row_l1;  // outs rows, then the new stash page
@@ -394,8 +397,8 @@ void kernel_main() {
             hidden[i] = static_cast<int32_t>(table_rows + i);
             tokens0[i] = 0;
             fresh[i] = stash[i];
-            for (uint32_t j = 0; j < S; ++j) {
-                serial(j)[i] = -1;
+            for (uint32_t k = 0; k < SR; ++k) {
+                serial(k)[i] = -1;
             }
         }
         bool any = false;
@@ -445,13 +448,13 @@ void kernel_main() {
                 }
                 const int32_t cached = q >= 0 ? static_cast<int32_t>(ring + q % ring) : -1;
                 pos[j] = cached;
-                serial(j)[j] = cached;
+                serial(j % SR)[j] = cached;
                 rope[j] = q > 0 ? q : 0;
                 fresh[j] = q;
                 fresh[S + j] = tokens0[j];
             }
         }
-        // Outputs in runtime-arg order (2 ..): positions, RoPE, hidden rows, tokens, serial 0 .. S - 1.
+        // Outputs in runtime-arg order (2 ..): positions, RoPE, hidden rows, tokens, serial 0 .. SR - 1.
         for (uint32_t k = 0; k < outs; ++k) {
             noc_async_write(out_l1 + k * row_l1, dram_addr(get_arg_val<uint32_t>(2 + k), row_bytes), row_bytes);
         }

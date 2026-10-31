@@ -68,7 +68,7 @@ from ..reference.spec_chain import (
     STATUS_AT,
     unpack_result,
 )
-from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, MTP_RING_TOKENS, SPEC_SLOTS
+from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, MTP_RING_TOKENS, SERIAL_WRITES, SPEC_SLOTS
 from ..reference.spec_inputs import DESC_A, DESC_COUNT, DESC_DRAFTING, DESC_SLOTS, DESC_TOKENS, MTP_ROWS, VERIFY_ROWS
 from .device_sampler import CB_SCRATCH, _cb, _is_dram, _kernel, _ranges
 
@@ -110,7 +110,7 @@ class SpecChain:
         if layer_inputs is not None:
             li = layer_inputs
             steps = [li.pos, li.rope, li.hidden, *li.tokens, *li.serial, li.stash]
-            assert self.max_batch <= li.table_rows and len(li.tokens) == MAX_DRAFTS and len(li.serial) == SPEC_SLOTS
+            assert self.max_batch <= li.table_rows and len(li.tokens) == MAX_DRAFTS and len(li.serial) == SERIAL_WRITES
         for t in (self.verify, self.mtp, accept, argmax, *self.heads, *steps):
             assert _is_dram(t) and t.layout == ttnn.ROW_MAJOR_LAYOUT, "the chain reads one-page DRAM buffers"
         self.result = ttnn.from_torch(
@@ -152,6 +152,7 @@ class SpecChain:
             OUT_WORDS,
             GROUP_WORDS,
             int(self.layer_inputs is not None),  # planned: the MTP drafter's planned program (LayerInputs)
+            SERIAL_WRITES,
         ]
         kernel = _kernel("spec_chain.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
         return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[_cb(CB_SCRATCH, scratch, _ranges(cores))])

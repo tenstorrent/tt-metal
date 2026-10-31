@@ -77,7 +77,15 @@ the last committed token), so the relay does not depend on the drafter.
 from dataclasses import dataclass
 
 from .sample_verify import GROUP_WORDS, GROUPS, NO_TOKEN, OUT_WORDS, unpack_out
-from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_cache_position, planned_drafts
+from .spec_decode import (
+    DRAFT_GROUPS,
+    GROUP_SLOTS,
+    MAX_DRAFTS,
+    SERIAL_WRITES,
+    SPEC_SLOTS,
+    mtp_cache_position,
+    planned_drafts,
+)
 from .spec_inputs import (
     DESC_A,
     DESC_COUNT,
@@ -293,7 +301,7 @@ def plan_step(mtp, stash, table_rows, layers=MAX_DRAFTS):
     """The plan step (mode 3): ``mtp`` the descriptions (pack_mtp_layers: draft group g's in row g, int32 values
     [MTP_ROWS * B]), ``stash`` the stash page [B], ``table_rows`` the row count T of the step's final norm buffer (the
     hidden table's first part; the stash rows follow it). plan_mtp_layers on device for each drafting group, in its
-    slots: returns ({"pos": ring cache positions [B], "serial": SPEC_SLOTS lists [B] each keeping slot j's, "rope":
+    slots: returns ({"pos": ring cache positions [B], "serial": SERIAL_WRITES lists [B] (serial_positions), "rope":
     RoPE indices [B], "hidden": hidden table rows [B], "tokens0": layer-0 tokens [B]}, the new stash page). Idle slots
     keep position -1, RoPE index 0, token 0 and gather their own stash row (T + j), so the stash copy rewrites it
     unchanged; an idle description (or a count out of range) leaves its group's stash as it was."""
@@ -329,7 +337,7 @@ def plan_step(mtp, stash, table_rows, layers=MAX_DRAFTS):
                 hidden[j], tokens0[j] = desc[DESC_SLOTS + t - r], desc[DESC_TOKENS + t - r]
             pos[j], rope[j] = mtp_cache_position(q), max(q, 0)
             new[STASH_POSITIONS + j], new[STASH_TOKENS + j] = q, tokens0[j]
-    serial = [[pos[j] if i == j else -1 for i in range(b)] for j in range(SPEC_SLOTS)]
+    serial = [[pos[i] if i % SERIAL_WRITES == k else -1 for i in range(b)] for k in range(SERIAL_WRITES)]
     return {"pos": pos, "rope": rope, "hidden": hidden, "tokens0": tokens0, "serial": serial}, new
 
 

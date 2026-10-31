@@ -29,7 +29,7 @@ import ttnn
 from ..reference import kv_pair_split
 from ..reference.model import load_layer_weights
 from ..reference.mtp_backfill import HISTORY_ROWS
-from ..reference.spec_decode import SPEC_SLOTS, serial_positions
+from ..reference.spec_decode import SERIAL_WRITES, SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
 from . import attention as attention_lib
 from .attention import (
@@ -428,7 +428,7 @@ class TtMiMoModel:
         assert self.block_size == kv_pair_split.SUB, self.block_size
         assert self.max_prefill_chunk % (2 * self.block_size) == 0, self.max_prefill_chunk
         spec = self.mtp is not None or self.dflash is not None
-        self.pair = PairSplit(self.plan, self.max_batch, serial_slots=SPEC_SLOTS if spec else 0)
+        self.pair = PairSplit(self.plan, self.max_batch, serial_slots=SERIAL_WRITES if spec else 0)
         self.pair_groups = set(keys)
         for layer in self.layers:
             if not layer.is_swa:
@@ -1414,8 +1414,8 @@ class TtMiMoModel:
         """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, cos/sin [1, 1, B, 192] for the SWA and
         the global theta, MoE token mask,
         and the global layers' per-chip view: owned positions [B] i32 and owner mask [1, 1, B, 1].
-        ``serial``: also SPEC_SLOTS position tensors [B] i32, each keeping one slot's position (a verify step writes
-        K / V slot by slot, reference/spec_decode.py)."""
+        ``serial``: also SERIAL_WRITES position tensors [B] i32, each keeping the positions of one column of the draft
+        groups (a verify step writes K / V one column at a time, reference/spec_decode.py serial_positions)."""
         assert tokens.numel() == self.max_batch and positions.numel() == self.max_batch
         rep = self.plan.replicate()
         tp, kv_rep = self.plan.tp, kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
@@ -1879,7 +1879,7 @@ class TtMiMoModel:
     def _verify_step(self, inputs):
         """The verify trace's step: with the MTP history, its slots' final norm rows written into their requests'
         rings (the verify upload's chain row names them) at the end."""
-        output = self._decode_inputs(inputs, serial=SPEC_SLOTS, verify_groups=self._verify_groups)
+        output = self._decode_inputs(inputs, serial=SERIAL_WRITES, verify_groups=self._verify_groups)
         hist = self._history()
         if hist is not None:
             hist.verify(self.spec_inputs.verify_packed, output["hidden"])

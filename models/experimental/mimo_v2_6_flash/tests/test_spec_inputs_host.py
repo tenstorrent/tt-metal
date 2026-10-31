@@ -14,6 +14,7 @@ import torch
 
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     MAX_DRAFTS,
+    SERIAL_WRITES,
     SPEC_SLOTS,
     DraftSource,
     draft_source,
@@ -91,9 +92,9 @@ def test_constants():
     assert torch.equal(torch.minimum(pos.reshape(1, -1), own), kv_lib.owned_positions(pos, TP, REP))
     assert torch.equal(owned_slot_columns(B, TP, REP), kv_lib.owner_mask(torch.zeros(B, dtype=torch.int32), TP, REP))
     caps = slot_caps(B)
-    assert caps.shape == (SPEC_SLOTS, B) and int(caps.max()) == INT32_MAX
-    assert [list(map(int, (caps[j] == INT32_MAX).nonzero().flatten())) for j in range(SPEC_SLOTS)] == [
-        [j] for j in range(SPEC_SLOTS)
+    assert caps.shape == (SERIAL_WRITES, B) and int(caps.max()) == INT32_MAX
+    assert [list(map(int, (caps[k] == INT32_MAX).nonzero().flatten())) for k in range(SERIAL_WRITES)] == [
+        list(range(k, SPEC_SLOTS, SERIAL_WRITES)) for k in range(SERIAL_WRITES)
     ]
 
 
