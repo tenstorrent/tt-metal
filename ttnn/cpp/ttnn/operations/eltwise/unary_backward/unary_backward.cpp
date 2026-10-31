@@ -1467,27 +1467,39 @@ std::vector<Tensor> abs_bw(
 std::vector<ComplexTensor> abs_bw(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor result = ttnn::abs(input, output_mem_config);
-    Tensor grad_inp_r = where(
-        ttnn::eqz(result, output_mem_config),
-        0.f,
-        ttnn::multiply(
-            grad,
-            ttnn::multiply(input.real(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const std::array abs_it = {EltwiseUnaryWithParam{UnaryOpType::ABS}};
+    const std::array sign_it = {EltwiseUnaryWithParam{UnaryOpType::SIGN}};
+    const std::array rsqrt_1_plus_r2 = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
+
+    const Tensor& inp_r = input.real();
+    const Tensor& inp_i = input.imag();
+    Tensor r_ge_i = ttnn::ge(inp_r, inp_i, std::nullopt, output_mem_config, std::nullopt, abs_it, abs_it);
+    Tensor big = ttnn::where(r_ge_i, inp_r, inp_i, output_mem_config);
+    Tensor small = ttnn::where(r_ge_i, inp_i, inp_r, output_mem_config);
+    Tensor ratio = ttnn::where(
+        ttnn::eqz(big, output_mem_config),
+        0.0f,
+        ttnn::divide(small, big, std::nullopt, output_mem_config),
         output_mem_config);
-    Tensor grad_inp_i = where(
-        ttnn::eqz(result, output_mem_config),
-        0.f,
-        ttnn::multiply(
-            grad,
-            ttnn::multiply(input.imag(), ttnn::reciprocal(result, output_mem_config), std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
+    small.deallocate();
+    Tensor unit_big =
+        ttnn::multiply(ratio, big, std::nullopt, output_mem_config, std::nullopt, {}, rsqrt_1_plus_r2, sign_it);
+    big.deallocate();
+    Tensor grad_big = ttnn::multiply(grad, unit_big, std::nullopt, output_mem_config);
+    unit_big.deallocate();
+    Tensor grad_small = ttnn::multiply(grad_big, ratio, std::nullopt, output_mem_config);
+    ratio.deallocate();
+    Tensor grad_inp_r = ttnn::where(r_ge_i, grad_big, grad_small, output_mem_config);
+    Tensor grad_inp_i = ttnn::where(r_ge_i, grad_small, grad_big, output_mem_config);
+    r_ge_i.deallocate();
+    grad_big.deallocate();
+    grad_small.deallocate();
     ComplexTensor grad_inp = ComplexTensor({grad_inp_r, grad_inp_i});
-    result.deallocate();
     grad_inp_r.deallocate();
     grad_inp_i.deallocate();
     grad_tensor.emplace_back(grad_inp);
