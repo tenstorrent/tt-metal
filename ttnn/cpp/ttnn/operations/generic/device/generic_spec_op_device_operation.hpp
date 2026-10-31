@@ -25,6 +25,10 @@ namespace ttnn::operations::generic {
 // ProgramDescriptor. This is the route for Python-built programs on Quasar, where the legacy
 // DataMovementKernel that ProgramDescriptor produces is not supported.
 struct GenericSpecOpDeviceOperation {
+    // Metal resolves each node's address of a per-core allocated tensor itself: per-node tensor bindings
+    // (LocalTensorAccessor) get it in that node's runtime args, and a borrowed DFB on such a tensor is rejected.
+    static constexpr bool supports_per_core_allocation = true;
+
     struct operation_attributes_t {
         tt::tt_metal::experimental::ProgramSpec spec;
         // Per-node runtime arg values; reapplied on every dispatch, so they are not part of the hash.
