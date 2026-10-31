@@ -58,12 +58,33 @@ def apply_mask_reference(logits: torch.Tensor, packed: torch.Tensor) -> torch.Te
     return logits.float() + mask_bias(packed, vocab)
 
 
+def _word_mask(words: int, vocab: int) -> torch.Tensor | None:
+    """int32 mask of the bits below ``vocab`` in the last word (None when the vocabulary fills every word)."""
+    tail = int(vocab) - 32 * (words - 1)
+    if tail >= 32:
+        return None
+    return torch.tensor(((1 << tail) - 1), dtype=torch.int64).to(torch.int32)
+
+
+def nonempty_rows(packed: torch.Tensor, vocab: int = VOCAB) -> torch.Tensor:
+    """bool ``[...]``: the row allows at least one token below ``vocab``. Works on the packed words (no 129,280-wide unpack): any non-zero word, with the tail bits of the last word masked."""
+    packed = torch.as_tensor(packed)
+    words = int(packed.shape[-1])
+    wm = _word_mask(packed_words(vocab), vocab)
+    if words > packed_words(vocab):
+        packed = packed[..., : packed_words(vocab)]
+        words = packed_words(vocab)
+    if wm is None:
+        return (packed != 0).any(-1)
+    head = (packed[..., :-1] != 0).any(-1)
+    return head | ((packed[..., -1] & wm) != 0)
+
+
 def check_rows_allow_something(packed: torch.Tensor, vocab: int = VOCAB, what: str = "grammar mask") -> None:
     """Raise when a row allows no token inside the vocabulary: sampling from it would return an arbitrary token (a grammar that rejects everything is a bug upstream)."""
     packed = torch.as_tensor(packed)
     flat = packed.reshape(-1, packed.shape[-1])
-    allowed = unpack_mask(flat, vocab)
-    empty = (~allowed.any(dim=-1)).nonzero().flatten().tolist()
+    empty = (~nonempty_rows(flat, vocab)).nonzero().flatten().tolist()
     if empty:
         raise ValueError(f"{what}: rows {empty} allow no token")
 
@@ -97,18 +118,31 @@ def permute_to_runner(
     if width < n:
         raise ValueError(f"the mask block has {width} columns, the verify round has {n}")
     out = torch.full((runner_rows, n, words), ALL_ONES, dtype=torch.int32)
-    seen = set()
-    for i, r in rows:
-        if not 0 <= i < W:
-            raise ValueError(f"logical row {i} outside the mask block of {W} rows")
-        if not 0 <= r < runner_rows:
-            raise ValueError(f"runner row {r} outside the {runner_rows} runner rows")
-        if r in seen:
-            raise ValueError(f"runner row {r} is mapped twice")
-        seen.add(r)
-        cols = 1 if column0_only else n
-        out[r, :cols] = block[i, :cols]
-        check_rows_allow_something(out[r, :cols], what=f"logical row {i} (runner row {r})")
+    cols = 1 if column0_only else n
+    if rows:
+        ii = torch.tensor([i for i, _ in rows], dtype=torch.long)
+        rr = torch.tensor([r for _, r in rows], dtype=torch.long)
+        if bool(((ii < 0) | (ii >= W)).any()):
+            raise ValueError(f"logical row {int(ii[(ii < 0) | (ii >= W)][0])} outside the mask block of {W} rows")
+        if bool(((rr < 0) | (rr >= runner_rows)).any()):
+            raise ValueError(
+                f"runner row {int(rr[(rr < 0) | (rr >= runner_rows)][0])} outside the {runner_rows} runner rows"
+            )
+        if len(set(rr.tolist())) != len(rows):
+            dup = next(r for r in rr.tolist() if rr.tolist().count(r) > 1)
+            raise ValueError(f"runner row {dup} is mapped twice")
+        sub = block[ii, :cols]  # [R, cols, words]
+        restricted = (sub != ALL_ONES).any(
+            -1
+        )  # [R, cols]: all-ones rows need neither a copy (out is all ones) nor a check
+        if bool(restricted.any()):
+            bad = restricted & ~nonempty_rows(sub)
+            if bool(bad.any()):
+                k = int(bad.any(-1).nonzero()[0])
+                raise ValueError(
+                    f"logical row {int(ii[k])} (runner row {int(rr[k])}): grammar mask: rows {bad[k].nonzero().flatten().tolist()} allow no token"
+                )
+            out[rr, :cols] = sub
     return out.reshape(runner_rows * n, words)
 
 

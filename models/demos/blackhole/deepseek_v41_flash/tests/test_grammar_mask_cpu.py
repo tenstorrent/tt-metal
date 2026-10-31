@@ -154,3 +154,26 @@ def test_empty_row_and_bad_mapping_raise(expect_error):
         gm.permute_to_runner(ok, [(0, 5)], 2, 2)
     with expect_error(ValueError, "outside"):
         gm.permute_to_runner(ok, [(7, 0)], 2, 2)
+
+
+def test_nonempty_rows_matches_the_unpack_reference_including_tail_bits():
+    g = torch.Generator().manual_seed(3)
+    for vocab in (V, 100, 96):
+        words = gm.packed_words(vocab)
+        allowed = torch.rand(40, words * 32, generator=g) < 0.002
+        allowed[::5] = False  # empty rows
+        allowed[1, vocab:] = True  # only tail bits set (outside the vocabulary): still empty below vocab
+        allowed[1, :vocab] = False
+        packed = pack(allowed, words)
+        want = gm.unpack_mask(packed, vocab).any(-1)
+        assert torch.equal(gm.nonempty_rows(packed, vocab), want)
+
+
+def test_permute_all_ones_rows_cost_no_copy_and_restricted_rows_land():
+    W, n = 16, 6
+    block = _block(W, n, {5: [9], 11: [3, 4]})
+    rows = [(i, i) for i in range(W)]
+    out = gm.permute_to_runner(block, rows, W, n, column0_only=False)
+    unp = gm.unpack_mask(out, V).reshape(W, n, V)
+    assert unp[5, 0].nonzero().flatten().tolist() == [9] and unp[11, 0].nonzero().flatten().tolist() == [3, 4]
+    assert unp[:, 1:].all() and unp[0].all()
