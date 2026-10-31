@@ -504,3 +504,32 @@ Exposed transport, i.e. op time minus `DRMS_ABLATE_EXCHANGE` time on the fastest
 `MIN_BLOCKS_PER_CORE = 1` before the gather-semaphore fix: 640×1792 ≈ 3.0, 32×1792 ≈ 1.7, 2048×1280 ≈ 9.6. The local
 half dominates every perf case. 2048×1280 runs R1 with one row per core (no overlap of read, exchange and write);
 lamp L3 (R3-i, `G_w = 3`, 105 cores) is the nearby split to measure.
+
+## Implementation notes (Refinement 3 — OVERLAP on the focus case)
+
+Breakdown that drove it (`DRMS_ZONES=1` per-stage device zones, `tests/.../perf_zones.py` timeline; 640×1792, chip 0,
+before): every root's reader ran the chain collect → finalize → distribute serially per wave, and the members'
+writes waited behind it. Measured per wave: collect 1.77 µs (RISC column-0 scatter of all G slots after the last
+landing), finalize 1.9 µs (6 full-tile SFPU passes), distribute 1.0 µs (unicast + ack barrier). Wave-0's distribute
+also queued behind wave-1's collect, and a member's wave-0 partial waited about 1.6 µs in its row-1 read barrier.
+
+| Item | Design | Implemented | Why / measured (focus case, fastest chip) |
+|------|--------|-------------|------------------------------------------|
+| Notify quantum (L4) | once per wave per direction | `NOTIFY_PER_ENTRY = True`: the ports notify per landed entry. The root opens wave w's `cb_stats_gather` window once it has published w, reads its own slot at once, then each peer slot as its entry lands (`entry_slot` RT args), and pushes after the last slot | At the last landing only one slot is left to read. Bundled step: 23.87 → 22.09 µs |
+| Column-0 copies | word loop | unrolled batches of 8 plain loads (after `invalidate_l1_cache`), volatile stores | publish 0.73 → 0.45 µs, collect 1.77 → 1.0 µs (all slots) |
+| Root poll order | gather, publish, collect, distribute | distribute, collect, publish, gather (downstream first); the root's own inv copy is pushed before the member writes | the root's next finalize is not held behind the member writes |
+| inv_rms distribution (L6) | unicast per member + ack barrier + `SEM_INV` inc | per member **row-run** (consecutive logical x in one row, i.e. a logical rectangle): **linked** multicast of faces 0/2, then `noc_semaphore_set_multicast` of the cumulative wave count (source: the root's own unused `SEM_INV` word); `writes_flushed` before the source pop | The linked chain to one rectangle arrives in order, so no ack barrier is needed (it was 0.5 µs of the 1.0 µs). 22.09 → 21.79 µs |
+| x loads | one blocking barrier per row | non-blocking cursor: one row's reads in flight, pushed once `ncrisc_noc_reads_flushed` | sends and publishes of reduced waves are not held behind a row's DRAM latency. 21.79 → 21.23 µs |
+| Read order (`READ_WAVE_GATE`) | — | wave k+1's reads are issued once this core's wave k is reduced locally | the grid's wave-0 reads (which gate the first exchange) do not compete with the fast cores' wave-1 reads. 21.23 → 21.05 µs |
+| Finalize SFPU ops | kernel_lib `AddBinary`, `MulUnary`, `AddUnary`, `Rsqrt` | in-kernel chain elements `AddBinaryCol`, `BinopScalarCol`, `RsqrtCol`: the same LLK calls with `VectorMode::C` (faces 0 + 2) | **Raw-LLK deviation (documented at the kernel head).** The helpers hardcode `VectorMode::RC`. The finalize tiles are valid in column 0 only, so half the SFPU passes are don't-care. Same ops and order, so numerics are unchanged. 21.05 → 20.51 µs |
+| `PORT_OWN_AHEAD` (port send order) | strict (wave, item) | knob, **parked False** | the own segment of wave w+1 may go before wave w's relays. Correct, measured null twice (the root chain bound). Kept as a live knob for the TRANSPORT round |
+
+Measured and not kept: 3 / 4 waves (`R3_ROWS_PER_GROUP` 3 / 4) are still slower (20.96 against 20.51 µs).
+Swapping the reader / writer NoCs: 30.2 µs. Splitting output writes over both NoCs in `DM_DYNAMIC_NOC` mode hung a
+Linear 32×1792 case (writer in `ncrisc_noc_fast_write_any_len`), so it was reverted.
+
+Remaining bottleneck (the timeline after): the output writes. 2.3 MB of writes run from about 13.5 to about 20.7 µs
+(about 280 GB/s), and they cannot start before inv_rms. Their NOC1 write time grows with the core's x: 0.3 µs at the
+west edge, about 6.5 µs at the east edge (x = 13..15). The far cores lose link arbitration on the way to the DRAM
+columns, and those cores set the op's end. Next levers: use both NoCs for the writes (by destination direction, with a
+working dynamic-NoC mode), or weight less output onto the far columns.

@@ -27,6 +27,9 @@
 //   release: pop cb_x_tiles (R_b * WS), cb_inv_rms (R_b)
 // Every phase is a kernel_lib helper; the raw calls are the caller-owned CB waits / pops the caller-managed
 // (None / None) policies hand back.
+// DEVIATION (Refinement 3): finalize_wave's SFPU elements are in-kernel chain elements (AddBinaryCol, BinopScalarCol,
+// RsqrtCol) issuing the API's own LLK calls with VectorMode::C (faces 0 + 2): the kernel_lib elements hardcode
+// VectorMode::RC and the finalize tiles are valid in column 0 only (measured 21.05 -> 20.51 us at 640x1792).
 
 #include <stdint.h>
 

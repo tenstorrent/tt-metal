@@ -117,3 +117,48 @@
 - Issues encountered: None.
 - Tests added: `test_distributed_rms_norm.py::test_output_placement` (WS→DRAM, HS→DRAM, DRAM→WS 8x3, WS→WS regrid
   4x2@(1,0); shapes 32x1792 and 64x1000 W-non-aligned), `run_case(out_memory=...)`.
+
+## Refinement 3 — OVERLAP: pipeline read → exchange → write on the perf-flagged case
+- Date: 2026-10-31
+- What was done (perf, label **OVERLAP**). Each lever was measured with `perf_measure.py` and kept by
+  `ccl_perf compare`. The breakdown came from new measurement-only per-stage zones: `DRMS_ZONES=1` and
+  `tests/.../perf_zones.py`. On the focus case they showed each root's collect → finalize → distribute chain running
+  serially per wave (1.77 + 1.9 + 1.0 µs).
+  1. **Per-entry collect (L4).** `NOTIFY_PER_ENTRY`: the ports notify per landed entry, and the root reads and
+     scatters each slot as it lands. The column-0 copies are unrolled, the poll order is downstream first, and the
+     root's own inv copy is pushed first. 23.87 → 22.09 µs.
+  2. **inv_rms multicast per member row-run (L6).** Linked multicast of faces 0/2 plus a multicast set of
+     `SEM_INV`, with no ack barrier. 22.09 → 21.79.
+  3. **Non-blocking x load cursor.** One row in flight, pushed once landed. 21.79 → 21.23.
+  4. **Wave-ordered reads (`READ_WAVE_GATE`).** 21.23 → 21.05.
+  5. **Finalize SFPU on the column faces only.** `VectorMode::C` in-kernel chain elements; a documented raw-LLK
+     deviation. 21.05 → 20.51.
+  6. **`PORT_OWN_AHEAD`** (the port sends wave w+1's own segment ahead of wave w's relays). Correct, measured null
+     twice, parked off as a live knob.
+  - Reused: the root event loop, the slot / landing layout, the chain helpers, the program semaphores (the root's own
+    `SEM_INV` word as the multicast source). Added: the reader's `entry_slot` and member row-run RT args, three host
+    knobs, and no new CB (`l1_ledger.md` is unchanged).
+- Perf (`perf_measure.py`, 5 experiments, fastest / slowest chip, µs; all `ccl_perf compare` wins):
+  - 640×1792 (PERF FOCUS) 23.95 / 25.75 → **20.51 / 21.77**;
+  - 32×1792 12.12 / 13.52 → 9.75 / 10.72;
+  - 2048×1280 44.09 / 47.18 → 42.53 / 45.67.
+  - Exposed transport (op minus `DRMS_ABLATE_EXCHANGE`, fastest chip): 2.94 → 1.97 / 1.60 → 0.71 / 10.0 → 9.1.
+- Measured nulls / reverts:
+  - 3 waves (`R3_ROWS_PER_GROUP=3`) 20.96 and 4 waves 24.4: still slower than 2.
+  - Reader / writer NoC swap 30.2: removed.
+  - Split output writes over both NoCs in `DM_DYNAMIC_NOC` mode: hung `test_linear[1x32x1792-bf16-cluster_axis=0]`
+    (writer in `ncrisc_noc_fast_write_any_len`), reverted.
+- Remaining bottleneck (finding, not a follow-up). The output write burst after inv_rms: 2.3 MB at about 280 GB/s.
+  The east-edge cores' NOC1 writes take about 6.5 µs, against 0.3 µs at the west edge, and they end the op.
+  Direction-aware writes on both NoCs are the next lever.
+- Accuracy achieved: unchanged math (same ops, same slot order). Precision baseline 20 passed / 4 skipped (bf16 PCC ≥
+  0.999998 under fp32 DEST, as at Phase 0); golden tolerances on every cell run.
+- Golden test progress:
+  - Slice (640×1792, 2×1×128×100, 4×128×47 at 2 links / fp32 DEST, plus 32×8192 HEIGHT_SHARDED at 1 link): 311
+    passed, 868 skipped (invalid), 10 xfailed, 0 failed.
+  - `test_translated.py`: 278 passed, 1 failed (the known prefill-131072 landing refusal, Refinement 4).
+  - The three perf cases are checked against the golden reference in `perf_measure.py`.
+- Issues encountered: the dynamic-NoC hang above (reverted). `DeviceZoneScopedN` in one scope twice is a compile
+  error, so the zones nest in braces.
+- Tests added: `tests/ttnn/unit_tests/operations/distributed_rms_norm/perf_zones.py` (measurement only, not collected).
+  Unit regression net: acceptance 111/111, debug 6/6 (incl. `test_repeat_rows`), knobs 12/12, precision 20 + 4 skipped.

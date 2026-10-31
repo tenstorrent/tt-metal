@@ -10,8 +10,9 @@
 // the input shard (zero-copy), all of this core's rows are pushed once.
 //
 // Then ONE non-blocking poll loop; each cursor steps whenever its condition holds, so no wave waits behind an earlier
-// wave's exchange:
-//   load        (interleaved) the next tile-row of x: V page reads, one barrier, W-pad columns zeroed, push WS
+// wave's exchange (root order: distribute, collect, publish, gather — downstream first):
+//   load        (interleaved) the next tile-row of x: V page reads issued, pushed in a later pass once they landed
+//               (non-blocking), W-pad columns zeroed; READ_WAVE_GATE: wave k+1's rows only after wave k is reduced
 //   member (R3, index > 0):
 //     send      wave w's collapsed partials (cb_partial_col) -> the root's cb_gather slots [(k*G_w + index)*Rw, +n)
 //               as faces 0/2, barrier, root SEM_GATHER_k += 1 (k = wave index within the block)
@@ -22,11 +23,12 @@
 //               device partial (cb_dev_partial) -> 32 fp32 words per tile-row -> one NoC write into slot p of the
 //               landing of each sending port of this root's link, barrier, port SEM_OWN_STATS += 1.
 //               For wave w >= 1 only after the ports counted wave w-1 (SEM_OWN_COUNTED >= n_send * w).
-//     collect   every direction's SEM_LANDED >= (w+1) * n_in: read the G slots' record runs (own slot included,
-//               from its own port landing: every chip sums identical fp32 inputs in the same order), scatter each
-//               record into column 0 of tile t*G + q of cb_stats_gather, push G*n
-//     distribute (R3) cb_rms_root -> every member's cb_inv_rms (faces 0/2, one write per member), barrier,
-//               member SEM_INV += 1; own copy into cb_inv_rms
+//     collect   slot by slot (the ports notify per landed entry): own slot once published, each peer slot when its
+//               entry is counted on SEM_LANDED_<d>; each record run is read from its port landing and scattered into
+//               column 0 of tile t*G + q of cb_stats_gather; push G*n after the last slot (every chip sums identical
+//               fp32 inputs in slot order)
+//     distribute (R3) own copy into cb_inv_rms first; then per member row-run a linked multicast of faces 0/2 into
+//               the members' cb_inv_rms + a multicast set of the cumulative wave count on SEM_INV (no ack barrier)
 // Raw NoC / CB calls: no kernel_lib helper reads TILE pages with W-pad zeroing, moves a face-strided subset of a tile,
 // extracts / scatters a tile's column 0, or polls several event sources without blocking (op_design.md -> Helpers
 // considered and rejected).

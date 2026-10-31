@@ -126,7 +126,7 @@ the starting point.
 **Done when**: the 12 `test_simulated_distributed_layernorm` placement-mismatch cells pass, `validate()` no longer
 raises regime refusal (b) for any placement pair the kernels now handle, and the golden suite stays green.
 
-### [ ] Refinement 3 — OVERLAP: pipeline read → exchange → write on the perf-flagged case
+### [x] Refinement 3 — OVERLAP: pipeline read → exchange → write on the perf-flagged case
 
 **Type**: perf
 
@@ -158,6 +158,25 @@ not higher (`python -m eval.ccl_perf compare`), and the exposed transport is re-
 Golden suite green. No regression across the config-spanning guard set: one representative per distinct kernel path ×
 layout × placement, which includes the other two `LOOSE_CASES` (32×1792 R3-i decode, 2048×1280 R1 prefill), a
 `HEIGHT_SHARDED` and a `WIDTH_SHARDED` cell, and a Linear `cluster_axis=0` cell.
+
+**Outcome**: focus case 23.95 / 25.75 → **20.51 / 21.77 µs** (fastest / slowest, `perf_measure.py`, 5 experiments;
+`ccl_perf compare`: win). The guard cases also win: 32×1792 12.12 / 13.52 → 9.75 / 10.72, 2048×1280 44.09 / 47.18 →
+42.53 / 45.67. Exposed transport (op minus `DRMS_ABLATE_EXCHANGE`, fastest chip) 2.94 → 1.97 µs (focus), 1.60 → 0.71,
+10.0 → 9.1. Seven levers landed. The zone-measured root chain per wave was collect 1.77 µs, finalize 1.9 µs and
+distribute 1.0 µs, serial behind each other:
+- per-entry collect (L4);
+- unrolled column-0 copies;
+- downstream-first poll order, with the root's own inv copy first;
+- linked inv_rms multicast per member row-run (L6);
+- non-blocking x loads;
+- wave-ordered reads;
+- finalize on the column faces only (`VectorMode::C`).
+
+The bottleneck now is the output write burst after inv_rms. 2.3 MB at about 280 GB/s, and the east-edge cores' NOC1
+writes are starved (about 6.5 µs against 0.3 µs at the west edge), so they set the op's end. More waves (L1+L2,
+`R3_ROWS_PER_GROUP` 3/4) are still slower, and so is a NoC swap. Next would be writes on both NoCs chosen by
+destination direction. A first dynamic-NoC attempt hung a Linear 32×1792 case and was reverted, so it was not pursued
+here. `PORT_OWN_AHEAD` is a live knob parked off (measured null).
 
 ### [ ] Refinement 4 — Bounded exchange landing for long sequences (TRANSPORT scheme change)
 
