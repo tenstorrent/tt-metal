@@ -98,7 +98,7 @@ void require_buffer_distribution_matches_spec(const Tensor& tensor, const char* 
 
 // Synthesize a populated-shard output ShardSpec for specless sharded eltwise-unary outputs.
 // `output_element_size_bytes` reflects the output dtype (typecast can differ from input dtype).
-tt::tt_metal::ShardSpec generate_output_shard_spec(
+std::optional<tt::tt_metal::ShardSpec> generate_output_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,

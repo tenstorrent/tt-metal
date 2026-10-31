@@ -35,6 +35,11 @@ ShardOrientation resolve_orientation(const SynthesizeOutputShardSpecOpts& opts) 
     return ShardOrientation::ROW_MAJOR;
 }
 
+bool rm_page_valid(uint64_t shard_width, uint32_t element_size_bytes, uint64_t tensor_width) {
+    const uint64_t page = shard_width * static_cast<uint64_t>(element_size_bytes);
+    return page != 0 && page % tt::tt_metal::hal::get_l1_alignment() == 0 && tensor_width % shard_width == 0;
+}
+
 }  // namespace
 
 ShardSpec synthesize_output_shard_spec(
@@ -167,15 +172,9 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
         return (mode == RmPageAlignmentMode::Strict) ? std::optional<ShardSpec>{std::nullopt} : std::optional{spec};
     }
     const uint64_t l1_page_align = static_cast<uint64_t>(tt::tt_metal::hal::get_l1_alignment());
-    auto rm_page_valid = [&](uint64_t shard_width) {
-        const uint64_t page = shard_width * static_cast<uint64_t>(element_size_bytes);
-        return page != 0 && (page % l1_page_align) == 0 && (tensor_width % shard_width) == 0;
-    };
-    if (rm_page_valid(spec.shape[1])) {
+    if (rm_page_valid(spec.shape[1], element_size_bytes, tensor_width)) {
         return spec;
     }
-    // Only WIDTH_SHARDED can be repaired by shrinking nc; {H,B}_SHARDED pin shard_width to tensor_width.
-    // Lenient returns `spec` unchanged (downstream FATAL surfaces later); Strict rejects so caller falls back.
     if (memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         return (mode == RmPageAlignmentMode::Strict) ? std::optional<ShardSpec>{std::nullopt} : std::optional{spec};
     }
@@ -187,7 +186,7 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
         if (tensor_width % nc != 0) {
             continue;
         }
-        if (rm_page_valid(tensor_width / nc)) {
+        if (rm_page_valid(tensor_width / nc, element_size_bytes, tensor_width)) {
             chosen_cores = nc;
             new_shard_width = static_cast<uint32_t>(tensor_width / nc);
             break;
@@ -212,6 +211,33 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     }
     auto new_grid = tt::tt_metal::num_cores_to_corerangeset(chosen_cores, compute_grid_size, row_wise);
     return ShardSpec(new_grid, {spec.shape[0], new_shard_width}, spec.orientation);
+}
+
+bool rm_shard_page_valid(const ShardSpec& spec, uint32_t element_size_bytes, uint64_t tensor_width) {
+    return rm_page_valid(spec.shape[1], element_size_bytes, tensor_width);
+}
+
+std::optional<ShardSpec> rm_block_shard_spec_or_fallback(
+    const ShardSpec& rm_spec,
+    const ShardSpec& tile_spec,
+    uint32_t element_size_bytes,
+    uint64_t tensor_width,
+    TensorMemoryLayout memory_layout,
+    bool whole_row_shards_only) {
+    if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        return rm_spec;
+    }
+    const auto usable = [&](const ShardSpec& spec) {
+        return rm_shard_page_valid(spec, element_size_bytes, tensor_width) &&
+               (!whole_row_shards_only || spec.shape[1] >= tensor_width);
+    };
+    if (usable(rm_spec)) {
+        return rm_spec;
+    }
+    if (usable(tile_spec)) {
+        return tile_spec;
+    }
+    return std::nullopt;
 }
 
 tt::tt_metal::NdShardSpec rescale_nd_shard_spec_for_output(

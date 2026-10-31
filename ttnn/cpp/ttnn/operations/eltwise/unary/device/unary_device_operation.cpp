@@ -320,7 +320,8 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
             TensorLayout(
                 args.output_dtype,
                 PageConfig(output_layout),
-                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+                shard_spec_opt.has_value() ? MemoryConfig(memory_layout, buffer_type, shard_spec_opt)
+                                           : MemoryConfig(TensorMemoryLayout::INTERLEAVED, buffer_type)));
     }
 
     const auto output_layout = tensor_args.input.layout();

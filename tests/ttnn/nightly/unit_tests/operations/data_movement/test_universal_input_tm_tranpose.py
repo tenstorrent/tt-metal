@@ -498,16 +498,10 @@ def test_transpose_rm_specless_height_shard_direct_path(device):
 
 
 def test_transpose_rm_specless_block_shard_direct_path(device):
-    """RM BLOCK_SHARDED specless output from a WIDTH-sharded RM irregular input: transpose(1,1,64,40)→
-    (1,1,40,64), out tw=64 with div_up(64, grid.x=8)=8 yields L1-aligned page=16B; skipped on grids
-    where div_up doesn't give a page-aligned tw divisor."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x < 4 or compute_grid.y < 4:
         pytest.skip("Block direct-path test needs >=4x4 compute cores")
     tw = 64
-    shard_w_direct = -(-tw // compute_grid.x)
-    if (shard_w_direct * 2) % 16 != 0 or tw % shard_w_direct != 0:
-        pytest.skip(f"Grid.x={compute_grid.x} → shard_w={shard_w_direct} unaligned; BLOCK direct path not exercised")
     shape = (1, 1, 64, 40)
     in_mc = _width_shard_config(shape, device, num_cores=4, layout=_RM)
     out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
@@ -522,6 +516,34 @@ def test_transpose_rm_specless_block_shard_direct_path(device):
     ss = mc.shard_spec
     assert ss.shape[1] * 2 % 16 == 0, f"BLOCK RM shard page must be L1-aligned; got page={ss.shape[1] * 2}B"
     assert tw % ss.shape[1] == 0, f"tensor_w={tw} must be a multiple of shard_w; got shard_w={ss.shape[1]}"
+    ref = x.transpose(-2, -1)
+    got = ttnn.to_torch(result.cpu().to(_RM))
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+@pytest.mark.parametrize(
+    "out_layout",
+    [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
+    ids=["height", "block"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 7, 64), (1, 1, 16, 40), (1, 1, 32, 40), (1, 1, 44, 64), (1, 1, 96, 40), (1, 1, 100, 64)]
+)
+def test_transpose_rm_specless_shard_unaligned_page(shape, dtype, out_layout, device):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 4 or compute_grid.y < 4:
+        pytest.skip("Unaligned-page test needs >=4x4 compute cores")
+    in_mc = _width_shard_config(shape, device, num_cores=4, layout=_RM)
+    out_mc = ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=_TTNN_TO_TORCH_DTYPE[dtype])
+    ttnn_in = ttnn.from_torch(x, layout=_RM, dtype=dtype, device=device, memory_config=in_mc)
+    result = ttnn.transpose(ttnn_in, -2, -1, memory_config=out_mc)
+    mc = result.memory_config()
+    if mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        page = mc.shard_spec.shape[1] * x.element_size()
+        assert page % 16 == 0, f"BLOCK RM shard page must be L1-aligned; got page={page}B"
     ref = x.transpose(-2, -1)
     got = ttnn.to_torch(result.cpu().to(_RM))
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)

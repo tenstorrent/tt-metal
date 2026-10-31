@@ -34,7 +34,7 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`pad_value` (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
+                * :attr:`memory_config`: Memory Config of the output tensor. A ROW_MAJOR BLOCK_SHARDED config with no spec may return an INTERLEAVED tensor if no aligned spec fits the shape.
         )doc";
 
     ttnn::bind_function<"transpose">(

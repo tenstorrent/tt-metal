@@ -261,16 +261,21 @@ ttnn::Tensor transpose_impl(
                 ttsl::SmallVector<uint32_t> out_padded_vec(input_padded.cbegin(), input_padded.cend());
                 std::swap(out_padded_vec[n1], out_padded_vec[n2]);
                 auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
-                // Composite path opts into RM-safe synth; TILE inputs still tile-inflate.
-                auto spec = generate_transpose_shard_spec(
-                    input_tensor,
-                    output_padded_shape,
-                    memory_config_arg->memory_layout(),
-                    input_orientation_hint,
-                    input_tensor.layout() == Layout::TILE ? OutputTiling::Tile : OutputTiling::RowMajor);
-                resolved_mc = tt::tt_metal::MemoryConfig(
-                    memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
-                copy_experimental_allocation_flags(*memory_config_arg, *resolved_mc);
+                auto spec = generate_transpose_rm_shard_spec(
+                    input_tensor, output_padded_shape, memory_config_arg->memory_layout(), input_orientation_hint);
+                if (spec.has_value()) {
+                    resolved_mc = tt::tt_metal::MemoryConfig(
+                        memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
+                    copy_experimental_allocation_flags(*memory_config_arg, *resolved_mc);
+                } else {
+                    log_warning(
+                        tt::LogOp,
+                        "ttnn.transpose: no L1-aligned ROW_MAJOR BLOCK_SHARDED spec for output shape {}; falling back "
+                        "to INTERLEAVED",
+                        output_padded_shape);
+                    resolved_mc = tt::tt_metal::MemoryConfig(
+                        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, memory_config_arg->buffer_type());
+                }
             }
             const auto interleaved_l1 =
                 tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
