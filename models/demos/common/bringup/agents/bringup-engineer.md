@@ -176,6 +176,11 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    attention, CCL workers. An op that defaults to the full device grid gets an explicit sub-grid. Take the limit from
    the model's settings (one value, `MAX_WORKER_CORES`), never a literal in a module, so other boxes keep their grid.
    When you add or change an op, report how many cores it runs on.
+19. Galaxy resets (2026-10-31, FIX.15): never run a single-card device job (`--device N|auto`, `tt-probe.sh
+   --device`) on a Galaxy whose mesh the run depends on, unless the brief says so: if it hangs, the safe runner resets
+   that card alone, its Ethernet re-trains alone, and the 8x4 mesh no longer opens (cluster discovery fails) until the
+   whole box is reset. Never trigger a reset yourself in any way: not `tt-smi -r`, not a `/tmp/tt-device-*.dirty` file,
+   not a run started to make the runner reset. A board that does not open is a stop: report it and end the attempt.
 
 ## Roles
 

@@ -201,6 +201,23 @@ def test_reject_reverts_the_change_and_lets_the_dependents_run(mk, sandbox):
     assert "[toy][P.1] experts at HiFi2 (rejected by the owner)" in sandbox.git("log", "--format=%s")
 
 
+def test_a_decided_pick_is_applied_before_a_queued_fix_is_placed(mk, sandbox):
+    """F235 (DeepSeek-V4.1 FIX.15 after P.20's reject): a fix released while a decided pick still had its changes in the
+    tree was placed first, and its agent started on the rejected change. The decided pick is applied first."""
+    from models.demos.common.bringup import overseer as OV
+
+    base = {"id": "A.1", "title": "base", "step": "perf", "deps": [], "gate": {"cmd": record_cmd(n=1)}}
+    o = mk([base, pick(deps=["A.1"])], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    assert decide(o, "P.1", "reject") == 0
+    OV.queue_fix(o.spec.ledger_dir, "Cap the cores.", ["A.1"], tasks={t: o.led.task(t) for t in o.led.tasks()})
+    o.run(until="P.1")
+    rejected = next(i for i, x in enumerate(mk.lines) if "[P.1]" in x and "REJECTED" in x)
+    placed = next((i for i, x in enumerate(mk.lines) if "placed by the overseer" in x), len(mk.lines))
+    assert rejected < placed, mk.lines
+    assert (sandbox.repo / "src/impl.txt").read_text() == "hifi4\n"
+
+
 def test_accept_runs_the_gate_and_commits_the_change(mk, sandbox):
     o = mk([pick(gate={"cmd": record_cmd(device_ms_experts=8.0), "metrics": {"device_ms_experts": "< 10"}})], CHANGE)
     assert o.run() == HUMAN

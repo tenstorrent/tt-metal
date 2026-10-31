@@ -563,6 +563,18 @@ class Orchestrator:
     def place_fixes(self) -> bool:
         return _place_fixes(self)
 
+    def decided_picks(self) -> list[str]:
+        """F235: perf picks with a recorded accept / reject not yet applied (neither committed nor reverted)."""
+        out = []
+        for tid in self.led.tasks():
+            task = self.led.task(tid)
+            if not self.perf_pick(task) or self.led.status(tid) in ("PASS", "REJECTED"):
+                continue
+            rec = self.ab_record(task)
+            if rec and rec.get("decision") in ("accept", "reject"):
+                out.append(tid)
+        return out
+
     def allowed_paths(self, task: dict, role: str) -> list[str]:
         b = rel(self.spec, self.spec.bringup_dir)
         if role == "test":
@@ -2146,7 +2158,10 @@ class Orchestrator:
     def run(self, until: str | None = None, only: str | None = None) -> int:
         """until (F152): run that task and what it needs, then stop; only: just that task."""
         while True:
-            if self.place_fixes():  # F77 / F143: queued fixes are placed first, so `--only FIX.<n>` can name one
+            decided = self.decided_picks()
+            # F235: a perf pick the owner (or the overseer) already decided is applied before a queued fix is placed:
+            # the fix's agent must not start on a rejected pick's changes (DeepSeek-V4.1 FIX.15 after P.20's reject)
+            if not decided and self.place_fixes():  # F77 / F143: queued fixes first, so `--only FIX.<n>` can name one
                 continue
             if until and until not in self.led.tasks():
                 self.echo(f"no task {until} (--until)")
@@ -2159,6 +2174,7 @@ class Orchestrator:
             runnable = [t for t in self.led.runnable() if state.get(t, {}).get("status") != "STOPPED" and t in scope]
             if only:
                 runnable = [t for t in runnable if t == only]
+            runnable.sort(key=lambda t: t not in decided)  # F235: decided picks first
             parked = self.parked_waiting(runnable, state)
             if parked and len(parked) < len(runnable):  # F109: a person's decision does not hold up independent work
                 runnable = [t for t in runnable if t not in parked]
