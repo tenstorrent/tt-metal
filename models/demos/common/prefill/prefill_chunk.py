@@ -200,6 +200,16 @@ def packed_forward_refusals(
     return reasons
 
 
+def packed_forward_capabilities(adapter) -> dict:
+    """The adapter's packed-forward capabilities as packed_forward_refusals() keywords, so every call site passes all
+    of them."""
+    return {
+        "supports_packed_forward": adapter.supports_packed_forward,
+        "traced_forward": adapter.supports_packed_forward_trace,
+        "forward_d2h_acks": adapter.supports_packed_forward_d2h_acks,
+    }
+
+
 def check_packed_forward_support(forward_chunks: int, **kwargs) -> None:
     reasons = packed_forward_refusals(forward_chunks, **kwargs)
     if reasons:
