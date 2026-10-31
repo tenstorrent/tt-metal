@@ -1581,6 +1581,21 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-31 07:14: the capstone: 32 resident users at 1 M, all prefilling at once (needle1m_32_r6)
+
+`needle1m_32_r6` (32 x 1 038 673-token needle prompts submitted together, `max-num-batched-tokens 524288` so the
+engine step holds all 32: four waves of 8 on slot indices 0-3, eight 2048-row steps per slot per 16 K chunk; the
+paged sparse attention, APC on, the 8-to-1 decode interleave, the slot mask; overlay 3a331f2a3f9): 32/32 needles
+retrieved, no cross-talk, TTFT 16 592-16 714 s for all 32 (4 h 38 min: 33.2 M tokens at 1.99 K tok/s aggregate, the
+same mesh rate as one prompt alone in 505 s), 2032 wave steps from 8.03 s to 8.40 s, the DRAM allocator flat end to
+end (3776 / 234 / 215 MiB per bank) with all 32 slots live (KV usage 95.4 %), no engine error. The first run (r5,
+budget 131072) admitted only 8 with 24 waiting and was stopped at 38 min: the 32-resident point needs the budget of
+32 x 16 K per step. Not measured here: the sustained decode rate at batch 32 x 1 M (the answers reached EOS within a
+few tokens; the harness's traced step at the served 1 M context is 54.9 ms); a `min_tokens` round on the retained
+slots is the served measurement. With this the completeness items are closed locally: 32 distinct and 32 resident
+1 M users, the wave path at 1 M, multimodal, APC, async; the release flow runs on the tt-shield CI (image
+`vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.25.0-3c1a2275ced...-350dac6-124408122103`, run 41161213787).
+
 ### 2026-10-31 00:45: the wave path serves 8 x 1 M (direct_r5): 8/8 needles, a flat allocator, 69 min for all eight
 
 `needle1m_8_direct_r5` (8 x 1 038 673-token needle prompts, 8 in flight, waves of 8 forced by `GLM53_VLLM_SP_FIRST=0`,
