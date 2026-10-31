@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 // The reader supplies, per channel tile, the four tap-shifted input tiles and, per channel block, the tap tiles
 // (weights in row 0). Scaling a tile's columns by a tap is a matmul with that tap's diagonal, so the four taps
@@ -43,19 +45,26 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             current_block = block;
             taps.wait_front(weight_tiles);
             weights.reserve_back(weight_tiles);
-            mul_bcast_rows_init(dfb::eye, dfb::taps);
-            for (uint32_t tile = 0; tile < weight_tiles; tile += diag_group) {
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < diag_group; ++i) {
-                    mul_tiles_bcast_rows(dfb::eye, dfb::taps, 0, tile + i, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < diag_group; ++i) {
-                    pack_tile<true>(i, dfb::weights, tile + i);
-                }
-                tile_regs_release();
-            }
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(weight_tiles).block_size(diag_group),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::input(
+                        dfb::eye,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::InputTileMapping::Scalar,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        dfb::taps,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::InputTileMapping::Block,
+                        ckl::DataFormatReconfig::Disabled)>{eye, taps},
+                ckl::PackTile<ckl::output(
+                    dfb::weights, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::DataFormatReconfig::Disabled)>{
+                    weights});
             weights.push_back(weight_tiles);
             taps.pop_front(weight_tiles);
             weights.wait_front(weight_tiles);

@@ -2567,6 +2567,21 @@ ALWI constexpr auto select_element(const E& elem) {
     }
 }
 
+// Inputs whose wait or pop is tied to block boundaries.
+template <class E>
+constexpr bool block_synced_input() {
+    if constexpr (is_runtime_conditional_sequence_op_v<E>) {
+        return true;
+    } else if constexpr (is_cb_reader_op_v<E>) {
+        constexpr auto synced = [](InputSpec spec) {
+            return spec.wait == WaitPolicy::PerBlockSize || spec.wait == WaitPolicy::Cumulative ||
+                   spec.pop == PopPolicy::PerBlockSize;
+        };
+        return synced(E::a_input()) || synced(b_input_of<E>());
+    }
+    return false;
+}
+
 template <class E>
 inline constexpr bool participates_in_compute_v = is_cb_reader_op_v<E> || is_dest_only_op_v<E>;
 
@@ -2875,11 +2890,12 @@ template <
     uint32_t PrevA,
     uint32_t PrevB,
     uint32_t PrevP,
-    bool PackHetero>
+    bool PackHetero,
+    bool TileMajor = false>
 struct ComputeFacts {};
 
 ALWI void elem_apply_compute(
-    UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
+    UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
 
 template <
     class ElemT,
@@ -2889,10 +2905,12 @@ template <
     uint32_t PrevA,
     uint32_t PrevB,
     uint32_t PrevP,
-    bool PackHetero>
+    bool PackHetero,
+    bool TileMajor>
 ALWI void elem_apply_compute(
-    SelectedElement<ElemT, ComputeFacts<EmitMathInit, EmitSfpuInit, SlotBase, PrevA, PrevB, PrevP, PackHetero>>
-        selected,
+    SelectedElement<
+        ElemT,
+        ComputeFacts<EmitMathInit, EmitSfpuInit, SlotBase, PrevA, PrevB, PrevP, PackHetero, TileMajor>> selected,
     [[maybe_unused]] uint32_t i_flat,
     [[maybe_unused]] uint32_t ht,
     [[maybe_unused]] uint32_t wt,
@@ -2900,7 +2918,8 @@ ALWI void elem_apply_compute(
     [[maybe_unused]] uint32_t block_sync_count,
     [[maybe_unused]] uint32_t chain_lane_width,
     [[maybe_unused]] uint32_t Ht,
-    [[maybe_unused]] uint32_t Wt) {
+    [[maybe_unused]] uint32_t Wt,
+    [[maybe_unused]] uint32_t lane_offset) {
     const ElemT& elem = selected.value;
     // Per-block streaming: pass chunk-local index `j` to exec so Block
     // returns the local CB-front offset (the just-waited window).
@@ -2945,7 +2964,14 @@ ALWI void elem_apply_compute(
             emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
         }
-        if constexpr (!eltwise_chain_skip_compute_v) {
+        if constexpr (!eltwise_chain_skip_compute_v && TileMajor) {
+            // One lane of a tile-major walk; the driver advances the lane.
+            if constexpr (elem_needs_per_side_idx_v<ElemT>) {
+                elem.exec(0, i_flat, ht, 0, wt, SlotBase + lane_offset);
+            } else {
+                elem.exec(use_local_idx ? 0 : i_flat, ht, wt, SlotBase + lane_offset);
+            }
+        } else if constexpr (!eltwise_chain_skip_compute_v) {
             constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
 #pragma GCC unroll 0
             for (uint32_t j = 0; j < inner_count; ++j) {
@@ -2989,8 +3015,12 @@ ALWI void elem_apply_compute(
             emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
             elem.init();  // instance dispatch (see convention note above)
         }
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            elem.exec(i_flat + j, SlotBase + j * chain_lane_width);
+        if constexpr (TileMajor) {
+            elem.exec(i_flat, SlotBase + lane_offset);
+        } else {
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                elem.exec(i_flat + j, SlotBase + j * chain_lane_width);
+            }
         }
     }
 }
@@ -3355,6 +3385,11 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     (detail::emit_wait_upfront(detail::select_element<detail::waits_upfront<Es>()>(elts), Ht, Wt), ...);
     (detail::emit_reserve_upfront(detail::select_element<detail::reserves_upfront<Es>()>(elts), Ht, Wt), ...);
 
+    // Element-major (each element over the whole block) is required when an element re-initializes per block or an
+    // input synchronizes per block. Otherwise a chain with two or more compute elements runs tile-major.
+    constexpr bool tile_major = hoist_math && hoist_sfpu &&
+                                (uint32_t{0} + ... + uint32_t{detail::participates_in_compute_v<Es>}) >= 2 &&
+                                (!detail::block_synced_input<Es>() && ...);
     constexpr DestAccumulation dest_accumulation_mode = detail::ChainTraits<Es...>::dest_accumulation_mode;
     constexpr bool dest_accumulation = dest_accumulation_mode != DestAccumulation::Disabled;
     constexpr bool per_row_dest_accumulation = dest_accumulation_mode == DestAccumulation::PerRow;
@@ -3388,26 +3423,56 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
             if constexpr (!dest_accumulation) {
                 tile_regs_acquire();
             }
-            (detail::elem_apply_compute(
-                 detail::select_element<
-                     detail::participates_in_compute_v<Es>,
-                     detail::ComputeFacts<
-                         !hoist_math,
-                         !hoist_sfpu,
-                         dest_accumulation ? 1 : 0,
-                         detail::ChainTraits<Es...>::prev.srca[Is],
-                         detail::ChainTraits<Es...>::prev.srcb[Is],
-                         detail::ChainTraits<Es...>::prev.pack[Is],
-                         detail::ChainTraits<Es...>::pack_hetero>>(elts),
-                 i_flat,
-                 ht,
-                 wt_base,
-                 inner_count,
-                 block_sync_count,
-                 chain_lane_w,
-                 Ht,
-                 Wt),
-             ...);
+            if constexpr (tile_major) {
+                // Each tile runs through the whole element sequence before the next one, so the next tile's
+                // unpack overlaps this tile's math, as in a hand-written per-tile loop.
+                for (uint32_t j = 0; j < inner_count; ++j) {
+                    (detail::elem_apply_compute(
+                         detail::select_element<
+                             detail::participates_in_compute_v<Es>,
+                             detail::ComputeFacts<
+                                 false,
+                                 false,
+                                 dest_accumulation ? 1 : 0,
+                                 detail::ChainTraits<Es...>::prev.srca[Is],
+                                 detail::ChainTraits<Es...>::prev.srcb[Is],
+                                 detail::ChainTraits<Es...>::prev.pack[Is],
+                                 detail::ChainTraits<Es...>::pack_hetero,
+                                 true>>(elts),
+                         i_flat + j,
+                         ht,
+                         wt_base + j,
+                         1,
+                         block_sync_count,
+                         chain_lane_w,
+                         Ht,
+                         Wt,
+                         j * chain_lane_w),
+                     ...);
+                }
+            } else {
+                (detail::elem_apply_compute(
+                     detail::select_element<
+                         detail::participates_in_compute_v<Es>,
+                         detail::ComputeFacts<
+                             !hoist_math,
+                             !hoist_sfpu,
+                             dest_accumulation ? 1 : 0,
+                             detail::ChainTraits<Es...>::prev.srca[Is],
+                             detail::ChainTraits<Es...>::prev.srcb[Is],
+                             detail::ChainTraits<Es...>::prev.pack[Is],
+                             detail::ChainTraits<Es...>::pack_hetero>>(elts),
+                     i_flat,
+                     ht,
+                     wt_base,
+                     inner_count,
+                     block_sync_count,
+                     chain_lane_w,
+                     Ht,
+                     Wt,
+                     0),
+                 ...);
+            }
             if constexpr (!dest_accumulation) {
                 tile_regs_commit();
                 tile_regs_wait();

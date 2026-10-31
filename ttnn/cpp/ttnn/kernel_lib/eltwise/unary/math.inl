@@ -25,10 +25,13 @@
 namespace compute_kernel_lib {
 
 // ---- Exp ----
-template <Approx approx, Dst Slot>
-struct Exp : UnaryOp<Exp<approx, Slot>, Slot> {
+template <Approx approx, Dst Slot, int Iterations, ckernel::VectorMode Mode>
+struct Exp : UnaryOp<Exp<approx, Slot, Iterations, Mode>, Slot> {
     static ALWI void init() { exp_tile_init<approx == Approx::Fast>(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { exp_tile<approx == Approx::Fast>(to_u32(Slot) + slot_offset); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        exp_tile<approx == Approx::Fast, false, ckernel::InputClamping::ClampToNegative, Iterations>(
+            to_u32(Slot) + slot_offset, Mode);
+    }
 };
 
 // ---- Log ----
@@ -51,10 +54,14 @@ struct Sqrt : UnaryOp<Sqrt<fast, Slot>, Slot> {
 };
 
 // ---- Recip (1/x) ----
-template <Dst Slot>
-struct Recip : UnaryOp<Recip<Slot>, Slot> {
-    static ALWI void init() { recip_tile_init(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { recip_tile(to_u32(Slot) + slot_offset); }
+template <Dst Slot, ckernel::ReciprocalApproxMode Approximation>
+struct Recip : UnaryOp<Recip<Slot, Approximation>, Slot> {
+    static constexpr auto dest_acc =
+        DST_ACCUM_MODE ? ckernel::ReciprocalDestAcc::FP32 : ckernel::ReciprocalDestAcc::BF16;
+    static ALWI void init() { recip_tile_init<dest_acc, Approximation>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        recip_tile<dest_acc, Approximation>(to_u32(Slot) + slot_offset);
+    }
 };
 
 // ---- Rsqrt ----

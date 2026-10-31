@@ -72,7 +72,8 @@ ALWI void apply_runtime_branch(
          inner_count,
          chain_lane_width,
          Ht,
-         Wt),
+         Wt,
+         0),
      ...);
 }
 
