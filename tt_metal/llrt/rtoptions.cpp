@@ -509,7 +509,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_CACHE=/path/to/cache
         case EnvVarID::TT_METAL_CACHE:
             this->is_cache_dir_env_var_set = true;
-            this->cache_dir_ = normalize_path(value, "tt-metal-cache");
+            this->cache_dir_ = normalize_path(value, "tt-metal-cache") + "/";
             break;
 
         // TT_METAL_KERNEL_PATH
