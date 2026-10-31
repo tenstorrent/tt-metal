@@ -1157,6 +1157,49 @@ tasks:
     gate_tasks:
     - P.17
     - K.1
+- id: FIX.16
+  title: 'STEADY_STATE_PROFILE: the profile''s timed runs take the consecutive-chunk path (model hook steady_state)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.17
+  gate:
+    cmd: BRINGUP_TASK=P.17 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.17 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+  device: true
+  paths:
+  - models/demos/moe_block
+  - models/demos/deepseek_v3_d_p
+  - models/demos/glm53_flash_d_p_lb
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/prepared_program
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn
+  - tt_metal/impl/allocator
+  - tt_metal/impl/buffers
+  - tools/triage/dump_l1_diff.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER 2026-10-31: every profile and wall run repeats the same chunk, so the window carry is rebuilt each time
+      (attention.py ~1011: slice 1760x512 + to_layout 128x512 + ckv_bfp4 when the tail''s next start != start; 120 calls,
+      1.21 ms device / 16.3 ms host a chunk) although consecutive serving chunks skip it: the measured wall overstates serving
+      by ~11 ms. The framework now calls model.steady_state(start) (if the device model has it) right before each TIMED run
+      (warm wall, cProfile, the profiled run; never before an accuracy run). Implement steady_state(start) on the DS41 device
+      model: make the next run at start take exactly the path a chunk following a whole previous chunk takes (e.g. mark every
+      layer''s window tail / tail blocks as ending at start, keeping the buffers it would hold). Values may differ from a
+      real previous chunk (timing only), nothing else may change. Check with the profile that the carry rebuild ops are gone
+      from the timed run and nothing else changed (op counts per section). No fork regression suites.'
+    gate_tasks:
+    - P.17
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1167,6 +1210,7 @@ tasks:
   - P.10
   - FIX.14
   - FIX.15
+  - FIX.16
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -1793,7 +1837,8 @@ tasks:
       chunk_wall_ms: < 434
       device_ms_total: <= 260
 - id: P.18
-  title: 'WINDOW_TILES: the window KV as bfloat8_b tiles in a per-chip region, a neighbour exchange instead of the window all-gathers'
+  title: 'WINDOW_TILES: the window KV as bfloat8_b tiles in a per-chip region, a neighbour exchange instead of the window
+    all-gathers'
   step: perf
   role: perf
   device: true
@@ -1803,22 +1848,20 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-30 (handover page v4, A12). Under SP=32 a chip runs 160 query rows (5120 / 32) and needs 288
-      window rows: its own 160 plus the 128 before them, which all sit on the previous chip in sequence order. Today
-      every chip gathers the whole replicated [128 carry | 5120] window (all_gather over TP, then over SP, plus the carry
-      block gathers), rounds it to bfloat8_b blocks (ckv_bfp4 blocks=True) and sparse_sdpa reads it by index (NOW
-      profile at 51200: ~11 ms device and ~39 ms host a chunk in those window ops; DS41-142). Do: a setting value
-      WINDOW_KV_FORMAT=bfp8_tiles (bfp8_blocks stays): the window as bfloat8_b TILES in a per-chip 288-row region
-      (9 tile rows; the same 16-value exponent groups and round-to-nearest-even as the blocks, so the same values), ONE
-      neighbour send of the last 128 rows (4 tile rows) to the next chip in sequence order instead of the window
-      all-gathers (the chunk''s carry from the last chip to chip 0), rounding only the chip''s own rows, and in the
-      sparse_sdpa fork a dense band read of the window part (5 query tile rows against 9 key tile rows with the
-      causal / window mask) instead of the index gather, the softmax still joint with the top-k rows (same math).
-      Non-chunk-aligned starts (prefix hits, the runner test''s 2496) must work (any multiple of 32) or keep the old
-      path. The SERVED window copy (0_window_kv, SERVED_WINDOW all) is unchanged: its TP gather and write stay. Agent
-      rules 18 (at most 110 cores per op) and 19 (no single-card device jobs) hold. No fork regression suites (F.1);
-      add tests for the fork option you add. Report per op before / after (device and host a chunk) and the window
-      memory a chip.'
+    details: 'OWNER 2026-10-30 (handover page v4, A12). Under SP=32 a chip runs 160 query rows (5120 / 32) and needs 288 window
+      rows: its own 160 plus the 128 before them, which all sit on the previous chip in sequence order. Today every chip gathers
+      the whole replicated [128 carry | 5120] window (all_gather over TP, then over SP, plus the carry block gathers), rounds
+      it to bfloat8_b blocks (ckv_bfp4 blocks=True) and sparse_sdpa reads it by index (NOW profile at 51200: ~11 ms device
+      and ~39 ms host a chunk in those window ops; DS41-142). Do: a setting value WINDOW_KV_FORMAT=bfp8_tiles (bfp8_blocks
+      stays): the window as bfloat8_b TILES in a per-chip 288-row region (9 tile rows; the same 16-value exponent groups and
+      round-to-nearest-even as the blocks, so the same values), ONE neighbour send of the last 128 rows (4 tile rows) to the
+      next chip in sequence order instead of the window all-gathers (the chunk''s carry from the last chip to chip 0), rounding
+      only the chip''s own rows, and in the sparse_sdpa fork a dense band read of the window part (5 query tile rows against
+      9 key tile rows with the causal / window mask) instead of the index gather, the softmax still joint with the top-k rows
+      (same math). Non-chunk-aligned starts (prefix hits, the runner test''s 2496) must work (any multiple of 32) or keep
+      the old path. The SERVED window copy (0_window_kv, SERVED_WINDOW all) is unchanged: its TP gather and write stay. Agent
+      rules 18 (at most 110 cores per op) and 19 (no single-card device jobs) hold. No fork regression suites (F.1); add tests
+      for the fork option you add. Report per op before / after (device and host a chunk) and the window memory a chip.'
   ab:
     env:
       WINDOW_KV_FORMAT: bfp8_blocks
@@ -1855,26 +1898,27 @@ tasks:
   device: true
   deps:
   - P.18
+  - FIX.16
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/common/bringup/core/model_settings.py
   - models/demos/moe_block
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-31: opportunities #9, #7, #8, #10 as one pick. #9 HOST_GLUE: Settings.get without an
-      os.environ read per call (snapshot at model load, the shared core/model_settings.py: keep every model working),
-      mm_configs.program_config memoized per call site. #7 NORM_INTO_MOE: ffn_norm writes the MoE block''s input buffer
-      directly (no bf16->bf16 copy) and, if the rms_norm fork can, a second bfp8 output (SFPU bf16 round first:
-      bit-identical to today). #8 NORM_GEMM_DTYPE: norms write the matmul input dtype where the matmul is their only
-      reader (q_a typecast, the indexer typecast), q_norm''s gamma carries the 512^-0.5 scale (folded at load) and
-      writes bfp8 (one rounding instead of two, DS41-137). #10 TINY_KERNELS: compressor _pool and engram _gate_math as
-      one small fork kernel each (the engram one may fit mhc_pre_xing_pack''s engram mode). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops, shapes,
-      file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated
-      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first;
-      precision at the reference''s level (no lowering; a change of rounding only where the report says it is one
-      rounding instead of two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add
-      tests for every fork option you add. Do not profile the model: the orchestrator measures off vs on at 51200 and
-      512000. Report per item: ops removed a chunk, device and host ms a chunk before / after.'
+    details: 'OWNER 2026-10-31: opportunities #9, #7, #8, #10 as one pick. #9 HOST_GLUE: Settings.get without an os.environ
+      read per call (snapshot at model load, the shared core/model_settings.py: keep every model working), mm_configs.program_config
+      memoized per call site. #7 NORM_INTO_MOE: ffn_norm writes the MoE block''s input buffer directly (no bf16->bf16 copy)
+      and, if the rms_norm fork can, a second bfp8 output (SFPU bf16 round first: bit-identical to today). #8 NORM_GEMM_DTYPE:
+      norms write the matmul input dtype where the matmul is their only reader (q_a typecast, the indexer typecast), q_norm''s
+      gamma carries the 512^-0.5 scale (folded at load) and writes bfp8 (one rounding instead of two, DS41-137). #10 TINY_KERNELS:
+      compressor _pool and engram _gate_math as one small fork kernel each (the engram one may fit mhc_pre_xing_pack''s engram
+      mode). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops, shapes,
+      file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated by
+      its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision
+      at the reference''s level (no lowering; a change of rounding only where the report says it is one rounding instead of
+      two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add tests for every fork option
+      you add. Do not profile the model: the orchestrator measures off vs on at 51200 and 512000. Report per item: ops removed
+      a chunk, device and host ms a chunk before / after.'
   ab:
     env:
       HOST_GLUE: 'off'
@@ -1912,19 +1956,19 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-31: opportunities #2 and #4 as one pick, both through rotary_embedding_indexed (and a
-      TILE in / out option of the sparse_sdpa fork if needed). #2: sparse_sdpa output -> to_layout -> inverse rope ->
-      nlp_concat_heads -> typecast bfp8 becomes one rope op that reads the sdpa output, writes heads grouped for wo_a
-      and in bfp8 after an SFPU bf16 round (bit-identical to rope -> bf16 -> typecast). #4: nlp_create_q_heads_split ->
-      rope -> untilize becomes a rope op that reads each head straight from wq_b''s TILE output and writes what
-      sparse_sdpa reads (RM, or TILE with a sparse_sdpa option); in the indexer layers its bfp4 round-to-nearest-even
-      output replaces bfp_round. Setting ROPE_CHAINS (on / off). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops, shapes,
-      file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated
-      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first;
-      precision at the reference''s level (no lowering; a change of rounding only where the report says it is one
-      rounding instead of two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add
-      tests for every fork option you add. Do not profile the model: the orchestrator measures off vs on at 51200 and
-      512000. Report per item: ops removed a chunk, device and host ms a chunk before / after.'
+    details: 'OWNER 2026-10-31: opportunities #2 and #4 as one pick, both through rotary_embedding_indexed (and a TILE in
+      / out option of the sparse_sdpa fork if needed). #2: sparse_sdpa output -> to_layout -> inverse rope -> nlp_concat_heads
+      -> typecast bfp8 becomes one rope op that reads the sdpa output, writes heads grouped for wo_a and in bfp8 after an
+      SFPU bf16 round (bit-identical to rope -> bf16 -> typecast). #4: nlp_create_q_heads_split -> rope -> untilize becomes
+      a rope op that reads each head straight from wq_b''s TILE output and writes what sparse_sdpa reads (RM, or TILE with
+      a sparse_sdpa option); in the indexer layers its bfp4 round-to-nearest-even output replaces bfp_round. Setting ROPE_CHAINS
+      (on / off). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops,
+      shapes, file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated
+      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision
+      at the reference''s level (no lowering; a change of rounding only where the report says it is one rounding instead of
+      two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add tests for every fork option
+      you add. Do not profile the model: the orchestrator measures off vs on at 51200 and 512000. Report per item: ops removed
+      a chunk, device and host ms a chunk before / after.'
   ab:
     env:
       ROPE_CHAINS: 'off'
@@ -1937,7 +1981,8 @@ tasks:
   - 512000
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
@@ -1965,19 +2010,19 @@ tasks:
   - models/demos/moe_block
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-31: opportunity #1 (supersedes #5 / #6). Keep the residual / mHC streams as each chip''s own
-      160 rows with the whole hidden ([160, 4 x 5120]) instead of [640, 1280] cols: the mHC row exchange, attn_norm and
-      ffn_norm become local (no statistics gather, no stats-only norm call), attention needs no all_to_all in or out,
-      the MoE tail keeps its owner rows, and only the TP-split shared expert still gathers x (row shards, an x_gather3
-      variant in the fused head). This changes the MoE head / tail interface (models/demos/moe_block, Marko''s code):
-      add it behind an option, today''s path the default there, so other models keep working. Setting OWN_ROWS (on /
-      off). Comparable work for scale: SP=32 attention (P.8-P.10). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there: evidence, ops, shapes,
-      file:line). Each change behind its own setting (default on, off = today''s path) so a regression can be isolated
-      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first;
-      precision at the reference''s level (no lowering; a change of rounding only where the report says it is one
-      rounding instead of two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add
-      tests for every fork option you add. Do not profile the model: the orchestrator measures off vs on at 51200 and
-      512000. Report per item: ops removed a chunk, device and host ms a chunk before / after.'
+    details: 'OWNER 2026-10-31: opportunity #1 (supersedes #5 / #6). Keep the residual / mHC streams as each chip''s own 160
+      rows with the whole hidden ([160, 4 x 5120]) instead of [640, 1280] cols: the mHC row exchange, attn_norm and ffn_norm
+      become local (no statistics gather, no stats-only norm call), attention needs no all_to_all in or out, the MoE tail
+      keeps its owner rows, and only the TP-split shared expert still gathers x (row shards, an x_gather3 variant in the fused
+      head). This changes the MoE head / tail interface (models/demos/moe_block, Marko''s code): add it behind an option,
+      today''s path the default there, so other models keep working. Setting OWN_ROWS (on / off). Comparable work for scale:
+      SP=32 attention (P.8-P.10). Opportunities report: /scratch/dnijemcevic/opportunities/report.md (read your items there:
+      evidence, ops, shapes, file:line). Each change behind its own setting (default on, off = today''s path) so a regression
+      can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks
+      first; precision at the reference''s level (no lowering; a change of rounding only where the report says it is one rounding
+      instead of two). Do not touch the served caches (owner: not now). No fork regression suites (F.1); add tests for every
+      fork option you add. Do not profile the model: the orchestrator measures off vs on at 51200 and 512000. Report per item:
+      ops removed a chunk, device and host ms a chunk before / after.'
   ab:
     env:
       OWN_ROWS: 'off'
@@ -1990,7 +2035,8 @@ tasks:
   - 512000
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
