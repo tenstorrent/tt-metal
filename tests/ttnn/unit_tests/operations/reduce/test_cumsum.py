@@ -721,3 +721,13 @@ def test_cumsum_tile_axis_fallback_permutes(torch_dtype, reverse_order, device):
     else:
         expected = torch.cumsum(torch_input, dim)
     assert_cumsum_quality(expected, ttnn.to_torch(output_tensor, dtype=torch_dtype))
+
+
+@pytest.mark.parametrize("op", ["cumsum", "cumprod"])
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.uint8])
+def test_accumulation_rejects_uint16_and_uint8(device, op, dtype, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.ones((32, 32), dtype=torch.int32), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "do not support"):
+        getattr(ttnn, op)(input_tensor, dim=-1)
