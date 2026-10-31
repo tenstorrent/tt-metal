@@ -514,6 +514,32 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape{};
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
+        const auto input_memory_layout = input_tensor_a.memory_config().memory_layout();
+        const bool is_legacy_2d_layout = input_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                                         input_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                         input_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+        const auto& logical_shape = input_tensor_a.logical_shape();
+        const bool is_single_nonempty_matrix =
+            logical_shape.rank() >= 2 && input_tensor_a.logical_volume() != 0 && output_shape.volume() != 0 &&
+            (logical_shape.rank() == 2 ||
+             input_tensor_a.logical_volume() == logical_shape[-2] * logical_shape[-1]);
+        if (is_single_nonempty_matrix && is_legacy_2d_layout &&
+            operation_attributes.output_mem_config.memory_layout() == input_memory_layout) {
+            // The same-layout writer copies each input shard on its owning core. Keep boundaries
+            // along sharded axes: deriving a smaller extent from idle grid cores would move output
+            // regions without moving their source data. Derive the unsharded axis from the logical
+            // output, however; retaining its padded input extent makes row-major intermediates
+            // advertise padding as data (for example, HEIGHT_SHARDED concat inputs of width 1).
+            if (input_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                shard_spec.shape[1] = output_shape[-1];
+            } else if (input_memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                shard_spec.shape[0] = fused_height;
+            }
+            auto mem_config = tt::tt_metal::MemoryConfig(
+                input_memory_layout, operation_attributes.output_mem_config.buffer_type(), shard_spec);
+            return tt::tt_metal::TensorSpec(
+                output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
+        }
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             const auto tile = input_tensor_a.tensor_spec().tile();
             uint32_t tile_height = tile.get_height();

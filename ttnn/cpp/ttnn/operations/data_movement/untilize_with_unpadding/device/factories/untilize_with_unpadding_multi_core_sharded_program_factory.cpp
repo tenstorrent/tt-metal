@@ -48,6 +48,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
+    // Removing interior matrix padding can move a row to another output shard.
+    // Route those rows by logical page ID, as for an interleaved destination.
+    const bool route_height_rows = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                   output.logical_shape()[-2] != a.padded_shape()[-2];
     // WIDTH_SHARDED <-> BLOCK_SHARDED with a matching column shard width (enforced in validate()).
     // Unlike the same-shard-type out_sharded path below (a same-core L1-to-L1 copy via a dataflow
     // buffer borrowed onto the output buffer), the executing core here may not be the physically-
@@ -63,7 +67,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // writer_unary_stick_layout_interleaved_blocks_metal2.cpp) expect the normal untilized row-major
     // rows produced by untilize.cpp and cannot consume the tiled data, so the fast path must be gated
     // on out_sharded in addition to !cross_shard_type.
-    bool unpad_tensor_w_16 = out_sharded && !cross_shard_type && output.padded_shape()[-1] == 16 &&
+    bool unpad_tensor_w_16 = out_sharded && !cross_shard_type && !route_height_rows && output.padded_shape()[-1] == 16 &&
                              output.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
@@ -165,7 +169,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
 
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
+    uint32_t num_output_tiles =
+        out_sharded && !route_height_rows ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
     uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
     DataflowBufferSpec out_dfb{
         .unique_id = SH_OUT,
@@ -175,7 +180,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     };
 
     Group<DataflowBufferSpec> dataflow_buffers = {std::move(in_dfb), std::move(out_dfb)};
-    const bool has_sharded_out_dfb = out_sharded && !cross_shard_type;
+    const bool has_sharded_out_dfb = out_sharded && !cross_shard_type && !route_height_rows;
     if (has_sharded_out_dfb) {
         // The kernel advances the write pointer by aligned_page_size (which may be
         // larger than block_row_size due to buffer alignment padding), so the buffer's
@@ -231,7 +236,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                 "batch",
                 "col_byte_offset",
                 "row_start_id"}};
-    } else if (out_sharded) {
+    } else if (out_sharded && !route_height_rows) {
         writer.source = unpad_tensor_w_16
                             ? "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
                               "writer_unary_unpad_width_16_sharded.cpp"
@@ -271,10 +276,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                     "batch"}};
         }
     } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-        // Height-sharded -> interleaved uses a dedicated writer that walks each core's absolute rows
+        // Height-sharded input uses a writer that walks each core's absolute rows
         // and drops both interior (row) and column padding per matrix. It handles any alignment of
         // matrices to core boundaries (whole matrices per core, a single matrix split across cores,
-        // or a batch whose matrices straddle cores), so there is no unbatched restriction.
+        // or a batch whose matrices straddle cores). TensorAccessor routes each output page to its
+        // owner, including sharded destinations whose row placement changes after unpadding.
         writer.source =
             "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
             "writer_unary_unpad_sharded_to_interleaved.cpp";
@@ -291,6 +297,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             .runtime_arg_names = {
                 "start_padded_row",
                 "num_rows",
+                "num_valid_rows",
+                "num_output_rows",
                 "matrix_h_padded",
                 "matrix_h_logical",
                 "block_row_size",
@@ -406,7 +414,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                  {"col_byte_offset", info.col_shard_id * block_row_size},
                  {"row_start_id", info.row_start_id}});
         }
-    } else if (out_sharded) {
+    } else if (out_sharded && !route_height_rows) {
         for (const auto& core : all_core_coords) {
             if (unpad_tensor_w_16) {
                 AddRuntimeArgsForNode(
@@ -436,6 +444,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         const uint32_t matrix_h_padded = a.padded_shape()[-2];
         const uint32_t matrix_h_logical = output.logical_shape()[-2];
         const uint32_t shard_height = shard_spec.shape[0];
+        const uint32_t total_padded_rows = a.physical_volume() / a.padded_shape()[-1];
         const uint32_t buffer_row_size = shard_spec.shape[1] * output.element_size();  // row stride (padded width)
         const uint32_t row_size_unpadded =
             output.logical_shape()[-1] * output.element_size();  // bytes written per row (logical width)
@@ -443,11 +452,19 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             const CoreCoord& core = all_core_coords[i];
             const uint32_t start_padded_row = i * shard_height;
+            const uint32_t rows_on_core =
+                start_padded_row < total_padded_rows
+                    ? std::min(shard_height, total_padded_rows - start_padded_row)
+                    : 0;
             AddRuntimeArgsForNode(
                 writer_run_args.runtime_arg_values,
                 core,
                 {{"start_padded_row", start_padded_row},
+                 // Compute produces a whole shard on each grid core, so the writer must drain all
+                 // num_rows. These two bounds decide which produced rows belong to the tensors.
                  {"num_rows", shard_height},
+                 {"num_valid_rows", rows_on_core},
+                 {"num_output_rows", num_output_rows},
                  {"matrix_h_padded", matrix_h_padded},
                  {"matrix_h_logical", matrix_h_logical},
                  {"block_row_size", buffer_row_size},
@@ -455,8 +472,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                  {"ntiles_per_row", ntiles_per_block}});
         }
     } else {
+        const CoreCoord grid_start = all_cores.bounding_box().start_coord;
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             CoreCoord core = all_core_coords[i];
+            CoreCoord local_core = {core.x - grid_start.x, core.y - grid_start.y};
 
             // writer runtime args
             uint32_t block_start_row_offset;
@@ -477,25 +496,25 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                 }
             } else {
                 if (row_major) {
-                    block_start_row_offset = core.x * block_row_size;
-                    block_start_row_id_offset = core.y * num_rows_block;
-                    if (core.x == end_core.x) {
+                    block_start_row_offset = local_core.x * block_row_size;
+                    block_start_row_id_offset = local_core.y * num_rows_block;
+                    if (local_core.x == end_core.x) {
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
-                    if (core.y == end_core.y) {
+                    if (local_core.y == end_core.y) {
                         num_rows_unpadded = num_output_rows_unpadded;
                     }
                 } else {
-                    block_start_row_offset = core.y * block_row_size;
-                    block_start_row_id_offset = core.x * num_rows_block;
-                    if (core.y == end_core.y) {
+                    block_start_row_offset = local_core.y * block_row_size;
+                    block_start_row_id_offset = local_core.x * num_rows_block;
+                    if (local_core.y == end_core.y) {
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
-                    if (core.x == end_core.x) {
+                    if (local_core.x == end_core.x) {
                         num_rows_unpadded = num_output_rows_unpadded;
                     }
                 }
-                if (core.x > end_core.x || core.y > end_core.y) {
+                if (local_core.x > end_core.x || local_core.y > end_core.y) {
                     row_size_unpadded = 0;
                     num_rows_unpadded = 0;
                 }

@@ -10,7 +10,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-// Writer for HEIGHT_SHARDED (tiled) -> ROW_MAJOR INTERLEAVED untilize-with-unpadding.
+// Writer for HEIGHT_SHARDED (tiled) -> ROW_MAJOR untilize-with-unpadding.
 //
 // The height-sharded input flattens to a [global_batch * H_padded, W_padded] row space that is
 // split into contiguous per-core row ranges. Every H_padded-tall band is one logical matrix whose
@@ -19,7 +19,7 @@
 //
 // The compute kernel streams the untilized rows into the output DFB one tile-row (32 rows) at a
 // time. For each row this kernel derives, from its absolute position, which matrix it belongs to
-// (m) and the row within that matrix (rr). Real rows (rr < H_logical) are written to interleaved
+// (m) and the row within that matrix (rr). Real rows (rr < H_logical) are written to
 // output page m * H_logical + rr; padding rows are skipped. Column padding is dropped by writing
 // only row_size_unpadded bytes while advancing the DFB read pointer by the full padded
 // block_row_size.
@@ -29,7 +29,9 @@
 // correct in every case.
 void kernel_main() {
     auto start_padded_row = get_arg(args::start_padded_row);    // absolute first padded row owned by this core
-    auto num_rows = get_arg(args::num_rows);                    // padded rows owned by this core (multiple of 32)
+    auto num_rows = get_arg(args::num_rows);                    // padded rows produced by compute (multiple of 32)
+    auto num_valid_rows = get_arg(args::num_valid_rows);        // rows backed by the physical input tensor
+    auto num_output_rows = get_arg(args::num_output_rows);      // rows in the destination tensor
     auto matrix_h_padded = get_arg(args::matrix_h_padded);      // padded height of one matrix
     auto matrix_h_logical = get_arg(args::matrix_h_logical);    // logical (real) height of one matrix
     auto block_row_size = get_arg(args::block_row_size);        // DFB row stride in bytes (padded width)
@@ -48,21 +50,24 @@ void kernel_main() {
     uint32_t m = matrix_h_padded == 0 ? 0 : start_padded_row / matrix_h_padded;
     uint32_t rr = matrix_h_padded == 0 ? 0 : start_padded_row % matrix_h_padded;
 
+    uint32_t row_on_core = 0;
     const uint32_t num_tile_rows = num_rows / TILE_HEIGHT;
     for (uint32_t t = 0; t < num_tile_rows; t++) {
         dfb_out0.wait_front(ntiles_per_row);
         uint32_t l1_read_addr = dfb_out0.get_read_ptr();
         for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
-            if (rr < matrix_h_logical) {
+            const uint32_t output_row = m * matrix_h_logical + rr;
+            if (row_on_core < num_valid_rows && rr < matrix_h_logical && output_row < num_output_rows) {
                 CoreLocalMem<uint32_t> src(l1_read_addr);
                 noc.async_write(
                     src,
                     s,
                     row_size_unpadded,
                     {.offset_bytes = 0},
-                    {.page_id = m * matrix_h_logical + rr, .offset_bytes = 0});
+                    {.page_id = output_row, .offset_bytes = 0});
             }
             l1_read_addr += block_row_size;
+            row_on_core++;
             rr++;
             if (rr == matrix_h_padded) {
                 rr = 0;
