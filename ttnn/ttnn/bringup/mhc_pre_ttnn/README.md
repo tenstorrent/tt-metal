@@ -20,6 +20,8 @@ New op (AI-generated, codegen run 1045; no TTNN source). The mHC (manifold hyper
   streams h and the keys k -> a new row [sum h_i w_i k_i | sum h_i^2 | sum k_i^2 | 0 ..] (i < n, exact fp32 SFPU; the
   engram gate's per-stream partials); units (stream, column block, token tile-row), the row's partials summed on a
   root core.
+  Opt-in `engram_gate_eps` (P.24): with the whole hidden on the chip, the root also writes the engram gates
+  sigmoid(copysign(sqrt(max(|d_i|, 1e-6)), d_i)) into columns 3n .. 4n-1 (the gate op chain on the SFPU, bit-identical).
 Single device; the caller does the mesh reduction (all_reduce / all_gather + add) between pack and xing.
 
 ## Consider it instead of
@@ -30,9 +32,13 @@ Single device; the caller does the mesh reduction (all_reduce / all_gather + add
   `ttnn.addcmul` chain, or a second `mhc_pre_xing(coefficients_given=True)`) when the collapse uses another pre.
 - `mhc_pre_xing_pack` engram mode: instead of `ttnn.multiply` + `ttnn.slice` + `ttnn.sum` chains for per-stream dot
   products and sums of squares (DeepSeek-V4 engram gates).
+- `mhc_pre_xing_pack` engram mode with `engram_gate_eps`: also instead of the gate chain after the sums (`ttnn.slice`,
+  `ttnn.multiply` / `ttnn.add` / `ttnn.rsqrt`, `ttnn.abs`, `ttnn.maximum`, `ttnn.sqrt`, `ttnn.neg` / `ttnn.ltz` /
+  `ttnn.where`, `ttnn.sigmoid`); feed the gates to `mhc_post(post_col=3n)`.
 
 ## Options
 - `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.mhc_pre_xing` and `mhc_pre_xing_pack` (engram pack too): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
+- `engram_gate_eps` (float, default None = off; `mhc_pre_xing_pack` engram mode only; P.24): the streams' C columns are the whole hidden (no TP split), and the row also holds the gates g_i in columns 3n + i: d_i = dot_i rsqrt(ssh_i / C + eps) rsqrt(ssk_i / C + eps) C^-0.5, g_i = sigmoid(copysign(sqrt(max(|d_i|, 1e-6)), d_i)), each step one fp32 rounding with the stock ops' SFPU bodies (bit-identical to that op chain). Columns 0 .. 3n-1 are the option-off bytes. Realistic (the chain's own arithmetic).
 Realistic (use by default): every option below.
 
 `mhc_pre` (from `mhc_pre_ttnn_nanobind.cpp`):
@@ -64,6 +70,7 @@ Realistic (use by default): every option below.
 Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is required, not an option).
 
 ## Measured
+- `engram_gate_eps` (P.24, 8x4 Galaxy, tests/unit/test_engram_pack.py): gates bit-identical to the device op chain (0 ulp, T160 C5120 / T640 C1024 / T64 C256 n2), worst rel vs float64 1.8e-6; columns 0 .. 3n-1 byte-equal to the option-off row. Device time not measured by the agent (the orchestrator's A/B).
 
 - Output buffers (P.16, 8x4): mhc_pre_xing 126.9 -> 84.4 us of host a call (8x4, 80 calls a chunk); mhc_pre_xing_pack 110 -> 105 us (3 calls, not given buffers by the model).
 - `mhc_pre` C++ host side, GLM-5.3 shape (T 5120, n*C 16384, bf16 X and W): host 2.037 -> 0.043 ms per call, wall 2.067 -> 0.597 ms per call vs the Python builder (CHANGELOG.md change 2).
@@ -81,6 +88,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp3
 - bf16 streams (CHANGELOG 11), deepseek_v41_flash_d_p P.20 (2x2, chunk 53248-55296, plain profile, BF16_ACTIVATIONS on vs off): attn_hc 2.65 -> 1.75 ms, ffn_hc 1.57 -> 1.12, engram_add 1.79 -> 1.34 ms a chunk; pack / engram rows bit-identical to the fp32 call on the same values, y = one nearest rounding of the fp32 y (tests/unit/test_xing_bf16_streams.py).
 
 ## Limits
+- `engram_gate_eps`: only when the C columns are the whole hidden (gates of TP partial sums would be wrong; the op cannot see it); n <= 4 (4n columns in a tile row).
 - `mhc_pre`: TILE only; X / W fp32 or bf16; fp32 DEST required (HiFi4 only declared); n(n+2)+1 <= 32 (n <= 4); C % 32 == 0; rank 2..4; outputs always DRAM interleaved. No memory-placement check on inputs; only DRAM interleaved tested.
 - `mhc_pre_xing` / `_pack`: every tensor fp32 TILE DRAM interleaved (the streams and the engram keys also bf16, the keys in the streams' dtype), rank 2..4, n 1..4, row last dim exactly 32.
 - `deepseek=True` with `coefficients_given=True` refused.
@@ -106,7 +114,7 @@ Tests: `tests/test_mhc_pre_ttnn.py` + `tests/cases.py` (mhc_pre model cases), `t
 ## Used by
 - glm53_flash_d_p: `mhc_pre` in `tt/mhc_fused.py` (default; `GLM_MHC_IMPL=composite` keeps the op chains); O.1 cases.
 - xing40_a4b_d_p: `mhc_pre_xing_pack` -> `ttnn.all_reduce` axis 1 -> `mhc_pre_xing` in `tt/mhc.py`; collapse `mhc_pre_xing(coefficients_given=True)` in `tt/collapse.py` (`XING_HC_IMPL=composed` keeps the op chain); task P.2b, O.1 cases.
-- deepseek_v41_flash_d_p: `tt/mhc.py` (`mhc_pre_xing_pack` -> gather + add axis 1 -> `mhc_pre_xing(deepseek=True)`, setting HC_SINKHORN=sfpu_fp32; `fpu` for the source kernel) and `tt/norm.py` (`mhc_pre_xing_pack(n=1)` for the RMS statistic); task FIX.4. P.14 (setting MHC_FUSED=on): `mhc_pre_xing(deepseek=True, collapse_pre=)` (tt/mhc.py:TtHcMixes.fused), `mhc_pre_xing(coefficients_given=True)` (tt/collapse.py, the final collapse), the engram mode (tt/engram_add.py). P.19 (setting GLUE_FOLD=on): `mhc_pre_xing(..., partials=TP)` on the all_gathered rows (tt/mhc.py:TtHcMixes.fused). P.20 (setting BF16_ACTIVATIONS=on): bf16 streams in every call (tt/mhc.py, tt/collapse.py, tt/engram_add.py with bf16 keys). Model cases for these calls: none yet (task O.1).
+- deepseek_v41_flash_d_p: `tt/mhc.py` (`mhc_pre_xing_pack` -> gather + add axis 1 -> `mhc_pre_xing(deepseek=True)`, setting HC_SINKHORN=sfpu_fp32; `fpu` for the source kernel) and `tt/norm.py` (`mhc_pre_xing_pack(n=1)` for the RMS statistic); task FIX.4. P.14 (setting MHC_FUSED=on): `mhc_pre_xing(deepseek=True, collapse_pre=)` (tt/mhc.py:TtHcMixes.fused), `mhc_pre_xing(coefficients_given=True)` (tt/collapse.py, the final collapse), the engram mode (tt/engram_add.py). P.19 (setting GLUE_FOLD=on): `mhc_pre_xing(..., partials=TP)` on the all_gathered rows (tt/mhc.py:TtHcMixes.fused). P.20 (setting BF16_ACTIVATIONS=on): bf16 streams in every call (tt/mhc.py, tt/collapse.py, tt/engram_add.py with bf16 keys). P.24 (setting TINY_KERNELS=on, OWN_ROWS=on): engram mode with `engram_gate_eps` (tt/engram_add.py, the gates read by `mhc_post(post_col=12)`). Model cases for these calls: none yet (task O.1).
 
 ## History
 CHANGELOG.md; codegen worklogs: changelog.md, op_design.md, op_requirements.md, verification_report.md, verifier_report.json, l1_ledger.md, self_reflection.md.

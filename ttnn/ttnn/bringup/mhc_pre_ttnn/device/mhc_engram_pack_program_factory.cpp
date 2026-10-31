@@ -12,6 +12,8 @@
 #include "mhc_engram_pack_device_operation.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -161,6 +163,18 @@ tt::tt_metal::ProgramDescriptor MhcEngramPackProgramFactory::create_descriptor(
     }
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.insert(compute_ct.end(), {CB_IN, CB_W, CB_ACC, CB_SOA, CB_SOA_OUT, CB_PART, CB_FIN});
+    const bool gate = params.gate_eps.has_value();
+    // P.24 gate epilogue: fp32 constants of the op chain (1 / C, eps, C^-0.5, the 1e-6 floor), as fp32 bits
+    if (gate) {
+        TT_FATAL(4 * n <= TILE_HW, "mhc_pre_xing_pack engram gate: 4n = {} columns exceed a tile row", 4 * n);
+        const double c = static_cast<double>(p.col_tiles) * TILE_HW;  // the whole hidden (the option's contract)
+        compute_ct.insert(
+            compute_ct.end(),
+            {std::bit_cast<uint32_t>(static_cast<float>(1.0 / c)),
+             std::bit_cast<uint32_t>(*params.gate_eps),
+             std::bit_cast<uint32_t>(static_cast<float>(1.0 / std::sqrt(c))),
+             std::bit_cast<uint32_t>(1e-6f)});
+    }
 
     KernelDescriptor::RuntimeArgs reader_rt, writer_rt, compute_rt;
     for (size_t i = 0; i < cores.size(); ++i) {
@@ -200,6 +214,11 @@ tt::tt_metal::ProgramDescriptor MhcEngramPackProgramFactory::create_descriptor(
     desc.kernels.push_back(make_kernel(
         "mhc_engram_pack_writer.cpp", all_cores, writer_ct, writer_rt, tt::tt_metal::WriterConfigDescriptor{}));
     desc.kernels.push_back(make_kernel("mhc_engram_pack_compute.cpp", all_cores, compute_ct, compute_rt, cc));
+    // P.24: the writer lays partial rows coefficient-major, the compute appends the gates (absent when off)
+    if (gate) {
+        desc.kernels[WRITER_KERNEL].defines.emplace_back("MHC_ENGRAM_GATE", "1");
+        desc.kernels.back().defines.emplace_back("MHC_ENGRAM_GATE", "1");
+    }
     if (x16) {  // absent for fp32: the reader / compute unchanged (P.20)
         for (auto& k : desc.kernels) {
             if (&k != &desc.kernels[WRITER_KERNEL]) {

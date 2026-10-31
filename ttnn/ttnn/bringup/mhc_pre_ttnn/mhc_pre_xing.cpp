@@ -202,9 +202,13 @@ Tensor mhc_pre_xing_pack(
     const std::optional<Tensor>& engram_keys,
     const std::optional<Tensor>& engram_weight,
     const std::optional<Tensor>& output_tensor,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    std::optional<float> engram_gate_eps) {
     if (n < 1 || n > 4) {
         throw ValueErrorCpp(fmt::format("mhc_pre_xing_pack: n={} must be in [1, 4]", n));
+    }
+    if (engram_gate_eps.has_value() && !(engram_keys.has_value() && engram_weight.has_value())) {
+        throw ValueErrorCpp("mhc_pre_xing_pack: engram_gate_eps needs engram mode (engram_keys and engram_weight)");
     }
     if (engram_keys.has_value() || engram_weight.has_value()) {
         if (!engram_keys.has_value() || !engram_weight.has_value() || mix_opt.has_value()) {
@@ -241,7 +245,7 @@ Tensor mhc_pre_xing_pack(
             throw ValueErrorCpp("mhc_pre_xing_pack: engram_weight must be (..., 32, n*C) with leading dims 1");
         }
         return ttnn::prim::bringup::mhc_engram_pack(
-                   streams, *engram_keys, *engram_weight, static_cast<uint32_t>(n), max_grid)
+                   streams, *engram_keys, *engram_weight, static_cast<uint32_t>(n), max_grid, engram_gate_eps)
             .at(0);  // [1] is the partials scratch, freed with the vector
     }
     if (!mix_opt.has_value()) {

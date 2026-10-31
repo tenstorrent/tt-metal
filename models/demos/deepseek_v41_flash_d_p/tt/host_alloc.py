@@ -301,7 +301,13 @@ def reserve_forks(model) -> None:
     if getattr(model, "own", False):  # OWN_ROWS (P.23): the streams on the chip's own rows, whole hidden
         rows, hid = model.rows, cfg.dim
     f32, bf16 = ttnn.float32, ttnn.bfloat16
+    pool_rows = model.chunk // sp // 2  # TINY_KERNELS (P.24): the compressor's pooled rows (S/SP / 2, ratio 2)
     for blk in model.blocks.values():
+        comp = getattr(blk, "compressor", None)
+        if comp is not None and comp.ratio == 2 and settings.get("TINY_KERNELS") == "on":
+            # pair_pool's output: read by the compressor's norm and dropped inside the step (one for every layer)
+            comp.pool_site = "fork.compressor.pool"
+            _reserve_fork(mesh, comp.pool_site, [1, 1, pool_rows, comp.hd], f32)
         # mHC (MHC_FUSED=on): attn_hc's hc lives to ffn_collapse, both collapses' y to their norm; ffn_hc's hc is the
         # next layer's pending pre (allocates)
         if getattr(blk, "fused", False):

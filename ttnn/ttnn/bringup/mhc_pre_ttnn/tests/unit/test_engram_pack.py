@@ -135,3 +135,78 @@ def test_engram_pack_refusals(mesh, expect_error):
         )
     with expect_error(Exception, "mix"):
         ttnn.bringup.mhc_pre_xing_pack(None, hd, n=4)
+
+
+# ---- option engram_gate_eps (deepseek_v41_flash_d_p P.24, TINY_KERNELS): the gates in columns 3n .. 4n-1
+
+
+def _gate_chain(row, n, C, eps):
+    """The op chain the model ran (tt/engram_add.py TtEngramAdd._gate_math) on the device: [.., T, >= 3n] -> [.., T, n]."""
+    T = row.shape[-2]
+    sl = lambda a, b: ttnn.slice(row, [0, 0, 0, a], [1, 1, T, b])  # noqa: E731
+    dot, ssh, ssk = sl(0, n), sl(n, 2 * n), sl(2 * n, 3 * n)
+    rs = [
+        ttnn.rsqrt(ttnn.add(ttnn.multiply(s, 1.0 / C, dtype=ttnn.float32), eps, dtype=ttnn.float32)) for s in (ssh, ssk)
+    ]
+    r2 = ttnn.multiply(rs[0], rs[1], dtype=ttnn.float32)
+    d = ttnn.multiply(ttnn.multiply(dot, r2, dtype=ttnn.float32), float(C) ** -0.5, dtype=ttnn.float32)
+    s = ttnn.sqrt(ttnn.maximum(ttnn.abs(d), 1e-6))
+    return ttnn.sigmoid(ttnn.where(ttnn.ltz(d), ttnn.neg(s), s))
+
+
+def _gate_want(sums, n, C, eps):
+    """float64 gates from float64 sums [.., 3n]."""
+    dot, ssh, ssk = sums[..., :n], sums[..., n : 2 * n], sums[..., 2 * n : 3 * n]
+    d = dot * torch.rsqrt(ssh / C + eps) * torch.rsqrt(ssk / C + eps) / C**0.5
+    return torch.sigmoid(torch.copysign(torch.sqrt(d.abs().clamp_min(1e-6)), d))
+
+
+def _ulps(a, b):
+    ia = a.float().contiguous().view(torch.int32).long()
+    ib = b.float().contiguous().view(torch.int32).long()
+    ia = torch.where(ia < 0, -(ia & 0x7FFFFFFF), ia)
+    ib = torch.where(ib < 0, -(ib & 0x7FFFFFFF), ib)
+    return (ia - ib).abs()
+
+
+GATE_CASES = [(160, 5120, 4, 1e-20), (640, 1024, 4, 1e-20), (64, 256, 2, 1e-6)]
+
+
+@pytest.mark.parametrize("T, C, n, eps", GATE_CASES, ids=[f"T{c[0]}-C{c[1]}-n{c[2]}" for c in GATE_CASES])
+def test_engram_gate(mesh, T, C, n, eps):
+    nd = mesh.get_num_devices()
+    h, kv, wrow = _inputs(nd, T, C, n, seed=T + C + n + 7)
+    h[..., 5, :] = 0.0  # a zero stream row: d = 0, the 1e-6 floor
+    h[..., 6, :C] *= -1.0
+    hd, kd = _dev(h, mesh), _dev(kv, mesh)
+    w32 = _dev(wrow.reshape(1, 1, 1, -1).expand(1, 1, 32, wrow.numel()), mesh, shard=False)
+    plain = ttnn.bringup.mhc_pre_xing_pack(None, hd, n=n, engram_keys=kd, engram_weight=w32)
+    gated = ttnn.bringup.mhc_pre_xing_pack(None, hd, n=n, engram_keys=kd, engram_weight=w32, engram_gate_eps=eps)
+    p, g = _host(plain, mesh), _host(gated, mesh)
+    assert tuple(g.shape) == (nd, 1, T, 32), g.shape
+    assert torch.equal(g[..., : 3 * n], p[..., : 3 * n]), "the sums must be the option-off row's bytes"
+    assert torch.all(g[..., 4 * n :] == 0), "columns past 4n must be zero"
+    gates = g[..., 3 * n : 4 * n]
+    chain = _host(_gate_chain(plain, n, C, eps), mesh)
+    ul = _ulps(gates, chain)
+    want = _gate_want(_want(h, kv, wrow, n, C), n, C, eps)
+    rel = ((gates - want).abs() / want.abs()).max().item()
+    print(
+        f"T{T} C{C} n{n}: gates vs the op chain max {int(ul.max())} ulp ({int((ul > 0).sum())} of {ul.numel()}); "
+        f"worst rel vs float64 {rel:.2e}"
+    )
+    assert int(ul.max()) <= 1, f"{int(ul.max())} ulp from the op chain"
+    assert rel <= 1e-5, rel
+    assert torch.allclose(
+        gates[..., 5, :], torch.full_like(gates[..., 5, :], 1 / (1 + torch.exp(torch.tensor(-1e-3)).item()))
+    )
+    # negative control: the gates of the k-sums swapped with the h-sums' are the same (symmetric); a sign flip is not
+    assert (gates - (1 - want)).abs().max().item() > 1e-3, "a dropped copysign must fail"
+
+
+def test_engram_gate_refusals(mesh, expect_error):
+    nd = mesh.get_num_devices()
+    with expect_error(Exception, "engram_gate_eps needs engram mode"):
+        ttnn.bringup.mhc_pre_xing_pack(
+            _dev(torch.zeros(nd, 1, 64, 32), mesh), _dev(torch.zeros(nd, 1, 64, 128), mesh), n=4, engram_gate_eps=1e-20
+        )

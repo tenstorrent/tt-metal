@@ -4972,3 +4972,46 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   (engram_kv, embedding) are stock ttnn.experimental.all_to_all_async_generic, as tt/common.cols_to_rows (no fork lists it).
 - Gate unit `P.23#test_ladder` (rung last, `gate P.23 --check --unit P.23#test_ladder`): PASS, worst layer pcc 0.6836
   (L39), final hidden pcc 0.98197 rel 0.1902, top1 0.9971, top5 1.0000.
+
+## P.24 perf (galaxy 8x4, attempt 1, 2026-10-31): TINY_KERNELS, the compressor pooling and the engram gate math as one fork program each (opportunity #10)
+- **What**: setting TINY_KERNELS (tt/settings.py, default on; off = the op chains, the path before P.24).
+  - Compressor (tt/compressor.py `_pool`): the ratio-2 pair pooling (reshape, 4 slices, maximum, 2 subtract, 2 exp,
+    add, 2 divide, 2 multiply, add: 16 launches a layer on [S/SP, 1024] fp32) is ONE call of the new fork
+    `ttnn.bringup.pair_pool` (ttnn/ttnn/bringup/pair_pool_ttnn, Python ProgramDescriptor op, registered in PYTHON_OPS).
+    Prepared always (prepare_program / run_prepared, the 2 address slots patched; OV-23), common runtime args only (no
+    per-core args, DS41-145), one program for the mesh range (DS41-147); output = a load-time buffer
+    (host_alloc.reserve_forks, site `fork.compressor.pool`, DS41-146) when FORK_OUT_BUFFERS=on. Taken when p is fp32 and
+    rows % 64 == 0 (every box: S/SP = 640 / 1280 / 2560), else the chain.
+  - Engram (tt/engram_add.py): with MHC_FUSED=on and OWN_ROWS=on (the pass's sums are whole rows) the engram pass
+    `mhc_pre_xing_pack` takes the new option `engram_gate_eps` and writes the gates into columns 12..15 of its row; the
+    add's `mhc_post` reads them with `post_col=12` (comb_col 0 on the identity [R, 16]). Removes _gate_math (3 slices,
+    2 x (multiply, add, rsqrt), 3 multiply, abs, maximum, sqrt, neg, ltz, where, sigmoid: ~19 launches a layer). With
+    OWN_ROWS=off (TP partial sums) the gates stay the chain (the epilogue would see partial sums).
+- **Fork changes**: mhc_pre_ttnn (C++, rebuilt): option `engram_gate_eps` (default None: the same program, args, CBs,
+  hash). On: the writer lays the partial rows coefficient-major (column k = SFPU vector k, lane = token row), the root
+  sums them as before (lane-wise, so columns 0..11 are the option-off bytes), the compute runs the gate steps on the
+  summed tile, the writer re-lays the row row-major in its free stage page. New fork pair_pool_ttnn.
+- **Precision**: none changed. Both kernels use the stock ops' per-vector SFPU bodies (`_calculate_sqrt_body_` rsqrt /
+  sqrt, `_sfpu_sigmoid_<true>`, `_sfpu_exp_accurate_<true>`, the fp32 SFPU divide body) in the chains' order, each
+  step one fp32 rounding (results stored to DEST between steps: no fused multiply-add). Result: bit-identical to the
+  device op chains (unit tests: 0 ulp on every value) and the quick A/B's 103 err metrics equal P.23's change-on side
+  to the last digit (L39 0.7581, L38 0.1650; worst err_state_window_kv_L28 at 0.911 of its limit; 102 limits pass;
+  host_transfers_per_layer 0).
+- **Gotchas**: DS41-189 (SFPI internal compiler error on a runtime-indexed DEST loop around the sqrt body: one template
+  instance per stream); DS41-190 (sqrt / rsqrt and the reciprocal share a programmable constant register: two phases,
+  re-init between); the gate scratch vectors (columns 16..18) must be zeroed before the pack; ttnn.Shape has no slice
+  `__getitem__` (index it).
+- **Cores**: pair_pool min(units, 110) = 110 a chip on the 8x4 (160 units: 10 tile rows x 16 column tiles, max_grid
+  11 x 10); the engram pass unchanged (its max_grid).
+- **Host**: pair_pool 75.8 us a warm call on 32 chips (prepared, output buffer; test_pair_pool_prepared_and_output).
+- **Measured** (`measure --task P.24`, change on: TINY_KERNELS=on ENGRAM_TABLE=resident; rc 0 on every part):
+  quick wall 194.0 ms (spread 111.6). p51200: wall 203.3 ms, device total 169.67 ms (compressor 1.78, engram_add 0.56),
+  1482 launches (host_launch_ms 123.8, cProfile 208.5). p512000: wall 226.4, device 208.34 (compressor 1.78,
+  engram_add 0.56), 1482 launches. P.23's change-on side (another run): device 172.01 / 207.73, compressor 2.05 / 1.95,
+  engram_add 0.65 / 0.65, 1571 launches, wall 217.7 / 237.1. The off side of this change is the orchestrator's A/B.
+- **Tests** (8x4, whole-box mesh, FABRIC_2D; no fork regression suites, OV-25):
+  `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/pair_pool_ttnn/tests/unit/test_pair_pool.py`
+  (6 passed) and `.../mhc_pre_ttnn/tests/unit/test_engram_pack.py` (11 passed: the new test_engram_gate x3 +
+  refusals, and the file's option-off cases).
+- No stock op added on the model path (F113): the model calls only the two forks.
+- Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.24`.
