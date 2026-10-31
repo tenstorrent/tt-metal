@@ -50,10 +50,15 @@ from ttnn.experimental.moe_compute_utils import (
 # Reuse 6U test helpers verbatim. The intent is that this single-card test
 # never duplicates compute logic — same goldens, same validators.
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
+    decode_packed_token_lists,
+    token_list_header_words,
+    token_list_page_words,
+    token_list_segment_starts,
     create_torch_w0,
     create_torch_w1,
     create_torch_w2,
     compute_e_t_golden,
+    compute_e_t_k_slot_golden,
     compute_expert_activation_golden,
     compute_matmul_golden,
     compute_combine_golden,
@@ -64,6 +69,7 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
     tt_to_torch_dtype,
     validate_activation,
     validate_e_t,
+    validate_packed_token_lists,
     validate_matmul,
     validate_combine,
     validate_combine_torch,
@@ -704,27 +710,40 @@ def _run_moe_compute_single_card_test(
         worker_mcast_bbox,
     )
 
-    activation_all_passed = validate_activation(
-        mesh_device,
-        experts_per_device,
-        num_devices,
-        expert_activation_output_tensor,
-        golden_activation,
-    )
-
-    e_t_all_passed = validate_e_t(
-        mesh_device,
-        total_tokens,
-        experts_per_device,
-        num_devices,
-        e_t_output_tensor,
-        golden_e_t,
-    )
-
     # The local output path (an explicit cluster_axis of extent 1) writes the final tensor directly
     # and never stages the expert outputs in the combine cores' L1, so slot 4 holds whatever the
-    # shared buffer last carried; the final output below is the validated artifact there.
+    # shared buffer last carried; the final output below is the validated artifact there. It builds
+    # no activation rows (slot 1 is a placeholder) and keeps the expert -> token lists packed (slot 2).
     local_output_path = not compute_only and op_cluster_axis is not None
+    if local_output_path:
+        activation_all_passed = True
+        logger.info("Expert Activation Tensor: not produced on the local output path (placeholder), skipped")
+        e_t_all_passed = validate_packed_token_lists(
+            mesh_device,
+            experts_per_device,
+            num_devices,
+            e_t_output_tensor,
+            golden_e_t,
+            compute_e_t_k_slot_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis),
+        )
+    else:
+        activation_all_passed = validate_activation(
+            mesh_device,
+            experts_per_device,
+            num_devices,
+            expert_activation_output_tensor,
+            golden_activation,
+        )
+
+        e_t_all_passed = validate_e_t(
+            mesh_device,
+            total_tokens,
+            experts_per_device,
+            num_devices,
+            e_t_output_tensor,
+            golden_e_t,
+        )
+
     if local_output_path:
         matmul_all_passed = True
         logger.info("Matmul Output Tensor: not staged on the local output path (slot 4 undefined), skipped")
@@ -1026,6 +1045,18 @@ def _run_moe_compute_single_card_test(
             with expect_error(RuntimeError, r"fully replicated input topology"):
                 run_moe_compute_once(create_combine_output_tensor(), tilize_input_tensor=tt_sharded_input)
             ttnn.deallocate(tt_sharded_input)
+            # So is a sharded output, even one whose per-device shard is a whole [k, T, H] buffer: the outputs
+            # take the replicated input topology, so it would come back relabeled.
+            tt_sharded_output = ttnn.from_torch(
+                torch.zeros([selected_experts_k * num_devices, total_tokens, hidden_size], dtype=torch.bfloat16),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            )
+            with expect_error(RuntimeError, r"fully replicated optional_output_tensor topology"):
+                run_moe_compute_once(tt_sharded_output)
+            ttnn.deallocate(tt_sharded_output)
 
 
 # DeepSeek-shaped workload mirrored on a single WH card so kernels see the same dims.
@@ -1310,6 +1341,339 @@ def test_moe_compute_single_card_explicit_axis0(mesh_device, mesh_shape, hidden_
     )
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# The local output path at prefill token counts. One call over T tokens must write the same (token, expert) pages as
+# the fused local combine writes over the same rows in 128-token calls (today's production slab form): the ring
+# kernels never see the token count and every row's arithmetic is independent of its chunk-mates, so only the chunk
+# sequence differs. The routing tensors name 512 experts of which this device holds 128 (the mapping row sends the
+# other 384 to devices 1..3 that a 1x1 mesh does not have: exactly what one device of a 1x4 line sees).
+# ---------------------------------------------------------------------------------------------------------------------
+
+_PREFILL_HIDDEN = 2560
+_PREFILL_N = 640
+_PREFILL_EXPERTS_PER_DEVICE = 128
+_PREFILL_EXPERTS = 512
+_PREFILL_K = 10
+_PREFILL_REFERENCE_TOKENS = 128
+_PREFILL_TOKENS_PER_CHUNK = 32
+
+
+def _prefill_routing(case, tokens, seed=20260925):
+    """``(indices [tokens, K] int64 of global expert ids, scores [tokens, K] bf16)`` for one routing case. Local
+    experts are 0..127; ids 128..511 belong to other devices and produce no local pair."""
+    k = _PREFILL_K
+    experts = _PREFILL_EXPERTS
+    local = _PREFILL_EXPERTS_PER_DEVICE
+    generator = torch.Generator().manual_seed(seed)
+    slots = torch.arange(k)
+
+    def distinct_remote(num_slots):
+        # num_slots distinct ids >= local for every token (num_slots < 384, so the arithmetic progression is distinct).
+        return local + (num_slots * torch.arange(tokens)[:, None] + torch.arange(num_slots)[None, :]) % (
+            experts - local
+        )
+
+    if case == "zipf":
+        # A hot head over a random permutation of the 512 experts: about a quarter of the pairs land here,
+        # with one or a few experts taking hundreds of tokens (the captured natural-text shape).
+        weights = 1.0 / torch.arange(1, experts + 1, dtype=torch.float32) ** 0.8
+        weights = weights[torch.randperm(experts, generator=generator)]
+        indices = torch.multinomial(weights.expand(tokens, -1), k, replacement=False, generator=generator)
+    elif case == "one_expert":
+        # Every token routes slot 0 to local expert 5: one segment of `tokens` entries, tokens / 32 chunks.
+        indices = torch.empty(tokens, k, dtype=torch.int64)
+        indices[:, 0] = 5
+        indices[:, 1:] = distinct_remote(k - 1)
+    elif case == "uniform_local":
+        # Every slot local, every expert with tokens * K / 128 entries: the packed lists at their capacity.
+        indices = (k * torch.arange(tokens)[:, None] + slots[None, :]) % local
+    elif case == "random_local":
+        # Every slot local with random experts: capacity again, skewed segment lengths.
+        indices = torch.stack([torch.randperm(local, generator=generator)[:k] for _ in range(tokens)])
+    elif case == "no_local":
+        # No local pair at all: an empty call (zero chunks) that still writes its zero rows.
+        indices = distinct_remote(k)
+    else:
+        raise ValueError(case)
+    scores = torch.rand(tokens, k, generator=generator) + 0.05
+    scores = (scores / scores.sum(dim=1, keepdim=True)).to(torch.bfloat16)
+    return indices.to(torch.int64), scores
+
+
+def _prefill_local_lists(indices):
+    """Per local expert, the (token ids, k slots) of its pairs in ascending token order (the list order the tilize
+    cores produce), and the per-expert counts."""
+    lists = []
+    counts = torch.zeros(_PREFILL_EXPERTS_PER_DEVICE, dtype=torch.int64)
+    for e in range(_PREFILL_EXPERTS_PER_DEVICE):
+        where = torch.nonzero(indices == e)  # row-major: ascending token
+        lists.append((where[:, 0].tolist(), where[:, 1].tolist()))
+        counts[e] = where.shape[0]
+    return lists, counts
+
+
+def _bf16_bits(tensor):
+    return ttnn.to_torch(tensor).contiguous().view(torch.int16)
+
+
+@torch.no_grad()
+def _run_moe_compute_local_output_prefill_test(
+    mesh_device,
+    tokens,
+    routing_case,
+    sentinel_output=False,
+    second_routing_case=None,
+):
+    arch = mesh_device.arch()
+    if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
+        pytest.skip(f"MoE compute single-card test: arch {arch} is not supported (only WH and BH).")
+    torch.manual_seed(2003)
+
+    hidden_size, N, k = _PREFILL_HIDDEN, _PREFILL_N, _PREFILL_K
+    experts_per_device, experts = _PREFILL_EXPERTS_PER_DEVICE, _PREFILL_EXPERTS
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    output_height_shard_dim = 1  # the 128-token form on an 8-bank ring; the local output path ignores it
+    num_layers = 1
+    layer_id = 0
+
+    indices, scores = _prefill_routing(routing_case, tokens)
+    golden_lists, golden_counts = _prefill_local_lists(indices)
+    golden_chunks = int(((golden_counts + _PREFILL_TOKENS_PER_CHUNK - 1) // _PREFILL_TOKENS_PER_CHUNK).sum())
+    logger.info(
+        f"Local output prefill: tokens {tokens}, routing {routing_case}: {int(golden_counts.sum())} local pairs, "
+        f"{int((golden_counts > 0).sum())} active experts, max count {int(golden_counts.max())}, {golden_chunks} chunks"
+    )
+
+    # Every device of a 1x4 line sees this mapping row: experts 0..127 here, the rest elsewhere.
+    expert_mapping = (torch.arange(experts) // experts_per_device).to(torch.uint16).reshape(1, experts)
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    hidden = torch.randn(tokens, hidden_size, dtype=torch.float32).to(torch.bfloat16)
+
+    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
+    torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
+    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
+    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
+        num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map, w2_shard_map, dram_core_range_set
+    )
+    tt_w0_w1, tt_w2 = _build_quantized_weight_tensors_cpu_prepare(
+        mesh_device,
+        torch_w0,
+        torch_w1,
+        torch_w2,
+        None,
+        None,
+        None,
+        num_layers,
+        experts_per_device,
+        hidden_size,
+        N,
+        False,
+        w0_w1_shard_map,
+        w2_shard_map,
+        w0_w1_mem_config,
+        w2_mem_config,
+    )
+
+    drain = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+    )
+    drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(drain.x, drain.y), ttnn.CoreCoord(drain.x, drain.y))})
+
+    def upload_call_inputs(rows, row_indices, row_scores, output_fill=0.0):
+        num_rows = rows.shape[0]
+        tt_rows = ttnn.from_torch(
+            rows.reshape(1, num_rows, hidden_size),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_indices = ttnn.from_torch(
+            row_indices.to(torch.int32).reshape(1, num_rows, k),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=create_sharded_memory_config(drain_core, [num_rows, k], ttnn.uint16),
+        )
+        tt_scores = ttnn.from_torch(
+            row_scores.reshape(1, num_rows, k),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=create_sharded_memory_config(drain_core, [num_rows, k], ttnn.bfloat16),
+        )
+        tt_output = ttnn.from_torch(
+            torch.full((k, num_rows, hidden_size), output_fill, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return tt_rows, tt_indices, tt_scores, tt_output
+
+    def run(tt_rows, tt_indices, tt_scores, tt_output, cluster_axis):
+        return ttnn.experimental.moe_compute(
+            tt_rows,
+            tt_indices,
+            tt_scores,
+            tt_expert_mapping,
+            tt_w0_w1,
+            tt_w2,
+            layer_id=layer_id,
+            output_height_shard_dim=output_height_shard_dim,
+            intermediate_size=N,
+            has_bias=False,
+            cluster_axis=cluster_axis,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            optional_output_tensor=tt_output,
+            activation_type=MoEActivationFunction.SILU,
+            compute_only=False,
+        )
+
+    def fused_reference_bits(indices, scores):
+        # The fused local combine (cluster_axis=None on a 1x1 mesh, today's production slab form) over the same
+        # rows, 128 tokens per call, pages re-indexed k * T + t; its buffer starts zero, so unowned rows read zero.
+        reference_bits = []
+        for start in range(0, tokens, _PREFILL_REFERENCE_TOKENS):
+            stop = min(start + _PREFILL_REFERENCE_TOKENS, tokens)
+            call_inputs = upload_call_inputs(hidden[start:stop], indices[start:stop], scores[start:stop])
+            outputs = run(*call_inputs, cluster_axis=None)
+            reference_bits.append(_bf16_bits(outputs[5]))
+            for tensor in (outputs[0], outputs[1], outputs[2], outputs[4], *call_inputs):
+                ttnn.deallocate(tensor)
+        reference_bits = torch.cat(reference_bits, dim=1)
+        assert reference_bits.shape == (k, tokens, hidden_size)
+        return reference_bits
+
+    reference_bits = fused_reference_bits(indices, scores)
+    if sentinel_output:
+        # The caller's buffer holds a sentinel: the unowned rows keep it, the owned rows are the reference.
+        sentinel_bits = torch.tensor(1.0, dtype=torch.bfloat16).view(torch.int16)
+        unowned = (indices >= experts_per_device).t().unsqueeze(-1)  # [K, T, 1]
+        assert bool(unowned.any()), "the sentinel check needs unowned rows"
+        expected_bits = torch.where(unowned, sentinel_bits, reference_bits)
+    else:
+        expected_bits = reference_bits
+
+    # One local output call over all tokens (cluster_axis=0, extent 1 on a 1x1 mesh).
+    call_inputs = upload_call_inputs(hidden, indices, scores, output_fill=1.0 if sentinel_output else 0.0)
+    outputs = run(*call_inputs, cluster_axis=0)
+    assert len(outputs) == 6
+    assert outputs[5].buffer_address() == call_inputs[3].buffer_address(), "slot 5 must be the caller's output"
+    output_bits = _bf16_bits(outputs[5])
+
+    counts = ttnn.to_torch(outputs[0]).to(torch.int64)[0, :experts_per_device]
+    assert torch.equal(counts, golden_counts), f"per-expert counts differ from the routing histogram: {counts}"
+
+    packed = ttnn.to_torch(outputs[2]).flatten().to(torch.int64) & 0xFFFFFFFF
+    assert packed.numel() == token_list_page_words(tokens, k, experts_per_device), "packed page size"
+    starts = packed[: experts_per_device + 1].tolist()
+    assert starts == token_list_segment_starts(golden_counts.tolist()), "segment starts differ from the alignment rule"
+    decoded = decode_packed_token_lists(packed, experts_per_device, golden_counts.tolist())
+    for e, ((token_ids, k_slots), (golden_tokens, golden_k)) in enumerate(zip(decoded, golden_lists)):
+        assert token_ids.tolist() == golden_tokens, f"expert {e}: token ids differ"
+        assert k_slots.tolist() == golden_k, f"expert {e}: k slots differ"
+    logger.info(
+        f"Packed token lists: {starts[-1]} entries in {experts_per_device} segments, "
+        f"header {token_list_header_words(experts_per_device)} words"
+    )
+
+    def assert_bitwise(output_bits, expected_bits, indices, what):
+        mismatches = output_bits != expected_bits
+        if bool(mismatches.any()):
+            k_slot, t, _ = torch.nonzero(mismatches)[0].tolist()
+            expert = int(indices[t, k_slot])
+            rows_differing = int(mismatches.any(dim=-1).sum())
+            raise AssertionError(
+                f"{what} differs from the expected pages: {int(mismatches.sum())} of {mismatches.numel()} bf16 values "
+                f"in {rows_differing} rows, first at (k={k_slot}, t={t}) routed to expert {expert} "
+                f"({'local' if expert < experts_per_device else 'remote'})"
+            )
+
+    assert_bitwise(output_bits, expected_bits, indices, f"local output at {tokens} tokens")
+    logger.info(
+        f"Local output at {tokens} tokens: {k * tokens} pages bitwise equal to the "
+        f"128-token fused local combine ({golden_chunks} chunks in one call"
+        f"{'; sentinel rows checked' if sentinel_output else ''})"
+    )
+    for tensor in (outputs[0], outputs[1], outputs[2], outputs[4], *call_inputs):
+        ttnn.deallocate(tensor)
+
+    if second_routing_case is not None:
+        # The same program (a cache hit: same T, K, shapes) on another routing: the drain reuses its page, its
+        # staging slots and the pair lists without clearing them, every read bounded by this call's counts.
+        indices_b, scores_b = _prefill_routing(second_routing_case, tokens, seed=20260926)
+        reference_b = fused_reference_bits(indices_b, scores_b)
+        call_inputs = upload_call_inputs(hidden, indices_b, scores_b)
+        outputs = run(*call_inputs, cluster_axis=0)
+        assert_bitwise(_bf16_bits(outputs[5]), reference_b, indices_b, f"cached program on {second_routing_case}")
+        logger.info(f"Local output at {tokens} tokens, cached program, routing {second_routing_case}: bitwise")
+        for tensor in (outputs[0], outputs[1], outputs[2], outputs[4], *call_inputs):
+            ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "tokens, routing_case, sentinel_output, second_routing_case",
+    [
+        (128, "zipf", False, None),
+        (512, "zipf", False, None),
+        (2048, "zipf", False, "random_local"),
+        (2048, "zipf", True, None),
+        (99, "zipf", False, None),
+        (2050, "zipf", False, None),
+        (2048, "one_expert", False, None),
+        (2048, "uniform_local", False, None),
+        (2048, "random_local", False, None),
+        (2048, "no_local", False, None),
+        (2048, "no_local", True, None),
+    ],
+    ids=[
+        "128-zipf",
+        "512-zipf",
+        "2048-zipf-then-random_local",
+        "2048-zipf-sentinel",
+        "99-zipf",
+        "2050-zipf",
+        "2048-one_expert",
+        "2048-uniform_local",
+        "2048-random_local",
+        "2048-no_local",
+        "2048-no_local-sentinel",
+    ],
+)
+def test_moe_compute_single_card_local_output_prefill(
+    mesh_device, mesh_shape, tokens, routing_case, sentinel_output, second_routing_case
+):
+    """One local output call over a prefill slab's tokens (Qwen3.8-Flash-Next shape: hidden 2560, N 640, 128 of 512
+    experts local, K 10) writes the same pages as the fused local combine over the same rows in 128-token calls,
+    bitwise; the per-expert counts are the routing histogram and the packed token lists decode to the golden lists.
+    Cases: the natural-text shape at 128 / 512 / 2048 tokens and at counts the four tilize cores split unevenly (99,
+    2050); one expert taking every token (a 64-chunk segment); every slot local, uniform (the lists at capacity) and
+    random; and no local pair (an empty call). With a sentinel-filled caller buffer the rows nobody owns keep the
+    sentinel, the owned rows being the reference; one row re-runs the cached program on a second routing."""
+    _run_moe_compute_local_output_prefill_test(
+        mesh_device,
+        tokens,
+        routing_case,
+        sentinel_output=sentinel_output,
+        second_routing_case=second_routing_case,
+    )
+
+
 def _height_sharded_rows_memory_config(buffer_type, num_rows, hidden_size, num_cores):
     """[num_rows, hidden_size] row-major HEIGHT_SHARDED over num_cores cores in a row of the grid,
     whole token rows per shard: every page is one 2 x H byte row, the same page rule as the
@@ -1377,8 +1741,8 @@ def test_moe_compute_multi_device_local_axis(mesh_device, mesh_shape, expect_err
     output at every device, on a mesh opened without a fabric config. The replicated token set
     and identical routing metadata go to every device, each device computes its own expert
     shard, every device's partial matches the golden rows its experts own, all outputs keep the
-    replicated input topology, and a dim-0-sharded input is rejected. With ccl_knobs the Galaxy-style topology / num_links / mux
-    range / cross-device semaphore are passed too and must be accepted and unused. The
+    replicated input topology, and a dim-0-sharded input or output is rejected. With ccl_knobs the Galaxy-style topology / num_links / mux
+    range / cross-device semaphore are passed too and must be accepted (no link, mux worker or semaphore is used). The
     mesh_device fixture skips this on machines with fewer than four devices."""
     if mesh_device.get_num_devices() < 2:
         pytest.skip("multi-device local combine needs at least two devices")
