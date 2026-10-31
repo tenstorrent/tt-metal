@@ -23,11 +23,13 @@ autograd::TensorPtr scaled_dot_product_attention(
     const std::optional<autograd::TensorPtr>& gate = std::nullopt);
 
 // Composite implementation using individual TTNN ops (fallback)
+// Requires a mask: unlike the fused op it does not generate a causal one, and attending to every key would
+// include future tokens and unwritten KV-cache slots. Pass an all-ones mask for full (non-causal) attention.
 autograd::TensorPtr scaled_dot_product_attention_composite(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const std::optional<autograd::TensorPtr>& mask = std::nullopt);
+    const std::optional<autograd::TensorPtr>& mask);
 
 autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,
