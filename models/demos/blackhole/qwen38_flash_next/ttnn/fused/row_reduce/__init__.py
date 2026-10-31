@@ -36,7 +36,7 @@ TRANSPORT_KERNEL = fp.kernel_source(NAME, "transport.cpp")
 COMPUTE_KERNEL = fp.kernel_source(NAME, "compute.cpp")
 CB_IN, PACK_CB, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT = range(8)
 LINKS = 1
-# QWEN38_ROW_REDUCE_LINKS (default "1" = one transport core / one link per direction): "2" sends the packets of the v2
+# QWEN38_ROW_REDUCE_LINKS (default "2"; "1" = one transport core / one link per direction): "2" sends the packets of the v2
 # programs over min(2, the line's link count) links, the packed bytes cut in two halves, one per transport core (QWEN38_ROW_REDUCE_SPLIT=0: packets dealt round robin)
 # (kernels/transport2l.cpp, transport3l.cpp); the landing slots, the sum order and the rounding are unchanged
 LINKS_ENV = "QWEN38_ROW_REDUCE_LINKS"
@@ -144,11 +144,11 @@ def prepare2(mesh, tiles: int = 80) -> dict:
 
 
 def _links(mesh, tiles: int, pitch: int, payload: int) -> int:
-    """Links the v2 programs use for one call: 1 (default) or, with QWEN38_ROW_REDUCE_LINKS=2, min(2, the line's links)
+    """Links the v2 programs use for one call: with QWEN38_ROW_REDUCE_LINKS=2 (default), min(2, the line's links)
     when the packets are whole chunks and there are at least two of them."""
 
     try:
-        want = int(os.environ.get(LINKS_ENV, "1"))
+        want = int(os.environ.get(LINKS_ENV, "2"))
     except ValueError:
         want = 1
     if want < 2:

@@ -224,11 +224,15 @@ def test_the_kernels_implement_the_modelled_order():
     )
 
 
+LINK_ARGS = r"\*\(\([^\n]*\) if links > 1 else \(\)\),"
+
+
 def test_v2_transport_layout_and_parity_pins():
     text = (fp.REPO_ROOT / rr.TRANSPORT2_KERNEL).read_text()
     ids = sorted({int(i) for i in re.findall(r"get_compile_time_arg_val\((\d+)\)", text)})
     base = int(re.search(r"ACCESSOR_BASE = (\d+);", text).group(1))
-    extra = re.search(r"def _row_reduce_v2.*?extra_args=\(([^)]*)\)", MODULE, re.S).group(1)
+    extra = MODULE.split("def _row_reduce_v2", 1)[1].split("extra_args=(", 1)[1].split("\n        ),", 1)[0]
+    extra = re.sub(LINK_ARGS, "", extra)  # the two-link kernel's extra scalars (transport2l.cpp)
     assert base == 11 + len([e for e in re.sub(r"\s+", " ", extra).split(",") if e.strip()]) == max(ids) + 1
     assert rr.version({}) == 2 and rr.version({rr.ENV: "1"}) == 1 and rr.version({rr.ENV: "2"}) == 2  # v2 default
     assert rr.enabled_by_env({rr.ENV: "2"}) and not rr.enabled_by_env({rr.ENV: "0"})
@@ -252,6 +256,7 @@ def test_rr_write_kernels_layout_and_hooks():
         .split("extra_args=(", 1)[1]
         .split("*fp.accessor_args(residual)", 1)[0]
     )
+    extra = re.sub(LINK_ARGS, "", extra)  # the two-link kernel's extra scalars (transport3l.cpp)
     scalars = [e for e in re.sub(r"\s+", " ", extra).split(",") if e.strip()]
     assert base == 11 + len(scalars) == max(ids) + 1  # the three accessor lists follow the scalars
     assert sorted({int(i) for i in re.findall(r"get_compile_time_arg_val\((\d+)\)", c3)}) == list(range(7)) + list(
