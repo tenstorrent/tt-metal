@@ -6,11 +6,14 @@ import ttnn
 from ..experts.operations import decode_tp_all_reduce, use_decode_ar
 from ..fused_decode.config import (
     OPROJ_DECODE_WEIGHT_DTYPE,
-    OPROJ_STREAM_READERS,
     QKV_DECODE_WEIGHT_DTYPE,
     QKV_FUSED_ROPE_KV,
-    QKV_STREAM_READERS,
+    SDA_WAIT_SEM,
+    TP1_QKV_PREFETCH,
+    sdpa_decode_compute_config,
     sdpa_decode_program_config,
+    split_attn_on,
+    stream_readers,
 )
 from ..fused_decode.stream import QKVRopeCache, rope_rotation_tiles
 from .config import AttentionConfig, ProgramConfig
@@ -101,9 +104,11 @@ def decode_forward(
             hidden_size // ttnn.TILE_SIZE,
             (num_local_heads + 2 * num_local_kv_heads) * head_dim,
             QKV_DECODE_WEIGHT_DTYPE,
-            readers=QKV_STREAM_READERS,
+            readers=stream_readers("qkv", mesh_config.tp),
             out_mode=3,
             heads=(num_local_heads * head_dim // ttnn.TILE_SIZE, num_local_kv_heads * head_dim // ttnn.TILE_SIZE),
+            # TP = 1: 20 columns of 91 BFP8 tiles per bank; the fused boundary's prefetch-all ring would not fit L1
+            prefetch_cols=TP1_QKV_PREFETCH if mesh_config.tp == 1 else None,
         )
         rope_kv = None
         if QKV_FUSED_ROPE_KV:
@@ -112,12 +117,28 @@ def decode_forward(
             rope_kv = QKVRopeCache(
                 rope_rotation_tiles(mesh_device), *rope_mats, position_idx, page_table, k_cache, v_cache
             )
-        tt_q, tt_k, tt_v = qkv_stream(
-            hidden_states,
-            weights.wqkv_stream,
-            ccl_manager.get_decode_qkv_heads(num_local_heads, num_local_kv_heads, head_dim),
-            rope_kv=rope_kv,
-        )
+        heads = ccl_manager.get_decode_qkv_heads(num_local_heads, num_local_kv_heads, head_dim)
+        sda = None
+        fuse = None
+        if rope_kv is not None and page_table is not None and split_attn_on():
+            # The split decode attention (fused_decode/split_attn.py) inside the QKV program: kv head g's heads on slice
+            # cores, each reading its range of the cache while QKV streams and starting once the QKV writers signal;
+            # output in L1. GPT_OSS_SPLIT_ATTN=0: the paged SDPA op below.
+            sda = ccl_manager.get_decode_split_attention(
+                num_local_heads, num_local_kv_heads, head_dim, config.sliding_window or 0, qkv_stream
+            )
+            kern, cbs, io = sda.parts(
+                heads[0],
+                k_cache,
+                v_cache,
+                position_idx,
+                page_table,
+                weights.decode_sinks,
+                config.scaling,
+                wait=(SDA_WAIT_SEM, len(qkv_stream.assignments)),
+            )
+            fuse = (kern, cbs, io, sda.noc_cores(), SDA_WAIT_SEM, sda.semaphores())
+        tt_q, tt_k, tt_v = qkv_stream(hidden_states, weights.wqkv_stream, heads, rope_kv=rope_kv, fuse=fuse)
         if rope_kv is None:
             tt_q, tt_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
                 tt_q, tt_k, rope_mats[0], rope_mats[1], transformation_mat
@@ -201,7 +222,9 @@ def decode_forward(
         use_height_and_width_as_shard_shape=True,
     )
     # Scaled dot-product attention
-    if page_table is not None:
+    if fused and sda is not None:
+        tt_sdpa_tensor = sda.out  # persistent (shared by every layer)
+    elif page_table is not None:
         tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
@@ -212,11 +235,15 @@ def decode_forward(
             page_table_tensor=page_table,
             scale=config.scaling,
             program_config=(
-                sdpa_decode_program_config(config.sliding_window, one_user=fused)
+                sdpa_decode_program_config(config.sliding_window, one_user=fused, tp=mesh_config.tp)
                 if fused or batched_qkv is not None
                 else program_config.get_decode_sdpa_config(mesh_device)
             ),
-            compute_kernel_config=program_config.get_compute_kernel_config(),
+            compute_kernel_config=(
+                sdpa_decode_compute_config(program_config, mesh_config.tp)
+                if fused
+                else program_config.get_compute_kernel_config()
+            ),
             # memory_config=height_sharded_mem_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -249,14 +276,15 @@ def decode_forward(
             num_local_heads * head_dim // ttnn.TILE_SIZE,
             hidden_size,
             OPROJ_DECODE_WEIGHT_DTYPE,
-            readers=OPROJ_STREAM_READERS,
+            readers=stream_readers("o_proj", mesh_config.tp),
             x_pages=head_dim // ttnn.TILE_SIZE,
             out_mode=5,
         )
         o_stream(
             tt_sdpa_tensor, weights.o_proj_stream, partial, send=ccl_manager.decode_boundary_send(hidden_size, "attn")
         )
-        tt_sdpa_tensor.deallocate(True)
+        if sda is None:
+            tt_sdpa_tensor.deallocate(True)
         return partial
 
     tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)

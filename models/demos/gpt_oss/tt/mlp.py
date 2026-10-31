@@ -11,6 +11,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
 from . import opt_switches
+from .bfp4_quant import nd_layer_dtypes
 from .experts import ExpertConfig, Experts
 from .experts_throughput import (
     DeepSeekPrefillConfig,
@@ -18,7 +19,13 @@ from .experts_throughput import (
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
-from .fused_decode.config import DENSE_MOE_TOKENS, dense_moe_decode_supported, fused_decode_supported
+from .fused_decode.config import (
+    DENSE_MOE_TOKENS,
+    dense_moe_decode_supported,
+    fused_decode_supported,
+    nd_expert_dtypes,
+    nd_experts_on,
+)
 from .topk import TopKRouter
 
 
@@ -36,6 +43,7 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
+        layer_idx=None,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -155,6 +163,11 @@ class MLP:
 
             # Use GPT-OSS specific program config
             program_config = GPTOSSProgramConfig()
+            # ND experts (TP=1 fused decode, gpt-oss-120b at TP=4): one ND-sharded copy for prefill and decode in the
+            # ND dtypes (fused_decode/config.py nd_expert_dtypes, BFP8 by default; GPT_OSS_ND_LAYER_DTYPES: per layer,
+            # bfp4_quant.nd_layer_dtypes); otherwise BFP4
+            nd = self.indexed_decode and nd_experts_on(mesh_config.decode.tp, hf_config.num_local_experts)
+            nd_dtypes = nd_layer_dtypes(layer_idx, nd_expert_dtypes()) if nd else (ttnn.bfloat4_b, None)
             # One 32-token tile per device (batch 32 on Blackhole 1x4): decode routes into dense [tokens, experts]
             # weights and computes every expert (router.dense_decode + Experts decode_forward_dense).
             self.dense_decode = dense_moe_decode_supported(
@@ -169,10 +182,11 @@ class MLP:
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
                 program_config=program_config,
-                weight_dtype=ttnn.bfloat4_b,
+                weight_dtype=nd_dtypes[0],
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 indexed_decode=self.indexed_decode,
                 dense_decode_tokens=DENSE_MOE_TOKENS if self.dense_decode else None,
+                down_weight_dtype=nd_dtypes[1],
             )
 
     def __call__(self, hidden_states, is_decode):
