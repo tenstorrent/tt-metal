@@ -207,8 +207,9 @@ struct TokenQueue {
         if (published == ready) {
             return;
         }
-        // The tokens have to be in L1 before the sender is told the entries are filled.
+        // The tokens and the fwd_meta stores have to be in L1 before the sender is told the entries are filled.
         noc_async_read_barrier();
+        routing_index::fence();
         noc_semaphore_inc(get_noc_addr(ct.filled_addr), ready - published);
         published = ready;
     }
