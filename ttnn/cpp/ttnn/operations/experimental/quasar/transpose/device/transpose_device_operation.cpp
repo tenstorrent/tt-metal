@@ -4,6 +4,7 @@
 #include "transpose_device_operation.hpp"
 #include "transpose_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -11,6 +12,7 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using ttnn::operations::data_movement::transpose::validate_sharded_rm_transpose_narrow_row;
 using ttnn::operations::experimental::quasar::transpose_op::adjust_shard_spec_to_shape;
 using ttnn::operations::experimental::quasar::transpose_op::generate_transpose_shard_spec;
 using ttnn::operations::experimental::quasar::transpose_op::is_native_transpose_sharding;
@@ -225,6 +227,16 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
             "Tiled tensor volume {} must be a multiple of TILE HEIGHT * TILE WIDTH",
             input_tensor.physical_volume(),
             TILE_HW);
+    }
+
+    // Shapes the narrow-row untilize of the sharded row-major WH factory packs wrong: H above one tile, an output
+    // row wider than one face or not a multiple of the L1 alignment in bytes, and W not a tile multiple (see
+    // validate_sharded_rm_transpose_narrow_row); on Quasar that factory is never selected. The cheap shape and
+    // sharding tests gate the factory selection, which this validate pays on every dispatch.
+    if (row_major && input_tensor.is_sharded() && (input_tensor.logical_shape()[-2] % TILE_HEIGHT) != 0 &&
+        std::holds_alternative<TransposeWHShardedRMProgramFactory>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        validate_sharded_rm_transpose_narrow_row(input_tensor);
     }
 }
 
