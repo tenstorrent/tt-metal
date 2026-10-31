@@ -76,8 +76,8 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 // only after every arrival has landed.
 //
 // Per call by design: the op holds no L1 between calls. The layout of a size (tensor spec, sharded page mapping over
-// the full grid, topology) is built on its first call and kept per mesh and size, host-side only and never released,
-// so a later call only allocates the buffer and wraps it. Costs:
+// the full grid) is built on its first call and kept per size and grid, host-side only and never released, so a later
+// call only allocates the buffer and wraps it (the topology is rebuilt from the mesh's shape every call). Costs:
 //   - host time on every eager call: allocating and freeing that buffer. Traced replays pay nothing.
 //   - traces: the staging is freed during capture, so an L1 buffer allocated after capture can land on it and is
 //     overwritten by every replay (tt-metal's general rule: buffers allocated while a trace exists are unsafe unless
@@ -85,6 +85,8 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 // Persistent staging (per mesh, per size, or grow-only) avoids both but holds 170-362 KiB per core for the life of the
 // mesh.
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles);
+// The spec allocate_staging gives a call's staging on a grid of grid_size cores.
+tt::tt_metal::TensorSpec staging_spec(const CoreCoord& grid_size, uint32_t staging_tiles);
 // Lookup only (factory and the hit path); TT_FATAL when the entry has not created them.
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);
 
