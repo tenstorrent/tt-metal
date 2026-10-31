@@ -13,6 +13,7 @@
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
@@ -129,6 +130,32 @@ TEST_F(MeshDispatchFixture, ResetGlobalSemaphores) {
                     device_id, mesh_device->worker_core_from_logical_core(core), overwrite_value, address);
                 EXPECT_EQ(sem_vals[0], reset_value);
             }
+        }
+    }
+}
+
+// Runs in both fast and slow dispatch: the queue is passed explicitly, and with slow dispatch it is simply not used.
+TEST_F(MeshDispatchFixture, GlobalSemaphoresWithExplicitQueue) {
+    CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
+    auto cores_vec = corerange_to_cores(cores);
+    for (const auto& mesh_device : devices_) {
+        auto device_id = mesh_device->get_device_ids()[0];
+        auto& cq = mesh_device->mesh_command_queue(0);
+        auto global_semaphore = tt::tt_metal::GlobalSemaphore(*mesh_device, cq, cores, /*initial_value=*/4);
+        auto address = global_semaphore.address();
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        auto read_value = [&](const CoreCoord& core) {
+            return tt::tt_metal::MetalContext::instance()
+                .get_cluster()
+                .read_core(device_id, mesh_device->worker_core_from_logical_core(core), address, sizeof(uint32_t))[0];
+        };
+        for (const auto& core : cores_vec) {
+            EXPECT_EQ(read_value(core), 4u);
+        }
+        global_semaphore.reset_semaphore_value(8, cq);
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        for (const auto& core : cores_vec) {
+            EXPECT_EQ(read_value(core), 8u);
         }
     }
 }

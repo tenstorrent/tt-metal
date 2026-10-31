@@ -34,7 +34,7 @@ public:
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type,
-        uint8_t cq_id = 0);
+        distributed::MeshCommandQueue& mesh_cq);
 
     GlobalCircularBufferImpl(const GlobalCircularBufferImpl&) = default;
     GlobalCircularBufferImpl& operator=(const GlobalCircularBufferImpl&) = default;
@@ -59,7 +59,8 @@ public:
     }
 
 private:
-    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender, uint8_t cq_id);
+    void setup_cb_buffers(
+        BufferType buffer_type, uint32_t max_num_receivers_per_sender, distributed::MeshCommandQueue& mesh_cq);
 
     // GlobalCircularBufferImpl is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
