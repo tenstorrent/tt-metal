@@ -18,6 +18,7 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 # (boundary, the neighbour just inside the bridge it belongs to)
 _BOUNDARIES = [
@@ -46,3 +47,39 @@ def test_lgamma_bridge_boundary_is_no_worse_than_the_bridge(device, z, inside):
         f"{err_inside:.4e} ({err_boundary / err_inside:.1f}x). The boundary is being sent to "
         f"the Stirling arm instead of the bridge it belongs to."
     )
+
+
+# multigammaln (p = 4) is computed from two lgamma evaluations plus ln((a - 1)(a - 1.5)) via
+# lgamma(a - 1) = lgamma(a) - ln(a - 1). Evaluating lgamma(a - 1.5) directly near the a > 1.5 domain
+# edge cost up to ~1e-2 relative error in fp32 (~1e5 ULP). Below a = 2.5 the bound is the fp32 lgamma
+# kernel itself, which loses accuracy just above its zero at z = 1 (lgamma(1.25) is off by ~3e-4
+# relative), so that range gets a looser threshold; elsewhere the composite is within a few ULP.
+@pytest.mark.parametrize(
+    "low, high, ulp_threshold",
+    [(1.5 + 2**-10, 2.5, 256), (2.5, 100.0, 8)],
+    ids=["near_domain_edge", "interior"],
+)
+def test_multigammaln_fp32(device, low, high, ulp_threshold):
+    x = torch.linspace(low, high, 32 * 32 * 8, dtype=torch.float32).reshape(1, 1, 256, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.multigammaln(tt_x))
+    expected = torch.special.multigammaln(x.double(), 4).float()
+    assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=ulp_threshold)
+
+
+# The ln((a - 1)(a - 1.5)) correction overflowed fp32 above ~1.8e19 and gave -inf, and a = +inf gave
+# inf - inf = NaN; the reference is finite for the first and +inf for the second.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_multigammaln_large_and_infinite_inputs(device, dtype):
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    values = torch.tensor([1e10, 1e19, 1e20, 1e30, float("inf")], dtype=torch.float32)
+    x = values.repeat(32 * 32 // len(values) + 1)[: 32 * 32].reshape(1, 1, 32, 32).to(torch_dtype)
+    tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.multigammaln(tt_x)).float()
+    expected = torch.special.multigammaln(x.double(), 4)
+
+    assert torch.equal(torch.isposinf(result), torch.isposinf(expected)), result
+    finite = torch.isfinite(expected)
+    assert torch.isfinite(result[finite]).all(), result
+    rel = ((result[finite].double() - expected[finite]) / expected[finite]).abs().max().item()
+    assert rel < (1e-5 if dtype == ttnn.float32 else 2e-2), rel
