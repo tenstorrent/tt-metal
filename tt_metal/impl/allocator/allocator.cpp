@@ -353,8 +353,7 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     }
 }
 
-void AllocatorImpl::deallocate_buffers() {
-    std::lock_guard<std::mutex> lock(mutex_);
+void AllocatorImpl::deallocate_all_banks() {
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
@@ -362,6 +361,20 @@ void AllocatorImpl::deallocate_buffers() {
     if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
         this->record_all_deallocations();
     }
+}
+
+void AllocatorImpl::deallocate_buffers() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    this->deallocate_all_banks();
+}
+
+void AllocatorImpl::deallocate_and_release_buffers() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (Buffer* buffer : allocated_buffers_) {
+        buffer->impl().mark_as_deallocated();
+    }
+    allocated_buffers_.clear();
+    this->deallocate_all_banks();
 }
 
 void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {
@@ -753,14 +766,7 @@ void AllocatorImpl::override_state(const AllocatorState& state) {
         TT_FATAL(!buf->impl().per_core_allocation_, "override_state does not yet support per-core L1 allocations");
     }
 
-    // Clear all buffer types
-    dram_manager_->deallocate_all();
-    l1_manager_->deallocate_all();
-    l1_small_manager_->deallocate_all();
-    trace_buffer_manager_->deallocate_all();
-    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
-        this->record_all_deallocations();
-    }
+    this->deallocate_all_banks();
     allocated_buffers_.clear();
 
     // Apply state for each buffer type
@@ -801,7 +807,7 @@ DeviceAddr calculate_bank_size_spread(
 // External facing Allocator
 Allocator::Allocator(AllocatorImpl* _impl) : impl_(_impl) {}
 
-void Allocator::deallocate_buffers() { impl_->deallocate_buffers(); }
+void Allocator::deallocate_buffers() { impl_->deallocate_and_release_buffers(); }
 
 std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const { return impl_->get_allocated_buffers(); }
 
