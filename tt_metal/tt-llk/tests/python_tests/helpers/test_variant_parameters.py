@@ -167,6 +167,9 @@ class MATMUL_ROW_MOP(TemplateParameter):
             return []
         if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B):
             return []
+        # a full sync cell that takes the hoisted form of its own ('r' cells keep the kernels' row MOP)
+        if dest_sync == DestSync.Full and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, True, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B) in ("R", "h"):
+            return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
 

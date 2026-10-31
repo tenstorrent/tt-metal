@@ -1474,6 +1474,10 @@ struct matmul_forced_form_cell
 };
 
 inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
+    // LoFi, 16-bit DEST, one DEST section, a 1x7 block over 8 k steps of a Bfp8 in0 under a Float16 in1 to a Bfp8 output: the opt-in row MOP reads 27 cycles behind main at half sync
+    // and 10 at full sync (the 1x6 and 1x8 blocks gain from it); the hoisted rows form reads 4.9 cycles ahead of main at half sync and 37 at full sync
+    {MathFidelity::LoFi, 0, 8, 8, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 7, 7, 1, true, 'R', false, 1, 1, true},
+    {MathFidelity::LoFi, 1, 8, 8, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 7, 7, 1, true, 'R', false, 1, 1, true},
     // Float32 to Bfp8_b at LoFi, one k step, 32-bit DEST: the 2x2 block reads 1.5 cycles behind main on the per row unpack; the four tile row and
     // column blocks lose with the hoisted form
     // (one DEST section only: with 4 sections the hoisted form reads 0.7 cycles behind main on the math sweep)
