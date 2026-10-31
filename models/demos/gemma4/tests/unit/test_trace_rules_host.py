@@ -18,8 +18,13 @@ from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin a
 from models.demos.gemma4.tt.generator import filter_warmup_sampling_params
 from models.demos.gemma4.tt.warmup_isls import (
     ENV_VAR,
+    PREFILL_PAD_BUCKETS_ENV,
     continuation_tails,
+    gemma4_padded_prefill_len,
+    new_prefill_pad_lengths,
+    parse_prefill_pad_buckets,
     parse_warmup_isls,
+    prefill_trim_width,
     run_prefill_ladder,
     run_prefix_continuation_warmup,
     warmup_page_table_with_real_blocks,
@@ -655,3 +660,217 @@ def test_no_penalties_drops_only_the_penalty_configs():
 def test_no_topk_keeps_only_greedy_and_none():
     sampler = SimpleNamespace(_allow_penalties_sampling=False, _allow_topk_sampling=False)
     assert filter_warmup_sampling_params(SWEEP, sampler) == [GREEDY, None]
+
+
+# ===== GEMMA4_PREFILL_PAD_BUCKETS: Gemma 4's own prefill padding (warmup_isls) and the shared loop's call cut to it
+PAD = "256,512,1024"
+
+
+@pytest.fixture()
+def _pad_knob(monkeypatch):
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, PAD)
+
+
+def test_pad_buckets_parse_keeps_powers_of_two_in_the_shared_1024_range():
+    assert parse_prefill_pad_buckets("256, 512,1024,abc,96,128,384,2048,,") == [256, 512, 1024]
+    assert parse_prefill_pad_buckets("") == [] and parse_prefill_pad_buckets(None) == []
+
+
+def test_pad_policy_unset_is_the_shared_policy_everywhere(monkeypatch):
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV, raising=False)
+    for n in (1, 128, 129, 143, 1024, 1025, 4097):
+        assert gemma4_padded_prefill_len(n) == get_padded_prefill_len(n)
+    assert prefill_trim_width(1024, 142) is None, "the shared loop's call keeps its width"
+    assert new_prefill_pad_lengths() == [] and warmup_prefill_isls(262144, env={}) == []
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_pad_policy_buckets_the_129_to_1024_range_only():
+    expect = {
+        1: 128,
+        128: 128,
+        129: 256,
+        143: 256,
+        256: 256,
+        257: 512,
+        512: 512,
+        513: 1024,
+        1024: 1024,
+        1025: 2048,
+        5000: 8192,
+    }
+    for n, padded in expect.items():
+        assert gemma4_padded_prefill_len(n) == padded, n
+        assert padded <= get_padded_prefill_len(n), "never above the shared bucket"
+    assert gemma4_padded_prefill_len(200, buckets=[512]) == 512, "the smallest listed bucket at or above the prompt"
+    assert gemma4_padded_prefill_len(600, buckets=[512]) == 1024, "none listed above it: the shared bucket"
+    assert new_prefill_pad_lengths() == [256, 512] and new_prefill_pad_lengths(300) == [256]
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_trim_width_cuts_cold_and_continued_single_user_calls_only():
+    assert prefill_trim_width(1024, 142) == 256, "143 rows: the 256 bucket"
+    assert prefill_trim_width(1024, 4096 + 199, num_cached_tokens=4096) == 256, "a 200-row continuation"
+    assert prefill_trim_width(1024, 600) is None, "601 rows pad to 1024 either way"
+    assert prefill_trim_width(128, 99) is None, "the 128 bucket is the shared one"
+    assert prefill_trim_width(4096, 4095) is None and prefill_trim_width(2048, 1500) is None, "above 1024: unchanged"
+    assert (
+        prefill_trim_width(1024, [142, 9], batch_size=2) is None and prefill_trim_width(1024, 142, batch_size=2) is None
+    )
+    assert prefill_trim_width(1024, None) is None and prefill_trim_width(1024, 142, buckets=[]) is None
+
+
+def test_ladder_and_continuation_tails_cover_the_knobs_lengths(monkeypatch):
+    env = {PREFILL_PAD_BUCKETS_ENV: PAD}
+    assert warmup_prefill_isls(16384, env=env) == [256, 512], "the lengths the shared policy never warms"
+    assert warmup_prefill_isls(300, env=env) == [256]
+    assert warmup_prefill_isls(16384, env={**env, ENV_VAR: "4096,256"}) == [256, 512, 4096]
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, PAD)
+    assert continuation_tails(4096, gemma4_padded_prefill_len) == [128, 256, 512, 1024, 2048, 4096]
+    assert continuation_tails(4096, gemma4_padded_prefill_len, skip_chunk=True) == [128, 256, 512, 1024, 2048]
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV)
+    assert continuation_tails(4096, gemma4_padded_prefill_len) == [128, 1024, 2048, 4096]
+
+
+@pytest.mark.usefixtures("_clean_env", "_pad_knob")
+def test_short_prefill_trace_opt_in_and_trace_isls_follow_the_policy(monkeypatch):
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "1")
+    monkeypatch.setenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", "256")
+    assert gt.trace_short_prefill_opt_in(200, 1), "pads to 256 under the knob"
+    assert not gt.trace_short_prefill_opt_in(257, 1), "pads to 512"
+    monkeypatch.delenv("GEMMA4_TRACE_PREFILL_SEQ_LENS", raising=False)
+    assert gt._resolve_trace_prefill_seq_lens() == [
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+    ], "the knob's buckets are trace shapes"
+    monkeypatch.setenv("GEMMA4_TRACE_PREFILL_SEQ_LENS", "128")
+    assert gt._resolve_trace_prefill_seq_lens() == [128], "an explicit list is taken as given"
+    monkeypatch.delenv("GEMMA4_TRACE_PREFILL_SEQ_LENS")
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV)
+    assert not gt.trace_short_prefill_opt_in(200, 1), "the shared 1024 bucket without the knob"
+    assert gt._resolve_trace_prefill_seq_lens() == gt._DEFAULT_TRACE_PREFILL_SEQ_LENS
+
+
+def _trim_generator(calls):
+    """A bare mixin whose eager single-user prefill records what it is handed (no page table, no KV cache)."""
+    g = Mixin.__new__(Mixin)
+    g.model = [
+        SimpleNamespace(mesh_config=None, layers=[], hidden_size_per_layer_input=0, bounded_sliding_kv_cache=False)
+    ]
+    g.model_args = [SimpleNamespace(max_prefill_chunk_size=4096)]
+
+    def eager(tokens, page_table=None, kv_cache=None, num_cached_tokens=0, **kwargs):
+        calls.append(
+            (tokens.clone(), num_cached_tokens, dict(kwargs), getattr(g.model[0], "_g4_mm_prefill_embeds", None))
+        )
+        return "logits"
+
+    g._prefill_forward_single_user_text_eager = eager
+    return g
+
+
+def _padded_call(rows, width=1024):
+    """The shared loop's ``prefill_ids``: the prompt's ids then zeros up to the shared bucket."""
+    tokens = torch.zeros(1, width, dtype=torch.long)
+    tokens[0, :rows] = torch.arange(1, rows + 1)
+    return tokens
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_the_shared_loops_padded_call_runs_at_the_gemma4_bucket():
+    calls = []
+    g = _trim_generator(calls)
+    assert g.prefill_forward_single_user_text(_padded_call(143), last_token_idx=142, model_id=0, user_id=0) == "logits"
+    toks, cached, kw, _mm = calls[-1]
+    assert tuple(toks.shape) == (1, 256) and int(toks[0, 142]) == 143 and int(toks[0, 143]) == 0
+    assert kw["last_token_idx"] == 142 and cached == 0, "the index is untouched: the last-token tile follows it"
+    # a continuation: the rows past the cached prefix set the bucket
+    g.prefill_forward_single_user_text(
+        _padded_call(200), last_token_idx=4096 + 199, num_cached_tokens=4096, model_id=0, user_id=0
+    )
+    assert tuple(calls[-1][0].shape) == (1, 256) and calls[-1][1] == 4096
+    # ids past the bucket that are not the loop's zero pad: the width stays
+    odd = _padded_call(143)
+    odd[0, 700] = 5
+    g.prefill_forward_single_user_text(odd, last_token_idx=142, model_id=0, user_id=0)
+    assert tuple(calls[-1][0].shape) == (1, 1024)
+    # the batched form (per-slot indices) keeps the width the shared batched consumption reshapes by
+    g.prefill_forward_single_user_text(
+        torch.zeros(2, 1024, dtype=torch.long), last_token_idx=[142, 9], batch_size=2, user_id=[0, 1], model_id=0
+    )
+    assert tuple(calls[-1][0].shape) == (2, 1024)
+
+
+def test_without_the_knob_the_shared_loops_width_is_kept(monkeypatch):
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV, raising=False)
+    calls = []
+    g = _trim_generator(calls)
+    g.prefill_forward_single_user_text(_padded_call(143), last_token_idx=142, model_id=0, user_id=0)
+    assert tuple(calls[-1][0].shape) == (1, 1024)
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_a_multimodal_call_cuts_its_embedding_suffix_with_the_tokens():
+    calls = []
+    g = _trim_generator(calls)
+    embeds = torch.arange(143 * 4, dtype=torch.float32).reshape(143, 4)
+    g.prefill_forward_single_user_text(
+        _padded_call(143), last_token_idx=142, model_id=0, user_id=0, pixel_values=embeds
+    )
+    toks, _cached, kw, mm = calls[-1]
+    assert tuple(toks.shape) == (1, 256) and "pixel_values" not in kw
+    assert mm is not None and tuple(mm[0].shape) == (143, 4) and mm[1] == 0, "the suffix within the bucket"
+    assert g.model[0]._g4_mm_prefill_embeds is None, "released after the call"
+
+
+class _TraceBase:
+    def _easy_trace_prefill(self, prefill_ids, **kwargs):
+        self.trace_calls.append((prefill_ids.clone(), dict(kwargs)))
+        return "hidden"
+
+
+class _TraceGen(Mixin, _TraceBase):
+    pass
+
+
+def _trace_generator():
+    g = _TraceGen.__new__(_TraceGen)
+    g.trace_calls = []
+    g.model = [SimpleNamespace(layers=[])]
+    g._easy_trace_prefill_with_chunk_page_table = (
+        lambda prefill_ids, **kw: g.trace_calls.append((prefill_ids.clone(), dict(kw, mc=True))) or "hidden"
+    )
+    return g
+
+
+@pytest.mark.usefixtures("_pad_knob")
+def test_the_traced_single_user_call_is_keyed_and_captured_at_the_gemma4_bucket():
+    g = _trace_generator()
+    common = dict(page_table=None, batch_size=1, num_cached_tokens=0, model_id=0)
+    assert g._easy_trace_prefill(_padded_call(143), last_token_idx=142, prefill_seq_len=1024, **common) == "hidden"
+    ids, kw = g.trace_calls[-1]
+    assert tuple(ids.shape) == (1, 256) and kw["prefill_seq_len"] == 256 and kw["last_token_idx"] == 142
+    assert g._g4_pf_row == (142, 142 % 32)
+    # the multi-chunk walk's chunks keep the chunk's key (whole buckets; the last chunk's rows sit below it)
+    g._easy_trace_prefill(
+        _padded_call(300, width=4096),
+        last_token_idx=8192 + 299,
+        prefill_seq_len=4096,
+        force_chunk_page_table=True,
+        **dict(common, num_cached_tokens=8192),
+    )
+    ids, kw = g.trace_calls[-1]
+    assert tuple(ids.shape) == (1, 4096) and kw["prefill_seq_len"] == 4096 and kw.get("mc")
+    # the batched capture keeps its width
+    g._easy_trace_prefill(
+        torch.zeros(2, 1024, dtype=torch.long),
+        last_token_idx=[142, 9],
+        prefill_seq_len=1024,
+        **dict(common, batch_size=2),
+    )
+    ids, kw = g.trace_calls[-1]
+    assert tuple(ids.shape) == (2, 1024) and kw["prefill_seq_len"] == 1024

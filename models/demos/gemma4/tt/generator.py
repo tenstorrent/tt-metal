@@ -34,14 +34,9 @@ from models.demos.gemma4.tt.vision.embedders import (
 )
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.gemma4.tt.vision.vision_tower import VisionTower
+from models.demos.gemma4.tt.warmup_isls import gemma4_padded_prefill_len, prefill_trim_width
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import (
-    Mode,
-    get_block_size,
-    get_max_prefill_chunk_size,
-    get_padded_prefill_len,
-    num_blocks_in_seq,
-)
+from models.tt_transformers.tt.common import Mode, get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -459,7 +454,7 @@ def plan_packed_prefill_groups(
         plen, cached = int(plen), int(cached)
         if cached > 0 or plen <= 0:
             continue
-        padded = int(get_padded_prefill_len(plen))
+        padded = int(gemma4_padded_prefill_len(plen))
         if padded > int(max_prefill_chunk_size):
             continue
         buckets.setdefault(padded, []).append(i)
@@ -1162,6 +1157,64 @@ class ChunkedPrefillPageTableGuardMixin:
 
         return trace_id, (tt_tokens, tt_log_probs), trace_input
 
+    # ── GEMMA4_PREFILL_PAD_BUCKETS: the shared loop's call cut back to Gemma 4's own bucket (warmup_isls) ──────
+    def _g4_log_pad_trim(self, width, trim, path):
+        """One INFO line per (padded width, bucket, path) per process, then DEBUG: the shared loop's own
+        "Prefill seq len: 1024" line precedes every trimmed call and would otherwise be the only trace of the
+        width the device ran."""
+        seen = getattr(self, "_g4_pad_trims_logged", None)
+        if seen is None:
+            seen = self._g4_pad_trims_logged = set()
+        key = (int(width), int(trim), path)
+        log = logger.debug if key in seen else logger.info
+        seen.add(key)
+        log(
+            "Gemma4 prefill padding: the {} call padded to {} tokens runs at the {}-token bucket "
+            "(GEMMA4_PREFILL_PAD_BUCKETS)",
+            path,
+            width,
+            trim,
+        )
+
+    def _g4_trim_prefill_tokens(self, tokens, kwargs, num_cached_tokens, path="eager"):
+        """``tokens`` cut to Gemma 4's bucket when the knob names one below the width the shared loop padded to
+        (``prefill_trim_width``: single user, the rows from ``last_token_idx``); every other call keeps its width,
+        as does one whose ids past the bucket are not the loop's zero pad."""
+        trim = prefill_trim_width(
+            int(tokens.shape[-1]),
+            kwargs.get("last_token_idx"),
+            num_cached_tokens,
+            kwargs.get("batch_size", 1),
+        )
+        if trim is None or tokens.dim() != 2 or int(tokens.shape[0]) != 1:
+            return tokens
+        if bool(torch.count_nonzero(tokens[:, trim:])):
+            logger.warning(
+                "Gemma4 prefill padding: ids past the {}-token bucket of a {}-token call are not pad; keeping "
+                "the width",
+                trim,
+                int(tokens.shape[-1]),
+            )
+            return tokens
+        self._g4_log_pad_trim(int(tokens.shape[-1]), trim, path)
+        return tokens[:, :trim]
+
+    def _g4_trim_trace_prefill_call(self, args, kwargs):
+        """The traced single-user call (``prefill_ids`` first, ``prefill_seq_len`` naming the trace key) at
+        Gemma 4's bucket: the key, the captured shape and every replay follow it, and the warmup sweep's mock
+        prompt at that length captures it at boot. Batched calls and the multi-chunk walk keep theirs."""
+        prefill_ids = args[0] if args else kwargs.get("prefill_ids")
+        if prefill_ids is None or not hasattr(prefill_ids, "shape"):
+            return args, kwargs
+        cut = self._g4_trim_prefill_tokens(prefill_ids, kwargs, kwargs.get("num_cached_tokens", 0) or 0, path="traced")
+        if cut is prefill_ids:
+            return args, kwargs
+        kwargs = dict(kwargs, prefill_seq_len=int(cut.shape[-1]))
+        if args:
+            return (cut,) + tuple(args[1:]), kwargs
+        kwargs["prefill_ids"] = cut
+        return args, kwargs
+
     def _easy_trace_prefill(self, *args, **kwargs):
         page_table = kwargs.get("page_table")
         if page_table is None and len(args) >= 2:
@@ -1187,6 +1240,10 @@ class ChunkedPrefillPageTableGuardMixin:
         # Traced multi-chunk always needs the full mapping so every chunk
         # (including sp0) builds a ``chunk_page_table`` for absolute fill.
         force_chunk_pt = bool(kwargs.pop("force_chunk_page_table", False))
+        if not force_chunk_pt:
+            # GEMMA4_PREFILL_PAD_BUCKETS: the single-chunk call at Gemma 4's bucket (the chunk walk's chunks are
+            # whole buckets and keep the chunk's key)
+            args, kwargs = self._g4_trim_trace_prefill_call(args, kwargs)
         if not kwargs.get("num_cached_tokens") and kwargs.get("full_page_table") is not None and not force_chunk_pt:
             kwargs["full_page_table"] = None
         # Defer lm_head outside the trace: capture returns post-norm hidden
@@ -1459,6 +1516,10 @@ class ChunkedPrefillPageTableGuardMixin:
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
+        # GEMMA4_PREFILL_PAD_BUCKETS: the shared loop padded ``tokens`` to its bucket (1024 for 129..1024 rows);
+        # the call runs at Gemma 4's own bucket from here on (the page-table trim, the sliding-tail generation's
+        # expected continuation offset and the multimodal embedding suffix all follow ``tokens.shape[-1]``).
+        tokens = self._g4_trim_prefill_tokens(tokens, kwargs, num_cached_tokens)
         # vLLM multimodal: the shared per-user loop hands every user its ``pixel_values``
         # entry; the bridge stages the user's host-merged prompt embeddings there
         # (``_stage_multimodal_prefill``) and text users carry None.
@@ -2251,10 +2312,10 @@ class ChunkedPrefillPageTableGuardMixin:
         the persistent inputs precedes the capture (no program may load inside it). The capture is an allocation
         event for the decode-trace guard. Returns True when the bucket is (now) captured."""
         from models.demos.gemma4.tt.lane_prefill import (
-            TRACE_SEQ_LENS,
             lane_kv_pool_blocks,
             lane_lmhead_in_trace_enabled,
             lane_trace_capture_width,
+            lane_trace_seq_lens,
             lane_unique_block_rows,
         )
         from models.tt_transformers.tt.common import copy_host_to_device
@@ -2271,7 +2332,7 @@ class ChunkedPrefillPageTableGuardMixin:
         lanes = int(mesh_cfg.lanes)
         lane_slots = int(getattr(model, "lane_slots", 0) or 32)
         max_chunk = int(self.model_args[0].max_prefill_chunk_size)
-        if S not in TRACE_SEQ_LENS or k < 1 or k > lane_slots or k * S > max_chunk:
+        if S not in lane_trace_seq_lens() or k < 1 or k > lane_slots or k * S > max_chunk:
             raise ValueError(f"lane prefill trace bucket {k}x{S} outside the chunk {max_chunk} / slots {lane_slots}")
         model_kv = kv_cache[0] if isinstance(kv_cache, (list, tuple)) else kv_cache
         block_size = self._effective_paged_block_size(model_kv)
@@ -3855,7 +3916,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             num_cached_per_user = align_num_cached_tokens_to_sdpa(num_cached_per_user)
             start_pos = num_cached_per_user
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
+            gemma4_padded_prefill_len(seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
         ]
         is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
@@ -4240,7 +4301,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             )
         prompt_len = int(tokens.shape[1])
         last_token_idx = (prompt_lens[0] if prompt_lens is not None else prompt_len) - 1
-        prefill_seq_len = get_padded_prefill_len(prompt_len)
+        prefill_seq_len = gemma4_padded_prefill_len(prompt_len)
 
         # 1. Vision -> valid projected soft tokens on device: [num_valid, text_hidden].
         _vision_t0 = time.perf_counter()

@@ -21,6 +21,15 @@ DEFAULT_BUCKETS = "1x128"
 TRACE_SEQ_LENS = (128, 512, 1024, 2048, 4096)
 
 
+def lane_trace_seq_lens():
+    """The padded lengths a lane frame may be captured at: ``TRACE_SEQ_LENS`` plus the buckets
+    ``GEMMA4_PREFILL_PAD_BUCKETS`` adds to Gemma 4's padding policy (``warmup_isls``): a 1x256 frame is only ever
+    matched when the router pads a 129..256-token prompt to 256, so without the knob it is not admitted."""
+    from models.demos.gemma4.tt.warmup_isls import prefill_pad_buckets  # a leaf like this one (torch, no ttnn)
+
+    return tuple(sorted(set(TRACE_SEQ_LENS) | set(prefill_pad_buckets())))
+
+
 def lane_prefill_trace_enabled():
     """GEMMA4_LANE_PREFILL_TRACE=1 (opt-in until the Galaxy window validates it): capture the lane-frame buckets at
     boot and replay them; off, every lane-frame call is eager."""
@@ -44,12 +53,14 @@ def bounded_sliding_trace_max(short_max=None):
 
 def parse_lane_prefill_trace_buckets(raw, *, max_chunk, lane_slots, bounded_sliding, short_max=None):
     """``{(k, S), ...}`` from ``"1x128,2x128"``: k rounds per column times the padded length S. A bucket needs
-    ``k * S`` within the prefill chunk, ``k`` within the lane's slots, ``S`` a trace ISL, and under bounded sliding
+    ``k * S`` within the prefill chunk, ``k`` within the lane's slots, ``S`` a trace ISL (``lane_trace_seq_lens``:
+    the pad buckets of GEMMA4_PREFILL_PAD_BUCKETS included), and under bounded sliding
     ``k == 1`` (the kernel-capped ring fill carries ONE valid length per device: a round's single prompt length) and
     ``S`` within ``bounded_sliding_trace_max`` (a longer frame records the sliding-tail stash's host write inside
     the capture). Malformed or out-of-range entries are dropped (returned separately for the log)."""
     buckets, dropped = set(), []
     s_max = bounded_sliding_trace_max(short_max) if bounded_sliding else None
+    seq_lens = lane_trace_seq_lens()
     for token in str(raw or "").split(","):
         token = token.strip().lower()
         if not token:
@@ -62,7 +73,7 @@ def parse_lane_prefill_trace_buckets(raw, *, max_chunk, lane_slots, bounded_slid
         ok = (
             k >= 1
             and k <= int(lane_slots)
-            and s in TRACE_SEQ_LENS
+            and s in seq_lens
             and k * s <= int(max_chunk)
             and (k == 1 or not bounded_sliding)
             and (s_max is None or s <= s_max)

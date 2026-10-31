@@ -85,8 +85,8 @@ from models.demos.gemma4.tt.vision.embedders import (
 )
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.gemma4.tt.vision.vision_tower import VisionTower
+from models.demos.gemma4.tt.warmup_isls import gemma4_padded_prefill_len
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, create_submeshes
 from models.tt_transformers.tt.generator_vllm import (
     HybridAttentionForCausalLM,
@@ -118,7 +118,8 @@ def _vllm_force_full_isl_single_chunk() -> bool:
 def _full_isl_prefill_chunk_size(max_seq_len: int) -> int:
     """Largest full-ISL single-chunk size that fits ``max_model_len``.
 
-    Prefill pads to the next power-of-2 bucket (``get_padded_prefill_len``).
+    Prefill pads to the next power-of-2 bucket (``get_padded_prefill_len``; the finer
+    ``GEMMA4_PREFILL_PAD_BUCKETS`` buckets stay within 1024 and do not change this).
     For non-pow2 pools (e.g. QB2 31B ``max_context=49152``) the largest valid
     single-chunk length is the floor power-of-2 (32768) — not 49152 (pads to
     65536 > pool) and not ceil-pow2 65536.
@@ -1524,7 +1525,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 kwargs["start_pos"] = num_cached_per_user
                 start_pos = num_cached_per_user
             prefill_seq_lens = [
-                get_padded_prefill_len(seq_len - num_cached)
+                gemma4_padded_prefill_len(seq_len - num_cached)
                 for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
             ]
             page_table = kwargs.get("page_table")
@@ -2181,7 +2182,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             prompt_lens_list = prompt_lens_list.tolist()
         num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens_list)
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
+            gemma4_padded_prefill_len(seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
         ]
         page_table = kwargs.get("page_table")
@@ -2350,7 +2351,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # The group walk gets raw-width tokens (the serial path pads inside prepare);
         # pad here or the sliding fill hands SDPA a sub-tile V.
         S = int(tokens.shape[-1])
-        S_pad = int(get_padded_prefill_len(S))
+        S_pad = int(gemma4_padded_prefill_len(S))
         # The lane-frame traces captured at boot ((k, S) buckets): a call whose rounds x padded length match one
         # replays it; with a one-round bucket at this length a single prompt (B < lanes) routes through the frame
         # as one real lane plus scratch lanes instead of the owner-lane eager path (the served c1 row).
@@ -2779,7 +2780,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         )
         if prompt_lens_list is not None:
             prefill_seq_lens_plan = [
-                get_padded_prefill_len(int(seq_len) - num_cached)
+                gemma4_padded_prefill_len(int(seq_len) - num_cached)
                 for seq_len, num_cached in zip(prompt_lens_list, num_cached_for_plan)
             ]
             padded_lens_equal = len(set(prefill_seq_lens_plan)) == 1
@@ -2880,9 +2881,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         elif prefill_seq_lens_plan is not None:
             prefill_seq_lens = prefill_seq_lens_plan
         elif seq_len is not None:
-            prefill_seq_lens = [get_padded_prefill_len(seq_len)]
+            prefill_seq_lens = [gemma4_padded_prefill_len(seq_len)]
         elif tokens is not None:
-            prefill_seq_lens = [get_padded_prefill_len(int(tokens.shape[1]))]
+            prefill_seq_lens = [gemma4_padded_prefill_len(int(tokens.shape[1]))]
         else:
             prefill_seq_lens = [128]
         can_batch = will_batch

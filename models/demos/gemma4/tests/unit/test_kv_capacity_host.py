@@ -34,6 +34,7 @@ from models.demos.gemma4.tt.capacity import (
 )
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Generator
+from models.demos.gemma4.tt.warmup_isls import PREFILL_PAD_BUCKETS_ENV
 
 try:
     import vllm  # noqa: F401
@@ -724,3 +725,40 @@ def test_unbounded_last_chunk_is_noop():
     )
     assert start == 100352
     assert last_idx == 440
+
+
+# ===== GEMMA4_PREFILL_PAD_BUCKETS x the bounded ring: the finer bucket's page table never drops below the window
+def _padded_prefill_generator(calls, *, window=None):
+    """A bare mixin with a 64-token-block layer-0 pool and, with ``window``, a bounded sliding layer; its eager
+    single-user prefill records the token width and page-table columns it is handed."""
+    generator = object.__new__(ChunkedPrefillPageTableGuardMixin)
+    layers = [SimpleNamespace(self_attn=None)]
+    if window:
+        config = SimpleNamespace(cache_position_modulo=window)
+        layers.append(SimpleNamespace(self_attn=SimpleNamespace(config=config)))
+    generator.model = [
+        SimpleNamespace(
+            mesh_config=None, layers=layers, hidden_size_per_layer_input=0, bounded_sliding_kv_cache=bool(window)
+        )
+    ]
+    generator.model_args = [SimpleNamespace(max_prefill_chunk_size=4096)]
+    generator._prefill_forward_single_user_text_eager = (
+        lambda tokens, page_table=None, **kw: calls.append((tuple(tokens.shape), tuple(page_table.shape))) or "logits"
+    )
+    return generator
+
+
+@pytest.mark.parametrize("window, cols", [(None, 4), (1024, 16)])
+def test_the_finer_bucket_trims_its_page_table_but_never_below_the_bounded_window(monkeypatch, window, cols):
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, "256,512,1024")
+    calls = []
+    generator = _padded_prefill_generator(calls, window=window)
+    kv_cache = [[SimpleNamespace(shape=(64, 8, 64, 256))], None]  # layer 0's K pool: 64-token blocks
+    tokens = torch.zeros(1, 1024, dtype=torch.long)  # the shared loop's 1024-token call for a 143-token prompt
+    tokens[0, :143] = 1
+    page_table = torch.arange(1, 33, dtype=torch.int32).reshape(1, 32)
+    generator.prefill_forward_single_user_text(
+        tokens, page_table, kv_cache=kv_cache, last_token_idx=142, model_id=0, user_id=0
+    )
+    assert calls == [((1, 256), (1, cols))], "4 blocks of 64 for the 256 bucket; the ring's 16 under bounded"
+    assert generator._g4_slot_tail_gen[0] == (1, 256), "the next chunk is expected at the bucket, not at 1024"

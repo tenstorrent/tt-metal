@@ -11,11 +11,12 @@ from loguru import logger
 
 from models.demos.gemma4.tt.warmup_isls import (
     continuation_tails,
+    gemma4_padded_prefill_len,
+    prefill_pad_buckets,
     run_prefill_ladder,
     run_prefix_continuation_warmup,
     warmup_prefill_isls,
 )
-from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -25,7 +26,8 @@ from models.tt_transformers.tt.generator import (
 
 # GEMMA4_TRACE_SHORT_PREFILL=1 (opt-in): under bounded sliding keep the prefill device trace for the short
 # single-user buckets (padded kernel length <= GEMMA4_TRACE_SHORT_PREFILL_MAX, default 128: prompts of at most 128
-# tokens; longer prompts pad to the 1024 bucket, get_padded_prefill_len). The 128-token TTFT of the
+# tokens; longer prompts pad to the 1024 bucket, get_padded_prefill_len, or to the finer buckets of
+# GEMMA4_PREFILL_PAD_BUCKETS, gemma4_padded_prefill_len). The 128-token TTFT of the
 # 26B-A4B on the 4-chip line is a per-layer launch floor (160-187 ms eager vs the 86 ms target, 2026-10-23), and
 # the served QB2 entry runs bounded sliding (hybrid KV groups), which disables every prefill trace. The opt-in
 # captures only the short buckets at warmup (the sweep's trace ISL list is cut at the cap) and replays them at
@@ -65,7 +67,7 @@ def trace_short_prefill_opt_in(prefill_seq_len=None, batch_size: int = 1, mesh_s
         return False
     if prefill_seq_len is None:
         return True
-    return int(get_padded_prefill_len(int(prefill_seq_len))) <= trace_short_prefill_max()
+    return int(gemma4_padded_prefill_len(int(prefill_seq_len))) <= trace_short_prefill_max()
 
 
 def short_prefill_stash_skipped(seq_len, batch_size, *, bounded: bool, trace_mode: bool) -> bool:
@@ -216,9 +218,12 @@ _DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
 
 
 def _resolve_trace_prefill_seq_lens() -> list[int]:
+    """The default list, plus the buckets ``GEMMA4_PREFILL_PAD_BUCKETS`` adds to the padding policy (each a trace
+    shape of its own: captured at boot by the warmup sweep and eligible at runtime, like the stock buckets); an
+    explicit ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` is taken as given."""
     override = os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS")
     if override is None:
-        return list(_DEFAULT_TRACE_PREFILL_SEQ_LENS)
+        return sorted(set(_DEFAULT_TRACE_PREFILL_SEQ_LENS) | set(prefill_pad_buckets()))
     return [int(x) for x in override.split(",") if x.strip()]
 
 
@@ -1325,7 +1330,7 @@ def _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, *, prefill_forward_fn
         # The shapes a prefix-cache hit (or a scheduler chunk past the first) prefills: every padded tail length
         # past cached tokens, eager, compiled here and not on a request. The chunk-long tail is the ladder's own
         # second chunk when an ISL above the chunk ran.
-        tails = continuation_tails(chunk, get_padded_prefill_len, skip_chunk=any(int(isl) > chunk for isl in warmed))
+        tails = continuation_tails(chunk, gemma4_padded_prefill_len, skip_chunk=any(int(isl) > chunk for isl in warmed))
         run_prefix_continuation_warmup(generator, kv_cache, prefill_forward, chunk=chunk, tails=tails)
 
 

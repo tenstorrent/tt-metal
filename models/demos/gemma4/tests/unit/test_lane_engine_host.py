@@ -15,6 +15,7 @@ import torch
 
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.lane_prefill import (
+    TRACE_SEQ_LENS,
     check_lane_decode_frame,
     fit_table_width,
     lane_decode_frame_shapes,
@@ -22,8 +23,10 @@ from models.demos.gemma4.tt.lane_prefill import (
     lane_prefill_trace_buckets,
     lane_prefill_trace_choice,
     lane_trace_rounds_for_call,
+    lane_trace_seq_lens,
     parse_lane_prefill_trace_buckets,
 )
+from models.demos.gemma4.tt.warmup_isls import PREFILL_PAD_BUCKETS_ENV
 from models.tt_transformers.tt.common import get_padded_prefill_len
 
 try:
@@ -1188,3 +1191,41 @@ def test_the_record_table_is_the_lane_frame_of_the_global_rows():
         lane_record_table(full, 2, rows, REC_LANES, REC_SLOTS)
     with expect_error_value("row 31 is outside the 20-row page table"):
         lane_record_table(full[:20], 5, [0, 31], REC_LANES, REC_SLOTS)
+
+
+# ===== GEMMA4_PREFILL_PAD_BUCKETS on the lane engine: the router pads to Gemma 4's bucket and the frames admit it
+def test_the_pad_knob_admits_its_buckets_as_frame_lengths(monkeypatch):
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV, raising=False)
+    assert lane_trace_seq_lens() == TRACE_SEQ_LENS
+    kept, dropped = parse_lane_prefill_trace_buckets(
+        "1x256,4x256,1x128", max_chunk=4096, lane_slots=32, bounded_sliding=False
+    )
+    assert kept == {(1, 128)} and dropped == ["1x256", "4x256"], "no router pads to 256 without the knob"
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, "256,512,1024")
+    assert lane_trace_seq_lens() == (128, 256, 512, 1024, 2048, 4096)
+    kept, dropped = parse_lane_prefill_trace_buckets(
+        "1x256,4x256,1x128", max_chunk=4096, lane_slots=32, bounded_sliding=False
+    )
+    assert kept == {(1, 128), (1, 256), (4, 256)} and dropped == []
+
+
+@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
+def test_router_pads_to_the_knobs_bucket_and_replays_its_frame(monkeypatch):
+    monkeypatch.setenv(PREFILL_PAD_BUCKETS_ENV, "256,512,1024")
+    inst, calls = _bridge_lane_prefill_trace_host(monkeypatch, prompts=1, captured={(1, 128), (1, 256)})
+    kwargs, tables = _step_lane_prefill_trace_host([33], [200], seq=200)  # 200 tokens: 256 under the knob, else 1024
+    out = inst._try_lane_parallel_prefill(kwargs, tables)
+    assert out is not None and calls["serial"] == [] and calls["eager"] == []
+    bucket, toks, _pts, _per_layer, plens = calls["replays"][-1]
+    assert bucket == (1, 256) and toks == (LANES_lane_prefill_trace_host, 1, 256)
+    assert plens == [200] * LANES_lane_prefill_trace_host
+    # a full round of 300-token prompts with no frame at 512: the eager walk at the knob's bucket
+    kwargs, tables = _step_lane_prefill_trace_host([0, 32, 64, 96], [300] * 4, seq=300)
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is not None
+    assert calls["eager"][-1][0] == (LANES_lane_prefill_trace_host, 512)
+    # without the knob the same prompt pads to the shared 1024 bucket, which has no frame: the serial path
+    monkeypatch.delenv(PREFILL_PAD_BUCKETS_ENV)
+    inst, calls = _bridge_lane_prefill_trace_host(monkeypatch, prompts=1, captured={(1, 128), (1, 256)})
+    kwargs, tables = _step_lane_prefill_trace_host([33], [200], seq=200)
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is None
+    assert calls["replays"] == [] and calls["eager"] == []
