@@ -545,8 +545,8 @@ CORE_CAP = ({}, ["--grid-size", SWEEP_GRID])
 
 
 def with_fallbacks(step: Step, fallbacks: list[tuple[dict[str, str], list[str]]]) -> Step:
-    """A failed or hung ND run tries each fallback in order, each after its own reset, until one passes. THROTTLE
-    throttles matmul compute to 33%. The row keeps the first result; each fallback is a sub-row."""
+    """A failed or hung ND run runs every fallback in order, each after its own reset, so each factor gets its own
+    result. THROTTLE throttles matmul compute to 33%. The row keeps the first result; each fallback is a sub-row."""
 
     def run(ctx: Ctx, state: State) -> Result:
         r = step.run(ctx, state)
@@ -560,8 +560,6 @@ def with_fallbacks(step: Step, fallbacks: list[tuple[dict[str, str], list[str]]]
             except Exception as e:
                 f.result = Result(Status.FAIL, f"{type(e).__name__}: {e}")
             f.end = time.time()
-            if f.result.status == Status.PASS:
-                break
         return r
 
     return Step(step.key, step.title, step.group, step.model, step.blocking, run, step.collect)
