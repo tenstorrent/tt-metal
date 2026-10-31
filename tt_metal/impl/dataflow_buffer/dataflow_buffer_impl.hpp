@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <span>
 #include <vector>
@@ -100,6 +101,12 @@ struct DataflowBufferImpl {
     uint32_t borrowed_addr_ = 0;
     // Byte offset of a borrowed-memory DFB within its backing buffer (DFBAdvancedOptions::borrowed_offset).
     uint32_t borrowed_offset_ = 0;
+    // Set by set_borrowed_memory_addrs() for a DFB borrowed from a per-core allocated buffer: each core's own
+    // address. Empty otherwise, and then borrowed_addr_ applies to every core. borrowed_addr_ still holds the
+    // buffer's reference address plus the offset, which op-to-op R/W inference keys on.
+    std::unordered_map<CoreCoord, uint32_t> borrowed_addr_by_core_;
+    // The DataflowBufferSpec's name, for error messages (empty for DFBs not created from a ProgramSpec).
+    std::string spec_name_;
 
     // Bumped whenever a size or address that the serialized config depends on changes, so cached
     // dispatch commands re-serialize only DFBs that changed.
@@ -117,9 +124,10 @@ struct DataflowBufferImpl {
 
     void set_borrowed_memory_base_addr(uint32_t new_addr) {
         TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);
-        if (new_addr != borrowed_addr_) {
+        if (new_addr != borrowed_addr_ || !borrowed_addr_by_core_.empty()) {
             ++config_generation_;
         }
+        borrowed_addr_by_core_.clear();
         borrowed_addr_ = new_addr;
         // If allocate_dataflow_buffers() has already run, update the live tables so that
         // a subsequent run picks up the new address.
@@ -131,6 +139,37 @@ struct DataflowBufferImpl {
         for (auto& [core, pair] : core_lookup_) {
             pair.second = new_addr;
         }
+    }
+
+    // Places a DFB borrowed from a per-core allocated buffer at each core's own address (addr_by_core covers every
+    // core of the DFB). reference_addr is the buffer's reference address plus the offset.
+    void set_borrowed_memory_addrs(uint32_t reference_addr, std::unordered_map<CoreCoord, uint32_t> addr_by_core) {
+        TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);
+        if (reference_addr != borrowed_addr_ || addr_by_core != borrowed_addr_by_core_) {
+            ++config_generation_;
+        }
+        borrowed_addr_ = reference_addr;
+        borrowed_addr_by_core_ = std::move(addr_by_core);
+        // If allocate_dataflow_buffers() has already run, update the live tables (as set_borrowed_memory_base_addr).
+        for (auto& group : groups) {
+            for (auto& [core, addr] : group.l1_by_core) {
+                addr = borrowed_addr_by_core_.at(core);
+            }
+        }
+        for (auto& [core, pair] : core_lookup_) {
+            pair.second = borrowed_addr_by_core_.at(core);
+        }
+    }
+
+    // True when the DFB's cores do not all share one L1 address (a DFB borrowed from a per-core allocated buffer
+    // whose cores got different addresses). Fast dispatch writes one DFB config per core range, so it cannot.
+    bool has_per_core_addresses() const {
+        for (const auto& [core, addr] : borrowed_addr_by_core_) {
+            if (addr != borrowed_addr_by_core_.begin()->second) {
+                return true;
+            }
+        }
+        return false;
     }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
@@ -179,6 +218,10 @@ uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowB
 
 std::vector<uint8_t> serialize_dm1_remapper_core_blob(
     const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Fast dispatch writes one DFB config per core range, from a representative core. Fails, naming the DFB, if a DFB
+// in dataflow_buffers has different addresses on different cores (borrowed from a per-core allocated buffer).
+void check_dfbs_share_one_address(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dataflow_buffers);
 
 // Packs the architecture-specific per-core DFB config into caller-owned storage.
 // WH/BH uses a sparse, device-slot-indexed format table; Quasar uses

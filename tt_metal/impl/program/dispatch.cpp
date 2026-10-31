@@ -1469,6 +1469,7 @@ public:
             // All cores in a DFB's range have the same alloc_addr, so any core works.
             const CoreCoord logical_representative = core_range.start_coord;
 
+            tt::tt_metal::experimental::dfb::detail::check_dfbs_share_one_address(dfbs_on_corerange);
             const size_t max_byte_end = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
                 logical_representative, dfbs_on_corerange, payload);
             TT_ASSERT(max_byte_end <= payload.size());
@@ -2832,6 +2833,7 @@ void update_program_dispatch_commands(
         if (update.last_config_generation == dfb_config_generation) {
             continue;
         }
+        tt::tt_metal::experimental::dfb::detail::check_dfbs_share_one_address(update.dataflow_buffers);
         dfb_config_payload.assign(
             program.get_program_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)).dfb_size,
             uint8_t{0});
@@ -3304,6 +3306,7 @@ TraceNode create_trace_node(
     all_dfb_configs_payloads.reserve(cached_program_command_sequence.dfb_config_updates.size());
     for (const ProgramCommandSequence::DataflowBufferConfigUpdate& update :
          cached_program_command_sequence.dfb_config_updates) {
+        tt::tt_metal::experimental::dfb::detail::check_dfbs_share_one_address(update.dataflow_buffers);
         std::vector<uint8_t> dfb_config_payload(dfb_size, 0);
         const size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
             update.logical_core, update.dataflow_buffers, dfb_config_payload);

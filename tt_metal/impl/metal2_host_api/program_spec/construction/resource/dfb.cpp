@@ -267,6 +267,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
         // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl.add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl.register_dfb_spec_name(dfb_name.get(), dfb_id);
+        program_impl.get_dataflow_buffer(dfb_id)->spec_name_ = dfb_name.get();
         dfb_name_to_id[dfb_name] = dfb_id;
         const auto& created_config = program_impl.get_dataflow_buffer(dfb_id)->config;
         dfb_name_to_slot[dfb_name] = program_impl.get_dataflow_buffer(dfb_id)->device_slot;

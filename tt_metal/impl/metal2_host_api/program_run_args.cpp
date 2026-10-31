@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
+#include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/tensor_binding_crtas.hpp"
@@ -677,7 +678,45 @@ void AttachBorrowedDFBBuffers(
             address,
             dfb_id,
             tp_name);
-        dfb_impl->set_borrowed_memory_base_addr(static_cast<uint32_t>(address));
+        if (!per_core_allocation::is_per_core_allocation(*buffer)) {
+            dfb_impl->set_borrowed_memory_base_addr(static_cast<uint32_t>(address));
+            continue;
+        }
+
+        // A per-core allocated buffer has its shard at a different address on each core: place the DFB at
+        // borrowed_offset from each of its cores' own shard.
+        std::unordered_map<CoreCoord, uint32_t> address_by_core;
+        bool uniform = true;
+        for (const CoreRange& core_range : dfb_impl->core_ranges.ranges()) {
+            for (const CoreCoord& core : core_range) {
+                const auto& per_core_addresses = per_core_allocation::get_per_core_addresses(*buffer);
+                TT_FATAL(
+                    per_core_addresses.contains(core),
+                    "DFB '{}' runs on core {}, where its per-core allocated TensorParameter '{}' has no shard.",
+                    dfb_impl->spec_name_,
+                    core.str(),
+                    tp_name);
+                const auto core_address = per_core_addresses.at(core) + offset;
+                TT_FATAL(
+                    core_address <= std::numeric_limits<uint32_t>::max(),
+                    "Borrowed Buffer address {} on core {} for DFB '{}' (TensorParameter '{}') exceeds uint32_t max.",
+                    core_address,
+                    core.str(),
+                    dfb_impl->spec_name_,
+                    tp_name);
+                address_by_core.emplace(core, static_cast<uint32_t>(core_address));
+                uniform = uniform && address_by_core.at(core) == address_by_core.begin()->second;
+            }
+        }
+        // Fast dispatch writes one DFB config per core range, so it cannot give each core its own address.
+        TT_FATAL(
+            uniform || !MetalContext::instance(dfb_impl->get_context_id()).rtoptions().get_fast_dispatch(),
+            "DFB '{}' borrows from the per-core allocated TensorParameter '{}', whose shards sit at different "
+            "addresses on its cores. Per-core borrowed DFBs are supported only with slow dispatch "
+            "(TT_METAL_SLOW_DISPATCH_MODE=1) for now.",
+            dfb_impl->spec_name_,
+            tp_name);
+        dfb_impl->set_borrowed_memory_addrs(static_cast<uint32_t>(address), std::move(address_by_core));
     }
 }
 

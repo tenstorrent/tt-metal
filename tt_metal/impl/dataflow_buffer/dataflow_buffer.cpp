@@ -576,6 +576,17 @@ static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& df
     check_side(/*is_producer=*/false);
 }
 
+void check_dfbs_share_one_address(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dataflow_buffers) {
+    for (const auto& dfb : dataflow_buffers) {
+        TT_FATAL(
+            !dfb->has_per_core_addresses(),
+            "DFB '{}' (id {}) has a different address on each core (borrowed from a per-core allocated tensor), "
+            "which fast dispatch does not support; use slow dispatch (TT_METAL_SLOW_DISPATCH_MODE=1).",
+            dfb->spec_name_,
+            dfb->id);
+    }
+}
+
 size_t serialize_dfb_config_for_core(
     const CoreCoord& core,
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
@@ -2996,6 +3007,35 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         // Alias secondaries share the primary's L1 address; skip allocation here
         // and propagate the address inline after the primary is processed below.
         if (dfb->alias_primary_id.has_value()) {
+            continue;
+        }
+
+        // A DFB borrowed from a per-core allocated buffer: every core at the address set_borrowed_memory_addrs()
+        // latched for it, and its alias secondaries (which borrow from the same buffer at the same offset) too.
+        if (dfb->borrows_memory() && !dfb->borrowed_addr_by_core_.empty()) {
+            auto place_per_core = [&dfb](experimental::dfb::detail::DataflowBufferImpl& target) {
+                bool changed = target.core_lookup_.size() != dfb->borrowed_addr_by_core_.size();
+                for (size_t gi = 0; gi < target.groups.size(); gi++) {
+                    for (auto& [core, addr] : target.groups[gi].l1_by_core) {
+                        addr = dfb->borrowed_addr_by_core_.at(core);
+                        auto it = target.core_lookup_.find(core);
+                        changed = changed || it == target.core_lookup_.end() || it->second.second != addr;
+                    }
+                }
+                target.core_lookup_.clear();
+                for (size_t gi = 0; gi < target.groups.size(); gi++) {
+                    for (const auto& [core, addr] : target.groups[gi].l1_by_core) {
+                        target.core_lookup_.emplace(core, std::make_pair(gi, addr));
+                    }
+                }
+                if (changed) {
+                    ++target.config_generation_;
+                }
+            };
+            place_per_core(*dfb);
+            for (uint32_t sec_id : dfb->alias_secondary_ids) {
+                place_per_core(*this->dataflow_buffers_[sec_id]);
+            }
             continue;
         }
 

@@ -12,7 +12,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
@@ -27,7 +26,8 @@ namespace {
 // backing MeshTensor flows through ProgramRunArgs::tensor_args at execution time.
 // We enforce only the safety-relevant checks:
 //  - the named parameter exists
-//  - the TensorSpec places storage in L1, with one address on every node (not per-node allocated),
+//  - the TensorSpec places storage in L1 (a per-node allocated tensor places the DFB at borrowed_offset from
+//    each node's own shard),
 //  - the spec is large enough
 // We don't validate any layout considerations (interleaved vs sharded, page / tile sizes, etc.)
 // That's on the user; this is an advanced feature.
@@ -65,12 +65,6 @@ void ValidateBorrowedMemory(
         tensor_spec.memory_config().is_l1(),
         "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 is "
         "required). Both L1 and L1_SMALL are accepted.",
-        dfb.unique_id,
-        tp_name);
-    TT_FATAL(
-        !per_core_allocation::is_per_core_allocation(tensor_spec.memory_config()),
-        "DFB '{}' borrows memory from TensorParameter '{}', which is per-node allocated. A borrowed-memory DFB "
-        "needs the backing tensor at the same address on every node.",
         dfb.unique_id,
         tp_name);
     // Spec-time sizing check. A borrowed DFB lives in ONE core's slice of the backing buffer,
