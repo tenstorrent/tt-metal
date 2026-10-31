@@ -151,6 +151,7 @@ DB_SCHEMA = [
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
+    Column("ring_depth", "int64", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
     Column("ternary_scalar_bits", "int64", True, "configuration"),
     Column("throttle_level", "int64", True, "configuration"),
