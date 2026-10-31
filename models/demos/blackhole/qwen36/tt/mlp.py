@@ -160,6 +160,26 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
     )
 
 
+def _down_decode_progcfg(n):
+    """Single-chip decode down_proj (M=1): 1D mcast on 11x10 with in0_block_w=4.
+
+    ttnn's auto config picks in0_block_w=2 at K=17408, which stalls at about 53% of DRAM peak;
+    in0_block_w=4 reaches about 74% with the same output.
+    """
+    per_core_n = -(-n // (ttnn.TILE_SIZE * 110))
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(11, 10),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=max(i for i in range(1, 5) if per_core_n % i == 0),
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 class Qwen36MLP:
     """SwiGLU feed-forward network for Qwen3.5."""
 
@@ -217,6 +237,8 @@ class Qwen36MLP:
             and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
+        elif T <= 1 and os.environ.get("QWEN36_1C_DOWN_PCFG") == "1":
+            down_pc = _down_decode_progcfg(w.w2.shape[-1])
         output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output

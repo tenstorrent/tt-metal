@@ -7,7 +7,7 @@ Teacher forcing from position 0 is a causal forward pass, so this scores the pos
 (the second half of the reference) without the prefill path, which fails on a p300c at c75e2d5 for both GDN
 modules (the default one: L1 clash in gated_delta_attn_seq at the 2048 bucket; TP=1: prefill sized for TP=4).
     HF_MODEL=<dense HF dir> pytest models/demos/blackhole/bonsai2/tp1/test_decode_e2e.py -s
-Flags under test: QWEN36_TP1_GDN=1, QWEN36_1C_SHARDED_NORM=1, QWEN36_1C_UNPAD_LOGITS=1. DECODE_E2E_RESULTS=<path.json>
+Flags under test: QWEN36_TP1_GDN=1, QWEN36_1C_SHARDED_NORM=1, QWEN36_1C_UNPAD_LOGITS=1, QWEN36_1C_DOWN_PCFG=1. DECODE_E2E_RESULTS=<path.json>
 writes the numbers.
 """
 import json
@@ -80,7 +80,8 @@ def test_decode_e2e(mesh_device):
 
     results = {
         "flags": {
-            k: os.environ.get(k, "0") for k in ("QWEN36_TP1_GDN", "QWEN36_1C_SHARDED_NORM", "QWEN36_1C_UNPAD_LOGITS")
+            k: os.environ.get(k, "0")
+            for k in ("QWEN36_TP1_GDN", "QWEN36_1C_SHARDED_NORM", "QWEN36_1C_UNPAD_LOGITS", "QWEN36_1C_DOWN_PCFG")
         },
         "top1_top5_second_half": acc(scored),
         "top1_top5_all": acc(range(n)),
