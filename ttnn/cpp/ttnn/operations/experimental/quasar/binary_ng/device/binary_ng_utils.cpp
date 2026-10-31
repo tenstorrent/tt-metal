@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <limits>
 #include <numeric>
 #include <string_view>
 
@@ -885,6 +886,10 @@ uint32_t native_compute_threads(const NativeTuning& tuning) {
     return tuning.compute_threads.env.value_or(kRuleComputeThreads);
 }
 
+uint32_t native_slice_tail_min(const NativeTuning& tuning, bool sfpu) {
+    return tuning.slice_tail_min.env.value_or(sfpu ? std::numeric_limits<uint32_t>::max() : kNativeSliceTailMinTiles);
+}
+
 uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit) {
     // The factory's compute config runs half sync, the default, so a section is half of the DST.
     return ttnn::get_dest_reg_count(ttnn::ComputeKernelConfig{.fp32_dest_acc_en = dst_32bit}) / (sfpu ? 2u : 1u);
@@ -895,7 +900,8 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
     // thread per compute thread, within the 6 user DM cores that the readers leave. A borrowed operand moves
     // nothing, so its reader or writer runs one thread. The DM batch is 8 tiles per barrier, and the compute
     // batch is as many tiles as a DST section holds: 4 on the SFPU kernel in a 16-bit DST and 2 in a 32-bit DST, and
-    // 8 on the FPU kernel at R = C = W = 1 only. Beside a DRAM operand both follow the compute thread's share (below).
+    // 8 on the FPU kernel at R = C = W = 1. Otherwise the FPU kernel's batch, and beside DRAM both batches, are the
+    // share batch (below).
     constexpr uint32_t kRuleDmBatch = 8;
     NativeConfig config;
     config.compute_threads = native_compute_threads(tuning);
@@ -912,19 +918,18 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
     const bool one_counter_per_compute_thread =
         config.reader_threads <= config.compute_threads && config.writer_threads <= config.compute_threads;
     const uint32_t max_tiles_per_cycle = native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit);
-    // Beside DRAM, both batches follow the compute thread's share once it draws 4 tiles (smaller shares measured
-    // slower), capped by a DST section. The share is 0 where an operand is sharded or borrowed, so those stay at 1.
-    constexpr uint32_t kMinBatchedShare = 4;
-    const bool share_batches = tuning.dram_batch && moves.batch_pays &&
-                               moves.tiles_per_compute_thread >= kMinBatchedShare && one_counter_per_compute_thread;
-    const uint32_t dram_batch =
+    // The share batch: bit_floor(share), capped by a DST section, from a share of 4 beside DRAM and 2 in L1 (smaller
+    // shares measured slower). The share is 0 where it does not apply.
+    const uint32_t min_batched_share = moves.dram ? 4u : 2u;
+    const bool share_batches = (tuning.dram_batch || !moves.dram) && moves.batch_pays &&
+                               moves.tiles_per_compute_thread >= min_batched_share && one_counter_per_compute_thread;
+    const uint32_t share_batch =
         share_batches ? std::bit_floor(std::min(max_tiles_per_cycle, moves.tiles_per_compute_thread)) : 1u;
-    // Off DRAM the rule batches the FPU kernel only at 1,1,1 until the other thread splits are measured.
-    const bool fpu_batches = config.reader_threads == 1 && config.compute_threads == 1 && config.writer_threads == 1;
-    const uint32_t l1_compute_batch =
-        one_counter_per_compute_thread && (moves.sfpu || fpu_batches) ? max_tiles_per_cycle : 1u;
-    config.dm_batch = tuning.dm_batch.env.value_or(moves.dram ? dram_batch : kRuleDmBatch);
-    config.tiles_per_cycle = tuning.tiles_per_cycle.env.value_or(moves.dram ? dram_batch : l1_compute_batch);
+    // In L1 the SFPU kernel, and the FPU kernel at 1,1,1, batch a whole DST section whatever the share.
+    const bool single_threads = config.reader_threads == 1 && config.compute_threads == 1 && config.writer_threads == 1;
+    const bool section_batches = !moves.dram && one_counter_per_compute_thread && (moves.sfpu || single_threads);
+    config.dm_batch = tuning.dm_batch.env.value_or(moves.dram ? share_batch : kRuleDmBatch);
+    config.tiles_per_cycle = tuning.tiles_per_cycle.env.value_or(section_batches ? max_tiles_per_cycle : share_batch);
     // Two batches of either kind per thread, so a batch is double-buffered, and a multiple of each, so no batch
     // straddles the ring end: 16 at the rule's DM batch of 8, 2 at batch 1.
     const uint32_t batch_lcm = std::lcm(config.dm_batch, config.tiles_per_cycle);
@@ -979,6 +984,8 @@ const NativeTuning& native_tuning() {
         constexpr uint32_t kMaxThreads = 8;
         constexpr uint32_t kMaxBatch = 8;
         constexpr uint32_t kMaxEntriesPerThread = 255;
+        // Past any bank's tile count: the largest value keeps every uneven slice on the NoC.
+        constexpr uint32_t kMaxSliceTailMin = 1u << 20;
 
         NativeTuning t;
         t.enabled = read_switch("TTNN_QSR_NATIVE");
@@ -990,6 +997,7 @@ const NativeTuning& native_tuning() {
         read_knob(t.entries_per_thread, kMaxEntriesPerThread);
         read_knob(t.dm_batch, kMaxBatch);
         read_knob(t.tiles_per_cycle, kMaxBatch);
+        read_knob(t.slice_tail_min, kMaxSliceTailMin);
 
         // Only when enabled: with the native path off nothing reads these, so an unconditional throw
         // would have no protective value and would kill the fallback reference arm.
@@ -997,7 +1005,8 @@ const NativeTuning& native_tuning() {
             const bool any_knob_set = t.implicit_sync || t.reader_threads.env.has_value() ||
                                       t.compute_threads.env.has_value() || t.writer_threads.env.has_value() ||
                                       t.entries_per_thread.env.has_value() || t.dm_batch.env.has_value() ||
-                                      t.tiles_per_cycle.env.has_value() || !t.dram_batch;
+                                      t.tiles_per_cycle.env.has_value() || t.slice_tail_min.env.has_value() ||
+                                      !t.dram_batch;
             if (any_knob_set) {
                 log_warning(
                     tt::LogOp,
@@ -1029,8 +1038,7 @@ const NativeTuning& native_tuning() {
         // num_entries is DERIVED (entries_per_thread x the endpoint's max(producers, consumers)), so the
         // depth reaching the credit register is not this number.
         // The program shapes can differ in their threads, batches and depth, so each gives its own. A DRAM
-        // operand changes only the batches and the depth. Where every operand is interleaved they follow the
-        // program's tile count, so the DRAM part names them for the other programs and the factory logs the rest.
+        // operand changes only the batches and the depth. A batch that follows the tile count is logged per program.
         const NativeConfig noc_dram = resolve_native_config(t, {.inputs = true, .output = true, .dram = true});
         const NativeConfig output_borrowed = resolve_native_config(t, {.inputs = true, .output = false});
         const NativeConfig inputs_borrowed = resolve_native_config(t, {.inputs = false, .output = true});
@@ -1048,8 +1056,8 @@ const NativeTuning& native_tuning() {
             "Where the inputs are borrowed and the output moves: R=1 W={} "
             "tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1 tiles_per_cycle={}. Where the SFPU kernel "
             "runs, "
-            "all in L1 over the NoC: tiles_per_cycle={} in a 16-bit DST, tiles_per_cycle={} in a 32-bit DST. Sync "
-            "is EXPLICIT.",
+            "all in L1 over the NoC: tiles_per_cycle={} in a 16-bit DST, tiles_per_cycle={} in a 32-bit DST. A program "
+            "whose batch follows the compute thread's share logs it. Sync is EXPLICIT.",
             describe_native_value(t.reader_threads, noc.reader_threads),
             describe_native_value(t.compute_threads, noc.compute_threads),
             describe_native_value(t.writer_threads, noc.writer_threads),
@@ -1068,8 +1076,10 @@ const NativeTuning& native_tuning() {
             describe_native_value(t.tiles_per_cycle, noc_sfpu_32bit.tiles_per_cycle));
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native batching beside DRAM {}.",
-            t.dram_batch ? "ON" : "OFF (TTNN_QSR_DRAM_BATCH=0)");
+            "binary_ng Quasar-native batching beside DRAM {}. Uneven L1 slices borrowed from {} tiles per bank, {}.",
+            t.dram_batch ? "ON" : "OFF (TTNN_QSR_DRAM_BATCH=0)",
+            describe_native_value(t.slice_tail_min, native_slice_tail_min(t, false)),
+            t.slice_tail_min.env.has_value() ? "on both kernels" : "on the FPU kernel only");
         return t;
     }();
     return tuning;

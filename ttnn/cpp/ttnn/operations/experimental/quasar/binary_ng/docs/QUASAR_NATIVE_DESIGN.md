@@ -465,19 +465,20 @@ NativeConfig resolve_native_config(const NativeTuning&, NativeMoves);   // set k
 | W, writer threads | min(C, 6 - R) when the output moves, else 1 | R + W <= 6; 4,4,2 takes all 6 DM cores |
 | entries_per_thread | two batches, a multiple of each: 16, or 2 at batch 1 | per-thread ring depth, see below |
 | dm_batch | 8; beside DRAM, the DRAM batch below | tiles per barrier in the reader and the writer |
-| tiles_per_cycle | 4 on the SFPU kernel (2 in a 32-bit DST) where R <= C and W <= C; 8 on the FPU kernel at R = C = W = 1 only; else 1; beside DRAM, the DRAM batch below | tiles per `tile_regs_acquire`; a 16-bit DST section holds 8 tiles, and the SFPU kernel takes two slots per tile (§3.6) |
+| tiles_per_cycle | 4 on the SFPU kernel (2 in a 32-bit DST) where R <= C and W <= C; 8 on the FPU kernel at R = C = W = 1; else the share batch below | tiles per `tile_regs_acquire`; a 16-bit DST section holds 8 tiles, and the SFPU kernel takes two slots per tile (§3.6) |
 
 R and W follow the effective C, so an override of C alone keeps R, W <= C and keeps the STRIDED ratio. A
 compute thread beside more reader or writer threads owns several tile counters of that ring, and a batch
 reads or fills one counter, not the thread's own tiles: it hangs or reorders the output. So the rule batches
 the compute only where each compute thread owns one counter of each ring, and a set batch there is refused.
-Every compute batch is exact at any ring stride (§4.3), but off DRAM the rule batches the FPU kernel only at
-1,1,1 until the other splits are measured. Every message names each value's source, for example `dm_batch=8 (rule)`
+Every compute batch is exact at any ring stride (§4.3). Every message names each value's source, for example `dm_batch=8 (rule)`
 or `entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)`.
 
-**The DRAM batch.** Where an input is in DRAM, a, b and c are interleaved and nothing is borrowed, both batches are
-the largest power of 2 up to a compute thread's share, capped by a DST section, from a share of 4 tiles; fp32 divide
-stays at 1. Elsewhere beside DRAM both are 1. `TTNN_QSR_DRAM_BATCH=0` keeps 1 everywhere. The NoC path's three rings
+**The share batch.** The largest power of 2 up to a compute thread's share of tiles, capped by a DST section.
+Beside DRAM, where an input is in DRAM, it is both batches, from a share of 4 (rounded up); fp32 divide stays at 1,
+and `TTNN_QSR_DRAM_BATCH=0` keeps 1. In L1 it is the FPU kernel's compute batch, from a share of 2 (rounded down). It
+applies to every layout: under an anchor the share is the anchor's tiles per cluster, and without one the
+split_work_to_cores share. The NoC path's three rings
 take 384 KiB of L1 per cluster with every operand in L1 (64 entries of 2 KiB each), and 48 KiB at batch 1 (8 entries
 each), against 12 KiB at the old 1,1,1 and depth 2. Nothing yet shrinks the rings when L1 buffers leave less room.
 Unset, the depth follows the batches, so a batch A/B that must hold the depth fixed sets
@@ -511,7 +512,8 @@ Env vars, one per knob: `TTNN_QSR_NATIVE` (master: on unless set to `0`), `TTNN_
 inert, and re-enabling it needs the non-empty-thread guarantee that F1 removed, since a zero-work thread
 would skip `handle_final_credits`' barrier), `TTNN_QSR_READER_THREADS`, `TTNN_QSR_COMPUTE_THREADS`,
 `TTNN_QSR_WRITER_THREADS`, `TTNN_QSR_ENTRIES_PER_THREAD`, `TTNN_QSR_DM_BATCH`, `TTNN_QSR_TILES_PER_CYCLE`,
-`TTNN_QSR_DRAM_BATCH` (on unless `0`);
+`TTNN_QSR_DRAM_BATCH` (on unless `0`), `TTNN_QSR_SLICE_TAIL_MIN` (the tiles per bank from which an uneven slice
+is borrowed, on both kernels);
 unset or empty means the rule. `select_program_factory` runs on **every** dispatch, so check arch and
 attributes before `std::getenv` and cache the parse in a trivially-destructible `static const`.
 
@@ -832,7 +834,9 @@ worker grid.
   grid to be the L1 bank cores, which is the whole grid on Quasar. An anchor must run on at least as many
   clusters as production uses for the op: the cores that hold the output's shards where production borrows the
   output, else production's split. Under the rule a borrowed ring must divide by 4; with all three operands
-  borrowed and no activation, tail rings carry the tiles past the largest multiple of 4. Among the anchors left,
+  borrowed and no activation, tail rings carry the tiles past the largest multiple of 4. A slice takes them only on
+  the FPU kernel from 96 tiles per bank (`TTNN_QSR_SLICE_TAIL_MIN`): their setup costs about 1000 cycles, which a
+  smaller slice or the SFPU kernel does not win back over the NoC path. Among the anchors left,
   the one that borrows the most operands wins; a tie goes to the one that borrows the output, then to the one on
   more clusters. Each operand that is not borrowed moves over the NoC in the anchor's tile order. Without an
   anchor, native splits the tiles as production does.
@@ -859,7 +863,7 @@ contiguous range. The tile count per cluster is the same: the first (tiles mod 3
 | | Production | Native |
 |---|---|---|
 | Threads | one reader, one compute and one writer kernel | R reader threads, C compute threads (Neos) and W writer threads. The rule: C = 4; R = 4 where an input moves, else 1; W = min(4, 6 − R) where the output moves, else 1. The `TTNN_QSR_*` knobs override each value |
-| Tiles per compute batch | where all three operands are borrowed: the FPU kernel 8 in a 16-bit DST and 4 in a 32-bit DST, the SFPU kernel 2; else 1 | by the rule: the SFPU kernel 4 in a 16-bit DST and 2 in a 32-bit DST where R ≤ C and W ≤ C, and the FPU kernel 8 at R = C = W = 1 only (§3.6); else 1; beside DRAM, the DRAM batch (§3.3) |
+| Tiles per compute batch | where all three operands are borrowed: the FPU kernel 8 in a 16-bit DST and 4 in a 32-bit DST, the SFPU kernel 2; else 1 | by the rule: the SFPU kernel 4 in a 16-bit DST and 2 in a 32-bit DST where R ≤ C and W ≤ C, and the FPU kernel 8 at R = C = W = 1 (§3.6); else the share batch (§3.3) |
 | Output at those settings | exact | exact, at any batch (§4.3) |
 | An activation on a or b | one intermediate ring of one compute batch, which the compute kernel fills and empties | one intermediate ring of one compute batch per compute thread: each Neo fills and empties its own tile counter |
 
@@ -872,7 +876,7 @@ contiguous range. The tile count per cluster is the same: the first (tiles mod 3
 | Tiles that do not divide over the cores | `split_work_to_cores`: group 1 takes one tile more than group 2; idle cores get no-op runtime args | the same groups; idle clusters do not start |
 | Uneven shards (pad slots) | borrowed only with one shard spec on all three; each core computes its full shard | the same, and also beside operands that move, which skip the pad slots |
 | Tiles that do not divide over the threads of a cluster | — | the low thread ids take one tile more; a thread can take none |
-| A borrowed shard that 4 does not divide | — | with all three borrowed and no activation: tail rings. Beside an activation, or beside operands that move: not borrowed (see above) |
+| A borrowed shard or slice that 4 does not divide | — | with all three borrowed and no activation: tail rings, for a slice only on the FPU kernel from 96 tiles per bank. Otherwise not borrowed (see above) |
 
 **The same in both.**
 
@@ -1619,7 +1623,7 @@ conflate them.
 | 1.5 | F5 | **fp32 — DONE 2026-10-19** | The native gate admits a, b and the output in one format, bf16 or fp32. In fp32, add, subtract, multiply and divide all run the SFPU kernel (`is_binary_sfpu_op`). On the native factory fast and approximate mode changes only the routing (the factory always sets `math_approx_mode = false`), and in fp32 the routing is the SFPU kernel either way. So the FPU kernel never runs in a 32-bit DST here; that is F17. Every fp32 operand reaches the DST by `UnpackToDest` (§3.6.1), which main's LLK serves since 2026-10-19. The rule takes the compute batch from the kernel and the DST mode (`native_max_tiles_per_cycle`): 2 for the SFPU kernel in a 32-bit DST, and a larger set batch is refused. No kernel change. Measured on craq-sim `b9d8e2f4`: add, subtract, multiply and divide over the nine op mixes at R1C1W1, rule-n1 and the rule, the tail-ring shards at the two configurations that have tail rings, and SQUARE on a, SQUARE on b and RELU on the result: add, subtract and multiply match torch fp32 bit for bit, and divide is within one fp32 step of torch's quotient (§6.1). int32 excluded pending the DFB-compute bug. |
 | 1.6 | F7 | **Activations (lhs/rhs/post) — DONE 2026-10-14** | The native gate admits activations on a, on b and on the result, which the Metal 2.0 factory already runs. The compute-side self-loop DFBs hold one compute batch per compute thread, because each Neo fills and empties its own tile counter. The FPU preprocess helper takes the kernel's DataflowBuffer objects, as on main since #60207, so no object drains when a call returns. The tail rings carry no activation: beside one, an anchor that borrows all three operands must divide by the compute count, as a slice must, else the op takes the NoC path. RELU on a or b, or beside a chain, runs on the SFPU; craq-sim runs it from build `b9d8e2f4` on, which decodes SFPGT. Oracles in §6.1. Not re-measured (dchen 2026-10-13), so this cost stays a prior: since #52762 `binary_tiles_init` inside `process_tiles` does 2 × `llk_unpack_program_bfd` per tile, burning 2 of 16 unpack partition ids per tile (wraps every 8). |
 | **2.0** | — | **Milestone 2 — reached 2026-10-19 with F5** | The op is dtype-, layout-, memory- and activation-complete for whole-tile operands in one data format, bf16 or fp32. Everything above is "the same op, wider"; everything below changes how a tile is *addressed*. Since 2026-10-20 the native factory is the default on Quasar; `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory. |
-| 2.0a | F19 | **FPU compute batch above ring stride 1 — exact since #61774; the rule off DRAM is TODO** | Beside DRAM the rule batches by the compute thread's share (§3.3). Off DRAM it still runs the FPU kernel at 1 above ring stride 1. The prize on craq-sim: 46.50 → 11.69 cycles per tile on a borrowed shard at 1,4,1. |
+| 2.0a | F19 | **FPU compute batch above ring stride 1 — DONE** | Exact since #61774; the rule batches by the compute thread's share (§3.3). craq-sim, add bf16 at 256 tiles per cluster: 3.99x on a borrowed shard at 1,4,1, 2.25x on the L1 NoC path at 4,4,2. |
 | 2.1 | F13 | **Outer-dim broadcast** (leading dims, `N`/`C`/`D`/`nD`) | **First in this milestone, because it is a regression rather than new capability** — `kernels_dfb/` already does this and `kernels_qsr/` lost it (§3.4.1). `SubtileBroadcastType::NONE` compares H and W only, so outer dims are a separate axis that `no_bcast` still has to carry. Until it lands every broadcast `add` falls back and gets none of the multi-thread win, which caps the reachable model-level gain. Not a revert: the odometer is sequential and each thread must advance by `num_threads`; put it behind a factory-set compile-time flag so dense shapes keep the measured 165 cyc/tile. |
 | 2.2 | F8 | **Subtile broadcast ROW/COL/SCALAR** | `ALL` consumer access + remapper fan-out. **Gated on `#51291`** or its stopgap. |
 | 2.3 | F9 | **Mixed broadcast** | Preserve the ROW-via-LLK / COL-via-reader-fill hybrid; do not collapse to a third LLK pass. |

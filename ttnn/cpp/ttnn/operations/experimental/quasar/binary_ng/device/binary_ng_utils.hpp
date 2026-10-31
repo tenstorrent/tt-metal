@@ -141,6 +141,8 @@ struct NativeTuning {
     // and consumer transact at different granularities.
     NativeKnob dm_batch{"TTNN_QSR_DM_BATCH"};
     NativeKnob tiles_per_cycle{"TTNN_QSR_TILES_PER_CYCLE"};  // tiles per tile_regs_acquire in the compute
+    // Tiles per bank from which an uneven L1-interleaved slice is borrowed with tail rings; a smaller one moves.
+    NativeKnob slice_tail_min{"TTNN_QSR_SLICE_TAIL_MIN"};
     // TTNN_QSR_DRAM_BATCH=0 keeps one tile per step beside DRAM.
     bool dram_batch = true;
 };
@@ -162,8 +164,7 @@ struct NativeMoves {
     bool dram = false;       // a, b or c is in DRAM, interleaved or sharded
     bool sfpu = false;       // the SFPU compute kernel runs the op
     bool dst_32bit = false;  // the DST is 32-bit (fp32_dest_acc_en)
-    // The most tiles a compute thread draws, set only where a, b and c are interleaved, an input is in DRAM and nothing
-    // is borrowed: there the rule batches by it.
+    // A compute thread's share of tiles, set only where the rule batches by it (the factory says where); else 0.
     uint32_t tiles_per_compute_thread = 0;
     bool batch_pays = true;  // false where batching measured slower
 };
@@ -181,22 +182,26 @@ struct NativeConfig {
 // The compute count of every program: the knob, else the rule's 4.
 uint32_t native_compute_threads(const NativeTuning& tuning);
 
+// The tiles per bank from which an uneven slice is borrowed: the knob, else kNativeSliceTailMinTiles on the FPU kernel
+// and never on the SFPU kernel. The tail rings' setup costs more than a smaller slice gains, and the SFPU kernel
+// computes no faster borrowed than over the NoC.
+inline constexpr uint32_t kNativeSliceTailMinTiles = 96;
+uint32_t native_slice_tail_min(const NativeTuning& tuning, bool sfpu);
+
 // Each set knob, else the rule's value for what the program moves. The rule takes the most threads and, with
 // every operand in L1, these batches: C = 4; R = C when an input moves, else 1; W = min(C, 6 - R) when the output
 // moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch native_max_tiles_per_cycle on the SFPU
-// kernel where R <= C and W <= C, and on the FPU kernel at R = C = W = 1 only, else 1. Beside a DRAM operand both
-// batches are bit_floor(min(native_max_tiles_per_cycle, NativeMoves::tiles_per_compute_thread)) where that share is
-// at least 4, R <= C, W <= C, NativeMoves::batch_pays holds and TTNN_QSR_DRAM_BATCH is not 0, else 1. Ring depth is
-// two batches per thread, a multiple of each. A borrowed input runs R = 1 and a borrowed output W = 1, whatever is
-// set. Off DRAM the rule does not batch the FPU kernel above ring stride 1 until those splits are measured; a set
-// batch still runs.
+// kernel where R <= C and W <= C, and on the FPU kernel at R = C = W = 1; otherwise the share batch, which beside DRAM
+// is both batches. Share batch: bit_floor(min(native_max_tiles_per_cycle, tiles_per_compute_thread)) where the share
+// is at least 4 beside DRAM (2 in L1), R <= C, W <= C, batch_pays, and beside DRAM TTNN_QSR_DRAM_BATCH != 0; else 1.
+// Ring depth is two batches per thread, a multiple of each. A borrowed input runs R = 1 and a borrowed output W = 1.
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves);
 
 // "8 (rule)" or "8 (TTNN_QSR_DM_BATCH)": a value the knob or the rule gave, with its source, for messages.
 std::string describe_native_value(const NativeKnob& knob, uint32_t value);
 
 // Parsed once into a function-local static. Knobs are TTNN_QSR_{NATIVE, IMPLICIT_SYNC, READER_THREADS,
-// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE, DRAM_BATCH}. Topology invariants are
-// asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
+// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE, DRAM_BATCH, SLICE_TAIL_MIN}.
+// Topology invariants are asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
 const NativeTuning& native_tuning();
 }  // namespace ttnn::operations::experimental::quasar::binary_ng

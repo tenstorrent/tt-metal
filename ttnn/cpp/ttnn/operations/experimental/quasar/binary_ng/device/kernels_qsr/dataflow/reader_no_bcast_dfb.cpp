@@ -71,9 +71,9 @@ void kernel_main() {
         }
 #endif
 #if TAIL_TILES
-        // Copy the shard's TAIL_TILES tiles past the borrowed part (all of it without a borrowed ring) into the
-        // tail rings, one entry per compute thread, through the local NoC loopback. Entries past TAIL_TILES stay
-        // padding: the compute runs on them, the writer drops them.
+        // Copy the TAIL_TILES tiles of the shard or slice past the borrowed part (all of it without a borrowed ring)
+        // into the tail rings, one entry per compute thread, through the local NoC loopback. Entries past TAIL_TILES
+        // stay padding: the compute runs on them, the writer drops them.
         {
             Noc noc;
             DataflowBuffer tail_in0(dfb::in0_tail);

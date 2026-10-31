@@ -51,7 +51,7 @@ void kernel_main() {
     }
 #endif
 #if TAIL_TILES
-    // Copy the real tail results into the shard just past the borrowed part, and drop the padding.
+    // Copy the real tail results into the shard or slice just past the borrowed part, and drop the padding.
     {
         const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
         constexpr uint32_t num_tcs = get_arg(args::num_tcs);

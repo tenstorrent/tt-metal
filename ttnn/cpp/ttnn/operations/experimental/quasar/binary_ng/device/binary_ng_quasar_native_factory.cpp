@@ -357,8 +357,8 @@ m2::DataflowBufferSpec make_dfb(
 // not borrowed moves in the anchor's tile order.
 enum class AnchorKind { kNone, kShard, kSlice };
 
-// Whether a program may send a borrowed shard's last tiles through the tail rings. The tail rings carry no
-// activation chain, so a program with activations runs none.
+// Whether a program may send a borrowed shard's or slice's last tiles through the tail rings. They carry no activation
+// chain, so a program with activations runs none.
 enum class TailRings { kAllowed, kNone };
 
 struct BorrowAnchor {
@@ -520,17 +520,18 @@ uint32_t legacy_cluster_count(const Tensor& a, const Tensor& b, const Tensor& c,
 // The anchor that borrows the most operands, among the anchors on at least as many clusters as the legacy binary_ng
 // uses (legacy_cluster_count). On a tie, the one that borrows the output, then the one on more clusters, then the
 // earlier candidate: the output's shard config, a's, b's, the banks. A borrowed ring must divide by its max(producers,
-// consumers); with all three borrowed, a shard's tail tiles go through the tail rings instead where `tail_rings`
-// allows them, and a slice has no tail rings. A pad slot is computed and never read back; an operand that moves skips
-// it. A program-cache hit keeps this decision. It reads only the hashed specs, activations and worker grid, the tuning,
-// and the bank layout of the device, which never changes after the device opens.
+// consumers); with all three borrowed, the tail tiles of a shard, or of a slice of `slice_tail_min` tiles or more, go
+// through the tail rings instead where `tail_rings` allows them. A pad slot is computed and never read back; an operand
+// that moves skips it. A program-cache hit keeps this decision. It reads only the hashed specs, activations and
+// worker grid, the tuning, and the bank layout of the device, which never changes after the device opens.
 BorrowAnchor select_borrow_anchor(
     const Tensor& a,
     const Tensor& b,
     const Tensor& c,
     const CoreRangeSet& worker_grid,
     const NativeTuning& tuning,
-    TailRings tail_rings) {
+    TailRings tail_rings,
+    uint32_t slice_tail_min) {
     const std::array<const Tensor*, 3> operands{&a, &b, &c};
     const uint32_t compute_threads = native_compute_threads(tuning);
     const uint32_t min_clusters = legacy_cluster_count(a, b, c, worker_grid);
@@ -541,7 +542,8 @@ BorrowAnchor select_borrow_anchor(
         const bool inputs_move = !anchor.borrowed[0] || !anchor.borrowed[1];
         const bool output_moves = !anchor.borrowed[2];
         if (!inputs_move && !output_moves) {
-            const bool tails_take_the_rest = anchor.kind == AnchorKind::kShard && tail_rings == TailRings::kAllowed;
+            const bool tails_take_the_rest = tail_rings == TailRings::kAllowed &&
+                                             (anchor.kind == AnchorKind::kShard || anchor.tiles >= slice_tail_min);
             return tails_take_the_rest || anchor.tiles % compute_threads == 0;
         }
         const NativeConfig config = resolve_native_config(tuning, {.inputs = inputs_move, .output = output_moves});
@@ -755,8 +757,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool has_activations = has_lhs_act || has_rhs_act ||
                                  !compute_defines["PROCESS_POST_ACTIVATIONS(i)"].empty() ||
                                  compute_defines.contains("PACK_RELU");
+    const TailRings tail_rings = has_activations ? TailRings::kNone : TailRings::kAllowed;
     const BorrowAnchor anchor =
-        select_borrow_anchor(a, *b_opt, c, op.worker_grid, t, has_activations ? TailRings::kNone : TailRings::kAllowed);
+        select_borrow_anchor(a, *b_opt, c, op.worker_grid, t, tail_rings, native_slice_tail_min(t, is_sfpu));
     const bool a_borrowed = anchor.borrowed[0];
     const bool b_borrowed = anchor.borrowed[1];
     const bool c_borrowed = anchor.borrowed[2];
@@ -767,19 +770,22 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // The values this program runs with. Where both inputs are borrowed the reader runs one thread, and where
     // the output is borrowed the writer does; a borrowed ring's stride is then max(R, C) or max(C, W), which the
-    // anchor's tile count divides. Beside a DRAM operand the rule batches only as below.
+    // anchor's tile count divides.
+    // The share batch runs in L1 and beside DRAM where an input is there. Beside DRAM a batch pays even for one tile
+    // fewer, so the share rounds up; in L1 it does not, so it rounds down.
     const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
-    const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
-    // Batching beside DRAM needs interleaved a, b, c and nothing borrowed. A sharded operand that moves over the NoC
-    // stays at batch 1: batched, it aborts on ttsim (H.I.I and W.I.I).
-    const auto interleaved = [](const Tensor& tensor) { return !tensor.memory_config().is_sharded(); };
+    const bool input_in_dram = in_dram(a) || in_dram(*b_opt);
+    const bool any_dram = input_in_dram || in_dram(c);
     uint32_t tiles_per_compute_thread = 0;
-    if (anchor.kind == AnchorKind::kNone && interleaved(a) && interleaved(*b_opt) && interleaved(c) &&
-        (in_dram(a) || in_dram(*b_opt))) {
-        // The most tiles split_work_to_cores gives a cluster.
-        const uint32_t tiles_per_cluster =
-            tt::div_up(c_num_tiles, std::min<uint32_t>(op.worker_grid.num_cores(), c_num_tiles));
-        tiles_per_compute_thread = tt::div_up(tiles_per_cluster, compute_threads);
+    if (input_in_dram || !any_dram) {
+        // Under an anchor every cluster runs the anchor's tile count; without one, split_work_to_cores gives a
+        // cluster this many tiles or one fewer. Where all three are borrowed, the tail rings run one tile at a time.
+        const uint32_t clusters = std::min<uint32_t>(op.worker_grid.num_cores(), c_num_tiles);
+        const uint32_t tiles_per_cluster = anchor.kind != AnchorKind::kNone ? borrowed_tiles
+                                           : any_dram                       ? tt::div_up(c_num_tiles, clusters)
+                                                                            : c_num_tiles / clusters;
+        tiles_per_compute_thread =
+            any_dram ? tt::div_up(tiles_per_cluster, compute_threads) : tiles_per_cluster / compute_threads;
     }
     const NativeConfig cfg = resolve_native_config(
         t,
@@ -795,9 +801,10 @@ ProgramArtifacts create_no_bcast_artifacts(
     if (tiles_per_compute_thread > 0) {
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native: {} tiles beside DRAM, {} per compute thread: dm_batch={} tiles_per_cycle={} "
+            "binary_ng Quasar-native: {} tiles {}, {} per compute thread: dm_batch={} tiles_per_cycle={} "
             "entries_per_thread={}",
             c_num_tiles,
+            any_dram ? "beside DRAM" : "in L1",
             tiles_per_compute_thread,
             describe_native_value(t.dm_batch, cfg.dm_batch),
             describe_native_value(t.tiles_per_cycle, cfg.tiles_per_cycle),
@@ -808,8 +815,8 @@ ProgramArtifacts create_no_bcast_artifacts(
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
     // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per compute
     // thread. A shard smaller than the count has no borrowed ring: all of it uses the tail rings. The tail rings
-    // run only with all three operands borrowed and no activation; otherwise the anchor is borrowed only when the
-    // count divides.
+    // run only with all three operands borrowed and no activation, and for a slice only from native_slice_tail_min;
+    // otherwise the anchor is borrowed only when the count divides.
     // The tail rings are temporary. When the DFB gives each tile counter its own capacity, remove them: the tail DFBs,
     // TAIL_TILES, HAS_MAIN_RING and the tail blocks of the reader, the writer and both compute kernels. The reader's
     // publish and the compute already take uneven shares. The divisibility checks in select_borrow_anchor come from the
