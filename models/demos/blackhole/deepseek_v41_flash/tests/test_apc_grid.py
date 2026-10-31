@@ -70,7 +70,7 @@ def make_cache(monkeypatch, budget=10**9, grid=True, nbytes=1000):
         monkeypatch.delenv("DSV41_APC_GRID", raising=False)
     monkeypatch.delenv("DSV41_APC_FILE", raising=False)
 
-    def begin(model, b, s, toks):
+    def begin(model, b, s, toks, s_lo=0):
         model.snaps += 1
         return types.SimpleNamespace(s=s, toks=torch.as_tensor(toks)[:s].clone())
 

@@ -289,6 +289,12 @@ class PrefixSnapshot:
     # prefix-cache KEY tokens when the prompt has images (DSV41_APC_IMAGES): ``toks`` with the positions of every image span replaced by a value derived from the image's content hash
     # (``key_tokens``): two prompts with the same text and different images get different keys. None: the key is made from ``toks`` (text prompts: unchanged).
     ktoks: object = None
+    # delta snapshots (DSV41_APC_DELTA=1, ``DeltaStore``): ``s_lo`` = the read covered only the rows of [s_lo, s) of the position-indexed tensors (the tail kinds and the pool latents); once the
+    # record is in a ``DeltaStore`` those rows live in refcounted ``Block``s (``bkeys``: the block chain keys of [0, s)) and ``carried`` keeps only the ``full`` kinds (the halos).
+    s_lo: int = 0
+    bkeys: object = None
+    tails: tuple = ()  # names of the position-indexed (``tail``) carried tensors (their rows go into blocks)
+    pool_alias: bool = False  # dense prefill: ``pool`` is a view of the kv-table rows in ``carried`` (stored once)
 
     @property
     def nbytes(self):
@@ -338,13 +344,16 @@ def _gather_pool(pool, d_ids):
     return P.paged_gather_rows(pool.pool, ttnn.reshape(d_ids, [1, int(d_ids.shape[-1])]))
 
 
-def read_pool_latents(model, b, src, n):
+def read_pool_latents(model, b, src, n, lo=0):
     """Paged prefill: entries [0, n) of kv-source layer ``src`` of user ``b`` -> torch bf16 [n, 512], gathered ON the device from the user's pool pages (``ttnn.embedding`` over the
     bf16 pool, row ids of the user's mesh row; pieces of 16384 rows) and read from one device of the mesh row."""
     pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
     _check_pool(pool)
     r = b // model.U
-    phys = pool.phys_rows(b, src, torch.arange(n)).long()
+    phys = pool.phys_rows(b, src, torch.arange(lo, n)).long()  # (``lo``: delta snapshots read only the entries [lo, n))
+    n = n - lo
+    if n <= 0:
+        return torch.zeros(0, 512, dtype=torch.bfloat16)
     shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
     out = []
     for a in range(0, n, 16384):
@@ -366,12 +375,13 @@ def read_pool_latents(model, b, src, n):
     return torch.cat(out) if len(out) > 1 else out[0]
 
 
-def read_pool_latents_begin(model, b, src, n):
+def read_pool_latents_begin(model, b, src, n, lo=0):
     """``read_pool_latents`` without waiting: [(rows m, host tensor handle)] of the gathers (pieces of 16384 rows), enqueued on CQ 0 and freed right after their reads (see ``snapshot_begin``)."""
     pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
     _check_pool(pool)
     r = b // model.U
-    phys = pool.phys_rows(b, src, torch.arange(n)).long()
+    phys = pool.phys_rows(b, src, torch.arange(lo, n)).long()
+    n = n - lo
     shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
     out = []
     for a in range(0, n, 16384):
@@ -405,12 +415,12 @@ SNAP_GROUP_MIB = (
 )
 
 
-def snapshot_user(model, b, s, toks):
+def snapshot_user(model, b, s, toks, s_lo=0):
     """-> PrefixSnapshot (see ``_snapshot_user``). ``DSV41_APC_SNAP_CHECK=1`` (debug): also takes the blocking snapshot and asserts both are bit-identical."""
     nb = _snapshot_nb()
-    snap = _snapshot_user(model, b, s, toks, nb)
+    snap = _snapshot_user(model, b, s, toks, nb, s_lo)
     if nb and os.environ.get("DSV41_APC_SNAP_CHECK") == "1":
-        ref = _snapshot_user(model, b, s, toks, False)
+        ref = _snapshot_user(model, b, s, toks, False, s_lo)
         assert snap.carried.keys() == ref.carried.keys()
         for k in ref.carried:
             assert len(snap.carried[k]) == len(ref.carried[k]) and all(
@@ -425,7 +435,7 @@ def snapshot_user(model, b, s, toks):
     return snap
 
 
-def _snapshot_user(model, b, s, toks, nb):
+def _snapshot_user(model, b, s, toks, nb, s_lo=0):
     """State of user ``b`` right after a step that ended at position ``s`` (``model.pf_resume[b] == s``) -> PrefixSnapshot. ``toks``: the user's tokens [>= s]. The pool latents of the kv-source layers
     are NOT read from the pool (an fp8 pool, and reading it would mean the whole per-device pool): the kv table of a source layer holds the same bf16 latents (entry j = FIFO row LAT - n + j).
     """
@@ -433,7 +443,7 @@ def _snapshot_user(model, b, s, toks, nb):
     assert model.__dict__.get("pf_resume", {}).get(b) == s, f"user {b} is not resumable at {s}"
     r, i = _slot_of(model, b)
     cols = model.cols
-    snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone())
+    snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone(), s_lo=s_lo)
     specs = carried_specs(model)
     paged = PG.read_on()
     for src in _sources(model):
@@ -474,12 +484,17 @@ def _snapshot_user(model, b, s, toks, nb):
         N, D = sp.tensor.shape[2], sp.tensor.shape[3]
         lo = sp.row0(N, n) if sp.kind == "tail" else 0
         end = lo + n if sp.kind == "tail" else N
+        if sp.kind == "tail" and s_lo:  # delta snapshot (DSV41_APC_DELTA): only the rows of [s_lo, s)
+            lo += sp.count(s_lo)
         # slice the slot (and, for a FIFO, its valid tail) ON DEVICE first: reading a whole padded table per tensor is what made a snapshot cost ~0.5 s regardless of its size
         whole = (
             sp.tensor.shape[0] == 1 and lo == 0 and end == N
         )  # (a full slice returns the persistent tensor itself: never free it)
         pieces = [[] for _ in range(1 if sp.replicated else cols)]
-        if whole:
+        if lo >= end:  # (delta snapshot with every row already held by cached blocks)
+            for c in range(len(pieces)):
+                pieces[c].append(torch.zeros(1, 1, 0, D, dtype=torch.bfloat16))
+        elif whole:
             for c in range(len(pieces)):
                 read(sp.tensor, r * cols + c, pieces[c])
             if nb:
@@ -505,11 +520,14 @@ def _snapshot_user(model, b, s, toks, nb):
     for name, (pieces, sp) in staged.items():
         vals = [torch.cat(x, dim=2) if len(x) > 1 else x[0] for x in pieces]
         snap.carried[name] = vals * cols if sp.replicated else vals
+        if sp.kind == "tail":
+            snap.tails += (name,)
     for src in _sources(model):
         if paged:  # no table: the latents are read from the user's pool pages
-            snap.pool[src] = read_pool_latents(model, b, src, s // P.SRC_RATIO[src])
+            snap.pool[src] = read_pool_latents(model, b, src, s // P.SRC_RATIO[src], s_lo // P.SRC_RATIO[src])
         else:
             snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]  # [s / ratio, 512], shared with the carried copy
+            snap.pool_alias = True
     snap.seconds = time.perf_counter() - t0
     return snap
 
@@ -528,7 +546,7 @@ class PendingSnapshot:
         )
 
 
-def snapshot_begin(model, b, s, toks):
+def snapshot_begin(model, b, s, toks, s_lo=0):
     """Deferred form of ``snapshot_user`` (``DSV41_APC_DEFER=1``): enqueue the device slices / gathers and the NON-blocking reads of user ``b``'s state at position ``s`` on CQ 0 and return a
     ``PendingSnapshot``; the host does not wait. Everything is ordered by the command queue: the reads precede the next replay (which may modify the state), a device slice is freed right after its
     read is enqueued (the next program that reuses the memory runs after the read), so no device memory is alive across the next replay (a trace's intermediates share the freed DRAM). The host
@@ -538,7 +556,7 @@ def snapshot_begin(model, b, s, toks):
     assert model.__dict__.get("pf_resume", {}).get(b) == s, f"user {b} is not resumable at {s}"
     r, i = _slot_of(model, b)
     cols = model.cols
-    snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone())
+    snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone(), s_lo=s_lo)
     specs = carried_specs(model)
     paged = PG.read_on()
     for src in _sources(model):
@@ -560,9 +578,14 @@ def snapshot_begin(model, b, s, toks):
         N, D = sp.tensor.shape[2], sp.tensor.shape[3]
         lo = sp.row0(N, n) if sp.kind == "tail" else 0
         end = lo + n if sp.kind == "tail" else N
+        if sp.kind == "tail" and s_lo:  # delta snapshot (DSV41_APC_DELTA): only the rows of [s_lo, s)
+            lo += sp.count(s_lo)
         whole = sp.tensor.shape[0] == 1 and lo == 0 and end == N
         pieces = [[] for _ in range(1 if sp.replicated else cols)]
-        if whole:
+        if lo >= end:  # (delta snapshot with every row already held by cached blocks)
+            for c in range(len(pieces)):
+                pieces[c].append(torch.zeros(1, 1, 0, D, dtype=torch.bfloat16))
+        elif whole:
             for c in range(len(pieces)):
                 read(sp.tensor, r * cols + c, pieces[c])
         else:
@@ -576,7 +599,7 @@ def snapshot_begin(model, b, s, toks):
     pool_parts = {}
     for src in _sources(model):
         if paged:
-            pool_parts[src] = read_pool_latents_begin(model, b, src, s // P.SRC_RATIO[src])
+            pool_parts[src] = read_pool_latents_begin(model, b, src, s // P.SRC_RATIO[src], s_lo // P.SRC_RATIO[src])
     event = ttnn.record_event(model.md, 0)
     return PendingSnapshot(snap, staged, handles, pool_parts, event, time.perf_counter() - t0)
 
@@ -591,12 +614,17 @@ def snapshot_finish(model, pend):
     for name, (pieces, sp) in pend.staged.items():
         vals = [torch.cat(x, dim=2) if len(x) > 1 else x[0] for x in pieces]
         snap.carried[name] = vals * cols if sp.replicated else vals
+        if sp.kind == "tail":
+            snap.tails += (name,)
     for src in _sources(model):
         if src in pend.pool_parts:
             parts = [ttnn.to_torch(h).reshape(m, 512).clone() for m, h in pend.pool_parts[src]]
-            snap.pool[src] = torch.cat(parts) if len(parts) > 1 else parts[0]
+            snap.pool[src] = (
+                torch.cat(parts) if len(parts) > 1 else parts[0] if parts else torch.zeros(0, 512, dtype=torch.bfloat16)
+            )
         else:
             snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]
+            snap.pool_alias = True
     snap.seconds = pend.t_begin + time.perf_counter() - t0
     pend.handles, pend.pool_parts, pend.staged = [], {}, OrderedDict()
     return snap
@@ -687,6 +715,31 @@ def restore_users(model, snap, bs):
         for b in bs:
             st.cache[b, :s] = row
     return time.perf_counter() - t0
+
+
+def delta_on():
+    """``DSV41_APC_DELTA=1``: block / delta host snapshots (``DeltaStore``). Default 0 (whole-prefix snapshots, unchanged)."""
+    return os.environ.get("DSV41_APC_DELTA", "0") == "1"
+
+
+def delta_unsupported(model, chunk):
+    """-> a reason string when the model's carried state cannot be stored as chunk blocks, else ''."""
+    from models.demos.blackhole.deepseek_v41_flash.tt import replay_cfg
+
+    for name, sp in carried_specs(model).items():
+        if sp.kind != "tail":
+            continue
+        if chunk % (sp.ratio * sp.div):
+            return f"{name}: chunk {chunk} is not a multiple of ratio {sp.ratio} x cols {sp.div}"
+        # bounded replay: layers >= 21 do not run on the chunks before the zone, so a snapshot there is 'partial'; its position-indexed rows are shared between records only when they all come
+        # from layers that run on every chunk (the kv sources and index-key owners are layers 2 / 8 / 14 / 20)
+        lid = int(name[1:].split(".")[0]) if name.startswith("L") and name[1:2].isdigit() else -1
+        if replay_cfg.split_enabled() and lid >= 21:
+            return f"{name} belongs to a layer that the bounded replay skips on early chunks"
+    for src in _sources(model):
+        if chunk % P.SRC_RATIO[src]:
+            return f"pool source {src}: chunk {chunk} is not a multiple of ratio {P.SRC_RATIO[src]}"
+    return ""
 
 
 def image_spans(vs):
@@ -792,10 +845,184 @@ class PrefixStore:
         self.misses += 1
         return None
 
+    def assemble(self, snap):
+        """full-form snapshot of a stored one (identity here; ``DeltaStore`` concatenates its blocks)"""
+        return snap
+
+    def drop(self, key):
+        """remove one snapshot (thinning); -> its record"""
+        old = self.snaps.pop(key)
+        self.bytes -= old.nbytes
+        return old
+
     def clear(self):
         """``reset_prefix_cache`` / a weight reload / a re-captured prefill trace."""
         self.snaps.clear()
         self.bytes = 0
+
+
+@dataclass
+class Block:
+    """The position-indexed state of ONE chunk (``chunk`` tokens) of a prompt: ``carried[name]`` = [cols] (or [1] when replicated) torch [1, 1, rows, D] of every ``tail`` tensor, ``pool[src]`` =
+    torch [rows, 512] latents of every kv source (paged pool only). ``refs`` = number of snapshot records whose chain contains the block.
+    """
+
+    carried: dict
+    pool: dict
+    refs: int = 0
+
+    @property
+    def nbytes(self):
+        n = 0
+        for v in self.carried.values():
+            n += sum(x.numel() * x.element_size() for x in v)
+        return n + sum(x.numel() * x.element_size() for x in self.pool.values())
+
+
+class DeltaStore(PrefixStore):
+    """``PrefixStore`` whose snapshots are DELTAS (``DSV41_APC_DELTA=1``): the position-indexed state (compressed latents of the pool, index keys, kv-table rows: append-only, entry j is a function of
+    the first (j + 1) * ratio tokens) is stored in content-addressed blocks of one chunk, keyed by the token chain at the block END, shared by every snapshot whose prefix contains them (refcounted);
+    a snapshot record keeps only what is NOT additive: the halos (128 raw kv rows per layer, ~5 MiB), the tokens and the chain of block keys. A snapshot of a 64k prompt that extends a stored
+    one by 4k tokens costs the halo plus 4k tokens of blocks instead of the whole 64k. Eviction is LRU over records; a block is freed with its last record. ``lookup`` / ``has`` / ``put`` keep the
+    ``PrefixStore`` contract; ``assemble`` turns a record into the full-form ``PrefixSnapshot`` that ``restore_users`` takes (logical rows concatenated, so the layout of the device FIFO, which
+    depends on s, never enters the store)."""
+
+    def __init__(self, chunk, budget_bytes, signature=""):
+        super().__init__(chunk, budget_bytes, signature)
+        self.blocks = {}  # block chain key -> Block
+        self.lost = 0  # records dropped at put because a block they relied on was evicted meanwhile
+
+    def block_keys(self, tokens, s):
+        ch = self._chain(tokens, s)
+        return [ch[x] for x in range(self.chunk, s + 1, self.chunk)]
+
+    def have_prefix(self, keys, extra=()):
+        """largest n such that blocks 0..n-1 of the chain ``keys`` are all held (or in ``extra``) -> n"""
+        n = 0
+        for k in keys:
+            if k in self.blocks or k in extra:
+                n += 1
+            else:
+                break
+        return n
+
+    def _split(self, snap, keys):
+        """the blocks of ``snap`` (a delta read of [s_lo, s)) not held yet -> {key: Block}, and move the rows out of ``snap.carried`` / ``snap.pool``"""
+        C, nb0 = self.chunk, snap.s_lo // self.chunk
+        nb = len(keys) - nb0
+        out = {}
+        if nb <= 0:
+            return out
+        parts = {}
+        for name in snap.tails:
+            v = snap.carried[name]
+            rows = v[0].shape[2]
+            assert rows % nb == 0, f"{name}: {rows} delta rows do not split into {nb} blocks"
+            parts[name] = (v, rows // nb)
+        pparts = {}
+        if not snap.pool_alias:
+            for src, lat in snap.pool.items():
+                assert lat.shape[0] % nb == 0, f"pool {src}: {lat.shape[0]} delta rows do not split into {nb} blocks"
+                pparts[src] = (lat, lat.shape[0] // nb)
+        for j in range(nb):
+            key = keys[nb0 + j]
+            if key in self.blocks:
+                continue
+            car = {}
+            for name, (v, m) in parts.items():
+                if len({id(x) for x in v}) == 1:  # replicated over the columns: one host copy
+                    car[name] = [v[0][:, :, j * m : (j + 1) * m].clone()]
+                else:
+                    car[name] = [x[:, :, j * m : (j + 1) * m].clone() for x in v]
+            pool = {src: lat[j * m : (j + 1) * m].clone() for src, (lat, m) in pparts.items()}
+            out[key] = Block(car, pool)
+        return out
+
+    def put(self, snap):
+        key = self.key(snap.toks if snap.ktoks is None else snap.ktoks, snap.s)
+        old = self.snaps.get(key)
+        if old is not None and (old.full or not snap.full):
+            self.snaps.move_to_end(key)
+            return False
+        keys = self.block_keys(snap.toks if snap.ktoks is None else snap.ktoks, snap.s)
+        new = self._split(snap, keys)
+        if any(k not in self.blocks and k not in new for k in keys):
+            self.lost += 1  # (a block read as present at ``begin`` was evicted before ``finish``)
+            return False
+        for name in snap.tails:
+            snap.carried.pop(name, None)
+        snap.pool = {}
+        own = snap.nbytes
+        add = own + sum(b.nbytes for b in new.values())
+        if add > self.budget:
+            return False
+        for k, b in new.items():
+            self.blocks[k] = b
+            self.bytes += b.nbytes
+        for k in keys:
+            self.blocks[k].refs += 1
+        if old is not None:
+            self.drop(key)  # (after the new refs: the blocks the two share survive)
+        snap.bkeys = keys
+        self.snaps[key] = snap
+        self.bytes += own
+        self.puts += 1
+        while self.bytes > self.budget and len(self.snaps) > 1:
+            k0 = next(iter(self.snaps))
+            if k0 == key:
+                break
+            self.drop(k0)
+            self.evictions += 1
+        if self.bytes > self.budget:  # (the record's own chain alone does not fit)
+            self.drop(key)
+            self.puts -= 1
+            return False
+        return True
+
+    def drop(self, key):
+        old = self.snaps.pop(key)
+        self.bytes -= old.nbytes
+        for k in old.bkeys or ():
+            b = self.blocks[k]
+            b.refs -= 1
+            if b.refs <= 0:
+                self.bytes -= b.nbytes
+                del self.blocks[k]
+        return old
+
+    def assemble(self, snap):
+        """record -> full-form ``PrefixSnapshot`` (what ``restore_users`` reads); shares the halo tensors, concatenates the block rows"""
+        if snap.bkeys is None:
+            return snap
+        blks = [self.blocks[k] for k in snap.bkeys]
+        carried = dict(snap.carried)
+        pool = {}
+        if blks:
+            for name in blks[0].carried:
+                ncol = len(blks[0].carried[name])
+                cat = [torch.cat([b.carried[name][c] for b in blks], dim=2) for c in range(ncol)]
+                carried[name] = cat
+            for src in blks[0].pool:
+                pool[src] = torch.cat([b.pool[src] for b in blks])
+        if snap.pool_alias:  # dense prefill: the latents ARE the rows of the kv table
+            from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P_
+
+            for src in P_.SOURCES:
+                if f"L{src}.kvt" in carried:
+                    pool[src] = carried[f"L{src}.kvt"][0][0, 0]
+        return PrefixSnapshot(
+            s=snap.s,
+            toks=snap.toks,
+            carried=carried,
+            pool=pool,
+            full=snap.full,
+            ktoks=snap.ktoks,
+            pool_alias=snap.pool_alias,
+        )
+
+    def clear(self):
+        super().clear()
+        self.blocks.clear()
 
 
 class PrefixCache:
@@ -811,11 +1038,14 @@ class PrefixCache:
 
     def __init__(self, model, chunk, budget_bytes, policy="pow2", log=print):
         self.m, self.chunk, self.log, self.policy = model, int(chunk), log, policy
-        self.store = PrefixStore(chunk, budget_bytes)
+        self.delta = (
+            delta_on()
+        )  # DSV41_APC_DELTA=1: block / delta snapshots (``DeltaStore``); checked against the model's carried tensors at the first snapshot
+        self.store = DeltaStore(chunk, budget_bytes) if self.delta else PrefixStore(chunk, budget_bytes)
+        self.delta_step = int(os.environ.get("DSV41_APC_DELTA_STEP", "0")) if self.delta else 0
         self.enabled = True
         # the continuation must rewrite the last WINDOW (128) positions of the prompt: the ring rows decode reads, ``prev_cs`` (last token) and the drafter taps. The extra ring rows of a spec build
         # (288 rows = window + slack for speculative writes) hold positions that no attention reads, so they need not be rewritten: margin 128 for both pools.
-        import os
 
         self.margin = int(os.environ.get("DSV41_APC_MARGIN", "128"))
         self.image_token_id = None  # set when image input is on: prompts with image placeholders bypass the cache
@@ -857,6 +1087,10 @@ class PrefixCache:
 
     def wants(self, B):
         k = B // self.chunk
+        if (
+            self.delta_step and k > 0 and k % self.delta_step == 0
+        ):  # (delta snapshots cost the halo + the new blocks: a finer grid is affordable)
+            return True
         if self.policy == "all":
             return True
         if self.policy.isdigit():
@@ -938,8 +1172,7 @@ class PrefixCache:
                 and old.s < snap.s
                 and chain.get(old.s) == key
             ):
-                self.store.bytes -= old.nbytes
-                del self.store.snaps[key]
+                self.store.drop(key)
                 self.stats["thinned"] = self.stats.get("thinned", 0) + 1
 
     def _has_image(self, tokens, n):
@@ -967,8 +1200,13 @@ class PrefixCache:
         if self.store.has(kt, B, full) or any(k == key and f_ >= full for _, k, (_, _, _, f_) in pend):
             return
         t0 = time.perf_counter()
+        s_lo = self._delta_start(kt, B)
         try:
-            p = snapshot_begin(self.m, b, B, tokens)
+            p = snapshot_begin(self.m, b, B, tokens, s_lo)
+            if (
+                self.delta and os.environ.get("DSV41_APC_DELTA_CHECK") == "1"
+            ):  # debug: the whole snapshot to compare the assembled record with (blocking read, same command queue)
+                p.ref = _snapshot_user(self.m, b, B, tokens, False, 0)
         except ApcUnsupported as e:
             self.enabled = False
             self.log(f"prefix caching disabled: {e}")
@@ -980,6 +1218,8 @@ class PrefixCache:
         )  # (M0': what chose this boundary; tips of older prompts are thinned)
         p.serial = self.plans.get(b, (self.serial, {}))[0]
         pend.append((p, key, (b, B, time.perf_counter() - t0, bool(full))))
+        if self.delta:
+            self.__dict__.setdefault("pending_bkeys", set()).update(self.store.block_keys(kt, B)[s_lo // self.chunk :])
 
     def finish_pending(self):
         """Complete every started snapshot (host copies, store insertion). -> seconds spent."""
@@ -988,13 +1228,40 @@ class PrefixCache:
             return 0.0
         t0 = time.perf_counter()
         self.pending = []
+        self.__dict__.pop("pending_bkeys", None)
         for p, key, (b, B, t_b, full) in pend:
             snap = snapshot_finish(self.m, p)
             snap.full = full
             snap.kind, snap.serial = getattr(p, "kind", ""), getattr(p, "serial", 0)
             self._store(snap, b, B, t_b, "deferred")
+            if getattr(p, "ref", None) is not None:
+                self._check_delta(p.ref, key, B)
             self._thin(snap)
         return time.perf_counter() - t0
+
+    def _check_delta(self, ref, key, B):
+        """DSV41_APC_DELTA_CHECK=1: the record assembled from blocks must equal the whole snapshot taken at the same moment, bit for bit"""
+        rec = self.store.snaps.get(key)
+        if rec is None:
+            self.log(f"prefix cache: delta check at {B}: record not stored (refused or evicted)")
+            return
+        full = self.store.assemble(rec)
+        bad = []
+        if set(full.carried) != set(ref.carried):
+            bad.append(f"names {sorted(set(full.carried) ^ set(ref.carried))}")
+        for name, per_col in ref.carried.items():
+            got = full.carried.get(name)
+            if got is None or any(not torch.equal(got[min(c, len(got) - 1)], x) for c, x in enumerate(per_col)):
+                bad.append(name)
+        for src, lat in ref.pool.items():
+            if not torch.equal(full.pool[src], lat):
+                bad.append(f"pool{src}")
+        self.stats["delta_checks"] = self.stats.get("delta_checks", 0) + 1
+        if bad:
+            self.stats["delta_check_failures"] = self.stats.get("delta_check_failures", 0) + 1
+        self.log(
+            f"prefix cache: delta check at {B} tokens: {'FAIL ' + ', '.join(bad[:8]) if bad else 'OK (bit-identical to the whole snapshot)'}"
+        )
 
     def _store(self, snap, b, B, t_dev, how=""):
         ev0 = self.store.evictions
@@ -1025,7 +1292,7 @@ class PrefixCache:
             return
         t_h1 = time.perf_counter()
         try:
-            snap = snapshot_user(self.m, b, B, tokens)
+            snap = snapshot_user(self.m, b, B, tokens, self._delta_start(kt, B))
             snap.full = bool(full)
             if kt is not tokens:
                 snap.ktoks = torch.as_tensor(kt).long().reshape(-1)[:B].clone()
@@ -1064,7 +1331,33 @@ class PrefixCache:
         snap = self.store.lookup(kt, end, end, margin=self.margin, zone=zone)
         return snap if snap is not None and snap.s > min_s else None
 
+    def _delta_start(self, kt, B):
+        """delta snapshots: the first token of the rows still to read at ``B`` = the end of the longest run of cached (or already pending) blocks of this chain; 0 = a whole snapshot. A model whose carried
+        tensors do not split into whole chunks (``delta_supported``) falls back to the whole-prefix store (log line, once).
+        """
+        if not self.delta:
+            return 0
+        if not isinstance(self.store, DeltaStore):
+            return 0
+        if not self.__dict__.get("_delta_checked"):
+            self._delta_checked = True
+            why = delta_unsupported(self.m, self.chunk)
+            if why:
+                self.log(f"prefix cache: DSV41_APC_DELTA ignored ({why}); whole-prefix snapshots")
+                st = PrefixStore(self.chunk, self.store.budget, self.store.signature)
+                st.tag = self.store.tag
+                self.store, self.delta = st, False
+                return 0
+        keys = self.store.block_keys(kt, B)
+        return self.store.have_prefix(keys, self.__dict__.get("pending_bkeys", ())) * self.chunk
+
     def restore_group(self, snap, bs):
+        t_a = time.perf_counter()
+        snap = self.store.assemble(snap)
+        t_a = time.perf_counter() - t_a
+        if self.delta:
+            self.stats["assemble_s"] = self.stats.get("assemble_s", 0.0) + t_a
+            self.log(f"prefix cache: delta record of {snap.s} tokens assembled from blocks in {t_a:.3f} s")
         t = restore_users(self.m, snap, bs)
         self.stats["restores"] += len(bs)
         self.stats["restored_tokens"] += snap.s * len(bs)
