@@ -1214,3 +1214,4 @@ before the first open task, not the next runnable one); agents need a sanctioned
 Rules added today (skill / agents): overseer queues never does; never idle the box on trivia; owner rules in the skill
 not memory; Galaxy 110 cores (rule 18); no single-card jobs / back-door resets on a Galaxy (rule 19); check estimates.
 - 21:15 OWNER: no reboot until ~250 GiB unaccounted; re-tune the matmuls within the cap (P.25, mesh-only), then Paris (K.1R = K.1's gate), push regularly; then stop for the day. Run --until K.1R.
+- 21:25 OWNER: queue the layer tail before Paris, configurable (best effort; reboot tomorrow if memory runs out): FIX.17 DEEP_TAIL (setting DEEP_LAYERS=all|tail, default all; gate = default path unchanged; agent measures tail mode). Order: P.25 -> FIX.17 -> K.1R.

@@ -2128,12 +2128,52 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 260
+- id: FIX.17
+  title: 'DEEP_TAIL: setting DEEP_LAYERS=all|tail (default all): layers 21-39 only on the prompt tail decode needs'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.25
+  gate:
+    cmd: BRINGUP_TASK=P.17 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && BRINGUP_TASK=P.17
+      DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 260
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/moe_block
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-31 (best effort, configurable): add the setting DEEP_LAYERS = all | tail, DEFAULT all (today''s model, unchanged: the tt-d-gen
+      main contract and our tests need every layer''s full history). With tail: every chunk runs layers 0-19 in full plus layer 20 (the last KV source:
+      its compressed rows and index keys must cover the whole history); layers 21-39 are skipped for normal chunks; the model keeps a rolling buffer of
+      layer 20''s output for the last 20*127+1 = 2541 positions (plus what the window carry needs), and when the prompt ends (the runner / harness signals
+      the last chunk; do not require the prompt length in advance) one TAIL PASS runs layers 21-39 on those rows as a short chunk padded to a tile-aligned
+      length on all 32 chips (e.g. 3072 = 96 rows a chip), with each layer''s window carry for the tail start. Result: layers 0-20 complete, layers 21-39
+      exact windows for the tail (they have no compressed rows of their own), the last token''s final hidden / logits. Rows of layers 21-39 outside the
+      tail are not computed (their served window rows stay unwritten in tail mode). Check: (1) the gate (default all) passes unchanged; (2) a test of your
+      own in models/demos/deepseek_v41_flash_d_p/tests (e.g. tests/perf/test_deep_tail.py) runs the profile rung''s prompt in tail mode and compares with
+      the golden: every layer 0-20, layers 21-39 on the tail rows, the final hidden and top-5, all within the same limits the ladder uses; (3) measure,
+      one device job at a time (long ones as background jobs you wait for; agent rules 18 / 19): a normal chunk at 51200 and 512000 in tail mode vs all
+      (test_profile.py with BRINGUP_POS, DS41_DEEP_LAYERS=tail / all), and the tail pass''s own time; report per-chunk device / wall and the tail pass,
+      and the resulting prompt tok/s for 128k, 512k and 1M (the estimate script /scratch/dnijemcevic/opportunities/prefill_tps.py has the arithmetic). No
+      fork regression suites.'
+    gate_tasks:
+    - P.17
 - id: K.1R
   title: 'Re-check: serving contract and Paris through tt-d-gen on todays code (K.1s gate)'
   step: check
   device: true
   deps:
-  - P.25
+  - FIX.17
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
