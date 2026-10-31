@@ -363,6 +363,12 @@ void device_setup() {
 
     set_deassert_addresses();
 
+#ifdef ARCH_WORMHOLE
+    // cq_dispatch turns BRISC's branch predictor off while it runs and back on when it exits. Clear the bit here too, so
+    // a dispatcher that was stopped without exiting can't leave it off for kernels launched on this core later.
+    cfg_regs[DISABLE_RISC_BP_Disable_main_ADDR32] &= ~DISABLE_RISC_BP_Disable_main_MASK;
+#endif
+
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     // Invalidate tensix icache for all 4 risc cores
