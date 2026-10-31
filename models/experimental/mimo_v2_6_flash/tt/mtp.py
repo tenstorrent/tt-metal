@@ -54,6 +54,7 @@ final norm feeds the target's LM head. Each layer's KV cache is a small ring add
 RoPE at the true position t (reference/spec_decode.py).
 """
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -79,6 +80,7 @@ from ..reference.spec_inputs import pack_mtp_commits
 from .common import TILE, as_weight, cache_fill, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
+from .proj_stream import BankStreamMatmul
 from .mtp_backfill import MtpHistory
 from .spec_chain import SpecChain
 
@@ -180,6 +182,8 @@ class TtMiMoMTP:
         self.layers = [TtMtpLayer(model, ckpt, cache_dir, i, weight_dtype) for i in layers]
         self.multi = planned  # the planned program (plan step, hidden gather, a pass per layer)
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
+        # The decode eh_proj as a bank-local stream (_eh_bank_stream), made at the first pass.
+        self.eh_stream, self._eh_stream_made = None, False
         self.page_table = None
         self.heads = None  # one GreedyHead per draft: their persistent token rows are the drafts
         self.inputs = None  # every layer: LayerInputs
@@ -253,6 +257,24 @@ class TtMiMoMTP:
             )
 
     # ------------------------------------------------------------------ device
+    def _eh_bank_stream(self):
+        """The decode eh_proj ([2 * hidden, hidden / tp] per chip, 2 tile columns per bank) as a BankStreamMatmul, or
+        None (MIMO_MTP_EH_STREAM=0, or its layout constraints fail): the default matmul program reads its 4.5 MB on 24
+        cores in ~110 us, three times a step. Made once the decode users are known (host-side only)."""
+        if not self._eh_stream_made and self.model.decode_users is not None:
+            self._eh_stream_made = True
+            if os.environ.get("MIMO_MTP_EH_STREAM", "1") == "1":
+                hidden = self.cfg.hidden_size
+                for group in (4, 2, 1):
+                    try:
+                        self.eh_stream = BankStreamMatmul(
+                            self.plan, 2 * hidden, hidden // self.plan.tp, self.mm_config, group=group
+                        )
+                        break
+                    except AssertionError:
+                        continue
+        return self.eh_stream
+
     def _pass(self, tokens_tt, hidden, pos_tt, serial, cos, sin, head, layer=None):
         """One MTP layer step over the slots (``layer``, default the only one): tokens [1, B] u32, hidden [1, 1, B,
         hidden] (final normed), cache positions [B] i32 (-1 skips a slot), cos / sin [1, 1, B, D] of the true
@@ -267,13 +289,17 @@ class TtMiMoMTP:
         cat = ttnn.concat([en, hn], dim=-1)
         en.deallocate(True)
         hn.deallocate(True)
-        xs = ttnn.linear(
-            cat,
-            layer.eh_proj,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        stream = self._eh_bank_stream()
+        if stream is not None:
+            xs = stream(cat, layer.eh_proj, rows=4 if m.decode_users <= 4 else 8)
+        else:
+            xs = ttnn.linear(
+                cat,
+                layer.eh_proj,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.mm_config,
+            )
         cat.deallocate(True)
         x = self.plan.all_gather(xs, dim=-1)
         xs.deallocate(True)

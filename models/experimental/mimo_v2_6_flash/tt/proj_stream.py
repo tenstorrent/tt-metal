@@ -94,16 +94,18 @@ class BankStreamMatmul:
     CB_X, CB_W, CB_OUT, CB_ZERO = 0, 1, 2, 3
     SEM_X = 0  # tiles of x the bank's loader has landed
 
-    def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False):
-        """``skip_bank_core``: use the GROUP cores after each bank core in its row instead of starting at it."""
+    def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False, group=None):
+        """``skip_bank_core``: use the GROUP cores after each bank core in its row instead of starting at it.
+        ``group``: cores per bank instead of GROUP (a narrow n: 2 tile columns per bank take 2 cores)."""
         device = plan.mesh_device
+        self.group = group or self.GROUP
         self.plan, self.k, self.n = plan, k, n
         self.banks = device.dram_grid_size().x
         self.kt = k // TILE
         self.cpb = math.ceil(n / (TILE * self.banks))
         self.n_pad = self.cpb * TILE * self.banks
-        assert k % TILE == 0 and n % TILE == 0 and self.cpb % self.GROUP == 0, (k, n)
-        self.cpc = self.cpb // self.GROUP
+        assert k % TILE == 0 and n % TILE == 0 and self.cpb % self.group == 0, (k, n)
+        self.cpc = self.cpb // self.group
         assert self.cpc <= self.MAX_DEST, self.cpc
         grid = device.compute_with_storage_grid_size()
         bank_cores = list(dram_bank_cores(device))
@@ -113,8 +115,8 @@ class BankStreamMatmul:
         for b, c in enumerate(bank_cores):
             row = [(x, c.y) for x in list(range(c.x, grid.x)) + list(range(c.x - 1, -1, -1))]
             xs = [p for p in row if p not in taken]
-            assert len(xs) >= self.GROUP, (b, c)
-            for q, (x, y) in enumerate(xs[: self.GROUP]):
+            assert len(xs) >= self.group, (b, c)
+            for q, (x, y) in enumerate(xs[: self.group]):
                 taken.add((x, y))
                 self.cores.append(ttnn.CoreCoord(x, y))
                 self.slots.append((b, q))
