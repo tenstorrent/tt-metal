@@ -39,6 +39,7 @@ from . import host_alloc
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
+from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
 from .settings import settings
 
 
@@ -64,7 +65,7 @@ def rot_mats(mesh) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     t[..., torch.arange(1, 32, 2), torch.arange(0, 32, 2)] = -1.0
 
     def dev(m):
-        return ttnn.from_torch(
+        return from_torch(
             m.contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -126,6 +127,7 @@ def rope_stock(
                 concat_prefix=prefix,
                 uniform=True,
                 output_tensor=out,
+                max_grid=max_grid(),
             )
             return out
         return ttnn.bringup.rotary_embedding_indexed(
@@ -140,8 +142,10 @@ def rope_stock(
             rotary_offset=x.shape[-1] - rd,
             concat_prefix=prefix,
             uniform=True,
+            max_grid=max_grid(),
         )
-    return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+    # (the fork with uniform off is the stock op's program; the fork for its max_grid: FIX.15, MAX_WORKER_CORES)
+    return ttnn.bringup.rotary_embedding_indexed(
         x,
         cos,
         sin,
@@ -152,6 +156,7 @@ def rope_stock(
         rotary_dim=rd,
         rotary_offset=x.shape[-1] - rd,
         concat_prefix=prefix,
+        max_grid=max_grid(),
     )
 
 
@@ -209,7 +214,7 @@ class PairPerm:
         self.half = half
 
         def dev(t):
-            return ttnn.from_torch(
+            return from_torch(
                 t.reshape(1, 1, w, w).contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -259,7 +264,7 @@ class RopeTable:
         assert self.half % 32 == 0, f"rope half width {self.half} is not a tile multiple"
 
         def dev(t, dtype):
-            return ttnn.from_torch(
+            return from_torch(
                 t.float().reshape(1, 1, max_seq, t.shape[-1]).contiguous(),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
@@ -314,7 +319,9 @@ class RopeTable:
         assert start + length <= self.max_seq, f"positions up to {start + length} > the table's {self.max_seq}"
         out = []
         for t in (self.cos, self.sin):
-            sl = ttnn.slice(t, [0, 0, start, 0], [1, 1, start + length, self.width], memory_config=DRAM)
+            sl = ttnn.slice(
+                t, [0, 0, start, 0], [1, 1, start + length, self.width], memory_config=DRAM, sub_core_grids=sub_cores(t)
+            )
             if sp > 1:
                 part = ttnn.mesh_partition(sl, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
                 dealloc(sl)
@@ -328,34 +335,39 @@ def rope_deinterleaved(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tt
     vector in the reference's interleaved order, [1, 1, R, W] fp32 TILE. Does not consume its inputs."""
     rows, width, half = x.shape[-2], x.shape[-1], cos.shape[-1]
     r0 = width - 2 * half
-    xe = ttnn.slice(x, [0, 0, 0, r0], [1, 1, rows, r0 + half], memory_config=DRAM)
-    xo = ttnn.slice(x, [0, 0, 0, r0 + half], [1, 1, rows, width], memory_config=DRAM)
+    xe = ttnn.slice(x, [0, 0, 0, r0], [1, 1, rows, r0 + half], memory_config=DRAM, sub_core_grids=sub_cores(x))
+    xo = ttnn.slice(x, [0, 0, 0, r0 + half], [1, 1, rows, width], memory_config=DRAM, sub_core_grids=sub_cores(x))
 
     def mul(a, b):
-        return ttnn.multiply(a, b, dtype=ttnn.float32, memory_config=DRAM)
+        return ttnn.multiply(a, b, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(a))
 
     a, b = mul(xe, cos), mul(xo, sin)
-    re = ttnn.subtract(a, b, dtype=ttnn.float32, memory_config=DRAM)
+    re = ttnn.subtract(a, b, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(a))
     dealloc(a)
     dealloc(b)
     a, b = mul(xe, sin), mul(xo, cos)
-    ro = ttnn.add(a, b, dtype=ttnn.float32, memory_config=DRAM)
+    ro = ttnn.add(a, b, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(a))
     for t in (a, b, xe, xo):
         dealloc(t)
-    tail = ttnn.concat([re, ro], dim=-1, memory_config=DRAM)
+    tail = ttnn.concat([re, ro], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
     dealloc(re)
     dealloc(ro)
     # [re | ro] -> interleaved (re_k, ro_k): a transpose of [2, half] per row, row-major (data movement only)
-    rm = ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+    rm = to_rm(tail, memory_config=DRAM)
     dealloc(tail)
-    t = ttnn.transpose(ttnn.reshape(rm, [1, rows, 2, half]), -2, -1, memory_config=DRAM)
+    t = ttnn.transpose(ttnn.reshape(rm, [1, rows, 2, half], sub_core_grids=sub_cores(rm)), -2, -1, memory_config=DRAM)
     dealloc(rm)
-    inter = ttnn.to_layout(ttnn.reshape(t, [1, 1, rows, 2 * half]), ttnn.TILE_LAYOUT, memory_config=DRAM)
+    inter = ttnn.to_layout(
+        ttnn.reshape(t, [1, 1, rows, 2 * half], sub_core_grids=sub_cores(t)),
+        ttnn.TILE_LAYOUT,
+        memory_config=DRAM,
+        sub_core_grids=sub_cores(),
+    )
     dealloc(t)
     if r0 == 0:
         return inter
-    head = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, r0], memory_config=DRAM)
-    out = ttnn.concat([head, inter], dim=-1, memory_config=DRAM)
+    head = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, r0], memory_config=DRAM, sub_core_grids=sub_cores(x))
+    out = ttnn.concat([head, inter], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
     dealloc(head)
     dealloc(inter)
     return out
@@ -368,17 +380,17 @@ def rope_deinterleaved_bf16(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, 
     tail. Does not consume its inputs."""
     rows, width, half = x.shape[-2], x.shape[-1], cos.shape[-1]
     r0 = width - 2 * half
-    tail = ttnn.slice(x, [0, 0, 0, r0], [1, 1, rows, width], memory_config=DRAM)
+    tail = ttnn.slice(x, [0, 0, 0, r0], [1, 1, rows, width], memory_config=DRAM, sub_core_grids=sub_cores(x))
     rot = rope_heads(tail, cos, sin, dtype=ttnn.bfloat16)  # [re | ro] bf16
     dealloc(tail)
     inter = pairs(rot, pairs.to_inter)
     dealloc(rot)
     if r0 == 0:
         return inter
-    head = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, r0], memory_config=DRAM)
-    hb = ttnn.typecast(head, ttnn.bfloat16, memory_config=DRAM)
+    head = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, r0], memory_config=DRAM, sub_core_grids=sub_cores(x))
+    hb = ttnn.typecast(head, ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(head))
     dealloc(head)
-    out = ttnn.concat([hb, inter], dim=-1, memory_config=DRAM)
+    out = ttnn.concat([hb, inter], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
     dealloc(hb)
     dealloc(inter)
     return out
@@ -388,11 +400,18 @@ def interleave_tail(t: ttnn.Tensor, half: int) -> ttnn.Tensor:
     """[B, H, R, 2 * half] TILE whose columns are [even | odd] -> the interleaved order (e_0, o_0, e_1, ...): a
     ROW_MAJOR transpose of [2, half] per row (data movement only, exact). Does not consume ``t``."""
     b, h, rows = t.shape[0], t.shape[1], t.shape[2]
-    rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-    tr = ttnn.transpose(ttnn.reshape(rm, [b * h, rows, 2, half]), -2, -1, memory_config=DRAM)
+    rm = to_rm(t, memory_config=DRAM)
+    tr = ttnn.transpose(
+        ttnn.reshape(rm, [b * h, rows, 2, half], sub_core_grids=sub_cores(rm)), -2, -1, memory_config=DRAM
+    )
     if rm is not t:
         dealloc(rm)
-    out = ttnn.to_layout(ttnn.reshape(tr, [b, h, rows, 2 * half]), ttnn.TILE_LAYOUT, memory_config=DRAM)
+    out = ttnn.to_layout(
+        ttnn.reshape(tr, [b, h, rows, 2 * half], sub_core_grids=sub_cores(tr)),
+        ttnn.TILE_LAYOUT,
+        memory_config=DRAM,
+        sub_core_grids=sub_cores(),
+    )
     dealloc(tr)
     return out
 
@@ -403,17 +422,24 @@ def deinterleave_tail(t: ttnn.Tensor, half: int) -> ttnn.Tensor:
     exact). Does not consume ``t``."""
     b, h, rows, width = t.shape
     r0 = width - 2 * half
-    tail = ttnn.slice(t, [0, 0, 0, r0], [b, h, rows, width], memory_config=DRAM)
-    rm = ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+    tail = ttnn.slice(t, [0, 0, 0, r0], [b, h, rows, width], memory_config=DRAM, sub_core_grids=sub_cores(t))
+    rm = to_rm(tail, memory_config=DRAM)
     dealloc(tail)
-    tr = ttnn.transpose(ttnn.reshape(rm, [b * h, rows, half, 2]), -2, -1, memory_config=DRAM)
+    tr = ttnn.transpose(
+        ttnn.reshape(rm, [b * h, rows, half, 2], sub_core_grids=sub_cores(rm)), -2, -1, memory_config=DRAM
+    )
     dealloc(rm)
-    de = ttnn.to_layout(ttnn.reshape(tr, [b, h, rows, 2 * half]), ttnn.TILE_LAYOUT, memory_config=DRAM)
+    de = ttnn.to_layout(
+        ttnn.reshape(tr, [b, h, rows, 2 * half], sub_core_grids=sub_cores(tr)),
+        ttnn.TILE_LAYOUT,
+        memory_config=DRAM,
+        sub_core_grids=sub_cores(),
+    )
     dealloc(tr)
     if r0 == 0:
         return de
-    head = ttnn.slice(t, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM)
-    out = ttnn.concat([head, de], dim=-1, memory_config=DRAM)
+    head = ttnn.slice(t, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM, sub_core_grids=sub_cores(t))
+    out = ttnn.concat([head, de], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
     dealloc(head)
     dealloc(de)
     return out
@@ -438,22 +464,22 @@ def rope_heads(
     half = cos.shape[-1]
     r0 = width - 2 * half
     assert dtype == ttnn.float32 or (r0 == 0 and not interleave), (dtype, r0, interleave)
-    xe = ttnn.slice(x, [0, 0, 0, r0], [b, h, rows, r0 + half], memory_config=DRAM)
-    xo = ttnn.slice(x, [0, 0, 0, r0 + half], [b, h, rows, width], memory_config=DRAM)
+    xe = ttnn.slice(x, [0, 0, 0, r0], [b, h, rows, r0 + half], memory_config=DRAM, sub_core_grids=sub_cores(x))
+    xo = ttnn.slice(x, [0, 0, 0, r0 + half], [b, h, rows, width], memory_config=DRAM, sub_core_grids=sub_cores(x))
 
     def mul(a, c):
-        return ttnn.multiply(a, c, dtype=ttnn.float32, memory_config=DRAM)
+        return ttnn.multiply(a, c, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(a))
 
     ec, os_, es, oc = mul(xe, cos), mul(xo, sin), mul(xe, sin), mul(xo, cos)
     if inverse:
-        re = ttnn.add(ec, os_, dtype=dtype, memory_config=DRAM)
-        ro = ttnn.subtract(oc, es, dtype=dtype, memory_config=DRAM)
+        re = ttnn.add(ec, os_, dtype=dtype, memory_config=DRAM, sub_core_grids=sub_cores(ec))
+        ro = ttnn.subtract(oc, es, dtype=dtype, memory_config=DRAM, sub_core_grids=sub_cores(oc))
     else:
-        re = ttnn.subtract(ec, os_, dtype=dtype, memory_config=DRAM)
-        ro = ttnn.add(es, oc, dtype=dtype, memory_config=DRAM)
+        re = ttnn.subtract(ec, os_, dtype=dtype, memory_config=DRAM, sub_core_grids=sub_cores(ec))
+        ro = ttnn.add(es, oc, dtype=dtype, memory_config=DRAM, sub_core_grids=sub_cores(es))
     for t in (ec, os_, es, oc, xe, xo):
         dealloc(t)
-    tail = ttnn.concat([re, ro], dim=-1, memory_config=DRAM)
+    tail = ttnn.concat([re, ro], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
     dealloc(re)
     dealloc(ro)
     if interleave:
@@ -462,8 +488,8 @@ def rope_heads(
         tail = inter
     if r0 == 0:
         return tail
-    head = ttnn.slice(x, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM)
-    out = ttnn.concat([head, tail], dim=-1, memory_config=DRAM)
+    head = ttnn.slice(x, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM, sub_core_grids=sub_cores(x))
+    out = ttnn.concat([head, tail], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
     dealloc(head)
     dealloc(tail)
     return out

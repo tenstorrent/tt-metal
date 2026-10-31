@@ -108,7 +108,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // stays a contiguous per-column rectangle (a block's group_rows rows share that block's band-chunk).
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC)
-    const auto grid = q.device()->compute_with_storage_grid_size();
+    const auto grid = op_grid(q.device()->compute_with_storage_grid_size(), args.program_config);
     const uint32_t grid_x = grid.x, grid_y = grid.y;
 
     const uint32_t group_rows = rows_for_groups(group_count, grid_y);

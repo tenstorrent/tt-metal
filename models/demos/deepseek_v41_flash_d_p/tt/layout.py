@@ -19,6 +19,8 @@ import torch
 
 import ttnn
 
+from .cores import from_torch
+
 HC = 4  # hc_mult: mHC residual streams
 
 
@@ -58,7 +60,7 @@ def streams_to_device(mesh, x: torch.Tensor, hidden: int, dtype=None) -> ttnn.Te
     s = host.shape[0]
     assert s % mesh.shape[0] == 0, f"{s} rows do not split over {mesh.shape[0]} mesh rows"
     host = streams_cols_to_chip_major(host, hidden, mesh.shape[1]).reshape(1, 1, s, HC * hidden)
-    return ttnn.from_torch(
+    return from_torch(
         host.contiguous(),
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -89,7 +91,7 @@ def blocks_to_device(mesh, x: torch.Tensor, hidden: int, n: int, dtype=ttnn.floa
     s = x.shape[0]
     assert x.shape[-1] == n * hidden and s % mesh.shape[0] == 0, (x.shape, n, hidden, tuple(mesh.shape))
     host = streams_cols_to_chip_major(x.float(), hidden, mesh.shape[1], n).reshape(1, 1, s, n * hidden)
-    return ttnn.from_torch(
+    return from_torch(
         host.contiguous(),
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -102,7 +104,7 @@ def blocks_to_device(mesh, x: torch.Tensor, hidden: int, n: int, dtype=ttnn.floa
 def row_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
     """Host [S, W] -> device [1, 1, S/SP, W] per chip, split by rows over axis 0, replicated over axis 1."""
     s, w = x.shape
-    return ttnn.from_torch(
+    return from_torch(
         x.float().reshape(1, 1, s, w).contiguous(),
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -134,7 +136,7 @@ def hidden_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Te
     (r, c) holds columns [c H/TP, (c+1) H/TP))."""
     s, h = x.shape
     assert s % mesh.shape[0] == 0 and h % mesh.shape[1] == 0, (x.shape, tuple(mesh.shape))
-    return ttnn.from_torch(
+    return from_torch(
         x.float().reshape(1, 1, s, h).contiguous(),
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,

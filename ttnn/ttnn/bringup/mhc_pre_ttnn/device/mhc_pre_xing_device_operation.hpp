@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <optional>
 #include <variant>
@@ -38,7 +39,20 @@ struct MhcPreXingParams {
     uint32_t partials = 1;   // > 1: the input row is (1, partials, T, 32), summed in dim-1 order (define
                              // MHC_XING_PARTIALS; 1 = off: the program and hash it always had)
     tt::tt_metal::ComputeConfigDescriptor compute_config;
+    // Fork option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle (0, 0) ..
+    // (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid. Hashed when set.
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
 };
+
+// the device's compute grid cut to max_grid (FIX.15)
+inline tt::tt_metal::CoreCoord cut_grid(
+    tt::tt_metal::CoreCoord g, const std::optional<tt::tt_metal::CoreCoord>& max_grid) {
+    if (max_grid.has_value()) {
+        g.x = std::max<std::size_t>(1, std::min<std::size_t>(g.x, max_grid->x));
+        g.y = std::max<std::size_t>(1, std::min<std::size_t>(g.y, max_grid->y));
+    }
+    return g;
+}
 
 struct MhcPreXingInputs {
     Tensor input;                        // (..., T, 32) mix row, or (..., T, n(n+2)) hc

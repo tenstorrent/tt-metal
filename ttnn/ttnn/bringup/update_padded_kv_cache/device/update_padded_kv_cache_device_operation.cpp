@@ -541,6 +541,12 @@ UpdatePaddedKvCacheDeviceOperation::tensor_return_value_t UpdatePaddedKvCacheDev
 
 ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.max_grid.has_value()) {  // FIX.15: the hash below, then the grid; absent: the hash it always was
+        auto off = args;
+        off.max_grid.reset();
+        return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
+            compute_program_hash(off, tensor_args), args.max_grid->x, args.max_grid->y);
+    }
     // slot_idx and kv_actual_global are NEVER hashed on either path (metadata: read on-device; scalar:
     // common runtime args patched on cache hits), so successive users/chunks reuse the cached program.
     // The metadata-vs-scalar choice DOES change the program (compile args, common args, which kernel
@@ -690,7 +696,11 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == window_Ht at tp=1).
     const uint32_t num_blocks_of_work = input_shape[1] * chunk_local_t;
 
-    const auto compute_grid = device->compute_with_storage_grid_size();
+    auto compute_grid = device->compute_with_storage_grid_size();
+    if (args.max_grid.has_value()) {  // bring-up option max_grid (FIX.15): a sub-rectangle of the grid
+        compute_grid.x = std::max<std::size_t>(1, std::min<std::size_t>(compute_grid.x, args.max_grid->x));
+        compute_grid.y = std::max<std::size_t>(1, std::min<std::size_t>(compute_grid.y, args.max_grid->y));
+    }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_g1, num_blocks_per_core_g2] =
         tt::tt_metal::split_work_to_cores(compute_grid, num_blocks_of_work, /*row_wise=*/true);
 
@@ -1017,7 +1027,8 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope,
     const std::optional<ttnn::Tensor>& scales,
     uint32_t input_row_offset,
-    std::optional<uint32_t> input_rows) {
+    std::optional<uint32_t> input_rows,
+    std::optional<CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .slot_idx = slot_idx,
@@ -1029,6 +1040,7 @@ ttnn::Tensor update_padded_kv_cache(
         .tp_axis = tp_axis,
         .input_row_offset = input_row_offset,
         .input_rows = input_rows,
+        .max_grid = max_grid,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .cache = cache,

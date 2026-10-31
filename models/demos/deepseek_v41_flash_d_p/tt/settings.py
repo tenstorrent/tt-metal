@@ -782,6 +782,16 @@ TABLE = {
         "final norm, the compressor / indexer sites. Buffers allocated at load time (tt/host_alloc.reserve_forks), one "
         "per site for every layer; outputs bit-identical. off = today's path (the ops allocate)",
     ),
+    "MAX_WORKER_CORES": Setting(
+        110,
+        None,
+        "FIX.15 (agent rule 18, owner 2026-10-30): on a Galaxy (cluster type GALAXY / TG / BLACKHOLE_GALAXY) no op may "
+        "run on more than this many Tensix cores of a chip: the chassis' power supply trips when a chip's current "
+        "rises too fast (di/dt), and the full 12 x 10 = 120-core grid can do it. Every op that picks a core grid takes "
+        "its grid from tt/cores.py (worker_grid / max_grid / sub_cores: the compute grid cut to its full rows' width: 11 x 10 "
+        "= 110 on the Galaxy's 12 x 10). Other boxes keep the full grid. 0 = no cap anywhere (the grid each op picks "
+        "itself: the path before FIX.15, for comparison only; never on a Galaxy in service)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

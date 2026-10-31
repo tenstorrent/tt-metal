@@ -61,7 +61,8 @@ RmsNormResult rms_norm_full(
     const std::optional<ComputeConfigArg>& compute_kernel_config,
     bool return_residual_sum,
     const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config,
-    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 // RMSNorm over the last dimension (rms_norm_ttnn.py's rms_norm_ttnn()).  The second member is true
 // when program_config.inplace made the output the input tensor itself.
@@ -115,7 +116,8 @@ ttnn::Tensor rms_norm_split_full(
     int64_t stats_width,
     const std::optional<std::pair<int64_t, int64_t>>& input_window,
     const std::optional<tt::tt_metal::DataType>& dtype,
-    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn
 

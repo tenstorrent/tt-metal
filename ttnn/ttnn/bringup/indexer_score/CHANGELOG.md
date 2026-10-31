@@ -191,3 +191,10 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit phase 1)
 - Files: device/indexer_score_device_operation.cpp, device/indexer_score_program_factory.cpp,
   device/ring_indexer_score_dsa_program_factory.cpp, tests/cases.py, tests/reference.py, tests/test_indexer_score.py
+
+### max_grid: the op's cores inside a rectangle (deepseek_v41_flash_d_p FIX.15)
+- What: option `max_grid_x` / `max_grid_y` (int, default 0 = no limit) in `ttnn.bringup.IndexerScoreProgramConfig` (indexer_score_dsa, ring_indexer_score_dsa): every program of the op places its cores (and splits its work) inside (0, 0) .. (x - 1, y - 1) of the compute grid. Default: the device's whole grid, the call as before (same program, same hash).
+- Why: agent rule 18 (owner 2026-10-30): a Galaxy chassis' power supply trips when a chip's current rises too fast (di/dt); no op may run on more than 110 of a chip's 120 Tensix cores. DeepSeek-V4.1 passes tt/cores.max_grid() = 11 x 10 on a Galaxy, None elsewhere.
+- Measured: 8x4 Galaxy, one 5120-token chunk (ring_indexer_score_dsa): 114 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
+- Needed by: deepseek_v41_flash_d_p FIX.15
+- Files: device/indexer_score_device_operation.cpp, device/indexer_score_device_operation_types.hpp, device/indexer_score_program_factory.cpp, device/ring_indexer_score_dsa_program_factory.cpp, indexer_score_nanobind.cpp

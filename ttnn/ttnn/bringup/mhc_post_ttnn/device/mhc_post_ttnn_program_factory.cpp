@@ -215,7 +215,8 @@ ProgramDescriptor create_program_descriptor(
     const ComputeConfigDescriptor& compute_config,
     bool comb_transposed,
     uint32_t post_col,
-    uint32_t comb_col) {
+    uint32_t comb_col,
+    std::optional<CoreCoord> max_grid) {
     auto* device = input.device();
 
     // post_col / comb_col (P.19): post / comb may be wider (the packed mixes); n is then the residual's stream count
@@ -238,7 +239,7 @@ ProgramDescriptor create_program_descriptor(
     TT_FATAL(output_page == residual_page, "mhc_post: output and residual page sizes differ");
 
     // ---- work split + block size ----
-    const CoreCoord grid_size = device->compute_with_storage_grid_size();
+    const CoreCoord grid_size = cut_grid(device->compute_with_storage_grid_size(), max_grid);
     double row_weight = ROW_WEIGHT;
     if (residual.dtype() == DataType::FLOAT32 && input.dtype() == DataType::BFLOAT16) {
         row_weight = ROW_WEIGHT_MIXED_FP32_STREAMS;  // carve-out (measured regression)
@@ -407,7 +408,8 @@ ProgramDescriptor MhcPostProgramFactory::create_descriptor(
         operation_attributes.compute_config,
         operation_attributes.comb_transposed,
         operation_attributes.post_col,
-        operation_attributes.comb_col);
+        operation_attributes.comb_col,
+        operation_attributes.max_grid);
 }
 
 void MhcPostProgramFactory::override_runtime_arguments(

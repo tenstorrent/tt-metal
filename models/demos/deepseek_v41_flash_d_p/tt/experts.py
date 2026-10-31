@@ -55,6 +55,7 @@ from models.demos.deepseek_v41_flash_d_p.reference.weights import fp4_dequant
 from . import ccl
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast, sum_cols
+from .cores import sub_cores, sub_cores_tiled
 from .settings import settings
 
 TILE = 32
@@ -454,7 +455,7 @@ class TtExperts:
             dk = (
                 dense
                 if dense.layout == ttnn.TILE_LAYOUT
-                else ttnn.to_layout(dense, ttnn.TILE_LAYOUT, memory_config=DRAM)
+                else ttnn.to_layout(dense, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(dense))
             )
             if idx is None:  # (the routing's K nonzero weights and their ids; order is free: the combine sums them)
                 wts, ids = ttnn.topk(dk, k=K, dim=-1, largest=True, sorted=True)
@@ -463,7 +464,11 @@ class TtExperts:
                 wts = ttnn.gather(dk, dim=-1, index=idx)  # = the router's wts (dense is their scatter)
             if dk is not dense:
                 dealloc(dk)
-        ids16 = ids if ids.dtype == ttnn.uint16 else ttnn.typecast(ids, ttnn.uint16, memory_config=DRAM)
+        ids16 = (
+            ids
+            if ids.dtype == ttnn.uint16
+            else ttnn.typecast(ids, ttnn.uint16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(ids))
+        )
         ids_g, wts_g = wc.routing(ids16, wts)
         passed = (ids_g, wts_g)  # (routing hands its inputs through on a one-row mesh / bf16 weights: freed after)
         for t in {id(t): t for t in (ids16, wts) + ((ids,) if idx is None else ())}.values():

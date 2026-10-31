@@ -46,13 +46,14 @@ import ttnn
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, compute_config
+from .cores import from_torch, sub_cores, sub_cores_tiled, to_rm
 from .settings import settings
 
 TILE = 32
 
 
 def _replicate(mesh, t: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
-    return ttnn.from_torch(
+    return from_torch(
         t.contiguous(),
         dtype=dtype,
         layout=layout,
@@ -96,7 +97,7 @@ class TtRouter:
     def _rows(self, t, s):
         if s == self.max_rows:
             return t
-        return ttnn.slice(t, [0, 0, 0, 0], [1, 1, s, self.num_experts])
+        return ttnn.slice(t, [0, 0, 0, 0], [1, 1, s, self.num_experts], sub_core_grids=sub_cores(t))
 
     def __call__(self, x: ttnn.Tensor):
         """x: [1, 1, S/SP, H] fp32 TILE per chip, row split over axis 0, replicated over axis 1; S/SP a multiple of 32.
@@ -112,20 +113,20 @@ class TtRouter:
             return self._fused(logits, s)
         sp = ttnn.softplus(logits, beta=1.0, threshold=20.0, memory_config=DRAM)
         dealloc(logits)
-        scores = ttnn.sqrt(sp, memory_config=DRAM)
+        scores = ttnn.sqrt(sp, memory_config=DRAM, sub_core_grids=sub_cores(sp))
         dealloc(sp)
-        choice = ttnn.add(scores, self.bias, dtype=ttnn.float32, memory_config=DRAM)
+        choice = ttnn.add(scores, self.bias, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(scores))
         _, idx = ttnn.topk(choice, k=self.top_k, dim=-1, largest=True, sorted=True)
         dealloc(choice)
         top = ttnn.gather(scores, dim=-1, index=idx)
         dealloc(scores)
-        tsum = ttnn.sum(top, dim=-1, keepdim=True)
+        tsum = ttnn.sum(top, dim=-1, keepdim=True, sub_core_grids=sub_cores(top))
         # (sum + 1e-20) / route_scale: the reference's eps, then the routed scale folded into the divisor
-        t1 = ttnn.add(tsum, 1e-20, memory_config=DRAM)
+        t1 = ttnn.add(tsum, 1e-20, memory_config=DRAM, sub_core_grids=sub_cores(tsum))
         dealloc(tsum)
-        tsum_s = ttnn.multiply(t1, 1.0 / self.route_scale, memory_config=DRAM)
+        tsum_s = ttnn.multiply(t1, 1.0 / self.route_scale, memory_config=DRAM, sub_core_grids=sub_cores(t1))
         dealloc(t1)
-        wts = ttnn.div(top, tsum_s, memory_config=DRAM)
+        wts = ttnn.div(top, tsum_s, memory_config=DRAM, sub_core_grids=sub_cores(top))
         dealloc(top)
         dealloc(tsum_s)
         if not self.dense:  # INDEXER_GLUE=on + weighted experts (P.16): they take wts itself; no dense scatter
@@ -156,7 +157,9 @@ class TtRouter:
         dealloc(logits)
         if not self.dense:
             return None, idx, wts
-        w32 = ttnn.typecast(wts, ttnn.float32, memory_config=DRAM)  # (exact: the scatter writes into fp32 zeros)
+        w32 = ttnn.typecast(
+            wts, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(wts)
+        )  # (exact: the scatter writes into fp32 zeros)
         dense = self._scatter(idx, w32, s)
         dealloc(w32)
         return dense, idx, wts
@@ -164,9 +167,9 @@ class TtRouter:
     def _scatter(self, idx, wts, s: int):
         """dense [1, 1, s, E] fp32 ROW_MAJOR = zeros with wts (fp32 TILE) at idx (K-4: fp32 scatter in ROW_MAJOR)."""
         zeros = self._rows(self.zeros, s)
-        idx_rm = ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        wts_rm = ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        dense = ttnn.scatter(zeros, dim=-1, index=idx_rm, src=wts_rm)
+        idx_rm = to_rm(idx, memory_config=DRAM)
+        wts_rm = to_rm(wts, memory_config=DRAM)
+        dense = ttnn.scatter(zeros, dim=-1, index=idx_rm, src=wts_rm, sub_core_grids=sub_cores(zeros))
         dealloc(idx_rm)
         dealloc(wts_rm)
         if zeros is not self.zeros:

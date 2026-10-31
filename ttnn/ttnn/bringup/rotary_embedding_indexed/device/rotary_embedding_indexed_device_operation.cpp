@@ -384,6 +384,9 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         // metadata is an optional TensorParameter, compared just as strictly when it is present.
         hash = ttsl::hash::hash_objects(hash, tensor_args.metadata->tensor_spec());
     }
+    if (args.max_grid.has_value()) {  // FIX.15; absent: the hash it always was
+        hash = ttsl::hash::hash_objects(hash, args.max_grid->x, args.max_grid->y);
+    }
     return hash;
 }
 
@@ -447,6 +450,12 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
 
     auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
+    if (args.max_grid.has_value()) {  // bring-up option max_grid (FIX.15): a sub-rectangle of the grid
+        compute_with_storage_grid_size.x =
+            std::max<std::size_t>(1, std::min<std::size_t>(compute_with_storage_grid_size.x, args.max_grid->x));
+        compute_with_storage_grid_size.y =
+            std::max<std::size_t>(1, std::min<std::size_t>(compute_with_storage_grid_size.y, args.max_grid->y));
+    }
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -872,7 +881,8 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
     bool uniform,
-    const std::optional<ttnn::Tensor>& output_tensor) {
+    const std::optional<ttnn::Tensor>& output_tensor,
+    std::optional<CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::rotary_embedding_indexed::RotaryEmbeddingIndexedDeviceOperation;
 
     auto arch = input.storage_type() == StorageType::DEVICE ? input.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -897,6 +907,7 @@ ttnn::Tensor rotary_embedding_indexed(
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
         .uniform = uniform,
+        .max_grid = max_grid,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input = input,

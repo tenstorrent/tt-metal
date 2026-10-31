@@ -57,7 +57,8 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> valid_global = std::nullopt,
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
-    const std::optional<ttnn::Tensor>& scales = std::nullopt);
+    const std::optional<ttnn::Tensor>& scales = std::nullopt,
+    std::optional<CoreCoord> max_grid = std::nullopt);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
 //     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
@@ -78,7 +79,8 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
     uint32_t input_row_offset = 0,
-    std::optional<uint32_t> input_rows = std::nullopt);
+    std::optional<uint32_t> input_rows = std::nullopt,
+    std::optional<CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::update_padded_kv_cache
 

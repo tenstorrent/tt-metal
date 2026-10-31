@@ -63,6 +63,7 @@ from .common import (
     stream_dtype,
 )
 from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights
+from .cores import from_torch, init_caps, max_grid, sub_cores, sub_cores_tiled
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
 from .engram_kv import build_engram_kv
@@ -520,7 +521,7 @@ class TtDS41Block:
             # the two partials summed before the one exchange over TP (components.yaml moe_add notes)
             # CCL_IMPL=fabric_bf16 (P.6): the sum written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
             sdt = ccl.partial_dtype(self.mesh) if self.experts.sum_mode == "gather_add" else ttnn.float32
-            s = ttnn.add(a, b, dtype=sdt, memory_config=DRAM)
+            s = ttnn.add(a, b, dtype=sdt, memory_config=DRAM, sub_core_grids=sub_cores(a))
             # GLUE_FOLD=on (P.19): the bf16 sum as is (ffn_residual's mhc_post takes bf16)
             out = self.experts.reduce(s, fp32=not self.fold)
             dealloc(s)
@@ -665,6 +666,7 @@ class TtDS41Model:
 
         t0 = time.time()
         self.mesh, self.path = mesh, str(model_path)
+        init_caps(mesh)  # FIX.15 (MAX_WORKER_CORES): the mesh's core cap for every op of the model
         self.weight_cache = weight_cache  # the routed experts' laid-out weight cache (tt/experts.py:expert_cache_dir)
         self.cfg = cfg = Config.from_dir(self.path)
         self.ck = ck = Checkpoint(self.path)
@@ -706,7 +708,7 @@ class TtDS41Model:
         emb = ck.get("embed.weight")
         assert emb.dtype == torch.bfloat16, emb.dtype  # the device copy is then exact
         self.vocab = emb.shape[0]
-        self.embed_w = ttnn.from_torch(
+        self.embed_w = from_torch(
             emb.contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -847,7 +849,7 @@ class TtDS41Model:
         and never reach a cache) -> layer 0's input: the embedding on all 4 streams, the pending pre one-hot."""
         ids = tokens.reshape(-1).long().clamp(0, self.vocab - 1).to(torch.int32)
         assert ids.numel() == self.chunk, (ids.numel(), self.chunk)
-        dev_ids = ttnn.from_torch(
+        dev_ids = from_torch(
             ids.reshape(self.sp, self.chunk // self.sp).contiguous(),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -855,21 +857,23 @@ class TtDS41Model:
             memory_config=DRAM,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
         )
-        e = ttnn.embedding(dev_ids, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=DRAM)
+        e = ttnn.bringup.embedding(
+            dev_ids, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=DRAM, max_grid=max_grid()
+        )
         dealloc(dev_ids)
         rows, w = self.chunk // self.sp, self.cfg.dim // self.tp
-        e4 = ttnn.reshape(e, [1, 1, rows, w])
+        e4 = ttnn.reshape(e, [1, 1, rows, w], sub_core_grids=sub_cores(e))
         if stream_dtype() == ttnn.bfloat16:  # BF16_ACTIVATIONS=on (P.20): the bf16 embedding rows as they are
-            streams = ttnn.concat([e4] * HC, dim=-1, memory_config=DRAM)
+            streams = ttnn.concat([e4] * HC, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
             dealloc(e4)
             if e.is_allocated():
                 dealloc(e)
             return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
-        ef = ttnn.typecast(e4, ttnn.float32, memory_config=DRAM)
+        ef = ttnn.typecast(e4, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(e4))
         dealloc(e4)  # a view of e's buffer (K-1): then e is freed with it
         if e.is_allocated():
             dealloc(e)
-        streams = ttnn.concat([ef] * HC, dim=-1, memory_config=DRAM)
+        streams = ttnn.concat([ef] * HC, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         dealloc(ef)
         return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
 

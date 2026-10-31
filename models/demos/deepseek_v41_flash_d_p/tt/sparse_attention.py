@@ -60,6 +60,7 @@ from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
 from .compressor import AttnTable, static_tables
+from .cores import sub_cores, sub_cores_tiled, to_rm
 from .rope import RopeTable
 
 TOPK_LIMIT = 1 << 24  # ids (and table rows) are exact in fp32 below this
@@ -167,12 +168,12 @@ class TtSparseAttention(TtWindowAttention):
         loc = nb * stripe
         assert loc <= ckv_cache.rows, f"chunk [{start}, {start + g.chunk}) past the compressed cache ({ckv_cache.rows})"
         sl = ckv_cache.slab.slice_rows(0, loc // r)  # [1, 1, loc / r, 512] compressed rows
-        tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
         dealloc(sl)
         gat = self._gather_mesh(tl, ckv_cache.tp_axis is not None)
         if gat is not tl:
             dealloc(tl)
-        rm = ttnn.to_layout(gat, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        rm = to_rm(gat, memory_config=DRAM)
         dealloc(gat)
         return rm, nb
 
@@ -193,14 +194,20 @@ class TtSparseAttention(TtWindowAttention):
             return out
 
         def floor_div(v, d):  # floor((v + 1/2) / d): exact for integers v >= 0 and any divisor d
-            y = op(ttnn.multiply, ttnn.add(v, 0.5, **f32), 1.0 / d)
+            y = op(ttnn.multiply, ttnn.add(v, 0.5, **f32, sub_core_grids=sub_cores(v)), 1.0 / d)
             out = ttnn.floor(y, memory_config=DRAM)
             dealloc(y)
             return out
 
         tiled = topk.layout != ttnn.TILE_LAYOUT  # K-1: to_layout to the same layout returns its input (not ours)
-        tl = ttnn.to_layout(topk, ttnn.TILE_LAYOUT, memory_config=DRAM) if tiled else topk
-        x = ttnn.typecast(ttnn.bitcast(tl, ttnn.int32), ttnn.float32, memory_config=DRAM)  # none -> -1.0
+        tl = (
+            ttnn.to_layout(topk, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(topk))
+            if tiled
+            else topk
+        )
+        x = ttnn.typecast(
+            ttnn.bitcast(tl, ttnn.int32), ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores()
+        )  # none -> -1.0
         if tiled:
             dealloc(tl)
         s = floor_div(x, hs)
@@ -210,13 +217,15 @@ class TtSparseAttention(TtWindowAttention):
         row = op(ttnn.add, op(ttnn.add, u, float(offset)), op(ttnn.multiply, b, float(hs)))
         row = op(ttnn.add, row, op(ttnn.multiply, q, float(nb * hs)))
         valid = ttnn.ge(x, 0.0, dtype=ttnn.float32)
-        out = ttnn.where(valid, row, -1.0)
+        out = ttnn.where(valid, row, -1.0, sub_core_grids=sub_cores(valid))
         for t in (x, row, valid):
             dealloc(t)
-        i32 = ttnn.typecast(out, ttnn.int32, memory_config=DRAM)  # -1 stays -1 (K-18)
+        i32 = ttnn.typecast(
+            out, ttnn.int32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(out)
+        )  # -1 stays -1 (K-18)
         dealloc(out)
         u32 = ttnn.bitcast(i32, ttnn.uint32)
-        rm = ttnn.to_layout(u32, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        rm = to_rm(u32, memory_config=DRAM)
         if u32 is not i32:
             dealloc(u32)
         dealloc(i32)
@@ -242,7 +251,7 @@ class TtSparseAttention(TtWindowAttention):
         if mine is not topk:
             dealloc(mine)
         cls = g.start_class(start)
-        src = ttnn.concat([self.tables.index[cls], rows], dim=-1, memory_config=DRAM)
+        src = ttnn.concat([self.tables.index[cls], rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         dealloc(rows)
         if cls == WINDOW:  # every window full: the top-k's own sentinel tail ends the list
             return src
@@ -258,7 +267,7 @@ class TtSparseAttention(TtWindowAttention):
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
         mine = self._mine(topk)
         cls = g.start_class(start)
-        src = ttnn.concat([table.index[cls], mine], dim=-1, memory_config=DRAM)
+        src = ttnn.concat([table.index[cls], mine], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         if mine is not topk:
             dealloc(mine)
         # every window full: the top-k's own sentinel tail ends the list; CKV_FORMAT=bfp4_rows: ROW_BFP4 takes the
@@ -342,7 +351,7 @@ class TtSparseAttention(TtWindowAttention):
                 memo.put(("comp", sources[0]), ckey, (comp, nb))
         else:
             comp, nb = hit
-        table = ttnn.concat([window, comp], dim=2, memory_config=DRAM)
+        table = ttnn.concat([window, comp], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
         dealloc(window)
         if not shared:
             dealloc(comp)

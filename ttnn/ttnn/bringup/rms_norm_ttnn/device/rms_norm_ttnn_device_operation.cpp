@@ -113,6 +113,8 @@ ttsl::hash::hash_t RmsNormDeviceOperation::compute_program_hash(
         spec_of(tensor_args.residual),
         residual_aliases_input(tensor_args),
         spec_of(tensor_args.residual_sum),
+        attrs.max_grid.has_value() ? attrs.max_grid->x : 0u,
+        attrs.max_grid.has_value() ? attrs.max_grid->y : 0u,
         env_key);
 }
 
@@ -131,14 +133,16 @@ ttnn::Tensor rms_norm_ttnn(
     bool inplace,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::Tensor>& residual_sum,
-    const std::optional<ttnn::Tensor>& output) {
+    const std::optional<ttnn::Tensor>& output,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::rms_norm_ttnn::RmsNormDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .epsilon = epsilon,
         .compute_config = compute_config,
         .subblock_w = subblock_w,
         .inplace = inplace,
-        .output_mem_config = output_mem_config};
+        .output_mem_config = output_mem_config,
+        .max_grid = max_grid};
     auto args = OperationType::tensor_args_t{
         .input = input,
         .weight = weight,

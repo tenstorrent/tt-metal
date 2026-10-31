@@ -1098,6 +1098,65 @@ tasks:
       once the window is bfloat8_b: report the new value, do not touch the waiver.'
     gate_tasks:
     - P.10
+- id: FIX.15
+  title: 'GALAXY_CORE_CAP: no op on more than 110 Tensix cores of a chip (PSU di/dt), then re-tune'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.17
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=P.17 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.17 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/moe_block
+  - models/demos/deepseek_v3_d_p
+  - models/demos/glm53_flash_d_p_lb
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/prepared_program
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn
+  - tt_metal/impl/allocator
+  - tt_metal/impl/buffers
+  - tools/triage/dump_l1_diff.py
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-30 15:40 (agent rule 18): the Galaxy''s power supply trips when a chip''s current rises too fast
+      (di/dt); no op may run on more than 110 of a chip''s 120 Tensix cores. Do: (1) add the setting MAX_WORKER_CORES (default
+      110 on Galaxy boxes, the full grid elsewhere; one place, tt/settings.py) and pass it to every op that picks a core grid;
+      (2) audit EVERY op the model runs on the 8x4 for its core count (the device profiler''s per-op core counts, or each
+      op''s program config / grid): matmul configs (tt/mm_configs: today''s rule and the galaxy table; today engram_kv uses
+      120 cores, attn.wq_b 114), the bring-up forks (ckv_bfp4 / bfp_round compact, rms_norm, mhc_pre / mhc_post, rotary_embedding_indexed,
+      sparse_sdpa, indexer_score, topk_large_indices, fabric_all_gather, combine_rf), the MoE block (fused head, se_engine3,
+      flat_routed_expert, tail, routing exchange), attention, CCL workers; (3) cap each over-limit op to at most MAX_WORKER_CORES
+      via its own option (fork ops: an option, default today''s grid), and re-sweep the capped matmul calls on single cards
+      (run_safe_pytest --device auto, P23_SHARD over all 32 cards); (4) report per op: cores before / after and its device
+      time before / after, and the chunk''s device time and warm wall at 51200 and 512000. No fork regression suites (task
+      F.1).'
+    gate_tasks:
+    - P.17
+    - K.1
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1107,6 +1166,7 @@ tasks:
   - K.1
   - P.10
   - FIX.14
+  - FIX.15
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -1405,16 +1465,15 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-29 19:00. FIX.14 (DS41-142) added ~+17.7 ms host overhead a chunk: ckv_bfp4 window blocks
-      80 calls a chunk at ~0.21 ms host each (chunk + 128-row carry, two calls a layer), bfp_round 12 calls at ~0.5 ms
-      each, both already prepared=True (P.7''s pattern). Do, in order, measuring host time per call and per chunk: (1)
-      check bfp_round really takes the prepared path at 8x4 (it costs 2.4x ckv_bfp4 a call: a fallback to generic_op,
-      a per-call output allocation, or the patching) and bring it to ckv_bfp4''s cost or below; (2) write each
-      layer''s carry and chunk window blocks in ONE ckv_bfp4 call (80 -> 40 calls), bit-identical blocks; (3) whatever
-      per-call host work remains in run_prepared / the output allocation that can move out of the per-call path
-      (reuse the output tensors, as the window block buffer already is). Bit-identical outputs. Behind the setting
-      LOWBIT_HOST (default on, ''off'' = FIX.14''s path). Report host_overhead_ms, per-call host time, device time and
-      warm wall per chunk (DS41_ENGRAM_TABLE=resident) before / after.'
+    details: 'OWNER 2026-10-29 19:00. FIX.14 (DS41-142) added ~+17.7 ms host overhead a chunk: ckv_bfp4 window blocks 80 calls
+      a chunk at ~0.21 ms host each (chunk + 128-row carry, two calls a layer), bfp_round 12 calls at ~0.5 ms each, both already
+      prepared=True (P.7''s pattern). Do, in order, measuring host time per call and per chunk: (1) check bfp_round really
+      takes the prepared path at 8x4 (it costs 2.4x ckv_bfp4 a call: a fallback to generic_op, a per-call output allocation,
+      or the patching) and bring it to ckv_bfp4''s cost or below; (2) write each layer''s carry and chunk window blocks in
+      ONE ckv_bfp4 call (80 -> 40 calls), bit-identical blocks; (3) whatever per-call host work remains in run_prepared /
+      the output allocation that can move out of the per-call path (reuse the output tensors, as the window block buffer already
+      is). Bit-identical outputs. Behind the setting LOWBIT_HOST (default on, ''off'' = FIX.14''s path). Report host_overhead_ms,
+      per-call host time, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) before / after.'
   ab:
     env:
       DS41_LOWBIT_HOST: 'off'
@@ -1443,17 +1502,15 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-29 20:10. Before this task starts the overseer merges dnijemcevic/model_bringup_lowbit @
-      9e5e0556b80 (READY FOR GALAXY) and rebuilds ttnn (the fork has C++). The 2x2 forked
-      ttnn.experimental.topk_large_indices into ttnn.bringup.topk_large_indices (upstream''s split LLK #62035 / #62488
-      / #62411 plus a K'' 512 port of the split segmented body) and made it the default for every indexer top-k (the
-      index top-k 512 and the candidate blocks'' k 2048), setting INDEX_TOPK_OP (fork | stock). One p150b: top-k 512
-      over 27648 keys 596 -> 337 us, over 262144 2258 -> 954 us; candidate k 2048 182 -> 138 us. Expected: device time
-      down, host time about the same. Do: run it at 8x4 sizes (per-chip key counts after P.8 / P.10, 40 layers), fix
-      what breaks in the fork behind the same behaviour keeping the 2x2 working; the selection must be identical to the
-      stock op (same ids; ties as the stock op orders them) or explain any difference. Report per-call top-k time
-      (index and candidates, r2 and r1), indexer section, device and warm wall per chunk (DS41_ENGRAM_TABLE=resident)
-      on vs off.'
+    details: 'OWNER 2026-10-29 20:10. Before this task starts the overseer merges dnijemcevic/model_bringup_lowbit @ 9e5e0556b80
+      (READY FOR GALAXY) and rebuilds ttnn (the fork has C++). The 2x2 forked ttnn.experimental.topk_large_indices into ttnn.bringup.topk_large_indices
+      (upstream''s split LLK #62035 / #62488 / #62411 plus a K'' 512 port of the split segmented body) and made it the default
+      for every indexer top-k (the index top-k 512 and the candidate blocks'' k 2048), setting INDEX_TOPK_OP (fork | stock).
+      One p150b: top-k 512 over 27648 keys 596 -> 337 us, over 262144 2258 -> 954 us; candidate k 2048 182 -> 138 us. Expected:
+      device time down, host time about the same. Do: run it at 8x4 sizes (per-chip key counts after P.8 / P.10, 40 layers),
+      fix what breaks in the fork behind the same behaviour keeping the 2x2 working; the selection must be identical to the
+      stock op (same ids; ties as the stock op orders them) or explain any difference. Report per-call top-k time (index and
+      candidates, r2 and r1), indexer section, device and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on vs off.'
   ab:
     env:
       DS41_INDEX_TOPK_OP: stock
@@ -1482,15 +1539,18 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-29: no Python-built op stays non-prepared. Census first: every op the model calls per chunk
-      whose program is built in Python (ttnn.generic_op / ProgramDescriptor: candidates rms_norm, mhc_pre_xing /
-      mhc_pre_xing_pack / mhc_post, combine_rf and its parts, flat_routed_expert*, fabric_all_gather /
-      fabric_reduce_scatter, moe_grouped_topk, update_padded_kv_cache - check each), with its calls a chunk, host time
-      a call (cProfile of warm chunks) and whether it already goes through ttnn.bringup.prepare_program /
-      run_prepared. Then move every one that does not onto the prepared path (as ckv_bfp4 / bfp_round prepared=True,
-      P.7, P.12): built once per shape and memory config, addresses patched per call, outputs reused where possible,
-      bit-identical results. Include models/demos/moe_block/tt/tail_a2a.py: its 16-entry program cache shared by all 40 layers is keyed on tensor ADDRESSES, so any allocation change mid-forward makes it rebuild programs (P.4 / DS41-146: 22 -> 188 ms a chunk); key it on shape and patch addresses per call (prepared). With that fixed, persistent CCL outputs (P.4''s rejected change, ~13 ms host a chunk) can be retried. One setting PREPARED_ALL (default on, ''off'' = today''s per-op paths). Report the census
-      table and host_overhead_ms, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on vs off.'
+    details: 'OWNER 2026-10-29: no Python-built op stays non-prepared. Census first: every op the model calls per chunk whose
+      program is built in Python (ttnn.generic_op / ProgramDescriptor: candidates rms_norm, mhc_pre_xing / mhc_pre_xing_pack
+      / mhc_post, combine_rf and its parts, flat_routed_expert*, fabric_all_gather / fabric_reduce_scatter, moe_grouped_topk,
+      update_padded_kv_cache - check each), with its calls a chunk, host time a call (cProfile of warm chunks) and whether
+      it already goes through ttnn.bringup.prepare_program / run_prepared. Then move every one that does not onto the prepared
+      path (as ckv_bfp4 / bfp_round prepared=True, P.7, P.12): built once per shape and memory config, addresses patched per
+      call, outputs reused where possible, bit-identical results. Include models/demos/moe_block/tt/tail_a2a.py: its 16-entry
+      program cache shared by all 40 layers is keyed on tensor ADDRESSES, so any allocation change mid-forward makes it rebuild
+      programs (P.4 / DS41-146: 22 -> 188 ms a chunk); key it on shape and patch addresses per call (prepared). With that
+      fixed, persistent CCL outputs (P.4''s rejected change, ~13 ms host a chunk) can be retried. One setting PREPARED_ALL
+      (default on, ''off'' = today''s per-op paths). Report the census table and host_overhead_ms, device time and warm wall
+      per chunk (DS41_ENGRAM_TABLE=resident) on vs off.'
   ab:
     env:
       DS41_PREPARED_ALL: 'off'
@@ -1509,7 +1569,8 @@ tasks:
       chunk_wall_ms: < 434
       device_ms_total: <= 230
 - id: P.15
-  title: 'HOST_ALLOC: persistent CCL outputs (P.4 retried), shape-keyed MoE head / dispatch programs, fewer allocations and slices'
+  title: 'HOST_ALLOC: persistent CCL outputs (P.4 retried), shape-keyed MoE head / dispatch programs, fewer allocations and
+    slices'
   step: perf
   role: perf
   device: true
@@ -1520,19 +1581,18 @@ tasks:
   - ttnn/ttnn/bringup
   brief:
     details: 'OWNER 2026-10-30. The chunk is host-bound by ~125 ms (NOW profile, /scratch/dnijemcevic/posprof/hostprof_now.pstats:
-      ~2,600 compiled op launches at ~82 us, 372 buffer allocations 31 ms, slices 20 ms, dealloc 27 ms; DS41-171). Do,
-      measuring host time per item (cProfile of warm chunks) and keeping outputs bit-identical: (1) P.4 retried: the 212
-      per-step all_gathers (mHC row exchange 80, window KV 80, split-norm stats 40, compressor 12) write persistent
-      outputs, ALLOCATED AT LOAD TIME (never mid-forward: DS41-146, P.11''s lesson), dealloc skipping them; (2) the MoE
-      fused head (fused_head.py _run, 40 x ~0.7 ms host) and sparse_all_gather_2d (MoE dispatch, 40 x ~0.15 ms) keyed on
-      shape with addresses patched per call (prepared, as P.14 did for the tail) - wire through tt/moe_block_adapter.py
-      if models/demos/moe_block is outside your paths, as P.14 did; (3) cut the per-chunk buffer allocations: reuse
-      output tensors of fixed-shape ops (output_tensor= / preallocated buffers, in-place where the op allows), list every
-      allocation site with calls a chunk before / after; (4) cut the slices: views or sharded reads instead of copies,
-      fold a slice into its consumer (offsets in the op), drop slices whose result equals the input, list every slice
-      site before / after. One setting HOST_ALLOC (default on, ''off'' = today''s path). Report host_overhead_ms, op launches
-      a chunk, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on vs off, and the remaining top host
-      items.'
+      ~2,600 compiled op launches at ~82 us, 372 buffer allocations 31 ms, slices 20 ms, dealloc 27 ms; DS41-171). Do, measuring
+      host time per item (cProfile of warm chunks) and keeping outputs bit-identical: (1) P.4 retried: the 212 per-step all_gathers
+      (mHC row exchange 80, window KV 80, split-norm stats 40, compressor 12) write persistent outputs, ALLOCATED AT LOAD
+      TIME (never mid-forward: DS41-146, P.11''s lesson), dealloc skipping them; (2) the MoE fused head (fused_head.py _run,
+      40 x ~0.7 ms host) and sparse_all_gather_2d (MoE dispatch, 40 x ~0.15 ms) keyed on shape with addresses patched per
+      call (prepared, as P.14 did for the tail) - wire through tt/moe_block_adapter.py if models/demos/moe_block is outside
+      your paths, as P.14 did; (3) cut the per-chunk buffer allocations: reuse output tensors of fixed-shape ops (output_tensor=
+      / preallocated buffers, in-place where the op allows), list every allocation site with calls a chunk before / after;
+      (4) cut the slices: views or sharded reads instead of copies, fold a slice into its consumer (offsets in the op), drop
+      slices whose result equals the input, list every slice site before / after. One setting HOST_ALLOC (default on, ''off''
+      = today''s path). Report host_overhead_ms, op launches a chunk, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident)
+      on vs off, and the remaining top host items.'
   ab:
     env:
       DS41_HOST_ALLOC: 'off'
@@ -1562,15 +1622,14 @@ tasks:
   - ttnn/ttnn/bringup
   brief:
     details: 'OWNER 2026-10-30 (P.15''s next host idea, DS41-171). ~500 calls a chunk of ttnn.bringup.rms_norm, mhc_post,
-      mhc_pre_xing / mhc_pre_xing_pack and rotary_embedding_indexed allocate their output on every call (~35 us host
-      each, ~17 ms a chunk). Give each fork an optional output tensor (behind an option, default = today''s
-      allocation; extend the fork''s C++ / Python and its tests, rebuild), then have the model pass load-time buffers
-      (tt/host_alloc.py, P.15''s pattern) at every call site whose output is consumed within its step. First check each
-      site''s output lifetime: an output kept across layers or chunks (e.g. by the indexer''s per-chunk memo, the mHC
-      residual streams) must not be overwritten - those sites keep allocating. Bit-identical outputs. Setting
-      FORK_OUT_BUFFERS (default on, ''off'' = today''s path). Report per-op calls a chunk and host us a call before /
-      after, allocations a chunk, host_overhead_ms, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on
-      vs off.'
+      mhc_pre_xing / mhc_pre_xing_pack and rotary_embedding_indexed allocate their output on every call (~35 us host each,
+      ~17 ms a chunk). Give each fork an optional output tensor (behind an option, default = today''s allocation; extend the
+      fork''s C++ / Python and its tests, rebuild), then have the model pass load-time buffers (tt/host_alloc.py, P.15''s
+      pattern) at every call site whose output is consumed within its step. First check each site''s output lifetime: an output
+      kept across layers or chunks (e.g. by the indexer''s per-chunk memo, the mHC residual streams) must not be overwritten
+      - those sites keep allocating. Bit-identical outputs. Setting FORK_OUT_BUFFERS (default on, ''off'' = today''s path).
+      Report per-op calls a chunk and host us a call before / after, allocations a chunk, host_overhead_ms, device time and
+      warm wall per chunk (DS41_ENGRAM_TABLE=resident) on vs off.'
   ab:
     env:
       DS41_FORK_OUT_BUFFERS: 'off'
@@ -1608,21 +1667,20 @@ tasks:
   - tt_metal/impl/buffers
   - tools/triage/dump_l1_diff.py
   brief:
-    details: 'OWNER 2026-10-30: take the new MoE block drop and measure its effect, device and host, at 50k -> 55k and
-      500k -> 505k. The drop is the 5 commits of origin/dnijemcevic/model_bringup_lowbit after 8deddc500ea (6f7fc85f27b
-      Sync with Marko @ 5dd83d14d7e: fused head host launch cost, persistent words in L1_SMALL, allocator shard-grid
-      cache, combine fp32 sums to DEST, prepared_program / sparse_all_gather_2d keys, se_engine3 speed-ups; 847723943b1
-      routing_stream SE-RPWAIT; 26f61977390 routing exchange forwarding slots in DRAM (GLM-5.3 hang); a99234c84e0
-      combine per-chip accumulator roles SPC_ACC_PERCHIP default on; 5e86f048ad4 flat DRISC NoC high address clear).
-      Do: `git fetch origin dnijemcevic/model_bringup_lowbit` and apply exactly those commits to the tree, uncommitted
-      (e.g. `git merge --squash --no-commit origin/dnijemcevic/model_bringup_lowbit`; the overseer checked: no conflicts
-      with HEAD; then `git reset -q` so nothing is staged), change nothing else, rebuild (./build_metal.sh, C++ in
-      tt_metal allocator / buffer, the hybrid combine factory, flat_routed_expert, prepared_program), check `import
-      ttnn` and that the model still runs its shipped configuration (MOE_IMPL=block, MOE_HEAD=fused, torus). If a
-      shipped DS41 path breaks, fix it in the DS41 adapter (tt/moe_block_adapter.py) and say so; do not change the
-      drop. No fork regression or unit suites (task F.1). The orchestrator measured ''before'' already and measures
-      ''after'' itself (quick A/B plus one chunk at 51200 and 512000: device per section, warm wall, host cProfile):
-      do not profile. Report the drop''s new switches and their defaults as the DS41 run uses them.'
+    details: 'OWNER 2026-10-30: take the new MoE block drop and measure its effect, device and host, at 50k -> 55k and 500k
+      -> 505k. The drop is the 5 commits of origin/dnijemcevic/model_bringup_lowbit after 8deddc500ea (6f7fc85f27b Sync with
+      Marko @ 5dd83d14d7e: fused head host launch cost, persistent words in L1_SMALL, allocator shard-grid cache, combine
+      fp32 sums to DEST, prepared_program / sparse_all_gather_2d keys, se_engine3 speed-ups; 847723943b1 routing_stream SE-RPWAIT;
+      26f61977390 routing exchange forwarding slots in DRAM (GLM-5.3 hang); a99234c84e0 combine per-chip accumulator roles
+      SPC_ACC_PERCHIP default on; 5e86f048ad4 flat DRISC NoC high address clear). Do: `git fetch origin dnijemcevic/model_bringup_lowbit`
+      and apply exactly those commits to the tree, uncommitted (e.g. `git merge --squash --no-commit origin/dnijemcevic/model_bringup_lowbit`;
+      the overseer checked: no conflicts with HEAD; then `git reset -q` so nothing is staged), change nothing else, rebuild
+      (./build_metal.sh, C++ in tt_metal allocator / buffer, the hybrid combine factory, flat_routed_expert, prepared_program),
+      check `import ttnn` and that the model still runs its shipped configuration (MOE_IMPL=block, MOE_HEAD=fused, torus).
+      If a shipped DS41 path breaks, fix it in the DS41 adapter (tt/moe_block_adapter.py) and say so; do not change the drop.
+      No fork regression or unit suites (task F.1). The orchestrator measured ''before'' already and measures ''after'' itself
+      (quick A/B plus one chunk at 51200 and 512000: device per section, warm wall, host cProfile): do not profile. Report
+      the drop''s new switches and their defaults as the DS41 run uses them.'
   imports:
   - origin/dnijemcevic/model_bringup_lowbit
   ab:
@@ -1653,21 +1711,20 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/perf
   brief:
-    details: 'OWNER 2026-10-30: the matmul program configs were swept on the 2x2 (P.23 / P.24, tt/mm_configs.rule)
-      and never on the Galaxy; every matmul the model runs on the 8x4 must be swept there. Do: (1) route every dense
-      matmul through tt/mm_configs (rope.py:234 calls ttnn.matmul directly; grep the model for any other ttnn.linear /
-      ttnn.matmul / minimal_matmul outside mm_configs) so the capture sees them all; (2) on the 8x4 at the shipped
-      settings (SP=32 on, DS41_ENGRAM_TABLE=resident), test_matmul_sweep.py -k capture, then -k sweep with
-      P23_MIN_MS=0 (EVERY distinct call, not only the expensive ones; P23_SITES unset); (3) a new value of the setting
-      MATMUL_CONFIG, galaxy: a per-shape table in tt/mm_configs keyed exactly as program_config caches (shape, weight
-      shape, dtypes, fp32 DEST, grid), holding each call''s best config, and today''s rule for any shape not in it;
-      tuned stays today''s rule. The same acceptance per candidate as P.23: deterministic, fits the L1 the model
-      leaves, output bit-identical to auto or within its last bf16 rounding, error vs float64 not worse than the
-      current config. Do not change dtypes, compute kernel configs, memory configs or the op sequence. (4) Report
-      per site and shape: calls a chunk, current vs galaxy ms a call and a chunk. List, as out of scope, the
-      matmul-like work that has no program config (flat routed experts, the shared expert engine and router in the
-      fused head, sparse_sdpa, the indexer score). Do not profile the model: the orchestrator measures tuned vs galaxy
-      at 51200 and 512000. No fork regression suites (task F.1).'
+    details: 'OWNER 2026-10-30: the matmul program configs were swept on the 2x2 (P.23 / P.24, tt/mm_configs.rule) and never
+      on the Galaxy; every matmul the model runs on the 8x4 must be swept there. Do: (1) route every dense matmul through
+      tt/mm_configs (rope.py:234 calls ttnn.matmul directly; grep the model for any other ttnn.linear / ttnn.matmul / minimal_matmul
+      outside mm_configs) so the capture sees them all; (2) on the 8x4 at the shipped settings (SP=32 on, DS41_ENGRAM_TABLE=resident),
+      test_matmul_sweep.py -k capture, then -k sweep with P23_MIN_MS=0 (EVERY distinct call, not only the expensive ones;
+      P23_SITES unset); (3) a new value of the setting MATMUL_CONFIG, galaxy: a per-shape table in tt/mm_configs keyed exactly
+      as program_config caches (shape, weight shape, dtypes, fp32 DEST, grid), holding each call''s best config, and today''s
+      rule for any shape not in it; tuned stays today''s rule. The same acceptance per candidate as P.23: deterministic, fits
+      the L1 the model leaves, output bit-identical to auto or within its last bf16 rounding, error vs float64 not worse than
+      the current config. Do not change dtypes, compute kernel configs, memory configs or the op sequence. (4) Report per
+      site and shape: calls a chunk, current vs galaxy ms a call and a chunk. List, as out of scope, the matmul-like work
+      that has no program config (flat routed experts, the shared expert engine and router in the fused head, sparse_sdpa,
+      the indexer score). Do not profile the model: the orchestrator measures tuned vs galaxy at 51200 and 512000. No fork
+      regression suites (task F.1).'
   ab:
     env:
       MATMUL_CONFIG: tuned
@@ -1699,17 +1756,16 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/perf
   brief:
-    details: 'OWNER 2026-10-30: compare SP=8 x TP=4 attention with SP=32 apples to apples, both with matmul configs
-      swept on the Galaxy. The SP=32 switches stay in the code with their old paths: ATTN_SP32 (P.10),
-      ATTN_SP32_PROJ (P.9), INDEXER_TOPK_LOCAL (P.8); off = the SP=8 path. Do: (1) with all three off (and
-      MATMUL_CONFIG=galaxy, DS41_ENGRAM_TABLE=resident), check that the model runs: P.11-P.17 were built with SP=32
-      on, so fix only what breaks on the off paths (P.15 persistent buffers, P.16 fork output buffers, P.11 window
-      packing), changing nothing on the SP=32 path; (2) with the three off, test_matmul_sweep.py -k capture and -k
-      sweep with P23_MIN_MS=0 (every call, as P.19), and add the SP=8 shapes'' winners to P.19''s galaxy table (keyed
-      by shape, so the SP=32 entries stay as P.19 left them; same acceptance per candidate); (3) report per site and
-      shape the SP=8 calls a chunk and ms a call / a chunk, next to P.19''s SP=32 numbers. Do not change the three
-      switches'' defaults (an accept does, F104). Do not profile the model: the orchestrator measures SP=32 vs SP=8,
-      both galaxy-tuned, at 51200 and 512000. No fork regression suites (task F.1).'
+    details: 'OWNER 2026-10-30: compare SP=8 x TP=4 attention with SP=32 apples to apples, both with matmul configs swept
+      on the Galaxy. The SP=32 switches stay in the code with their old paths: ATTN_SP32 (P.10), ATTN_SP32_PROJ (P.9), INDEXER_TOPK_LOCAL
+      (P.8); off = the SP=8 path. Do: (1) with all three off (and MATMUL_CONFIG=galaxy, DS41_ENGRAM_TABLE=resident), check
+      that the model runs: P.11-P.17 were built with SP=32 on, so fix only what breaks on the off paths (P.15 persistent buffers,
+      P.16 fork output buffers, P.11 window packing), changing nothing on the SP=32 path; (2) with the three off, test_matmul_sweep.py
+      -k capture and -k sweep with P23_MIN_MS=0 (every call, as P.19), and add the SP=8 shapes'' winners to P.19''s galaxy
+      table (keyed by shape, so the SP=32 entries stay as P.19 left them; same acceptance per candidate); (3) report per site
+      and shape the SP=8 calls a chunk and ms a call / a chunk, next to P.19''s SP=32 numbers. Do not change the three switches''
+      defaults (an accept does, F104). Do not profile the model: the orchestrator measures SP=32 vs SP=8, both galaxy-tuned,
+      at 51200 and 512000. No fork regression suites (task F.1).'
   ab:
     env:
       ATTN_SP32: 'on'

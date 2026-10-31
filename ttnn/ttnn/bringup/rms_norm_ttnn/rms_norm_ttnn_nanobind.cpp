@@ -146,7 +146,8 @@ RmsNormPyResult rms_norm_py(
     int64_t stats_width,
     const std::optional<std::pair<int64_t, int64_t>>& input_window,
     const std::optional<tt::tt_metal::DataType>& dtype,
-    const std::optional<ttnn::Tensor>& output_tensor) {
+    const std::optional<ttnn::Tensor>& output_tensor,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     // CHANGELOG 6: any split option -> the split program (the default program never sees them)
     if (stats_out || partial_stats.has_value() || stats_width != 0 || input_window.has_value() || dtype.has_value()) {
         if (bias.has_value() || residual_input_tensor.has_value() || program_config.has_value() ||
@@ -168,7 +169,8 @@ RmsNormPyResult rms_norm_py(
                 stats_width,
                 input_window,
                 dtype,
-                output_tensor),
+                output_tensor,
+                max_grid),
             .residual_sum = std::nullopt};
     }
     auto r = rms_norm_full(
@@ -182,7 +184,8 @@ RmsNormPyResult rms_norm_py(
         compute_kernel_config,
         return_residual_sum,
         residual_sum_memory_config,
-        output_tensor);
+        output_tensor,
+        max_grid);
     if (r.inplace) {
         return RmsNormPyResult{
             .alias = &input_tensor, .value = std::nullopt, .residual_sum = std::move(r.residual_sum)};
@@ -284,6 +287,10 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
                 the op allocates its output): the op writes this tensor, which must have exactly the output's spec
                 (shape, dtype, layout, memory config; checked on every call) and must not be the input; either
                 program. The result is a tensor of its buffer (a new Python object). Not with ``inplace``.
+            max_grid (ttnn.CoreCoord, optional): opt-in (deepseek_v41_flash_d_p FIX.15; default None = the
+                device's whole compute grid): the op runs on the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1)
+                of the grid (a Galaxy's 110-core cap); either program, interleaved inputs (a sharded input keeps its
+                shard grid).
 
         Returns:
             ttnn.Tensor: the normalized tensor (the input tensor itself under ``inplace``); with
@@ -306,7 +313,8 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
         nb::arg("stats_width") = 0,
         nb::arg("input_window") = nb::none(),
         nb::arg("dtype") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("max_grid") = nb::none());
 
     // For the parity test: the C++ builder's ProgramDescriptor, without dispatching.
     mod.def(

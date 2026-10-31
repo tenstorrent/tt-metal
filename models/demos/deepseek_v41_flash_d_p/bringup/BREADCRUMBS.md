@@ -4613,3 +4613,115 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   host_transfers_per_layer 0. Position profiles p51200 / p512000 left to the orchestrator (brief).
 - OV-3: nothing padded. OV-23: no Python-built op added or touched. OV-25: no fork suites run.
 - Re-run: see tests/perf/test_matmul_sweep.py docstring (capture, test_sweep_card shards, merge_shards).
+
+## P.20 perf (galaxy 8x4, attempt 1): SP8_RESWEEP, the SP=8 x TP=4 attention's matmuls swept on the Galaxy
+
+- Change-on side: DS41_ATTN_SP32=off, ATTN_SP32_PROJ=off, INDEXER_TOPK_LOCAL=off, MATMUL_CONFIG=galaxy,
+  ENGRAM_TABLE=resident. Off side: the three on (P.19's SP=32). No switch default changed (F104).
+- (1) Off paths: the model ran unchanged with the three off, so nothing was fixed. That covers three warm runs in
+  each capture process, at 51200 and 512000, and the quick measure. The off paths are P.15's load-time buffers, P.16's
+  fork outputs and P.11's packing. No code change in tt/ besides the table.
+- (2) Capture (test_capture, new P23_TAG=sp8 so P.19's calls_tuned*.json stay as they are): calls_sp8.json (51200)
+  and calls_sp8_p512000.json are identical: 187 calls, 12 distinct, same configs, 1357 KiB free for CBs at every
+  call. No dense matmul shape depends on the context. Sweep: test_sweep_card on 12 single cards in parallel, one
+  distinct call each (P23_SHARD=i/12, P23_CALLS=calls_sp8.json, P23_NAME=_sp8, P23_MIN_MS=0). Merged with
+  `P23_NAME=_sp8 merge_shards(12)`, giving sweep_sp8.json and galaxy_table_sp8.py. All shards rc 0 in about 3 min.
+- tt/mm_configs.GALAXY: 7 SP=8 keys added (12 -> 19 entries). 5 SP=8 calls share a key with P.19's entries
+  (engram_kv, hc.fn, indexer.wq_b, compressor 320 / 640 x 512 x 128). Their sweep winners equal P.19's entries, and
+  those entries are unchanged. Acceptance is the same as P.19. All 7 are bit-identical to auto. One new winner:
+  attn.wo_b 640x2048x5120, minimal M4 K8 N16 sb2x2, 0.0775 -> 0.0739 ms (-4.6 %). The rule is kept for the other 6.
+  Cores (OV-31, no 110 cap in this pick): minimal 12x10 = 120 (wq_b, wo_b, q_a); 2D 11x10 = 110 (wo_a, compressor
+  1024); 8x10 = 80 (compressor 512); 1x10 (weights_proj).
+- (3) Per site, galaxy-tuned device kernel ms on one card. These are calls a chunk and ms a call / a chunk, at the
+  5120-token chunk:
+  | site | SP=8 shape (per chip) | calls | ms a call | ms a chunk | SP=32 shape (P.19) | calls | ms a call | ms a chunk |
+  |---|---|---|---|---|---|---|---|---|
+  | q_a | 640x1280 x 1280x1792 bfp8 -> bf16 (K split, + TP sum) | 40 | 0.0251 | 1.005 | 160x5120 x 5120x1792 | 40 | 0.0450 | 1.801 |
+  | attn.wq_b | 640x1280 x 1280x8192 bfp8 -> bf16 | 40 | 0.0751 | 3.006 | 160x1280 x 1280x32768 | 40 | 0.1897 | 7.587 |
+  | attn.wo_a | 2x640x4096 x 2x4096x1024 bfp8 -> bfp8 | 40 | 0.0593 | 2.371 | 8x160x4096 x 8x4096x1024 | 40 | 0.2060 | 8.240 |
+  | attn.wo_b | 640x2048 x 2048x5120 bfp8 -> bf16 (+ RS) | 40 | 0.0739 | 2.957 | 160x8192 x 8192x5120 | 40 | 0.1506 | 6.024 |
+  | indexer.wq_b | 160x1280 x 1280x4096 bfp8 -> bf16 | 8 | 0.0269 | 0.215 | same | 8 | 0.0269 | 0.215 |
+  | indexer.weights_proj | 640x1280 x 1280x32 bf16 -> bf16 | 8 | 0.0093 | 0.075 | 160x5120 x 5120x32 | 8 | 0.0168 | 0.135 |
+  | compressor | 640x1280 x 1280x1024 bf16 -> bf16 | 3 | 0.0199 | 0.060 | 160x5120 x 5120x1024 -> fp32 | 3 | 0.0431 | 0.129 |
+  | compressor | 640x1280 x 1280x512 bf16 -> bf16 | 1 | 0.0151 | 0.015 | 160x5120 x 5120x512 -> fp32 | 1 | 0.0293 | 0.029 |
+  | compressor | 320x512 x 512x128 bf16 | 3 | 0.0042 | 0.013 | same | 3 | 0.0042 | 0.013 |
+  | compressor | 640x512 x 512x128 bf16 | 1 | 0.0067 | 0.007 | same | 1 | 0.0067 | 0.007 |
+  | engram_kv | 640x6144 x 6144x6400 bfp8 -> bf16 | 2 | 0.2241 | 0.448 | same | 2 | 0.2237 | 0.447 |
+  | hc.fn | 640x5120 bf16 x 5120x32 fp32 -> fp32 | 1 | 0.0298 | 0.030 | same | 1 | 0.0298 | 0.030 |
+  Matmul total a chunk: SP=8 10.20 ms (tuned rule 10.44) vs SP=32 24.66 ms. SP=8's matmuls are TP partials (q_a,
+  compressor, weights_proj: K split; wo_b) or column splits, so the TP reduce-scatters / gathers and the head <-> seq
+  all_to_alls that SP=32 removed are not in these numbers. The orchestrator's profiles at 51200 / 512000 compare the
+  whole chunk.
+- Quick A/B (change on, `measure --task P.20 --part quick`): rc 0, all 102 limits pass. L39 err 0.8918 / 1.533
+  (P.19 SP=32: 0.9144), min layer PCC 0.532 (L39). The tightest are err_state_topk_idx_L08 at 0.90 of its limit and
+  window_kv L28 at 0.88. host_transfers_per_layer 0, chunk_wall_ms 374.2 (spread 70.3; P.19's quick on SP=32:
+  301.9). No profile was run (brief).
+- OV-3: nothing padded. OV-23: no Python-built op touched. OV-25: no fork suites run.
+- Re-run: captures `DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off DS41_INDEXER_TOPK_LOCAL=off DS41_MATMUL_CONFIG=galaxy
+  DS41_ENGRAM_TABLE=resident P23_TAG=sp8 [BRINGUP_POS=512000] scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py -k capture`. Sweep:
+  `/scratch/dnijemcevic/p20/sweep.sh` (12 shards; logs in /scratch/dnijemcevic/p20/sweep). A/B: `python -m
+  models.demos.common.bringup.orchestrator measure --task P.20`.
+
+## FIX.15 overseer (galaxy 8x4, attempt 3): GALAXY_CORE_CAP, no op on more than 110 Tensix cores of a chip
+
+Owner rule 18 (2026-10-30): a Galaxy's PSU trips on a chip's di/dt; at most 110 of the 120 cores an op. Attempt 2's
+edits were in the tree (OV-34): kept, rebuilt (`./build_metal.sh` rc 0), finished. Attempt 1 / 2 stopped by the
+overseer (P.20 revert, then the card-0 reset). The P.20 section above is the rejected pick's record, left as found.
+- Setting `MAX_WORKER_CORES` (tt/settings.py, default 110): the cap on a Galaxy (cluster type GALAXY / TG /
+  BLACKHOLE_GALAXY), the whole grid elsewhere; 0 = no cap. One module reads it: tt/cores.py (`worker_grid` 11 x 10,
+  `max_grid()` for fork options, `sub_cores()` for stock `sub_core_grids`; None off a Galaxy, so other boxes run the
+  calls as before).
+- Forks, option `max_grid` (default None = today's grid; attempt 2): sparse_sdpa, rms_norm (both programs),
+  mhc_pre_xing / mhc_pre_xing_pack, mhc_post (+ stats), rotary_embedding_indexed, update_padded_kv_cache (both
+  forms), ckv_bfp4 / bfp_round (prepared path kept, OV-23), IndexerScoreProgramConfig `max_grid_x / max_grid_y`.
+  New forks (stock op without a grid option): embedding, nlp_concat_heads, nlp_create_qkv_heads
+  (nlp_create_q_heads_split), slice_write; README / CHANGELOG / INDEX written, tests/source.yaml skeletons (selection
+  and baseline: F.1; no fork suite run here, OV-25).
+- This attempt: (1) MoE block: `MoEOptions.max_grid` (moe_block.py; DS41 passes cores.max_grid): the fused head's
+  engine + mover column inside 11 columns (HeadSE3 `max_grid`; planner: engine 10 x 10, MT 2, KB 10, predicted 231
+  us), its x copy as a capped same-dtype typecast (ttnn.copy takes no grid), the bfp8 cast capped, the warm-up / router
+  uploads host-built. (2) cores.maximum = where(ge(a, b), a, b) on the capped grid (bit-exact select; ttnn.maximum's
+  binding takes no sub_core_grids; no fork of a binary op for 4 calls a chunk). (3) cores.typecast for ROW_MAJOR
+  (tilize -> typecast -> untilize, capped; stock refuses a sub grid on RM): the indexer's block maxes.
+  (4) served.slice_rows: no output_tensor under the cap (slice lands it with an uncapped ttnn.copy) and a whole-slab
+  read as 2 slices + concat (a no-op slice of the ND-sharded slab is a whole-grid to_memory_config) (DS41-176).
+  (5) cores.from_torch: host build + to_device under the cap (from_torch(device=) tilizes / typecasts on the whole
+  grid), every tt/ upload; served._zero_fill_capped: DRAMZeroFill's kernel on 11 x 10, prepared (DS41-177).
+  (6) compressor divide got its sub_core_grids.
+- Audit (tests/perf/test_core_audit.py, real-time profiler core_count per program; DS41-179): before (attempt 2,
+  01:09, today's code) 77 (section, op, shape) rows over 110 (120 cores; ring_indexer_score_dsa 114); after:
+  0 over in the warm chunk AND in the load + compile chunk (`CORES_LOAD=1 CORES_AUDIT_STRICT=1`: PASS, max 110).
+- Matmuls: capped program_config keys on grid 11 x 10, so the P.19 12 x 10 table entries miss on the Galaxy (kept for
+  an uncapped 12 x 10 grid). Capture on the capped code (calls_cap110.json: 187 calls, 12 distinct, 1358 KiB free for
+  CBs), swept on the 8x4 MESH (OV-34; `test_sweep` now holds candidates to cores.worker_grid): 12 calls in 5:44, all
+  bit-identical to auto. ms a call, P.19 12 x 10 table -> 11 x 10 rule -> 11 x 10 best (now in GALAXY):
+  q_a x40 0.0450 -> 0.0551 -> 0.0474 (1d bw16); attn.wq_b x40 0.1897 -> 0.1972 (rule); attn.wo_a x40 0.2060 ->
+  0.2062; attn.wo_b x40 0.1506 -> 0.1364; engram_kv x2 0.2237 -> 0.2806 -> 0.2284 (minimal M4 K16 N8); compressor /
+  indexer / hc.fn within 0.001. Swept total 24.66 (P.19) -> 24.52 ms a chunk.
+- Per op (audit, one warm 5120-token chunk, kernel ms a chunk, all chips max; cores before -> after): attention
+  linear 120 -> 110, 13.87 -> 13.52; sparse_sdpa 120 -> 110, 11.90 -> 11.61; rotary (attention) 120 -> 110, 4.90 ->
+  4.96; mhc_pre_xing x2 120 -> 110, 8.06 -> 8.00; mhc_post x2 120 -> 100 / 110, 7.65 -> 7.73; nlp_concat_heads 120 ->
+  110, 2.47 -> 2.58; nlp_create_q_heads_split 120 -> 110, 1.98 -> 2.04; slice_write 120 -> 110, 0.85 -> 0.90;
+  ring_indexer_score_dsa 114 -> 104, 3.02 -> 3.31; topk_large_indices 120 -> 110, 1.48 -> 1.49; rms_norm (q_a, ffn,
+  kv) 120 -> 110, unchanged; engram_kv minimal_matmul 120 -> 110, 0.455 -> 0.462; attention RM untilize
+  (to_layout -> untilize_with_unpadding) 120 -> 107, 4.03 -> ~5.1; attention typecast 120 -> 80, 1.52 -> 1.81; q_a
+  typecast 120 -> 100, 0.29 -> 0.55; experts x copy + bfp8 cast 120 -> 100, 0.67 -> 1.21 (DS41-180); MoE fused head
+  120 -> 110 (experts section unchanged); flat_routed_expert 109 (unchanged). Full table:
+  /scratch/dnijemcevic/fix15/per_op.md; JSON generated/ds41_cores/cores_before.json, cores_after_ms.json.
+- Chunk (DS41_ENGRAM_TABLE=resident; before = P.19's shipped side): rung (gate profile) device 191.63 -> 195.03 ms,
+  warm wall 302.5 -> 303.7; p51200 device 201.47 -> 205.54, wall 306.4 -> 302.6; p512000 device 239.13 -> 241.32,
+  wall 308.6 -> 306.7 (indexer 43.74 -> 46.89 there: the ring indexer score on 104 cores). Gate FIX.15 --check PASS
+  (112 checks; err_final_hidden 0.18973 (P.19 0.18954), top5 1.0, contract 0 failed, acks_early 0, smoke 1).
+- Not done / open: a re-tune of the capped stand-ins (sub-grid typecast, untilize_with_unpadding, ~2 ms a chunk) and
+  of the ring indexer score's work split at 110 (it lands on 104); galaxy_4x4 not run (the fused head at 1280 rows a
+  row on 10 engine columns is unverified there; the planner raises if no layout fits). tt-probe.sh mesh mode reset
+  the whole box after its (passing) probe (DS41-178): one probe this attempt, then only run_safe_pytest.
+- OV-3: nothing padded. OV-23: the one Python-built program added (capped zero fill) runs prepared; ckv_bfp4 stays
+  prepared. OV-25: no fork suite run. OV-34: no single-card job; the audit, the probe and the sweep on the 8x4 mesh.
+- Re-run: audit `CORES_LOAD=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_core_audit.py`; sweep: `-k capture` on test_matmul_sweep.py,
+  `cp generated/ds41_p23/calls_galaxy.json generated/ds41_p23/calls_cap110.json`, then `P23_CALLS=calls_cap110.json
+  P23_MIN_MS=0 ... test_matmul_sweep.py -k "test_sweep and not card"`; positions: `DS41_ENGRAM_TABLE=resident
+  BRINGUP_PROFILE_WALL=1 BRINGUP_POS=<p> BRINGUP_PROFILE_HOST=1 ... test_profile.py`, then `BRINGUP_WALL_CLEAN=1` the
+  same; gate: `python -m models.demos.common.bringup gate FIX.15 --spec <spec> --check`.

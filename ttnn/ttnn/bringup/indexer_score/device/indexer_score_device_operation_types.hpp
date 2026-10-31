@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <vector>
@@ -25,7 +26,23 @@ struct IndexerScoreProgramConfig {
     std::size_t q_chunk_size = 32;
     std::size_t k_chunk_size = 32;
     std::size_t head_group_size = 1;  // heads resident at once; 1 always fits L1, raise for perf (0 = all)
+    // Bring-up option (deepseek_v41_flash_d_p FIX.15, agent rule 18: at most 110 Tensix cores an op on a Galaxy):
+    // the op (compute and, fused, its all-gather workers) runs on the rectangle (0, 0) .. (max_grid_x - 1,
+    // max_grid_y - 1) of the device's compute grid. 0 = the whole grid (default, the program it always was).
+    std::size_t max_grid_x = 0;
+    std::size_t max_grid_y = 0;
 };
+
+// The device's compute grid cut to the config's max_grid (FIX.15)
+inline tt::tt_metal::CoreCoord op_grid(tt::tt_metal::CoreCoord g, const IndexerScoreProgramConfig& cfg) {
+    if (cfg.max_grid_x > 0) {
+        g.x = std::min<std::size_t>(g.x, cfg.max_grid_x);
+    }
+    if (cfg.max_grid_y > 0) {
+        g.y = std::min<std::size_t>(g.y, cfg.max_grid_y);
+    }
+    return g;
+}
 
 // Resolve head_group_size to a concrete head count (0 = all Hi). Single-sourced so validate and the
 // factory can't drift on the "0 = all" contract.

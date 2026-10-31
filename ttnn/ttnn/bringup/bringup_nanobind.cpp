@@ -10,6 +10,12 @@
 namespace nb = nanobind;
 
 // BEGIN FORKED OPS (fork_op.py)
+namespace ttnn::operations::bringup::slice_write {
+void bind_slice_write(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_nlp_create_qkv_heads(nb::module_& mod);
+}
 namespace ttnn::operations::bringup::topk_large_indices::detail {
 void bind_topk_large_indices(nb::module_& mod);
 }
@@ -61,6 +67,12 @@ void bind_mhc_post_ttnn(nb::module_& mod);
 namespace ttnn::operations::bringup::mhc_pre_ttnn::detail {
 void bind_mhc_pre_ttnn(nb::module_& mod);
 }
+namespace ttnn::operations::bringup::nlp_concat_heads::detail {
+void bind_nlp_concat_heads(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::embedding {
+void bind_embedding(nb::module_& mod);
+}
 // END FORKED OPS (fork_op.py)
 // New ops (not made by fork_op.py)
 namespace ttnn::operations::bringup::prepared_program::detail {
@@ -71,6 +83,8 @@ namespace ttnn::bringup {
 
 void py_module(nb::module_& mod) {
     // BEGIN FORKED OPS (fork_op.py)
+    ::ttnn::operations::bringup::slice_write::bind_slice_write(mod);
+    ::ttnn::operations::bringup::detail::bind_nlp_create_qkv_heads(mod);
     ::ttnn::operations::bringup::detail::bind_rotary_embedding_indexed(mod);
     ::ttnn::operations::bringup::topk_large_indices::detail::bind_topk_large_indices(mod);
     ::ttnn::operations::bringup::detail::bind_update_padded_kv_cache(mod);
@@ -88,6 +102,8 @@ void py_module(nb::module_& mod) {
     ::ttnn::operations::bringup::rms_norm_ttnn::detail::bind_rms_norm_ttnn(mod);
     ::ttnn::operations::bringup::mhc_post_ttnn::detail::bind_mhc_post_ttnn(mod);
     ::ttnn::operations::bringup::mhc_pre_ttnn::detail::bind_mhc_pre_ttnn(mod);
+    ::ttnn::operations::bringup::nlp_concat_heads::detail::bind_nlp_concat_heads(mod);
+    ::ttnn::operations::bringup::embedding::bind_embedding(mod);
     // END FORKED OPS (fork_op.py)
     ::ttnn::operations::bringup::prepared_program::detail::bind_prepared_program(mod);
 }

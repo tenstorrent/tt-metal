@@ -42,6 +42,7 @@ import ttnn
 
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, compute_config, tp_sum
+from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled
 from .layout import HC, row_split_to_device, streams_cols_to_chip_major
 from .settings import settings
 
@@ -66,7 +67,7 @@ class TtEngramAdd:
         wt = (q_weight.float() * k_weight.float()).reshape(1, HC * hidden)  # the reference's fp32 product
         wt = streams_cols_to_chip_major(wt, hidden, tp)  # chip column c's [4 x H/TP] block (stream-major)
         dims = (None, 3) if TP_AXIS == 1 else (3, None)
-        self.weight = ttnn.from_torch(
+        self.weight = from_torch(
             wt.reshape(1, 1, 1, HC * hidden).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -77,7 +78,7 @@ class TtEngramAdd:
         self.fused = settings.get("MHC_FUSED") == "on"
         self.weight32 = None
         if self.fused:  # the engram mode of mhc_pre_xing_pack reads the weight row on all 32 rows of a tile
-            self.weight32 = ttnn.from_torch(
+            self.weight32 = from_torch(
                 wt.reshape(1, 1, 1, HC * hidden).expand(1, 1, 32, HC * hidden).contiguous(),
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
@@ -100,12 +101,16 @@ class TtEngramAdd:
         return t
 
     def _rowsum(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.sum(t, dim=-1, keepdim=True, compute_kernel_config=self.ckc, memory_config=DRAM)
+        return ttnn.sum(
+            t, dim=-1, keepdim=True, compute_kernel_config=self.ckc, memory_config=DRAM, sub_core_grids=sub_cores(t)
+        )
 
     def _partials_fused(self, h: ttnn.Tensor, kv: ttnn.Tensor) -> ttnn.Tensor:
         """MHC_FUSED=on: the 12 exact partial sums [dot 0..3 | sum h^2 | sum k^2] of this chip's columns in ONE
         ttnn.bringup.mhc_pre_xing_pack engram pass over h and the keys -> [1, 1, R, 32], summed exactly over TP."""
-        part = ttnn.bringup.mhc_pre_xing_pack(None, h, n=HC, engram_keys=kv, engram_weight=self.weight32)
+        part = ttnn.bringup.mhc_pre_xing_pack(
+            None, h, n=HC, engram_keys=kv, engram_weight=self.weight32, max_grid=max_grid()
+        )
         full = tp_sum(self.mesh, part, exact=True)
         dealloc(part)
         return full
@@ -115,28 +120,36 @@ class TtEngramAdd:
         rows, w = h.shape[-2], self.w
         if self.fused:
             return self._gate_math(self._partials_fused(h, kv), rows)
-        hw = ttnn.multiply(h, self.weight, dtype=ttnn.float32, memory_config=DRAM)  # h * (q_w k_w), all 4 streams
+        hw = ttnn.multiply(
+            h, self.weight, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(h)
+        )  # h * (q_w k_w), all 4 streams
         cols = []  # [dot_0..3 | ss_h 0..3 | ss_k 0..3] partials, each [R, 1]
         sq_h, sq_k = [], []
         for n in range(HC):
-            hn = ttnn.slice(h, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM)
-            kn = ttnn.slice(kv, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM)
-            hwn = ttnn.slice(hw, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM)
-            p = ttnn.multiply(hwn, kn, dtype=ttnn.float32, memory_config=DRAM)
+            hn = ttnn.slice(
+                h, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM, sub_core_grids=sub_cores(h)
+            )
+            kn = ttnn.slice(
+                kv, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM, sub_core_grids=sub_cores(kv)
+            )
+            hwn = ttnn.slice(
+                hw, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM, sub_core_grids=sub_cores(hw)
+            )
+            p = ttnn.multiply(hwn, kn, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(hwn))
             dealloc(hwn)
             cols.append(self._rowsum(p))
             dealloc(p)
-            p = ttnn.multiply(hn, hn, dtype=ttnn.float32, memory_config=DRAM)
+            p = ttnn.multiply(hn, hn, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(hn))
             sq_h.append(self._rowsum(p))
             dealloc(p)
-            p = ttnn.multiply(kn, kn, dtype=ttnn.float32, memory_config=DRAM)
+            p = ttnn.multiply(kn, kn, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(kn))
             sq_k.append(self._rowsum(p))
             dealloc(p)
             dealloc(hn)
             dealloc(kn)
         dealloc(hw)
         parts = cols + sq_h + sq_k
-        part = ttnn.concat(parts, dim=-1, memory_config=DRAM)  # [1, 1, R, 12]
+        part = ttnn.concat(parts, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores(parts))  # [1, 1, R, 12]
         for t in parts:
             dealloc(t)
         full = tp_sum(self.mesh, part)
@@ -145,38 +158,42 @@ class TtEngramAdd:
 
     def _gate_math(self, full: ttnn.Tensor, rows: int) -> ttnn.Tensor:
         """The gates from the exchanged partials [1, 1, R, >= 12] (consumed)."""
-        dot = ttnn.slice(full, [0, 0, 0, 0], [1, 1, rows, HC], memory_config=DRAM)
-        ssh = ttnn.slice(full, [0, 0, 0, HC], [1, 1, rows, 2 * HC], memory_config=DRAM)
-        ssk = ttnn.slice(full, [0, 0, 0, 2 * HC], [1, 1, rows, 3 * HC], memory_config=DRAM)
+        dot = ttnn.slice(full, [0, 0, 0, 0], [1, 1, rows, HC], memory_config=DRAM, sub_core_grids=sub_cores(full))
+        ssh = ttnn.slice(full, [0, 0, 0, HC], [1, 1, rows, 2 * HC], memory_config=DRAM, sub_core_grids=sub_cores(full))
+        ssk = ttnn.slice(
+            full, [0, 0, 0, 2 * HC], [1, 1, rows, 3 * HC], memory_config=DRAM, sub_core_grids=sub_cores(full)
+        )
         dealloc(full)
         rs = []
         for ss in (ssh, ssk):
-            ms = ttnn.multiply(ss, self.inv_h, dtype=ttnn.float32, memory_config=DRAM)
+            ms = ttnn.multiply(ss, self.inv_h, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(ss))
             dealloc(ss)
-            t = ttnn.add(ms, self.eps, dtype=ttnn.float32, memory_config=DRAM)
+            t = ttnn.add(ms, self.eps, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(ms))
             dealloc(ms)
-            rs.append(ttnn.rsqrt(t, memory_config=DRAM))
+            rs.append(ttnn.rsqrt(t, memory_config=DRAM, sub_core_grids=sub_cores(t)))
             dealloc(t)
-        r2 = ttnn.multiply(rs[0], rs[1], dtype=ttnn.float32, memory_config=DRAM)  # rsqrt(h) * rsqrt(key)
+        r2 = ttnn.multiply(
+            rs[0], rs[1], dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores()
+        )  # rsqrt(h) * rsqrt(key)
         for t in rs:
             dealloc(t)
-        d0 = ttnn.multiply(dot, r2, dtype=ttnn.float32, memory_config=DRAM)
+        d0 = ttnn.multiply(dot, r2, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(dot))
         dealloc(dot)
         dealloc(r2)
-        d = ttnn.multiply(d0, self.inv_sqrt_h, dtype=ttnn.float32, memory_config=DRAM)
+        d = ttnn.multiply(d0, self.inv_sqrt_h, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(d0))
         dealloc(d0)
-        a = ttnn.abs(d, memory_config=DRAM)
+        a = ttnn.abs(d, memory_config=DRAM, sub_core_grids=sub_cores(d))
         am = ttnn.maximum(a, GATE_FLOOR, memory_config=DRAM)
         dealloc(a)
-        s = ttnn.sqrt(am, memory_config=DRAM)
+        s = ttnn.sqrt(am, memory_config=DRAM, sub_core_grids=sub_cores(am))
         dealloc(am)
-        neg = ttnn.neg(s, memory_config=DRAM)
-        isneg = ttnn.ltz(d, memory_config=DRAM)
+        neg = ttnn.neg(s, memory_config=DRAM, sub_core_grids=sub_cores(s))
+        isneg = ttnn.ltz(d, memory_config=DRAM, sub_core_grids=sub_cores(d))
         dealloc(d)
-        sg = ttnn.where(isneg, neg, s, memory_config=DRAM)  # copysign(s, d)
+        sg = ttnn.where(isneg, neg, s, memory_config=DRAM, sub_core_grids=sub_cores(isneg))  # copysign(s, d)
         for t in (neg, isneg, s):
             dealloc(t)
-        gate = ttnn.sigmoid(sg, memory_config=DRAM)
+        gate = ttnn.sigmoid(sg, memory_config=DRAM, sub_core_grids=sub_cores(sg))
         dealloc(sg)
         return gate
 
@@ -192,32 +209,48 @@ class TtEngramAdd:
         assert h.dtype == ttnn.float32 or self.fused, "bf16 streams need MHC_FUSED=on"
         rows, w = h.shape[-2], self.w
         assert h.shape[-1] == HC * w and kv.shape[-1] == (HC + 1) * w and kv.shape[-2] == rows, (h.shape, kv.shape)
-        kv32 = kv if kv.dtype == h.dtype else ttnn.typecast(kv, h.dtype, memory_config=DRAM)
+        kv32 = (
+            kv
+            if kv.dtype == h.dtype
+            else ttnn.typecast(kv, h.dtype, memory_config=DRAM, sub_core_grids=sub_cores_tiled(kv))
+        )
         gate = self.gates(h, kv32)
-        value = ttnn.slice(kv32, [0, 0, 0, HC * w], [1, 1, rows, (HC + 1) * w], memory_config=DRAM)
+        value = ttnn.slice(
+            kv32, [0, 0, 0, HC * w], [1, 1, rows, (HC + 1) * w], memory_config=DRAM, sub_core_grids=sub_cores(kv32)
+        )
         if kv32 is not kv:
             dealloc(kv32)
         if self.fused:
             row = None
             if hc is not None:  # X'_n = gate_n value + h_n, and attn_hc's partial row of X'
                 out, row = ttnn.bringup.mhc_post(
-                    value, h, gate, self.eye(rows), stats_weight=hc.fn_t, compute_kernel_config=hc.post_cfg
+                    value,
+                    h,
+                    gate,
+                    self.eye(rows),
+                    stats_weight=hc.fn_t,
+                    compute_kernel_config=hc.post_cfg,
+                    max_grid=max_grid(),
                 )
             else:
-                out = ttnn.bringup.mhc_post(value, h, gate, self.eye(rows))  # X'_n = gate_n value + h_n
+                out = ttnn.bringup.mhc_post(
+                    value, h, gate, self.eye(rows), max_grid=max_grid()
+                )  # X'_n = gate_n value + h_n
             dealloc(value)
             dealloc(gate)
             return out, pre, row
         outs = []
         for n in range(HC):
-            hn = ttnn.slice(h, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM)
-            g = ttnn.slice(gate, [0, 0, 0, n], [1, 1, rows, n + 1], memory_config=DRAM)
+            hn = ttnn.slice(
+                h, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM, sub_core_grids=sub_cores(h)
+            )
+            g = ttnn.slice(gate, [0, 0, 0, n], [1, 1, rows, n + 1], memory_config=DRAM, sub_core_grids=sub_cores(gate))
             outs.append(ttnn.addcmul(hn, value, g, memory_config=DRAM))
             dealloc(hn)
             dealloc(g)
         dealloc(value)
         dealloc(gate)
-        out = ttnn.concat(outs, dim=-1, memory_config=DRAM)
+        out = ttnn.concat(outs, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores(outs))
         for t in outs:
             dealloc(t)
         return out, pre, None

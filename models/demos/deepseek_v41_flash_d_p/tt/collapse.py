@@ -28,6 +28,7 @@ import ttnn
 
 from .ccl import dealloc
 from .common import DRAM
+from .cores import max_grid, sub_cores
 from .layout import HC
 from .settings import settings
 
@@ -46,22 +47,24 @@ class TtHcCollapse:
         assert x.shape[-1] == self.n * w and pre.shape[-1] >= self.n and pre.shape[-2] == rows, (x.shape, pre.shape)
         ng = self.n * (self.n + 2)
         if self.fused and pre.shape[-1] == ng:
-            _, y = ttnn.bringup.mhc_pre_xing(pre, x, n=self.n, coefficients_given=True)
+            _, y = ttnn.bringup.mhc_pre_xing(pre, x, n=self.n, coefficients_given=True, max_grid=max_grid())
             return y
         if x.dtype == ttnn.bfloat16:
             # BF16_ACTIVATIONS=on (P.20) with a bare [R, n] pre (the hybrid harness): the fork's collapse on the pre
             # padded to the mixes' width (only columns 0..n-1 are read); y bf16, one rounding of the fp32 sum
             p = ttnn.pad(pre, [(0, 0), (0, 0), (0, 0), (0, ng - pre.shape[-1])], 0.0) if pre.shape[-1] < ng else pre
-            _, y = ttnn.bringup.mhc_pre_xing(p, x, n=self.n, coefficients_given=True)
+            _, y = ttnn.bringup.mhc_pre_xing(p, x, n=self.n, coefficients_given=True, max_grid=max_grid())
             if p is not pre:
                 dealloc(p)
             return y
         y = None
         for i in range(self.n):
-            s = ttnn.slice(x, [0, 0, 0, i * w], [1, 1, rows, (i + 1) * w], memory_config=DRAM)
-            c = ttnn.slice(pre, [0, 0, 0, i], [1, 1, rows, i + 1], memory_config=DRAM)
+            s = ttnn.slice(
+                x, [0, 0, 0, i * w], [1, 1, rows, (i + 1) * w], memory_config=DRAM, sub_core_grids=sub_cores(x)
+            )
+            c = ttnn.slice(pre, [0, 0, 0, i], [1, 1, rows, i + 1], memory_config=DRAM, sub_core_grids=sub_cores(pre))
             if y is None:
-                y = ttnn.multiply(s, c, dtype=ttnn.float32, memory_config=DRAM)
+                y = ttnn.multiply(s, c, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(s))
             else:
                 nxt = ttnn.addcmul(y, s, c, memory_config=DRAM)
                 dealloc(y)

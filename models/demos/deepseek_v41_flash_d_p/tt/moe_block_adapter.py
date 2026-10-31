@@ -41,6 +41,7 @@ import ttnn
 from . import ccl, host_alloc
 from .ccl import dealloc
 from .common import DRAM, cast
+from .cores import from_torch, max_grid, sub_cores_tiled
 from .experts import TtExperts
 from .settings import settings
 
@@ -71,8 +72,9 @@ def block_model(cfg):
     return m
 
 
-def block_options():
-    """MOE_HEAD=fused (the default, owner 2026-10-27): the fused head on the column split, the combine snapped (owner
+def block_options(mesh=None):
+    """max_grid (FIX.15, MAX_WORKER_CORES): the block's own programs inside tt/cores.max_grid(mesh) (11 x 10 on a
+    Galaxy; None elsewhere: the whole grid, as before). MOE_HEAD=fused (the default, owner 2026-10-27): the fused head on the column split, the combine snapped (owner
     2026-10-27: keep the snap; bit-identical runs). ops: D2 x gathered, D4 ops head, D7 fixed combine order. MOE_TAIL:
     ops (a program a stage) or fused (TailA2A: tilize + shared + TP all-to-all in one program); TAIL_A2A_PREPARED: the
     fused tail's descriptors prepared once and dispatched with run_prepared."""
@@ -80,9 +82,13 @@ def block_options():
 
     tail = settings.get("MOE_TAIL")
     tp = settings.get("TAIL_A2A_PREPARED") == "on"  # (P.2: the fused tail's descriptors as prepared programs)
+    g = max_grid(mesh) if mesh is not None else None
+    cap = (g.x, g.y) if g is not None else None
     if settings.get("MOE_HEAD") == "fused":
-        return MoEOptions(head="fused", tail=tail, tail_prepared=tp, combine_snap=COMBINE_SNAP)
-    return MoEOptions(head="ops", tail=tail, tail_prepared=tp, x_gathered=True, combine_deterministic=True)
+        return MoEOptions(head="fused", tail=tail, tail_prepared=tp, combine_snap=COMBINE_SNAP, max_grid=cap)
+    return MoEOptions(
+        head="ops", tail=tail, tail_prepared=tp, x_gathered=True, combine_deterministic=True, max_grid=cap
+    )
 
 
 def block_dtypes():
@@ -129,7 +135,7 @@ def _block_op(mesh, fe, g, n_experts: int, layout: dict):
     cap = RoutedExperts.cap_of(g)
     op = copy.copy(fe) if fe.m == cap else fe.replanned(cap, layout)
     gids = RoutedExperts.gids_of(g)
-    op.gidx = ttnn.from_torch(
+    op.gidx = from_torch(
         torch.tensor(gids, dtype=torch.int32).reshape(len(gids), 1, g.experts_per_chip),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -232,7 +238,7 @@ class TtMoEBlockLayer:
                 WeightCache(path=None, layer=self.layer),
                 num_links=LINKS,
                 dtypes=self.dtypes,
-                options=block_options(),
+                options=block_options(self.mesh),
             )
             if settings.get("PREPARED_ALL") == "on":  # (P.14: the fused tail keyed on shapes, addresses patched)
                 from .prepared_tail import install
@@ -251,7 +257,7 @@ class TtMoEBlockLayer:
         if xb is not x:
             dealloc(xb)
         if not self.fold:
-            y32 = ttnn.typecast(y, ttnn.float32, memory_config=DRAM)
+            y32 = ttnn.typecast(y, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(y))
             dealloc(y)
             y = y32
         return y

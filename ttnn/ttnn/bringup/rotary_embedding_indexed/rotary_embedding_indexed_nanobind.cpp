@@ -84,6 +84,9 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                     (the op allocates its output). Given: the op writes this tensor, whose spec must be
                     exactly the output spec (shape, dtype, layout, memory config; checked on every call),
                     and returns a tensor of its buffer. Not the input (the op is not in place).
+                max_grid (ttnn.CoreCoord, optional): bring-up option, scalar form only, default None (the
+                    device's whole compute grid). The op runs on the rectangle (0, 0) .. (max_grid - 1) of the
+                    grid (deepseek_v41_flash_d_p FIX.15: a Galaxy's 110-core cap).
 
             Returns:
                 ttnn.Tensor: a rotary-embedded tensor, with concat_prefix channels first when supplied.
@@ -104,7 +107,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 uint32_t,
                 const std::optional<Tensor>&,
                 bool,
-                const std::optional<Tensor>&>(&rotary_embedding_indexed),
+                const std::optional<Tensor>&,
+                std::optional<CoreCoord>>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -118,7 +122,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("rotary_offset") = 0,
             nb::arg("concat_prefix") = std::nullopt,
             nb::arg("uniform") = false,
-            nb::arg("output_tensor") = std::nullopt),
+            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("max_grid") = std::nullopt),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<

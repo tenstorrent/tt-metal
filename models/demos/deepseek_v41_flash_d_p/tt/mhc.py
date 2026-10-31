@@ -38,6 +38,7 @@ from . import ccl, host_alloc
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, compute_config, fpu_weight, tp_sum
+from .cores import from_torch, max_grid, sub_cores
 from .layout import HC, streams_cols_to_chip_major
 from .settings import settings
 
@@ -73,7 +74,7 @@ class TtHcMixes:
         # (axis 1), replicated over mesh rows (axis 0): chip (r, c) holds its [4 x H/TP, 32] block.
         fn_t = torch.zeros(HC * hidden, W, dtype=torch.float32)
         fn_t[:, :NG] = streams_cols_to_chip_major(fn, hidden, tp).T
-        self.fn_t = ttnn.from_torch(
+        self.fn_t = from_torch(
             fpu_weight(fn_t).reshape(1, 1, HC * hidden, W),  # in1 = srcA: 9 mantissa bits at HiFi4, RNE (DS41-42)
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -91,7 +92,7 @@ class TtHcMixes:
             return
         # fpu: the Sinkhorn kernel's constants (SEL_pre / post / comb with the scales folded in, the bases, RB / CB).
         consts = build_consts(SimpleNamespace(n=HC), scale.float().reshape(-1), base.float().reshape(-1))
-        self.consts = ttnn.from_torch(
+        self.consts = from_torch(
             consts.reshape(8, W, W).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -106,7 +107,9 @@ class TtHcMixes:
         mix = mm.matmul(
             x, self.fn_t, site="hc.fn", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
         )
-        packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
+        packed = ttnn.bringup.mhc_pre_xing_pack(
+            mix, x, n=HC, max_grid=max_grid()
+        )  # column 24 = this chip's sum of x^2 (exact)
         dealloc(mix)
         return packed
 
@@ -148,6 +151,7 @@ class TtHcMixes:
             hc_output=hco,
             y_output=yo,
             **partials,
+            max_grid=max_grid(),
         )
         dealloc(red)
         # (the kept objects: the op returns new wrappers of their buffers, DS41-149)
@@ -158,7 +162,9 @@ class TtHcMixes:
         mix = mm.matmul(
             x, self.fn_t, site="hc.fn", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
         )
-        packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
+        packed = ttnn.bringup.mhc_pre_xing_pack(
+            mix, x, n=HC, max_grid=max_grid()
+        )  # column 24 = this chip's sum of x^2 (exact)
         dealloc(mix)
         red = tp_sum(self.mesh, packed)
         dealloc(packed)
@@ -174,27 +180,30 @@ class TtHcMixes:
                 hc_eps=self.hc_eps,
                 sinkhorn_iters=self.iters,
                 deepseek=True,
+                max_grid=max_grid(),
             )
             dealloc(red)
             return hc
-        ss = ttnn.slice(red, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1])
-        ms = ttnn.multiply(ss, self.inv_n, dtype=ttnn.float32)
+        ss = ttnn.slice(red, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1], sub_core_grids=sub_cores(red))
+        ms = ttnn.multiply(ss, self.inv_n, dtype=ttnn.float32, sub_core_grids=sub_cores(ss))
         dealloc(ss)
-        t = ttnn.add(ms, self.norm_eps, dtype=ttnn.float32)
+        t = ttnn.add(ms, self.norm_eps, dtype=ttnn.float32, sub_core_grids=sub_cores(ms))
         dealloc(ms)
-        rs = ttnn.rsqrt(t)
+        rs = ttnn.rsqrt(t, sub_core_grids=sub_cores(t))
         dealloc(t)
-        mixes = ttnn.multiply(red, rs, dtype=ttnn.float32, memory_config=DRAM)  # column 24 is ignored below
+        mixes = ttnn.multiply(
+            red, rs, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(red)
+        )  # column 24 is ignored below
         dealloc(red)
         dealloc(rs)
         pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
             mixes, self.consts, HC, self.iters, self.hc_eps
         )
         dealloc(mixes)
-        out = ttnn.concat([pre, post, comb], dim=-1, memory_config=DRAM)
+        out = ttnn.concat([pre, post, comb], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         for t_ in (pre, post, comb):
             dealloc(t_)
-        return ttnn.reshape(out, [1, 1, rows, NG])
+        return ttnn.reshape(out, [1, 1, rows, NG], sub_core_grids=sub_cores(out))
 
 
 def build_hc(mesh, ck, cfg, layer: int, step: str) -> TtHcMixes:
