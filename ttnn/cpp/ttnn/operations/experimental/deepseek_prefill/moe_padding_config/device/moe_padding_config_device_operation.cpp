@@ -120,6 +120,15 @@ MoePaddingConfigDeviceOperation::tensor_return_value_t MoePaddingConfigDeviceOpe
     return tensor_args.config;
 }
 
+MoePaddingConfigDeviceOperation::topology_return_value_t MoePaddingConfigDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // In-place: the returned handle IS the caller's config row, so it keeps the caller's declared distribution
+    // (sharded along the SP axis, replicated along TP). The generic output-topology inference would otherwise
+    // relabel it with the union of every input's placements, letting the actual_start/actual_end metadata
+    // tensors' labels leak onto the config; same contract as update_padded_kv_cache.
+    return {tensor_args.config.tensor_topology()};
+}
+
 ttsl::hash::hash_t MoePaddingConfigDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // The per-chunk values are NEVER hashed: they are read on-device from the metadata tensors, whose
@@ -145,7 +154,8 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
     tensor_return_value_t& /*output*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(
-        mesh_dispatch_coordinate.has_value(), "MoePaddingConfig::create_descriptor requires a mesh dispatch coordinate");
+        mesh_dispatch_coordinate.has_value(),
+        "MoePaddingConfig::create_descriptor requires a mesh dispatch coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
 
     const auto& config = tensor_args.config;
