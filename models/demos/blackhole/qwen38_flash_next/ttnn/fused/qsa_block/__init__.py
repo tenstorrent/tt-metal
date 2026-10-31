@@ -18,6 +18,7 @@ tail programs take the first tile of each projection's window in the tensor they
 
 from __future__ import annotations
 
+import os
 import struct
 
 import ttnn
@@ -56,6 +57,27 @@ MAIN_TAIL = {
         "writer_staging",
     )
 }
+# QWEN38_QSA_MT_ROW (default "1"; "0" keeps the 16-tile staging path): with one lane (rows == 1, unpaged, no KV stage)
+# main_tail's staging core runs the one-row kernels: the readers build the new row [v | k] in L1 with the value rule the
+# 16-tile path stores (exponent 0 -> +0.0, NaN -> Inf, exponents 1..8 -> RNE(x + 2^-127); main_tail_row.h) and the writer
+# puts it into the KV cache row P and into row P % 32 of the 16 staging tiles; no compute kernel on that core, no staging
+# read, no 32-row write.  Every other call keeps the kernels above.
+MT_ROW_ENV = "QWEN38_QSA_MT_ROW"
+MAIN_TAIL_ROW = {role: fp.kernel_source(NAME, f"main_tail_{role}_staging_row.cpp") for role in ("reader", "writer")}
+
+
+def mt_row_enabled(environ=None) -> bool:
+    """True unless ``QWEN38_QSA_MT_ROW`` is set to something other than "1" in ``environ`` (default ``os.environ``)."""
+
+    return (os.environ if environ is None else environ).get(MT_ROW_ENV, "1") == "1"
+
+
+def mt_row_admits(rows: int, paged: bool, kv_stage) -> bool:
+    """The one-row staging core serves the single-lane decode only: rows == 1, unpaged, no KV stage."""
+
+    return rows == 1 and not paged and kv_stage is None
+
+
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
 TILE_BF16, TILE_FP32 = fp.TILE_BYTES[BF16], fp.TILE_BYTES[FP32]
 ROPE_DIM = 64
@@ -713,6 +735,7 @@ _MAIN_TAIL_CBS = (
 )
 CB_STGC, CB_STGW, CB_MT_POS_R, CB_MT_POS_W, CB_MT_POSCR, CB_MT_POSCW = 21, 22, 25, 26, 27, 28
 CB_MT_PT = 29  # the paged writer's page-table window (PAGED only)
+CB_MT_ROW = 30  # the one-row staging core's packed row (two 512 B pages: the V half, the K half)
 PT_WINDOW_BYTES = 64  # one DRAM-aligned window of the page table row that holds a lane's page entry
 
 
@@ -841,6 +864,9 @@ def main_tail(
     )
     cbs += [fp.cb_descriptor(cb, ttnn.uint32, POS_PAGE, 1, all_set) for cb in (CB_MT_POS_R, CB_MT_POS_W)]
     cbs += [fp.cb_descriptor(cb, ttnn.uint32, POSC_BYTES, 1, all_set) for cb in (CB_MT_POSCR, CB_MT_POSCW)]
+    mt_row = mt_row_enabled() and mt_row_admits(rows, paged, kv_stage)
+    if mt_row:
+        cbs.append(fp.cb_descriptor(CB_MT_ROW, BF16, HEAD_DIM * 2, 2, all_set))
     if paged:  # the writer's page-table window: 64 bytes, aligned to 64 in the kernel
         cbs.append(fp.cb_descriptor(CB_MT_PT, ttnn.uint32, 2 * PT_WINDOW_BYTES, 1, all_set))
     eps_bits = _bits(eps)
@@ -956,8 +982,38 @@ def main_tail(
             ),
         ]
 
+    def staging_row_kernels():  # the one-row stage (rows == 1): reader + writer, no compute kernel
+        lane = 0
+        return [
+            fp.reader_kernel(
+                MAIN_TAIL_ROW["reader"],
+                staging_set,
+                [*acc(v_ws)],
+                [(staging_cores[0], [v_ws.buffer_address(), v_first, lane])],
+            ),
+            fp.writer_kernel(
+                MAIN_TAIL_ROW["writer"],
+                staging_set,
+                [*acc(staging), *acc(kv_cache), *acc(block_start), *acc(row_hit)],
+                [
+                    (
+                        staging_cores[0],
+                        [
+                            staging.buffer_address(),
+                            kv_cache.buffer_address(),
+                            block_start.buffer_address(),
+                            row_hit.buffer_address(),
+                            rows,
+                            lane_rows,
+                            lane,
+                        ],
+                    )
+                ],
+            ),
+        ]
+
     if kv_stage is None:
-        kernels += staging_kernels()
+        kernels += staging_row_kernels() if mt_row else staging_kernels()
         io = _io(
             qg_ws,
             k_ws,
@@ -978,7 +1034,7 @@ def main_tail(
         io = _io(
             qg_ws, k_ws, v_ws, q_norm, k_norm, cos, sin, *kv_stage.io, query
         )  # the query last: run_program returns it
-    semaphores = [fp.semaphore_descriptor(i, all_set) for i in range(3)]
+    semaphores = [fp.semaphore_descriptor(i, all_set) for i in range(4 if mt_row else 3)]
     # the qg, k and v windows (from the projection shards), the position inputs, the two norm weights and the RoPE
     # tiles in, the staging read and written, one 32-row KV block per lane written, the sparse query out; the seven
     # rms_norms and partial RoPEs, the staging one-hot update

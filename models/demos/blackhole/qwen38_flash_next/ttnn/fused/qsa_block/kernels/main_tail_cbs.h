@@ -17,8 +17,10 @@ constexpr uint32_t CB_IN = 10, CB_ROT = 11, CB_COS = 12, CB_SIN = 13, CB_SCALAR 
 constexpr uint32_t CB_RSIN = 17, CB_OUT = 18;
 constexpr uint32_t CB_STG = 19, CB_ONES = 20, CB_STGC = 21, CB_STGW = 22, CB_RM = 23, CB_PACK = 24, CB_POS_R = 25,
                    CB_POS_W = 26, CB_POSCR = 27, CB_POSCW = 28,
-                   CB_PT = 29;  // CB_PT: the paged writer's page-table window
-constexpr uint32_t SEM_ROPE = 0, SEM_KROT = 1, SEM_KNORM = 2;
+                   CB_PT = 29,  // CB_PT: the paged writer's page-table window
+    CB_ROW = 30;                // CB_ROW: the one-row staging core's packed row (QWEN38_QSA_MT_ROW)
+constexpr uint32_t SEM_ROPE = 0, SEM_KROT = 1, SEM_KNORM = 2,
+                   SEM_ROW_DONE = 3;  // SEM_ROW_DONE: the one-row staging core's split K build (QWEN38_QSA_MT_ROW)
 constexpr uint32_t HEAD_TILES = 8, ROPE_TILES = 2, PACK_TILES = 16, QUERY_ROW_BYTES = 1024, HEAD_ROW_BYTES = 512;
 constexpr uint32_t QUERY_HEADS = 32;
 #ifdef MAIN_TAIL_LOCAL_HEADS
