@@ -41,11 +41,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
 
+from helpers.chip_architecture import cli_flag_given
 from ttsim_error import parse_ttsim_error
 
-# ttsim runs in-process (no SimulationServer). Its init must complete before the
-# skip_for_* markers in this plugin call get_chip_architecture() (which reaches
-# check_context()) at module-load time.
 # TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
 # TT_UMD_SIMULATOR_PATH is kept as an alias for the existing RTL-simulator workflow.
 # Gate on --run-simulator so the env var being set doesn't force a ttsim init on silicon runs,
@@ -59,7 +57,7 @@ _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
 # Skips ttexalens after setup_build fills the paths, and the session-end perf combine.
 _HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
-    "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
+    cli_flag_given("--run-simulator") and not cli_flag_given("--compile-producer")
 )
 if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
     from ttexalens import tt_exalens_init as _tt_exalens_init
@@ -80,7 +78,11 @@ import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    simulator_architecture,
+)
 from helpers.device import LLKAssertException
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
@@ -505,6 +507,17 @@ def pytest_configure(config):
     TestConfig.create_build_directories()
 
     TestConfig.TEST_TARGET.update_from_pytest_config(config)
+
+    # The arch was resolved at import, before --run-simulator from the ini file's addopts was
+    # visible, so the build and skip markers may target the host card instead of the simulator.
+    if TestConfig.TEST_TARGET.run_simulator:
+        sim_arch = simulator_architecture()
+        if sim_arch is not None and sim_arch != TestConfig.CHIP_ARCH:
+            raise pytest.UsageError(
+                f"The simulator's soc_descriptor.yaml is {sim_arch.value}, but this session "
+                f"targets {TestConfig.CHIP_ARCH.value}. Set CHIP_ARCH={sim_arch.value}, or "
+                f"pass --run-simulator on the command line or in PYTEST_ADDOPTS."
+            )
 
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
 

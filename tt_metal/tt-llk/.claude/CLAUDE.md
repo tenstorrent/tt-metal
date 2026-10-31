@@ -79,7 +79,7 @@ We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@pa
 2. **Compile-consumer**: `pytest --compile-consumer -x ./test_name.py` — runs compiled variants on hardware
 
 ### Key Concepts
-- `CHIP_ARCH` env var selects the target architecture (`blackhole`, `wormhole`, `quasar`)
+- Target architecture is detected from the PCIe card or the simulator's `soc_descriptor.yaml`; `CHIP_ARCH` (`blackhole`, `wormhole`, `quasar`) overrides it and is required only when neither is present (e.g. hardware-free runs)
 - Tests run from the `tests/` directory
 - Test isolation: tests can affect each other via HW state leaking between kernel reconfigurations (reconfig escapes)
 - Key files: `tests/python_tests/conftest.py`, `tests/python_tests/helpers/test_config.py`
