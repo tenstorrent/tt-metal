@@ -598,8 +598,11 @@ DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     MeshDevice* device, DataType input_dtype, DataType weight_dtype) {
     // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
     bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
+    const auto default_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0 && default_fp32_acc)
+                                      ? tt::tt_metal::MathFidelity::HiFi3
+                                      : tt::tt_metal::MathFidelity::HiFi4;
     return init_device_compute_kernel_config(
-        device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, default_fp32_acc, false);
+        device->arch(), std::nullopt, default_fidelity, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
