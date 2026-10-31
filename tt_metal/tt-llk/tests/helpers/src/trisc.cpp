@@ -94,8 +94,12 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    // RC memset knock-out c2: clear unchanged; then, while math and unpack wait in a barrier (Tensix semaphores, no
+    // L1), the pack TRISC makes one L1 load, so port 3's last grant is the pack TRISC when everyone continues.
     llk_profiler::reset();
     llk_profiler::sync_threads();
+    llk_barrier::rendezvous(
+        llk_barrier::is_action_thread(), [] { (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(mailboxes_start)); });
 #endif
 
     {
