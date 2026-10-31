@@ -2761,7 +2761,7 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.0192
+              fps: 0.0367
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models

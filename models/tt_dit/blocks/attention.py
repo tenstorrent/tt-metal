@@ -215,7 +215,7 @@ class Attention(Module):
         *,
         spatial: ttnn.Tensor,
         prompt: ttnn.Tensor | None = None,
-        spatial_sequence_length: int,
+        spatial_sequence_length: int | ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
@@ -224,6 +224,7 @@ class Attention(Module):
         Args:
             spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, query_dim].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, query_dim] (not sharded!).
+            spatial_sequence_length: Length of the spatial sequence without padding, before sharding.
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (not sharded!).
         """
@@ -234,6 +235,20 @@ class Attention(Module):
             assert len(t.shape) == 2
         for t in prompt_rope or ():
             assert len(t.shape) == 2
+
+        whole_tiles = spatial.shape[1] % ttnn.TILE_SIZE == 0
+
+        # Ring attention is faster but needs whole tiles on each device and a CCL manager.
+        use_ring_attention = whole_tiles and self.ccl_manager is not None
+
+        if self.parallel_config.sequence_parallel.factor != 1 and not whole_tiles:
+            msg = "with sequence parallelism, the spatial sequence must be whole tiles on each device"
+            raise ValueError(msg)
+        if not use_ring_attention and (
+            isinstance(spatial_sequence_length, ttnn.Tensor) or spatial_sequence_length != spatial.shape[1]
+        ):
+            msg = "a padded spatial sequence must be whole tiles on each device and needs a CCL manager"
+            raise ValueError(msg)
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -275,7 +290,7 @@ class Attention(Module):
             shape = [1, self.n_local_heads, 0, self.head_dim]
             add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
 
-        if self.parallel_config.sequence_parallel.factor > 1:
+        if use_ring_attention:
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -305,10 +320,6 @@ class Attention(Module):
                 ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
             )
         else:
-            assert (
-                spatial_sequence_length == spatial.shape[1]
-            ), "spatial sequence must not be padded without sequence parallelism"
-
             spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
                 q,
                 k,
