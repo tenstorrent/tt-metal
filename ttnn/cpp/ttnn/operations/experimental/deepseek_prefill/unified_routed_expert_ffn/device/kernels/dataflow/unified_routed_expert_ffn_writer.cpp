@@ -71,6 +71,21 @@ void kernel_main() {
     constexpr uint32_t d_out_subblock_h = get_compile_time_arg_val(4);
     constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(5);
     constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(6);
+
+#ifdef STACKED_GATE_UP
+    // Laguna stacked gate_up [1, E, K, 2N]: each K row holds expert e's gate (columns 0..N-1) then its up (N..2N-1).
+    // Every expert's common arg is the stacked tensor's address; expert e's slice starts e * *_expert_bytes past it
+    // (the program factory's stacked_expert_bytes).
+    constexpr uint32_t gu_row_stride = 2 * N_gate_tiles_full;
+    constexpr uint32_t up_col_offset = N_gate_tiles_full;
+    constexpr uint32_t gu_expert_bytes = STACKED_GU_EXPERT_BYTES;
+    constexpr uint32_t d_expert_bytes = STACKED_D_EXPERT_BYTES;
+#else
+    constexpr uint32_t gu_row_stride = N_gate_tiles_full;
+    constexpr uint32_t up_col_offset = 0;
+    constexpr uint32_t gu_expert_bytes = 0;
+    constexpr uint32_t d_expert_bytes = 0;
+#endif
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(7);
     constexpr uint32_t num_chunks_max = get_compile_time_arg_val(8);
     constexpr uint32_t chunk_M_max = get_compile_time_arg_val(9);
@@ -239,9 +254,12 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
-        const auto up_acc =
-            TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+    for (uint32_t local_expert_id = RE_EXPERT_FIRST; local_expert_id < experts_per_chip;
+         local_expert_id += RE_EXPERT_STEP) {
+        const auto up_acc = TensorAccessor(
+            up_args,
+            get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id) + local_expert_id * gu_expert_bytes,
+            up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
@@ -292,9 +310,9 @@ void kernel_main() {
                                 noc_up,
                                 up_acc,
                                 kb * in0_block_w_gu + k,
-                                N_gate_tiles_full,
-                                up_col0,
-                                up_col_end,
+                                gu_row_stride,
+                                up_col_offset + up_col0,
+                                up_col_offset + up_col_end,
                                 l1_w_up,
                                 up_tile_bytes);
                             l1_w_up += per_core_N_gu * up_tile_bytes;
@@ -375,7 +393,9 @@ void kernel_main() {
             if constexpr (writer_split_down) {
                 if (is_up_sender) {
                     const auto down_acc = TensorAccessor(
-                        down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+                        down_args,
+                        get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id) + local_expert_id * d_expert_bytes,
+                        down_tile_bytes);
                     // cb_in1_down is double-buffered with one push per down K-block, and this
                     // RISC never pushes, so its write pointer is static: index the live slot
                     // off the block counter, exactly as the UP_SPLIT block does.

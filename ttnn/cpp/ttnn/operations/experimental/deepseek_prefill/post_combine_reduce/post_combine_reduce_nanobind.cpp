@@ -72,6 +72,13 @@ void bind_post_combine_reduce(nb::module_& mod) {
                     non-local expert in expert_dispatch_table (their L1 slot keeps finite stale data). A row
                     index past the table's last row is not read either.
 
+                residual (ttnn.Tensor, optional): bf16 TILE tensor of the output's [seq_len, emb_dim] added to the
+                    reduced result (e.g. a shared-expert partial), saving a separate full-size add.
+
+                l1_end (int, optional): L1 address the op's circular buffers must end below (0: the whole L1).
+                    A caller keeping buffers resident in L1 passes the lowest such address; a residual that would
+                    not fit is then single-buffered.
+
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.
                     Shape: [batch, dispatch_group_size, seq_len, emb_dim]
@@ -86,7 +93,9 @@ void bind_post_combine_reduce(nb::module_& mod) {
         nb::arg("expert_dim") = 3,
         nb::arg("output_memory_config") = nb::none(),
         nb::arg("combine_row_index") = nb::none(),
-        nb::arg("skip_row") = std::numeric_limits<uint32_t>::max());
+        nb::arg("skip_row") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("residual") = nb::none(),
+        nb::arg("l1_end") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::detail

@@ -28,7 +28,7 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
     uint32_t n_routed_experts = operation_attributes.n_routed_experts;
 
     // Input is TILE + interleaved (no shard spec). Derive the work split from the shape: keep the
-    // fixed 8x8 (64-core) grid and the binary-tree reduction, giving each core a contiguous range of
+    // fixed 8x8 (64-core) grid and the flat column reduction, giving each core a contiguous range of
     // token rows. Each core reads the TILE pages covering its rows from interleaved memory and untiles
     // in-kernel. tile_h (32) is the tile height; the token count is tile-aligned by construction.
     const uint32_t tile_h = input.tensor_spec().page_config().get_tile().get_height();
@@ -89,7 +89,7 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
     uint32_t cb_in_ncrisc = tt::CBIndex::c_2;
     add_cb(cb_in_ncrisc, max_tiles_ncrisc * input_page_size, input_page_size, input_cb_data_format);
 
-    // CB 3: gather temp buffer (collector reads remote histograms here)
+    // CB 3: NCRISC's own histogram (BRISC folds it into CB 1), then a reducer's 16 output counts
     uint32_t cb_gather_tmp = tt::CBIndex::c_3;
     add_cb(cb_gather_tmp, output_page_size, output_page_size, output_cb_data_format);
 
@@ -97,6 +97,17 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
     tt::DataFormat mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::INT32);
     uint32_t cb_mask = tt::CBIndex::c_4;
     add_cb(cb_mask, mask_page_size, mask_page_size, mask_cb_data_format);
+
+    // CB 5: reducer staging, one 64-byte histogram column (16 experts) of every core
+    constexpr uint32_t experts_per_reducer = 16;
+    constexpr uint32_t column_bytes = experts_per_reducer * sizeof(uint32_t);
+    TT_FATAL(
+        (n_routed_experts + experts_per_reducer - 1) / experts_per_reducer <= num_cores,
+        "masked_bincount: n_routed_experts ({}) needs more than the {} reducer cores ({} experts each)",
+        n_routed_experts,
+        num_cores,
+        experts_per_reducer);
+    add_cb(tt::CBIndex::c_5, num_cores * column_bytes, column_bytes, output_cb_data_format);
 
     // --- Semaphores ---
     auto add_semaphore = [&]() {
@@ -191,48 +202,28 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
         .noc = tt::tt_metal::NOC::RISCV_1_default,
     };
 
-    // --- Per-core runtime args (tree reduction) ---
+    // --- Per-core runtime args (flat column reduction) ---
+    // BRISC: [src, dst, mask, page_offset, num_cores, num_reducers, my_reducer (or ~0), xy of every core...]; the
+    // first num_reducers cores each sum one 16-expert column of every core's histogram.
+    const uint32_t num_reducers = (n_routed_experts + experts_per_reducer - 1) / experts_per_reducer;
+    std::vector<uint32_t> all_xy;
+    all_xy.reserve(2 * all_cores_vec.size());
+    for (const auto& c : all_cores_vec) {
+        auto n = device->worker_core_from_logical_core(c);
+        all_xy.push_back(n.x);
+        all_xy.push_back(n.y);
+    }
     for (uint32_t i = 0; i < all_cores_vec.size(); i++) {
         uint32_t page_offset = i * shard_height;
-
-        // Tree structure: core i receives from children at consecutive levels,
-        // then signals its parent. Children at level L: core i + 2^L.
-        std::vector<uint32_t> children_noc;
-        uint32_t num_receive = 0;
-        for (uint32_t L = 0; (1u << L) < num_cores; L++) {
-            uint32_t stride = 1u << L;
-            uint32_t group = stride << 1;
-            if ((i % group) == 0 && (i + stride) < num_cores) {
-                auto child_noc = device->worker_core_from_logical_core(all_cores_vec[i + stride]);
-                children_noc.push_back(child_noc.x);
-                children_noc.push_back(child_noc.y);
-                num_receive++;
-            } else {
-                break;
-            }
-        }
-
-        // Parent: the core that reads from us. For i > 0, clear lowest set bit.
-        uint32_t parent_noc_x = 0xFFFFFFFF;
-        uint32_t parent_noc_y = 0xFFFFFFFF;
-        if (i > 0) {
-            uint32_t lowest_bit = i & (~i + 1);
-            uint32_t parent_idx = i ^ lowest_bit;
-            auto p_noc = device->worker_core_from_logical_core(all_cores_vec[parent_idx]);
-            parent_noc_x = p_noc.x;
-            parent_noc_y = p_noc.y;
-        }
-
-        // rt_args: [src, dst, mask, page_offset, num_receive, parent_noc_x, parent_noc_y, child0_x, child0_y, ...]
         tt::tt_metal::KernelDescriptor::RTArgList rt_brisc;
         rt_brisc.push_back(src_buffer);
         rt_brisc.push_back(dst_buffer);
         rt_brisc.push_back(mask_buffer);
         rt_brisc.push_back(page_offset);
-        rt_brisc.push_back(num_receive);
-        rt_brisc.push_back(parent_noc_x);
-        rt_brisc.push_back(parent_noc_y);
-        rt_brisc.append(children_noc);
+        rt_brisc.push_back(num_cores);
+        rt_brisc.push_back(num_reducers);
+        rt_brisc.push_back(i < num_reducers ? i : 0xFFFFFFFFu);
+        rt_brisc.append(all_xy);
         brisc_kernel_desc.emplace_runtime_args(all_cores_vec[i], rt_brisc);
         ncrisc_kernel_desc.emplace_runtime_args(
             all_cores_vec[i], {src_buffer, dst_buffer, mask_buffer, page_offset + h_brisc, 0u});

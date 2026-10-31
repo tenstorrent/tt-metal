@@ -100,6 +100,17 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
+    // Laguna stacked weights: every gate/up/down list entry is the SAME tensor, gate_up = [1, E, K, 2N] (expert e's
+    // gate in columns 0..N-1 of each row, its up in N..2N-1) and down = [1, E, N, K]. The factory passes each expert's
+    // slice as a virtual base address (slice start tile / DRAM banks * page size) and the kernels read gate/up rows
+    // with stride 2N (up at column offset N). Compile-time in the kernels, so part of the program-cache key.
+    bool stacked_packed_weights = false;
+
+    // L1 address the circular buffers must end below (0: the whole L1). A caller that keeps buffers resident in L1
+    // passes the lowest such address so the CB blocking is fitted to the L1 left free instead of clashing with them.
+    // It sizes the CBs, so it is part of the program-cache key.
+    uint32_t l1_end = 0;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -107,10 +118,20 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens");
+        "max_active_tokens",
+        "stacked_packed_weights",
+        "l1_end");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            stacked_packed_weights,
+            l1_end);
     }
 };
 

@@ -18,6 +18,9 @@ struct PostCombineReduceParams {
     // Row-indexed combine only: pairs whose row is skip_row are not read (their slot is skipped by the expert-skip
     // test; UINT32_MAX: read every pair).
     uint32_t skip_row = std::numeric_limits<uint32_t>::max();
+    // L1 address the circular buffers must end below (0: the whole L1); with a residual that would not fit, the
+    // residual input is single-buffered. Sizes the CBs, so part of the program-cache key.
+    uint32_t l1_end = 0;
 };
 
 struct PostCombineReduceInputs {
@@ -32,6 +35,8 @@ struct PostCombineReduceInputs {
     // row combine_row_index[t, j] (UINT32 ROW_MAJOR [..., seq_len, num_experts_per_tok], one page per token), instead
     // of a gathered [..., seq_len, num_experts_per_tok, emb_dim] copy.
     std::optional<ttnn::Tensor> combine_row_index;
+    // Optional [.., seq_len, emb_dim] bf16 TILE tensor added to the reduced output (e.g. a shared-expert partial).
+    std::optional<ttnn::Tensor> residual;
 };
 
 // The [..., seq_len, num_experts_per_tok, emb_dim] shape the reduce works on: combine_output's, or with

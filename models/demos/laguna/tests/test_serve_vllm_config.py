@@ -1,0 +1,835 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Device-free launcher policy checks."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+LAUNCHER = Path(__file__).resolve().parents[1] / "serve_vllm.sh"
+SETUP = Path(__file__).resolve().parents[1] / "setup_vllm.sh"
+
+
+XS = "poolside/Laguna-XS-2.1"
+S = "poolside/Laguna-S-2.1"
+
+
+def _config(tmp_path, **overrides):
+    # A minimal environment makes the test independent of inherited bring-up/debug knobs. The profile
+    # policy tests below are the XS launcher contract; S cases pass HF_MODEL=None to drop the default.
+    env = {
+        "HOME": str(tmp_path),
+        "PATH": os.environ["PATH"],
+        "HF_MODEL": XS,
+        "LAGUNA_PROFILE": "p150x2",
+        "TT_VISIBLE_DEVICES": "0,1",
+        **overrides,
+    }
+    env = {k: v for k, v in env.items() if v is not None}
+    return subprocess.run(
+        ["bash", str(LAUNCHER), "config"],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def test_p150x2_defaults_to_qualified_prefix_caching(tmp_path):
+    result = _config(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "hybrid_kv=0\n" in result.stdout
+    assert "hybrid_kv_status=production_safe_disabled\n" in result.stdout
+    assert "hybrid_kv_layout=uniform_forty_tensor_pairs\n" in result.stdout
+    assert "prefix_cache=1\n" in result.stdout
+    assert "prefix_cache_profile_default=1\n" in result.stdout
+    assert "prefix_cache_profile_policy=qualified\n" in result.stdout
+    assert "prefix_cache_env_explicit=0\n" in result.stdout
+    assert "prefix_cache_status=production_qualified\n" in result.stdout
+    assert "prefix_cache_cli_arg=--enable-prefix-caching\n" in result.stdout
+    assert "context_status=profile_qualified_limit\n" in result.stdout
+    assert "multi_seq_status=profile_qualified_sequence_limit\n" in result.stdout
+    assert "prompt_tokens_details_cli_arg=--enable-prompt-tokens-details\n" in result.stdout
+    assert ("prefix_cache_cli_args=--enable-prefix-caching " "--enable-prompt-tokens-details\n") in result.stdout
+    assert "prefix_cache_quantum=8192\n" in result.stdout
+    assert "prefix_cache_block_size=64\n" in result.stdout
+    assert "prefix_cache_admission_policy=complete_canonical_prompt_chunks\n" in result.stdout
+    assert "prefix_cache_kv_group_policy=single_uniform_full_attention\n" in result.stdout
+    assert "prefix_cache_scheduler_policy=max_num_seqs_1_no_chunked_prefill\n" in result.stdout
+    assert "prefix_cache_spec_decode_policy=disabled\n" in result.stdout
+    assert "prefix_cache_external_kv_policy=disabled\n" in result.stdout
+    assert "chunked_prefill_cli_arg=--no-enable-chunked-prefill\n" in result.stdout
+    assert "streaming_prefill=1\n" in result.stdout
+    assert "streaming_prefill_status=production_qualified\n" in result.stdout
+    assert "moe_token_dispatch=0\n" in result.stdout
+    assert "moe_token_dispatch_status=production_safe_disabled\n" in result.stdout
+    assert "moe_prefill_tile_sparse=0\n" in result.stdout
+    assert "moe_prefill_tile_sparse_status=production_safe_disabled\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+    assert "min_dram_free_fraction=0.10\n" in result.stdout
+    assert "min_contiguous_mib=128\n" in result.stdout
+
+
+def test_explicit_one_uses_qualified_policy_without_experimental_acknowledgement(tmp_path):
+    result = _config(tmp_path, TT_LAGUNA_PREFIX_CACHE="1")
+
+    assert result.returncode == 0, result.stderr
+    assert "prefix_cache=1\n" in result.stdout
+    assert "prefix_cache_profile_default=1\n" in result.stdout
+    assert "prefix_cache_profile_policy=qualified\n" in result.stdout
+    assert "prefix_cache_env_explicit=1\n" in result.stdout
+    assert "prefix_cache_status=production_qualified\n" in result.stdout
+    assert "prefix_cache_cli_arg=--enable-prefix-caching\n" in result.stdout
+    assert "prompt_tokens_details_cli_arg=--enable-prompt-tokens-details\n" in result.stdout
+    assert ("prefix_cache_cli_args=--enable-prefix-caching " "--enable-prompt-tokens-details\n") in result.stdout
+    assert "chunked_prefill_cli_arg=--no-enable-chunked-prefill\n" in result.stdout
+    assert "prefix_cache_quantum=8192\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+
+
+def test_explicit_zero_is_a_fail_closed_non_experimental_override(tmp_path):
+    result = _config(tmp_path, TT_LAGUNA_PREFIX_CACHE="0")
+
+    assert result.returncode == 0, result.stderr
+    assert "prefix_cache=0\n" in result.stdout
+    assert "prefix_cache_profile_default=1\n" in result.stdout
+    assert "prefix_cache_profile_policy=qualified\n" in result.stdout
+    assert "prefix_cache_env_explicit=1\n" in result.stdout
+    assert "prefix_cache_status=operator_rollback_disabled\n" in result.stdout
+    assert "prefix_cache_cli_arg=--no-enable-prefix-caching\n" in result.stdout
+    assert "prompt_tokens_details_cli_arg=<none>\n" in result.stdout
+    assert "chunked_prefill_cli_arg=<vllm-default>\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+
+
+def test_streaming_prefill_rollback_is_strict_and_experimental(tmp_path):
+    invalid = _config(tmp_path, TT_LAGUNA_STREAMING_PREFILL="false")
+    assert invalid.returncode == 2
+    assert "TT_LAGUNA_STREAMING_PREFILL" in invalid.stderr
+    assert "must be 0 or 1" in invalid.stderr
+
+    rejected = _config(tmp_path, TT_LAGUNA_STREAMING_PREFILL="0")
+    assert rejected.returncode == 2
+    assert "TT_LAGUNA_STREAMING_PREFILL=0 (qualified=1)" in rejected.stderr
+
+    accepted = _config(
+        tmp_path,
+        TT_LAGUNA_STREAMING_PREFILL="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "streaming_prefill=0\n" in accepted.stdout
+    assert "streaming_prefill_status=experimental_monolithic_rollback\n" in accepted.stdout
+    assert "TT_LAGUNA_STREAMING_PREFILL=0 (qualified=1)" in accepted.stdout
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "config_key", "status_key"),
+    (
+        (
+            "TT_LAGUNA_MOE_TOKEN_DISPATCH",
+            "1",
+            "moe_token_dispatch",
+            "moe_token_dispatch_status",
+        ),
+        (
+            "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE",
+            "1",
+            "moe_prefill_tile_sparse",
+            "moe_prefill_tile_sparse_status",
+        ),
+    ),
+)
+def test_moe_prefill_optimizations_are_strict_default_off_experiments(tmp_path, flag, value, config_key, status_key):
+    invalid = _config(tmp_path, **{flag: "yes"})
+    assert invalid.returncode == 2
+    assert "must be 0 or 1" in invalid.stderr
+
+    rejected = _config(tmp_path, **{flag: value})
+    assert rejected.returncode == 2
+    assert f"{flag}=1 (qualified=0)" in rejected.stderr
+
+    accepted = _config(
+        tmp_path,
+        **{
+            flag: value,
+            "TT_LAGUNA_PREFIX_CACHE": "0",
+            "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1",
+        },
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert f"{config_key}=1\n" in accepted.stdout
+    assert f"{status_key}=experimental_unqualified\n" in accepted.stdout
+    assert "prefix_cache=0\n" in accepted.stdout
+    assert f"{flag}=1 (qualified=0)" in accepted.stdout
+
+
+@pytest.mark.parametrize(
+    ("flag", "overrides", "message"),
+    (
+        ("TT_LAGUNA_MOE_TOKEN_DISPATCH", {}, "requires TT_LAGUNA_PREFIX_CACHE=0"),
+        ("TT_LAGUNA_MOE_PREFILL_TILE_SPARSE", {}, "requires TT_LAGUNA_PREFIX_CACHE=0"),
+        (
+            "TT_LAGUNA_MOE_TOKEN_DISPATCH",
+            {"TT_LAGUNA_PREFIX_CACHE": "0", "TT_LAGUNA_HYBRID_KV": "1"},
+            "requires TT_LAGUNA_HYBRID_KV=0 and TT_LAGUNA_DFLASH=0",
+        ),
+        (
+            "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE",
+            {"TT_LAGUNA_PREFIX_CACHE": "0", "TT_LAGUNA_DFLASH": "1"},
+            "requires TT_LAGUNA_HYBRID_KV=0 and TT_LAGUNA_DFLASH=0",
+        ),
+        (
+            "TT_LAGUNA_MOE_TOKEN_DISPATCH",
+            {"TT_LAGUNA_PREFIX_CACHE": "0", "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE": "1"},
+            "separate, unstacked qualification paths",
+        ),
+    ),
+)
+def test_moe_prefill_optimizations_reject_unqualified_feature_stacking(tmp_path, flag, overrides, message):
+    result = _config(
+        tmp_path,
+        **{
+            flag: "1",
+            "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1",
+            **overrides,
+        },
+    )
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+def test_hybrid_kv_is_explicit_cache_off_experimental_only(tmp_path):
+    rejected = _config(
+        tmp_path,
+        TT_LAGUNA_HYBRID_KV="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+    )
+    assert rejected.returncode == 2
+    assert "unqualified inherited/debug override" in rejected.stderr
+    assert "TT_LAGUNA_HYBRID_KV=1 (qualified=0)" in rejected.stderr
+
+    accepted = _config(
+        tmp_path,
+        TT_LAGUNA_HYBRID_KV="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "hybrid_kv=1\n" in accepted.stdout
+    assert "hybrid_kv_status=experimental_cache_off_qualification\n" in accepted.stdout
+    assert "hybrid_kv_layout=four_groups_ten_aliased_tensor_pairs\n" in accepted.stdout
+    assert "hybrid_kv_scheduler_chunk=8192\n" in accepted.stdout
+    assert "chunked_prefill_cli_arg=--enable-chunked-prefill\n" in accepted.stdout
+    assert ("chunked_prefill_cli_args=--enable-chunked-prefill " "--max-num-batched-tokens 8192\n") in accepted.stdout
+    assert "TT_LAGUNA_HYBRID_KV=1 (qualified=0)" in accepted.stdout
+
+
+def test_dflash_is_explicit_p150x2_batch_one_cache_off_experimental_only(tmp_path):
+    rejected = _config(
+        tmp_path,
+        TT_LAGUNA_DFLASH="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+    )
+    assert rejected.returncode == 2
+    assert "unqualified inherited/debug override" in rejected.stderr
+    assert "TT_LAGUNA_DFLASH=1 (qualified=0)" in rejected.stderr
+
+    accepted = _config(
+        tmp_path,
+        TT_LAGUNA_DFLASH="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "dflash=1\n" in accepted.stdout
+    assert "dflash_status=experimental_cache_off_serving\n" in accepted.stdout
+    assert "dflash_envelope=p150x2_batch1_greedy_uniform_cache_off\n" in accepted.stdout
+    assert "prefix_cache=0\n" in accepted.stdout
+    assert "hybrid_kv=0\n" in accepted.stdout
+    assert "max_num_seqs=1\n" in accepted.stdout
+    assert "chunked_prefill_cli_arg=--no-enable-chunked-prefill\n" in accepted.stdout
+    assert "chunked_prefill_cli_args=--no-enable-chunked-prefill\n" in accepted.stdout
+    assert "TT_LAGUNA_DFLASH=1 (qualified=0)" in accepted.stdout
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({}, "requires TT_LAGUNA_PREFIX_CACHE=0"),
+        (
+            {"TT_LAGUNA_PREFIX_CACHE": "0", "TT_LAGUNA_SPEC_DECODE": "1"},
+            "does not support TT_LAGUNA_SPEC_DECODE",
+        ),
+        (
+            {
+                "LAGUNA_PROFILE": "p150",
+                "TT_VISIBLE_DEVICES": "0",
+                "TT_LAGUNA_PREFIX_CACHE": "0",
+            },
+            "restricted to LAGUNA_PROFILE=p150x2",
+        ),
+    ],
+)
+def test_dflash_launcher_rejects_unqualified_feature_overlap(tmp_path, overrides, message):
+    result = _config(
+        tmp_path,
+        TT_LAGUNA_DFLASH="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+        **overrides,
+    )
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("plugin_filter", "missing"),
+    (
+        ("", "tt"),
+        ("tt_model_registry,laguna_tt_ext", "tt"),
+        ("tt,laguna_tt_ext", "tt_model_registry"),
+        ("tt,tt_model_registry", "laguna_tt_ext"),
+        ("tt,tt_model_registry,laguna_tt_ext_extra", "laguna_tt_ext"),
+    ),
+)
+def test_hybrid_kv_rejects_incomplete_plugin_filter(tmp_path, plugin_filter, missing):
+    result = _config(
+        tmp_path,
+        TT_LAGUNA_HYBRID_KV="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+        VLLM_PLUGINS=plugin_filter,
+    )
+
+    assert result.returncode == 2
+    assert f"include the exact entry '{missing}'" in result.stderr
+
+
+def test_hybrid_kv_accepts_plugin_filter_with_exact_local_entry(tmp_path):
+    result = _config(
+        tmp_path,
+        TT_LAGUNA_HYBRID_KV="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+        VLLM_PLUGINS="tt,tt_model_registry,laguna_tt_ext",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "hybrid_kv=1\n" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("plugin_filter", "missing"),
+    (
+        ("tt_model_registry,laguna_tt_ext", "tt"),
+        ("tt,laguna_tt_ext", "tt_model_registry"),
+        ("tt,tt_model_registry", "laguna_tt_ext"),
+    ),
+)
+def test_qualified_prefix_cache_rejects_incomplete_plugin_filter(tmp_path, plugin_filter, missing):
+    result = _config(tmp_path, VLLM_PLUGINS=plugin_filter)
+
+    assert result.returncode == 2
+    assert f"include the exact entry '{missing}'" in result.stderr
+
+
+def test_cache_off_launch_requires_complete_plugin_allowlist(tmp_path):
+    rejected = _config(
+        tmp_path,
+        TT_LAGUNA_PREFIX_CACHE="0",
+        VLLM_PLUGINS="tt,tt_model_registry",
+    )
+    assert rejected.returncode == 2
+    assert "include the exact entry 'laguna_tt_ext'" in rejected.stderr
+
+    accepted = _config(
+        tmp_path,
+        TT_LAGUNA_PREFIX_CACHE="0",
+        VLLM_PLUGINS="tt,tt_model_registry,laguna_tt_ext",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "prefix_cache=0\n" in accepted.stdout
+
+
+def test_setup_rejects_missing_local_extension_before_build(tmp_path):
+    result = subprocess.run(
+        ["bash", str(SETUP)],
+        env={
+            "HOME": str(tmp_path),
+            "PATH": os.environ["PATH"],
+            "VLLM_PLUGINS": "tt,tt_model_registry",
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "include the exact entry 'laguna_tt_ext'" in result.stderr
+    assert "First run builds tt-metal" not in result.stdout
+
+
+def test_setup_rejects_missing_tt_runtime_plugin_before_build(tmp_path):
+    result = subprocess.run(
+        ["bash", str(SETUP)],
+        env={
+            "HOME": str(tmp_path),
+            "PATH": os.environ["PATH"],
+            "VLLM_PLUGINS": "tt_model_registry,laguna_tt_ext",
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "include the exact entry 'tt'" in result.stderr
+    assert "First run builds tt-metal" not in result.stdout
+
+
+def test_hybrid_kv_combines_with_prefix_caching_and_rejects_non_d2_topology(tmp_path):
+    overlap = _config(
+        tmp_path,
+        TT_LAGUNA_HYBRID_KV="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert overlap.returncode == 0, overlap.stderr
+    assert "hybrid_kv=1\n" in overlap.stdout
+    assert "prefix_cache=1\n" in overlap.stdout
+    assert "prefix_cache_scheduler_policy=max_num_seqs_1_chunked_prefill_8192\n" in overlap.stdout
+    assert "--enable-chunked-prefill --max-num-batched-tokens 8192" in overlap.stdout
+
+    non_d2 = _config(
+        tmp_path,
+        LAGUNA_PROFILE="p150",
+        TT_VISIBLE_DEVICES="0",
+        TT_LAGUNA_HYBRID_KV="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert non_d2.returncode == 2
+    assert "restricted to LAGUNA_PROFILE=p150x2" in non_d2.stderr
+
+
+def test_262k_context_probe_is_exact_explicit_hybrid_and_cache_off(tmp_path):
+    unflagged = _config(tmp_path, LAGUNA_MAX_MODEL_LEN="262144")
+    assert unflagged.returncode == 2
+    assert "exceeds the verified p150x2 limit 131072" in unflagged.stderr
+
+    wrong_value = _config(
+        tmp_path,
+        LAGUNA_MAX_MODEL_LEN="200000",
+        TT_LAGUNA_CONTEXT_PROBE="1",
+    )
+    assert wrong_value.returncode == 2
+    assert "only fail-closed exception" in wrong_value.stderr
+
+    unsafe_cache_mode = _config(
+        tmp_path,
+        LAGUNA_MAX_MODEL_LEN="262144",
+        TT_LAGUNA_CONTEXT_PROBE="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert unsafe_cache_mode.returncode == 2
+    assert "requires cache-off hybrid KV" in unsafe_cache_mode.stderr
+
+    accepted = _config(
+        tmp_path,
+        LAGUNA_MAX_MODEL_LEN="262144",
+        TT_LAGUNA_CONTEXT_PROBE="1",
+        TT_LAGUNA_HYBRID_KV="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "max_model_len=262144\n" in accepted.stdout
+    assert "max_num_seqs=1\n" in accepted.stdout
+    assert "context_status=experimental_262144_probe\n" in accepted.stdout
+    assert "multi_seq_status=profile_qualified_sequence_limit\n" in accepted.stdout
+    assert "hybrid_kv=1\n" in accepted.stdout
+    assert "prefix_cache=0\n" in accepted.stdout
+    assert "TT_LAGUNA_ADVERTISED_CONTEXT=262144" in accepted.stdout
+    assert "TT_LAGUNA_CONTEXT_PROBE=1 (qualified=0)" in accepted.stdout
+
+
+def test_two_sequence_pool_probe_is_exact_uniform_cache_off_and_bounded(tmp_path):
+    unflagged = _config(tmp_path, LAGUNA_MAX_NUM_SEQS="2")
+    assert unflagged.returncode == 2
+    assert "exceeds the p150x2 limit 1" in unflagged.stderr
+
+    too_long = _config(
+        tmp_path,
+        LAGUNA_MAX_MODEL_LEN="131072",
+        LAGUNA_MAX_NUM_SEQS="2",
+        TT_LAGUNA_MULTI_SEQ_POOL="1",
+    )
+    assert too_long.returncode == 2
+    assert "max_model_len<=65536" in too_long.stderr
+
+    unsafe_prefix = _config(
+        tmp_path,
+        LAGUNA_MAX_MODEL_LEN="65536",
+        LAGUNA_MAX_NUM_SEQS="2",
+        TT_LAGUNA_MULTI_SEQ_POOL="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert unsafe_prefix.returncode == 2
+    assert "uniform-KV cache-off path" in unsafe_prefix.stderr
+
+    accepted = _config(
+        tmp_path,
+        LAGUNA_MAX_MODEL_LEN="65536",
+        LAGUNA_MAX_NUM_SEQS="2",
+        TT_LAGUNA_MULTI_SEQ_POOL="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "max_model_len=65536\n" in accepted.stdout
+    assert "max_num_seqs=2\n" in accepted.stdout
+    assert "context_status=profile_qualified_limit\n" in accepted.stdout
+    assert "multi_seq_status=experimental_two_sequence_pool\n" in accepted.stdout
+    assert "hybrid_kv=0\n" in accepted.stdout
+    assert "prefix_cache=0\n" in accepted.stdout
+    assert "TT_LAGUNA_MULTI_SEQ_POOL=1 (qualified=0)" in accepted.stdout
+
+
+@pytest.mark.parametrize(
+    ("profile", "devices"),
+    (("p150", "0"), ("p150x4", "0,1,2,3")),
+)
+def test_non_candidate_profiles_keep_clean_cache_off_defaults(tmp_path, profile, devices):
+    result = _config(
+        tmp_path,
+        LAGUNA_PROFILE=profile,
+        TT_VISIBLE_DEVICES=devices,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "prefix_cache=0\n" in result.stdout
+    assert "prefix_cache_profile_default=0\n" in result.stdout
+    assert "prefix_cache_profile_policy=experimental_only\n" in result.stdout
+    assert "prefix_cache_env_explicit=0\n" in result.stdout
+    assert "prefix_cache_status=production_safe_disabled\n" in result.stdout
+    assert "prefix_cache_cli_arg=--no-enable-prefix-caching\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("profile", "devices"),
+    (("p150", "0"), ("p150x4", "0,1,2,3")),
+)
+def test_non_candidate_profiles_remain_experimental_only(tmp_path, profile, devices):
+    overrides = {
+        "LAGUNA_PROFILE": profile,
+        "TT_VISIBLE_DEVICES": devices,
+        "TT_LAGUNA_PREFIX_CACHE": "1",
+        "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1",
+    }
+    if profile == "p150x4":
+        overrides["LAGUNA_MAX_NUM_SEQS"] = "1"
+    accepted = _config(
+        tmp_path,
+        **overrides,
+    )
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert "prefix_cache_profile_policy=experimental_only\n" in accepted.stdout
+    assert "prefix_cache_status=experimental_unqualified\n" in accepted.stdout
+    assert "prompt_tokens_details_cli_arg=--enable-prompt-tokens-details\n" in accepted.stdout
+
+
+def test_prefix_cache_rejects_multi_sequence_scheduler(tmp_path):
+    rejected = _config(
+        tmp_path,
+        LAGUNA_PROFILE="p150x4",
+        TT_VISIBLE_DEVICES="0,1,2,3",
+        TT_LAGUNA_PREFIX_CACHE="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+
+    assert rejected.returncode == 2
+    assert "requires LAGUNA_MAX_NUM_SEQS=1" in rejected.stderr
+
+
+@pytest.mark.parametrize(
+    ("override", "value", "message"),
+    (
+        ("TT_LAGUNA_PREFILL_FAST", "0", "requires TT_LAGUNA_PREFILL_FAST=1"),
+        (
+            "TT_LAGUNA_PREFILL_FAST_CHUNK",
+            "4096",
+            "requires TT_LAGUNA_PREFILL_FAST_CHUNK=8192",
+        ),
+        (
+            "TT_LAGUNA_PREFILL_SDPA_CHUNK",
+            "4096",
+            "requires TT_LAGUNA_PREFILL_SDPA_CHUNK=8192",
+        ),
+        (
+            "TT_LAGUNA_SPEC_DECODE",
+            "1",
+            "does not support TT_LAGUNA_SPEC_DECODE",
+        ),
+    ),
+)
+def test_prefix_cache_rejects_incompatible_prefill_or_spec_policy(tmp_path, override, value, message):
+    rejected = _config(
+        tmp_path,
+        TT_LAGUNA_PREFIX_CACHE="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+        **{override: value},
+    )
+
+    assert rejected.returncode == 2
+    assert message in rejected.stderr
+
+
+def test_weaker_memory_margins_require_experimental_override_acknowledgement(tmp_path):
+    cases = (
+        ("TT_LAGUNA_MIN_DRAM_FREE_FRACTION", "0", "0.10", "min_dram_free_fraction=0\n"),
+        ("TT_LAGUNA_MIN_CONTIGUOUS_MIB", "1", "128", "min_contiguous_mib=1\n"),
+    )
+    for name, value, qualified, config_line in cases:
+        rejected = _config(tmp_path, **{name: value})
+
+        assert rejected.returncode == 2
+        assert "unqualified inherited/debug override" in rejected.stderr
+        assert f"{name}={value} (qualified={qualified})" in rejected.stderr
+
+        accepted = _config(
+            tmp_path,
+            **{
+                name: value,
+                "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1",
+            },
+        )
+        assert accepted.returncode == 0, accepted.stderr
+        assert config_line in accepted.stdout
+        assert f"{name}={value} (qualified={qualified})" in accepted.stdout
+
+
+def test_s_is_the_default_model_and_selects_p150x4(tmp_path):
+    result = _config(tmp_path, HF_MODEL=None, LAGUNA_PROFILE=None, TT_VISIBLE_DEVICES=None)
+
+    assert result.returncode == 0, result.stderr
+    assert f"hf_model={S}\n" in result.stdout
+    assert "profile=p150x4\n" in result.stdout
+    assert "mesh_device=P150x4\n" in result.stdout
+    assert "tt_visible_devices=0,1,2,3\n" in result.stdout
+    assert "prefix_cache=0\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+    # S on p150x4 serves with hybrid KV, chunk-major streaming prefill and its declared 1048576 context.
+    assert "hybrid_kv=1\n" in result.stdout
+    assert "hybrid_kv_status=production_qualified\n" in result.stdout
+    assert "hybrid_kv_layout=four_groups_twelve_aliased_tensor_pairs\n" in result.stdout
+    assert "streaming_prefill_status=production_qualified\n" in result.stdout
+    assert "max_model_len=1048576\n" in result.stdout
+    assert "trace_region_size=128000000\n" in result.stdout
+    assert "moe_token_dispatch=1\n" in result.stdout
+    assert "moe_token_dispatch_status=production_qualified\n" in result.stdout
+    assert "max_num_seqs=1\n" in result.stdout
+    assert ("chunked_prefill_cli_args=--enable-chunked-prefill " "--max-num-batched-tokens 8192\n") in result.stdout
+    assert 'chat_template_kwargs={"enable_thinking": true}\n' in result.stdout
+
+
+def test_s_uniform_kv_rollback_needs_no_ack_and_keeps_its_measured_limit(tmp_path):
+    rollback = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV="0")
+    assert rollback.returncode == 0, rollback.stderr
+    assert "hybrid_kv=0\n" in rollback.stdout
+    assert "hybrid_kv_status=operator_rollback_uniform\n" in rollback.stdout
+    assert "hybrid_kv_layout=uniform_forty_eight_tensor_pairs\n" in rollback.stdout
+    assert "max_model_len=131072\n" in rollback.stdout
+    assert "experimental_overrides=<none>\n" in rollback.stdout
+
+    too_long = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV="0", LAGUNA_MAX_MODEL_LEN="262144")
+    assert too_long.returncode == 2
+    assert "exceeds the verified p150x4 limit 131072" in too_long.stderr
+
+
+def test_s_hybrid_rejects_context_beyond_its_declared_1048576(tmp_path):
+    result = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                     LAGUNA_MAX_MODEL_LEN="2097152")
+    assert result.returncode == 2
+    assert "exceeds the verified p150x4 limit 1048576" in result.stderr
+
+
+def test_tt_laguna_model_alone_selects_the_checkpoint(tmp_path):
+    result = _config(tmp_path, HF_MODEL=None, TT_LAGUNA_MODEL=XS)
+
+    assert result.returncode == 0, result.stderr
+    assert f"hf_model={XS}\n" in result.stdout
+    assert "hybrid_kv_layout=uniform_forty_tensor_pairs\n" in result.stdout
+    assert "max_model_len=131072\n" in result.stdout
+    assert "chat_template_kwargs=<none>\n" in result.stdout
+
+
+def test_xs_p150x4_is_unchanged_by_s_policies(tmp_path):
+    result = _config(tmp_path, HF_MODEL=XS, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3")
+    assert result.returncode == 0, result.stderr
+    assert "hybrid_kv=0\n" in result.stdout
+    assert "hybrid_kv_status=production_safe_disabled\n" in result.stdout
+    assert "streaming_prefill_status=topology_inactive\n" in result.stdout
+    assert "max_model_len=131072\n" in result.stdout
+    assert "max_num_seqs=8\n" in result.stdout
+    assert "trace_region_size=1500000000\n" in result.stdout
+
+
+@pytest.mark.parametrize("hybrid", ("1", "0"))
+def test_s_p150x4_accepts_up_to_32_sequences_on_request(tmp_path, hybrid):
+    accepted = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV=hybrid, LAGUNA_MAX_NUM_SEQS="32")
+    assert accepted.returncode == 0, accepted.stderr
+    assert "max_num_seqs=32\n" in accepted.stdout
+    assert f"hybrid_kv={hybrid}\n" in accepted.stdout
+
+    rejected = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                       TT_LAGUNA_HYBRID_KV=hybrid, LAGUNA_MAX_NUM_SEQS="33")
+    assert rejected.returncode == 2
+    assert "exceeds the p150x4 limit 32" in rejected.stderr
+
+
+@pytest.mark.parametrize(("profile", "devices"), (("p150", "0"), ("p150x2", "0,1")))
+def test_s_rejects_profiles_that_cannot_hold_it(tmp_path, profile, devices):
+    result = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE=profile, TT_VISIBLE_DEVICES=devices)
+
+    assert result.returncode == 2
+    assert f"does not fit LAGUNA_PROFILE '{profile}'" in result.stderr
+
+
+def test_conflicting_model_selectors_are_rejected(tmp_path):
+    result = _config(tmp_path, HF_MODEL=S, TT_LAGUNA_MODEL=XS)
+
+    assert result.returncode == 2
+    assert "conflicts with TT_LAGUNA_MODEL" in result.stderr
+
+
+def test_unknown_model_is_rejected(tmp_path):
+    result = _config(tmp_path, HF_MODEL="poolside/Laguna-M-2.1")
+
+    assert result.returncode == 2
+    assert "HF_MODEL must be poolside/Laguna-S-2.1 or poolside/Laguna-XS-2.1" in result.stderr
+
+
+def test_chat_template_kwargs_override(tmp_path):
+    off = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                  LAGUNA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}')
+    assert off.returncode == 0, off.stderr
+    assert 'chat_template_kwargs={"enable_thinking": false}\n' in off.stdout
+    none = _config(tmp_path, HF_MODEL=S, LAGUNA_PROFILE="p150x4", TT_VISIBLE_DEVICES="0,1,2,3",
+                   LAGUNA_CHAT_TEMPLATE_KWARGS="")
+    assert none.returncode == 0, none.stderr
+    assert "chat_template_kwargs=<none>\n" in none.stdout
+
+
+def test_s_dflash_runs_on_the_hybrid_default_with_its_chunks_and_a_64_token_draft_margin(tmp_path):
+    result = _s_dflash(tmp_path, TT_LAGUNA_HYBRID_KV=None, LAGUNA_MAX_NUM_SEQS=None)
+    assert result.returncode == 0, result.stderr
+    assert "hybrid_kv=1\n" in result.stdout
+    assert "dflash_envelope=p150x4_batch1_greedy_hybrid_cache_off\n" in result.stdout
+    assert "max_num_seqs=1\n" in result.stdout
+    # The draft RoPE horizon is 1,048,576; a proposal pads up to 64 rows past the context.
+    assert "max_model_len=1048512\n" in result.stdout
+    assert "chunked_prefill_cli_args=--enable-chunked-prefill --max-num-batched-tokens 8192\n" in result.stdout
+
+    explicit = _s_dflash(tmp_path, TT_LAGUNA_HYBRID_KV=None, LAGUNA_MAX_NUM_SEQS=None, LAGUNA_MAX_MODEL_LEN="1048576")
+    assert explicit.returncode == 2
+    assert "LAGUNA_MAX_MODEL_LEN+64<=1048576" in explicit.stderr
+
+
+def _s_dflash(tmp_path, **overrides):
+    env = {
+        "HF_MODEL": S,
+        "LAGUNA_PROFILE": "p150x4",
+        "TT_VISIBLE_DEVICES": "0,1,2,3",
+        "TT_LAGUNA_DFLASH": "1",
+        "TT_LAGUNA_HYBRID_KV": "0",
+        "LAGUNA_MAX_NUM_SEQS": "1",
+        "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1",
+        **overrides,
+    }
+    return _config(tmp_path, **env)
+
+
+def test_s_dflash_is_explicit_p150x4_batch_one_uniform_cache_off_experimental_only(tmp_path):
+    rejected = _s_dflash(tmp_path, LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=None)
+    assert rejected.returncode == 2
+    assert "unqualified inherited/debug override" in rejected.stderr
+    assert "TT_LAGUNA_DFLASH=1 (qualified=0)" in rejected.stderr
+
+    accepted = _s_dflash(tmp_path)
+    assert accepted.returncode == 0, accepted.stderr
+    assert f"hf_model={S}\n" in accepted.stdout
+    assert "dflash=1\n" in accepted.stdout
+    assert "dflash_status=experimental_cache_off_serving\n" in accepted.stdout
+    assert "dflash_envelope=p150x4_batch1_greedy_uniform_cache_off\n" in accepted.stdout
+    assert "device_count=4\n" in accepted.stdout
+    assert "prefix_cache=0\n" in accepted.stdout
+    assert "hybrid_kv=0\n" in accepted.stdout
+    assert "hybrid_kv_status=operator_rollback_uniform\n" in accepted.stdout
+    assert "max_num_seqs=1\n" in accepted.stdout
+    # S's uniform-KV context cap; +64 proposal padding stays far below the S draft's 1048576 horizon.
+    assert "max_model_len=131072\n" in accepted.stdout
+    assert "streaming_prefill_status=production_qualified\n" in accepted.stdout
+    assert "chunked_prefill_cli_args=--no-enable-chunked-prefill\n" in accepted.stdout
+    assert "TT_LAGUNA_DFLASH=1 (qualified=0)" in accepted.stdout
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        # p150x4's uniform-KV profile default is eight sequences.
+        ({"LAGUNA_MAX_NUM_SEQS": None}, "requires LAGUNA_MAX_NUM_SEQS=1"),
+        ({"TT_LAGUNA_PREFIX_CACHE": "1"}, "requires TT_LAGUNA_PREFIX_CACHE=0"),
+        ({"TT_LAGUNA_SPEC_DECODE": "1"}, "does not support TT_LAGUNA_SPEC_DECODE"),
+        ({"TT_LAGUNA_STREAMING_PREFILL": "0"}, "requires TT_LAGUNA_STREAMING_PREFILL=1"),
+    ],
+)
+def test_s_dflash_launcher_rejects_unqualified_feature_overlap(tmp_path, overrides, message):
+    result = _s_dflash(tmp_path, **overrides)
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+def test_xs_dflash_stays_restricted_to_p150x2(tmp_path):
+    result = _config(
+        tmp_path,
+        LAGUNA_PROFILE="p150x4",
+        TT_VISIBLE_DEVICES="0,1,2,3",
+        TT_LAGUNA_DFLASH="1",
+        TT_LAGUNA_PREFIX_CACHE="0",
+        LAGUNA_MAX_NUM_SEQS="1",
+        LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES="1",
+    )
+    assert result.returncode == 2
+    assert f"Laguna DFlash serving for {XS} is restricted to LAGUNA_PROFILE=p150x2" in result.stderr
+
+
+def test_s_token_dispatch_rollback_needs_no_acknowledgement(tmp_path):
+    result = _config(
+        tmp_path, HF_MODEL=None, LAGUNA_PROFILE=None, TT_VISIBLE_DEVICES=None, TT_LAGUNA_MOE_TOKEN_DISPATCH="0"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "moe_token_dispatch=0\n" in result.stdout
+    assert "moe_token_dispatch_status=operator_rollback_dense\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+
+
+def test_s_token_dispatch_composes_with_dflash_and_multi_sequence(tmp_path):
+    for extra in ({"TT_LAGUNA_DFLASH": "1", "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1"}, {"LAGUNA_MAX_NUM_SEQS": "32"}):
+        result = _config(tmp_path, HF_MODEL=None, LAGUNA_PROFILE=None, TT_VISIBLE_DEVICES=None, **extra)
+
+        assert result.returncode == 0, result.stderr
+        assert "moe_token_dispatch=1\n" in result.stdout
+        assert "moe_token_dispatch_status=production_qualified\n" in result.stdout

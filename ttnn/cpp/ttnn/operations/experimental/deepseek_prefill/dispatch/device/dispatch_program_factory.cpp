@@ -170,10 +170,15 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                         operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
         "Zero-link prefill dispatch requires a singleton communication domain, dispatch_group_size=1, and Linear "
         "topology");
+    // The chip can host every routed expert (one TP group) or a share of them (expert parallelism over
+    // single-chip dispatch groups, e.g. Laguna-S on a QuietBox 2): routes to experts the dispatch table
+    // maps nowhere (-1) are dropped by the worker reader, so they never leave the chip.
     TT_FATAL(
         !local_only || (operation_attributes.experts_per_chip > 0 &&
-                        operation_attributes.num_routed_experts == operation_attributes.experts_per_chip),
-        "Local prefill dispatch requires all routed experts on its only chip");
+                        operation_attributes.experts_per_chip <= operation_attributes.num_routed_experts),
+        "Local prefill dispatch requires 0 < experts_per_chip ({}) <= num_routed_experts ({})",
+        operation_attributes.experts_per_chip,
+        operation_attributes.num_routed_experts);
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;

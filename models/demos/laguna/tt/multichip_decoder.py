@@ -1,0 +1,2662 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""TTNN decoder for poolside/Laguna-XS-2.1 on a 1×D Blackhole mesh (D=1, 2, or 4).
+
+Parallelizes the single-chip optimized decoder (``tt/optimized_decoder.py``,
+``OptimizedDecoder``) across a 1×D Blackhole mesh with **1D tensor parallelism (TP=D)**
+for the dense/attention path and **expert parallelism (EP=D)** for the routed MoE. The
+optimized decoder is the single-chip baseline: this class subclasses it and reuses every
+optimized helper (precision policy, packed-QKV split, RMSNorm, RoPE, SDPA config, the
+DRAM-sharded matmul helper, and the sparse-expert program configs). Only weight placement
+(mesh sharding at load time) and the collectives the scheme needs are added here.
+
+Scheme:
+  * Residual stream is **replicated** (BF16). Both RMSNorms see the full hidden and are
+    exact locally — no distributed norm needed.
+  * Attention: WQKV column-parallel (packed, reordered so device d owns Q heads
+    [d·lqh:(d+1)·lqh) and KV heads [2d:2d+2)); per-head QK-norm/RoPE/SDPA local; KV cache
+    holds the device-local KV heads; softplus gate g_proj column-parallel; WO row-parallel
+    → partial → one all_reduce.
+  * Dense MLP (layer 0): gate/up column-parallel, down row-parallel → partial → all_reduce.
+  * MoE (layers 1-39): router runs replicated; expert weights EP-sharded (256/D experts/device);
+    a mesh-sharded selection-matmul turns the replicated 256-wide router output into device d's
+    contiguous 64-wide scores/sparsity; ``ttnn.sparse_matmul`` (nnz=None, Blackhole-required)
+    over the local experts; shared expert TP; routed_local + shared_partial → one all_reduce.
+
+Collectives: exactly **2 all_reduce / layer** for D>1 (attn out, MLP/MoE out), cluster_axis=1.
+Topology and link count are selected with ``TT_LAGUNA_CCL_TOPOLOGY`` and
+``TT_LAGUNA_CCL_NUM_LINKS``; D=1 bypasses collectives. Decoder-layer input and output share
+the replicated ``[1,1,B,H]`` /
+``[1,seq,H]`` layout, so layers stack with no inter-layer reshard.
+
+Public API matches OptimizedDecoder/FunctionalDecoder (``from_state_dict``, ``alloc_kv_cache``,
+``make_page_table``, ``prefill_forward``, ``decode_forward``) — the tensors must live on the
+1×D mesh (replicated inputs). Enable a matching fabric before opening a multi-device mesh;
+fabric must remain disabled for D=1.
+"""
+from __future__ import annotations
+
+import math
+import os
+import re
+
+import torch
+
+import ttnn
+
+from .optimized_decoder import (
+    TILE,
+    _kv_heads_geometry,
+    LayerConfig,
+    OptimizedDecoder,
+    PrecisionPolicy,
+    _cached_device_tensor,
+    _decode_shard_cores,
+    _dram_matmul_pc,
+    _dram_weight_memcfg,
+    _hf_rope_tables,
+    _sparse_pc,
+    _width_sharded_l1,
+    weight_cache_key,
+)
+from . import colpage, moe_decode1, tile_regroup
+from .prefill_page_table import single_shot_fill_page_table
+
+TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
+FOLD_GATE_QKV_ENV = "TT_LAGUNA_FOLD_GATE_QKV"  # 0 = separate 1-core g_proj matmul in decode
+ROPE_PERMUTE_ENV = "TT_LAGUNA_ROPE_PERMUTE"  # 0 = partial RoPE via rot/pass slices + concat
+MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
+# XS p150x2's power-of-two buckets plus S's finer prefill ladder (generator_vllm._PREFILL_FINE_BUCKETS)
+TOKEN_DISPATCH_BUCKETS = frozenset({1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192})
+# Short buckets through dispatch too (48-layer prefill on p150x4 vs the 256-row sparse MoE loop, with the row-expert
+# routed op and the local combine): 128 163 -> 123, 256 284 -> 120, 512 581 -> 133 ms. Dispatch computes each token
+# the same way in every bucket (fp32-reference accuracy measured at 512..8192).
+TOKEN_DISPATCH_BUCKETS = TOKEN_DISPATCH_BUCKETS | {
+    int(v) for v in os.environ.get("TT_LAGUNA_DISPATCH_SMALL", "128,256,512").split(",") if v.strip()
+}
+# Fine prefill ladder above 512 tokens (S p150x4, generator_vllm._prefill_bucket_lens): every 128 tokens to 2048, every
+# 256 to 4096, every 512 to 8192, so a request pads by at most 128/256/512 rows (a 1066-token prompt computed 1536
+# rows on the 1536-then-every-1024 ladder). Multiples of 128 keep the sequence-parallel split (seq % (4 * 32)) and the
+# 128-row chunked SDPA. TT_LAGUNA_FINE_LADDER=0 restores 1536 + every 1024.
+FINE_PREFILL_LADDER = (
+    tuple(range(640, 2048, 128)) + tuple(range(2048, 4096, 256)) + tuple(range(4096, 8192 + 1, 512))
+    if os.environ.get("TT_LAGUNA_FINE_LADDER", "1") == "1"
+    else ()
+)
+TOKEN_DISPATCH_BUCKETS = TOKEN_DISPATCH_BUCKETS | set(FINE_PREFILL_LADDER)
+TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 48))  # XS routes layers 1-39, S layers 1-47
+# (mesh devices, global experts, local experts, hidden, moe intermediate, top-k) the dispatch path was measured on:
+# Laguna-XS-2.1 on p150x2 and Laguna-S-2.1 on p150x4.
+TOKEN_DISPATCH_GEOMETRIES = frozenset({(2, 256, 128, 2048, 512, 8), (4, 256, 64, 3072, 1024, 10)})
+TOKEN_DISPATCH_CHUNK_M_TILES = 16
+TOKEN_DISPATCH_METADATA_LEN = 5
+# Decode keeps the routed-expert intermediates (gate/up, GLU, down, weighted: ~LE x 32 rows x (2I + 2H) bf16)
+# in L1. The largest footprint qualified on hardware is XS on one chip (256 x 32 x (1024 + 4096) x 2 B =
+# 83.9 MB); S on one chip (134.2 MB) clashes with the static circular buffers. Above this bound decode uses
+# DRAM instead. S on P150x4 needs 33.5 MB and keeps L1.
+MOE_DECODE_L1_MAX_BYTES = 256 * TILE * (2 * 512 + 2 * 2048) * 2
+
+
+def _parse_binary_env(name: str, default: bool = False) -> bool:
+    """Parse an experimental runtime switch without accepting typos.
+
+    The token-dispatch path is intentionally fail-closed: only literal ``0``
+    and ``1`` are accepted, and an unset variable retains the default-off
+    production path.
+    """
+
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    if value not in {"0", "1"}:
+        raise ValueError(f"{name} must be exactly '0' or '1'; got {value!r}")
+    return value == "1"
+
+
+def _token_dispatch_eligibility(
+    *,
+    enabled: bool,
+    layer_idx: int,
+    is_moe: bool,
+    mesh_devices: int,
+    seq_len: int,
+    sharded: bool,
+    pack_gate_up: bool,
+    global_experts: int,
+    local_experts: int,
+    hidden: int,
+    intermediate: int,
+    top_k: int,
+    activation_dtype,
+    moe_ff13_dtype,
+    moe_ff2_dtype,
+    ccl_dtype,
+    moe_fidelity: str,
+) -> tuple[bool, str]:
+    """Return the narrow, measured token-dispatch serving envelope.
+
+    Everything outside this envelope goes through the established 256-row
+    sparse-MoE loop. Keeping this decision device-free makes every layer and
+    bucket guard independently testable without opening hardware.
+    """
+
+    checks = (
+        (enabled, "feature flag is disabled"),
+        (layer_idx in TOKEN_DISPATCH_MOE_LAYERS and is_moe, "layer is not a Laguna routed-MoE layer"),
+        (mesh_devices in (2, 4), "only the p150x2 and p150x4 meshes are supported"),
+        (seq_len in TOKEN_DISPATCH_BUCKETS, "prefill bucket is not supported"),
+        (not sharded, "decode/sharded activations are not supported"),
+        (pack_gate_up, "stacked packed gate/up weights are required"),
+        (
+            (mesh_devices, global_experts, local_experts, hidden, intermediate, top_k) in TOKEN_DISPATCH_GEOMETRIES,
+            "model or expert-partition dimensions match neither Laguna-XS-2.1 p150x2 nor Laguna-S-2.1 p150x4",
+        ),
+        (activation_dtype == ttnn.bfloat16, "BF16 token-dispatch activations are required"),
+        (
+            moe_ff13_dtype == ttnn.bfloat4_b and moe_ff2_dtype == ttnn.bfloat4_b,
+            "the qualified routed-expert weight policy is BFP4/BFP4",
+        ),
+        (ccl_dtype == ttnn.bfloat16, "the qualified routed accumulation uses BF16 CCL"),
+        (moe_fidelity == "LoFi", "the qualified routed-expert fidelity is LoFi"),
+    )
+    for passed, reason in checks:
+        if not passed:
+            return False, reason
+    return True, "eligible"
+
+
+def _cache_layer_identity(layer_idx: int, cache_namespace: str | None = None) -> int | str:
+    """Return the cache-layer identity without changing established target keys.
+
+    Draft models can reuse target layer numbers while owning different weights.  An
+    explicit namespace keeps those converted tensor caches disjoint; ``None`` retains
+    the byte-for-byte target-model key used before this option existed.
+    """
+
+    if cache_namespace is None:
+        return layer_idx
+    if not isinstance(cache_namespace, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", cache_namespace):
+        raise ValueError(
+            "cache_namespace must start with an alphanumeric character and contain only "
+            "letters, digits, '.', '_', or '-'"
+        )
+    return f"{cache_namespace}_L{layer_idx}"
+
+
+def _build_expert_row_dispatch(
+    topk_indices: torch.Tensor,
+    topk_weights: torch.Tensor,
+    *,
+    expert_start: int,
+    expert_count: int,
+) -> dict[str, torch.Tensor]:
+    """Build the stable token-to-local-expert packing contract on the host.
+
+    This is an executable specification for a future token-sparse device kernel, not a
+    runtime fallback: moving router output or activations through the host would erase the
+    prefill win.  Entries are ordered by ``(local_expert, token, top-k slot)``; the returned
+    offsets therefore delimit the selected input rows for every local expert without ever
+    materialising ``[tokens, local_experts, hidden]``.
+
+    Zero-weight routes are omitted because they cannot contribute to the weighted expert
+    sum.  That also matches ``sparse_matmul``'s current interpretation of a zero routing
+    entry as inactive.
+    """
+    if topk_indices.shape != topk_weights.shape:
+        raise ValueError(
+            f"top-k index/weight shapes must match, got {tuple(topk_indices.shape)} and " f"{tuple(topk_weights.shape)}"
+        )
+    if topk_indices.ndim < 2:
+        raise ValueError(f"top-k tensors must have rank >= 2, got rank {topk_indices.ndim}")
+    if expert_start < 0 or expert_count <= 0:
+        raise ValueError(f"invalid local expert range: start={expert_start}, count={expert_count}")
+
+    top_k = topk_indices.shape[-1]
+    num_tokens = topk_indices.numel() // top_k
+    indices = topk_indices.reshape(num_tokens, top_k).to(torch.int64)
+    weights = topk_weights.reshape(num_tokens, top_k)
+    token_indices = torch.arange(num_tokens, device=indices.device, dtype=torch.int64).unsqueeze(1).expand_as(indices)
+    slot_indices = torch.arange(top_k, device=indices.device, dtype=torch.int64).unsqueeze(0).expand_as(indices)
+
+    local_experts = indices - expert_start
+    selected = (local_experts >= 0) & (local_experts < expert_count) & (weights != 0)
+    packed_tokens = token_indices[selected]
+    packed_slots = slot_indices[selected]
+    packed_experts = local_experts[selected]
+    packed_weights = weights[selected]
+
+    # Sorting a unique composite key by expert and token is stable, leaving duplicate
+    # (token, expert) routes in top-k-slot order.  Stable ordering is part of the combine
+    # contract and makes a future device implementation deterministic.
+    if packed_tokens.numel():
+        key = (packed_experts * num_tokens + packed_tokens) * top_k + packed_slots
+        order = torch.argsort(key, stable=True)
+        packed_tokens = packed_tokens[order]
+        packed_slots = packed_slots[order]
+        packed_experts = packed_experts[order]
+        packed_weights = packed_weights[order]
+
+    counts = torch.bincount(packed_experts, minlength=expert_count)
+    offsets = torch.empty(expert_count + 1, device=indices.device, dtype=torch.int64)
+    offsets[0] = 0
+    offsets[1:] = torch.cumsum(counts, dim=0)
+    return {
+        "token_indices": packed_tokens,
+        "slot_indices": packed_slots,
+        "local_expert_indices": packed_experts,
+        "weights": packed_weights,
+        "expert_counts": counts,
+        "expert_offsets": offsets,
+    }
+
+
+class MultichipDecoder(OptimizedDecoder):
+    """Laguna decoder for a 1×D Blackhole mesh: TP=D attention/dense + EP=D routed MoE,
+    replicated BF16 residual, and exactly two ``all_reduce``s per layer for D>1. On D=1 the same
+    packed production path is used, but both reductions and the expert-selector projection are
+    identities.
+
+    ``PACK_GATE_UP`` (default True) enables the decode gate/up matmul-packing optimization: the two
+    same-input gate/up projections (routed-expert MoE, dense MLP, shared expert) are concatenated at load
+    into one wide weight so a single matmul replaces two dispatches (decode is dispatch/latency-bound). PCC
+    is preserved exactly (SiLU is applied after the on-device split), so it is a pure device-time win
+    (measured ~−5.4% layer decode). Set ``PACK_GATE_UP=False`` for the unpacked baseline (A/B evidence).
+    Previously this lived in a separate ``OptimizedMultichipDecoder`` subclass; folded in here as a flag.
+    """
+
+    # Inherited runtime chunk knobs (MOE_PREFILL_CHUNK, PIPE_CHUNK, PREFILL_SDPA_CHUNK).
+    PACK_GATE_UP = True
+    # Stage 1 of prefill dispatch: bound routed gate/up work to a hardware tile instead
+    # of taking one expert union across the full 256-token MoE chunk.  This remains
+    # tile-sparse (an expert selected by one row computes the other rows in that tile),
+    # not true token packing.  The down projection deliberately keeps the established
+    # full-T union because TTNN elementwise ops do not preserve a group×expert batch for
+    # input-A-sparse matmul. Keep this opt-in and unqualified; decode never uses it.
+    MOE_PREFILL_TILE_SPARSE = _parse_binary_env(MOE_PREFILL_TILE_SPARSE_ENV)
+    MOE_PREFILL_TILE_GROUP = TILE
+
+    def __init__(self, cfg, weights, cos_table, sin_table, mesh_device, policy, meta):
+        super().__init__(cfg, weights, cos_table, sin_table, mesh_device, policy, meta)
+        self.D = meta["mesh_devices"]
+        self.global_experts = meta["global_experts"]
+        self.local_experts = meta["local_experts"]
+        self.moe_decode_l1_bytes = (
+            self.local_experts * TILE * (2 * cfg.moe_intermediate + 2 * cfg.hidden) * 2 if cfg.is_moe else 0
+        )
+        self.moe_decode_in_l1 = self.moe_decode_l1_bytes <= MOE_DECODE_L1_MAX_BYTES
+        self._token_dispatch_requested = _parse_binary_env(TOKEN_DISPATCH_ENV)
+        self._token_dispatch_state = None
+        self._ag_reduce = _parse_binary_env("TT_LAGUNA_AG_REDUCE", True)  # decode all-reduce as all_gather+sum
+        # 2 fabric buffers per channel for that all_gather: 24.0 -> 22.3 us per 1-row decode all-reduce on p150x4
+        nb = int(os.environ.get("TT_LAGUNA_AG_BUFFERS", "2"))
+        self._ag_kw = {"num_buffers_per_channel": nb} if nb > 0 else {}
+        # batch-1 decode: all-reduce only row 0 of the partials, fused with the residual add (allreduce_rows.py)
+        self._ar_rows = _parse_binary_env("TT_LAGUNA_AR_ROWS", True)
+        self._ar_broadcast = _parse_binary_env("TT_LAGUNA_AR_BROADCAST", True)  # all_broadcast, no concat (see above)
+        # largest decode batch on the packed-rows all-reduce (6-row DFlash verify: 32-row tile all_gather + reduce
+        # + add ~24 us -> packed rows); 1 keeps it batch-1 only
+        self._ar_rows_max = int(os.environ.get("TT_LAGUNA_AR_ROWS_MAX", "8"))
+        # batch-1 decode attention prologue as one op (attn_prologue1.py); TT_LAGUNA_AP1=0 restores the op chain
+        self._ap1 = _parse_binary_env("TT_LAGUNA_AP1", True)
+        # batch-1 decode attention epilogue (gate slice + softplus gate + flatten into WO's input) as one op
+        # (attn_epilogue1.py); TT_LAGUNA_AE1=0 restores the op chain
+        self._ae1 = _parse_binary_env("TT_LAGUNA_AE1", True)
+        self._ap1_scaler = None
+        # attn_prologue1 also for the sequential-KV verify rows (2..8, DFlash); 0 keeps it batch-1 only
+        self._ap1_rows = _parse_binary_env("TT_LAGUNA_AP1_ROWS", True)
+        # ... and at 32 rows (one row per core: q over 2 cores, k / v over 1; replaces the head-split op, the q / k
+        # norms, the two RoPEs and ~8 layout moves)
+        self._ap1_32 = _parse_binary_env("TT_LAGUNA_AP1_32", True)
+        # ... and attn_epilogue1 at 32 rows: batch-32 decode, and the batched verify's chunks writing into one shared
+        # WO input (replaces the gate slice, reshape, gated multiply, reshard, head concat and unshard per chunk)
+        self._ae32 = _parse_binary_env("TT_LAGUNA_AE32", True)
+        # the batched verify's prologue as one op over all its rows (3 rows per core at 96) instead of one per chunk
+        self._ap1_multi = _parse_binary_env("TT_LAGUNA_AP1_MULTI", True)
+        # DFlash context K/V (dflash_kv_rows) from a K/V-only slice of the fused QKV weight
+        self._dflash_kv_only = _parse_binary_env("TT_LAGUNA_DFLASH_KV_ONLY", True)
+        # 32-row draft head split / join as one multi-core tile copy (tile_regroup) instead of nlp_create_qkv_heads /
+        # nlp_concat_heads (one core each: ~37 / ~30 -> ~3 us)
+        self._dflash_regroup = _parse_binary_env("TT_LAGUNA_DFLASH_REGROUP", True)
+        self._router_1d = _parse_binary_env("TT_LAGUNA_ROUTER_1D", True)  # see _router_scores
+        self._router_ksplit = _parse_binary_env("TT_LAGUNA_ROUTER_KSPLIT", True)  # see _router_scores
+        # multi-row verify KV writes through the fused K+V op (share_cache group mode) instead of one op per K / V
+        self._seq_kv_fused = _parse_binary_env("TT_LAGUNA_SEQ_KV_FUSED", True)
+        # draft query rows: the gate logits from the decode path's fused [Q|K|V|G] DRAM-sharded matmul instead of a
+        # separate N = 18 g_proj matmul (one core, ~23 us per draft layer)
+        self._dflash_fold_g = _parse_binary_env("TT_LAGUNA_DFLASH_FOLD_G", True)
+        if self._ap1 and self.D >= 1:
+            from .attn_prologue1 import reduce_scaler
+
+            self._ap1_scaler = reduce_scaler(
+                mesh_device, self.cfg.head_dim, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+            )
+        self._defer_reduce = False
+        self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
+        self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
+        # batched decode (2..32 tokens) router: per-token rank<K as well, instead of the 1-core top-k chain
+        self._route_rank_batch = _parse_binary_env("TT_LAGUNA_ROUTE_RANK_BATCH", False)
+        self._head_norm_4d = _parse_binary_env("TT_LAGUNA_HEAD_NORM_4D", True)  # decode q/k norm without flattening
+        self._decode_heads_op = _parse_binary_env("TT_LAGUNA_DECODE_HEADS_OP", True)  # fused decode head split/concat
+        # routed expert weights DRAM-sharded one shard per (expert, tile column) (colpage.py); the decode MoE kernels
+        # below read whole columns from it and need it
+        self._colpage = _parse_binary_env("TT_LAGUNA_COLPAGE", True)
+        # batch-1 decode MoE generic_ops
+        self._moe1_kernels = self._colpage and _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)
+        # batch-1 decode shared expert through the same kernels, as one always-active expert over column-sharded
+        # copies of its weights (TT_LAGUNA_SH1=0: the matmul / slice / multiply / matmul chain)
+        self._sh1 = self._moe1_kernels and _parse_binary_env("TT_LAGUNA_SH1", True)
+        # ... run inside the routed experts' gate/up and down programs (idle cores / one more accumulated unit)
+        self._sh1_fused = _parse_binary_env("TT_LAGUNA_SH1_FUSED", True)
+        # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
+        self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
+        self._cp32_short = _parse_binary_env("TT_LAGUNA_CP32_SHORT", True)  # also 2..31 rows (16-row DFlash verify)
+        self._seq_kv_chain = _parse_binary_env("TT_LAGUNA_SEQ_KV_CHAIN", True)  # verify KV rows in one chained op
+        self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
+        # one-token decode: the router kernel writes this chip's local routing row directly (no EP-select matmul)
+        self._route_local_row = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROW", True)
+        # 2..32-token decode (DFlash verify, batched decode): sigmoid fused into the router matmul, a row-repeated
+        # bias, and the router kernel writing this chip's routing rows and expert weight tiles directly (_moe_rows_local)
+        self._route_local_rows = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROWS", True)
+        # more than 32 rows (the batched DFlash verify, 32-row multiples): the same router kernel and the routed-expert
+        # kernels over Mt token tiles (each weight read once for every tile) instead of the sparse-matmul chain
+        self._batched_rows_moe = _parse_binary_env("TT_LAGUNA_BATCHED_ROWS_MOE", True)
+        self._route_topk_kernel = _parse_binary_env("TT_LAGUNA_ROUTE_TOPK_KERNEL", True)  # prefill dispatch router
+        self._combine_local = _parse_binary_env("TT_LAGUNA_COMBINE_LOCAL", True)  # all-core local combine kernel
+        self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
+        self._esum32 = _parse_binary_env("TT_LAGUNA_ESUM32", True)  # active-expert sum, no down zero fill
+        self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
+        self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
+        self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
+        self._slice_sharded = _parse_binary_env("TT_LAGUNA_SLICE_SHARDED", True)  # decode splits slice the shard
+        self._reshape_to_shard = _parse_binary_env("TT_LAGUNA_RESHAPE_TO_SHARD", True)  # attn flatten -> WO shard
+        # 1-token router: eltwise ops read the sharded logits; the EP-select matmul casts the fp32 weights to bf16
+        self._router_sharded_logits = _parse_binary_env("TT_LAGUNA_ROUTER_SHARDED_LOGITS", True)
+        self._router_fp32_out = self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
+        self._token_dispatch_fallback_reason = "feature flag is disabled"
+        # routed gate+up sparse matmul skips the output zero-fill (needs ttnn sparse_matmul zero_init_output)
+        self._gu_skip_zero_init = _parse_binary_env("TT_LAGUNA_MOE_GU_SKIP_ZERO_INIT", True)
+        # Prefill attention gate without head reshapes: a 0/1 [nh, nh*hd] matrix expands the per-head softplus gate
+        # to full width (each output = 1.0 x one gate value, fp32 accumulation -> exact), then one flat multiply.
+        # The [seq, nh, hd] reshape pads nh to a full tile (12 or 18 -> 32) and copied ~2.7x the attention output.
+        # Chunk starts must be multiples of q and k. A prefix-cache resume starts at any 64-token block; without the
+        # prefix cache every chunk starts at a multiple of PIPE_CHUNK (2048), so 128/128 is valid there (8K warm
+        # prefill 1194 -> 1154 ms, fp32-reference accuracy unchanged).
+        default_qk = "64,64" if os.environ.get("TT_LAGUNA_PREFIX_CACHE", "0") == "1" else "128,128"
+        qk = os.environ.get("TT_LAGUNA_PREFILL_SDPA_QK", default_qk)
+        self._prefill_chunked_sdpa_pc = None
+        if qk != "0":
+            q, k = (int(v) for v in qk.split(","))
+            grid = mesh_device.compute_with_storage_grid_size()
+            self._prefill_chunked_sdpa_pc = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                q_chunk_size=q,
+                k_chunk_size=k,
+                exp_approx_mode=False,
+            )
+        self._gate_expand = None
+        if _parse_binary_env("TT_LAGUNA_PREFILL_GATE_EXPAND", True):
+            nh, hd = cfg.num_heads, cfg.head_dim
+            expand = torch.zeros(nh, nh * hd)
+            for h in range(nh):
+                expand[h, h * hd : (h + 1) * hd] = 1.0
+            self._gate_expand = ttnn.from_torch(
+                expand,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
+        # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
+        # The default decode op is accurate at the same positions. Keep the proven explicit k64
+        # program on D=2/4; callers may still opt D1 back into a future-qualified program explicitly.
+        if self.D == 1 and "TT_LAGUNA_DECODE_SDPA_PC" not in os.environ:
+            self._decode_use_sdpa_pc = False
+        # TP/EP live on cluster_axis 1 for every supported 1×D profile.
+        self.tp_axis = 1
+        if self.D == 1:
+            self.ccl_topology = None
+            self.num_links = 0
+        else:
+            topology_name = os.environ.get("TT_LAGUNA_CCL_TOPOLOGY", "ring").strip().lower()
+            topologies = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}
+            if topology_name not in topologies:
+                raise ValueError(
+                    "TT_LAGUNA_CCL_TOPOLOGY must be 'ring' or 'linear' for a multi-device Laguna profile; "
+                    f"got {topology_name!r} for D={self.D}"
+                )
+            try:
+                num_links = int(os.environ.get("TT_LAGUNA_CCL_NUM_LINKS", str(meta.get("num_links", 2))))
+            except ValueError as exc:
+                raise ValueError("TT_LAGUNA_CCL_NUM_LINKS must be an integer") from exc
+            if num_links not in (1, 2):
+                raise ValueError(f"TT_LAGUNA_CCL_NUM_LINKS must be 1 or 2 for D={self.D}; got {num_links}")
+            self.ccl_topology = topologies[topology_name]
+            self.num_links = num_links
+
+    def _prefill_chunked_sdpa_kw(self, seq=None):
+        """Program config for the streamed (paged) prefill SDPA. TTNN's default (no config) runs 32/32 chunks; 64/64
+        measured 160.3 -> 143.4 ms (8192 rows) and 85.0 -> 81.7 ms (4096) for layers 0/1/4 on S p150x4. Chunk starts
+        are block (64) aligned, so q/k chunks must divide 64. TT_LAGUNA_PREFILL_SDPA_QK="q,k" overrides ("0" = default)."""
+        pc = getattr(self, "_prefill_chunked_sdpa_pc", None)  # built in __init__
+        if pc is None:
+            return {}
+        if seq is not None and (pc.q_chunk_size > seq or pc.k_chunk_size > seq):
+            # short buckets (32, 64 tokens): chunks no longer than the sequence
+            qc, kc = min(pc.q_chunk_size, seq), min(pc.k_chunk_size, seq)
+            if qc % TILE or kc % TILE:
+                return {}
+            cache = self.__dict__.setdefault("_prefill_chunked_sdpa_pcs", {})
+            if (qc, kc) not in cache:
+                grid = self.device.compute_with_storage_grid_size()
+                cache[(qc, kc)] = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                    q_chunk_size=qc,
+                    k_chunk_size=kc,
+                    exp_approx_mode=False,
+                )
+            pc = cache[(qc, kc)]
+        return {"program_config": pc}
+
+    def _gate(self, attn, ln, g=None):
+        """Prefill: flat attention [1, seq, nh*hd] times the per-head softplus gate expanded by one matmul."""
+        if getattr(self, "_gate_expand", None) is None or len(attn.shape) != 3 or attn.shape[-2] <= TILE:
+            return super()._gate(attn, ln, g)
+        if g is None:
+            g = ttnn.linear(ln, self.w["wg"], compute_kernel_config=self._ck_gate)
+        g = ttnn.softplus(g)
+        g_full = ttnn.matmul(g, self._gate_expand, compute_kernel_config=self._ck_hifi4, dtype=ttnn.bfloat16)
+        return ttnn.mul(attn, g_full)
+
+    # ---- collective ------------------------------------------------------- #
+    def _reduce(self, x):
+        """Reduce a row-parallel partial into the replicated residual layout.
+
+        D=1 is an identity. D>1 uses the profile-selected all-reduce and is traceable.
+
+        The all_reduce payload dtype is ``policy.ccl`` (default BF16 == the replicated
+        residual, so the path is byte-identical to the BF16 baseline). A lower CCL
+        dtype casts the partial before the collective and casts the reduced result back to
+        BF16 for the residual add — swept as a yes/no switch in the datatype sweep."""
+        if self.D == 1 or self._defer_reduce:  # deferred: the caller all-reduces the partial (_reduce_rows_add)
+            return x
+        if getattr(self, "_sp_active", False):
+            # sequence-parallel prefill (see prefill_forward): reduce and keep this chip's rows only
+            return ttnn.reduce_scatter(
+                x, len(x.shape) - 2, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
+            )
+        ccl = getattr(self.policy, "ccl", ttnn.bfloat16)
+        if self._ag_reduce and len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and x.shape[-2] <= 3 * TILE:
+            # Decode-sized partial (<= 3 tile rows: decode and the batched DFlash verify): ONE all_gather of the D
+            # partials + a local sum beats the composite all_reduce's two dependent collectives (reduce_scatter ->
+            # all_gather): traced 22.6 vs 38.0 us at 32 rows, 39.7 vs 47.5 us at 96 rows on p150x4
+            xin = ttnn.typecast(x, ccl) if x.dtype != ccl else x
+            # a width-sharded matmul output is gathered directly into L1-interleaved (no separate s2i)
+            gathered = ttnn.all_gather(
+                xin,
+                dim=1,
+                cluster_axis=self.tp_axis,
+                topology=self.ccl_topology,
+                num_links=self.num_links,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                **self._ag_kw,
+            )  # [1, D, rows, H]
+            # ttnn.sum(dim=1) is FillPad + fast_reduce_nc + slice: the ~5 us FillPad of the 1-row tensor's tile
+            # padding is unnecessary for a reduction over dim 1 (it never mixes rows), and a preallocated output
+            # with the logical row count (an allocation, not an op) replaces the slice back from the padded rows
+            rows, width = gathered.shape[-2], gathered.shape[-1]
+            out = ttnn.empty(
+                (1, 1, rows, width), gathered.dtype, ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG
+            )
+            out = ttnn.experimental.fast_reduce_nc(
+                gathered, dims=[1], output=out, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
+        if ccl == ttnn.bfloat16:
+            return ttnn.all_reduce(x, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links)
+        xin = ttnn.typecast(x, ccl) if x.dtype != ccl else x
+        out = ttnn.all_reduce(xin, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links)
+        return ttnn.typecast(out, ttnn.bfloat16) if out.dtype != ttnn.bfloat16 else out
+
+    def _rows_ok(self, B, partial, residual):
+        """allreduce_rows applies: batch-1 (or up to TT_LAGUNA_AR_ROWS_MAX rows: the DFlash verify) decode on a mesh,
+        bf16 TILE partial and residual, bf16 collective."""
+        return (
+            self._ar_rows
+            and self.D > 1
+            and 1 <= B <= self._ar_rows_max
+            and getattr(self.policy, "ccl", ttnn.bfloat16) == ttnn.bfloat16
+            and partial.dtype == ttnn.bfloat16
+            and residual.dtype == ttnn.bfloat16
+            and partial.layout == ttnn.TILE_LAYOUT
+            and residual.layout == ttnn.TILE_LAYOUT
+        )
+
+    def _reduce_rows_add(self, partial, residual, memory_config, rows=1):
+        """residual + all-reduce(partial) for a ``rows``-row decode partial: rows 0..rows-1 packed to a row-major
+        [rows, H] tensor (6 KB per row), gathered, summed with the residual's rows in fp32 (allreduce_rows.py). Batch 1:
+        13.4 vs 25.2 us for tile all_gather + fast_reduce + add on the p150x4 ring."""
+        from .allreduce_rows import pack_row0, sum_rows_add
+
+        if os.environ.get("TT_LAGUNA_AR_ROWS_DEBUG") == "1":
+            for nm, t in (("partial", partial), ("residual", residual)):
+                print(f"[ar_rows] {nm} shape={t.shape} padded={t.padded_shape} dtype={t.dtype} tile={t.tile} "
+                      f"mem={t.memory_config()}", flush=True)
+            print(f"[ar_rows] out mem={memory_config}", flush=True)
+        row = pack_row0(partial, rows)
+        if self._ar_broadcast:
+            # all_gather of the row is AllBroadcast + Concat; the sum reads the D broadcast rows directly instead
+            rows = ttnn.all_broadcast(
+                row,
+                cluster_axis=self.tp_axis,
+                topology=self.ccl_topology,
+                num_links=self.num_links,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(row)
+            out = sum_rows_add(rows, residual, memory_config)
+            for t in rows:
+                ttnn.deallocate(t)
+            return out
+        gathered = ttnn.all_gather(
+            row,
+            dim=1,
+            cluster_axis=self.tp_axis,
+            topology=self.ccl_topology,
+            num_links=self.num_links,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            **self._ag_kw,
+        )
+        ttnn.deallocate(row)
+        out = sum_rows_add(gathered, residual, memory_config)
+        ttnn.deallocate(gathered)
+        return out
+
+    # ---- construction ------------------------------------------------------ #
+    @classmethod
+    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, max_seq_len, policy=None, **kwargs):
+        cfg = LayerConfig.from_hf(hf_config, layer_idx)
+        policy = policy or PrecisionPolicy()
+        dev = mesh_device
+        cache_layer_identity = _cache_layer_identity(layer_idx, kwargs.get("cache_namespace"))
+        D = mesh_device.get_num_devices()
+        mesh_shape = tuple(mesh_device.shape)
+        if D not in (1, 2, 4):
+            raise ValueError(f"Laguna supports D=1, 2, or 4 devices; got D={D}")
+        if mesh_shape != (1, D):
+            raise ValueError(f"Laguna requires a 1×D mesh; got shape={mesh_shape} for D={D}")
+        # TTNN decode SDPA pads each device's query heads to 32-row tiles and needs the tile count to be a
+        # power of two (sdpa_decode MUL_BCAST_GRANULARITY). S's 72-head sliding layers give 3 tiles on one
+        # chip (72 -> 96 rows) and fail mid-decode; on D=2/4 they give 2/1. Reject before loading weights.
+        q_tiles = -(-(cfg.num_heads // D) // TILE)
+        if q_tiles & (q_tiles - 1):
+            raise ValueError(
+                f"layer {layer_idx}: {cfg.num_heads // D} query heads per device pad to {q_tiles} tiles; decode "
+                f"SDPA needs a power of two. Use a larger mesh (this checkpoint on D={D} is unsupported)."
+            )
+        dram_cores = mesh_device.dram_grid_size().x
+
+        replicate = ttnn.ReplicateTensorToMesh(dev)
+
+        def shard(dim):
+            return ttnn.ShardTensorToMesh(dev, dim=dim)
+
+        def g(name):
+            return state_dict[name].float()
+
+        # ---- device-weight disk cache (plan Stage 0; see optimized_decoder) ----
+        # The mesh tag encodes the mapping (replicate / shard-dim-N) AND the device
+        # count D, so a multichip weight never collides with the single-chip ("sc")
+        # copy or a different-D mesh. ``build`` is a thunk so a cache hit skips the
+        # source build (critical for the 256-expert stack).
+        def rep_tt(name, build, dtype, layout=ttnn.TILE_LAYOUT):
+            return _cached_device_tensor(
+                build,
+                device=dev,
+                dtype=dtype,
+                layout=layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate,
+                cache_key=weight_cache_key(name, cache_layer_identity, f"rep_d{D}"),
+            )
+
+        def shard_tt(name, build, dim, dtype, layout=ttnn.TILE_LAYOUT):
+            return _cached_device_tensor(
+                build,
+                device=dev,
+                dtype=dtype,
+                layout=layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=shard(dim),
+                cache_key=weight_cache_key(name, cache_layer_identity, f"sh{dim}_d{D}"),
+            )
+
+        # ---- global shapes ----
+        H = cfg.hidden
+        hd = cfg.head_dim
+        GQ = cfg.num_heads  # 48 (full) / 64 (sliding)
+        GKV = cfg.num_kv_heads  # 8
+        assert GQ % D == 0 and GKV % D == 0, f"heads must divide mesh {D}: Q={GQ} KV={GKV}"
+        lqh = GQ // D
+        lkv = GKV // D
+        local_q_w = lqh * hd
+        local_kv_w = lkv * hd
+        local_qkv_w = local_q_w + 2 * local_kv_w
+
+        w = {}
+
+        def store_shard(key, w_in_full, k_local, n_local, dtype, mesh_dim):
+            """Store a mesh-sharded interleaved copy (``key``) and a mesh-sharded +
+            per-device DRAM-width-sharded copy (``key+"_ds"``). ``w_in_full`` is the full
+            (unsharded) weight already in ttnn [in, out] orientation; ``mesh_dim`` is the
+            tensor axis sharded across the mesh; ``k_local``/``n_local`` are the resulting
+            PER-DEVICE [in, out] dims for the DRAM shard spec. Only the interleaved
+            copy is disk-cached; the ``_ds`` copy is derived on-device via
+            to_memory_config (a width-sharded memory_config is not preserved through
+            the ttnn tensor cache — see optimized_decoder._cached_device_tensor)."""
+            w[key] = shard_tt(key, lambda: w_in_full, mesh_dim, dtype)
+            w[key + "_ds"] = ttnn.to_memory_config(w[key], _dram_weight_memcfg(k_local, n_local, dram_cores))
+
+        # --- partial RoPE as full-width RoPE: permute every Q/K head's dims (and the q/k norm weights) so the
+        # rd rotary lanes pair up across the two head halves [rot_lo | pass_lo | rot_hi | pass_hi]; with cos=1 /
+        # sin=0 on the pass lanes a plain full-width rotate_half RoPE is then exactly HF's partial RoPE, and
+        # Q.K (and so attention) is unchanged. Drops the per-layer rot/pass slices + concat for Q and K.
+        rope_perm = None
+        rd0 = cfg.rotary_dim
+        if rd0 < hd and rd0 % 2 == 0 and (hd - rd0) % 2 == 0 and _parse_binary_env(ROPE_PERMUTE_ENV, True):
+            r2, p2 = rd0 // 2, (hd - rd0) // 2
+            rope_perm = torch.cat(
+                [torch.arange(0, r2), torch.arange(rd0, rd0 + p2), torch.arange(r2, rd0), torch.arange(rd0 + p2, hd)]
+            )
+        rp_tag = "_rp" if rope_perm is not None else ""
+
+        def head_perm(w_t, nheads):  # [H, nheads*hd] columns permuted within each head
+            if rope_perm is None:
+                return w_t
+            return w_t.reshape(w_t.shape[0], nheads, hd)[:, :, rope_perm].reshape(w_t.shape[0], nheads * hd)
+
+        # --- packed QKV (column-parallel), reordered into per-device [Q_d|K_d|V_d] blocks --- #
+        wq = head_perm(g("self_attn.q_proj.weight").t().contiguous(), GQ)  # [H, GQ*hd]
+        wk = head_perm(g("self_attn.k_proj.weight").t().contiguous(), GKV)  # [H, GKV*hd]
+        wv = g("self_attn.v_proj.weight").t().contiguous()  # [H, GKV*hd]
+        blocks = []
+        for d in range(D):
+            blocks.append(wq[:, d * local_q_w : (d + 1) * local_q_w])
+            blocks.append(wk[:, d * local_kv_w : (d + 1) * local_kv_w])
+            blocks.append(wv[:, d * local_kv_w : (d + 1) * local_kv_w])
+        wqkv = torch.cat(blocks, dim=1).contiguous()  # [H, D*local_qkv_w]; shard(dim1) -> per-dev block
+        store_shard("wqkv" + rp_tag, wqkv, H, local_qkv_w, policy.attn_qkv, mesh_dim=1)
+        if rp_tag:  # callers look the weights up by their canonical names
+            w["wqkv"], w["wqkv_ds"] = w.pop("wqkv" + rp_tag), w.pop("wqkv" + rp_tag + "_ds")
+        # WO row-parallel: device d owns contiguous Q-head rows [d*local_q_w:(d+1)*local_q_w] -> plain shard(dim0)
+        wo = g("self_attn.o_proj.weight").t().contiguous()  # [GQ*hd, H]
+        store_shard("wo", wo, local_q_w, H, policy.attn_o, mesh_dim=0)
+        # softplus gate g_proj [H, GQ] column-parallel -> device d gate for its Q heads
+        w["wg"] = shard_tt("wg", lambda: g("self_attn.g_proj.weight").t().contiguous(), 1, policy.attn_gate)
+        if _parse_binary_env(FOLD_GATE_QKV_ENV, True):
+            # Decode-only fused [Q_d|K_d|V_d|G_d|0-pad] weight: the g_proj gate (N = lqh, one tile -> a
+            # 1-core matmul) rides the DRAM-sharded QKV matmul on the same `ln` input. N is zero-padded to
+            # a TILE*dram_cores multiple so the DRAM width shards are even. Only the _ds copy is kept.
+            fused_w = local_qkv_w + lqh
+            fused_pad = math.ceil(fused_w / (TILE * dram_cores)) * (TILE * dram_cores)
+
+            def build_qkvg():
+                wg_full = g("self_attn.g_proj.weight").t().contiguous()  # [H, GQ]
+                fused = []
+                for d in range(D):
+                    fused += [
+                        wq[:, d * local_q_w : (d + 1) * local_q_w],
+                        wk[:, d * local_kv_w : (d + 1) * local_kv_w],
+                        wv[:, d * local_kv_w : (d + 1) * local_kv_w],
+                        wg_full[:, d * lqh : (d + 1) * lqh],
+                        torch.zeros(H, fused_pad - fused_w),
+                    ]
+                return torch.cat(fused, dim=1).contiguous()
+
+            qkvg_il = shard_tt("wqkvg" + rp_tag, build_qkvg, 1, policy.attn_qkv)
+            w["wqkvg_ds"] = ttnn.to_memory_config(qkvg_il, _dram_weight_memcfg(H, fused_pad, dram_cores))
+            ttnn.deallocate(qkvg_il)
+            # decode reads the fused copy; prefill reads the interleaved wqkv. The DRAM-sharded wqkv_ds has no
+            # reader left (~6.7 MB/layer/chip on S), so free it.
+            ttnn.deallocate(w.pop("wqkv_ds"))
+            qkvg_pad = fused_pad
+        else:
+            qkvg_pad = None
+        def norm_w(name):
+            v = g(name)
+            return (v if rope_perm is None else v[rope_perm]).reshape(1, 1, 1, hd)
+
+        w["q_norm"] = rep_tt("q_norm" + rp_tag, lambda: norm_w("self_attn.q_norm.weight"), policy.qk_norm)
+        w["k_norm"] = rep_tt("k_norm" + rp_tag, lambda: norm_w("self_attn.k_norm.weight"), policy.qk_norm)
+        w["input_ln"] = rep_tt("input_ln", lambda: g("input_layernorm.weight").reshape(1, 1, 1, H), ttnn.bfloat16)
+        w["post_ln"] = rep_tt(
+            "post_ln", lambda: g("post_attention_layernorm.weight").reshape(1, 1, 1, H), ttnn.bfloat16
+        )
+
+        global_experts = cfg.num_experts
+        if cfg.is_moe and global_experts % D != 0:
+            raise ValueError(f"experts must divide mesh {D}: experts={global_experts}")
+        local_experts = global_experts // D if cfg.is_moe else 0
+
+        if cfg.is_moe:
+            E, I = global_experts, cfg.moe_intermediate
+            # router replicated (full 256-wide logits/top-k on every device)
+            w["gate_w"] = rep_tt("gate_w", lambda: g("mlp.gate.weight").t().contiguous(), policy.router)
+            # DRAM-width-sharded copy for the decode router (N=E=8 tiles -> interleaved linear ran on 8 cores)
+            w["gate_w_ds"] = ttnn.to_memory_config(w["gate_w"], _dram_weight_memcfg(H, E, dram_cores))
+            w["e_bias"] = rep_tt(
+                "e_bias", lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), ttnn.bfloat16
+            )
+            w["e_bias_f32"] = rep_tt(
+                "e_bias", lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), ttnn.float32
+            )
+            # expert ids 0..E-1 (fp32, exact): one-hot compare replaces the 1-core router cut-off gather
+            w["expert_iota_f32"] = rep_tt(
+                "expert_iota", lambda: torch.arange(E, dtype=torch.float32).reshape(1, 1, 1, E), ttnn.float32
+            )
+            # the same two rows repeated over a full 32-token tile: a batch-32 decode's bias add and one-hot compares
+            # then read equal-shape operands instead of broadcasting one row (~12-16 us per op on that path)
+            w["e_bias_f32_rows"] = rep_tt(
+                "e_bias_rows",
+                lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E).expand(1, 1, TILE, E).contiguous(),
+                ttnn.float32,
+            )
+            w["expert_iota_f32_rows"] = rep_tt(
+                "expert_iota_rows",
+                lambda: torch.arange(E, dtype=torch.float32).reshape(1, 1, 1, E).expand(1, 1, TILE, E).contiguous(),
+                ttnn.float32,
+            )
+            if cfg.norm_topk_prob:  # 1/routed_scaling [E, E]: the router's row-sum-and-broadcast matmul
+                inv_scale = 1.0 / cfg.routed_scaling
+                w["ones_ee_f32"] = rep_tt(
+                    f"ones_ee_s{inv_scale:.6g}", lambda: torch.full((1, 1, E, E), inv_scale), ttnn.float32
+                )
+            # For D>1, a mesh-sharded identity selects device d's contiguous local expert scores.
+            # D=1 already owns every score, so avoid the large identity weight and selector matmul.
+            if D > 1:
+                w["ep_sel"] = shard_tt("ep_sel", lambda: torch.eye(E).reshape(1, 1, E, E), 3, ttnn.bfloat16)
+                # each chip's first local expert id (the one-token router kernel's local routing row)
+                w["ep_off"] = ttnn.from_torch(
+                    (torch.arange(D, dtype=torch.int32) * (E // D)).reshape(1, 1, 1, D),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=dev,
+                    mesh_mapper=ttnn.ShardTensorToMesh(dev, dim=3),
+                )
+
+            # expert weights EP-sharded on the expert dim (dim1): device d holds experts [64d:64d+64].
+            # The 256-expert torch.stack is the dominant boot cost, so build it lazily
+            # inside the cache thunk — a HIT skips the stack (and the safetensors
+            # upcast) entirely, not just the tilize/shard.
+            def _stack(proj):
+                return torch.stack([g(f"mlp.experts.{i}.{proj}.weight") for i in range(E)])
+
+            w["exp_gate"] = shard_tt(
+                "exp_gate", lambda: _stack("gate_proj").transpose(1, 2).reshape(1, E, H, I), 1, policy.moe_ff13
+            )
+            w["exp_up"] = shard_tt(
+                "exp_up", lambda: _stack("up_proj").transpose(1, 2).reshape(1, E, H, I), 1, policy.moe_ff13
+            )
+            w["exp_down"] = shard_tt(
+                "exp_down", lambda: _stack("down_proj").transpose(1, 2).reshape(1, E, I, H), 1, policy.moe_ff2
+            )
+            # shared expert TP (col/col/row); down produces a partial folded into the routed all_reduce
+            gsh = cfg.shared_intermediate
+            if gsh % D != 0:
+                raise ValueError(f"shared intermediate must divide mesh {D}: shared_intermediate={gsh}")
+            local_sh = gsh // D
+            store_shard(
+                "sh_gate",
+                g("mlp.shared_expert.gate_proj.weight").t().contiguous(),
+                H,
+                local_sh,
+                policy.shared_ff13,
+                mesh_dim=1,
+            )
+            store_shard(
+                "sh_up",
+                g("mlp.shared_expert.up_proj.weight").t().contiguous(),
+                H,
+                local_sh,
+                policy.shared_ff13,
+                mesh_dim=1,
+            )
+            store_shard(
+                "sh_down",
+                g("mlp.shared_expert.down_proj.weight").t().contiguous(),
+                local_sh,
+                H,
+                policy.shared_ff2,
+                mesh_dim=0,
+            )
+            cfg.shared_intermediate = local_sh  # local for _glu_mlp
+        else:
+            II = cfg.intermediate
+            if II % D != 0:
+                raise ValueError(f"dense intermediate must divide mesh {D}: intermediate={II}")
+            local_II = II // D
+            store_shard(
+                "mlp_gate", g("mlp.gate_proj.weight").t().contiguous(), H, local_II, policy.dense_ff13, mesh_dim=1
+            )
+            store_shard("mlp_up", g("mlp.up_proj.weight").t().contiguous(), H, local_II, policy.dense_ff13, mesh_dim=1)
+            store_shard(
+                "mlp_down", g("mlp.down_proj.weight").t().contiguous(), local_II, H, policy.dense_ff2, mesh_dim=0
+            )
+            cfg.intermediate = local_II  # local for _glu_mlp
+
+        # build the (cos,sin) RoPE tables once PER ATTENTION KIND, not once per layer then
+        # dedup. LagunaModel.from_pretrained threads a shared ``rope_tables`` dict; the first layer of
+        # each kind builds+caches, later layers of that kind reuse the SAME device tensors. This removes
+        # the ~4.7 GB transient peak (all 40 pairs alive before _dedup_rope) and cuts the per-layer
+        # trust-remote-code load (get_class_from_dynamic_module runs twice — one per kind — not 40x).
+        # Tables depend only on (attention_type, max_seq_len, config), so sharing is exact / bit-identical.
+        rope_tables = kwargs.get("rope_tables")
+        kind = cfg.attention_type + rp_tag
+        if rope_tables is not None and kind in rope_tables:
+            cos_2d, sin_2d = rope_tables[kind]
+        else:
+            cos, sin = _hf_rope_tables(hf_config, cfg.attention_type, max_seq_len)  # [seq, rd0]
+            if rope_perm is not None:  # full-width tables in the permuted lane order: cos=1 / sin=0 on pass lanes
+                rot = rope_perm < rd0
+                cos_f = torch.ones(cos.shape[0], hd, dtype=cos.dtype)
+                sin_f = torch.zeros(sin.shape[0], hd, dtype=sin.dtype)
+                cos_f[:, rot] = cos[:, rope_perm[rot]]
+                sin_f[:, rot] = sin[:, rope_perm[rot]]
+                cos, sin = cos_f, sin_f
+            cos_2d = ttnn.from_torch(
+                cos, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=replicate
+            )
+            sin_2d = ttnn.from_torch(
+                sin, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=replicate
+            )
+            if rope_tables is not None:
+                rope_tables[kind] = (cos_2d, sin_2d)
+
+        if rope_perm is not None:
+            cfg.rotary_dim = hd  # RoPE now runs full width over the permuted head dims
+        # ---- mutate cfg to LOCAL head counts so all inherited attention code runs per-device ----
+        cfg.num_heads = lqh
+        cfg.num_kv_heads = lkv
+        cfg.num_kv_groups = lqh // lkv
+
+        meta = {
+            "layer_idx": layer_idx,
+            "dram_cores": dram_cores,
+            "q_w": local_q_w,
+            "kv_w": local_kv_w,
+            "qkv_w": local_qkv_w,
+            "qkvg_pad": qkvg_pad,
+            "mesh_devices": D,
+            "global_experts": global_experts,
+            "local_experts": local_experts,
+            "num_links": 2,
+        }
+        dec = cls(cfg, w, cos_2d, sin_2d, dev, policy, meta)
+        if cls.PACK_GATE_UP:
+            dec._pack_gate_up()
+        dec._setup_token_dispatch()
+        return dec
+
+    def _pack_gate_up(self):
+        """Concat the same-input gate/up weights (interleaved + DRAM-width-sharded ``_ds`` copies) into one
+        packed weight and free the separate copies. Pure on-device concat/reshard of the already-loaded
+        (and disk-cached) tensors, so it inherits the weight cache. The packed copies are intentionally NOT
+        separately disk-cached: they are cheap to derive on device, and the ttnn tensor cache cannot
+        round-trip the ``_ds`` copy's custom width-sharded memory_config anyway."""
+        w = self.w
+        dram_cores = self.meta["dram_cores"]
+        H = self.cfg.hidden
+
+        def pack_dram_pair(gk, uk, out, n_local):
+            """Concat two DRAM-width-sharded gate/up weights (interleaved + _ds copies) into one
+            [H, 2*n_local] weight; rebuild the DRAM shard spec for the doubled width; free originals."""
+            il = ttnn.concat([w[gk], w[uk]], dim=-1)  # [H, 2*n_local] interleaved DRAM
+            ds = ttnn.to_memory_config(il, _dram_weight_memcfg(H, 2 * n_local, dram_cores))
+            w[out] = il
+            w[out + "_ds"] = ds
+            for k in (gk, uk):
+                ttnn.deallocate(w[k])
+                ttnn.deallocate(w[k + "_ds"])
+                del w[k]
+                del w[k + "_ds"]
+
+        if self.cfg.is_moe:
+            # routed experts: interleaved BFP4 [1,64,H,512] each -> [1,64,H,1024]
+            w["exp_gate_up"] = ttnn.concat([w["exp_gate"], w["exp_up"]], dim=-1)
+            ttnn.deallocate(w["exp_gate"])
+            ttnn.deallocate(w["exp_up"])
+            del w["exp_gate"]
+            del w["exp_up"]
+            if self._colpage:  # same values, one DRAM shard per (expert, tile column); stock ops read it unchanged
+                for k in ("exp_gate_up", "exp_down"):
+                    cp = colpage.to_column_pages(w[k])
+                    ttnn.deallocate(w[k])
+                    w[k] = cp
+            pack_dram_pair("sh_gate", "sh_up", "sh_gate_up", self.cfg.shared_intermediate)
+            if self._sh1:
+                # batch-1 decode shared expert (moe_decode1 kernels, which read whole weight columns): column-sharded
+                # [1, 1, K, N] copies of the packed gate|up and down weights, and a routing row that marks the one
+                # expert active with weight 1
+                for k in ("sh_gate_up", "sh_down"):
+                    K, N = w[k].padded_shape[-2], w[k].padded_shape[-1]
+                    w[k + "_cp"] = ttnn.to_memory_config(
+                        ttnn.reshape(w[k], (1, 1, K, N)), colpage.column_pages_memory_config(self.device, K)
+                    )
+                row = torch.zeros([1, 1, 1, 32], dtype=torch.float32)
+                row[..., 0] = 1.0
+                w["sh_active"] = ttnn.from_torch(
+                    row, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+        else:
+            pack_dram_pair("mlp_gate", "mlp_up", "mlp_gate_up", self.cfg.intermediate)
+
+    def _token_dispatch_guard(self, seq_len: int, sharded: bool) -> tuple[bool, str]:
+        """Check the qualified path contract before every dispatch attempt."""
+
+        eligible, reason = _token_dispatch_eligibility(
+            enabled=self._token_dispatch_requested,
+            layer_idx=self.meta["layer_idx"],
+            is_moe=self.cfg.is_moe,
+            mesh_devices=self.D,
+            seq_len=seq_len,
+            sharded=sharded,
+            pack_gate_up=self.PACK_GATE_UP,
+            global_experts=self.global_experts,
+            local_experts=self.local_experts,
+            hidden=self.cfg.hidden,
+            intermediate=self.cfg.moe_intermediate,
+            top_k=self.cfg.top_k,
+            activation_dtype=self.policy.activation,
+            moe_ff13_dtype=self.policy.moe_ff13,
+            moe_ff2_dtype=self.policy.moe_ff2,
+            ccl_dtype=self.policy.ccl,
+            moe_fidelity=self.policy.fid_moe,
+        )
+        if eligible and self._token_dispatch_state is None:
+            return False, self._token_dispatch_fallback_reason
+        return eligible, reason
+
+    def _setup_token_dispatch(self) -> None:
+        """Build the small local-only routing state for the opt-in D2 path.
+
+        No state is allocated unless the flag and static model policy match.
+        Bucket-specific dispatch/combine wrappers contain configuration only;
+        their large buffers are allocated per invocation by the TTNN ops.
+        """
+
+        eligible, reason = _token_dispatch_eligibility(
+            enabled=self._token_dispatch_requested,
+            layer_idx=self.meta["layer_idx"],
+            is_moe=self.cfg.is_moe,
+            mesh_devices=self.D,
+            seq_len=min(TOKEN_DISPATCH_BUCKETS),
+            sharded=False,
+            pack_gate_up=self.PACK_GATE_UP,
+            global_experts=self.global_experts,
+            local_experts=self.local_experts,
+            hidden=self.cfg.hidden,
+            intermediate=self.cfg.moe_intermediate,
+            top_k=self.cfg.top_k,
+            activation_dtype=self.policy.activation,
+            moe_ff13_dtype=self.policy.moe_ff13,
+            moe_ff2_dtype=self.policy.moe_ff2,
+            ccl_dtype=self.policy.ccl,
+            moe_fidelity=self.policy.fid_moe,
+        )
+        if not eligible:
+            self._token_dispatch_fallback_reason = reason
+            return
+        if "exp_gate_up" not in self.w or "exp_down" not in self.w:
+            self._token_dispatch_fallback_reason = "stacked routed-expert tensors are unavailable"
+            return
+
+        # The qualified serving profiles keep token dispatch disabled. Keep its
+        # DeepSeek-derived implementation out of the standard model import graph;
+        # experimental users only pay this dependency when they explicitly opt in.
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
+
+        dispatch_group_size = 1
+        num_dispatch_groups = self.D
+        dispatch_table_host = ExpertMapping.create_dispatch_table(
+            num_routed_experts=self.global_experts,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        routing_setup = TtMoERoutingSetup(
+            mesh_device=self.device,
+            expert_dispatch_table=dispatch_table_host,
+            num_links=1,
+            experts_per_chip=self.local_experts,
+        )
+        dispatch_table = TtDispatchModule.shard_expert_dispatch_table(self.device, dispatch_table_host, dispatch_axis=0)
+        global_expert_idx = ttnn.from_torch(
+            ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=self.local_experts,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+            ),
+            mesh_mapper=get_ep_mesh_mapper(self.device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            dtype=ttnn.uint32,
+        )
+        global_expert_idx = ttnn.squeeze(ttnn.squeeze(global_expert_idx, 0), 0)
+
+        # dispatch/combine "links" = sender cores (max 4); local-only dispatch sends nothing over fabric
+        dc_links = int(os.environ.get("TT_LAGUNA_DISPATCH_LINKS", "3"))
+        # row-major dispatch input (ttnn dispatch's row-major path); TT_LAGUNA_DISPATCH_RM=0 sends tiles
+        self._dispatch_rm = os.environ.get("TT_LAGUNA_DISPATCH_RM", "1") == "1"
+        bucket_modules = {}
+        for seq_len in sorted(TOKEN_DISPATCH_BUCKETS):
+            # Worst case: every one of T*K routes is local, plus at most 31
+            # padding rows for each local expert's tile-aligned region.
+            max_dispatch_rows = seq_len * self.cfg.top_k + (TILE - 1) * self.local_experts
+            bucket_modules[seq_len] = {
+                "dispatch": TtDispatchModule(
+                    mesh_device=self.device,
+                    dispatch_group_size=dispatch_group_size,
+                    experts_per_chip=self.local_experts,
+                    num_routed_experts=self.global_experts,
+                    num_experts_per_tok=self.cfg.top_k,
+                    metadata_len=TOKEN_DISPATCH_METADATA_LEN,
+                    max_dispatch_buffer_token_size=max_dispatch_rows,
+                    seq_len_per_chip=seq_len,
+                    emb_dim=self.cfg.hidden,
+                    cluster_axis=0,
+                    num_links=dc_links,
+                    topology=ttnn.Topology.Linear,
+                ),
+                "combine": TtCombineModule(
+                    mesh_device=self.device,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    experts_per_chip=self.local_experts,
+                    num_experts_per_tok=self.cfg.top_k,
+                    seq_len_per_chip=seq_len,
+                    cluster_axis=0,
+                    num_links=dc_links,
+                    topology=ttnn.Topology.Linear,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    # post_combine_reduce reads only local slots (zeros for a token with none), so the [T, K, H]
+                    # combine output needs no zero fill (TT_LAGUNA_COMBINE_ZEROS=1 restores it)
+                    init_zeros=os.environ.get("TT_LAGUNA_COMBINE_ZEROS", "0") == "1",
+                ),
+                "max_dispatch_rows": max_dispatch_rows,
+            }
+
+        self._token_dispatch_state = {
+            "routing_setup": routing_setup,
+            "dispatch_table": dispatch_table,
+            "global_expert_idx": global_expert_idx,
+            "buckets": bucket_modules,
+        }
+        self._token_dispatch_fallback_reason = "eligible"
+
+    # ---- KV cache / page table (replicated init; each device holds its own local KV heads) ---- #
+    def alloc_kv_cache(self, max_users, max_seq_len, block_size=32, dtype=None):
+        dtype = dtype or self.policy.kv_cache
+        blocks_per_user = int(math.ceil(max_seq_len / block_size))
+        max_num_blocks = blocks_per_user * max_users
+        shape = (max_num_blocks, self.cfg.num_kv_heads, block_size, self.cfg.head_dim)  # local KV heads
+        # allocated and zero-filled on device (ttnn.fill in place): host zeros -- ttnn.from_torch, and ttnn.zeros too
+        # for bfloat8_b (it builds a host vector) -- were converted to the cache format on the CPU and uploaded per
+        # layer: ~45 s for a batch-32, 8K-token cache
+        k, v = (
+            ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, self.device,
+                                           ttnn.DRAM_MEMORY_CONFIG)
+            for _ in range(2)
+        )  # fmt: skip
+        for t in (k, v):
+            ttnn.fill(t, 0.0, output_tensor=t)
+        return {"k": k, "v": v, "block_size": block_size, "blocks_per_user": blocks_per_user, "dtype": dtype}
+
+    def make_page_table(self, num_users, blocks_per_user):
+        pt = torch.arange(num_users * blocks_per_user, dtype=torch.int32).reshape(num_users, blocks_per_user)
+        return ttnn.from_torch(
+            pt,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+
+    # ---- MoE (Expert Parallel) --------------------------------------------- #
+    def _dispatch_slice_rows(self, seq_len: int) -> int:
+        """Rows per router / shared-expert program in the dispatch path. XS p150x2 keeps its 256-row contract; S on
+        p150x4 runs the whole bucket in one program (~20 router ops per slice were ~2.5 ms/layer at 4096 rows).
+        TT_LAGUNA_DISPATCH_SLICE_ROWS overrides (0 = whole bucket)."""
+        env = os.environ.get("TT_LAGUNA_DISPATCH_SLICE_ROWS")
+        rows = int(env) if env is not None else (0 if self.D == 4 else self.MOE_PREFILL_CHUNK)
+        return seq_len if rows <= 0 else rows
+
+    def _token_dispatch_router(self, ln_flat, seq_len: int):
+        """Run the established 256-row router programs, then concatenate routes.
+
+        The 8192-token qualification showed that one whole-M router changes
+        roughly 18% of top-k slots. Keeping the existing slice boundaries is
+        therefore an accuracy contract, even though dispatch/experts operate on
+        the whole outer prefill bucket.
+        """
+
+        weights = []
+        indices = []
+        cfg = self.cfg
+        rows = self._dispatch_slice_rows(seq_len)
+        if rows >= seq_len and self._route_topk_kernel and seq_len % TILE == 0:
+            # exact fp32 top-K on every core, written straight in dispatch's row-major [1, T, K] layout, instead
+            # of the coarse bf16 top-(K+1), the fp32 cut-off ops, a second top-K, the gather and the re-layouts
+            from .router32 import route_topk_rm
+
+            logits32 = self._prefill_linear(ln_flat, self.w["gate_w"], self._ck_router_precise, dtype=ttnn.float32)
+            # sigmoid as the bias add's lhs activation (no standalone sigmoid); the kernel reads only sel and recovers
+            # each picked score as sel - bias
+            sig = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)]
+            sel = ttnn.add(logits32, self.w["e_bias_f32"], input_tensor_a_activations=sig)
+            ttnn.deallocate(logits32)
+            return route_topk_rm(
+                sel, None, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, bias=self.w["e_bias_f32"]
+            )
+        for start in range(0, seq_len, rows):
+            end = min(start + rows, seq_len)
+            chunk = ln_flat if rows >= seq_len else ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
+            _, idx, wsel = self._route(chunk)
+            weights.append(ttnn.reshape(ttnn.to_layout(wsel, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
+            indices.append(ttnn.reshape(ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
+        return ttnn.concat(weights, dim=1), ttnn.concat(indices, dim=1)
+
+    def _token_dispatch_shared(self, ln_flat, seq_len: int):
+        """Preserve the established 256-row shared-expert numerics."""
+
+        partials = []
+        cfg = self.cfg
+        rows = self._dispatch_slice_rows(seq_len)
+        for start in range(0, seq_len, rows):
+            end = min(start + rows, seq_len)
+            chunk = ln_flat if rows >= seq_len else ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
+            partials.append(
+                self._glu_mlp(
+                    chunk,
+                    "sh",
+                    cfg.hidden,
+                    cfg.shared_intermediate,
+                    self._ck_shared,
+                    False,
+                )
+            )
+        return ttnn.concat(partials, dim=2)
+
+    def _moe_token_dispatch(self, ln_flat, seq_len: int):
+        """Exact local-only token-to-expert prefill dispatch on p150x2.
+
+        Each column is a dispatch group of size one: it packs only routes for
+        that ASIC's contiguous 128 experts, runs compact FFNs directly from the
+        existing stacked BFP4 tensors, combines back to top-k slots, applies the
+        original router weights in the fused reduction, then performs the one
+        existing EP all-reduce.
+        """
+
+        state = self._token_dispatch_state
+        bucket = state["buckets"][seq_len]
+        cfg = self.cfg
+
+        weights, indices = self._token_dispatch_router(ln_flat, seq_len)
+        routing = state["routing_setup"](
+            ttnn_top_k_experts_indices=indices,
+            num_routed_experts=self.global_experts,
+            num_experts_per_tok=cfg.top_k,
+        )
+        offsets = routing.global_dispatch_offsets
+        counts = routing.total_counts_per_expert
+        region_offsets = routing.expert_region_offsets
+        ttnn.deallocate(routing.expert_histograms)
+        if routing.all_global_dispatch_offsets is not offsets:
+            ttnn.deallocate(routing.all_global_dispatch_offsets)
+
+        dispatch_input = ttnn.reshape(ln_flat, (1, seq_len, cfg.hidden))
+        if self._dispatch_rm:
+            # row-major input selects ttnn dispatch's row-major path
+            dispatch_input = ttnn.to_layout(dispatch_input, ttnn.ROW_MAJOR_LAYOUT)
+        dispatched, metadata = bucket["dispatch"](
+            dispatch_input,
+            weights,
+            indices,
+            offsets,
+            state["dispatch_table"],
+        )
+        # All 64 local experts in ONE routed-expert program over the stacked gate|up and down weights (upstream
+        # unified_routed_expert_moe + Laguna's stacked mode). It reads the row-major bf16 dispatch buffer at each
+        # expert's region offset, tilizes it in-op and writes a TILE bf8 buffer that combine reads.
+        expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_stacked(
+            ttnn.squeeze(ttnn.squeeze(dispatched, 0), 0),
+            region_offsets,
+            counts,
+            state["global_expert_idx"],
+            self.w["exp_gate_up"],
+            self.w["exp_down"],
+            seq_len,
+            compute_kernel_config=self._ck_moe,
+            # fit the op's circular buffers below L1 buffers kept resident across prefills (DFlash's)
+            l1_end=int(self.device.lowest_occupied_compute_l1_address() or 0),
+        )
+        ttnn.deallocate(dispatched)
+
+        if self._combine_local:
+            # local-only combine on every core (combine_local.py) instead of the <= 4-sender combine pipeline
+            from .combine_local import combine_local
+
+            combined_slots = combine_local(
+                expert_outputs, metadata, counts, region_offsets, state["global_expert_idx"], seq_len, cfg.top_k
+            )
+        else:
+            combined_slots = bucket["combine"](
+                ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, 0), 0),
+                metadata,
+                counts,
+                region_offsets,
+            )
+        ttnn.deallocate(expert_outputs)
+        ttnn.deallocate(metadata)
+        ttnn.deallocate(offsets)
+        ttnn.deallocate(counts)
+        ttnn.deallocate(region_offsets)
+
+        weights_5d = ttnn.unsqueeze(ttnn.unsqueeze(weights, dim=-1), dim=0)
+        # the shared-expert partial is added inside post_combine_reduce (its tiles summed onto the reduced ones), not
+        # by a separate full [T, H] add
+        shared_partial = ttnn.reshape(self._token_dispatch_shared(ln_flat, seq_len), (1, 1, seq_len, cfg.hidden))
+        fold = shared_partial.dtype == ttnn.bfloat16 and shared_partial.layout == ttnn.TILE_LAYOUT
+        local_output = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            combined_slots,
+            weights_5d,
+            indices,
+            state["dispatch_table"],
+            expert_dim=3,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            residual=shared_partial if fold else None,
+            l1_end=int(self.device.lowest_occupied_compute_l1_address() or 0),
+        )
+        local_output = ttnn.reshape(local_output, (1, 1, seq_len, cfg.hidden))
+        ttnn.deallocate(combined_slots)
+        ttnn.deallocate(weights)
+        ttnn.deallocate(indices)
+        if not fold:
+            local_output = ttnn.add(local_output, shared_partial)
+        ttnn.deallocate(shared_partial)
+        output = self._reduce(local_output)
+        ttnn.deallocate(local_output)
+        return output
+
+    def _moe(self, ln_flat, m, sharded):
+        """Routed-expert MoE (EP=4). With PACK_GATE_UP, one packed gate+up sparse_matmul (split + SwiGLU on
+        device); else the unpacked two-matmul baseline (``_moe_separate``). Both end in a ring all_reduce."""
+        if not self.PACK_GATE_UP:
+            return self._moe_separate(ln_flat, m, sharded)
+        cfg = self.cfg
+        LE = self.local_experts
+        H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
+        T = ln_flat.shape[2]
+        if (
+            T == 1
+            and self.D > 1
+            and getattr(self, "_moe1_kernels", False)
+            and getattr(self, "_route_local_row", False)
+            and getattr(self, "_router32", False)
+            and "ep_off" in self.w
+            and "gate_w_ds" in self.w
+        ):
+            return self._moe1_local(ln_flat, sharded)
+        many = T > TILE and T % TILE == 0 and T <= self.device.compute_with_storage_grid_size().x * self.device.compute_with_storage_grid_size().y
+        if (
+            (1 < T <= TILE or (many and self._batched_rows_moe))
+            and self.D > 1
+            and self._route_local_rows
+            and self._route_dense_mask
+            and getattr(self, "_router32", False)
+            and getattr(self, "_cp32", False)
+            and (T >= TILE or self._cp32_short)
+            and "ep_off" in self.w
+            and "gate_w_ds" in self.w
+            and "e_bias_f32_rows" in self.w
+        ):
+            return self._moe_rows_local(ln_flat, sharded)
+        logits, idx, wsel = self._route(ln_flat, want_dense=self._route_dense_mask)
+        # idx is None when the router returned the dense [1,1,T,E] routing matrix directly
+        dense = wsel if idx is None else ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
+        dense_local = (
+            dense
+            if self.D == 1
+            else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router, dtype=ttnn.bfloat16)
+        )  # bf16 out (dense may be the router's fp32 weights)
+        # Preserve the established full-T union for the down projection.  The
+        # optional grouped union applies only to gate/up below.
+        # one token: the union over T rows IS the single routing row (skip the fill-pad + reduce)
+        full_union = dense_local if T == 1 else ttnn.sum(dense_local, dim=2, keepdim=True)
+        group = self.MOE_PREFILL_TILE_GROUP
+        tile_sparse = self.MOE_PREFILL_TILE_SPARSE and not sharded and T >= group and T % group == 0
+        if tile_sparse:
+            # A sparse_matmul sparsity entry selects one complete M tile, so use one
+            # routing mask per 32 token rows.  The old mask reduced all T rows and
+            # caused an expert selected once to run over every row in the MoE chunk.
+            # Keeping group == the input tile height avoids padding extra compute.
+            groups = T // group
+            dense_grouped = ttnn.reshape(dense_local, (1, groups, group, LE))
+            union = ttnn.sum(dense_grouped, dim=2, keepdim=True)
+            a = ttnn.reshape(ln_flat, (1, groups, group, H))
+            matmul_m = group
+        else:
+            groups = 1
+            union = full_union
+            a = ttnn.reshape(ln_flat, (1, 1, T, H))
+            matmul_m = T
+        sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
+        down_sparsity = ttnn.to_layout(full_union, ttnn.ROW_MAJOR_LAYOUT) if tile_sparse else sparsity
+        moe_mem = ttnn.L1_MEMORY_CONFIG if sharded and self.moe_decode_in_l1 else ttnn.DRAM_MEMORY_CONFIG
+        if T == 1 and getattr(self, "_moe1_kernels", False):
+            # one token: generic_op kernels that touch only the routed local experts (gate|up + SwiGLU + routing
+            # weight, then down + expert sum) instead of sparse matmuls and eltwise ops over all 64 experts
+            x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+            glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
+            routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
+        elif (T == TILE or (1 < T < TILE and self._cp32_short)) and not tile_sparse and getattr(self, "_cp32", False):
+            # up to 32 tokens (one row tile; rows past T only feed discarded output rows): generic_ops over the
+            # active experts that read whole weight columns (colpage.py) -- gate|up matmul + SwiGLU + per-token
+            # routing weight, then down matmul + expert sum -- instead of two sparse matmuls reading single tiles,
+            # the SwiGLU and the expert-sum ops. Also the 16-row DFlash verify (it fell to the sparse path).
+            x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+            wv = ttnn.reshape(dense_local, (1, T, LE))
+            wv = ttnn.permute(wv, (0, 2, 1))
+            wv = ttnn.reshape(wv, (1, LE, T, 1))
+            glu = moe_decode1.gate_up32(x32, colpage.column_pages(self.w["exp_gate_up"]), wv, sparsity)
+            routed_local = moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), sparsity)
+        else:
+            otile = ttnn.Tile([TILE, TILE])
+            gu_pc = _sparse_pc(2 * I, matmul_m, H)  # packed gate+up, N = 2*I
+            # The down projection below reads only the experts active in its sparsity, which (without tile-sparse
+            # grouping) is this matmul's sparsity, whose rows are all computed. So the inactive experts' output need not
+            # be zero-filled first (~13.6 us per decode MoE layer for [64, 32, 2048]).
+            gu_kw = {} if tile_sparse or not getattr(self, "_gu_skip_zero_init", False) else {"zero_init_output": False}
+            gu = ttnn.sparse_matmul(
+                a,
+                self.w["exp_gate_up"],
+                sparsity=sparsity,
+                program_config=gu_pc,
+                compute_kernel_config=self._ck_moe,
+                memory_config=moe_mem,
+                output_tile=otile,
+                **gu_kw,
+            )
+            if tile_sparse:
+                # sparse_matmul orders output batches as A-batches then B-batches:
+                # [group, local_expert, row, channel]. Restore expert-major token
+                # order after the grouped gate/up projection. The down projection
+                # then follows the established full-T union path.
+                gu = ttnn.reshape(gu, (groups, LE, group, 2 * I))
+                gu = ttnn.permute(gu, (1, 0, 2, 3))
+                gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+            else:
+                gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+            fused_glu = T == TILE and not tile_sparse and getattr(self, "_swiglu32", False)
+            if not fused_glu:
+                gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
+                up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
+            if T == 1:  # [1,1,1,LE] -> [1,LE,1,1] is the same element order: one reshape, no permute
+                wv = ttnn.reshape(dense_local, (1, LE, 1, 1))
+            else:
+                wv = ttnn.reshape(dense_local, (1, T, LE))
+                wv = ttnn.permute(wv, (0, 2, 1))
+                wv = ttnn.reshape(wv, (1, LE, T, 1))
+            # silu fused into the gate*up mul, and the per-(expert, token) routing weight applied BEFORE the
+            # linear down projection on the I-wide glu (I < H): w*(glu@Wd) == (w*glu)@Wd, and sparse_matmul
+            # zero-fills skipped experts, so the H-wide post-down weighting mul is gone.
+            if fused_glu:
+                # one generic_op over the active experts only: gate/up read in place from the packed output (no
+                # slices), silu(gate) * up * w with the per-token weights column-broadcast (moe_decode1.swiglu32)
+                glu = moe_decode1.swiglu32(gu, wv, sparsity)
+            else:
+                glu = ttnn.mul(gate_o, up_o, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+                glu = ttnn.mul(glu, wv)
+            dn_pc = _sparse_pc(H, T, I)
+            # active-expert sum kernel: inactive experts' down outputs are never read, so skip their zero fill
+            fused_sum = fused_glu and getattr(self, "_esum32", False)
+            weighted = ttnn.sparse_matmul(
+                glu,
+                self.w["exp_down"],
+                sparsity=down_sparsity,
+                is_input_a_sparse=True,
+                program_config=dn_pc,
+                compute_kernel_config=self._ck_moe,
+                memory_config=moe_mem,
+                output_tile=otile,
+                **({"zero_init_output": False} if fused_sum else {}),
+            )  # [1, LE, T, H], already routing-weighted
+            if fused_sum:
+                routed_local = moe_decode1.expert_sum32(weighted, sparsity)
+            elif self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
+                (reduced,) = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                    weighted, dim=1, split_size=H, output_memory_config=moe_mem, compute_kernel_config=self._ck_moe
+                )
+                routed_local = ttnn.reshape(reduced, (1, 1, T, H))
+            else:
+                routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))
+        keep = sharded and self._glu_out_sharded and T <= TILE
+        shared_partial = self._glu_mlp(
+            ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep
+        )
+        if keep:
+            # width-sharded shared output as the add's first operand, the interleaved routed sum as the second:
+            # the add writes interleaved for the all_gather (no separate sharded->interleaved)
+            combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
+        return self._reduce(combined)
+
+    def _moe_rows_local(self, ln_flat, sharded):
+        """2..32 decode tokens: router scores (sigmoid fused into the logits matmul) + row-repeated bias -> the router
+        kernel writing this chip's per-token routing rows (router32.route_local_rows) -> the 32-row MoE kernels (which
+        union the rows and build the per-token weight tiles from them) + the shared expert and the all-reduce (see _moe). Replaces the
+        sigmoid, the broadcast bias add (~12 us), the dense routing tile, the EP-select matmul, the row sum, the
+        untilize and the weight transpose."""
+        from .router32 import route_local_rows
+
+        cfg = self.cfg
+        H, E, T = cfg.hidden, cfg.num_experts, ln_flat.shape[-2]
+        if ln_flat.is_sharded():
+            ln_flat = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG)
+        scores = self._router_scores(ln_flat)
+        if T == TILE:
+            bias = self.w["e_bias_f32_rows"]
+        else:  # the bias repeated over T rows (made once, at the first eager call, before any trace capture)
+            cache = self.__dict__.setdefault("_bias_rows_t", {})
+            if T not in cache:
+                rows32 = self.w["e_bias_f32_rows"]
+                cache[T] = (ttnn.concat([rows32] * (T // TILE), dim=2) if T > TILE
+                            else ttnn.slice(rows32, [0, 0, 0, 0], [1, 1, T, E]))  # fmt: skip
+            bias = cache[T]
+        sel = ttnn.add(scores, bias)
+        rows = route_local_rows(
+            sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts,
+            active=getattr(self, "_rows_active", None),  # an adaptive-depth DFlash verify (generator_vllm)
+        )
+        x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+        if self._sh1_fused and "sh_gate_up_cp" in self.w:
+            # shared expert inside the routed programs: gate/up on the cores after the routed ones (weight 1 per row:
+            # all-ones routing rows), down as one more unit of the next expert group (summed by the group reduce)
+            ones = self.__dict__.setdefault("_sh_rows_t", {})
+            if T not in ones:  # made at the first (eager) call, before any trace capture
+                r = torch.zeros((1, 1, T, 32), dtype=torch.float32)
+                r[..., 0] = 1.0
+                ones[T] = ttnn.from_torch(r, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device,
+                                          memory_config=ttnn.L1_MEMORY_CONFIG,
+                                          mesh_mapper=ttnn.ReplicateTensorToMesh(self.device))  # fmt: skip
+            glu, sh_glu = moe_decode1.gate_up32(
+                x32, colpage.column_pages(self.w["exp_gate_up"]), None, rows,
+                shared=(colpage.column_pages(self.w["sh_gate_up_cp"]), ones[T]),
+            )  # fmt: skip
+            return self._reduce(
+                moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), rows,
+                                   shared=(sh_glu, colpage.column_pages(self.w["sh_down_cp"])))
+            )  # fmt: skip
+        glu = moe_decode1.gate_up32(x32, colpage.column_pages(self.w["exp_gate_up"]), None, rows)
+        routed_local = moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), rows)
+        keep = sharded and self._glu_out_sharded
+        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep)
+        if keep:
+            combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
+        return self._reduce(combined)
+
+    def _router_scores(self, x):
+        """Decode router scores sigmoid(x @ gate_w), fp32, L1 interleaved; x: [1, 1, T <= 32, H] L1 interleaved. The
+        1D matmul (activations multicast, one expert tile column per core, K blocks of 32 tiles) reads the
+        interleaved input directly: ~12 vs ~20 us for the reshard to 8 cores + DRAM-sharded matmul + unshard."""
+        cfg = self.cfg
+        H, E = cfg.hidden, cfg.num_experts
+        sig = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
+        kt = H // TILE
+        T = int(x.shape[-2])
+        if self._router_ksplit and T % TILE == 0 and T > TILE and kt % 12 == 0:
+            # the batched DFlash verify: K-split over 96 cores (router_mm.py), up to 96 rows per call (traced: 38 vs
+            # 66 us at 96 rows, 29 vs 45 us at 64). At 32 rows the 96-core program's dispatch outweighs its shorter
+            # kernel (23 vs 21 us traced), so batch-32 decode keeps the DRAM-sharded matmul below
+            from .router_mm import router_scores
+
+            if T <= 3 * TILE:
+                return router_scores(x, self.w["gate_w"])
+            parts = [router_scores(ttnn.slice(x, [0, 0, r0, 0], [1, 1, min(T, r0 + 3 * TILE), H],
+                                              memory_config=ttnn.L1_MEMORY_CONFIG), self.w["gate_w"])
+                     for r0 in range(0, T, 3 * TILE)]  # fmt: skip
+            return ttnn.concat(parts, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if T > TILE:  # the batched DFlash verify: the 32-row DRAM-sharded matmul per 32-row chunk
+            parts = [self._router_scores(ttnn.slice(x, [0, 0, r0, 0], [1, 1, r0 + TILE, H],
+                                                    memory_config=ttnn.L1_MEMORY_CONFIG))
+                     for r0 in range(0, T, TILE)]  # fmt: skip
+            return ttnn.concat(parts, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # up to 8 rows (batch 1, the DFlash verify); batch-32 decode kept the DRAM-sharded matmul (25.0 -> 24.1 tok/s
+        # per user at 8K with this one)
+        if self._router_1d and E % TILE == 0 and E // TILE <= 8 and x.shape[-2] <= 8:
+            bw = next(b for b in (32, 24, 16, 12, 8, 4, 2, 1) if kt % b == 0)
+            pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(E // TILE, 1), in0_block_w=bw, out_subblock_h=1,
+                out_subblock_w=1, per_core_M=1, per_core_N=1, fuse_batch=True, fused_activation=sig, mcast_in0=True,
+            )  # fmt: skip
+            return ttnn.linear(x, self.w["gate_w"], program_config=pc, compute_kernel_config=self._ck_router_precise,
+                               dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        num_cores = _decode_shard_cores(H, E)
+        x_sh = ttnn.to_memory_config(x, _width_sharded_l1(TILE, H, num_cores))
+        # sigmoid fused into the logits matmul (fp32 out): the scores directly
+        scores = ttnn.linear(
+            x_sh,
+            self.w["gate_w_ds"],
+            program_config=_dram_matmul_pc(TILE, H, E, num_cores, fused_activation=sig),
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self._ck_router_precise,
+            dtype=ttnn.float32,
+        )
+        ttnn.deallocate(x_sh)
+        return ttnn.sharded_to_interleaved(scores, ttnn.L1_MEMORY_CONFIG)
+
+    def _moe1_local(self, ln_flat, sharded):
+        """One decode token: router logits -> exact top-K kernel writing this chip's local routing row -> the
+        batch-1 MoE kernels; then the shared expert and the all-reduce (see _moe)."""
+        from .router32 import route1_local
+
+        cfg = self.cfg
+        if ln_flat.is_sharded():
+            ln_flat = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG)
+        scores = self._router_scores(ln_flat)
+        sel = ttnn.add(scores, self.w["e_bias_f32"])
+        sparsity = route1_local(
+            sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
+        )
+        x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+        if self._sh1 and self._sh1_fused:
+            # shared expert inside the routed programs: its gate/up on the cores after the routed experts' (same
+            # program, runs alongside them), its down projection accumulated into the routed down's output tiles (no
+            # separate programs, no add)
+            glu, sh_glu = moe_decode1.gate_up_swiglu(
+                x1, self.w["exp_gate_up"], sparsity,
+                shared=(self.w["sh_gate_up_cp"], self.w["sh_active"], int(os.environ.get("TT_LAGUNA_SH1_CHUNK", "48"))),
+            )  # fmt: skip
+            return self._reduce(
+                moe_decode1.down_sum(glu, self.w["exp_down"], sparsity, shared=(sh_glu, self.w["sh_down_cp"]))
+            )
+        glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
+        routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
+        if self._sh1:
+            # shared expert as one always-active expert through the same kernels: 2 programs that read whole weight
+            # columns instead of a DRAM-sharded matmul, 2 slices, SwiGLU, a reshard and a second matmul (~27 us)
+            # one active expert = 8 working cores (one per gate/up column pair): 48-tile reads keep each core's DRAM
+            # stream busier than the routed experts' 16 (16.7 -> 14.3 us, outputs identical)
+            sh_glu = moe_decode1.gate_up_swiglu(x1, self.w["sh_gate_up_cp"], self.w["sh_active"],
+                                                chunk=int(os.environ.get("TT_LAGUNA_SH1_CHUNK", "48")))
+            shared_local = moe_decode1.down_sum(sh_glu, self.w["sh_down_cp"], self.w["sh_active"])
+            return self._reduce(ttnn.add(routed_local, shared_local, memory_config=ttnn.L1_MEMORY_CONFIG))
+        keep = sharded and self._glu_out_sharded
+        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded, keep)
+        if keep:
+            combined = ttnn.add(shared_partial, routed_local, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, 1, H)))
+        return self._reduce(combined)
+
+    # ---- MoE baseline (unpacked gate/up: two separate sparse_matmuls) ------ #
+    def _moe_separate(self, ln_flat, m, sharded):
+        cfg = self.cfg
+        GE, LE = self.global_experts, self.local_experts
+        H, I, K = cfg.hidden, cfg.moe_intermediate, cfg.top_k
+        T = ln_flat.shape[2]
+        # --- router (replicated: identical full-256 selection on every device) ---
+        logits, idx, wsel = self._route(ln_flat)  # logits [1,1,T,GE]
+        dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)  # [1,1,T,GE] replicated
+        # --- EP selection: replicated 256-wide -> device-local contiguous 64-wide (SPMD-safe matmul) ---
+        dense_local = (
+            dense if self.D == 1 else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
+        )  # [1,1,T,LE]
+        union = ttnn.sum(dense_local, dim=2, keepdim=True)  # [1,1,1,LE]
+        sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
+        a = ttnn.reshape(ln_flat, (1, 1, T, H))
+        moe_mem = ttnn.L1_MEMORY_CONFIG if sharded and self.moe_decode_in_l1 else ttnn.DRAM_MEMORY_CONFIG
+        otile = ttnn.Tile([TILE, TILE])
+        gu_pc = _sparse_pc(I, T, H)
+        gate_o = ttnn.sparse_matmul(
+            a,
+            self.w["exp_gate"],
+            sparsity=sparsity,
+            program_config=gu_pc,
+            compute_kernel_config=self._ck_moe,
+            memory_config=moe_mem,
+            output_tile=otile,
+        )
+        up_o = ttnn.sparse_matmul(
+            a,
+            self.w["exp_up"],
+            sparsity=sparsity,
+            program_config=gu_pc,
+            compute_kernel_config=self._ck_moe,
+            memory_config=moe_mem,
+            output_tile=otile,
+        )
+        gate_o = ttnn.reshape(gate_o, (1, LE, T, I))
+        up_o = ttnn.reshape(up_o, (1, LE, T, I))
+        glu = ttnn.mul(ttnn.silu(gate_o), up_o)
+        dn_pc = _sparse_pc(H, T, I)
+        down_o = ttnn.sparse_matmul(
+            glu,
+            self.w["exp_down"],
+            sparsity=sparsity,
+            is_input_a_sparse=True,
+            program_config=dn_pc,
+            compute_kernel_config=self._ck_moe,
+            memory_config=moe_mem,
+            output_tile=otile,
+        )  # [1,LE,T,H]
+        if T == 1:  # [1,1,1,LE] -> [1,LE,1,1] is the same element order: one reshape, no permute
+            wv = ttnn.reshape(dense_local, (1, LE, 1, 1))
+        else:
+            wv = ttnn.reshape(dense_local, (1, T, LE))
+            wv = ttnn.permute(wv, (0, 2, 1))
+            wv = ttnn.reshape(wv, (1, LE, T, 1))
+        weighted = ttnn.mul(down_o, wv)
+        routed_local = ttnn.reshape(ttnn.sum(weighted, dim=1), (1, 1, T, H))  # partial (local experts)
+        shared_partial = self._glu_mlp(ln_flat, "sh", cfg.hidden, cfg.shared_intermediate, self._ck_shared, sharded)
+        combined = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, T, H)))
+        return self._reduce(combined)  # all_reduce -> total routed + shared (replicated)
+
+    # ---- dense / shared SwiGLU MLP: one packed gate+up matmul, split, SwiGLU (else unpacked base) ---- #
+    def _glu_mlp(self, x, key, H, I, ck, sharded, keep_sharded=False):
+        """keep_sharded: return the decode down-projection output width-sharded (its consumer -- the decode
+        all_gather or a residual add -- reads the shard directly; no sharded->interleaved)."""
+        if not self.PACK_GATE_UP:
+            return super()._glu_mlp(x, key, H, I, ck, sharded)
+        guk, dk = {"mlp": ("mlp_gate_up", "mlp_down"), "sh": ("sh_gate_up", "sh_down")}[key]
+        w = self.w
+        if sharded and self.use_dram_sharded:
+            gu = self._dram_mm(x, w[guk], w[guk + "_ds"], H, 2 * I, ck)  # [.,.,M,2I] width-sharded
+            if not self._slice_sharded:
+                gu = ttnn.sharded_to_interleaved(gu, ttnn.L1_MEMORY_CONFIG)
+            shp = list(gu.shape)
+            # the gate/up slices read the width-sharded matmul output directly into interleaved L1
+            g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I], memory_config=ttnn.L1_MEMORY_CONFIG)
+            u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I], memory_config=ttnn.L1_MEMORY_CONFIG)
+            gg = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])  # silu fused: one op
+            out = self._dram_mm(gg, w[dk], w[dk + "_ds"], I, H, ck)
+            return out if keep_sharded else ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+        # prefill: interleaved packed gate+up linear, split, SwiGLU, down
+        gu = self._prefill_linear(x, w[guk], ck)  # [.,seq,2I]
+        shp = list(gu.shape)
+        g = ttnn.slice(gu, [0] * len(shp), shp[:-1] + [I])
+        u = ttnn.slice(gu, [0] * (len(shp) - 1) + [I], shp[:-1] + [2 * I])
+        if getattr(self, "_glu_fused_silu", False):  # the batched DFlash draft: silu as the multiply's lhs activation
+            gg = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        else:
+            gg = ttnn.mul(ttnn.silu(g), u)
+        return self._prefill_linear(gg, w[dk], ck)
+
+    # ---- dense/shared MLP: gate/up column, down row -> caller reduces ------ #
+    def _mlp(self, ln, T, sharded):
+        cfg = self.cfg
+        ln_flat = ttnn.reshape(ln, (1, 1, T, cfg.hidden))
+        if not cfg.is_moe:
+            keep = sharded and self._glu_out_sharded and T <= TILE
+            partial = self._glu_mlp(ln_flat, "mlp", cfg.hidden, cfg.intermediate, self._ck_dense, sharded, keep)
+            if tuple(partial.shape) != (1, 1, T, cfg.hidden):
+                partial = ttnn.reshape(partial, (1, 1, T, cfg.hidden))
+            return self._reduce(partial)  # the decode all_gather reads a width-sharded partial directly
+        use_token_dispatch, reason = self._token_dispatch_guard(T, sharded)
+        if use_token_dispatch:
+            return self._moe_token_dispatch(ln_flat, T)
+        if self._token_dispatch_requested:
+            self._token_dispatch_fallback_reason = reason
+        if T <= self.MOE_PREFILL_CHUNK:
+            return self._moe(ln_flat, T, sharded)
+        outs = []
+        for s in range(0, T, self.MOE_PREFILL_CHUNK):
+            e = min(s + self.MOE_PREFILL_CHUNK, T)
+            chunk = ttnn.slice(ln_flat, [0, 0, s, 0], [1, 1, e, cfg.hidden])
+            outs.append(self._moe(chunk, e - s, sharded))
+        return ttnn.concat(outs, dim=2)
+
+    # ---- prefill (single shot): reuse optimized body + all_reduce after WO --- #
+    def prefill_forward(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        *,
+        fill_page_table=None,
+        fill_page_table_base_pos=0,
+        user_id=0,
+        start_pos=0,
+        rope_mats=None,
+        runtime_offsets=None,
+        seq_parallel=False,
+    ):
+        fill_page_table = page_table if fill_page_table is None else fill_page_table
+        seq = x_BSH.shape[-2]
+        # Runtime offsets identify the qualified D2 path (cold pipeline or a resumed suffix).
+        # Route even a small resumed bucket through the pipeline implementation so cached and cold
+        # prefixes use the same flexible chunked-SDPA kernel family. In particular, this avoids the
+        # single-shot q32/k64 program diverging from the pipeline's q32/k32 numerics after a cache hit.
+        # Cold single-shot and all D1/D4 calls have runtime_offsets=None and remain byte-for-byte on
+        # the established local-SDPA branch below.
+        if seq_parallel:
+            # Sequence-parallel residual (LagunaModel.prefill_layers): this chip holds 1/D of the rows of the
+            # residual stream. Each all-reduce becomes its reduce-scatter half (_reduce), the residual adds and
+            # the two RMSNorms run on the local rows, and the normed rows are all-gathered for attention / MoE --
+            # the same link traffic as the all-reduces, a 1/D share of the add / norm work.
+            self._sp_active = True
+            try:
+                if runtime_offsets is not None or seq * self.D > self.PIPE_CHUNK:
+                    return self._prefill_pipelined(
+                        x_BSH,
+                        kv_cache,
+                        page_table,
+                        fill_page_table,
+                        user_id,
+                        start_pos,
+                        fill_page_table_base_pos=fill_page_table_base_pos,
+                        rope_mats=rope_mats,
+                        runtime_offsets=runtime_offsets,
+                        seq_parallel=True,
+                    )
+                return self._prefill_forward_sp(x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos,
+                                                 user_id, start_pos, rope_mats)
+            finally:
+                self._sp_active = False
+        if runtime_offsets is not None or seq > self.PIPE_CHUNK:
+            return self._prefill_pipelined(
+                x_BSH,
+                kv_cache,
+                page_table,
+                fill_page_table,
+                user_id,
+                start_pos,
+                fill_page_table_base_pos=fill_page_table_base_pos,
+                rope_mats=rope_mats,
+                runtime_offsets=runtime_offsets,
+            )
+        cfg = self.cfg
+        residual = x_BSH
+        ln = self._rms(x_BSH, self.w["input_ln"])
+        q, k, v = self._qkv_roped(ln, seq, start_pos, rope=rope_mats)
+        cdt = kv_cache["dtype"]
+        # paged_fill_cache writes k/v into the blocks listed in its dedicated table
+        # starting at its first column. Bucket-padding entries are -1 (skip); the
+        # attention table remains scratch-mapped and is never passed to the writer.
+        # The fill table must be offset to the block
+        # containing start_pos. Cold prefill (start_pos=0) => col0=0 (unchanged);
+        # a prefix-cache suffix prefill (start_pos>0) must NOT write at position 0
+        # (that would clobber the cached prefix's first blocks). Mirrors the
+        # per-chunk slicing in _prefill_pipelined.
+        fill_pt = single_shot_fill_page_table(
+            fill_page_table,
+            start_pos=start_pos,
+            seq_len=seq,
+            block_size=kv_cache["block_size"],
+            fill_page_table_base_pos=fill_page_table_base_pos,
+        )
+        ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), fill_pt, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), fill_pt, batch_idx=user_id)
+        chunk_start_idx_tensor = None
+        if runtime_offsets is not None:
+            if tuple(runtime_offsets.chunk_lengths) != (int(seq),):
+                raise ValueError(f"single-shot runtime chunks {runtime_offsets.chunk_lengths} do not match seq {seq}")
+            chunk_start_idx_tensor = runtime_offsets.chunk_start_idxs[0]
+        attn = self._prefill_attention(
+            q,
+            k,
+            v,
+            kv_cache,
+            page_table,
+            user_id,
+            start_pos,
+            seq,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
+        )
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
+        attn = self._gate(attn, ln)
+        o = self._prefill_linear(attn, self.w["wo"], self._ck_o)  # row-parallel partial
+        o = self._reduce(o)
+        h = ttnn.add(residual, o)
+        ln2 = self._rms(h, self.w["post_ln"])
+        mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, seq, cfg.hidden))
+        return ttnn.add(h, mlp_out)
+
+    def dflash_query_forward(self, x_all, x_q, take, rope, rope_q, mask):
+        """One DFlash draft layer computing only what the 32 query rows need (no KV-cache write).
+
+        x_all [1, S, H]: context rows then the query rows (prefill_forward's input); x_q [1, 32, H]: the query rows
+        (``take @ x_all``); take [1, 32, S] 0/1 row picker; rope / rope_q: (cos, sin) for the S rows / the 32 query
+        rows; mask [1, 1, 32, S]: 0 where query row i may see key j (causal sliding window), -1e9 elsewhere.
+        Keys/values come from every row; Q, attention, gate, O projection, all-reduce and MLP run on 32 rows instead
+        of S. Returns the 32 query rows of prefill_forward's output."""
+        cfg = self.cfg
+        S = x_all.shape[-2]
+        ln = self._rms(x_all, self.w["input_ln"])
+        qkv = self._prefill_linear(ln, self.w["wqkv"], self._ck_qkv)  # [1, S, qkv_w]
+        _, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (1, 1, S, self.meta["qkv_w"])), num_heads=cfg.num_heads, num_kv_heads=cfg.num_kv_heads,
+            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope)
+        ck = self._ck_hifi4  # 0/1 row selection: exact with fp32 accumulation
+        qkv_q = ttnn.matmul(take, qkv, compute_kernel_config=ck)  # [1, 32, qkv_w]
+        ln_q = ttnn.matmul(take, ln, compute_kernel_config=ck)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv_q, (1, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+        return self._dflash_query_tail(x_q, ln_q, q, k, v, mask)
+
+    def dflash_kv_rows(self, x, rope):
+        """Keys and values [1, nkv, R, hd] (k-norm and RoPE applied) of rows x [1, R, H]: the K/V prefill_forward
+        computes for them, which the cached DFlash draft keeps per context row (dflash_tt.DFlashTTProposalCache)."""
+        cfg = self.cfg
+        R = x.shape[-2]
+        ln = self._rms(x, self.w["input_ln"])
+        if self._dflash_kv_only:
+            # only the K and V columns of the fused QKV weight (sliced once, at the first -- eager -- call): ~1/5 of
+            # the weight read, and a head split of 2 x 2 heads instead of the 1-core split of every Q/K/V head
+            if "dflash_wkv" not in self.w:
+                q_w, kv_w = self.meta["q_w"], self.meta["kv_w"]
+                w = self.w["wqkv"]
+                lead = [0] * (len(w.shape) - 1)
+                ends = [w.shape[i] for i in range(len(w.shape) - 1)] + [q_w + 2 * kv_w]
+                self.w["dflash_wkv"] = ttnn.slice(w, lead + [q_w], ends)
+            kv = self._prefill_linear(ln, self.w["dflash_wkv"], self._ck_qkv)  # [1, R, 2 * kv_w]
+            kv_w = self.meta["kv_w"]
+            if R == TILE and self._dflash_regroup and kv.dtype == ttnn.bfloat16:
+                shape = (1, cfg.num_kv_heads, TILE, cfg.head_dim)
+                k, v = tile_regroup.regroup(kv, [(shape, 0), (shape, kv_w // TILE)], ttnn.DRAM_MEMORY_CONFIG)
+                return self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope), v
+            k, v = (
+                ttnn.permute(
+                    ttnn.reshape(ttnn.slice(kv, [0, 0, i * kv_w], [1, R, (i + 1) * kv_w]),
+                                 (1, R, cfg.num_kv_heads, cfg.head_dim)),
+                    (0, 2, 1, 3),
+                )
+                for i in range(2)
+            )  # fmt: skip
+        else:
+            qkv = self._prefill_linear(ln, self.w["wqkv"], self._ck_qkv)
+            _, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                ttnn.reshape(qkv, (1, 1, R, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+                num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # fmt: skip
+        return self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope), v
+
+    def dflash_query_forward_cached(self, x_q, k_ctx, v_ctx, rope_q, mask):
+        """dflash_query_forward over cached context keys/values: x_q [1, 32, H] query rows; k_ctx / v_ctx
+        [1, nkv, C, hd] (dflash_kv_rows of the context rows); rope_q (cos, sin) [1, 1, 32, hd]; mask [1, 1, 32, C + 32]
+        over the context slots then the 32 query rows. Every op runs on the 32 query rows; attention reads C + 32 keys."""
+        cfg = self.cfg
+        pad = self.meta.get("qkvg_pad")
+        if self._dflash_fold_g and self._dflash_regroup and self.use_dram_sharded and pad and "wqkvg_ds" in self.w:
+            # an interleaved copy of the fused weight (made at the first -- eager -- call) through the 1D program: at
+            # the draft's HiFi4 the DRAM-sharded matmul is compute-bound on its 32 cores (~69 vs ~27 us)
+            if "dflash_wqkvg" not in self.w:
+                self.w["dflash_wqkvg"] = ttnn.to_memory_config(self.w["wqkvg_ds"], ttnn.DRAM_MEMORY_CONFIG)
+            ln_q = self._rms(x_q, self.w["input_ln"])
+            qkvg = self._prefill_linear(ln_q, self.w["dflash_wqkvg"], self._ck_qkv)  # [1, 32, pad]
+            if qkvg.dtype == ttnn.bfloat16:
+                qkv_w = self.meta["qkv_w"]
+                g = ttnn.slice(qkvg, [0, 0, qkv_w], [1, TILE, qkv_w + cfg.num_heads])  # [1, 32, num_heads]
+                q, k, v = tile_regroup.split_heads(qkvg, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim,
+                                                   ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+                q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+                k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
+                k = ttnn.concat([k_ctx, k], dim=2)
+                v = ttnn.concat([v_ctx, v], dim=2)
+                return self._dflash_query_tail(x_q, None, q, k, v, mask, g=g)
+        ln_q = self._rms(x_q, self.w["input_ln"])
+        qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)
+        if self._dflash_regroup and qkv.dtype == ttnn.bfloat16:
+            q, k, v = tile_regroup.split_heads(qkv, cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                ttnn.reshape(qkv, (1, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+                num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # fmt: skip
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm"]), *rope_q)
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
+        k = ttnn.concat([k_ctx, k], dim=2)
+        v = ttnn.concat([v_ctx, v], dim=2)
+        return self._dflash_query_tail(x_q, ln_q, q, k, v, mask)
+
+    def dflash_query_forward_batched(self, x_q, k_ring, v_ring, rope_q, mask, ring_dests=None):
+        """dflash_query_forward_cached for U users at once: x_q [1, U * 32, H] (user u's 32 query rows -- its 16
+        proposal rows, then padding -- at rows u * 32 ..); k_ring / v_ring [U, nkv, RING, hd] the users' context
+        rings; rope_q (cos, sin) [U, 1, 32, hd] at each user's query positions; mask [U, 1, 32, RING + 32] over the
+        user's ring slots then its 32 query rows. Matmuls, gate, O projection, all-reduce and MLP run once over all
+        U * 32 rows; attention is batched over users (each user's queries see only its own ring and rows).
+        ring_dests (uint32 [1, U * 32]): write the rows' keys/values into the rings at these slots (ring_write_batched)
+        and attend over the rings alone (mask [U, 1, 32, RING] covering the rows' own slots)."""
+        cfg = self.cfg
+        U = int(k_ring.shape[0])
+        T = U * TILE
+        ln_q = self._rms(x_q, self.w["input_ln"])
+        qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)  # [1, T, qkv_w]
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (U, 1, TILE, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        # the attention scale folded into a pre-scaled copy of the q-norm weight (made at the first, eager, call):
+        # with scale 1 the SDPA op does not multiply the whole mask by 1 / scale on every call
+        if "q_norm_scaled" not in self.w:
+            self.w["q_norm_scaled"] = ttnn.multiply(self.w["q_norm"], float(cfg.scaling))
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm_scaled"]), *rope_q)
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_q)
+        if ring_dests is not None:
+            # the 32 rows' keys/values written into the rings at their positions' slots (slots whose old positions
+            # are outside every window); attention reads the rings as they are (no ring + rows concat per layer)
+            from .ring_write import ring_write_batched
+
+            ring_write_batched([k_ring, v_ring], [k, v], ring_dests,
+                               rows_per_user=getattr(self, "_dflash_rows_per_user", 16))  # fmt: skip
+            k, v = k_ring, v_ring
+        else:
+            k = ttnn.concat([k_ring, k], dim=2)
+            v = ttnn.concat([v_ring, v], dim=2)
+        S = int(k.shape[-2])
+        kc = next(c for c in (128, 64, 32) if S % c == 0)
+        # GQA fold: the num_heads / nkv query heads sharing a KV head as one block of query rows ([U, nkv, G * 32, hd],
+        # the same memory: heads are consecutive per KV head), so each KV head's keys/values are read once per query
+        # chunk instead of once per query head; mask: [U, 1, G * 32, S] (the 32-row mask repeated G times)
+        G = cfg.num_heads // cfg.num_kv_heads
+        fold = int(mask.shape[-2]) == G * TILE
+        qc = int(os.environ.get("TT_LAGUNA_DFLASH_DRAFT_QC", str(min(G * TILE, 96)))) if fold else TILE
+        key = (qc, kc)
+        if getattr(self, "_dflash_q_pc", {}).get(key) is None:
+            grid = self.device.compute_with_storage_grid_size()
+            self.__dict__.setdefault("_dflash_q_pc", {})[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=qc, k_chunk_size=kc,
+                exp_approx_mode=False,
+            )  # fmt: skip
+        sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        if fold:
+            q = ttnn.reshape(q, (U, cfg.num_kv_heads, G * TILE, cfg.head_dim))
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, scale=1.0, program_config=self._dflash_q_pc[key],
+            compute_kernel_config=sdpa_ck,
+        )  # fmt: skip
+        if fold:
+            attn = ttnn.reshape(attn, (U, cfg.num_heads, TILE, cfg.head_dim))
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [U, 1, 32, nh * hd]
+        attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
+        g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)
+        if self._gate_expand is not None:
+            attn = ttnn.mul(attn, ttnn.matmul(ttnn.softplus(g), self._gate_expand, compute_kernel_config=self._ck_hifi4,
+                                              dtype=ttnn.bfloat16))  # fmt: skip
+        else:
+            attn = self._gate(attn, ln_q, g=g)
+        h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
+        ln2 = self._rms(h, self.w["post_ln"])
+        return ttnn.add(h, ttnn.reshape(self._mlp(ln2, T, sharded=False), (1, T, cfg.hidden)))
+
+    def dflash_query_forward_users(self, x_q, k_ring, v_ring, rope_rows, mask, ring_dests, Q):
+        """The batched draft layer with Q rows per user: x_q [1, U * Q, H] (user u's rows at u * Q ..); k_ring /
+        v_ring [U, nkv, RING, hd] the users' context rings; rope_rows (cos, sin) [1, 1, U * Q, hd] at each row's
+        position; mask [U, 1, RP, RING] over the user's ring slots for its per-user query block (rows (h % G) * Q + i,
+        dflash_q_users.to_users); ring_dests uint32 [1, U * Q]: the slots the rows' keys/values are written to.
+        Matmuls, norms, RoPE, gate, O projection, all-reduce and MLP run once over all rows; attention runs per
+        user (its G query heads of a KV head and its Q rows as one block) over that user's ring only."""
+        from .dflash_q_users import from_users, to_users
+        from .ring_write import ring_write_batched
+
+        cfg = self.cfg
+        U = int(k_ring.shape[0])
+        T = U * Q
+        ln_q = self._rms(x_q, self.w["input_ln"])
+        qkv = self._prefill_linear(ln_q, self.w["wqkv"], self._ck_qkv)  # [1, T, qkv_w]
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, (1, 1, T, self.meta["qkv_w"])), num_heads=cfg.num_heads,
+            num_kv_heads=cfg.num_kv_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # fmt: skip
+        if "q_norm_scaled" not in self.w:  # the attention scale folded into the q norm (SDPA then runs at scale 1)
+            self.w["q_norm_scaled"] = ttnn.multiply(self.w["q_norm"], float(cfg.scaling))
+        q = self._apply_rope(self._per_head_norm(q, self.w["q_norm_scaled"]), *rope_rows)
+        k = self._apply_rope(self._per_head_norm(k, self.w["k_norm"]), *rope_rows)
+        ring_write_batched([k_ring, v_ring], [k, v], ring_dests, rows_per_user=Q)
+        qu = to_users(q, U, Q, cfg.num_kv_heads)  # [U, nkv, RP, hd]
+        RP, S = int(qu.shape[2]), int(k_ring.shape[2])
+        kc = next(c for c in (128, 64, 32) if S % c == 0)
+        key = ("users", RP, kc)
+        if getattr(self, "_dflash_q_pc", {}).get(key) is None:
+            grid = self.device.compute_with_storage_grid_size()
+            self.__dict__.setdefault("_dflash_q_pc", {})[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=RP, k_chunk_size=kc,
+                exp_approx_mode=False,
+            )  # fmt: skip
+        sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            qu, k_ring, v_ring, is_causal=False, attn_mask=mask, scale=1.0, program_config=self._dflash_q_pc[key],
+            compute_kernel_config=sdpa_ck,
+        )  # fmt: skip
+        attn = from_users(attn, U, Q, cfg.num_heads)  # [1, nh, T, hd]
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, T, nh * hd]
+        attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
+        g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)
+        if self._gate_expand is not None:
+            attn = ttnn.mul(attn, ttnn.matmul(ttnn.softplus(g), self._gate_expand, compute_kernel_config=self._ck_hifi4,
+                                              dtype=ttnn.bfloat16))  # fmt: skip
+        else:
+            attn = self._gate(attn, ln_q, g=g)
+        h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
+        ln2 = self._rms(h, self.w["post_ln"])
+        return ttnn.add(h, ttnn.reshape(self._mlp(ln2, T, sharded=False), (1, T, cfg.hidden)))
+
+    def _dflash_query_tail(self, x_q, ln_q, q, k, v, mask, g=None):
+        """Masked attention of the 32 query rows over keys k / values v, gate, O projection + all-reduce, MLP. g: the
+        gate logits [1, 32, num_heads] when already computed (else g_proj(ln_q))."""
+        cfg = self.cfg
+        S = k.shape[-2]
+        kc = next(c for c in (128, 64, 32) if S % c == 0)
+        if getattr(self, "_dflash_q_pc", {}).get(kc) is None:
+            grid = self.device.compute_with_storage_grid_size()
+            self.__dict__.setdefault("_dflash_q_pc", {})[kc] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y), q_chunk_size=TILE, k_chunk_size=kc,
+                exp_approx_mode=False,
+            )  # fmt: skip
+        sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, scale=cfg.scaling, program_config=self._dflash_q_pc[kc],
+            compute_kernel_config=sdpa_ck,
+        )  # fmt: skip
+        if self._dflash_regroup and attn.dtype == ttnn.bfloat16:
+            attn = tile_regroup.join_heads(attn, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (1, TILE, cfg.num_heads * cfg.head_dim))
+        if self._gate_expand is not None:
+            # the prefill gate (softplus(g) expanded to every head column by a 0/1 matmul, one multiply) instead of
+            # the 32-row path's reshapes into heads and back (~75 -> ~35 us per draft layer)
+            if g is None:
+                g = ttnn.linear(ln_q, self.w["wg"], compute_kernel_config=self._ck_gate)
+            g = ttnn.softplus(g)
+            attn = ttnn.mul(attn, ttnn.matmul(g, self._gate_expand, compute_kernel_config=self._ck_hifi4,
+                                              dtype=ttnn.bfloat16))
+        else:
+            attn = self._gate(attn, ln_q, g=g)
+        R = getattr(self, "_dflash_ar_rows", 0)
+        if R and self.D > 1 and x_q.dtype == ttnn.bfloat16:
+            # only the first R (the proposal block's) rows matter (no real row attends to a later one): residual +
+            # all-reduce of those rows in one row-packed collective + sum (allreduce_rows) instead of the composite
+            # all_reduce (reduce_scatter + all_gather) and an add; rows R.. become 0
+            h = self._reduce_rows_add(self._prefill_linear(attn, self.w["wo"], self._ck_o), x_q,
+                                      ttnn.DRAM_MEMORY_CONFIG, rows=R)  # fmt: skip
+            ln2 = self._rms(h, self.w["post_ln"])
+            self._defer_reduce = True
+            try:
+                partial = self._mlp(ln2, TILE, sharded=False)
+            finally:
+                self._defer_reduce = False
+            return self._reduce_rows_add(ttnn.reshape(partial, (1, TILE, cfg.hidden)), h, ttnn.DRAM_MEMORY_CONFIG, rows=R)
+        h = ttnn.add(x_q, self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o)))
+        ln2 = self._rms(h, self.w["post_ln"])
+        return ttnn.add(h, ttnn.reshape(self._mlp(ln2, TILE, sharded=False), (1, TILE, cfg.hidden)))
+
+    def _sp_gather(self, x):
+        return ttnn.all_gather(
+            x, len(x.shape) - 2, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
+        )
+
+    def _prefill_forward_sp(self, x_BSH, kv_cache, page_table, fill_page_table, fill_page_table_base_pos, user_id,
+                            start_pos, rope_mats):
+        """Single-shot cold prefill with the residual split over the mesh by rows (see prefill_forward)."""
+        cfg = self.cfg
+        residual = x_BSH  # [1, seq / D, H]
+        ln = self._sp_gather(self._rms(x_BSH, self.w["input_ln"]))  # [1, seq, H]
+        seq = ln.shape[-2]
+        q, k, v = self._qkv_roped(ln, seq, start_pos, rope=rope_mats)
+        cdt = kv_cache["dtype"]
+        fill_pt = single_shot_fill_page_table(
+            fill_page_table,
+            start_pos=start_pos,
+            seq_len=seq,
+            block_size=kv_cache["block_size"],
+            fill_page_table_base_pos=fill_page_table_base_pos,
+        )
+        ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), fill_pt, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), fill_pt, batch_idx=user_id)
+        attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
+        attn = self._gate(attn, ln)
+        o = self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o))  # reduce-scatter: local rows
+        h = ttnn.add(residual, o)
+        ln2 = self._sp_gather(self._rms(h, self.w["post_ln"]))
+        rows = h.shape[-2]
+        mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, rows, cfg.hidden))
+        return ttnn.add(h, mlp_out)
+
+    def prefill_forward_packed(self, x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats, seq_parallel=False):
+        """Cold prefill of ``num_segs`` users packed along the sequence: x is [1, num_segs * seg_len, H], user j in
+        rows [j * seg_len, (j + 1) * seg_len). Everything but attention runs once over all rows (one MoE weight
+        pass for every user); each user's q/k/v slice fills its own row ``j`` of ``fill_page_table`` and runs its
+        own causal SDPA from position 0. ``rope_mats`` holds positions 0..seg_len-1 repeated per user."""
+        if seq_parallel:  # residual rows split over the mesh (see prefill_forward)
+            self._sp_active = True
+            try:
+                return self._prefill_forward_packed_body(x_BSH, kv_cache, fill_page_table, seg_len, num_segs,
+                                                         rope_mats, True)
+            finally:
+                self._sp_active = False
+        return self._prefill_forward_packed_body(x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats, False)
+
+    def _prefill_forward_packed_body(self, x_BSH, kv_cache, fill_page_table, seg_len, num_segs, rope_mats, sp):
+        cfg = self.cfg
+        T = int(seg_len) * int(num_segs)
+        residual = x_BSH
+        ln = self._rms(x_BSH, self.w["input_ln"])
+        if sp:
+            ln = self._sp_gather(ln)
+        q, k, v = self._qkv_roped(ln, T, 0, rope=rope_mats)
+        cdt = kv_cache["dtype"]
+        outs = []
+        for j in range(int(num_segs)):
+            a, b = j * seg_len, (j + 1) * seg_len
+            qj = ttnn.slice(q, [0, 0, a, 0], [1, cfg.num_heads, b, cfg.head_dim])
+            kj = ttnn.slice(k, [0, 0, a, 0], [1, cfg.num_kv_heads, b, cfg.head_dim])
+            vj = ttnn.slice(v, [0, 0, a, 0], [1, cfg.num_kv_heads, b, cfg.head_dim])
+            ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(kj, cdt), fill_page_table, batch_idx=j)
+            ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(vj, cdt), fill_page_table, batch_idx=j)
+            outs.append(self._prefill_attention(qj, kj, vj, kv_cache, None, j, 0, seg_len))
+        attn = ttnn.concat(outs, dim=2) if len(outs) > 1 else outs[0]
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (1, T, cfg.num_heads * cfg.head_dim))
+        attn = self._gate(attn, ln)
+        o = self._prefill_linear(attn, self.w["wo"], self._ck_o)
+        o = self._reduce(o)
+        h = ttnn.add(residual, o)
+        ln2 = self._rms(h, self.w["post_ln"])
+        if sp:
+            ln2 = self._sp_gather(ln2)
+        mlp_out = ttnn.reshape(self._mlp(ln2, T, sharded=False), (1, h.shape[-2], cfg.hidden))
+        return ttnn.add(h, mlp_out)
+
+    def _prefill_pipelined(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        fill_page_table,
+        user_id,
+        start_pos,
+        *,
+        fill_page_table_base_pos=0,
+        rope_mats=None,
+        runtime_offsets=None,
+        seq_parallel=False,
+    ):
+        cfg = self.cfg
+        # seq_parallel (one outer chunk only): x_BSH holds this chip's 1/D of the rows; see prefill_forward
+        seq = x_BSH.shape[-2] * (self.D if seq_parallel else 1)
+        bs = kv_cache["block_size"]
+        cdt = kv_cache["dtype"]
+        CH = (self._prefill_pipe_chunk // bs) * bs  # env-gated outer chunk (TT_LAGUNA_PREFILL_FAST)
+        win = cfg.sliding_window
+        outs = []
+        expected_chunks = tuple(min(CH, seq - c) for c in range(0, seq, CH))
+        if runtime_offsets is not None and tuple(runtime_offsets.chunk_lengths) != expected_chunks:
+            raise ValueError(f"pipelined runtime chunks {runtime_offsets.chunk_lengths} do not match {expected_chunks}")
+        if rope_mats is not None and len(rope_mats) != len(expected_chunks):
+            raise ValueError(f"pipelined RoPE has {len(rope_mats)} chunks, expected {len(expected_chunks)}")
+        fill_base = int(fill_page_table_base_pos)
+        if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
+            raise ValueError(f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned")
+        if seq_parallel and len(expected_chunks) != 1:
+            raise ValueError(f"sequence-parallel pipelined prefill needs one outer chunk, got {expected_chunks}")
+        for chunk_idx, c in enumerate(range(0, seq, CH)):
+            ch = min(CH, seq - c)
+            gpos = start_pos + c
+            if seq_parallel:
+                xc = x_BSH
+                residual = xc
+                ln = self._sp_gather(self._rms(xc, self.w["input_ln"]))
+            else:
+                xc = ttnn.slice(x_BSH, [0, c, 0], [1, c + ch, cfg.hidden])
+                residual = xc
+                ln = self._rms(xc, self.w["input_ln"])
+            q, k, v = self._qkv_roped(
+                ln,
+                ch,
+                gpos,
+                rope=(rope_mats[chunk_idx] if rope_mats is not None else None),
+            )
+            col0 = (gpos - fill_base) // bs
+            ncol = (ch + bs - 1) // bs
+            chunk_pt = ttnn.slice(
+                fill_page_table,
+                [0, col0],
+                [fill_page_table.shape[0], col0 + ncol],
+            )
+            ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), chunk_pt, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), chunk_pt, batch_idx=user_id)
+            user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
+            start_tensor = runtime_offsets.chunk_start_idxs[chunk_idx] if runtime_offsets is not None else None
+            start_kw = (
+                {"chunk_start_idx_tensor": start_tensor} if start_tensor is not None else {"chunk_start_idx": gpos}
+            )
+            if not cfg.is_sliding:
+                attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    q,
+                    kv_cache["k"],
+                    kv_cache["v"],
+                    user_pt,
+                    **start_kw,
+                    compute_kernel_config=self._sdpa_compute,
+                    **self._prefill_chunked_sdpa_kw(ch),
+                )
+            else:
+                # Sliding layers read from the paged window cache (not a local
+                # k_tail), so a cached prefix (prefix caching) is visible: the
+                # window can span back into positions filled by an earlier
+                # prefill. ttnn chunked SDPA now composes with sliding_window_size
+                # (see memory laguna-ttnn-incremental-rebuild; PoC PCC 1.0 vs the
+                # dense sliding op). page_table is full-width with null-padded
+                # out-of-window blocks (vLLM SlidingWindowManager), so absolute
+                # chunk_start_idx=gpos indexing stays correct against the smaller
+                # physical pool.
+                attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    q,
+                    kv_cache["k"],
+                    kv_cache["v"],
+                    user_pt,
+                    **start_kw,
+                    sliding_window_size=win,
+                    compute_kernel_config=getattr(self, "_sdpa_compute_sliding", self._sdpa_compute),
+                    **self._prefill_chunked_sdpa_kw(ch),
+                )
+            attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn = ttnn.reshape(attn, (1, ch, cfg.num_heads * cfg.head_dim))
+            attn = self._gate(attn, ln)
+            o = self._prefill_linear(attn, self.w["wo"], self._ck_o)
+            o = self._reduce(o)
+            h = ttnn.add(residual, o)
+            ln2 = self._rms(h, self.w["post_ln"])
+            if seq_parallel:
+                ln2 = self._sp_gather(ln2)
+            mlp_out = ttnn.reshape(self._mlp(ln2, ch, sharded=False), (1, h.shape[-2], cfg.hidden))
+            outs.append(ttnn.add(h, mlp_out))
+        return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=1)
+
+    # ---- decode: reuse optimized body + all_reduce after WO --------------- #
+    def decode_forward(
+        self,
+        x_1BH,
+        cur_pos,
+        rope_idx,
+        page_table,
+        kv_cache,
+        sequential_kv_write=False,
+        rope_mats=None,
+        next_norm_cores=None,
+        qkv_pre=None,
+        qkv_row0=None,
+        ae_out=None,
+    ):
+        """qkv_pre (verify_rows_forward): this 32-row chunk's fused QKV + gate projection, computed once over every
+        chunk (x_1BH is then unused); with self._stop_pre_wo the attention output (heads joined, interleaved L1
+        [1, 1, B, heads * head_dim]) is returned before the WO projection. qkv_row0 / ae_out: qkv_pre holds every
+        chunk's rows, this chunk's are qkv_row0 .. + 31 (read in place by the prologue and epilogue), and the epilogue
+        writes the chunk's attention output into those rows of ae_out (returned with self._stop_pre_wo)."""
+        cfg = self.cfg
+        B = TILE if qkv_row0 is not None else (x_1BH if qkv_pre is None else qkv_pre).shape[-2]
+        residual = x_1BH
+        fold_g = self.use_dram_sharded and self.meta.get("qkvg_pad")
+        if qkv_pre is None:
+            # with g_proj folded into QKV, ln's only decode consumer is that matmul: hand it off sharded
+            ln = self._rms(
+                x_1BH,
+                self.w["input_ln"],
+                out_cores=_decode_shard_cores(cfg.hidden, self.meta["qkvg_pad"]) if fold_g else None,
+            )
+        g = None
+        if fold_g:
+            # g_proj folded into the QKV matmul at the QKV fidelity (LoFi): HiFi2 doubled this M=32 matmul's
+            # math and made it compute-bound (~41 us vs ~22 us)
+            if qkv_pre is None:
+                qkv = self._dram_mm(ln, None, self.w["wqkvg_ds"], cfg.hidden, self.meta["qkvg_pad"], self._ck_qkv)
+            else:
+                qkv = qkv_pre
+            # head split in L1 (q -> DRAM before SDPA): the slices read the width-sharded qkv directly
+            split_mem = ttnn.L1_MEMORY_CONFIG
+            if not self._slice_sharded and qkv.is_sharded():
+                qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
+            qkv_w = self.meta["qkv_w"]
+            ae1 = (
+                self._ae1
+                and (B == 1 or (1 < B <= 8 and sequential_kv_write and self._ap1_rows) or (B == TILE and self._ae32))
+                and self._reshape_to_shard
+                and qkv.dtype == ttnn.bfloat16
+            )
+            if not ae1:  # attn_epilogue1 reads the gate logits from qkv itself
+                g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads], memory_config=split_mem)
+        else:
+            split_mem = None
+            qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
+            if self.use_dram_sharded:
+                qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
+        fused_kv = self._fused_kv_update and (self._seq_kv_fused or not (sequential_kv_write and B > 1)) and B <= 4 * 8
+        if (
+            self._ap1
+            and fold_g
+            and (
+                (B == 1 and not sequential_kv_write)
+                or (1 < B <= 8 and sequential_kv_write and self._ap1_rows)
+                or (B == TILE and self._ap1_32)  # batch-32 decode and the batched DFlash verify's 32-row chunks
+            )
+            and qkv.dtype == ttnn.bfloat16
+            and cfg.head_dim == 128
+            and cfg.rotary_dim in (64, 128)
+        ):
+            # batch 1 (or the up-to-8-row DFlash verify): head split + q/k RMSNorm + RoPE + the KV-write shards in one
+            # op (attn_prologue1.py) instead of ~16 (11) small ops
+            from .attn_prologue1 import attn_prologue1
+
+            if rope_mats is None:
+                cos = self._rope_decode(rope_idx, B)
+                sin = self._rope_decode(rope_idx, B, sin=True)
+            else:
+                cos, sin = rope_mats
+            q, k_sh, v_sh = attn_prologue1(
+                qkv,
+                cos,
+                sin,
+                self.w["q_norm"],
+                self.w["k_norm"],
+                self._ap1_scaler,
+                cfg.num_heads,
+                cfg.num_kv_heads,
+                cfg.rotary_dim,
+                cfg.eps,
+                self._kv_shard_memcfg(B),
+                self._kv_shard_memcfg(B, y0=4 if fused_kv else 0),
+                rows=B,
+                row0=qkv_row0 or 0,
+            )
+        else:
+            assert qkv_row0 is None, "qkv_row0 needs the attention prologue (attn_prologue1)"
+            if fold_g and B <= TILE and getattr(self, "_decode_heads_op", False):
+                # one fused head split (q/k/v height-sharded, one user per core) instead of 3 slices + 3 tile-relayout
+                # reshapes (the q reshape alone ~20 us at B = 32)
+                q_sh, k_sh0, v_sh0 = ttnn.experimental.nlp_create_qkv_heads_decode(
+                    ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, B, self.meta["qkv_w"]], memory_config=ttnn.L1_MEMORY_CONFIG),
+                    num_heads=cfg.num_heads,
+                    num_kv_heads=cfg.num_kv_heads,
+                    overlap_qk_coregrid=True,
+                    memory_config=self._qkv_heads_decode_memcfg,
+                )
+                q = ttnn.sharded_to_interleaved(q_sh, ttnn.L1_MEMORY_CONFIG)
+                k = ttnn.sharded_to_interleaved(k_sh0, ttnn.L1_MEMORY_CONFIG)
+                v = v_sh0  # _shard_kv moves it onto the KV-write cores
+            else:
+                q, k, v = self._split_qkv(qkv, B, memory_config=split_mem)
+            q = self._per_head_norm_decode(q, self.w["q_norm"])
+            k = self._per_head_norm_decode(k, self.w["k_norm"])
+            # share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
+            # PER LAYER (an L1-sharded cos_sh cannot be hoisted — scratch, clobbered by later layers).
+            if rope_mats is None:  # local fallback (layer PCC tests / direct callers)
+                cos = self._rope_decode(rope_idx, B)
+                sin = self._rope_decode(rope_idx, B, sin=True)
+            else:
+                cos, sin = rope_mats
+            if self._use_fused_rope:  # gated (TT_LAGUNA_FUSED_ROPE=1): fused HF rotate_half — PCC-validate first
+                cos_sh = self._shard_cossin(cos, B, cfg.rotary_dim)
+                sin_sh = self._shard_cossin(sin, B, cfg.rotary_dim)
+                q = self._fused_rope_decode(q, cos_sh, sin_sh, cfg.num_heads, B)
+                # K straight from the RoPE's height shard into the KV write (no s2i to DRAM + reshard) when the
+                # layouts coincide (full-rotary layers)
+                k = self._fused_rope_decode(k, cos_sh, sin_sh, cfg.num_kv_heads, B, self._kv_shard_memcfg(B))
+            else:
+                q = self._apply_rope(q, cos, sin)
+                k = self._apply_rope(k, cos, sin)
+            fused_kv = self._fused_kv_update and (self._seq_kv_fused or not (sequential_kv_write and B > 1)) and B <= 4 * 8
+            k_sh = self._shard_kv(k, B)
+            v_sh = self._shard_kv(v, B, y0=4 if fused_kv else 0)  # B <= 32 -> K on rows 0-3, V on rows 4-7
+        if fused_kv:  # one op writes K and V (instead of two paged_update_cache)
+            # a multi-row verify (rows of one user): share_cache merges the rows of each cache tile on one core per K / V
+            ttnn.experimental.paged_fused_update_cache(
+                kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table,
+                share_cache=bool(sequential_kv_write and B > 1),
+            )
+        elif sequential_kv_write and B > 1:
+            # Spec-decode VERIFY: the B candidate rows share ONE user's blocks; with BLOCK_SIZE==TILE==32
+            # consecutive positions land in the same tile, so a batched paged_update_cache RMW-races and
+            # corrupts KV. Serialize the tiny per-row writes (matmuls + SDPA above/below still run batched,
+            # so the verify stays fast). Mirrors gemma4/tt/attention/decode.py:147.
+            if self._seq_kv_chain:
+                # one op per K / V: share_cache chains the row cores (core i starts after core i - 1 finished its
+                # tile read-modify-write), the same serial order as the per-row writes without B x (3 slices +
+                # reshard + update) ops per layer (~4 ms of a 6-row DFlash verify)
+                ttnn.experimental.paged_update_cache(
+                    kv_cache["k"], k_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
+                )
+                ttnn.experimental.paged_update_cache(
+                    kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
+                )
+            else:
+                self._seq_kv_write(kv_cache["k"], k_sh, cur_pos, page_table, B)
+                self._seq_kv_write(kv_cache["v"], v_sh, cur_pos, page_table, B)
+        else:
+            ttnn.experimental.paged_update_cache(kv_cache["k"], k_sh, update_idxs_tensor=cur_pos, page_table=page_table)
+            ttnn.experimental.paged_update_cache(kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table)
+        sdpa_kwargs = {
+            "cur_pos_tensor": cur_pos,
+            "page_table_tensor": page_table,
+            "scale": cfg.scaling,
+            "compute_kernel_config": self._sdpa_compute,
+        }
+        if cfg.is_sliding:
+            sdpa_kwargs["sliding_window_size"] = cfg.sliding_window
+        if sequential_kv_write and self._decode_use_sdpa_pc:
+            # Spec-decode verify. k_chunk via TT_LAGUNA_VERIFY_K (default 64). D=1 uses the same
+            # accurate TTNN fallback as normal decode; the explicit parallel program has the same
+            # partial-context reduction hazard in verify mode.
+            # ACCURACY FIX (2026-08-06): this is the LIVE served decode_forward (overrides OptimizedDecoder's);
+            # it previously ran _sdpa_pc (k128) — the SAME config proven LOSSY on normal decode (teacher top1
+            # 0.95→0.58). Committed spec tokens ARE this verify's argmax, so k128 made spec-decode inherit the
+            # lossy trajectory. _sdpa_pc_verify (TT_LAGUNA_VERIFY_K, default 64) aligns it with the accurate
+            # normal-decode SDPA. The disproven "verify REQUIRES k128" claim is dropped (k64 verify runs
+            # correctly on device — standalone driver + served HumanEval). See tt/optimized_decoder.py.
+            sdpa_kwargs["program_config"] = self._sdpa_pc_verify
+            sdpa_kwargs.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
+        elif self._decode_use_sdpa_pc:
+            # Stage 2 fix: accuracy-safe fast NORMAL-decode config — k_chunk=64 (not 128) keeps the
+            # max_cores=16 parallel-KV-scan long-context speed but drops the k128 last-partial-chunk masking
+            # that was LOSSY (teacher top1 0.95→0.58, layer PCC -0.016 at low non-aligned cur_pos).
+            # See tt/optimized_decoder.py (decode SDPA program config).
+            sdpa_kwargs["program_config"] = self._sdpa_pc_decode
+            sdpa_kwargs.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
+        if q.memory_config().buffer_type != ttnn.BufferType.DRAM:  # paged decode SDPA needs Q in DRAM
+            q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q, kv_cache["k"], kv_cache["v"], **sdpa_kwargs
+        )
+        q_w = self.meta["q_w"]
+        if fold_g and ae1:
+            # gate slice + softplus(g) * attn + flatten into WO's width-sharded input in one op
+            from .attn_epilogue1 import attn_epilogue1
+
+            if ae_out is not None:  # a batched verify chunk: its rows of the shared WO input
+                attn_epilogue1(attn, qkv, self.meta["qkv_w"], cfg.num_heads, None, rows=B, row_in=qkv_row0,
+                               out=ae_out, row_out=qkv_row0)  # fmt: skip
+                assert getattr(self, "_stop_pre_wo", False)
+                return ae_out
+            wo_in = _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden))
+            attn = attn_epilogue1(attn, qkv, self.meta["qkv_w"], cfg.num_heads, wo_in, rows=B)
+            o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
+            return self._decode_tail(o, residual, B, next_norm_cores)
+        # gate in the SDPA's native [1,B,nh,hd] head layout, then flatten ONCE (the generic _gate flattens,
+        # re-splits into heads -- an ~11 us 4-core reshape -- and flattens again).
+        if g is None:
+            g = ttnn.linear(ln, self.w["wg"], compute_kernel_config=self._ck_gate)
+        # softplus is elementwise, so it commutes with the reshape and runs as the mul's rhs activation (one op)
+        g = ttnn.reshape(g, (1, B, cfg.num_heads, 1))
+        softplus = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)  # ttnn.softplus defaults
+        if B == TILE and getattr(self, "_decode_heads_op", False):
+            # fused head concat: [1, 32, heads, hd] one user per core -> [1, 1, 32, heads * hd] width-sharded on one
+            # core per head, then a small reshard onto WO's input grid (replaces an ~20 us tile-relayout reshape)
+            attn = ttnn.mul(attn, g, input_tensor_b_activations=[softplus], memory_config=ttnn.L1_MEMORY_CONFIG)
+            attn = ttnn.to_memory_config(attn, self._qkv_heads_decode_memcfg)
+            attn = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=cfg.num_heads)
+            if getattr(self, "_stop_pre_wo", False):  # verify_rows_forward: WO runs once over every chunk
+                return ttnn.sharded_to_interleaved(attn, ttnn.L1_MEMORY_CONFIG)
+            if self.use_dram_sharded and self._reshape_to_shard:
+                attn = ttnn.to_memory_config(attn, _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden)))
+            o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
+            return self._decode_tail(o, residual, B, next_norm_cores)
+        attn = ttnn.mul(attn, g, input_tensor_b_activations=[softplus])
+        # the flatten writes the WO DRAM-sharded matmul's width-sharded input layout directly (no i2s in _dram_mm)
+        wo_in = (
+            _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden))
+            if self.use_dram_sharded and B <= TILE and self._reshape_to_shard
+            else None
+        )
+        attn = ttnn.reshape(attn, (1, 1, B, cfg.num_heads * cfg.head_dim), memory_config=wo_in)
+        o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
+        return self._decode_tail(o, residual, B, next_norm_cores)
+
+    def verify_rows_forward(self, x, chunks, kv_cache, rope_all=None):
+        """Batched DFlash verify: T (a multiple of 32) decode rows of many users in one step.
+
+        Row r is one token of some user; a user's rows are consecutive positions. The weight-reading projections run
+        once over all T rows (input norm, fused QKV + gate matmul, WO matmul, all-reduce; the MoE half: post-attention
+        norm, routed and shared experts reading each expert's weights once over T / 32 token tiles, all-reduce). The
+        per-row attention runs the tuned batch-32 decode block per 32-row chunk (decode_forward with qkv_pre, up to
+        the joined heads): head split, q/k norms, RoPE, share_cache KV writes merging rows that land in one cache
+        tile, paged SDPA, gate. x: [1, 1, T, H] bf16 TILE; chunks: one (cur_pos int32 [32], (cos, sin)
+        [1, 32, 1, rotary_dim], page_table int32 [32, blocks]) per chunk (see LagunaModel.verify_layers_batched);
+        rope_all: (cos, sin) [1, T, 1, rotary_dim] of every row (one prologue op over all rows)."""
+        cfg = self.cfg
+        T = int(x.shape[-2])
+        n = T // TILE
+        if T % TILE or n != len(chunks):
+            raise ValueError(f"batched verify takes {len(chunks)} 32-row chunks, got {T} rows")
+        if not (self.use_dram_sharded and self.meta.get("qkvg_pad") and "wqkvg_ds" in self.w):
+            raise RuntimeError("batched verify needs the fused QKV + gate weight (fold_g)")
+        if "dflash_wqkvg" not in self.w:  # an interleaved copy of the fused weight (made at the first, eager, call)
+            self.w["dflash_wqkvg"] = ttnn.to_memory_config(self.w["wqkvg_ds"], ttnn.DRAM_MEMORY_CONFIG)
+        ln = self._rms(x, self.w["input_ln"])
+        if ln.is_sharded():
+            ln = ttnn.sharded_to_interleaved(ln, ttnn.L1_MEMORY_CONFIG)
+        qkvg = self._prefill_linear(ln, self.w["dflash_wqkvg"], self._ck_qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pad = int(qkvg.shape[-1])
+        parts = []
+        # every chunk's prologue / epilogue read their rows of qkvg in place and the epilogues write one shared WO
+        # input (no per-chunk slices, gate ops, head joins or concat)
+        shared = self._ap1 and self._ap1_32 and self._ae1 and self._ae32 and self._reshape_to_shard
+        shared = shared and qkvg.dtype == ttnn.bfloat16 and cfg.head_dim == 128 and cfg.rotary_dim in (64, 128)
+        ae_out = None
+        if shared:
+            ae_out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, self.meta["q_w"]]), ttnn.bfloat16,
+                                                    ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        multi = shared and n > 1 and rope_all is not None and self._ap1_multi
+        multi = multi and self._fused_kv_update and self._seq_kv_fused
+        self._stop_pre_wo = True
+        try:
+            if multi:
+                from .attn_prologue1 import attn_prologue1
+
+                qs, ks, vs = attn_prologue1(
+                    qkvg, rope_all[0], rope_all[1], self.w["q_norm"], self.w["k_norm"], self._ap1_scaler,
+                    cfg.num_heads, cfg.num_kv_heads, cfg.rotary_dim, cfg.eps, self._kv_shard_memcfg(TILE),
+                    self._kv_shard_memcfg(TILE, y0=4), rows=T,
+                )  # fmt: skip
+                attns = [self._verify_chunk_attention(qs[c], ks[c], vs[c], cur_c, pt_c, kv_cache)
+                         for c, (cur_c, _rope_c, pt_c) in enumerate(chunks)]  # fmt: skip
+                # one epilogue over every row (each chunk's SDPA output for its rows) into the shared WO input
+                from .attn_epilogue1 import attn_epilogue1
+
+                attn_epilogue1(attns, qkvg, self.meta["qkv_w"], cfg.num_heads, None, rows=T, out=ae_out)
+                chunks = []
+            for c, (cur_c, rope_c, pt_c) in enumerate(chunks):
+                if shared:
+                    self.decode_forward(None, cur_c, None, pt_c, kv_cache, sequential_kv_write=True, rope_mats=rope_c,
+                                        qkv_pre=qkvg, qkv_row0=c * TILE, ae_out=ae_out)  # fmt: skip
+                    continue
+                q_c = ttnn.slice(qkvg, [0, 0, c * TILE, 0], [1, 1, (c + 1) * TILE, pad],
+                                 memory_config=ttnn.L1_MEMORY_CONFIG) if n > 1 else qkvg  # fmt: skip
+                parts.append(self.decode_forward(None, cur_c, None, pt_c, kv_cache, sequential_kv_write=True,
+                                                 rope_mats=rope_c, qkv_pre=q_c))  # fmt: skip
+        finally:
+            self._stop_pre_wo = False
+        attn = ae_out if shared else (ttnn.concat(parts, dim=2) if n > 1 else parts[0])
+        o = self._reduce(self._prefill_linear(attn, self.w["wo"], self._ck_o, memory_config=ttnn.L1_MEMORY_CONFIG))
+        h = ttnn.add(x, o)
+        ln2 = self._rms(h, self.w["post_ln"])
+        if ln2.is_sharded():
+            ln2 = ttnn.sharded_to_interleaved(ln2, ttnn.L1_MEMORY_CONFIG)
+        return ttnn.add(h, self._mlp(ln2, T, sharded=False))
+
+    def _verify_chunk_attention(self, q, k_sh, v_sh, cur_pos, page_table, kv_cache):
+        """One 32-row chunk of the batched verify after the shared prologue (verify_rows_forward), as decode_forward
+        runs it for a chunk: the fused K/V cache write with share_cache (rows of one user landing in one cache tile
+        merged on one core), then the paged SDPA (verify program config). Returns the SDPA output."""
+        cfg = self.cfg
+        ttnn.experimental.paged_fused_update_cache(
+            kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
+        )
+        kw = {"cur_pos_tensor": cur_pos, "page_table_tensor": page_table, "scale": cfg.scaling,
+              "compute_kernel_config": self._sdpa_compute}  # fmt: skip
+        if cfg.is_sliding:
+            kw["sliding_window_size"] = cfg.sliding_window
+        if self._decode_use_sdpa_pc:
+            kw["program_config"] = self._sdpa_pc_verify
+            kw.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
+        return ttnn.transformer.paged_scaled_dot_product_attention_decode(q, kv_cache["k"], kv_cache["v"], **kw)
+
+    def _decode_tail(self, o, residual, B, next_norm_cores):
+        """WO output (row-parallel partial) -> all-reduce, residual add, post norm, MLP, residual add."""
+        cfg = self.cfg
+        res_cores = _decode_shard_cores(cfg.hidden, cfg.hidden) if self._sharded_residual and B <= TILE else None
+        res_mem = _width_sharded_l1(TILE, cfg.hidden, res_cores) if res_cores else None
+        rows = self._rows_ok(B, o, residual)
+        if rows:
+            h = self._reduce_rows_add(o, residual, res_mem, B)
+        else:
+            if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
+                o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
+            o = self._reduce(o)  # row-parallel partial -> replicated
+            # the post-attention residual add writes straight into the width-sharded layout the post-attention
+            # norm reads, so its interleaved->sharded is a no-op
+            h = ttnn.add(residual, o, memory_config=res_mem)
+        ln2 = self._rms(h, self.w["post_ln"], cores=res_cores)
+        # the layer output goes straight into the NEXT layer's input-norm layout when that is h's own shard
+        # spec (a sharded add whose output spec differs from its sharded input's gave PCC 0)
+        out_mem = ttnn.DRAM_MEMORY_CONFIG if res_mem else None
+        if res_mem is not None and next_norm_cores == res_cores:
+            out_mem = res_mem
+        if rows:
+            self._defer_reduce = True  # the MLP returns its row-parallel partial
+            try:
+                partial = self._mlp(ln2, B, sharded=True)
+            finally:
+                self._defer_reduce = False
+            if self._rows_ok(B, partial, h):
+                return self._reduce_rows_add(partial, h, out_mem, B)
+            return ttnn.add(h, self._reduce(partial), memory_config=out_mem)
+        mlp_out = self._mlp(ln2, B, sharded=True)
+        return ttnn.add(h, mlp_out, memory_config=out_mem)
+
+    def _per_head_norm_decode(self, x, weight):
+        """Per-head RMSNorm of decode q/k [1, B, heads, head_dim]. The norm reduces each row over head_dim, so it
+        runs on the 4D tile tensor as is; flattening to [1, 1, B * heads, head_dim] (the shared helper) is a real
+        data move when heads is not a multiple of 32 (~6-10 us per reshape at B = 32, two per tensor)."""
+        if not getattr(self, "_head_norm_4d", False):
+            return self._per_head_norm(x, weight)
+        return ttnn.rms_norm(x, weight=weight, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)
+
+    def input_norm_cores(self):
+        """Width-shard grid the decode input norm uses (handed off to the fused QKV+gate matmul)."""
+        if self.use_dram_sharded and self.meta.get("qkvg_pad"):
+            return _decode_shard_cores(self.cfg.hidden, self.meta["qkvg_pad"])
+        return None

@@ -10,6 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -52,8 +53,10 @@ const DFBSpecName TF_UNTILIZED_CACHE{"untilized_cache"};
 const DFBSpecName TF_UNTILIZED_CACHE2{"untilized_cache2"};
 const DFBSpecName TF_UNTILIZED_INPUT{"untilized_input"};
 const DFBSpecName TF_OUT_TILES{"out_tiles"};
+const DFBSpecName TF_GROUP_META{"group_meta"};
 
 const SemaphoreSpecName TF_IN0_SEQUENTIAL{"in0_sequential_mode"};
+const SemaphoreSpecName TF_GROUP_DONE{"group_done"};
 
 const TensorParamName TF_CACHE1{"cache1"};
 const TensorParamName TF_CACHE2{"cache2"};
@@ -229,6 +232,17 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
     uint32_t num_output_tiles = B * Wt;
 
+    // Group mode (share_cache with an index tensor and a DRAM page table; see paged_update_cache): within the K
+    // cores and within the V cores, the rows that land in the same cache tile are merged by the lowest such row
+    // ("leader"), which reads and writes that tile once; the other rows ("followers") skip the cache read and
+    // write. The chain semaphore becomes the leader's "rows ready" count; group_done releases each follower.
+    const bool group_mode = operation_attributes.share_cache && use_index_tensor && is_paged_cache &&
+                            page_table_is_dram && B <= TILE_HEIGHT && device->arch() != tt::ARCH::QUASAR;
+    // group_meta entry: [is_leader, follower count, leader row, (follower row, its row in the tile)...], then a
+    // 64-byte page-table chunk per row (the chunk holding the row's page-table entry).
+    const uint32_t group_meta_bytes = static_cast<uint32_t>(tt::round_up((3 + 2 * B) * sizeof(uint32_t), 64));
+    const uint32_t group_entry_bytes = group_meta_bytes + 64 * B;
+
     // ---------------- Dataflow buffers ----------------
 
     // Each input buffer is built on its own tensor's resident shard, and a buffer lives wherever its
@@ -330,6 +344,15 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             optional_resource_defines.emplace("PAGE_TABLE_IS_DRAM", "1");
         }
     }
+    if (group_mode) {
+        optional_resource_defines.emplace("GROUP_MODE", "1");
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = TF_GROUP_META,
+            .entry_size = group_entry_bytes,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        });
+    }
 
     // ---------------- Kernels, one triple per input shard grid ----------------
 
@@ -425,6 +448,28 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                 });
             }
         }
+        Group<SemaphoreBinding> writer_semaphore_bindings = {
+            SemaphoreBinding{
+                .semaphore_spec_name = TF_IN0_SEQUENTIAL,
+                .accessor_name = "in0_seq",
+            },
+        };
+        if (group_mode) {
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = TF_GROUP_META,
+                .accessor_name = "group_meta",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            writer_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = TF_GROUP_META,
+                .accessor_name = "group_meta",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+            writer_semaphore_bindings.push_back(SemaphoreBinding{
+                .semaphore_spec_name = TF_GROUP_DONE,
+                .accessor_name = "group_done",
+            });
+        }
 
         kernels.push_back(KernelSpec{
             .unique_id = reader_id,
@@ -454,6 +499,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                     {"page_table_stick_size", page_table_stick_size},
                     {"St", St},
                     {"batch_size", B},
+                    {"group_meta_bytes", group_meta_bytes},
                 },
             .runtime_arg_schema =
                 {.runtime_arg_names = {"has_work", "cache_start_id", "my_batch_idx", "wait_to_start"}},
@@ -466,13 +512,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                       "writer_paged_fused_update_cache_interleaved_start_id.cpp",
             .compiler_options = {.defines = optional_resource_defines},
             .dfb_bindings = std::move(writer_dfb_bindings),
-            .semaphore_bindings =
-                {
-                    SemaphoreBinding{
-                        .semaphore_spec_name = TF_IN0_SEQUENTIAL,
-                        .accessor_name = "in0_seq",
-                    },
-                },
+            .semaphore_bindings = std::move(writer_semaphore_bindings),
             .tensor_bindings =
                 {
                     TensorBinding{
@@ -503,6 +543,8 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                       "send_core_x",
                       "send_core_y"}},
             .hw_config = create_writer_datamovement_config(),
+            // group mode: every row's core of this kernel's set (NOC x, y pairs, in row order)
+            .advanced_options = {.num_common_runtime_varargs = group_mode ? 2 * B : 0u},
         });
 
         // Legacy built a ComputeConfigDescriptor that set only fp32_dest_acc_en, leaving every other
@@ -607,6 +649,10 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                     .unique_id = TF_IN0_SEQUENTIAL,
                     .target_nodes = all_cores,
                 },
+                SemaphoreSpec{
+                    .unique_id = TF_GROUP_DONE,
+                    .target_nodes = all_cores,
+                },
             },
         .tensor_parameters = std::move(tensor_parameters),
         .work_units =
@@ -647,8 +693,8 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
         const uint32_t tile_update_offset_B = use_index_tensor ? 0u : offsets.at(i).tile_update_offset_B;
 
         // Calculate synchronization parameters
-        bool wait_to_start = operation_attributes.share_cache and (i != 0);
-        bool send_signal = operation_attributes.share_cache and (i != cores1.size() - 1);
+        bool wait_to_start = operation_attributes.share_cache and (i != 0) and !group_mode;
+        bool send_signal = operation_attributes.share_cache and (i != cores1.size() - 1) and !group_mode;
         uint32_t send_core1_x = 0, send_core1_y = 0;
         uint32_t send_core2_x = 0, send_core2_y = 0;
 
@@ -701,6 +747,23 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
 
         add_index_args(reader1_run_args, writer1_run_args, compute1_run_args, core1, send_core1_x, send_core1_y);
         add_index_args(reader2_run_args, writer2_run_args, compute2_run_args, core2, send_core2_x, send_core2_y);
+    }
+
+    if (group_mode) {
+        TT_FATAL(
+            cores1.size() == B && cores2.size() == B,
+            "paged_fused_update_cache group mode needs one core per row ({} rows, {} and {} cores)",
+            B,
+            cores1.size(),
+            cores2.size());
+        for (uint32_t i = 0; i < cores1.size(); ++i) {
+            const auto physical1 = device->worker_core_from_logical_core(cores1.at(i));
+            const auto physical2 = device->worker_core_from_logical_core(cores2.at(i));
+            writer1_run_args.advanced_options.common_runtime_varargs.push_back(static_cast<uint32_t>(physical1.x));
+            writer1_run_args.advanced_options.common_runtime_varargs.push_back(static_cast<uint32_t>(physical1.y));
+            writer2_run_args.advanced_options.common_runtime_varargs.push_back(static_cast<uint32_t>(physical2.x));
+            writer2_run_args.advanced_options.common_runtime_varargs.push_back(static_cast<uint32_t>(physical2.y));
+        }
     }
 
     ProgramRunArgs run_args;

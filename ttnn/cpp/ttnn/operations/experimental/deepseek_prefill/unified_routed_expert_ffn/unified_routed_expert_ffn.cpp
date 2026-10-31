@@ -111,4 +111,61 @@ ttnn::Tensor unified_routed_expert_moe(
         max_active_tokens);
 }
 
+ttnn::Tensor unified_routed_expert_moe_stacked(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& gate_up_projs,
+    const ttnn::Tensor& down_projs,
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t l1_end) {
+    // Laguna's stacked expert weights: gate_up [1, E, K, 2N] (gate | up per row) and down [1, E, N, K]. Each list
+    // entry is the same tensor; the program factory turns expert e into its slice's base address and the kernels read
+    // gate/up with row stride 2N (STACKED_GATE_UP).
+    TT_FATAL(
+        gate_up_projs.padded_shape().rank() == 4 && down_projs.padded_shape().rank() == 4,
+        "stacked gate_up/down must be rank 4 (got {} and {})",
+        gate_up_projs.padded_shape(),
+        down_projs.padded_shape());
+    const uint32_t experts_per_chip = static_cast<uint32_t>(gate_up_projs.padded_shape()[-3]);
+    TT_FATAL(experts_per_chip > 0, "Need at least one stacked expert per chip");
+    const std::vector<ttnn::Tensor> gate_up(experts_per_chip, gate_up_projs);
+    const std::vector<ttnn::Tensor> down(experts_per_chip, down_projs);
+    const uint32_t m_tiles = (max_dispatched_tokens_per_expert + 31) / 32;
+    const bool x_is_row_major = dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR;
+    const ttnn::Tensor output =
+        x_is_row_major ? ttnn::empty(
+                             dispatched_buffer.logical_shape(),
+                             tt::tt_metal::DataType::BFLOAT8_B,
+                             tt::tt_metal::Layout::TILE,
+                             dispatched_buffer.device(),
+                             tt::tt_metal::MemoryConfig{
+                                 tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM})
+                       : dispatched_buffer;
+    return ttnn::prim::unified_routed_expert_moe(
+        dispatched_buffer,
+        gate_up,
+        gate_up,
+        down,
+        expert_token_counts,
+        global_expert_idx_table,
+        expert_region_offsets,
+        output,
+        m_tiles,
+        experts_per_chip,
+        x_is_row_major,
+        compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
+                                          : std::nullopt,
+        RoutedExpertActivation::Silu,
+        {},
+        {},
+        {},
+        0,
+        std::numeric_limits<uint32_t>::max(),
+        /*stacked_packed_weights=*/true,
+        l1_end);
+}
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

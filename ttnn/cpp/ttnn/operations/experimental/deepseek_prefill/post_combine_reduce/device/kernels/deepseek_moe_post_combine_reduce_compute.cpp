@@ -23,6 +23,11 @@ constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
 // is true; it carries zero from the program factory otherwise.
 constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(2);
 constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(3) != 0;
+// residual: after the tilize, out_tiles residual tiles (cb_residual) are added to the reduced tiles -> cb_final
+constexpr bool has_residual = get_compile_time_arg_val(4) != 0;
+constexpr uint32_t out_tiles = get_compile_time_arg_val(5);
+constexpr uint32_t cb_residual_id = tt::CBIndex::c_5;
+constexpr uint32_t cb_final_id = tt::CBIndex::c_18;
 
 // Like read_tile_value but reads a uint16 element (zero-extended to uint32_t).
 // Indices arrive from DRAM as uint16 and stay uint16 in the CB; this avoids
@@ -155,5 +160,25 @@ void kernel_main() {
         cb_rowmajor.push_back(total_token_tiles);
 
         compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor_id, cb_output_id>(1);
+
+        if constexpr (has_residual) {
+            CircularBuffer cb_residual(cb_residual_id);
+            CircularBuffer cb_final(cb_final_id);
+            add_init(cb_output_id, cb_residual_id);
+            cb_output.wait_front(total_token_tiles);
+            cb_residual.wait_front(out_tiles);
+            for (uint32_t j = 0; j < out_tiles; ++j) {
+                tile_regs_acquire();
+                add_tiles(cb_output_id, cb_residual_id, j, j, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                cb_final.reserve_back(1);
+                pack_tile(0, cb_final_id);
+                cb_final.push_back(1);
+                tile_regs_release();
+            }
+            cb_output.pop_front(total_token_tiles);
+            cb_residual.pop_front(out_tiles);
+        }
     }
 }

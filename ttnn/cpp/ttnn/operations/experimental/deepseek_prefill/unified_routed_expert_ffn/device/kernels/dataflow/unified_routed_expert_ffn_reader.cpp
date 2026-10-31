@@ -114,6 +114,21 @@ void kernel_main() {
     constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(13);
     constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(14);
     constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(15);
+
+#ifdef STACKED_GATE_UP
+    // Laguna stacked gate_up [1, E, K, 2N]: each K row holds expert e's gate (columns 0..N-1) then its up (N..2N-1).
+    // Every expert's common arg is the stacked tensor's address; expert e's slice starts e * *_expert_bytes past it
+    // (the program factory's stacked_expert_bytes).
+    constexpr uint32_t gu_row_stride = 2 * N_gate_tiles_full;
+    constexpr uint32_t up_col_offset = N_gate_tiles_full;
+    constexpr uint32_t gu_expert_bytes = STACKED_GU_EXPERT_BYTES;
+    constexpr uint32_t d_expert_bytes = STACKED_D_EXPERT_BYTES;
+#else
+    constexpr uint32_t gu_row_stride = N_gate_tiles_full;
+    constexpr uint32_t up_col_offset = 0;
+    constexpr uint32_t gu_expert_bytes = 0;
+    constexpr uint32_t d_expert_bytes = 0;
+#endif
     constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(16);
     constexpr uint32_t M_tiles_full = get_compile_time_arg_val(17);
     // num_chunks_max: compile-time upper bound on the runtime chunk count (clamp).
@@ -401,15 +416,19 @@ void kernel_main() {
     // Per expert we resolve its global id (idx_table[e]), token count
     // (counts[global_id]), region offset (start[global_id]) and per-expert
     // weight base addresses, then drive the same chunked matmul pipeline.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t local_expert_id = RE_EXPERT_FIRST; local_expert_id < experts_per_chip;
+         local_expert_id += RE_EXPERT_STEP) {
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
         const uint32_t gate_addr_e =
-            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 0 * experts_per_chip + local_expert_id);
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 0 * experts_per_chip + local_expert_id) +
+            local_expert_id * gu_expert_bytes;
         const uint32_t up_addr_e =
-            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 1 * experts_per_chip + local_expert_id);
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 1 * experts_per_chip + local_expert_id) +
+            local_expert_id * gu_expert_bytes;
         const uint32_t down_addr_e =
-            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 2 * experts_per_chip + local_expert_id);
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 2 * experts_per_chip + local_expert_id) +
+            local_expert_id * d_expert_bytes;
         const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
         const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
@@ -737,7 +756,7 @@ void kernel_main() {
                         noc_read,
                         gate_acc,
                         kb * in0_block_w_gu + k,
-                        N_gate_tiles_full,
+                        gu_row_stride,
                         gate_col0,
                         gate_col_end,
                         l1_w_gate,
@@ -760,9 +779,9 @@ void kernel_main() {
                             noc_read,
                             up_acc,
                             kb * in0_block_w_gu + k,
-                            N_gate_tiles_full,
-                            gate_col0,
-                            gate_col_end,
+                            gu_row_stride,
+                            up_col_offset + gate_col0,
+                            up_col_offset + gate_col_end,
                             l1_w_up,
                             up_tile_bytes);
                         l1_w_up += per_core_N_gu * up_tile_bytes;

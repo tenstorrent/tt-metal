@@ -52,6 +52,8 @@ void kernel_main() {
 
     constexpr auto St = get_arg(args::St);
     constexpr auto batch_size = get_arg(args::batch_size);
+    // group mode only (see below): the byte size of the role words that open the group_meta entry
+    constexpr auto group_meta_bytes = get_arg(args::group_meta_bytes);
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -84,9 +86,10 @@ void kernel_main() {
     bool skip_update = false;
 
 #ifdef USE_INDEX_TENSOR
+    uint32_t index_wr_ptr = 0;
     {
         dfb_index.reserve_back(1);
-        uint32_t index_wr_ptr = dfb_index.get_write_ptr();
+        index_wr_ptr = dfb_index.get_write_ptr();
 #ifdef INDEX_IS_DRAM
         {
             const auto addrg = TensorAccessor(tensor::index);
@@ -152,6 +155,77 @@ void kernel_main() {
                 cache_id = cache_start_id;
             }
 #endif
+        }
+    }
+#endif
+
+#ifdef GROUP_MODE
+#ifdef ARCH_QUASAR
+#error "paged_fused_update_cache group mode is Wormhole / Blackhole only"
+#endif
+    // Group mode (share_cache + index tensor + DRAM page table; see the paged_update_cache reader): within this
+    // core's set (K or V), the rows that land in the same cache tile are merged by the lowest such row ("leader"),
+    // which reads and writes that tile once; the other rows ("followers") skip the cache read and write. Roles go
+    // to the writer through group_meta: [is_leader, follower count, leader row, (follower row, its row in the
+    // tile)...]; the rest of the entry holds, per row, the 64-byte page-table chunk with that row's entry.
+    {
+        DataflowBuffer dfb_group_meta(dfb::group_meta);
+        dfb_group_meta.reserve_back(1);
+        const uint32_t meta_addr = dfb_group_meta.get_write_ptr();
+        const uint32_t chunks_addr = meta_addr + group_meta_bytes;
+        volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_addr);
+        volatile tt_l1_ptr uint32_t* index_all = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_wr_ptr);
+        const auto page_table_gen = TensorAccessor(tensor::page_table);
+
+        uint32_t tile_of[batch_size];
+        for (uint32_t b = 0; b < batch_size; ++b) {
+            const uint32_t idx = index_all[b];
+            if (idx == (uint32_t)-1) {
+                continue;
+            }
+            const uint32_t entry_offset = (idx / block_size) * sizeof(uint32_t);
+            noc.async_read(
+                page_table_gen,
+                CoreLocalMem<uint32_t>(chunks_addr + b * 64),
+                64,
+                {.page_id = b, .offset_bytes = entry_offset & ~63u},
+                {});
+        }
+        noc.async_read_barrier();
+        for (uint32_t b = 0; b < batch_size; ++b) {
+            const uint32_t idx = index_all[b];
+            if (idx == (uint32_t)-1) {
+                tile_of[b] = (uint32_t)-1;
+                continue;
+            }
+            const uint32_t entry_addr = chunks_addr + b * 64 + (((idx / block_size) * sizeof(uint32_t)) & 63u);
+            const uint32_t physical_block_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(entry_addr)[0];
+            tile_of[b] = physical_block_id * num_heads * block_size_t * Wt + ((idx % block_size) / TILE_HEIGHT) * Wt;
+        }
+
+        const uint32_t mine = tile_of[my_batch_idx];
+        uint32_t leader = (uint32_t)-1;
+        uint32_t followers = 0;
+        if (mine != (uint32_t)-1) {
+            for (uint32_t b = 0; b < batch_size; ++b) {
+                if (tile_of[b] != mine) {
+                    continue;
+                }
+                if (leader == (uint32_t)-1) {
+                    leader = b;
+                } else if (leader == my_batch_idx) {
+                    meta[3 + 2 * followers] = b;
+                    meta[4 + 2 * followers] = index_all[b] % TILE_HEIGHT;
+                    ++followers;
+                }
+            }
+        }
+        meta[0] = (leader == my_batch_idx) ? 1 : 0;
+        meta[1] = followers;
+        meta[2] = leader;
+        dfb_group_meta.push_back(1);
+        if (leader != my_batch_idx) {
+            skip_update = true;  // a follower (or a skipped row) reads no cache tile
         }
     }
 #endif

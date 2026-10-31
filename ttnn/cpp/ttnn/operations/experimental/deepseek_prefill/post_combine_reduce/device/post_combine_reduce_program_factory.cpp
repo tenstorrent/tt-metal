@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -34,6 +35,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     const bool use_dispatch_table_skip = indices_opt.has_value();
     auto* device = combine_output.device();
 
+    // [..., seq_len, num_experts_per_tok, emb_dim]: combine_output's shape, or with combine_row_index the index shape
+    // followed by the [rows, emb_dim] table's emb_dim.
     const ttnn::Shape combine_shape = logical_combine_shape(tensor_args);
     const auto& row_index_opt = tensor_args.combine_row_index;
     const bool row_indexed = row_index_opt.has_value();
@@ -54,11 +57,6 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     // Number of tile-sized CB pages needed to hold one emb_dim row.
     // ceil(emb_dim / 1024) supports non-1024-aligned dims (e.g. GPT-OSS 2880).
-    const uint32_t emb_dim_cb_tiles = (emb_dim + TILE_SIZE - 1) / TILE_SIZE;
-    // Number of real 32x32 output tiles per 32-token block.
-    const uint32_t emb_dim_out_tiles = emb_dim / TILE_WIDTH;
-    // Raw byte count for NoC reads in the reader (handles non-aligned emb_dim).
-    const uint32_t emb_dim_bytes = emb_dim * BF16_BYTES;
 
     TT_FATAL(
         emb_dim % TILE_WIDTH == 0,
@@ -67,9 +65,9 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         TILE_WIDTH,
         emb_dim % TILE_WIDTH);
     TT_FATAL(
-        emb_dim_cb_tiles <= 8,
-        "Embedding dimension tiles {} must fit in 8 DST registers for batching",
-        emb_dim_cb_tiles);
+        (emb_dim + TILE_SIZE - 1) / TILE_SIZE <= 8,
+        "Embedding dimension {} must fit in 8 DST registers (1024 elements each) for batching",
+        emb_dim);
 
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
     TT_FATAL(num_tokens > 0, "post_combine_reduce: num_tokens must be > 0, got {}", num_tokens);
@@ -85,9 +83,26 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     const uint32_t total_chunks = num_tokens / TOKENS_PER_CHUNK;
-    const uint32_t num_cores = std::min(total_chunks, num_cores_total);
-    const uint32_t base_chunks_per_core = total_chunks / num_cores;
-    const uint32_t extra_chunks = total_chunks % num_cores;
+    // Few 32-token chunks (short prefill) leave most cores idle: split the embedding columns into col_groups
+    // groups of 32-column tiles, one (chunk, column group) unit per core. col_groups = the largest divisor of the
+    // row's tile count whose units still fit the grid (1 when the chunks alone fill it).
+    const uint32_t row_tiles = emb_dim / TILE_WIDTH;
+    uint32_t col_groups = 1;
+    for (uint32_t g = 2; g <= row_tiles; ++g) {
+        if (row_tiles % g == 0 && total_chunks * g <= num_cores_total) {
+            col_groups = g;
+        }
+    }
+    const uint32_t col_width = emb_dim / col_groups;  // elements per core's column group
+    const uint32_t total_units = total_chunks * col_groups;
+    const uint32_t num_cores = std::min(total_units, num_cores_total);
+    const uint32_t base_chunks_per_core = total_chunks / std::min(total_chunks, num_cores_total);
+    const uint32_t extra_chunks = total_chunks % std::min(total_chunks, num_cores_total);
+
+    // Per-core column group: CB pages holding one col_width row, real output tiles per 32-token block, NoC bytes.
+    const uint32_t emb_dim_cb_tiles = (col_width + TILE_SIZE - 1) / TILE_SIZE;
+    const uint32_t emb_dim_out_tiles = col_width / TILE_WIDTH;
+    const uint32_t emb_dim_bytes = col_width * BF16_BYTES;
 
     constexpr bool row_major = true;
 
@@ -101,12 +116,13 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
     // Per-token weights ([..., num_experts]): one page holds a token's num_experts weights; the writer reads a
-    // 32-token chunk of pages at once into c_4 instead of one DRAM read per (token, expert).
+    // 32-token chunk of pages at once into c_6 instead of one DRAM read per (token, expert).
     const bool weights_per_token = weights.padded_shape().rank() + 1 == combine_shape.rank();
     const uint32_t weights_aligned_page_size = get_aligned_page_size(weights);
 
     // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
+    // one token's num_experts slots per reader batch (one barrier per token), double-buffered
+    uint32_t combine_cb_size = 2 * num_experts * emb_dim_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = combine_cb_size,
         .core_ranges = core_range_set,
@@ -118,7 +134,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     });
 
     // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
-    uint32_t weight_cb_size = tile_size;
+    uint32_t weight_cb_size = 2 * num_experts * tile_size;  // one token's weights per writer batch, double-buffered
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = weight_cb_size,
         .core_ranges = core_range_set,
@@ -161,6 +177,17 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
             }}},
         });
 
+        // c_4: per-chunk (token, expert slot) byte mask, writer -> reader: the reader reads only local slots.
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * tt::round_up(TOKENS_PER_CHUNK * num_experts, 32u),
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+                .data_format = tt::DataFormat::UInt8,
+                .page_size = tt::round_up(TOKENS_PER_CHUNK * num_experts, 32u),
+            }}},
+        });
+
         // c_3: Indices scratch — loaded one chunk at a time (reused per chunk).
         indices_page_size_val = get_page_size(indices);
         indices_aligned_page_size = get_aligned_page_size(indices);
@@ -178,12 +205,12 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     }
 
     if (weights_per_token) {
-        // c_4: one 32-token chunk of per-token weight pages (writer-only scratch).
+        // c_6: one 32-token chunk of per-token weight pages (writer-only scratch).
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = TOKENS_PER_CHUNK * weights_aligned_page_size,
             .core_ranges = core_range_set,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
                 .data_format = weight_cb_data_format,
                 .page_size = TOKENS_PER_CHUNK * weights_aligned_page_size,
             }}},
@@ -192,15 +219,40 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     uint32_t row_index_aligned_page_size = 0;
     if (row_indexed) {
-        // c_5: one 32-token chunk of combine_row_index pages (reader-only scratch).
+        // c_7: one 32-token chunk of combine_row_index pages (reader-only scratch).
         row_index_aligned_page_size = get_aligned_page_size(*row_index_opt);
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = TOKENS_PER_CHUNK * row_index_aligned_page_size,
             .core_ranges = core_range_set,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
                 .data_format = tt::DataFormat::UInt32,
                 .page_size = TOKENS_PER_CHUNK * row_index_aligned_page_size,
+            }}},
+        });
+    }
+
+    // c_5 / c_18 (residual only): the chunk's residual tiles of this core's column group, and their sum with the
+    // reduced tiles (the writer's source instead of c_16)
+    const auto& residual_opt = tensor_args.residual;
+    const bool has_residual = residual_opt.has_value();
+    if (has_residual) {
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * emb_dim_out_tiles * tile_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = output_cb_data_format,
+                .page_size = tile_size,
+            }}},
+        });
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = emb_dim_out_tiles * tile_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_18),
+                .data_format = output_cb_data_format,
+                .page_size = tile_size,
             }}},
         });
     }
@@ -229,6 +281,23 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }}},
     });
 
+    // l1_end: buffers the caller keeps resident in L1 start there. If the CBs would end past it, hold one chunk of
+    // residual tiles instead of two (the reader reserves exactly one chunk's tiles at a time).
+    if (operation_attributes.l1_end != 0 && has_residual) {
+        const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint64_t cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            cb_bytes += tt::round_up(cb.total_size, 64u);
+        }
+        if (l1_base + cb_bytes > operation_attributes.l1_end) {
+            for (auto& cb : desc.cbs) {
+                if (cb.format_descriptors[0].buffer_index == static_cast<uint8_t>(tt::CBIndex::c_5)) {
+                    cb.total_size /= 2;
+                }
+            }
+        }
+    }
+
     auto* combine_buffer = combine_output.buffer();
     auto* weight_buffer = weights.buffer();
     auto* output_buffer = tensor_return_value.buffer();
@@ -236,14 +305,22 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
     // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor.
-    // Reader does not need to know about expert-skip; that logic lives in compute + writer.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
         emb_dim_cb_tiles,
         emb_dim_bytes,
+        static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),  // read only local slots (writer's mask)
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
-    // Row-indexed combine: flag, skip row, index page size, then the index accessor (combine's as a placeholder).
+    // residual: flag, output tiles per core column group, tiles per 32-token row, then its accessor (the combine
+    // buffer's as a placeholder when absent)
+    reader_compile_time_args.push_back(has_residual ? 1 : 0);
+    reader_compile_time_args.push_back(emb_dim_out_tiles);
+    reader_compile_time_args.push_back(row_tiles);
+    tt::tt_metal::TensorAccessorArgs(has_residual ? residual_opt->buffer() : combine_buffer)
+        .append_to(reader_compile_time_args);
+    // Row-indexed combine: flag, skip row, index page size, table rows, then the index accessor (combine's as a
+    // placeholder).
     auto* row_index_buffer = row_indexed ? row_index_opt->buffer() : combine_buffer;
     reader_compile_time_args.push_back(static_cast<uint32_t>(row_indexed ? 1 : 0));
     reader_compile_time_args.push_back(operation_attributes.skip_row);
@@ -259,6 +336,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         emb_dim_cb_tiles,
         dispatch_table_num_pages,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
+        static_cast<uint32_t>(has_residual ? 1 : 0),
+        emb_dim_out_tiles,
     };
 
     // Writer compile-time args use a fixed layout across both paths. In the
@@ -283,6 +362,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? indices_buffer : weight_buffer)
         .append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
+    writer_compile_time_args.push_back(row_tiles);             // output tiles per 32-token row of the whole tensor
+    writer_compile_time_args.push_back(has_residual ? 1 : 0);  // write c_18 (reduced + residual) instead of c_16
     writer_compile_time_args.push_back(static_cast<uint32_t>(weights_per_token ? 1 : 0));
     writer_compile_time_args.push_back(weights_aligned_page_size);
 
@@ -325,7 +406,12 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     uint32_t token_start = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
-        const uint32_t chunks_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
+        // col_groups > 1: exactly one unit per core (chunk i / col_groups, column group i % col_groups)
+        const uint32_t chunks_this_core = col_groups > 1 ? 1 : base_chunks_per_core + (i < extra_chunks ? 1 : 0);
+        const uint32_t col_group = col_groups > 1 ? i % col_groups : 0;
+        if (col_groups > 1) {
+            token_start = (i / col_groups) * TOKENS_PER_CHUNK;
+        }
 
         // Reader RT args: [combine_buffer*, token_start, chunks_this_core].
         // Push the buffer pointer first so the framework records a BufferBinding
@@ -334,8 +420,15 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         reader_rt_args.push_back(combine_buffer);
         reader_rt_args.push_back(token_start);
         reader_rt_args.push_back(chunks_this_core);
+        reader_rt_args.push_back(col_group * emb_dim_bytes);  // byte offset of this core's columns in a row
+        if (has_residual) {
+            reader_rt_args.push_back(residual_opt->buffer());
+        } else {
+            reader_rt_args.push_back(0u);
+        }
+        reader_rt_args.push_back(col_group * emb_dim_out_tiles);  // first tile column of this core
         if (row_indexed) {
-            reader_rt_args.push_back(row_index_buffer);
+            reader_rt_args.push_back(row_index_buffer);  // arg 6
         }
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
@@ -358,9 +451,12 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }
         writer_rt_args.push_back(token_start);
         writer_rt_args.push_back(chunks_this_core);
+        writer_rt_args.push_back(col_group * emb_dim_out_tiles);  // first output tile column of this core
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
 
-        token_start += chunks_this_core * TOKENS_PER_CHUNK;
+        if (col_groups == 1) {
+            token_start += chunks_this_core * TOKENS_PER_CHUNK;
+        }
     }
 
     desc.kernels.push_back(std::move(reader_kernel_desc));

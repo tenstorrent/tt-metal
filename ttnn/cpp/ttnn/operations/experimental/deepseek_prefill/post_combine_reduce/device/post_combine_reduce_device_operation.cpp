@@ -49,6 +49,11 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_hit(
             tensor_args.combine_row_index->device() == combine_output.device(),
             "combine_row_index must be on combine_output's device");
     }
+    if (tensor_args.residual.has_value()) {
+        // Checked on every call: the reader takes the residual buffer's address as a runtime arg.
+        TT_FATAL(
+            tensor_args.residual->device() == combine_output.device(), "residual must be on combine_output's device");
+    }
 
     const ttnn::Shape combine_shape = logical_combine_shape(tensor_args);
     const auto combine_rank = combine_shape.rank();
@@ -144,6 +149,27 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             operation_attributes.skip_row == std::numeric_limits<uint32_t>::max(), "skip_row needs combine_row_index");
     }
+
+    if (tensor_args.residual.has_value()) {
+        const auto& r = *tensor_args.residual;
+        TT_FATAL(r.storage_type() == StorageType::DEVICE && r.buffer() != nullptr, "residual must be on device");
+        TT_FATAL(r.layout() == ttnn::Layout::TILE, "residual must be TILE");
+        TT_FATAL(r.dtype() == DataType::BFLOAT16, "residual must be bfloat16");
+        // Tokens counted on the [..., seq_len, num_experts_per_tok, emb_dim] shape the reduce works on, so a
+        // row-indexed [rows, emb_dim] combine table counts its tokens from combine_row_index.
+        const ttnn::Shape cs = logical_combine_shape(tensor_args);
+        const auto& rs = r.padded_shape();
+        uint32_t tokens = 1;
+        for (uint32_t i = 0; i < operation_attributes.expert_dim; ++i) {
+            tokens *= cs[i];
+        }
+        TT_FATAL(
+            rs[-1] == cs[-1] && r.physical_volume() == static_cast<uint64_t>(tokens) * cs[-1],
+            "residual must hold [{} tokens, {}] (got padded shape {})",
+            tokens,
+            cs[-1],
+            rs);
+    }
 }
 
 tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
@@ -190,13 +216,16 @@ ttnn::Tensor post_combine_reduce(
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::Tensor>& combine_row_index,
-    uint32_t skip_row) {
+    uint32_t skip_row,
+    const std::optional<ttnn::Tensor>& residual,
+    uint32_t l1_end) {
     namespace pcr = ttnn::operations::experimental::deepseek_prefill::post_combine_reduce;
     using OperationType = pcr::PostCombineReduceDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        pcr::PostCombineReduceParams{expert_dim, output_memory_config, skip_row},
-        pcr::PostCombineReduceInputs{combine_output, weights, indices, expert_dispatch_table, combine_row_index});
+        pcr::PostCombineReduceParams{expert_dim, output_memory_config, skip_row, l1_end},
+        pcr::PostCombineReduceInputs{
+            combine_output, weights, indices, expert_dispatch_table, combine_row_index, residual});
 }
 
 }  // namespace ttnn::prim

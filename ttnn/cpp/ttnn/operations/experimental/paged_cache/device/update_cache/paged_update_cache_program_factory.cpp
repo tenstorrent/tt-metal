@@ -10,6 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -41,8 +42,10 @@ const DFBSpecName UC_UNTILIZED_CACHE{"untilized_cache"};
 const DFBSpecName UC_UNTILIZED_CACHE2{"untilized_cache2"};
 const DFBSpecName UC_UNTILIZED_INPUT{"untilized_input"};
 const DFBSpecName UC_OUT_TILES{"out_tiles"};
+const DFBSpecName UC_GROUP_META{"group_meta"};
 
 const SemaphoreSpecName UC_IN0_SEQUENTIAL{"in0_sequential_mode"};
+const SemaphoreSpecName UC_GROUP_DONE{"group_done"};
 
 const TensorParamName UC_CACHE{"cache"};
 const TensorParamName UC_INPUT{"input"};
@@ -222,6 +225,20 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     // a bounded sliding-window cache (vLLM SlidingWindowSpec).
     const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0u);
 
+    // Group mode (share_cache with an index tensor and a paged cache): instead of a core-to-core chain, the rows
+    // that land in the same cache tile are merged by one core (the lowest such row, "leader"), which reads and
+    // writes that tile once; the other rows ("followers") skip the cache read and write. Rows of one user at
+    // consecutive positions (a speculative-decoding verify) then cost one read-modify-write per tile instead of
+    // one per row in sequence. The reader works out every row's tile and hands this core's role to the writer
+    // through group_meta; the chain semaphore becomes the leader's "rows ready" count and group_done releases
+    // each follower once the leader has copied its row.
+    const bool group_mode = operation_attributes.share_cache && use_index_tensor && is_paged_cache &&
+                            num_cores <= TILE_HEIGHT && device->arch() != tt::ARCH::QUASAR;
+    // group_meta entry: [is_leader, follower count, leader row, (follower row, its row in the tile)...], then a
+    // 64-byte page-table chunk per row (the chunk holding the row's page-table entry).
+    const uint32_t group_meta_bytes = static_cast<uint32_t>(tt::round_up((3 + 2 * num_cores) * sizeof(uint32_t), 64));
+    const uint32_t group_entry_bytes = group_meta_bytes + 64 * num_cores;
+
     // ---------------- Dataflow buffers ----------------
 
     Group<DataflowBufferSpec> dataflow_buffers = {
@@ -303,6 +320,15 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
         // Sharded page tables are UINT16 (see validate_on_program_cache_miss); the kernels default to UINT32.
         optional_resource_defines.emplace("PAGE_TABLE_ENTRY_UINT16", "1");
     }
+    if (group_mode) {
+        optional_resource_defines.emplace("GROUP_MODE", "1");
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = UC_GROUP_META,
+            .entry_size = group_entry_bytes,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        });
+    }
 
     // ---------------- Reader ----------------
 
@@ -346,6 +372,13 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             .accessor_name = "page_table",
         });
     }
+    if (group_mode) {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UC_GROUP_META,
+            .accessor_name = "group_meta",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
 
     KernelSpec reader{
         .unique_id = UC_READER,
@@ -376,6 +409,8 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"page_table_stick_size", page_table_stick_size},
                 {"St", St},
                 {"cache_position_modulo", cache_position_modulo},
+                {"num_rows", group_mode ? num_cores : 1u},
+                {"group_meta_bytes", group_meta_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"cache_start_id", "my_batch_idx", "wait_to_start"}},
         .hw_config = create_reader_datamovement_config(),
@@ -422,6 +457,23 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
+    Group<SemaphoreBinding> writer_semaphore_bindings = {
+        SemaphoreBinding{
+            .semaphore_spec_name = UC_IN0_SEQUENTIAL,
+            .accessor_name = "in0_seq",
+        },
+    };
+    if (group_mode) {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UC_GROUP_META,
+            .accessor_name = "group_meta",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        writer_semaphore_bindings.push_back(SemaphoreBinding{
+            .semaphore_spec_name = UC_GROUP_DONE,
+            .accessor_name = "group_done",
+        });
+    }
 
     KernelSpec writer{
         .unique_id = UC_WRITER,
@@ -430,13 +482,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             "writer_update_cache_interleaved_start_id.cpp",
         .compiler_options = {.defines = optional_resource_defines},
         .dfb_bindings = std::move(writer_dfb_bindings),
-        .semaphore_bindings =
-            {
-                SemaphoreBinding{
-                    .semaphore_spec_name = UC_IN0_SEQUENTIAL,
-                    .accessor_name = "in0_seq",
-                },
-            },
+        .semaphore_bindings = std::move(writer_semaphore_bindings),
         .tensor_bindings =
             {
                 TensorBinding{
@@ -465,6 +511,8 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                   "send_core_x",
                   "send_core_y"}},
         .hw_config = create_writer_datamovement_config(),
+        // group mode: every row's core (NOC x, y pairs, in row order), for the leader / follower exchange
+        .advanced_options = {.num_common_runtime_varargs = group_mode ? 2 * num_cores : 0u},
     };
 
     // ---------------- Compute ----------------
@@ -567,6 +615,10 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                     .unique_id = UC_IN0_SEQUENTIAL,
                     .target_nodes = all_cores,
                 },
+                SemaphoreSpec{
+                    .unique_id = UC_GROUP_DONE,
+                    .target_nodes = all_cores,
+                },
             },
         .tensor_parameters = std::move(tensor_parameters),
         .work_units =
@@ -597,7 +649,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
 
         bool wait_to_start, send_signal;
         uint32_t send_core_x, send_core_y;
-        if (operation_attributes.share_cache) {
+        if (operation_attributes.share_cache && !group_mode) {
             // Share cache
             wait_to_start = i != 0;
             send_signal = i != num_cores - 1;
@@ -632,6 +684,14 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"send_core_x", send_core_x},
                 {"send_core_y", send_core_y},
             });
+    }
+
+    if (group_mode) {
+        for (const auto& core : cores) {
+            const auto physical = device->worker_core_from_logical_core(core);
+            writer_run_args.advanced_options.common_runtime_varargs.push_back(static_cast<uint32_t>(physical.x));
+            writer_run_args.advanced_options.common_runtime_varargs.push_back(static_cast<uint32_t>(physical.y));
+        }
     }
 
     ProgramRunArgs run_args;

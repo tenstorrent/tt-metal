@@ -88,6 +88,25 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_biases") = nb::none(),
         nb::arg("min_active_tokens") = 0,
         nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
+
+    ttnn::bind_function<"unified_routed_expert_moe_stacked", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        unified_routed_expert_moe over stacked weights in one program: gate_up_projs [1, E, K, 2N] holds each expert's
+        gate (columns 0..N-1) and up (N..2N-1) per row, down_projs [1, E, N, K]. A ROW_MAJOR bf16 dispatched buffer is
+        tilized in-op and gives a fresh TILE bf8 output; a TILE bf8 buffer is written in place.
+        )doc",
+        &unified_routed_expert_moe_stacked,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::arg("global_expert_idx_table").noconvert(),
+        nb::arg("gate_up_projs").noconvert(),
+        nb::arg("down_projs").noconvert(),
+        nb::arg("max_dispatched_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("l1_end") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

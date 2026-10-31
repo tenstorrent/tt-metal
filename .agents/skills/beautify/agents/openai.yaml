@@ -1,0 +1,7 @@
+interface:
+  display_name: "Beautify"
+  short_description: "Cleanup and simplify model code"
+  default_prompt: "Use $beautify to clean up model code without changing behavior: remove unnecessary inheritance, dead code, superfluous debug machinery, and improve maintainability while preserving performance and accuracy."
+
+policy:
+  allow_implicit_invocation: true

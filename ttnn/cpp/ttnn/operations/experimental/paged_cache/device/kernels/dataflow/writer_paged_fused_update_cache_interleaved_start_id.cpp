@@ -133,7 +133,38 @@ void kernel_main() {
     }
 #endif
 
+#ifdef GROUP_MODE
+#ifdef ARCH_QUASAR
+#error "paged_fused_update_cache group mode is Wormhole / Blackhole only"
+#endif
+    // Group mode (see the reader and the paged_update_cache writer): a follower writes no cache tile; it tells its
+    // leader once its row is untilized and keeps that row in L1 until the leader has copied it. The leader waits
+    // for all its followers, copies each follower's row into its own row of the cache tile, writes the tile once
+    // and releases them. Every row's core of this set (NOC x, y) is in the common varargs, in row order.
+    DataflowBuffer dfb_group_meta(dfb::group_meta);
+    dfb_group_meta.wait_front(1);
+    volatile tt_l1_ptr uint32_t* group_meta =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_group_meta.get_read_ptr());
+    const bool group_leader = group_meta[0] == 1;
+    const uint32_t group_followers = group_leader ? group_meta[1] : 0;
+    const uint32_t group_leader_row = group_meta[2];
+    if (!group_leader) {
+        skip_update = true;
+    }
+#endif
+
     dfb_untilized_input.wait_front(Wt);  // input tensor
+#ifdef GROUP_MODE
+    if (group_leader) {
+        Semaphore rows_ready(sem::in0_seq);
+        rows_ready.wait(group_followers);
+        rows_ready.set(0);
+    } else if (group_leader_row != (uint32_t)-1) {
+        Semaphore(sem::in0_seq)
+            .up(noc, get_common_vararg(2 * group_leader_row), get_common_vararg(2 * group_leader_row + 1), 1);
+        noc.async_atomic_barrier();
+    }
+#endif
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
     const uint32_t my_noc_y = my_y[noc_id];
@@ -152,6 +183,22 @@ void kernel_main() {
             Wbytes,
             {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = input_l1_read_addr},
             {});
+#ifdef GROUP_MODE
+        // the followers' rows: the same untilized-input address on their cores (one program, one buffer layout),
+        // each into its own row of the tile
+        for (uint32_t f = 0; f < group_followers; ++f) {
+            const uint32_t row = group_meta[3 + 2 * f];
+            const uint32_t row_in_tile = group_meta[4 + 2 * f];
+            noc.async_read(
+                local_src,
+                CoreLocalMem<uint32_t>(dfb_untilized_cache.get_read_ptr() + row_in_tile * Wbytes),
+                Wbytes,
+                {.noc_x = get_common_vararg(2 * row),
+                 .noc_y = get_common_vararg(2 * row + 1),
+                 .addr = input_l1_read_addr},
+                {});
+        }
+#endif
         noc.async_read_barrier();
         dfb_untilized_cache2.push_back(Wt);
         dfb_untilized_cache.pop_front(Wt);  // NEW
@@ -180,7 +227,23 @@ void kernel_main() {
         cache_id += head_offset_t;
     }
 
+#ifdef GROUP_MODE
+    if (!group_leader && group_leader_row != (uint32_t)-1) {
+        // keep this row in L1 until the leader has copied it
+        Semaphore released(sem::group_done);
+        released.wait(1);
+        released.set(0);
+    }
+#endif
     dfb_untilized_input.pop_front(Wt);
+#ifdef GROUP_MODE
+    for (uint32_t f = 0; f < group_followers; ++f) {
+        const uint32_t row = group_meta[3 + 2 * f];
+        Semaphore(sem::group_done).up(noc, get_common_vararg(2 * row), get_common_vararg(2 * row + 1), 1);
+    }
+    noc.async_atomic_barrier();
+    dfb_group_meta.pop_front(1);
+#endif
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input buffer
