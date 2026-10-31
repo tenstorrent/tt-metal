@@ -926,7 +926,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/dataflow/dataflow_api.h \
                          tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h \
                          tt_metal/hw/inc/internal/ethernet/dataflow_api.h \
-                         tt_metal/api/tt-metalium/host_api.hpp \
+                         tt_metal/api/tt-metalium/workload/host_api.hpp \
                          tt_metal/api/tt-metalium/experimental/profiler.hpp \
                          tt_metal/hw/inc/api/compute/eltwise_unary/comp.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/erf_erfc.h \
@@ -999,7 +999,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/mul_int_sfpu.h \
                          tt_metal/hw/inc/api/compute/compute_kernel_api.h \
                          tt_metal/jit_build/kernel_args.hpp \
-                         tt_metal/api/tt-metalium/global_circular_buffer.hpp
+                         tt_metal/api/tt-metalium/memory/global/global_circular_buffer.hpp
 
 
 # This tag can be used to specify the character encoding of the source files
