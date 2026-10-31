@@ -1779,10 +1779,18 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }
-    // Use Os (optimize for size) when VC1 is active to fit in code space
-    // Use O3 (optimize for performance) otherwise
+    // VC1-bearing (multi-mesh) routers carry up to 9 sender channels and do not fit their code
+    // budget at -O3. On Blackhole that budget is the ACTIVE_ETH kernel config window shared by both
+    // ERISC router kernels; -O2 is slightly smaller than -Os there and fits every supported
+    // multi-mesh configuration, so it replaces the -Os these routers were built with. On Wormhole
+    // the budget is the 16 KB ERISC IRAM region, which the dual-T3K routers overflow at -O2, so
+    // Wormhole keeps -Os. Everything else gets -O3.
     bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
-    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+    if (!vc1_active) {
+        return tt::tt_metal::KernelBuildOptLevel::O3;
+    }
+    return fabric_context_.get_hal().get_arch() == tt::ARCH::BLACKHOLE ? tt::tt_metal::KernelBuildOptLevel::O2
+                                                                       : tt::tt_metal::KernelBuildOptLevel::Os;
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(

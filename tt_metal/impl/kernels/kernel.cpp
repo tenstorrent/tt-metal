@@ -835,6 +835,10 @@ uint64_t Kernel::compute_hash() const {
     // Independent of compile_time_args_ values: same words with a different split must not collide.
     hasher.update(static_cast<uint64_t>(this->compile_time_vararg_count_));
     hasher.update(this->config_hash());
+    // The build optimization level is a compile and link input: two kernels identical apart from it
+    // must not share a JIT cache entry, or the second one silently runs the first one's ELF.
+    hasher.update(this->get_compiler_opt_level());
+    hasher.update(this->get_linker_opt_level());
 
     // Include paths affect compilation: the gcc -I order is significant (left-to-right
     // header resolution), so different lists or orderings must produce different binaries.
