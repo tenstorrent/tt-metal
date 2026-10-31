@@ -40,8 +40,9 @@ inline void calculate_heaviside(std::uint32_t value) {
     // sfpi::abs(v) == 0 arm) costs 11: SFPABS + SFPSETCC for the zero test, two SFPMOVs to
     // merge the arms, and a RISC loop. Here the row is three stores: an unpredicated store of
     // `value` to every lane; then 1.0 to the lanes SFPABS + SFPSETCC NE0 enables, those with
-    // |v| != 0, so -0.0 keeps `value` (SFPABS clears the sign bit, which keeps -0.0 inside
-    // SFPSETCC's contract; ckernel_sfpu_comp.h's nez arm uses the same test); then
+    // |v| != 0, so -0.0 keeps `value` (SFPABS clears the sign bit of every non-NaN input, which
+    // keeps -0.0 inside SFPSETCC's contract; a -NaN stays sign-set but is nonzero, so it is enabled
+    // here and sent to 0.0 below); then
     // 0.0 to those of them that SFPSETCC LT0 leaves enabled, the ones whose sign bit is set
     // (SFPSETCC only writes the flags of enabled lanes). Both forms dispatch on the sign bit
     // rather than a float compare, so NaN lands where it did: a NaN with a clear sign bit is
