@@ -1452,3 +1452,52 @@ def test_scale_mask_softmax_causal_mask_height_differs_from_width(device, op, ba
         atol=0.01,
         frobenius_threshold=0.05,
     )
+
+
+# The attention softmaxes unsqueeze to 4D, which threw for rank > 4. They now fold the dims between the batch
+# and the last two into one, so a rank 5 or 6 input runs like the same data as a rank 4 tensor.
+@pytest.mark.parametrize("op", ["scale_mask_softmax", "scale_mask_softmax_in_place", "softmax_in_place"])
+@pytest.mark.parametrize(
+    "shape", [(2, 3, 2, 64, 96), (2, 2, 2, 2, 64, 96), (1, 2, 4, 32, 40)], ids=["r5", "r6", "r5_w40"]
+)
+@pytest.mark.parametrize("mask_kind", [None, "row", "causal"], ids=["nomask", "rowmask", "causalmask"])
+def test_attention_softmax_rank_above_4(device, op, shape, mask_kind):
+    if op == "softmax_in_place" and mask_kind is not None:
+        pytest.skip("softmax_in_place has no mask")
+    if op == "scale_mask_softmax" and mask_kind == "causal" and shape[-2] > 32:
+        pytest.skip("scale_mask_softmax accepts a mask at most one tile high")
+    torch.manual_seed(0)
+    scale = 0.125
+    S, W = shape[-2], shape[-1]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    mask_shape = (shape[0],) + (1,) * (len(shape) - 3)
+    torch_mask = None
+    if mask_kind == "row":
+        torch_mask = torch.where(torch.rand(mask_shape + (1, W)) > 0.5, 0.0, -10000.0).to(torch.bfloat16)
+    elif mask_kind == "causal":
+        causal = torch.triu(torch.full((S, W), -10000.0), diagonal=1)
+        torch_mask = (torch.zeros(mask_shape + (1, 1)) + causal).to(torch.bfloat16)
+
+    if op == "softmax_in_place" or mask_kind is None:
+        scale = None  # the scale is only accepted together with a mask
+    s = 1.0 if scale is None else scale
+    golden = torch_input.float() * s
+    if torch_mask is not None:
+        golden = golden + torch_mask.float()
+    golden = F.softmax(golden, dim=-1)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_mask = None
+    if torch_mask is not None:
+        tt_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    is_causal = mask_kind == "causal"
+
+    if op == "scale_mask_softmax":
+        out = ttnn.scale_mask_softmax(tt_input, scale, tt_mask, is_causal_mask=is_causal)
+    elif op == "scale_mask_softmax_in_place":
+        out = ttnn.scale_mask_softmax_in_place(tt_input, scale, tt_mask, is_causal_mask=is_causal)
+    else:
+        out = ttnn.softmax_in_place(tt_input)
+    result = ttnn.to_torch(out).float()
+    assert result.shape == golden.shape
+    assert_numeric_metrics(golden, result, pcc_threshold=0.999, rtol=0.12, atol=0.04, frobenius_threshold=0.05)
