@@ -31,7 +31,7 @@ a rank boundary.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links, per_axis_topology
 
 HIDDEN_SIZE = 7168
 BLOCK_SIZE = 12
@@ -102,7 +102,9 @@ class TtAttnRes(LightweightModule):
             checks its input against it. The tensor-parallel axis must be wider than
             one chip: the read's exchange is what its one dispatch is built around,
             and there is no exchange to absorb at `tp_factor == 1`.
-        num_links: fabric links for the statistics all-reduce.
+        num_links: fabric links for the statistics collective. Defaults to every link the
+            box has on the tensor-parallel axis: the block's statistics are the largest
+            payload AttnRes moves, and one link left the all-gather half idle.
         topology: one `ttnn.Topology` **per mesh axis**, not a scalar. Defaults to
             what the opened fabric actually wraps, which is the only source that
             cannot disagree with it: naming `Ring` on an axis the fabric does not
@@ -151,7 +153,7 @@ class TtAttnRes(LightweightModule):
         dtype=ttnn.bfloat16,
         sp_axis=0,
         tp_axis=1,
-        num_links=1,
+        num_links=None,
         topology=None,
         stats_dtype=ttnn.float32,
         fold_stats=True,
@@ -165,7 +167,7 @@ class TtAttnRes(LightweightModule):
         self.dtype = dtype
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
-        self.num_links = num_links
+        self.num_links = get_num_links(mesh_device, tp_axis) if num_links is None else num_links
         self.stats_dtype = stats_dtype
         self.fold_stats = fold_stats
         self.one_pass_stats = one_pass_stats
