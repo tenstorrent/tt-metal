@@ -29,7 +29,7 @@ class PenaltyContext:
     sub_core_grids: Any | None = None
 
 
-def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
+def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext], keep_input: bool = False) -> ttnn.Tensor:
     if context is None:
         return logits
 
@@ -52,7 +52,7 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     logits_gt1.deallocate()
     penalties.deallocate()
     inverse_penalties.deallocate()
-    logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
+    logits = ttnn.multiply(logits, scaling, output_tensor=None if keep_input else logits, **op_kwargs)
     scaling.deallocate()
 
     # presence
@@ -413,7 +413,7 @@ class TTPenalties(LightweightModule):
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **self._op_kwargs)
         return counts, mask
 
-    def apply(self, tt_logits: ttnn.Tensor) -> ttnn.Tensor:
+    def apply(self, tt_logits: ttnn.Tensor, keep_input: bool = False) -> ttnn.Tensor:
         if tt_logits is None:
             return tt_logits
         context = PenaltyContext(
@@ -431,5 +431,6 @@ class TTPenalties(LightweightModule):
         reshaped = ttnn.reshape(tt_logits, (-1, original_shape[-1]))
         if reshaped.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
             reshaped = ttnn.typecast(reshaped, ttnn.bfloat16, **self._op_kwargs)
-        apply_penalties(reshaped, context)
+            keep_input = False
+        reshaped = apply_penalties(reshaped, context, keep_input=keep_input)
         return ttnn.reshape(reshaped, original_shape)
