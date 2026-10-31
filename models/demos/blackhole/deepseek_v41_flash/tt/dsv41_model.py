@@ -2937,7 +2937,6 @@ class Model:
             self.log_dram("before the one-slot (Up=1) prefill context")
             self.Up = 1
             try:
-                self.sink.set_map([None] * rows)
                 pm.compile_dyn_up(chunk, S1, 1)
                 pm.use_dyn(S1)
                 self.warm_key_export(limit=S1)

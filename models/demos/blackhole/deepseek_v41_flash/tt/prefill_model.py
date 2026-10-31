@@ -879,7 +879,11 @@ class DSV41PrefillModel:
         self._put(self, self._UP_PM, {"U": int(up), "_bufs": {}})
         sink = self.__dict__.get("sink")
         if sink is not None:
-            self._put(sink, self._UP_SINK, {"U": int(up), "bufs": {}, "slot_b": None})
+            self._put(
+                sink,
+                self._UP_SINK,
+                {"U": int(up), "bufs": {}, "slot_b": [None] * (self.rows * int(up)) if int(up) != sink.Ud else None},
+            )
         pas, sps, ixs = self._dyn_objs()
         for o in pas + sps + ixs:
             o.U = int(up)
