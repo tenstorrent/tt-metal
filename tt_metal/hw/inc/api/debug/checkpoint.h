@@ -140,7 +140,8 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
     // Math thread: optionally dump dest registers (only Math can access them)
     if constexpr (dump_dest) {
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
-        if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
+        if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled) &&
+            data_format_reg_field_value != (uint32_t)DataFormat::Int32) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
         }
         uint32_t row = 0;

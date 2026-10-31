@@ -808,7 +808,7 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     bool illegal = (addr + len <= addr);  // zero length / wraparound
-#if defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
     illegal = illegal || (addr + len > MEM_ETH_SIZE);
 #elif defined(COMPILE_FOR_DRISC)
     illegal = illegal || (addr + len > MEM_DRISC_L1_SIZE);
@@ -933,8 +933,8 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
         4);
 #endif
 #endif  // NOC_ATT_ENABLED
-#define DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, check_linked)                                                     \
-    debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
+#define DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, check_linked)                                                      \
+    debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE, check_linked); \
     LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l) DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, true)
 #define DEBUG_SANITIZE_NOC_MULTI_ADDR_(noc_id, a, l, check_linked)                                                  \
