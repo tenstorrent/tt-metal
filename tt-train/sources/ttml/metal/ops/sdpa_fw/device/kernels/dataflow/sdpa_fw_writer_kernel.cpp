@@ -14,22 +14,27 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t intermediates_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    const uint32_t work_list_arg_idx = runtime_args_counter;  // then the work list
+    uint32_t scratch_addr = get_arg_val<uint32_t>(runtime_args_counter++);  // partials scratch (split units)
+    const uint32_t work_list_arg_idx = runtime_args_counter;                // then the work list
 
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
+#ifdef SPLIT_UNITS
+    constexpr uint32_t cb_partial_out = tt::CBIndex::c_18;
+#endif
 
     constexpr uint32_t vWt = get_compile_time_arg_val(0);             // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);              // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);         // num of heads in query
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);      // query tile-rows per Q chunk
     constexpr uint32_t heads_per_item = get_compile_time_arg_val(4);  // Q heads stacked in one item
+    // 5..8: the four semaphore ids (a sender bumps its merger's)
     constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
     constexpr uint32_t rows = Sq_chunk_t * heads_per_item;  // tile-rows of one item
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<5>();
+    constexpr auto output_args = TensorAccessorArgs<9>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
     [[maybe_unused]] constexpr auto intermediates_args =
@@ -37,6 +42,14 @@ void kernel_main() {
 #ifdef RETURN_INTERMEDIATES
     const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
     const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
+#endif
+    [[maybe_unused]] constexpr auto scratch_args =
+        TensorAccessorArgs<intermediates_args.next_compile_time_args_offset()>();
+#ifdef SPLIT_UNITS
+    constexpr uint32_t partial_row_tiles = sdpa_fw_items::partial_row_tiles(vWt);
+    constexpr uint32_t kPartialRowsPerBatch = sdpa_fw_items::partial_rows_per_batch(rows);
+    const uint32_t partial_tile_bytes = get_tile_size(cb_partial_out);
+    const auto scratch_addr_generator = TensorAccessor(scratch_args, scratch_addr, partial_tile_bytes);
 #endif
 
     constexpr uint32_t onetile = 1U;
@@ -99,5 +112,32 @@ void kernel_main() {
 #endif
     };
 
-    for_each_work_item(work_list_arg_idx, write_q_chunk);
+    for_each_work_unit(work_list_arg_idx, [&](const WorkUnit& unit) {
+#ifdef SPLIT_UNITS
+        if (unit.role == kUnitSender) {
+            // The partial state goes to its scratch slot; once it has landed, the merger's semaphore is bumped.
+            static_assert(sdpa_fw_items::kMaxMergersPerCore == 4U, "the semaphore ids are compile args 5..8");
+            const uint32_t sem_ids[sdpa_fw_items::kMaxMergersPerCore] = {
+                get_compile_time_arg_val(5),
+                get_compile_time_arg_val(6),
+                get_compile_time_arg_val(7),
+                get_compile_time_arg_val(8)};
+            for (uint32_t r = 0; r < rows; r += kPartialRowsPerBatch) {
+                write_tiles_by_row(
+                    cb_partial_out,
+                    scratch_addr_generator,
+                    (unit.slot * rows + r) * partial_row_tiles,
+                    kPartialRowsPerBatch * partial_row_tiles,
+                    partial_tile_bytes,
+                    kPartialRowsPerBatch * partial_row_tiles);
+            }
+            noc_semaphore_inc(get_noc_addr(unit.merger_x, unit.merger_y, get_semaphore(sem_ids[unit.sem_idx])), 1);
+            noc_async_atomic_barrier();  // the kernel must not end with the increment in flight
+            return;
+        }
+#endif
+        for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+            write_q_chunk(item);
+        }
+    });
 }

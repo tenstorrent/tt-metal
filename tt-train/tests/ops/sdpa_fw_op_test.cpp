@@ -11,6 +11,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <map>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -21,13 +25,16 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -380,11 +387,10 @@ ttnn::Tensor group_shared_matmul(
     auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
     auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
-        throw std::invalid_argument(
-            fmt::format(
-                "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
-                query_tensor.logical_shape(),
-                kv_tensor.logical_shape()));
+        throw std::invalid_argument(fmt::format(
+            "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
+            query_tensor.logical_shape(),
+            kv_tensor.logical_shape()));
     }
     if (heads == groups) {
         // no broadcasting needed
@@ -505,6 +511,10 @@ struct SDPATestConfig {
     bool use_gate = false;
     float gate_min = -4.0F;  // sigmoid(-4) ~ 0.018
     float gate_max = 4.0F;   // sigmoid(+4) ~ 0.982
+    // V's range. Zero-mean values make the late (long) rows average out to ~0, where an absolute
+    // tolerance hides relative errors; the split tests use [0, 1] so every output is ~0.5.
+    float value_min = -1.0F;
+    float value_max = 1.0F;
     float dropout_prob = 0.0F;
     // 0 = program factory default.
     ttml::metal::SDPAForwardProgramConfig program_config{};
@@ -517,8 +527,13 @@ struct SDPATestConfig {
     std::string test_name = "SDPA Test";
 };
 
-// kernel_output, when given, receives the kernel's output so callers can compare runs with each other.
-void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_output = nullptr) {
+// kernel_output / kernel_lse, when given, receive the kernel's output and logsumexp so callers can compare
+// runs with each other.
+void run_sdpa_test(
+    const SDPATestConfig& config,
+    xt::xarray<float>* kernel_output = nullptr,
+    xt::xarray<float>* kernel_lse = nullptr,
+    xt::xarray<float>* reference_lse = nullptr) {
     using namespace ttml;
 
     ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
@@ -550,8 +565,8 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
 
     const std::array<std::size_t, 4> value_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
-    xt::xarray<float> value_tensor =
-        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed + 2U));
+    xt::xarray<float> value_tensor = round_to_bf16(
+        ttml::test_utils::make_uniform_xarray<float>(value_shape, config.value_min, config.value_max, seed + 2U));
 
     // Optional gate: (B, num_query_heads, S, head_dim_v) - same shape as the kernel output.
     std::optional<xt::xarray<float>> gate_tensor;
@@ -612,6 +627,9 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     if (return_intermediates) {
         ASSERT_TRUE(result[1].has_value()) << "intermediates requested but not returned in " << config.test_name;
         interm_xtensor = core::to_xtensor(result[1].value());
+        if (kernel_lse != nullptr) {
+            *kernel_lse = interm_xtensor;
+        }
     } else {
         ASSERT_FALSE(result[1].has_value()) << "intermediates returned although not requested in " << config.test_name;
     }
@@ -660,7 +678,10 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
         const ttml::metal::SDPAForwardProgramConfig pinned{
             .q_chunk_size = picked.Sq_chunk_t * 32U,
             .k_chunk_size = picked.Sk_chunk_t * 32U,
-            .heads_per_item = picked.heads_per_item};
+            .heads_per_item = picked.heads_per_item,
+            .max_pieces = config.program_config.max_pieces,  // same schedule too: the merge order is part of
+            .num_cores = config.program_config.num_cores,    // the numerics the two runs must share
+            .causal_pairs = config.program_config.causal_pairs};
         auto ungated = ttml::metal::sdpa_fw(
             query,
             key,
@@ -684,8 +705,7 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
 
         // (2) the logsumexp is packed before the gate path runs, so it must be bit-identical.
         if (return_intermediates) {
-            xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
-            EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, ungated_interm_xtensor)))
+            EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, core::to_xtensor(ungated[1].value()))))
                 << "Gate changed the intermediates (logsumexp) in " << config.test_name;
         }
     }
@@ -698,6 +718,14 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     if (return_intermediates) {
         ASSERT_EQ(interm_xtensor.shape(), float_intermediates.shape())
             << "Intermediate shape mismatch in " << config.test_name;
+        // The logsumexp is ~log(S), so the relative tolerance below is blind to its absolute error: print it.
+        fmt::print(
+            "{}: logsumexp max abs gap vs float reference {:.3e}\n",
+            config.test_name,
+            xt::amax(xt::abs(interm_xtensor - float_intermediates))());
+        if (reference_lse != nullptr) {
+            *reference_lse = float_intermediates;
+        }
     }
 
     // Compute MSE for validation
@@ -1477,6 +1505,8 @@ struct ChunkKnobs {
     uint32_t q_chunk_size;
     uint32_t k_chunk_size;
     uint32_t heads_per_item = 0U;
+    uint32_t max_pieces = 0U;
+    uint32_t num_cores = 0U;
 };
 
 // One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
@@ -1488,32 +1518,226 @@ const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64},
 // uniform few-percent rescale error through.
 constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
 
+ttml::metal::SDPAForwardProgramConfig program_config_of(const ChunkKnobs& knobs) {
+    return {
+        .q_chunk_size = knobs.q_chunk_size,
+        .k_chunk_size = knobs.k_chunk_size,
+        .heads_per_item = knobs.heads_per_item,
+        .max_pieces = knobs.max_pieces,
+        .num_cores = knobs.num_cores};
+}
+
+// The shape and chunks the program factory would resolve for config on this device.
+std::pair<ttml::metal::ops::sdpa_fw::device::SDPAForwardShape, ttml::metal::ops::sdpa_fw::device::SDPAForwardChunks>
+host_shape_and_chunks(const SDPATestConfig& config) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t value_dim = config.value_dim > 0U ? config.value_dim : config.key_value_dim;
+    const SDPAForwardShape shape{
+        .batch = config.batch_size,
+        .q_heads = config.num_query_heads,
+        .kv_heads = config.num_key_heads,
+        .St = config.sequence_length / 32U,
+        .qWt = config.key_value_dim / config.num_key_heads / 32U,
+        .vWt = value_dim / config.num_key_heads / 32U,
+        .mask_type = config.mask_type,
+        .has_gate = config.use_gate,
+        .return_intermediates = config.return_intermediates};
+    return {
+        shape, resolve_chunks(config.program_config, shape, ttml::metal::available_l1_bytes(*device), grid.x * grid.y)};
+}
+
+// The schedule the program factory builds for config on this device.
+ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPATestConfig& config) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    const auto [shape, chunks] = host_shape_and_chunks(config);
+    return ttml::metal::ops::sdpa_fw::device::schedule_for(config.program_config, shape, chunks, grid.x * grid.y);
+}
+
+// The terms of the split-vs-unsplit error bounds, from the split schedule: for the cut item whose merged
+// sum is furthest from the unsplit one, the partials its merger folds in and how many more K/V steps the
+// unsplit run of that item takes than the merger's own piece (each step of the running sum passes the FPU
+// once, so the two runs' sums carry different truncation counts). Zero when nothing is cut.
+struct FoldErrorTerms {
+    uint32_t partials = 0;
+    uint32_t extra_unsplit_steps = 0;
+};
+
+FoldErrorTerms fold_error_terms(
+    const SDPATestConfig& split_config, const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& split_schedule) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    const auto [shape, chunks] = host_shape_and_chunks(split_config);
+    FoldErrorTerms terms;
+    for (const auto& units : split_schedule.per_core) {
+        for (const auto& unit : units) {
+            if (unit.role != UnitRole::Merger) {
+                continue;
+            }
+            const uint32_t extra = num_kv_steps(shape, chunks, unit.item) - (unit.step_end - unit.step_begin);
+            if (unit.num_partials + extra > terms.partials + terms.extra_unsplit_steps) {
+                terms = FoldErrorTerms{.partials = unit.num_partials, .extra_unsplit_steps = extra};
+            }
+        }
+    }
+    return terms;
+}
+
+// Split and unsplit outputs of the same inputs. Both runs multiply the running sum on the FPU, whose inputs
+// are 19-bit (TF32): a truncation of up to 2^-10 per K/V step and, in the split run, per partial folded in;
+// the merger's own fp32 output accumulator is rescaled in DST and is not truncated. So the two outputs
+// differ by one to two bf16 ULP of rounding plus the steps the runs do not share, each worth the truncation
+// and about as much again from the rescale chain (the weights of a peaked row reach the output through a
+// different product of exps in the two runs; measured, not derived). The callers give V a nonzero mean so
+// that no output sits near zero, where a bf16 ULP of the output would be smaller than the fp32 noise of
+// the fold. The mean gap is held to the mean truncation, 2^-11 per unshared step.
+void expect_split_matches_unsplit(
+    const xt::xarray<float>& split_output,
+    const xt::xarray<float>& unsplit_output,
+    const FoldErrorTerms& terms,
+    const std::string& name) {
+    constexpr float kTwoUlpRel = 7.8125e-3F;   // 2^-7: two bf16 ULP in [0.25, 0.5), one in [0.5, 1)
+    constexpr float kTruncRel = 9.765625e-4F;  // 2^-10: one TF32 truncation, worst case
+    const float unshared_steps = static_cast<float>(terms.partials + terms.extra_unsplit_steps);
+    const float rel_tol = kTwoUlpRel + 2.0F * kTruncRel * unshared_steps;
+    const float mean_rel_tol = 1e-3F + 0.5F * kTruncRel * unshared_steps;
+    const xt::xarray<float> gap = xt::abs(split_output - unsplit_output);
+    const xt::xarray<float> bound = rel_tol * xt::abs(unsplit_output);
+    const float worst_share = xt::amax(gap / bound)();  // of the bound; V > 0 keeps every output away from 0
+    const float mean_rel = xt::mean(gap)() / xt::mean(xt::abs(unsplit_output))();
+    fmt::print(
+        "{}: {} partials, {} extra unsplit steps; split vs unsplit worst element at {:.2f} of the {:.2e} relative "
+        "bound, mean relative gap {:.3e} (bound {:.1e})\n",
+        name,
+        terms.partials,
+        terms.extra_unsplit_steps,
+        worst_share,
+        rel_tol,
+        mean_rel,
+        mean_rel_tol);
+    EXPECT_LE(worst_share, 1.0F) << name << ": a split element is off the unsplit run by more than the bound";
+    EXPECT_LT(mean_rel, mean_rel_tol) << name << ": split and unsplit runs differ by " << mean_rel << " on average";
+}
+
+// The merger's logsumexp, scale * max + log(sum), is what the backward pass consumes. The max is exact, so
+// merging may move it off the float reference by at most the folds' truncation of the sum (two per partial:
+// the sender's copy and the merge) on top of the unsplit run's own error.
+void expect_split_lse_matches_reference(
+    const xt::xarray<float>& split_lse,
+    const xt::xarray<float>& unsplit_lse,
+    const xt::xarray<float>& reference_lse,
+    const FoldErrorTerms& terms,
+    const std::string& name) {
+    constexpr float kTruncAbs = 9.765625e-4F;  // 2^-10 on log(sum)
+    const float split_gap = xt::amax(xt::abs(split_lse - reference_lse))();
+    const float unsplit_gap = xt::amax(xt::abs(unsplit_lse - reference_lse))();
+    const float bound = unsplit_gap + kTruncAbs * static_cast<float>(2U * terms.partials + 1U);
+    fmt::print(
+        "{}: logsumexp max gap vs reference: split {:.3e}, unsplit {:.3e} (bound {:.1e})\n",
+        name,
+        split_gap,
+        unsplit_gap,
+        bound);
+    EXPECT_LE(split_gap, bound) << name << ": the merged logsumexp is further off the reference than the folds allow";
+}
+
+// A split schedule folds the partials into the merger's running state in fp32, in a different order than one
+// core's inner loop, then rounds once to bf16 like the unsplit run. So the two outputs agree to a couple of
+// bf16 ULP per element and far closer on average; a merger that dropped, double-counted or mis-scaled a
+// partial would miss by a lot more. The 2e-2 reference tolerance would not see that on the small late-row
+// outputs that get cut, which is why the sweep's reference checks are not enough.
+void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
+    if (!base.seed.has_value()) {
+        base.seed = ttml::autograd::ctx().get_generator()();
+    }
+    auto arm = [&](uint32_t max_pieces, const char* tag) {
+        SDPATestConfig config = base;
+        config.program_config = program_config_of(knobs);
+        config.program_config.max_pieces = max_pieces;
+        config.test_name = base.test_name + tag;
+        return config;
+    };
+    base.value_min = 0.0F;  // see expect_split_matches_unsplit
+    base.value_max = 1.0F;
+    const SDPATestConfig split = arm(knobs.max_pieces, "_split");
+    const SDPATestConfig unsplit = arm(1U, "_unsplit");
+    // The split arm must really split, or the check proves nothing.
+    const auto split_schedule = host_schedule(split);
+    ASSERT_GT(split_schedule.num_slots, 0U) << split.test_name << " schedules no split units";
+    ASSERT_EQ(host_schedule(unsplit).num_slots, 0U) << unsplit.test_name << " schedules split units";
+
+    xt::xarray<float> split_output;
+    xt::xarray<float> unsplit_output;
+    xt::xarray<float> split_lse;
+    xt::xarray<float> unsplit_lse;
+    xt::xarray<float> reference_lse;
+    {
+        SCOPED_TRACE(split.test_name);
+        run_sdpa_test(split, &split_output, &split_lse, &reference_lse);
+    }
+    {
+        SCOPED_TRACE(unsplit.test_name);
+        run_sdpa_test(unsplit, &unsplit_output, &unsplit_lse);
+    }
+    const FoldErrorTerms terms = fold_error_terms(split, split_schedule);
+    expect_split_matches_unsplit(split_output, unsplit_output, terms, base.test_name);
+    if (base.return_intermediates) {
+        expect_split_lse_matches_reference(split_lse, unsplit_lse, reference_lse, terms, base.test_name);
+    }
+}
+
 void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
     if (!base.seed.has_value()) {
         base.seed = ttml::autograd::ctx().get_generator()();  // every row sees the same inputs
     }
     xt::xarray<float> default_output;
+    SDPATestConfig default_config = base;
+    default_config.program_config = {};
+    default_config.test_name = base.test_name + "_default";
+    const auto default_schedule = host_schedule(default_config);
     {
-        SDPATestConfig config = base;
-        config.program_config = {};
-        config.test_name = base.test_name + "_default";
-        SCOPED_TRACE(config.test_name);
-        run_sdpa_test(config, &default_output);
+        SCOPED_TRACE(default_config.test_name);
+        run_sdpa_test(default_config, &default_output);
     }
     for (const auto& knobs : sweep) {
         SDPATestConfig config = base;
-        config.program_config = {
-            .q_chunk_size = knobs.q_chunk_size,
-            .k_chunk_size = knobs.k_chunk_size,
-            .heads_per_item = knobs.heads_per_item};
-        config.test_name =
-            fmt::format("{}_q{}_k{}_h{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size, knobs.heads_per_item);
+        config.program_config = program_config_of(knobs);
+        config.test_name = fmt::format(
+            "{}_q{}_k{}_h{}_p{}_c{}",
+            base.test_name,
+            knobs.q_chunk_size,
+            knobs.k_chunk_size,
+            knobs.heads_per_item,
+            knobs.max_pieces,
+            knobs.num_cores);
         SCOPED_TRACE(config.test_name);
+        const auto row_schedule = host_schedule(config);
+        if (knobs.max_pieces > 1U) {
+            // A row that asks for pieces is there to run split units; one that schedules none would pass
+            // for the wrong reason on any grid.
+            ASSERT_GT(row_schedule.num_slots, 0U) << config.test_name << " schedules no split units";
+        }
         xt::xarray<float> output;
         run_sdpa_test(config, &output);
         const float mean_abs_gap = xt::mean(xt::abs(output - default_output))();
-        EXPECT_LT(mean_abs_gap, kCrossChunkingMeanAbsTol)
-            << config.test_name << " differs from the default chunking by " << mean_abs_gap << " on average";
+        // The bound follows what the schedules do, not the knob: a row with the default max_pieces cuts too
+        // when its items are heavier than a core's fair share.
+        if (row_schedule.num_slots > 0U || default_schedule.num_slots > 0U) {
+            // A run that cuts differs from the other by the folds' truncation, relative to the output
+            // (expect_split_matches_unsplit's mean bound), on top of whatever the other's own cuts add.
+            const FoldErrorTerms row_terms = fold_error_terms(config, row_schedule);
+            const FoldErrorTerms default_terms = fold_error_terms(default_config, default_schedule);
+            const float unshared_steps = static_cast<float>(
+                row_terms.partials + row_terms.extra_unsplit_steps + default_terms.partials +
+                default_terms.extra_unsplit_steps);
+            const float mean_rel_tol = 1e-3F + 4.8828125e-4F * unshared_steps;
+            const float mean_rel = mean_abs_gap / xt::mean(xt::abs(default_output))();
+            EXPECT_LT(mean_rel, mean_rel_tol)
+                << config.test_name << " differs from the default chunking by " << mean_rel << " relative on average";
+        } else {
+            EXPECT_LT(mean_abs_gap, kCrossChunkingMeanAbsTol)
+                << config.test_name << " differs from the default chunking by " << mean_abs_gap << " on average";
+        }
     }
 }
 
@@ -1725,6 +1949,229 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
         .test_name = "ChunkKnobs_None_DiffVDim_Gate"});
 }
 
+// Few heavy items on many cores: the late items are heavier than a core's fair share, so the schedule cuts
+// them into step ranges computed on different cores and merged. 2 heads, S=1024, 64-row chunks: 32 items,
+// up to four pieces each.
+const SDPATestConfig kSplitUnitsBase{
+    .batch_size = 1U,
+    .sequence_length = 1024U,
+    .query_dim = 128U,
+    .key_value_dim = 128U,
+    .num_query_heads = 2U,
+    .num_key_heads = 2U,
+    .mask_type = ttml::metal::AttentionMaskType::Causal,
+    .test_name = "ChunkKnobs_SplitUnits"};
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The blocking runs of the split kernel: the cut rows against the same rows uncut, on the full grid
+    // and on 32 cores, where a core runs a sender and then a merger (the merger waits on its own core's
+    // bump) and another a whole item and then a merger.
+    run_split_vs_unsplit(kSplitUnitsBase, {64, 128, 1, 4, 0});
+    const ChunkKnobs crowded{64, 128, 1, 4, 32};
+    SDPATestConfig crowded_config = kSplitUnitsBase;
+    crowded_config.program_config = program_config_of(crowded);
+    using ttml::metal::ops::sdpa_fw::device::UnitRole;
+    bool sender_then_merger = false;
+    for (const auto& units : host_schedule(crowded_config).per_core) {
+        sender_then_merger |=
+            !units.empty() && units.front().role == UnitRole::Sender && units.back().role == UnitRole::Merger;
+    }
+    ASSERT_TRUE(sender_then_merger) << "the 32-core row must put a sender and a merger on one core";
+    run_split_vs_unsplit(kSplitUnitsBase, crowded);
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Sweep) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The same rows against the references with four pieces, uncut, and on 32 cores so senders, whole items
+    // and mergers share cores.
+    run_chunk_knob_sweep(kSplitUnitsBase, {{64, 128, 1, 4, 0}, {64, 128, 1, 1, 0}, {64, 128, 1, 0, 32}});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_Backward) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The merged logsumexp and output feed the backward kernel. On a shape the default pick cuts, the
+    // gradients of the cut forward must match those of the uncut forward, and the autograd op, which passes
+    // no program config and so cuts by default, must produce the same gradients as the metal path.
+    using namespace ttml;
+    SDPATestConfig config = kSplitUnitsBase;
+    config.value_min = 0.0F;  // see expect_split_matches_unsplit
+    config.test_name = "ChunkKnobs_SplitUnits_Backward";
+    const auto split_schedule = host_schedule(config);
+    ASSERT_GT(split_schedule.num_slots, 0U) << "the default pick must cut this shape";
+    const FoldErrorTerms terms = fold_error_terms(config, split_schedule);
+
+    auto* device = &autograd::ctx().get_device();
+    const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
+    const uint32_t seed = 7U;
+    auto make = [&](uint32_t s, float lo, float hi) {
+        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed + s), device);
+    };
+    const ttnn::Tensor query = make(0U, -1.0F, 1.0F);
+    const ttnn::Tensor key = make(1U, -1.0F, 1.0F);
+    const ttnn::Tensor value = make(2U, 0.0F, 1.0F);
+    const ttnn::Tensor grad_output = make(3U, -1.0F, 1.0F);
+
+    struct Grads {
+        xt::xarray<float> dQ, dK, dV;
+    };
+    auto grads_of = [&](const metal::SDPAForwardProgramConfig& cfg) {
+        auto fw = metal::sdpa_fw(
+            query,
+            key,
+            value,
+            metal::AttentionMaskType::Causal,
+            std::nullopt,
+            0.0F,
+            /*return_intermediates=*/true,
+            std::nullopt,
+            cfg);
+        auto [dQ, dK, dV, dGate] = metal::sdpa_bw(
+            grad_output, fw[0].value(), query, key, value, fw[1].value(), metal::AttentionMaskType::Causal);
+        return Grads{core::to_xtensor(dQ), core::to_xtensor(dK), core::to_xtensor(dV)};
+    };
+    const Grads split = grads_of({});
+    const Grads unsplit = grads_of({.max_pieces = 1U});
+    // The gradients inherit the forward's output and logsumexp gaps (relative, the unshared steps' truncation)
+    // and add the backward kernel's own rounding of them; the bound is the forward's mean bound on the mean.
+    const float mean_rel_tol = 1e-3F + 4.8828125e-4F * static_cast<float>(terms.partials + terms.extra_unsplit_steps);
+    auto expect_close = [&](const xt::xarray<float>& a, const xt::xarray<float>& b, const char* what) {
+        ASSERT_EQ(a.shape(), b.shape());
+        const float mean_rel = xt::mean(xt::abs(a - b))() / xt::mean(xt::abs(b))();
+        fmt::print(
+            "{}: split vs unsplit {} mean relative gap {:.3e} (bound {:.1e})\n",
+            config.test_name,
+            what,
+            mean_rel,
+            mean_rel_tol);
+        EXPECT_LT(mean_rel, mean_rel_tol) << config.test_name << ": " << what << " of the cut forward is off";
+        EXPECT_TRUE(xt::all(xt::isfinite(a))) << what;
+    };
+    expect_close(split.dQ, unsplit.dQ, "dQ");
+    expect_close(split.dK, unsplit.dK, "dK");
+    expect_close(split.dV, unsplit.dV, "dV");
+
+    // The autograd entry point: forward, then backward with the same upstream gradient.
+    auto q = autograd::create_tensor(query, /* requires_grad */ true);
+    auto k = autograd::create_tensor(key, /* requires_grad */ true);
+    auto v = autograd::create_tensor(value, /* requires_grad */ true);
+    auto out = ops::scaled_dot_product_attention(q, k, v);
+    out->set_grad(grad_output);
+    out->backward();
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(q->get_grad()), split.dQ))) << "autograd dQ != metal dQ";
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(k->get_grad()), split.dK))) << "autograd dK != metal dK";
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(v->get_grad()), split.dV))) << "autograd dV != metal dV";
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Long) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // S=2048: 128-row chunks of four pieces at 256-row steps and of up to eight at 128-row steps (a piece
+    // needs two steps, so eight pieces need sixteen steps), 64-row chunks of two, the shape rule's own pick,
+    // and on 48 cores.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 2048U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_SplitUnits_Long"};
+    run_chunk_knob_sweep(base, {{128, 256, 1, 4, 0}, {128, 128, 1, 8, 0}, {64, 128, 1, 2, 0}, {64, 128, 1, 0, 48}});
+    run_split_vs_unsplit(base, {128, 128, 1, 8, 0});
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_ManyPieces) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // One head with one K tile per step: items of up to 64 steps cut into up to 8 and 16 pieces, so a
+    // merger folds in more than three partials.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 2048U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_SplitUnits_ManyPieces"};
+    run_chunk_knob_sweep(base, {{128, 32, 1, 8, 0}, {128, 32, 1, 16, 0}});
+    run_split_vs_unsplit(base, {128, 32, 1, 16, 0});
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_TwoMergers) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Two mergers on one core, so one of them waits on the core's second semaphore: one head of dim 32,
+    // S=768, one-row chunks of three K/V tiles on 31 cores (the host Schedule test holds the same
+    // schedule). Also the only split run with one-tile-wide heads.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 768U,
+        .query_dim = 32U,
+        .key_value_dim = 32U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_SplitUnits_TwoMergers"};
+    const ChunkKnobs knobs{32, 96, 1, 4, 31};
+    SDPATestConfig split = base;
+    split.program_config = program_config_of(knobs);
+    uint32_t highest_sem_idx = 0;
+    for (const auto& units : host_schedule(split).per_core) {
+        for (const auto& unit : units) {
+            highest_sem_idx = std::max(highest_sem_idx, unit.sem_idx);
+        }
+    }
+    ASSERT_EQ(highest_sem_idx, 1U) << "the shape must put two mergers on one core";
+    run_split_vs_unsplit(base, knobs);
+}
+
+// Splits with stacked heads, a different value dim and the gate; the gate is applied by the merger only.
+const SDPATestConfig kSplitUnitsGqaGateBase{
+    .batch_size = 1U,
+    .sequence_length = 512U,
+    .query_dim = 512U,      // 4 heads * 128
+    .key_value_dim = 256U,  // 2 kv heads * 128
+    .value_dim = 128U,      // 2 kv heads * 64
+    .num_query_heads = 4U,
+    .num_key_heads = 2U,
+    .mask_type = ttml::metal::AttentionMaskType::Causal,
+    .use_gate = true,
+    .test_name = "ChunkKnobs_SplitUnits_GQA_Gate"};
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    run_split_vs_unsplit(kSplitUnitsGqaGateBase, {64, 128, 2, 4, 0});
+    // The gated split kernel without the logsumexp: a variant no other test compiles.
+    SDPATestConfig no_intermediates = kSplitUnitsGqaGateBase;
+    no_intermediates.program_config = program_config_of({64, 128, 2, 4, 0});
+    no_intermediates.return_intermediates = false;
+    no_intermediates.test_name = "ChunkKnobs_SplitUnits_GQA_Gate_NoIntermediates";
+    ASSERT_GT(host_schedule(no_intermediates).num_slots, 0U);
+    run_sdpa_test(no_intermediates);
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate_Sweep) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Three pieces on 16 cores: 128-row chunks of two heads at 32-row steps, so the heavy items have the
+    // steps to cut three ways.
+    run_chunk_knob_sweep(kSplitUnitsGqaGateBase, {{64, 128, 2, 4, 0}, {128, 32, 2, 3, 16}});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NumCores) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 2U,
+            .sequence_length = 256U,
+            .query_dim = 256U,
+            .key_value_dim = 256U,
+            .num_query_heads = 4U,
+            .num_key_heads = 4U,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .test_name = "ChunkKnobs_NumCores"},
+        {{0, 0, 0, 0, 1}, {0, 0, 0, 0, 7}, {32, 32, 1, 1, 3}});
+}
+
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     // With the knobs at 0 the shape rule picks the chunking: larger than main's one Q row / four K tiles
     // where L1 allows, and always something that fits.
@@ -1741,149 +2188,428 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .has_gate = false,
         .return_intermediates = true};
+    // The partials' CBs count only when the schedule cuts; these 32-head shapes never cut.
+    const auto fits = [&](const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
+        const bool cuts = schedule_for({}, shape, chunks, kCores).num_slots > 0U;
+        return l1_bytes(cb_tiles(shape, chunks, cuts)) <= kBudget;
+    };
     const auto picked = resolve_chunks({}, tinyllama, kBudget, kCores);
     EXPECT_GE(picked.rows(), 4U) << "Sq=" << picked.Sq_chunk_t << " h=" << picked.heads_per_item;
     EXPECT_GE(picked.Sk_chunk_t, 4U);
-    EXPECT_LE(l1_bytes(cb_tiles(tinyllama, picked)), kBudget);
+    EXPECT_TRUE(fits(tinyllama, picked));
 
     SDPAForwardShape wide = tinyllama;  // head dim 512: the biggest chunks do not fit, the pick must degrade
     wide.qWt = 16U;
     wide.vWt = 16U;
     const auto picked_wide = resolve_chunks({}, wide, kBudget, kCores);
-    EXPECT_LE(l1_bytes(cb_tiles(wide, picked_wide)), kBudget);
+    EXPECT_TRUE(fits(wide, picked_wide));
+    EXPECT_GT(l1_bytes(cb_tiles(wide, picked_wide, /* with_partials */ true)), kBudget)
+        << "the uncut pick uses the L1 the partials would have taken";
 
     // A user knob pins its axis; the others are still picked.
     const auto pinned = resolve_chunks({.k_chunk_size = 32U}, tinyllama, kBudget, kCores);
     EXPECT_EQ(pinned.Sk_chunk_t, 1U);
     EXPECT_GE(pinned.rows(), 4U);
 
-    // Few causal sequences (8 heads, S=2048): four-row chunks give 64 light/heavy pairs for 130 cores, so
-    // the pick shrinks to one row per chunk (256 pairs) and keeps every core on a balanced pair, as main
-    // did, instead of falling back to an unbalanced contiguous split.
+    // Few causal sequences (8 heads, S=2048): four-row chunks give 128 items for 130 cores. The scheduler
+    // keeps the cores busy by cutting the heavy ones, which beats two-row chunks (256 items) uncut, so the
+    // pick stays at four rows and the schedule cuts; with cutting off the pick shrinks to two rows.
     SDPAForwardShape few_seqs = tinyllama;
     few_seqs.q_heads = 8U;
     few_seqs.kv_heads = 8U;
     const auto picked_few = resolve_chunks({}, few_seqs, kBudget, kCores);
-    EXPECT_EQ(picked_few.Sq_chunk_t, 1U);
-    EXPECT_GE(num_work_units(few_seqs, picked_few, kCores), kCores);
+    EXPECT_EQ(picked_few.Sq_chunk_t, 4U);
+    EXPECT_GT(schedule_for({}, few_seqs, picked_few, kCores).num_slots, 0U) << "the pick must let the cut engage";
     EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
-
-    // An odd chunk count cannot pair: S=384 (12 tiles) gives three four-row chunks, and main paired every
-    // even tile count. With 64 sequences the pick shrinks to two-row chunks (six per sequence, 192 pairs for
-    // 130 cores) instead of keeping four-row chunks on an unbalanced contiguous split.
-    SDPAForwardShape odd_chunks = tinyllama;
-    odd_chunks.batch = 2U;
-    odd_chunks.St = 12U;
-    const auto picked_odd = resolve_chunks({}, odd_chunks, kBudget, kCores);
-    EXPECT_EQ(picked_odd.Sq_chunk_t, 2U);
-    EXPECT_GE(num_causal_pairs(odd_chunks, picked_odd), kCores);
-    EXPECT_EQ(num_work_units(odd_chunks, picked_odd, kCores), num_causal_pairs(odd_chunks, picked_odd))
-        << "the split must hand out pairs";
+    const auto picked_few_uncut = resolve_chunks({.max_pieces = 1U}, few_seqs, kBudget, kCores);
+    EXPECT_EQ(picked_few_uncut.Sq_chunk_t, 2U);
+    EXPECT_GE(num_work_items(few_seqs, picked_few_uncut), kCores);
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
-    // Host-only: causal chunks go out as (i, n-1-i) pairs, every item exactly once, when there is a pair for
-    // every core (main's rule); fewer pairs than cores, an odd chunk count and the other mask modes get
-    // contiguous blocks of items.
-    using namespace ttml::metal::ops::sdpa_fw::device;
-    constexpr uint32_t kCores = 130U;
-    const auto items_of = [](const CoreItemRuns& runs) {
-        std::vector<uint32_t> items;
-        for (const auto& run : runs) {
-            for (uint32_t i = 0; i < run.num_items; ++i) {
-                items.push_back(run.first_item + i);
-            }
-        }
-        return items;
-    };
-    const auto check_each_item_once = [&](const std::vector<CoreItemRuns>& per_core, uint32_t total_items) {
-        std::vector<uint32_t> seen(total_items, 0U);
-        for (const auto& runs : per_core) {
-            EXPECT_FALSE(runs.empty()) << "a core without work";
-            for (const uint32_t item : items_of(runs)) {
-                ASSERT_LT(item, total_items);
-                ++seen[item];
-            }
-        }
-        EXPECT_TRUE(std::all_of(seen.begin(), seen.end(), [](uint32_t n) { return n == 1U; }))
-            << "every item must be handed out exactly once";
-    };
+namespace {
 
-    SDPAForwardShape causal{
-        .batch = 1U,
-        .q_heads = 32U,
-        .kv_heads = 32U,
-        .St = 16U,
-        .qWt = 2U,
-        .vWt = 2U,
+using ttml::metal::ops::sdpa_fw::device::SDPAForwardChunks;
+using ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule;
+using ttml::metal::ops::sdpa_fw::device::SDPAForwardShape;
+using ttml::metal::ops::sdpa_fw::device::UnitRole;
+using ttml::metal::ops::sdpa_fw::device::WorkUnit;
+
+// What every schedule must satisfy for the kernels to compute each item exactly once and for the senders
+// and mergers to find each other: full coverage, consecutive slots per item, matching semaphores, and
+// senders before whole items before mergers on every core.
+void check_schedule(
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    const SDPAForwardSchedule& schedule,
+    uint32_t max_pieces) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    const uint32_t total_items = num_work_items(shape, chunks);
+    // Every unit must fit the three runtime-arg words (append_unit_words throws otherwise).
+    for (const auto& units : schedule.per_core) {
+        for (const WorkUnit& unit : units) {
+            std::vector<uint32_t> words;
+            EXPECT_NO_THROW(append_unit_words(words, unit, /* merger_noc_x */ 0U, /* merger_noc_y */ 0U));
+            EXPECT_EQ(words.size(), kWordsPerUnit);
+        }
+    }
+    std::vector<uint32_t> whole_count(total_items, 0U);
+    struct Cut {
+        std::vector<std::pair<uint32_t, uint32_t>> ranges;  // step ranges of every piece
+        std::vector<uint32_t> sender_slots;
+        std::vector<uint32_t> sender_sems;
+        std::vector<uint32_t> sender_merger_cores;
+        std::optional<WorkUnit> merger;
+        uint32_t merger_core = 0;
+    };
+    std::map<uint32_t, Cut> cuts;
+    std::set<uint32_t> slots;
+    for (uint32_t core = 0; core < schedule.per_core.size(); ++core) {
+        auto rank = [](UnitRole role) { return role == UnitRole::Sender ? 0 : role == UnitRole::Whole ? 1 : 2; };
+        int last_rank = 0;
+        std::set<uint32_t> sems_on_core;
+        for (const WorkUnit& unit : schedule.per_core[core]) {
+            EXPECT_GE(rank(unit.role), last_rank) << "core " << core << ": senders, then whole items, then mergers";
+            last_rank = rank(unit.role);
+            if (unit.role == UnitRole::Whole) {
+                ASSERT_LE(unit.item + unit.num_items, total_items);
+                for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                    ++whole_count[item];
+                }
+                continue;
+            }
+            ASSERT_LT(unit.item, total_items);
+            Cut& cut = cuts[unit.item];
+            cut.ranges.emplace_back(unit.step_begin, unit.step_end);
+            EXPECT_LT(unit.step_begin, unit.step_end) << "empty piece";
+            if (unit.role == UnitRole::Sender) {
+                EXPECT_TRUE(slots.insert(unit.slot).second) << "slot " << unit.slot << " used twice";
+                EXPECT_LT(unit.slot, schedule.num_slots);
+                cut.sender_slots.push_back(unit.slot);
+                cut.sender_sems.push_back(unit.sem_idx);
+                cut.sender_merger_cores.push_back(unit.merger_core);
+            } else {
+                EXPECT_FALSE(cut.merger.has_value()) << "item " << unit.item << " has two mergers";
+                EXPECT_TRUE(sems_on_core.insert(unit.sem_idx).second) << "core " << core << " reuses a semaphore";
+                EXPECT_LT(unit.sem_idx, kMaxMergersPerCore);
+                cut.merger = unit;
+                cut.merger_core = core;
+            }
+        }
+    }
+    EXPECT_EQ(slots.size(), schedule.num_slots) << "every slot belongs to one sender";
+    for (uint32_t item = 0; item < total_items; ++item) {
+        const auto cut = cuts.find(item);
+        if (cut == cuts.end()) {
+            EXPECT_EQ(whole_count[item], 1U) << "item " << item << " is computed " << whole_count[item] << " times";
+            continue;
+        }
+        EXPECT_EQ(whole_count[item], 0U) << "item " << item << " is both cut and whole";
+        Cut& c = cut->second;
+        ASSERT_TRUE(c.merger.has_value()) << "item " << item << " is cut but has no merger";
+        EXPECT_EQ(c.merger->num_partials, c.sender_slots.size());
+        EXPECT_LE(c.ranges.size(), max_pieces);
+        EXPECT_GE(c.ranges.size(), 2U);
+        std::sort(c.ranges.begin(), c.ranges.end());
+        uint32_t next = 0;
+        for (const auto& [begin, end] : c.ranges) {
+            EXPECT_EQ(begin, next) << "item " << item << ": pieces must tile its K/V steps";
+            next = end;
+        }
+        EXPECT_EQ(next, num_kv_steps(shape, chunks, item)) << "item " << item << ": pieces must cover every step";
+        std::sort(c.sender_slots.begin(), c.sender_slots.end());
+        for (uint32_t k = 0; k < c.sender_slots.size(); ++k) {
+            EXPECT_EQ(c.sender_slots[k], c.merger->slot + k) << "item " << item << ": slots must follow the merger's";
+            EXPECT_EQ(c.sender_sems[k], c.merger->sem_idx)
+                << "item " << item << ": a sender bumps its merger's semaphore";
+            EXPECT_EQ(c.sender_merger_cores[k], c.merger_core)
+                << "item " << item << ": a sender targets its merger's core";
+        }
+    }
+}
+
+SDPAForwardShape causal_shape(uint32_t batch, uint32_t q_heads, uint32_t kv_heads, uint32_t St, uint32_t Wt) {
+    return SDPAForwardShape{
+        .batch = batch,
+        .q_heads = q_heads,
+        .kv_heads = kv_heads,
+        .St = St,
+        .qWt = Wt,
+        .vWt = Wt,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .has_gate = false,
         .return_intermediates = true};
-    const SDPAForwardChunks four_rows{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
-    // 32 sequences x 4 chunks = 128 items = 64 pairs. With 130 cores that is fewer pairs than cores, so as
-    // on main the items go out contiguously, one per core on 128 cores.
-    ASSERT_EQ(num_work_items(causal, four_rows), 128U);
-    ASSERT_EQ(num_causal_pairs(causal, four_rows), 64U);
-    EXPECT_EQ(num_work_units(causal, four_rows, kCores), 128U);
-    const auto unpaired = split_work(causal, four_rows, 128U, kCores);
-    ASSERT_EQ(unpaired.size(), 128U);
-    check_each_item_once(unpaired, 128U);
-    for (const auto& runs : unpaired) {
-        EXPECT_EQ(items_of(runs).size(), 1U) << "one item per core";
-    }
-    // With 64 cores every core gets a pair: paired on 64 cores.
-    constexpr uint32_t kPairCores = 64U;
-    ASSERT_EQ(num_work_units(causal, four_rows, kPairCores), 64U);
-    const uint32_t num_cores = std::min(kPairCores, num_work_units(causal, four_rows, kPairCores));
-    EXPECT_EQ(num_cores, 64U);
-    const auto paired = split_work(causal, four_rows, num_cores, kPairCores);
-    ASSERT_EQ(paired.size(), num_cores);
-    check_each_item_once(paired, 128U);
-    constexpr uint32_t kChunksPerSeq = 4U;
-    for (const auto& runs : paired) {
-        const auto items = items_of(runs);
-        ASSERT_EQ(items.size(), 2U) << "one pair per core";
-        const uint32_t seq = items[0] / kChunksPerSeq;
-        EXPECT_EQ(items[1] / kChunksPerSeq, seq) << "a pair stays inside one sequence";
-        EXPECT_EQ(items[0] % kChunksPerSeq + items[1] % kChunksPerSeq, kChunksPerSeq - 1U)
-            << "chunk i goes with chunk n-1-i";
-    }
-    // Fewer cores than pairs: pairs are shared out contiguously, still each item once.
-    const auto paired_fewer = split_work(causal, four_rows, 40U, 40U);
-    ASSERT_EQ(paired_fewer.size(), 40U);
-    check_each_item_once(paired_fewer, 128U);
-
-    // Odd chunk count (St=12, Sq=4 -> 3 chunks): contiguous over min(cores, items).
-    SDPAForwardShape odd = causal;
-    odd.St = 12U;
-    EXPECT_EQ(num_causal_pairs(odd, four_rows), 0U);
-    EXPECT_EQ(num_work_units(odd, four_rows, kCores), num_work_items(odd, four_rows));
-    const auto contiguous =
-        split_work(odd, four_rows, std::min(kCores, num_work_units(odd, four_rows, kCores)), kCores);
-    ASSERT_EQ(contiguous.size(), 96U);
-    check_each_item_once(contiguous, 96U);
-    for (const auto& runs : contiguous) {
-        EXPECT_EQ(runs.size(), 1U) << "a contiguous block is one run";
-    }
-
-    // No mask: items, not pairs.
-    SDPAForwardShape none = causal;
-    none.mask_type = ttml::metal::AttentionMaskType::None;
-    EXPECT_EQ(num_work_units(none, four_rows, kCores), 128U);
-    const uint32_t none_cores = std::min(kCores, num_work_units(none, four_rows, kCores));
-    const auto none_split = split_work(none, four_rows, none_cores, kCores);
-    ASSERT_EQ(none_split.size(), none_cores);
-    check_each_item_once(none_split, 128U);
-
-    EXPECT_ANY_THROW(split_work(causal, four_rows, 65U, kPairCores)) << "more cores than pairs is a caller bug";
 }
 
-// The production pick (four-row chunks, eight K/V tiles, light/heavy pairs) only lands on device when there
-// is a pair per core; every other blocking shape is too small for that and resolves to one-row chunks. B is
-// sized from the grid: S=512 gives four chunks per sequence (two pairs), so B*H = cores/2 + 2 sequences give
-// cores + 4 pairs. A core with the (0, 3) pair walks two non-consecutive runs of its work list, and the two
-// cores with two pairs run the multi-item list, as TinyLlama does. D=32 keeps the host references cheap; the
-// pick does not depend on it below 128.
+uint32_t count_role(const SDPAForwardSchedule& schedule, UnitRole role) {
+    uint32_t n = 0;
+    for (const auto& units : schedule.per_core) {
+        for (const auto& unit : units) {
+            n += unit.role == role ? 1U : 0U;
+        }
+    }
+    return n;
+}
+
+}  // namespace
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
+    // The scheduler is pure, so its invariants are checked on the host for the cases the device tests can
+    // not reach: many pieces per item, two mergers on one core, the runtime-arg fallback.
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    constexpr uint32_t kCores = 120U;
+
+    // Enough items per core: nothing is cut, every core gets whole items.
+    const SDPAForwardShape tinyllama = causal_shape(1U, 32U, 4U, 64U, 2U);
+    const SDPAForwardChunks sq4sk8{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardChunks sq4sk1{.Sq_chunk_t = 4U, .Sk_chunk_t = 1U, .heads_per_item = 1U};
+    const SDPAForwardSchedule uncut = make_schedule(tinyllama, sq4sk8, kCores, kDefaultMaxPieces);
+    EXPECT_EQ(uncut.num_slots, 0U);
+    EXPECT_EQ(count_role(uncut, UnitRole::Sender), 0U);
+    EXPECT_EQ(uncut.per_core.size(), kCores);
+    check_schedule(tinyllama, sq4sk8, uncut, kDefaultMaxPieces);
+
+    // Two heads, S=2048: the late items are cut. Only items heavier than a core's fair share are cut, so the
+    // scratch slots (one per sender) stay under the core count: that bounds the scratch the program owns.
+    const SDPAForwardShape two_heads = causal_shape(1U, 2U, 2U, 64U, 2U);
+    const SDPAForwardSchedule cut = make_schedule(two_heads, sq4sk8, kCores, kDefaultMaxPieces);
+    EXPECT_GT(cut.num_slots, 0U);
+    EXPECT_LT(cut.num_slots, kCores);
+    EXPECT_EQ(count_role(cut, UnitRole::Sender), cut.num_slots);
+    EXPECT_GT(count_role(cut, UnitRole::Merger), 0U);
+    check_schedule(two_heads, sq4sk8, cut, kDefaultMaxPieces);
+
+    // Items at one to two per core: cutting would put the mergers on cores the whole items already fill, so
+    // the model rates the uncut schedule faster and make_schedule keeps it (8 heads / 2 kv, S=2048, D=128:
+    // 128 items on 80 cores); on the full grid the cut wins.
+    const SDPAForwardShape tp4 = causal_shape(1U, 8U, 2U, 64U, 4U);
+    const SDPAForwardChunks sq4sk4{.Sq_chunk_t = 4U, .Sk_chunk_t = 4U, .heads_per_item = 1U};
+    const SDPAForwardSchedule crowded = make_schedule(tp4, sq4sk4, 80U, kDefaultMaxPieces);
+    EXPECT_EQ(crowded.num_slots, 0U) << "cutting at 1.6 items per core loses; the schedule must not cut";
+    EXPECT_GT(crowded.predicted_us, 0.0);
+    check_schedule(tp4, sq4sk4, crowded, kDefaultMaxPieces);
+    const SDPAForwardSchedule roomy = make_schedule(tp4, sq4sk4, kCores, kDefaultMaxPieces);
+    EXPECT_GT(roomy.num_slots, 0U);
+    EXPECT_LT(roomy.predicted_us, make_schedule(tp4, sq4sk4, kCores, 1U).predicted_us);
+    check_schedule(tp4, sq4sk4, roomy, kDefaultMaxPieces);
+
+    // Equal items on as many cores: the fair share is an item's cost up to a rounding, and a tie must not
+    // cut every item in two (3 heads, S=128, one-chunk items of 4 steps on 3 cores).
+    const SDPAForwardShape equal_items = causal_shape(1U, 3U, 3U, 4U, 1U);
+    const SDPAForwardSchedule tie = make_schedule(equal_items, sq4sk1, 3U, kDefaultMaxPieces);
+    EXPECT_EQ(tie.num_slots, 0U) << "equal items on as many cores must not be cut";
+    EXPECT_EQ(tie.per_core.size(), 3U);
+    check_schedule(equal_items, sq4sk1, tie, kDefaultMaxPieces);
+
+    // max_pieces = 1 never cuts.
+    const SDPAForwardSchedule one_piece = make_schedule(two_heads, sq4sk8, kCores, 1U);
+    EXPECT_EQ(one_piece.num_slots, 0U);
+    check_schedule(two_heads, sq4sk8, one_piece, 1U);
+
+    // One head with one K tile per step: items of up to 64 steps cut into many pieces, more partials than
+    // any device test reaches.
+    const SDPAForwardShape one_head = causal_shape(1U, 1U, 1U, 64U, 2U);
+    const SDPAForwardSchedule many = make_schedule(one_head, sq4sk1, kCores, 16U);
+    uint32_t most_partials = 0;
+    for (const auto& units : many.per_core) {
+        for (const auto& unit : units) {
+            most_partials = std::max(most_partials, unit.num_partials);
+        }
+    }
+    EXPECT_GT(most_partials, 3U);
+    EXPECT_LT(many.num_slots, kCores);
+    check_schedule(one_head, sq4sk1, many, 16U);
+
+    // The most pieces an item can be cut into, 63: one 128-step item (a whole 1024-tile sequence, eight K
+    // tiles per step, so a step outweighs a merge) on 120 cores gets 62 senders and a merger with 62
+    // partials, the top of the six-bit num_partials field, which check_schedule encodes.
+    const SDPAForwardShape one_item = causal_shape(1U, 1U, 1U, 1024U, 1U);
+    const SDPAForwardChunks whole_seq{.Sq_chunk_t = 1024U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardSchedule most = make_schedule(one_item, whole_seq, kCores, kMaxPieces);
+    EXPECT_EQ(most.num_slots, kMaxPieces - 1U);
+    EXPECT_EQ(count_role(most, UnitRole::Sender), kMaxPieces - 1U);
+    EXPECT_EQ(count_role(most, UnitRole::Merger), 1U);
+    check_schedule(one_item, whole_seq, most, kMaxPieces);
+
+    // Two mergers on one core, so the second waits on the core's next semaphore: one head, S=768, one-row
+    // chunks of three K/V tiles, on 31 cores. Their senders carry the merger's semaphore index.
+    const SDPAForwardShape one_head_short = causal_shape(1U, 1U, 1U, 24U, 1U);
+    const SDPAForwardChunks sq1sk3{.Sq_chunk_t = 1U, .Sk_chunk_t = 3U, .heads_per_item = 1U};
+    const SDPAForwardSchedule two_mergers = make_schedule(one_head_short, sq1sk3, 31U, kDefaultMaxPieces);
+    uint32_t most_mergers_on_a_core = 0;
+    uint32_t highest_sem_idx = 0;
+    for (const auto& units : two_mergers.per_core) {
+        uint32_t mergers = 0;
+        for (const auto& unit : units) {
+            if (unit.role == UnitRole::Merger) {
+                ++mergers;
+                highest_sem_idx = std::max(highest_sem_idx, unit.sem_idx);
+            }
+        }
+        most_mergers_on_a_core = std::max(most_mergers_on_a_core, mergers);
+    }
+    EXPECT_GE(most_mergers_on_a_core, 2U) << "the shape must put two mergers on one core";
+    EXPECT_EQ(highest_sem_idx + 1U, most_mergers_on_a_core) << "a core's mergers take its semaphores in turn";
+    check_schedule(one_head_short, sq1sk3, two_mergers, kDefaultMaxPieces);
+
+    // More cores than items with no cuts allowed: one core per item.
+    const SDPAForwardSchedule few_items = make_schedule(two_heads, sq4sk8, kCores, 1U);
+    EXPECT_EQ(few_items.per_core.size(), num_work_items(two_heads, sq4sk8));
+
+    // Longest-first scatters equal-cost items across the cores, so with far more items than the runtime
+    // args can list per core the schedule falls back to heavy/light chunk pairs: every core gets the same
+    // number of K/V steps within one pair, folded into a few runs.
+    const SDPAForwardShape many_items = causal_shape(2U, 32U, 32U, 256U, 2U);
+    const SDPAForwardChunks sq1sk8{.Sq_chunk_t = 1U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardSchedule paired = make_schedule(many_items, sq1sk8, kCores, kDefaultMaxPieces);
+    const uint32_t total = num_work_items(many_items, sq1sk8);
+    ASSERT_EQ(paired.per_core.size(), kCores);
+    EXPECT_EQ(paired.num_slots, 0U);
+    uint64_t min_steps = std::numeric_limits<uint64_t>::max();
+    uint64_t max_steps = 0;
+    for (const auto& units : paired.per_core) {
+        EXPECT_LE(units.size(), 4U) << "pairs of one stack fold into runs";
+        uint64_t steps = 0;
+        for (const WorkUnit& unit : units) {
+            for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                steps += num_kv_steps(many_items, sq1sk8, item);
+            }
+        }
+        min_steps = std::min(min_steps, steps);
+        max_steps = std::max(max_steps, steps);
+    }
+    // 16384 items on 120 cores: 136 or 137 items each, one pair's worth of steps apart at most.
+    EXPECT_LE(max_steps - min_steps, static_cast<uint64_t>(num_kv_steps(many_items, sq1sk8, total - 1U) + 1U));
+    check_schedule(many_items, sq1sk8, paired, kDefaultMaxPieces);
+}
+
+// Ring SDPA must run the program it ran before the chunk knobs and the scheduler (its only device test is
+// the Galaxy ring test). Its config pins main's chunking and asks for main's placement; here the schedule
+// the factory builds for it is compared with main's work split, written out from main's program factory:
+// causal, an even number of tile-rows and at least as many heavy/light pairs as cores -> core c gets a
+// contiguous block of pairs (the first total % cores cores one more), pair p of sequence s being rows p
+// and St - 1 - p; otherwise split_work_to_cores over the rows. Items are rows here, so the sets match.
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_RingRunsMainProgram) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    using ttml::metal::ops::ring_sdpa_fw::ring_program_config;
+    constexpr uint64_t kAnyBudget = 1ULL << 40U;
+    uint32_t checked = 0;
+    uint32_t paired_cases = 0;
+    for (const uint32_t cores : {120U, 130U}) {
+        for (const uint32_t St : {1U, 2U, 3U, 4U, 6U, 8U, 16U, 64U, 128U}) {
+            for (const auto& [batch, heads] :
+                 std::vector<std::pair<uint32_t, uint32_t>>{{1U, 1U}, {1U, 8U}, {2U, 32U}, {4U, 32U}}) {
+                const SDPAForwardShape shape = causal_shape(batch, heads, heads, St, 2U);
+                const auto config = ring_program_config(St);
+                // main's pick_sk_chunk_t: the largest of 4, 2, 1 that divides St; one row per item.
+                const uint32_t main_sk = St % 4U == 0U ? 4U : (St % 2U == 0U ? 2U : 1U);
+                const SDPAForwardChunks chunks = resolve_chunks(config, shape, kAnyBudget, cores);
+                EXPECT_EQ(chunks.Sq_chunk_t, 1U);
+                EXPECT_EQ(chunks.Sk_chunk_t, main_sk);
+                EXPECT_EQ(chunks.heads_per_item, 1U);
+                EXPECT_FALSE(may_split(config, shape));
+
+                const SDPAForwardSchedule schedule = schedule_for(config, shape, chunks, cores);
+                EXPECT_EQ(schedule.num_slots, 0U);
+                EXPECT_EQ(count_role(schedule, UnitRole::Sender), 0U);
+                EXPECT_EQ(count_role(schedule, UnitRole::Merger), 0U);
+                check_schedule(shape, chunks, schedule, 1U);
+
+                const uint32_t NC = batch * heads;
+                const uint32_t total_rows = NC * St;
+                const uint32_t total_pairs = NC * (St / 2U);
+                const bool balanced = St % 2U == 0U && total_pairs >= cores;
+                std::vector<std::vector<uint32_t>> expected;
+                if (balanced) {
+                    ++paired_cases;
+                    expected.resize(cores);
+                    uint32_t pair = 0;
+                    for (uint32_t core = 0; core < cores; ++core) {
+                        const uint32_t n = total_pairs / cores + (core < total_pairs % cores ? 1U : 0U);
+                        for (uint32_t p = pair; p < pair + n; ++p) {
+                            const uint32_t seq = p / (St / 2U);
+                            const uint32_t row = p % (St / 2U);
+                            expected[core].push_back(seq * St + row);
+                            expected[core].push_back(seq * St + St - 1U - row);
+                        }
+                        pair += n;
+                    }
+                } else {
+                    const uint32_t used = std::min(cores, total_rows);
+                    expected.resize(used);
+                    uint32_t row = 0;
+                    for (uint32_t core = 0; core < used; ++core) {
+                        const uint32_t n = total_rows / used + (core < total_rows % used ? 1U : 0U);
+                        for (uint32_t r = row; r < row + n; ++r) {
+                            expected[core].push_back(r);
+                        }
+                        row += n;
+                    }
+                }
+                ASSERT_EQ(schedule.per_core.size(), expected.size())
+                    << "St=" << St << " batch=" << batch << " heads=" << heads << " cores=" << cores;
+                for (uint32_t core = 0; core < expected.size(); ++core) {
+                    std::vector<uint32_t> got;
+                    for (const WorkUnit& unit : schedule.per_core[core]) {
+                        for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                            got.push_back(item);
+                        }
+                    }
+                    std::sort(got.begin(), got.end());
+                    std::sort(expected[core].begin(), expected[core].end());
+                    EXPECT_EQ(got, expected[core]) << "St=" << St << " batch=" << batch << " heads=" << heads
+                                                   << " cores=" << cores << " core=" << core;
+                }
+                ++checked;
+            }
+        }
+    }
+    EXPECT_EQ(checked, 2U * 9U * 4U);
+    EXPECT_GE(paired_cases, 20U) << "the ring shards here must reach main's paired mode";
+}
+
+// main's program on device, through the single-chip op: a shard that reaches the paired placement (144
+// pairs over the grid) and one that falls back to blocks of rows (4 pairs on 8 cores).
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_RingProgramOnDevice) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    using ttml::metal::ops::ring_sdpa_fw::ring_program_config;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t cores = static_cast<uint32_t>(grid.x * grid.y);
+    struct Shard {
+        uint32_t batch;
+        uint32_t heads;
+        uint32_t S;
+        bool paired;
+    };
+    for (const Shard shard : {Shard{1U, 18U, 512U, true}, Shard{1U, 1U, 256U, false}}) {
+        const uint32_t St = shard.S / 32U;
+        const auto config = ring_program_config(St);
+        const SDPAForwardShape shape = causal_shape(shard.batch, shard.heads, shard.heads, St, 1U);
+        const auto chunks = resolve_chunks(config, shape, ttml::metal::available_l1_bytes(*device), cores);
+        const SDPAForwardSchedule schedule = schedule_for(config, shape, chunks, cores);
+        ASSERT_EQ(schedule.num_slots, 0U);
+        const uint32_t pairs = shard.batch * shard.heads * (St / 2U);
+        ASSERT_EQ(pairs >= cores, shard.paired) << "the shard must land in the intended placement";
+        ASSERT_EQ(schedule.per_core.size(), shard.paired ? cores : std::min(cores, shard.batch * shard.heads * St));
+        run_sdpa_test(SDPATestConfig{
+            .batch_size = shard.batch,
+            .sequence_length = shard.S,
+            .query_dim = shard.heads * 32U,
+            .key_value_dim = shard.heads * 32U,
+            .num_query_heads = shard.heads,
+            .num_key_heads = shard.heads,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .program_config = config,
+            .test_name =
+                shard.paired ? "ChunkKnobs_RingProgramOnDevice_Paired" : "ChunkKnobs_RingProgramOnDevice_Rows"});
+    }
+}
+
+// The production pick (four-row chunks, eight K/V tiles) only lands on device when the items keep the
+// cores busy; every other blocking shape is too small for that and resolves to one-row chunks. B is sized
+// from the grid: S=512 gives four chunks per sequence, so B*H = cores/2 + 2 sequences give about two items
+// per core, as TinyLlama has. D=32 keeps the host references cheap; the pick does not depend on it below 128.
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPairedOnDevice) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     using namespace ttml::metal::ops::sdpa_fw::device;
@@ -1905,7 +2631,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPairedOnDevice) {
     const auto picked = resolve_chunks({}, shape, ttml::metal::available_l1_bytes(*device), cores);
     ASSERT_EQ(picked.Sq_chunk_t, 4U) << "the shape must take the production pick";
     ASSERT_EQ(picked.Sk_chunk_t, 8U);
-    ASSERT_GE(num_causal_pairs(shape, picked), cores) << "a pair per core, so the split pairs";
+    ASSERT_GE(num_work_items(shape, picked), cores) << "an item per core, so the pick keeps four rows";
     run_sdpa_test(SDPATestConfig{
         .batch_size = B,
         .sequence_length = S,
@@ -1941,7 +2667,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
     auto query = make(1U);
     auto key = make(2U);
     auto value = make(3U);
-    auto run = [&](uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t heads_per_item = 0U) {
+    auto run_cfg = [&](const metal::SDPAForwardProgramConfig& program_config) {
         return metal::sdpa_fw(
             query,
             key,
@@ -1951,7 +2677,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
             0.0F,
             false,
             std::nullopt,
-            {.q_chunk_size = q_chunk_size, .k_chunk_size = k_chunk_size, .heads_per_item = heads_per_item});
+            program_config);
+    };
+    auto run = [&](uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t heads_per_item = 0U) {
+        return run_cfg({.q_chunk_size = q_chunk_size, .k_chunk_size = k_chunk_size, .heads_per_item = heads_per_item});
     };
     EXPECT_NO_THROW(run(0U, 0U));
     EXPECT_THAT([&] { run(48U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (48)")));
@@ -1959,6 +2688,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
     EXPECT_THAT([&] { run(96U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (96)")));
     EXPECT_THAT([&] { run(0U, 2U * S); }, ThrowsMessage<std::exception>(HasSubstr("k_chunk_size (512)")));
     EXPECT_THAT([&] { run(0U, 0U, 2U); }, ThrowsMessage<std::exception>(HasSubstr("heads_per_item (2)")));
+    EXPECT_THAT([&] { run_cfg({.max_pieces = 64U}); }, ThrowsMessage<std::exception>(HasSubstr("max_pieces (64)")));
+    EXPECT_THAT(
+        [&] { run_cfg({.num_cores = 100000U}); }, ThrowsMessage<std::exception>(HasSubstr("num_cores (100000)")));
 
     // Head dim 512 with whole-sequence chunks: the circular buffers do not fit L1.
     const std::array<std::size_t, 4> wide_shape{1U, 2U, S, 512U};
@@ -1997,30 +2729,62 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
             /*has_gate=*/false,
             /*return_intermediates=*/false);
         const uint64_t budget = ttml::metal::available_l1_bytes(ttml::autograd::ctx().get_device());
+        const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+        const uint32_t kGridCores = grid.x * grid.y;
         EXPECT_THAT(
-            [&] { check_chunks({.q_chunk_size = S}, wide, budget); },
+            [&] { check_chunks({.q_chunk_size = S}, wide, budget, kGridCores); },
             ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")));
-        EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget));
-        EXPECT_NO_THROW(check_chunks({}, wide, budget));
+        EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget, kGridCores));
+        // main's placement never cuts, so it refuses a max_pieces above one.
+        EXPECT_THAT(
+            [&] { check_chunks({.max_pieces = 2U, .causal_pairs = true}, wide, budget, kGridCores); },
+            ThrowsMessage<std::exception>(HasSubstr("causal_pairs never cuts")));
+        EXPECT_NO_THROW(check_chunks({.causal_pairs = true}, wide, budget, kGridCores));
+        // The work list numbers items in a 20-bit field: one tile-row of one head is the most items.
+        SDPAForwardShape too_many = wide;
+        too_many.batch = 1U;
+        too_many.q_heads = 32U;
+        too_many.kv_heads = 32U;
+        too_many.St = 32768U;  // 32 * 32768 = 2^20 items fit
+        EXPECT_NO_THROW(check_chunks({}, too_many, budget, kGridCores));
+        too_many.St = 32769U;
+        EXPECT_THAT(
+            [&] { check_chunks({}, too_many, budget, kGridCores); },
+            ThrowsMessage<std::exception>(HasSubstr("exceeds the work list's item range")));
+        EXPECT_NO_THROW(check_chunks({}, wide, budget, kGridCores));
     }
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
-    // Two chunkings on the same tensors are two cached programs; the first one again is a hit, and a hit
-    // on a second live input set must read the new buffers.
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Two chunkings on the same tensors are two cached programs; the first one again is a hit, also on a
+    // second set of inputs at other addresses. The first chunking splits, so the hit reuses the cached
+    // program's scratch tensor, its semaphores (reset by every merger) and its slots; the second does not
+    // cut, so the two agree to the uncut cross-chunking bound.
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     device->enable_program_cache();
-    const std::array<std::size_t, 4> shape{1U, 2U, 256U, 64U};
-    auto make = [&](uint32_t seed) {
-        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    const SDPATestConfig shape_config{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = metal::AttentionMaskType::Causal,
+        .return_intermediates = false};
+    const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
+    auto make = [&](uint32_t seed, float lo, float hi) {
+        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed), device);
     };
     struct Inputs {
         ttnn::Tensor query, key, value;
     };
-    const Inputs first{make(1U), make(2U), make(3U)};
-    const Inputs second{make(4U), make(5U), make(6U)};  // both sets stay alive: different addresses
-    auto run = [&](const Inputs& in, const metal::SDPAForwardProgramConfig& cfg) {
+    // V in [0, 1]: see expect_split_matches_unsplit.
+    const Inputs first{make(1U, -1.0F, 1.0F), make(2U, -1.0F, 1.0F), make(3U, 0.0F, 1.0F)};
+    const Inputs second{
+        make(4U, -1.0F, 1.0F), make(5U, -1.0F, 1.0F), make(6U, 0.0F, 1.0F)};  // live at once: other addresses
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const Inputs& in) {
         return core::to_xtensor(metal::sdpa_fw(
                                     in.query,
                                     in.key,
@@ -2033,42 +2797,56 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
                                     cfg)[0]
                                     .value());
     };
-    const metal::SDPAForwardProgramConfig a{.q_chunk_size = 128U, .k_chunk_size = 256U};
-    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 32U, .k_chunk_size = 64U};
+    const metal::SDPAForwardProgramConfig a{.q_chunk_size = 64U, .k_chunk_size = 128U};
+    const metal::SDPAForwardProgramConfig a_unsplit{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U};
+    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 128U, .k_chunk_size = 256U, .max_pieces = 1U};
+    SDPATestConfig split_config = shape_config;
+    split_config.program_config = a;
+    const auto split_schedule = host_schedule(split_config);
+    ASSERT_GT(split_schedule.num_slots, 0U) << "the twice-run config must split";
     const auto entries0 = device->num_program_cache_entries();
-    const xt::xarray<float> out_a = run(first, a);
+    const xt::xarray<float> out_a = run(a, first);
     const auto entries_a = device->num_program_cache_entries();
     ASSERT_GT(entries_a, entries0) << "first config did not populate the cache";
-    const xt::xarray<float> out_b = run(first, b);
+    const xt::xarray<float> out_b = run(b, first);
     EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "second config must miss: different program";
-    const xt::xarray<float> out_a_again = run(first, a);
+    const xt::xarray<float> out_a_second = run(a, second);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "first config on new inputs must hit";
+    const xt::xarray<float> out_a_again = run(a, first);
     EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "first config again must hit";
     EXPECT_TRUE(xt::all(xt::equal(out_a, out_a_again))) << "cache hit must reproduce the first run";
     EXPECT_LT(xt::mean(xt::abs(out_a - out_b))(), kCrossChunkingMeanAbsTol) << "both chunkings compute the same op";
-
-    // Same shapes at other addresses: a hit that computes the new inputs (both chunkings agree on them).
-    const xt::xarray<float> out_a2 = run(second, a);
-    const xt::xarray<float> out_b2 = run(second, b);
-    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "other addresses must hit";
-    EXPECT_FALSE(xt::allclose(out_a2, out_a, 1e-3F, 1e-3F)) << "hit reproduced the first inputs: stale addresses";
-    EXPECT_LT(xt::mean(xt::abs(out_a2 - out_b2))(), kCrossChunkingMeanAbsTol)
-        << "the hits on the second inputs must agree with each other";
+    // The hit on the second inputs must have read them (not the first inputs) and merged them right.
+    const xt::xarray<float> out_a_second_unsplit = run(a_unsplit, second);
+    EXPECT_FALSE(xt::all(xt::equal(out_a_second, out_a))) << "the hit must read the new inputs";
+    expect_split_matches_unsplit(
+        out_a_second,
+        out_a_second_unsplit,
+        fold_error_terms(split_config, split_schedule),
+        "ProgramCacheMissAndHit_second_inputs");
 
     // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
     // other values and address) must read the new mask, not the first one.
-    const std::array<std::size_t, 4> mask_shape{1U, 1U, 256U, 256U};
-    xt::xarray<float> lower = xt::tril(xt::ones<float>({256UL, 256UL}));
+    constexpr std::size_t kSeq = 1024U;
+    const std::array<std::size_t, 4> mask_shape{1U, 1U, kSeq, kSeq};
+    xt::xarray<float> lower = xt::tril(xt::ones<float>({kSeq, kSeq}));
     lower.reshape(mask_shape);
-    xt::xarray<float> upper = xt::triu(xt::ones<float>({256UL, 256UL}));
+    xt::xarray<float> upper = xt::triu(xt::ones<float>({kSeq, kSeq}));
     upper.reshape(mask_shape);
     const ttnn::Tensor causal_mask = core::from_xtensor(lower, device);
     const ttnn::Tensor anticausal_mask = core::from_xtensor(upper, device);  // both stay alive
     const auto entries_before_masked = device->num_program_cache_entries();  // the uploads cache their own ops
+    // Mask-tensor programs are never cut, so the run is held against the uncut causal run on the same inputs.
+    // The two differ by real rounding, not by chunking: the mask-tensor path walks every K/V step, and each
+    // fully masked step multiplies the running sum by alpha = 1 on the FPU, whose inputs are 19-bit, so the
+    // sum is truncated once more than on the causal path (2^-11 relative); the output is bf16 (2^-9). With V in
+    // [0, 1] the outputs sit near 0.5, so the bound is relative to the mean output: 1e-2 is ten times the
+    // measured gap and a hundred times under a misread mask (which flips whole rows).
     auto run_masked = [&](const ttnn::Tensor& mask) {
         return core::to_xtensor(metal::sdpa_fw(
-                                    first.query,
-                                    first.key,
-                                    first.value,
+                                    second.query,
+                                    second.key,
+                                    second.value,
                                     metal::AttentionMaskType::Arbitrary,
                                     mask,
                                     0.0F,
@@ -2082,7 +2860,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     EXPECT_EQ(entries_masked, entries_before_masked + 1U) << "the mask tensor variant is its own program";
     const xt::xarray<float> out_anticausal = run_masked(anticausal_mask);
     EXPECT_EQ(device->num_program_cache_entries(), entries_masked) << "the second mask must hit";
-    EXPECT_LT(xt::mean(xt::abs(out_causal - out_a))(), kCrossChunkingMeanAbsTol)
+    constexpr float kMaskPathMeanRelTol = 1e-2F;
+    EXPECT_LT(
+        xt::mean(xt::abs(out_causal - out_a_second_unsplit))(),
+        kMaskPathMeanRelTol * xt::mean(xt::abs(out_a_second_unsplit))())
         << "the lower-triangular mask tensor must agree with the causal kernel mask";
     EXPECT_FALSE(xt::allclose(out_anticausal, out_causal, 1e-3F, 1e-3F))
         << "hit reproduced the first mask: stale mask address";
@@ -2099,6 +2880,16 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
     k_changed.program_config.k_chunk_size = 128U;
     Params h_changed = base;
     h_changed.program_config.heads_per_item = 2U;
+    Params p_changed = base;
+    p_changed.program_config.max_pieces = 2U;
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(p_changed));
+    Params pairs_changed = base;
+    pairs_changed.program_config.causal_pairs = true;
+    EXPECT_NE(
+        ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(pairs_changed));
+    Params c_changed = base;
+    c_changed.program_config.num_cores = 8U;
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(c_changed));
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(h_changed));
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(q_changed));
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));

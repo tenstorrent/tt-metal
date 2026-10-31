@@ -8,18 +8,22 @@
 
 #include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_item_math.hpp"
 
-// The core's work list sits in the runtime args after the kernel's own arguments: num_runs, then
-// (first_item, num_items) per run of consecutive items (sdpa_fw_item_math.hpp). All three kernels walk
-// the same list; row r of an item is head head0 + r / Sq_chunk_t, tile row first_row_tile + r % Sq_chunk_t.
+// The core's work list sits in the runtime args after the kernel's own arguments: num_units, then three
+// words per unit (sdpa_fw_item_math.hpp has the layout and the unit kinds). Row r of an item is head
+// head0 + r / Sq_chunk_t, tile row first_row_tile + r % Sq_chunk_t. All three kernels walk the same list.
+using WorkUnit = sdpa_fw_items::WorkUnitFields;
+constexpr uint32_t kUnitWhole = sdpa_fw_items::kUnitWhole;
+constexpr uint32_t kUnitSender = sdpa_fw_items::kUnitSender;
+constexpr uint32_t kUnitMerger = sdpa_fw_items::kUnitMerger;
+
 template <typename Fn>
-inline void for_each_work_item(uint32_t arg_idx, Fn&& fn) {
-    const uint32_t num_runs = get_arg_val<uint32_t>(arg_idx++);
-    for (uint32_t run = 0; run < num_runs; ++run) {
-        const uint32_t first_item = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t num_items = get_arg_val<uint32_t>(arg_idx++);
-        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
-            fn(item);
-        }
+inline void for_each_work_unit(uint32_t arg_idx, Fn&& fn) {
+    const uint32_t num_units = get_arg_val<uint32_t>(arg_idx++);
+    for (uint32_t u = 0; u < num_units; ++u) {
+        const uint32_t w0 = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t w1 = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t w2 = get_arg_val<uint32_t>(arg_idx++);
+        fn(sdpa_fw_items::decode_unit(w0, w1, w2));
     }
 }
 
