@@ -37,8 +37,8 @@ DRAWS = 1000
 MIN_P_VALUE = 1e-3
 
 
-def _predictor(device, temperature=None, top_k=None):
-    predictor = TtCodePredictorCachedDecoder(device, preprocess_cached_predictor_parameters(device))
+def _predictor(device, temperature=None, top_k=None, batch=1):
+    predictor = TtCodePredictorCachedDecoder(device, preprocess_cached_predictor_parameters(device), batch=batch)
     if top_k is not None:
         predictor.sample_on_device(temperature, top_k)
     return predictor
@@ -103,7 +103,7 @@ def test_the_first_codebook_is_drawn_from_the_top_k_softmax(device):
 
 def _sample_built(predictor, device, logits, noise=()):
     """One device draw from built logits, with `noise` on the first candidates."""
-    rows = torch.zeros(1, 1, predictor.groups - 1, DEVICE_TOP_K_LIMIT)
+    rows = torch.zeros(1, predictor.groups - 1, 1, DEVICE_TOP_K_LIMIT)
     rows[0, 0, 0, : len(noise)] = torch.tensor(noise, dtype=torch.float32)
     ttnn.copy_host_to_device_tensor(
         ttnn.from_torch(rows, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), predictor._device_sampling["noise"]
@@ -144,3 +144,23 @@ def test_a_seeded_generator_repeats_its_frames(device):
     assert run(7) == run(7)
     assert run(7) != run(8)
     traced.release()
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_batched_rows_pick_what_each_row_picks_alone(device):
+    """Three frames in one replay, greedy: each row's 15 codes are the ones its frame gets on
+    its own. The rows differ in codebook 0, so their frames differ."""
+    talker_hidden, first_code, _, _ = code_predictor_prompt()
+    firsts = [int(first_code), 100, 1500]
+
+    alone = _traced(_predictor(device, 1.0, 1))
+    expected = [list(alone.generate(talker_hidden, code)) for code in firsts]
+    alone.release()
+
+    batched = _traced(_predictor(device, 1.0, 1, batch=len(firsts)))
+    rows = talker_hidden.reshape(1, 1, -1).expand(1, len(firsts), -1).contiguous()
+    got = batched.generate_rows(rows, firsts)
+    batched.release()
+
+    assert len({tuple(codes) for codes in expected}) == len(firsts), "the rows' frames should differ"
+    assert got == expected

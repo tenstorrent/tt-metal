@@ -83,11 +83,11 @@ def reference_codes(value):
     return codes.t()
 
 
-def clone_reference(info, device=None):
+def clone_reference(info, device=None, encoders=None):
     """The request's `CloneReference`, from an encoded `voice_clone_prompt` or from `ref_audio`.
 
     Encoding `ref_audio` runs the speaker encoder, and in context the codec encoder, on
-    `device`. That is eager device work, so no trace may be live when this runs.
+    `device`, with `encoders`' weights when given (see `build_clone_reference`).
     """
     in_context = clone_mode(info)
     prompt = voice_clone_prompt(info)
@@ -112,7 +112,7 @@ def clone_reference(info, device=None):
         import librosa
 
         audio = torch.from_numpy(librosa.resample(y=audio.numpy(), orig_sr=int(rate), target_sr=expected)).float()
-    return build_clone_reference(device, audio, text, x_vector_only=not in_context)
+    return build_clone_reference(device, audio, text, x_vector_only=not in_context, encoders=encoders)
 
 
 REF_AUDIO_CACHE_KEY = "_qwen3_tts_ref_audio_cache_key"
@@ -131,13 +131,13 @@ class ReferenceCache:
         self.max_entries = max_entries
         self._entries = OrderedDict()
 
-    def reference(self, info, device=None):
+    def reference(self, info, device=None, encoders=None):
         """The request's `CloneReference`, encoded from its clip or recalled by its key."""
         key = first(info, REF_AUDIO_CACHE_KEY)
         slot = (key, clone_mode(info))
         carries_clip = voice_clone_prompt(info) is not None or first(info, "ref_audio") is not None
         if not key or carries_clip:
-            reference = clone_reference(info, device)
+            reference = clone_reference(info, device, encoders)
             if key:
                 self._entries[slot] = (reference.codes, reference.speaker_embedding)
                 self._entries.move_to_end(slot)

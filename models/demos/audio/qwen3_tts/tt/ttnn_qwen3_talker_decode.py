@@ -66,9 +66,8 @@ TARGET_PER_CORE_N = 5
 # The MLP's matmuls only: a fifth off the step at no measurable cost. README has the rest.
 MLP_WEIGHT_DTYPE = ttnn.bfloat8_b
 
-# Rows in the step's rotary tables: the fused rotation pairs row i of `cos` with row i of
-# its input, so one tile's worth covers every head count here.
-ROPE_ROWS = 32
+# Rows a decode step's batch, or one batch row's heads, are padded to: one tile.
+TILE_ROWS = 32
 
 
 def decode_matmul_config(device, in_features, out_features, fused_activation=None):
@@ -196,11 +195,19 @@ def sharded_norm_plan(device, dim, dtype=ttnn.bfloat16):
 
 
 class TtTalkerCachedDecoder:
-    """Prefill once into an on-device KV cache, then step one position at a time."""
+    """Prefill once into an on-device KV cache, then step one position at a time.
 
-    def __init__(self, device, parameters, max_seq=512, kv_cache=None):
+    A step advances `batch` rows together, each its own request at its own position over
+    its own row of the page table. Prefill fills one row at a time.
+    """
+
+    def __init__(self, device, parameters, max_seq=512, kv_cache=None, batch=1):
         """`kv_cache`, when given, is one `(k, v)` pair per layer of paged caches the caller
         owns; the caller then also supplies each request's blocks through `set_page_table`."""
+        grid = device.compute_with_storage_grid_size()
+        if not 1 <= batch <= grid.x:
+            raise ValueError(f"a batch of {batch} rows: the step shards one row per core across {grid.x} columns")
+        self.batch = batch
         self.device = device
         self.p = parameters
         self.config = parameters["config"]
@@ -216,6 +223,8 @@ class TtTalkerCachedDecoder:
 
         self.max_seq = ((max_seq + CACHE_TILE_MULTIPLE - 1) // CACHE_TILE_MULTIPLE) * CACHE_TILE_MULTIPLE
         self._owns_cache = kv_cache is None
+        if self._owns_cache and batch > 1:
+            raise ValueError("a cache this decoder allocates holds one request; pass kv_cache for a batch")
         if self._owns_cache:
             blocks = -(-self.max_seq // OWNED_BLOCK_SIZE)
             empty = torch.zeros(blocks, self.kv_heads, OWNED_BLOCK_SIZE, self.head_dim)
@@ -230,39 +239,34 @@ class TtTalkerCachedDecoder:
                 f"cache blocks of shape {tuple(self.k_cache[0].shape)}: need [blocks, {self.kv_heads}, "
                 f"a multiple of 32, {self.head_dim}]"
             )
-        # One request's blocks, in position order. Device-resident and rewritten in place, so a
-        # captured step reads whichever request's table is current.
+        # Each row's request's blocks, in position order. Device-resident and rewritten in place,
+        # so a captured step reads whichever requests' tables are current.
         self.max_blocks = -(-self.max_seq // self.block_size)
         if not self._owns_cache and self.max_blocks > int(self.k_cache[0].shape[0]):
             # A page table may not be wider than the cache it indexes, and no request can
             # hold more positions than the cache has, so the caller's cache bounds both.
             self.max_blocks = int(self.k_cache[0].shape[0])
             self.max_seq = self.max_blocks * self.block_size
-        self._page_table = ttnn.from_torch(
-            torch.zeros(1, self.max_blocks, dtype=torch.int32), dtype=ttnn.int32, device=device
-        )
+        self._tables = torch.zeros(batch, self.max_blocks, dtype=torch.int32)
+        self._page_table = ttnn.from_torch(self._tables, dtype=ttnn.int32, device=device)
         if self._owns_cache:
             self.set_page_table(torch.arange(self.max_blocks, dtype=torch.int32))
 
         # Stable per-step state, allocated once so a captured trace can read it. Allocating
         # under a live trace corrupts it, so everything the step touches exists up front.
-        self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)
+        self._pos = ttnn.from_torch(torch.zeros(batch, dtype=torch.int32), device=device)
         self._in = ttnn.from_torch(
-            torch.zeros(1, 1, self.hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, batch, self.hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        # One row per head, all identical: the fused rotation reads a row per row of its
-        # input, and the step's Q carries `heads` of them. 32 covers both Q and K.
-        self._cos = ttnn.from_torch(
-            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        self._sin = ttnn.from_torch(
-            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        # `paged_update_cache` requires a sharded input, so the step hands it L1-sharded K and
-        # V. They go on different cores because the fused K+V variant needs them not to
-        # overlap, which keeps that swap available later.
-        self._k_shard = self._single_core_shard(0)
-        self._v_shard = self._single_core_shard(1)
+        # Height-sharded, one batch row per core: the cache update needs its K and V sharded,
+        # and the decode-mode rotation needs its input and tables sharded alike. K is rotated
+        # straight into the cores the update reads it from. V goes on another row of cores,
+        # since the fused K+V update needs the two not to overlap.
+        self._k_shard = self._row_shard(0)
+        self._v_shard = self._row_shard(1)
+        # Each batch row's own position, [1, batch, 1, head_dim], laid out like K.
+        self._cos = self._rope_table()
+        self._sin = self._rope_table()
         # One zero tensor to clear the caches from. `zeros_like` would allocate a fresh
         # device buffer per cache per utterance, and a buffer allocated while a trace is
         # live is corrupt once that trace runs unless it is released first.
@@ -311,15 +315,22 @@ class TtTalkerCachedDecoder:
         )
         return ttnn.sharded_to_interleaved(out)
 
-    def _single_core_shard(self, column):
+    def _row_shard(self, row):
+        """One tile of rows per batch row, on cores (0..batch-1, row)."""
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(column, 0), ttnn.CoreCoord(column, 0))}),
-                (32, self.head_dim),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, row), ttnn.CoreCoord(self.batch - 1, row))}),
+                (TILE_ROWS, self.head_dim),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
+        )
+
+    def _rope_table(self):
+        empty = torch.zeros(1, self.batch, 1, self.head_dim)
+        return ttnn.from_torch(
+            empty, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=self._k_shard
         )
 
     def _cache_tensor(self, empty):
@@ -330,25 +341,37 @@ class TtTalkerCachedDecoder:
         """Whether the cache was allocated here, and so may be cleared here."""
         return self._owns_cache
 
-    def set_page_table(self, blocks):
-        """Point prefill and step at one request's cache blocks, in position order."""
+    def set_page_table(self, blocks, row=0):
+        """Point batch row `row`, for prefill and step, at its request's cache blocks, in
+        position order. The rest of the row reads block 0, vLLM's null block."""
         blocks = torch.as_tensor(blocks, dtype=torch.int32).reshape(-1)
         if blocks.numel() > self.max_blocks:
             raise ValueError(f"{blocks.numel()} blocks for a table of {self.max_blocks}")
-        row = torch.zeros(1, self.max_blocks, dtype=torch.int32)
-        row[0, : blocks.numel()] = blocks
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(row, dtype=ttnn.int32), self._page_table)
+        if not 0 <= row < self.batch:
+            raise ValueError(f"row {row} of a batch of {self.batch}")
+        self._tables[row] = 0
+        self._tables[row, : blocks.numel()] = blocks
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(self._tables, dtype=ttnn.int32), self._page_table)
+
+    def set_page_tables(self, tables):
+        """Every row's blocks at once: `tables` [batch, blocks], each row in position order."""
+        tables = torch.as_tensor(tables, dtype=torch.int32)
+        if tables.shape[0] != self.batch or tables.shape[1] > self.max_blocks:
+            raise ValueError(f"page tables of shape {tuple(tables.shape)} for {self.batch} rows of {self.max_blocks}")
+        self._tables.zero_()
+        self._tables[:, : tables.shape[1]] = tables
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(self._tables, dtype=ttnn.int32), self._page_table)
 
     # ── shared pieces ───────────────────────────────────────────────────────
 
-    def _rotate(self, x, cos, sin):
+    def _rotate(self, x, cos, sin, decode=False):
         """RoPE in one kernel, where the arithmetic spelled out took seven ops: 7.8 us against 26.7.
 
-        `is_decode_mode=False` despite serving the step. Decode mode wants one row per batch slot
-        and at batch 1 the step's rows are heads, so `cos` carries a row per head instead.
+        Prefill rotates [1, heads, positions, head_dim] by a table row per position. A step
+        rotates [1, batch, heads, head_dim], sharded a batch row per core, by its row's position.
         """
         return ttnn.experimental.rotary_embedding_hf(
-            x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
+            x, cos, sin, is_decode_mode=decode, compute_kernel_config=self.compute_config
         )
 
     def _mlp(self, x, layer, configs=None):
@@ -388,11 +411,12 @@ class TtTalkerCachedDecoder:
 
     # ── prefill ─────────────────────────────────────────────────────────────
 
-    def prefill(self, embeddings, position_ids=None):
-        """Seed the cache for positions 0..P-1 in one pass and return the hidden states.
+    def prefill(self, embeddings, position_ids=None, row=0):
+        """Seed batch row `row`'s cache for positions 0..P-1 in one pass and return the
+        hidden states.
 
         Each layer's K/V weights are read once here rather than once per position, and the
-        cache is written through the page table with `paged_fill_cache`.
+        cache is written through that row of the page table with `paged_fill_cache`.
         """
         length = embeddings.shape[1]
         if length > self.max_seq:
@@ -417,8 +441,8 @@ class TtTalkerCachedDecoder:
             query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos_tt, sin_tt)
             key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), cos_tt, sin_tt)
 
-            ttnn.experimental.paged_fill_cache(self.k_cache[index], key, self._page_table, batch_idx=0)
-            ttnn.experimental.paged_fill_cache(self.v_cache[index], value, self._page_table, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(self.k_cache[index], key, self._page_table, batch_idx=row)
+            ttnn.experimental.paged_fill_cache(self.v_cache[index], value, self._page_table, batch_idx=row)
 
             repeats = self.heads // self.kv_heads
             attended = ttnn.matmul(
@@ -450,25 +474,29 @@ class TtTalkerCachedDecoder:
             qkv = ttnn.linear(
                 normed, layer["qkv"], compute_kernel_config=self.compute_config, program_config=self._matmul["qkv"]
             )
-            # Fused per-head split. Emits [1, 1, heads, head_dim] height-sharded in L1, which
-            # is exactly the layout flash decode and the cache update want, so no permutes
-            # appear in the step at all. It replaces 3 slices, 3 reshapes and 3 permutes.
+            # Fused per-head split. Emits [1, batch, heads, head_dim] height-sharded in L1,
+            # the layout flash decode and the cache update want, so no permutes appear in the
+            # step at all. It replaces 3 slices, 3 reshapes and 3 permutes.
             query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
-                ttnn.reshape(qkv, (1, 1, 1, qkv.shape[-1])), num_heads=self.heads, num_kv_heads=self.kv_heads
+                ttnn.reshape(qkv, (1, 1, self.batch, qkv.shape[-1])),
+                num_heads=self.heads,
+                num_kv_heads=self.kv_heads,
             )
             # QK-norm cannot read height-sharded input, so Q and K come back interleaved for
-            # the norm and the rotation, then K and V are resharded for the cache write.
-            query = ttnn.sharded_to_interleaved(query)
-            key = ttnn.sharded_to_interleaved(key)
-            query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), self._cos, self._sin)
-            key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), self._cos, self._sin)
+            # the norm, then go back to a row per core for the rotation.
+            query = ttnn.rms_norm(ttnn.sharded_to_interleaved(query), weight=layer["q_norm"], epsilon=self.eps)
+            key = ttnn.rms_norm(ttnn.sharded_to_interleaved(key), weight=layer["k_norm"], epsilon=self.eps)
+            query = ttnn.sharded_to_interleaved(
+                self._rotate(ttnn.to_memory_config(query, self._k_shard), self._cos, self._sin, decode=True)
+            )
+            key = self._rotate(ttnn.to_memory_config(key, self._k_shard), self._cos, self._sin, decode=True)
 
             # The cache therefore stores post-norm, post-rotation K, which is what attention
             # over the prefix expects to find there. One kernel writes both, which needs them
-            # on non-overlapping cores, hence the two single-core shards.
+            # on non-overlapping cores.
             ttnn.experimental.paged_fused_update_cache(
                 self.k_cache[index],
-                ttnn.to_memory_config(key, self._k_shard),
+                key,
                 self.v_cache[index],
                 ttnn.to_memory_config(value, self._v_shard),
                 update_idxs_tensor=self._pos,
@@ -484,8 +512,7 @@ class TtTalkerCachedDecoder:
                 scale=self.scale,
                 compute_kernel_config=self.compute_config,
             )
-            # Fused head merge instead of permute + reshape.
-            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.heads * self.head_dim))
+            attended = ttnn.reshape(attended, (1, self.batch, self.heads * self.head_dim))
             x = ttnn.add(
                 x,
                 ttnn.linear(
@@ -500,11 +527,13 @@ class TtTalkerCachedDecoder:
         return self._norm(x, {"norm": self.p["norm"], "norm_wide": getattr(self, "_final_norm_wide", None)}, "norm")
 
     def set_position(self, position):
-        """Where the step writes and how far attention reads."""
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.full((1,), int(position), dtype=torch.int32)), self._pos)
-        cos, sin = rotary_tables(self.config, torch.full((3, 1, 1), int(position), dtype=torch.long))
+        """Where each row's step writes and how far its attention reads: one position, or one
+        per batch row."""
+        positions = torch.as_tensor(position, dtype=torch.int32).reshape(-1).expand(self.batch).contiguous()
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(positions), self._pos)
+        cos, sin = rotary_tables(self.config, positions.long().reshape(1, self.batch, 1).expand(3, -1, -1))
         for source, target in ((cos, self._cos), (sin, self._sin)):
-            rows = source.reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous()
+            rows = source.reshape(1, self.batch, 1, self.head_dim)
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(rows, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), target)
 
     def release(self):
@@ -527,7 +556,10 @@ class TtTalkerCachedDecoder:
             ttnn.copy(self._zero_cache, cache)
 
     def step(self, embedding, position):
-        """One position: embedding [1, 1, hidden] -> hidden state [1, 1, hidden]."""
+        """One position per row: embeddings [1, batch, hidden] -> hidden states [1, batch, hidden].
+
+        `position` is one position, or one per row.
+        """
         # A host tensor copied into the stable input, rather than a fresh device buffer.
         if isinstance(embedding, ttnn.Tensor):
             ttnn.copy(embedding, self._in)

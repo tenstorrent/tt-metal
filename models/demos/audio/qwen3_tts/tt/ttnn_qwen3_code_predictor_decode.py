@@ -45,7 +45,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     MLP_WEIGHT_DTYPE,
     NORM_NAMES,
     NORM_SHARD_HEIGHT,
-    ROPE_ROWS,
+    TILE_ROWS,
     decode_matmul_config,
     sharded_norm_plan,
 )
@@ -137,9 +137,18 @@ DEVICE_TOP_K_LIMIT = 64
 
 
 class TtCodePredictorCachedDecoder:
-    """Prefill two positions, then 14 cached steps, one output head each."""
+    """Prefill two positions, then 14 cached steps, one output head each.
 
-    def __init__(self, device, parameters):
+    A frame runs `batch` rows together, one request each. Every row is at the same position
+    at every step, so the rows share the rotary tables and only the caches, the inputs and
+    the samples are per row.
+    """
+
+    def __init__(self, device, parameters, batch=1):
+        grid = device.compute_with_storage_grid_size()
+        if not 1 <= batch <= grid.x:
+            raise ValueError(f"a batch of {batch} rows: the step shards one row per core across {grid.x} columns")
+        self.batch = batch
         self.device = device
         self.p = parameters
         self.config = parameters["config"]
@@ -155,7 +164,7 @@ class TtCodePredictorCachedDecoder:
         self.layers = len(parameters["layers"])
 
         self.max_seq = ((self.groups + CACHE_TILE_MULTIPLE - 1) // CACHE_TILE_MULTIPLE) * CACHE_TILE_MULTIPLE
-        empty = torch.zeros(1, self.kv_heads, self.max_seq, self.head_dim)
+        empty = torch.zeros(batch, self.kv_heads, self.max_seq, self.head_dim)
         self.k_cache = [
             ttnn.from_torch(empty, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             for _ in range(self.layers)
@@ -165,18 +174,21 @@ class TtCodePredictorCachedDecoder:
             for _ in range(self.layers)
         ]
 
-        self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)
+        self._pos = ttnn.from_torch(torch.zeros(batch, dtype=torch.int32), device=device)
         self._in = ttnn.from_torch(
-            torch.zeros(1, 1, parameters["input_width"]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, batch, parameters["input_width"]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
         self._cos = ttnn.from_torch(
-            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, TILE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._sin = ttnn.from_torch(
-            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, TILE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        self._k_shard = self._single_core_shard(0)
-        self._v_shard = self._single_core_shard(1)
+        self._k_shard = self._row_shard(0)
+        self._v_shard = self._row_shard(1)
         self._zero_cache = ttnn.from_torch(empty, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
         silu = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
@@ -202,7 +214,7 @@ class TtCodePredictorCachedDecoder:
         # An index for the step's codebook lookups, and per-position rotary tables built once:
         # the predictor's positions are always 0 to 15, so nothing here changes per frame.
         self._index = ttnn.from_torch(
-            torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            torch.zeros(batch, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         self._position_inputs = {}
 
@@ -212,13 +224,15 @@ class TtCodePredictorCachedDecoder:
         # Set by `sample_on_device`: the frame trace's sampling settings and its inputs.
         self._device_sampling = None
 
-    def _single_core_shard(self, column):
+    def _row_shard(self, row):
+        """One tile of rows per batch row, on cores (0..batch-1, row): the cache update needs
+        K and V sharded, and the fused update needs the two on different cores."""
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(column, 0), ttnn.CoreCoord(column, 0))}),
-                (32, self.head_dim),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, row), ttnn.CoreCoord(self.batch - 1, row))}),
+                (TILE_ROWS, self.head_dim),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
@@ -239,7 +253,11 @@ class TtCodePredictorCachedDecoder:
         return ttnn.sharded_to_interleaved(out)
 
     def _rotate(self, x, cos, sin):
-        """The same fused rotation the talker uses, over 150 rotations a frame."""
+        """The same fused rotation the talker's prefill uses, over 150 rotations a frame.
+
+        A step's [1, batch, heads, head_dim] reads as `batch` heads of `heads` rows; every row
+        of `cos` holds the one position all batch rows are at.
+        """
         return ttnn.experimental.rotary_embedding_hf(
             x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
         )
@@ -275,12 +293,12 @@ class TtCodePredictorCachedDecoder:
         if position not in self._position_inputs:
             cos, sin = self._rotary(1, offset=int(position))
             rows = lambda table: ttnn.from_torch(
-                table.reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous(),
+                table.reshape(1, 1, 1, -1).expand(1, 1, TILE_ROWS, self.head_dim).contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
             self._position_inputs[position] = (
-                ttnn.from_torch(torch.full((1,), int(position), dtype=torch.int32)),
+                ttnn.from_torch(torch.full((self.batch,), int(position), dtype=torch.int32)),
                 rows(cos),
                 rows(sin),
             )
@@ -292,8 +310,9 @@ class TtCodePredictorCachedDecoder:
         ttnn.copy_host_to_device_tensor(cos, self._cos)
         ttnn.copy_host_to_device_tensor(sin, self._sin)
 
-    def prefill(self, embeddings):
-        """Seed the cache from the two-position prompt and return its last hidden state."""
+    def prefill(self, embeddings, row=0):
+        """Seed batch row `row`'s cache from the two-position prompt and return its last
+        hidden state."""
         length = embeddings.shape[1]
         cos, sin = self._rotary(length)
         to_device = lambda tensor: ttnn.from_torch(
@@ -319,8 +338,8 @@ class TtCodePredictorCachedDecoder:
             query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos_tt, sin_tt)
             key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), cos_tt, sin_tt)
 
-            ttnn.fill_cache(self.k_cache[index], key, 0)
-            ttnn.fill_cache(self.v_cache[index], value, 0)
+            ttnn.fill_cache(self.k_cache[index], key, row)
+            ttnn.fill_cache(self.v_cache[index], value, row)
 
             repeats = self.heads // self.kv_heads
             scores = ttnn.matmul(
@@ -356,7 +375,9 @@ class TtCodePredictorCachedDecoder:
                 normed, layer["qkv"], compute_kernel_config=self.compute_config, program_config=self._matmul["qkv"]
             )
             query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
-                ttnn.reshape(qkv, (1, 1, 1, qkv.shape[-1])), num_heads=self.heads, num_kv_heads=self.kv_heads
+                ttnn.reshape(qkv, (1, 1, self.batch, qkv.shape[-1])),
+                num_heads=self.heads,
+                num_kv_heads=self.kv_heads,
             )
             query = ttnn.sharded_to_interleaved(query)
             key = ttnn.sharded_to_interleaved(key)
@@ -379,7 +400,7 @@ class TtCodePredictorCachedDecoder:
                 scale=self.scale,
                 compute_kernel_config=self.compute_config,
             )
-            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.heads * self.head_dim))
+            attended = ttnn.reshape(attended, (1, self.batch, self.heads * self.head_dim))
             x = ttnn.add(
                 x,
                 ttnn.linear(
@@ -500,7 +521,7 @@ class TtCodePredictorCachedDecoder:
             "top_k": int(top_k),
             "positions": positions,
             "noise": ttnn.from_torch(
-                torch.zeros(1, 1, steps, DEVICE_TOP_K_LIMIT),
+                torch.zeros(1, steps, self.batch, DEVICE_TOP_K_LIMIT),
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
@@ -509,19 +530,22 @@ class TtCodePredictorCachedDecoder:
         self._warmed = False
 
     def _sample(self, logits, step):
-        """One code from a head's logits: argmax of the scaled top k plus this step's noise.
+        """One code per row from a head's logits: argmax of the scaled top k plus this step's
+        noise.
 
-        Returns the code as a float32 [1, 1, 1, 1], exact, as every codebook index is far
+        Returns the codes as a float32 [1, 1, batch, 1], exact, as every codebook index is far
         below float32's 2^24. Of tied best scores, which only argmax meets, the lowest id
         wins, as `torch.argmax` picks. The top k is stable so that id stays a candidate
         however many logits tie.
         """
         settings = self._device_sampling
         k = settings["top_k"]
-        values, indices = ttnn.topk(ttnn.reshape(logits, (1, 1, 1, -1)), k=DEVICE_TOP_K_LIMIT, dim=-1, stable=True)
+        values, indices = ttnn.topk(
+            ttnn.reshape(logits, (1, 1, self.batch, -1)), k=DEVICE_TOP_K_LIMIT, dim=-1, stable=True
+        )
         values = ttnn.typecast(values, ttnn.float32)
-        floor = ttnn.slice(values, [0, 0, 0, k - 1], [1, 1, 1, k])
-        noise = ttnn.slice(settings["noise"], [0, 0, step, 0], [1, 1, step + 1, DEVICE_TOP_K_LIMIT])
+        floor = ttnn.slice(values, [0, 0, 0, k - 1], [1, 1, self.batch, k])
+        noise = ttnn.slice(settings["noise"], [0, step, 0, 0], [1, step + 1, self.batch, DEVICE_TOP_K_LIMIT])
         scores = ttnn.add(ttnn.multiply(values, 1.0 / settings["temperature"]), noise)
         # Below the k-th value is out; -1e30 rather than -inf keeps the max and eq finite.
         scores = ttnn.where(ttnn.ge(values, floor), scores, -1e30)
@@ -529,22 +553,23 @@ class TtCodePredictorCachedDecoder:
         return ttnn.min(ttnn.where(hit, ttnn.typecast(indices, ttnn.float32), 1e9), dim=-1, keepdim=True)
 
     def _embed_code(self, table, code):
-        """`table`'s row for a code the device holds, shaped as a step input."""
-        index = ttnn.reshape(ttnn.to_layout(ttnn.typecast(code, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), (1, 1))
+        """`table`'s row for each batch row's code, which the device holds, shaped as a step input."""
+        index = ttnn.reshape(ttnn.to_layout(ttnn.typecast(code, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), (self.batch, 1))
         row = ttnn.embedding(index, table, layout=ttnn.TILE_LAYOUT)
-        return ttnn.reshape(row, (1, 1, self.p["input_width"]))
+        return ttnn.reshape(row, (1, self.batch, self.p["input_width"]))
 
     def _frame_ops(self):
-        """A whole frame from `_in` (the talker's hidden state) and `_index` (codebook 0).
+        """A whole frame per row from `_in` (the talker's hidden states) and `_index`
+        (codebook 0).
 
-        Returns codebooks 1 to 15 as a uint32 [1, 1, 1, 15].
+        Returns codebooks 1 to 15 as a uint32 [1, 1, batch, 15].
         """
         positions = self._device_sampling["positions"]
         for cache in self.k_cache + self.v_cache:
             ttnn.copy(self._zero_cache, cache)
         self._step_ops(self._in, positions[0])
         first = ttnn.embedding(self._index, self.p["talker_codec_embedding_device"], layout=ttnn.TILE_LAYOUT)
-        hidden = self._step_ops(ttnn.reshape(first, (1, 1, self.p["input_width"])), positions[1])
+        hidden = self._step_ops(ttnn.reshape(first, (1, self.batch, self.p["input_width"])), positions[1])
         codes = []
         for step in range(self.groups - 1):
             code = self._sample(self._head(hidden, step), step)
@@ -554,33 +579,38 @@ class TtCodePredictorCachedDecoder:
             hidden = self._step_ops(self._embed_code(self.p["codec_embedding_device"][step], code), positions[2 + step])
         return ttnn.typecast(ttnn.concat(codes, dim=-1), ttnn.uint32)
 
-    def _generate_on_device(self, talker_hidden, first_code, watch=None, generator=None):
+    def generate_rows(self, talker_hidden, first_codes, watch=None, generator=None):
+        """Codebooks 1 to 15 for every batch row: talker hidden states [1, batch, hidden] and
+        one codebook 0 per row in, one list of 15 codes per row out. Needs `sample_on_device`."""
+        if self._device_sampling is None:
+            raise RuntimeError("a batch of rows samples on device; call sample_on_device first")
+        if len(first_codes) != self.batch:
+            raise ValueError(f"{len(first_codes)} first codes for a batch of {self.batch}")
         settings = self._device_sampling
         if settings["top_k"] == 1:
-            gumbel = torch.zeros(1, 1, self.groups - 1, DEVICE_TOP_K_LIMIT)
+            gumbel = torch.zeros(1, self.groups - 1, self.batch, DEVICE_TOP_K_LIMIT)
         else:
-            uniform = torch.rand(1, 1, self.groups - 1, DEVICE_TOP_K_LIMIT, generator=generator)
+            uniform = torch.rand(1, self.groups - 1, self.batch, DEVICE_TOP_K_LIMIT, generator=generator)
             # Clamped off 0 and 1, where the double log is infinite.
             gumbel = -torch.log(-torch.log(uniform.clamp_(1e-10, 1 - 1e-7)))
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(gumbel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), self._device_sampling["noise"]
         )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(torch.tensor([[int(first_code)]], dtype=torch.int32), dtype=ttnn.uint32), self._index
-        )
+        firsts = torch.tensor([[int(code)] for code in first_codes], dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(firsts, dtype=ttnn.uint32), self._index)
         if isinstance(talker_hidden, ttnn.Tensor):
-            ttnn.copy(ttnn.reshape(talker_hidden, (1, 1, -1)), self._in)
+            ttnn.copy(ttnn.reshape(talker_hidden, (1, self.batch, -1)), self._in)
         else:
-            self._fill_from_host(talker_hidden.reshape(1, 1, -1))
+            self._fill_from_host(talker_hidden.reshape(1, self.batch, -1))
         if self.trace_id is not None:
             ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
             codes = self._out
         else:
             codes = self._frame_ops()
-        codes = [int(code) for code in ttnn.to_torch(codes).reshape(-1)]
+        rows = ttnn.to_torch(codes).reshape(self.batch, -1).tolist()
         if watch is not None:
             watch.split("predictor")
-        return codes
+        return [[int(code) for code in row] for row in rows]
 
     def generate(self, talker_hidden, first_code, pick=None, watch=None, generator=None):
         """Codebooks 1 to 15, from the talker's hidden state and codebook 0.
@@ -594,8 +624,10 @@ class TtCodePredictorCachedDecoder:
         Under `sample_on_device` the settings given there apply instead of `pick`, and
         `generator` draws the frame's noise, so a seeded one makes frames reproducible.
         """
+        if self.batch != 1:
+            raise RuntimeError(f"generate runs one row; a batch of {self.batch} runs through generate_rows")
         if self._device_sampling is not None:
-            return self._generate_on_device(talker_hidden, first_code, watch, generator)
+            return self.generate_rows(talker_hidden, [first_code], watch, generator)[0]
         charge = watch.split if watch is not None else (lambda name: None)
         self.reset()
         if isinstance(talker_hidden, ttnn.Tensor):
