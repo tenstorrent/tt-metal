@@ -222,3 +222,16 @@ def test_zone_points_survive_newer_tips(monkeypatch):
         serve(c, np.concatenate([sysp, seg(100 + i, 2000)]), replay=2560)
     assert any(k[2] == 29184 for k in c.store.snaps)  # a later prompt's tip does not thin the zone point
     assert serve(c, np.concatenate([sysp, seg(200, 2000)]), replay=2560) == 29184
+
+
+def test_live_switch_file(monkeypatch, tmp_path):
+    f = tmp_path / "grid_switch"
+    monkeypatch.setenv("DSV41_APC_GRID_FILE", str(f))
+    c = make_cache(monkeypatch)
+    p = seg(1, 9000)
+    f.write_text("0")
+    serve(c, p)
+    assert sorted(k[2] for k in c.store.snaps) == [512, 1024, 2048, 4096, 8192]  # pow2 only
+    f.write_text("1")
+    serve(c, seg(2, 9000))
+    assert 8704 in [k[2] for k in c.store.snaps]

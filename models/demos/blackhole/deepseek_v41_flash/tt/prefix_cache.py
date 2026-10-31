@@ -895,7 +895,16 @@ class PrefixCache:
     def new_prompt(self, b, tokens, total, zone=0):
         """APC M0': a prompt starts on user ``b``: choose its extra snapshot boundaries (``GridPolicy.plan``: tip / divergence); continuation pieces reuse the plan."""
         self.serial += 1
-        if self.grid is not None and self.active() and not self._has_image(tokens, int(total)):
+        gf = os.environ.get(
+            "DSV41_APC_GRID_FILE"
+        )  # live A/B switch: a file that contains 0 turns the grid snapshots off (the usual pow2 points stay)
+        off = False
+        if gf:
+            try:
+                off = open(gf).read().strip() == "0"
+            except OSError:
+                pass
+        if self.grid is not None and not off and self.active() and not self._has_image(tokens, int(total)):
             self.plans[b] = (self.serial, self.grid.plan(tokens, total, zone))
         else:
             self.plans.pop(b, None)
