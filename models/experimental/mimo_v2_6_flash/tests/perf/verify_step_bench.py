@@ -138,6 +138,8 @@ def main():
     cfg = MiMoConfig.from_model_path(path)
     pair = generator_vllm.KV_PAIR_SPLIT
     groups, buffers = vllm_kv_layout(cfg)
+    layers = int(os.environ.get("VSB_LAYERS", cfg.num_hidden_layers))  # fewer layers: a debugging aid
+    groups = groups[:layers]
     MiMoV2ForCausalLM._layer_groups = groups
     MiMoV2ForCausalLM.prefill_token_budget = a.budget
     max_seq_len = -(-(a.ctx + 8192) // 128) * 128  # whole blocks of the pair-split global group
@@ -169,10 +171,10 @@ def main():
     )
     try:
         t0 = time.time()
-        hf = SimpleNamespace(num_hidden_layers=cfg.num_hidden_layers, _name_or_path=path)
+        hf = SimpleNamespace(num_hidden_layers=layers, _name_or_path=path)
         model = MiMoV2ForCausalLM.initialize_vllm_model(hf, mesh, rows, max_seq_len, tt_data_parallel=1)
         specs = []
-        for i in range(cfg.num_hidden_layers):
+        for i in range(layers):
             dims = cfg.attention_dims(i)
             block = 2 * BLOCK_SIZE if pair and not cfg.is_swa(i) else BLOCK_SIZE
             specs.append(((num_blocks, 1, block, dims.head_dim), torch.bfloat16, buffers[i]))
