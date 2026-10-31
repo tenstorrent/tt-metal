@@ -1259,6 +1259,18 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const core_count_and_size block = get_l1_usage_for_sharding(TensorMemoryLayout::BLOCK_SHARDED, conv_config);
     const core_count_and_size width = get_l1_usage_for_sharding(TensorMemoryLayout::WIDTH_SHARDED, conv_config);
 
+    // Height sharding is the fastest layout whenever every core gets enough output rows to amortise its own
+    // copy of the weights, so take it when it fits L1, even if block or width sharding would use less.
+    const uint64_t output_tile_rows =
+        tt::div_up(static_cast<uint64_t>(batch_size) * output_height * output_width, tt::constants::TILE_HEIGHT);
+    const bool height_fills_cores = output_tile_rows * 2 >= static_cast<uint64_t>(height.core_count) * 3;
+    const uint64_t height_l1_bytes =
+        std::max<uint64_t>(height.halo_input_size + height.halo_output_size, height.total_size);
+    const uint64_t l1_budget = static_cast<uint64_t>(tt::tt_metal::hal::get_max_worker_l1_unreserved_size()) * 9 / 10;
+    if (height_fills_cores && height_l1_bytes <= l1_budget) {
+        return height.conv_config;
+    }
+
     core_count_and_size& winning_config = height;
     // Make sure that BS not only has smaller size but provides at least some slicing along the channels.
     // In case we have BS that would slice the tensor only along the HS conv2d code would fail later on.
