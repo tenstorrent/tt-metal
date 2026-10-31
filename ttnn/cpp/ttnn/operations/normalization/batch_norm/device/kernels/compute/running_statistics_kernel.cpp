@@ -64,6 +64,10 @@ void kernel_main() {
         old_running_mean_has_value || old_running_var_has_value,
         "running_statistics requires at least one of running_mean / running_var");
 
+    if (num_tiles == 0) {
+        return;
+    }
+
     DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
     DataflowBuffer dfb_momentum_obj(dfb::momentum);

@@ -97,6 +97,10 @@ void kernel_main() {
         old_running_mean_has_value || old_running_var_has_value,
         "running_statistics requires at least one of running_mean / running_var");
 
+    if (num_tiles == 0) {
+        return;
+    }
+
     constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
     constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
 
