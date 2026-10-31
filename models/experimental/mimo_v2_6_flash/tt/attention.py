@@ -55,6 +55,7 @@ import os
 import torch
 
 import ttnn
+from loguru import logger
 
 from ..reference.kv_pair_split import NO_KEY_LSE
 from ..reference.spec_decode import ADAPTIVE, GROUP_SLOTS, SPEC_SLOTS, WIDTHS
@@ -183,6 +184,10 @@ def page_table_width(blocks):
     """Width in blocks of a page table that covers ``blocks``: padded to whole SwaDecodeQkv.TABLE_READ pieces (int32
     entries). The entries past ``blocks`` are never read."""
     return pad_to(blocks, SwaDecodeQkv.TABLE_READ // 4)
+
+
+# tt/model.py MIMO_DEBUG_ROWS (debug, eager decode)
+DEBUG_ROWS = [int(r) for r in os.environ.get("MIMO_DEBUG_ROWS", "").split(",") if r]
 
 
 class SwaDecodeQkv:
@@ -1489,11 +1494,25 @@ class TtMiMoAttention:
             compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        if DEBUG_ROWS:  # eager decode only (tt/model.py MIMO_DEBUG_ROWS): the query, SDPA and concatenated rows
+
+            def norms(t, per_user):
+                v = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+                v = v[0] if per_user else v[0, 0]
+                return [round(float(v[r].norm()), 3) for r in DEBUG_ROWS]
+
+            logger.info(
+                f"MIMO_DEBUG_ROWS swa attn: q {norms(q_rot, True)} sdpa {norms(attn, True)} "
+                f"pos {ttnn.to_torch(ttnn.get_device_tensors(cur_pos)[0]).reshape(-1)[:16].tolist()}"
+            )
         if not fused_qkv:
             q_rot.deallocate(True)
         # Heads concatenated (V's 128 real dims), in L1 for the o matmul.
         attn_cat = self.concat_heads(attn)
         attn.deallocate(True)
+        if DEBUG_ROWS:
+            v = ttnn.to_torch(ttnn.get_device_tensors(attn_cat)[0]).float()[0, 0]
+            logger.info(f"MIMO_DEBUG_ROWS swa attn: cat {[round(float(v[r].norm()), 3) for r in DEBUG_ROWS]}")
         return self._decode_o(attn_cat, compact)
 
     def _forward_decode_split(
