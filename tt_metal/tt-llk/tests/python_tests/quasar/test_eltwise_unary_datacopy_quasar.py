@@ -61,7 +61,7 @@ def generate_eltwise_unary_datacopy_combinations(
 
     Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, data_copy_type, input_dimensions, dest_sync, edgecase_dest_index, tile_dimensions) tuples
+    Returns: List of (data_copy_type, dest_acc, format, input_dimensions, dest_sync, edgecase_dest_index, tile_dimensions) tuples
     """
     combinations = []
 
@@ -127,9 +127,9 @@ def generate_eltwise_unary_datacopy_combinations(
                             for dest_index in dest_indices:
                                 combinations.append(
                                     (
-                                        fmt,
-                                        dest_acc,
                                         data_copy_type,
+                                        dest_acc,
+                                        fmt,
                                         runtime(dimensions),
                                         dest_sync,
                                         runtime(dest_index),
@@ -156,12 +156,12 @@ PERF_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
+    data_copy_type_dest_acc_formats_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_eltwise_unary_datacopy_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    data_copy_type_dest_acc_formats_dims_dest_sync_dest_indices,
     run_types,
     loop_factor,
     *,
@@ -169,14 +169,14 @@ def test_eltwise_unary_datacopy_quasar(
     perf_report=None,
 ):
     (
-        formats,
-        dest_acc,
         data_copy_type,
+        dest_acc,
+        formats,
         input_dimensions,
         dest_sync_mode,
         dest_index,
         tile_dimensions,
-    ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
+    ) = data_copy_type_dest_acc_formats_dims_dest_sync_dest_indices
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

@@ -66,23 +66,23 @@ static vector<uint32_t> run_mxfp4_typecast(
 // Data generators follow the fp8_typecast tests' convention: generate
 // row-major floats in U(0, rand_max_float) + offset, then pack into tiles.
 static vector<uint32_t> create_random_vector_of_mxfp4(
-	uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-	uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
-	TT_FATAL(
-		num_bytes % single_tile_size == 0,
-		"num_bytes {} must be divisible by MXFP4 tile_size {}",
-		num_bytes,
-		single_tile_size);
-	uint32_t num_tiles = num_bytes / single_tile_size;
+    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
+    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
+    TT_FATAL(
+        num_bytes % single_tile_size == 0,
+        "num_bytes {} must be divisible by MXFP4 tile_size {}",
+        num_bytes,
+        single_tile_size);
+    uint32_t num_tiles = num_bytes / single_tile_size;
 
-	std::mt19937 rng(seed);
-	std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
 
-	constexpr uint32_t kNumFloatsPerTile = 1024;
-	vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
-	for (float& v : fp32_vec) {
-		v = dist(rng) + offset;
-	}
+    constexpr uint32_t kNumFloatsPerTile = 1024;
+    vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
+    for (float& v : fp32_vec) {
+        v = dist(rng) + offset;
+    }
 
     vector<uint32_t> packed =
         pack_as_mx_tiles(tt::DataFormat::MxFp4, ttsl::make_const_span(fp32_vec), /*row_major_input=*/true);
@@ -213,8 +213,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxFp4ToFloat16bFp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);

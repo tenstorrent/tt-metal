@@ -532,7 +532,10 @@ extern "C" uint32_t _start1() {
 #endif
         {
             // Profiler FW zone for subordinate DMs (DM1-DM7).
+            // Worker DM0 never runs a kernel (it only services the DFB implicit-sync ISR), so the subordinate DMs are
+            // the only place a worker kernel can leave a DFB trid behind.
             DeviceZoneScopedMainN("DM-FW");
+            reset_cmd_buf_trids();
             auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
             record_stack_usage(stack_free);

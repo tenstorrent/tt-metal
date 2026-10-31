@@ -65,6 +65,9 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
+  # ttsim: tensix_unpacr0_row is unimplemented (tenstorrent/ttsim#TBD). The 32-bit Dest unary unpack to SrcB issues it.
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_datacopy_quasar.py::test_eltwise_unary_datacopy_quasar[data_copy_type_dest_acc_formats_dims_dest_sync_dest_indices:(<DataCopyType.B2D: 'B2D'>, <DestAccumulation.Yes: True>"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[unpack_sel_dest_acc_formats_sync_transpose_dims:(<UnpackerEngine.UnpB: 'UNP_B'>, <DestAccumulation.Yes: True>"
 
   # --- Sanity ttnn sim_quasar tests ---
   - models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_update_cache.py::test_paged_update_cache[00_128x8x32x64_bf8_int-dram-ttnn_mesh_device0]

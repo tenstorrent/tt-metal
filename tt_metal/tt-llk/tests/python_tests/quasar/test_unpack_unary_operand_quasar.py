@@ -79,7 +79,7 @@ def generate_unpack_unary_operand_combinations(
 
     Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
+    Returns: List of (unpacker_sel, dest_acc, format, dest_sync, transpose_en, input_dimensions, tile_dimensions) tuples
     """
     combinations = []
     dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
@@ -154,11 +154,11 @@ def generate_unpack_unary_operand_combinations(
                             for dimensions in dimensions_list:
                                 combinations.append(
                                     (
-                                        fmt,
+                                        unpacker_sel,
                                         dest_acc,
+                                        fmt,
                                         dest_sync,
                                         transpose_en,
-                                        unpacker_sel,
                                         runtime(dimensions),
                                         runtime(tile_dims),
                                     )
@@ -195,12 +195,12 @@ PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinati
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    unpack_sel_dest_acc_formats_sync_transpose_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_unary_operand_quasar(
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    unpack_sel_dest_acc_formats_sync_transpose_dims,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -209,14 +209,14 @@ def test_unpack_unary_operand_quasar(
     perf_report=None,
 ):
     (
-        formats,
+        unpacker_sel,
         dest_acc,
+        formats,
         dest_sync_mode,
         transpose_en,
-        unpacker_sel,
         input_dimensions,
         tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims
+    ) = unpack_sel_dest_acc_formats_sync_transpose_dims
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

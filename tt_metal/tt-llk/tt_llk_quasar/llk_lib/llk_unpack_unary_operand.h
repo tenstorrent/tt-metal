@@ -14,6 +14,57 @@
 using namespace ckernel;
 
 /**
+ * @brief Returns the instruction that retags the unused source register before the 32-bit Dest datacopy clears it.
+ *
+ * A source bank's format tag is updated only by a real write; CLRSRC/ZEROSRC zero the data but keep the old tag. If the
+ * cleared register was last written in a packed format (e.g. MxFp4_2x_B by a 2x matmul), ELWADD reads it through the
+ * packed path and adds non-zero garbage. This holds even though the clear sets dvalid, which assembly.yaml describes as
+ * also setting the implied format from OUT_DATA_FORMAT: on emu-quasar that clear, with a non-packed OUT_DATA_FORMAT, still
+ * left the bank read through the packed path. The returned single-row unpack (no dvalid, no index increment) gives the bank
+ * the unused unpacker's output format; the clear that follows zeroes the row. Costs one extra single-row unpack per tile
+ * on the otherwise idle unpacker, in 32-bit Dest mode only.
+ *
+ * Also points the unused unpacker's tile counters at tile 0 of buf_desc_id. _llk_unpack_unary_operand_ only sets
+ * UNP_SEL's counters and the retag never increments them, so its read stays inside this op's buffer.
+ *
+ * @tparam UNP_SEL: unpacker engine in use, values = <p_unpacr::UNP_A/UNP_B>
+ * @param buf_desc_id: buffer descriptor the op unpacks from
+ * @note Issue the returned instruction right before @ref nop_insn_for_unused_unpacker_engine, once per tile.
+ */
+template <std::uint32_t UNP_SEL>
+inline std::uint32_t retag_insn_for_unused_unpacker_engine(const std::uint32_t buf_desc_id)
+{
+    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL must be UNP_A or UNP_B");
+    constexpr std::uint32_t retag_unp = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, retag_unp, 0 /*Value*/);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, retag_unp, 0 /*Value*/);
+    if constexpr (UNP_SEL == p_unpacr::UNP_A)
+    {
+        return TT_OP_UNPACR1_ROW(
+            0 /*Dst_Row_Idx*/,
+            0 /*Src_Row_Idx*/,
+            0 /*Dst_Face_Idx*/,
+            0 /*Src_Face_Idx*/,
+            0 /*Dst_Tile_Offset_Idx_Inc*/,
+            0 /*Src_Tile_Offset_Idx_Inc*/,
+            buf_desc_id,
+            0 /*SetDatValid*/);
+    }
+    else
+    {
+        return TT_OP_UNPACR0_ROW(
+            0 /*Dst_Row_Idx*/,
+            0 /*Src_Row_Idx*/,
+            0 /*Dst_Face_Idx*/,
+            0 /*Src_Face_Idx*/,
+            0 /*Dst_Tile_Offset_Idx_Inc*/,
+            0 /*Src_Tile_Offset_Idx_Inc*/,
+            buf_desc_id,
+            0 /*SetDatValid*/);
+    }
+}
+
+/**
  * @brief MOP configuration for unpack of unary operations
  * @details Sets up MOP for unpacking a single operand by tiles
  * Specialized for tiny-tile unpack where each face is a separate tile in HW.
@@ -63,8 +114,16 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
     if constexpr (EN_32BIT_DEST)
     {
-        const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_start_op(clr_unused_unpacr_engine);
+        const std::uint32_t clr_unused_unpacr_engine   = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
+        const std::uint32_t retag_unused_unpacr_engine = retag_insn_for_unused_unpacker_engine<UNP_SEL>(buf_desc_id);
+        // The end ops are taken, so the retag and the clear go in through the replay buffer as the start op.
+        load_replay_buf<0, 2>(
+            [retag_unused_unpacr_engine, clr_unused_unpacr_engine]
+            {
+                TT_INSN(retag_unused_unpacr_engine);
+                TT_INSN(clr_unused_unpacr_engine);
+            });
+        temp.set_start_op(TT_OP_REPLAY(0 /*start_idx*/, 2 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/));
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -105,8 +164,9 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
     if constexpr (EN_32BIT_DEST)
     {
-        const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_end_op(clr_unused_unpacr_engine);
+        const std::uint32_t clr_unused_unpacr_engine   = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
+        const std::uint32_t retag_unused_unpacr_engine = retag_insn_for_unused_unpacker_engine<UNP_SEL>(buf_desc_id);
+        temp.set_end_ops(retag_unused_unpacr_engine, clr_unused_unpacr_engine);
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -190,8 +250,9 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
     // 32-bit datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB
     if constexpr (EN_32BIT_DEST)
     {
-        const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_end_op(clr_unused_unpacr_engine);
+        const std::uint32_t clr_unused_unpacr_engine   = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
+        const std::uint32_t retag_unused_unpacr_engine = retag_insn_for_unused_unpacker_engine<UNP_SEL>(buf_desc_id);
+        temp.set_end_ops(retag_unused_unpacr_engine, clr_unused_unpacr_engine);
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
