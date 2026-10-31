@@ -216,12 +216,19 @@ class TtGatedAttention:
             ttnn.deallocate(u)
         return out
 
-    def __call__(self, x: ttnn.Tensor, start: int, cache, slot: int = 0, cache_layer: int = 0) -> ttnn.Tensor:
+    def __call__(
+        self, x: ttnn.Tensor, start: int, cache, slot: int = 0, cache_layer: int = 0, end: int | None = None
+    ) -> ttnn.Tensor:
         """x [1, 1, T / sp, hidden] bf16 (this SP row's rows, replicated over TP); cache a TtKVCache (written in
-        place at rows [start, start + T)). Returns [1, 1, T / sp, hidden] bf16 replicated over TP."""
+        place at rows [start, end), end default start + T; rows [end, ceil32(end)) zeroed). Returns
+        [1, 1, T / sp, hidden] bf16 replicated over TP."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         rows = x.shape[-2]
         T = rows * self.sp
+        end = start + T if end is None else end
+        assert start < end <= start + T, (start, end, T)
+        # pad rows: write only the 32-row records holding real tokens, then zero the last record's pad rows
+        valid = {} if end == start + T else {"valid_global": end}
         D, nq = self.D, self.nq
         qkv_w = (nq + 2) * D
 
@@ -269,8 +276,20 @@ class TtGatedAttention:
                 num_layers=cache.num_layers,
                 kv_actual_global=start,
                 cluster_axis=0,
+                **valid,
             )
             ttnn.deallocate(t8)
+            if end % 32:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    c_,
+                    slot_idx=slot,
+                    layer_idx=cache_layer,
+                    num_layers=cache.num_layers,
+                    valid_global=end,
+                    chunk_size_global=T,
+                    cluster_axis=0,
+                    pad_align=32,
+                )
         qb = ttnn.typecast(q, ttnn.bfloat16)
         ttnn.deallocate(q)
         o, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(

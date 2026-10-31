@@ -37,14 +37,31 @@ def compute_config():
     )
 
 
+def chip_order(start: int, T: int, sp: int) -> list[int]:
+    """Chip-order index of each natural row n of a chunk at start: the engine's ring_sdpa_reshuffle
+    (ring_sdpa_reshuffle.hpp:31-68), the order update_padded_kv_cache writes. The start's chip c0 holds the first
+    rows - intra tokens at local rows [0, rows - intra) and the chunk's last intra tokens after them; chip c0 + k
+    holds the next rows tokens in order. intra = start % rows; the identity when start is a multiple of rows."""
+    rows = T // sp
+    c0, intra = (start // rows) % sp, start % rows
+    out = []
+    for n in range(T):
+        if n < rows - intra:
+            out.append(c0 * rows + n)
+        elif n >= T - intra:
+            out.append(c0 * rows + n - (T - rows))
+        else:
+            m = n - (rows - intra)
+            out.append(((c0 + 1 + m // rows) % sp) * rows + m % rows)
+    return out
+
+
 @functools.lru_cache(maxsize=None)
 def chip_order_runs(start: int, T: int, sp: int, to_natural: bool) -> list[tuple[int, int]]:
     """Row runs [lo, hi) that, concatenated, reorder a chunk of T rows between the engine's chip order (chip q's
-    T / sp local rows at [q * T / sp, (q + 1) * T / sp), token g on chip (g / rows) % sp at local row g % rows) and
-    natural order. to_natural: runs index the chip-order tensor; else they index the natural-order tensor."""
-    rows = T // sp
-    # chip-order index of each natural row n (token start + n)
-    pos = [((start + n) // rows % sp) * rows + (start + n) % rows for n in range(T)]
+    T / sp local rows at [q * T / sp, (q + 1) * T / sp), chip_order) and natural order. to_natural: runs index the
+    chip-order tensor; else they index the natural-order tensor."""
+    pos = chip_order(start, T, sp)
     if not to_natural:
         inv = [0] * T
         for n, i in enumerate(pos):
@@ -61,7 +78,7 @@ def chip_order_runs(start: int, T: int, sp: int, to_natural: bool) -> list[tuple
 class TtGatedDeltaNet:
     """linear_attn of one layer. Weights from the checkpoint dict ``w`` (``linear_attn.*`` keys, bf16)."""
 
-    def __init__(self, mesh, cfg, w: dict, prefix: str = "linear_attn."):
+    def __init__(self, mesh, cfg, w: dict, prefix: str = "linear_attn.", chunk: int | None = None):
         self.mesh, self.cfg = mesh, cfg
         self.tp, self.sp = mesh.shape[1], mesh.shape[0]
         tp = self.tp
@@ -130,6 +147,23 @@ class TtGatedDeltaNet:
         )
         self.conv_pc = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=self._channel_chunk(self.cd))
         self.consts = {C: self._gdn_consts(C) for C in (32, 64)}
+        self.row_idx = {}  # T -> [1, 1, T, 32] fp32 row index (pad-row mask of g / beta)
+        if chunk is not None:
+            self._row_index(chunk)
+
+    def _row_index(self, T: int) -> ttnn.Tensor:
+        """[1, 1, T, 32] fp32 holding each row's index: lt(row_idx, n) masks the pad rows on the device. Built once
+        per chunk length (at load time for the chunk given to __init__)."""
+        if T not in self.row_idx:
+            self.row_idx[T] = ttnn.from_torch(
+                torch.arange(T, dtype=torch.float32)[:, None].expand(T, 32).reshape(1, 1, T, 32).contiguous(),
+                device=self.mesh,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        return self.row_idx[T]
 
     # ---------------------------------------------------------------- load-time helpers
     def _qkv_rows(self, c: int) -> torch.Tensor:
@@ -176,9 +210,10 @@ class TtGatedDeltaNet:
 
     def state_to_device(self, conv: torch.Tensor, recurrent: torch.Tensor) -> dict:
         """The reference's state (conv [conv_dim, K] oldest first, recurrent [48, 128, 128] fp32) in the device
-        layout: conv history [1, 3, 2560] bf16 ROW_MAJOR (the last K - 1 inputs) and recurrent [1, 12, 128, 128]
-        fp32 TILE, per TP column, replicated over the SP rows. Load time / harness boundary only."""
-        hist = torch.cat([conv[self.qkv_rows[c], 1:].T.float() for c in range(self.tp)], -1)  # [3, tp * 2560]
+        layout: conv tail [1, K, 2560] bf16 ROW_MAJOR (the last K inputs, oldest first; the op reads the last K - 1)
+        and recurrent [1, 12, 128, 128] fp32 TILE, per TP column, replicated over the SP rows. Load time / harness
+        boundary only."""
+        hist = torch.cat([conv[self.qkv_rows[c]].T.float() for c in range(self.tp)], -1)  # [K, tp * 2560]
         mm = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(None, 2))
         h = ttnn.from_torch(
             hist.reshape(1, *hist.shape),
@@ -199,7 +234,41 @@ class TtGatedDeltaNet:
         )
         return {"conv": h, "recurrent": r}
 
+    def state_to_torch(self, state: dict) -> dict:
+        """Inverse of state_to_device (SP row 0's copy): conv [conv_dim, K], recurrent [48, 128, 128] fp32."""
+        cat = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, 2))
+        hist = ttnn.to_torch(state["conv"], mesh_composer=cat)[0].float()  # [K, tp * 2560]
+        conv = torch.zeros(self.cfg.conv_dim, self.K)
+        for c in range(self.tp):
+            conv[self.qkv_rows[c]] = hist[:, c * self.cd : (c + 1) * self.cd].T
+        cat = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, 1))
+        rec = ttnn.to_torch(state["recurrent"], mesh_composer=cat)[0].float()  # [48, 128, 128]
+        return {"conv": conv, "recurrent": rec}
+
+    @staticmethod
+    def clone_state(state: dict) -> dict:
+        return {k: ttnn.clone(v, memory_config=ttnn.DRAM_MEMORY_CONFIG) for k, v in state.items()}
+
+    @staticmethod
+    def free_state(state: dict) -> None:
+        for v in state.values():
+            ttnn.deallocate(v)
+
     # ---------------------------------------------------------------- forward helpers
+    def _conv_tail(self, hist: ttnn.Tensor, xin: ttnn.Tensor, m: int) -> ttnn.Tensor:
+        """The conv state after m rows of this chunk: rows [m, m + K) of [hist (K rows) | xin], [1, K, cd]."""
+        dram, K, cd = ttnn.DRAM_MEMORY_CONFIG, self.K, self.cd
+        if m >= K:
+            return ttnn.slice(xin, (0, m - K, 0), (1, m, cd), memory_config=dram)
+        if m == 0:
+            return ttnn.clone(hist, memory_config=dram)
+        old = ttnn.slice(hist, (0, m, 0), (1, K, cd), memory_config=dram)
+        new = ttnn.slice(xin, (0, 0, 0), (1, m, cd), memory_config=dram)
+        out = ttnn.concat([old, new], dim=1, memory_config=dram)
+        for u in (old, new):
+            ttnn.deallocate(u)
+        return out
+
     def _gather_natural(self, t: ttnn.Tensor, start: int, T: int) -> ttnn.Tensor:
         """[1, 1, T / sp, W] per chip -> [1, 1, T, W] whole chunk in natural order on every chip."""
         g = ttnn.all_gather(t, dim=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -264,13 +333,60 @@ class TtGatedDeltaNet:
         ttnn.deallocate(t)
         return out
 
-    def __call__(self, x: ttnn.Tensor, start: int, state: dict):
-        """x [1, 1, T / sp, hidden] bf16 (this SP row's rows, replicated over TP); state from state_to_device.
-        Returns (out [1, 1, T / sp, hidden] bf16 replicated over TP, new state)."""
+    def _delta_rule(self, q, k, v, g, beta, rec, bounds: list[int], chunk: int):
+        """chunk_gated_delta_rule over the segments [bounds[j], bounds[j + 1]) of the chunk, each from the previous
+        segment's final state. Returns (o [nv, T, dv] fp32 TILE, the state after each segment)."""
+        eye, tril, ones, masks = self.consts[chunk]
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        whole = len(bounds) == 2
+        outs, states = [], []
+        for lo, hi in zip(bounds, bounds[1:]):
+
+            def seg(t):
+                if whole:
+                    return t
+                s, e = [0] * len(t.shape), list(t.shape)
+                s[1], e[1] = lo, hi
+                return ttnn.slice(t, s, e, memory_config=dram)
+
+            args = [seg(t) for t in (q, k, v, g, beta)]
+            o, rec = ttnn.transformer.chunk_gated_delta_rule(
+                *args,
+                scale=self.dk**-0.5,
+                initial_state=rec,
+                output_final_state=True,
+                chunk_size=chunk,
+                output_head_major=True,
+                eye=eye,
+                tril=tril,
+                ones=ones,
+                masks=masks,
+            )
+            if not whole:
+                for t in args:
+                    ttnn.deallocate(t)
+            outs.append(o)
+            states.append(rec)
+        if whole:
+            return outs[0], states
+        o = ttnn.concat(outs, dim=1, memory_config=dram)
+        for t in outs:
+            ttnn.deallocate(t)
+        return o, states
+
+    def __call__(self, x: ttnn.Tensor, start: int, state: dict, end: int | None = None, snap_at=()):
+        """x [1, 1, T / sp, hidden] bf16 (this SP row's rows, replicated over TP); state from state_to_device (the
+        state at start). Rows at or past end (default start + T) are pad: they leave the state untouched (g = beta =
+        0, the conv tail taken at end). snap_at: positions in (start, end] to also return the state at.
+        Returns (out [1, 1, T / sp, hidden] bf16 replicated over TP, state at end, {position: state})."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         rows = x.shape[-2]
         T = rows * self.sp
         kd, vd, cd, nv = self.kd, self.vd, self.cd, self.nv
+        n_real = T if end is None else end - start
+        assert 0 < n_real <= T, (start, end, T)
+        snap_at = sorted(set(snap_at))
+        assert all(start < p <= start + n_real and (p - start) % 32 == 0 for p in snap_at), (start, end, snap_at)
 
         # 1. projections on the local rows
         # fp32 out: z gates in fp32 (as the reference); the conv input is cast to bf16 (the op's contract)
@@ -294,15 +410,21 @@ class TtGatedDeltaNet:
 
         # 2. the whole chunk in natural order on every chip of the column
         qkv_all = self._gather_natural(qkv, start, T)
-        g_all = self._heads(self._gather_natural(g, start, T), T)
-        beta_all = self._heads(self._gather_natural(beta, start, T), T)
+        g_all, beta_all = self._gather_natural(g, start, T), self._gather_natural(beta, start, T)
         for t in (qkv, g, beta):
             ttnn.deallocate(t)
+        if n_real < T:
+            # pad rows: g = beta = 0 keeps the recurrent state as it is after the last real row
+            real = ttnn.lt(self._row_index(T), float(n_real), memory_config=dram)
+            g_all, beta_all = (ttnn.multiply(t, real, memory_config=dram) for t in (g_all, beta_all))
+            ttnn.deallocate(real)
+        g_all, beta_all = self._heads(g_all, T), self._heads(beta_all, T)
 
-        # 3. causal conv + silu + q/k/v split on the whole chunk, history = the conv state
+        # 3. causal conv + silu + q/k/v split on the whole chunk, history = the last K - 1 rows of the conv state
         xin = ttnn.to_layout(ttnn.reshape(qkv_all, (1, T, cd)), ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
         ttnn.deallocate(qkv_all)
-        hist = state["conv"]
+        tail = state["conv"]
+        hist = ttnn.slice(tail, (0, 1, 0), (1, self.K, cd), memory_config=dram)
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             xin,
             hist,
@@ -315,32 +437,24 @@ class TtGatedDeltaNet:
             predecessor_carry=hist,
             memory_config=dram,
         )
-        new_conv = ttnn.slice(xin, (0, T - (self.K - 1), 0), (1, T, cd), memory_config=dram)
+        ttnn.deallocate(hist)
+        new_conv = self._conv_tail(tail, xin, n_real)
+        snap_conv = {p: self._conv_tail(tail, xin, p - start) for p in snap_at if p < start + n_real}
         ttnn.deallocate(xin)
 
-        # 4. the gated delta rule over the chunk from the recurrent state
+        # 4. the gated delta rule over the chunk from the recurrent state, split at the snapshot positions
         chunk = settings.get("GDN_CHUNK")
         if chunk != CHUNK_FLAT:
             # rank-4 head-split path: q / k l2-normalised here (fp32), the op casts q / k / v to bf16
             q, k = (self._l2norm(self._split_heads(t, self.nk, self.dk, T)) for t in (q, k))
             v = self._split_heads(v, self.nv, self.dv, T)
-        eye, tril, ones, masks = self.consts[chunk]
-        o, new_rec = ttnn.transformer.chunk_gated_delta_rule(
-            q,
-            k,
-            v,
-            g_all,
-            beta_all,
-            scale=self.dk**-0.5,
-            initial_state=state["recurrent"],
-            output_final_state=True,
-            chunk_size=chunk,
-            output_head_major=True,
-            eye=eye,
-            tril=tril,
-            ones=ones,
-            masks=masks,
-        )  # o [nv, T, dv] fp32 TILE
+        bounds = [0] + [p - start for p in snap_conv] + [T]
+        o, recs = self._delta_rule(q, k, v, g_all, beta_all, state["recurrent"], bounds, chunk)  # o [nv, T, dv]
+        new_rec = recs[-1]
+        snaps = {p: {"conv": c, "recurrent": r} for (p, c), r in zip(snap_conv.items(), recs)}
+        for p in snap_at:
+            if p == start + n_real:
+                snaps[p] = self.clone_state({"conv": new_conv, "recurrent": new_rec})
         for t in (q, k, v, g_all, beta_all):
             ttnn.deallocate(t)
 
@@ -365,4 +479,4 @@ class TtGatedDeltaNet:
         ttnn.deallocate(part)
         out = ttnn.typecast(red, ttnn.bfloat16)
         ttnn.deallocate(red)
-        return out, {"conv": new_conv, "recurrent": new_rec}
+        return out, {"conv": new_conv, "recurrent": new_rec}, snaps

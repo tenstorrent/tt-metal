@@ -58,6 +58,13 @@ TABLE = {
     "SDPA_NUM_LINKS": Setting(2, (1, 2), "fabric links of the ring SDPA K/V exchange (Blackhole: 2)"),
     "SDPA_TOPOLOGY": Setting("Linear", ("Linear", "Ring"), "ring SDPA CCL topology (minimax_m3 / DeepSeek: Linear)"),
     "MLP_FP32_ACC": Setting(True, (True, False), "rule 7 default: MLP matmuls accumulate in fp32"),
+    "NUM_SLOTS": Setting(2, None, "users per prefill mesh (serving_answers slots = engine max_slots): KV / GDN state"),
+    "KV_BLOCK_SIZE": Setting(
+        64,
+        (64, 32, 128),
+        "the deployed kv_block_size: a follow-up turn restarts at align_down(prev_end, this); the GDN layers keep a "
+        "state snapshot there",
+    ),
 }
 
 MAX_PRECISION = {

@@ -119,3 +119,31 @@
 - Not done yet (later tasks): pad rows past actual_end (`valid_global` + `zero_padded_kv_cache`), the
   trace-safe tensor forms of slot / start, and a multi-slot / multi-layer cache from the model.
 - Re-run: `bfw job check --task C.attn.attention --gate-only`.
+
+## M.1 (all-device model, layers 0-3), 2026-10-31
+
+- `tt/model.py` `TtQwen38Model` (`hooks.device_model`): `embed(tokens, start=)` lays the ids out as the engine's
+  payload (`[8, 1, 640]` uint32, chip order), clamps PAD_ID with `ttnn.minimum(ids, vocab - 1)`, then
+  `ttnn.embedding` on a `[vocab, 1280]` bf16 table per TP column and `all_gather(axis 1)`. Each layer goes through
+  `run_block` with the block graph's steps bound to the existing modules. `final_norm` uses `TtRMSNorm`, and
+  `logits` runs a bfp8 lm_head split over the vocab. Between blocks the residual stays in the engine's chip order
+  (`gdn.chip_order`). That order is a literal port of `ring_sdpa_reshuffle`, checked against the framework's port
+  and against `update_padded_kv_cache`'s `local_cache_offset` at starts 0, 1312, 2944, 5056, 5120, 48896, 51136
+  and 51200. The old `chip_order_runs` formula (token g at local row g % 640) was wrong for starts that are not a
+  multiple of 640.
+- State `TtModelState`: one `TtKVCache` with all slots and attention layers (batch `slot * n_attn + attn_layer`,
+  `NUM_SLOTS` = 2), plus a `GdnSlot` per (slot, GDN layer) holding the live conv/recurrent state, its position and
+  its snapshots. The conv state is now the full K = 4-row tail (the reference's layout); the conv op gets its last
+  3 rows.
+- Hybrid restart rule: `gdn_begin` resets the state at start 0, continues from the live state, or restores the
+  snapshot taken exactly at start. Any other start raises ValueError. `snap_points` = `align_down(end,
+  KV_BLOCK_SIZE)` and `max_seq - chunk` inside (start, end]. The GDN module splits `chunk_gated_delta_rule` at
+  those points (initial_state chaining) and returns the state at each. A chunk's own start is kept as a snapshot
+  when it is a restart point.
+- Pad rows: GDN multiplies g and beta by `lt(row_index, n_real)` (the row index table is built at load time) and
+  takes the conv tail at `end`. Attention writes with `valid_global=end`, then runs `zero_padded_kv_cache(pad_align=32)`
+  when end is not 32-aligned.
+- Results: ladder s10240 PCC per layer >= 0.99998, rel <= 0.0067, bias <= 2.5e-4, state PCC 0.99937, 0 host
+  transfers, 55 ops per layer. kv_layout passes. hybrid_chunk_starts: every state PCC >= 0.99937, and the restart
+  at 1024 is refused. The C.linear.attention, C.attn.attention, S.*.02 and S.*.06 gates still pass.
+- Re-run: `bfw job check --task M.1 --gate-only`.

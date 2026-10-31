@@ -85,5 +85,40 @@ class TtKVCache:
             setattr(self, name, self._upload(host[None].expand(B, -1, -1, -1).contiguous()))
             ttnn.deallocate(old)
 
+    def batch(self, slot: int, layer: int) -> int:
+        return slot * self.num_layers + layer
+
+    def _read(self, t: ttnn.Tensor) -> torch.Tensor:
+        """The whole cache [batch, n_kv, max_seq, head_dim] in natural position order (harness boundary only)."""
+        flat = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
+        cat = ttnn.ConcatMesh2dToTensor(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, 1))
+        host = ttnn.to_torch(flat, mesh_composer=cat).float()
+        ttnn.deallocate(flat)
+        out = torch.empty_like(host)
+        out[:, :, blockcyclic_positions(self.sp, self.chunk, self.max_seq)] = host
+        return out
+
+    def to_torch(self, slot: int, layer: int, length: int) -> dict:
+        """key / value [n_kv, length, head_dim] of one (slot, layer), natural order (harness boundary only)."""
+        b = self.batch(slot, layer)
+        return {name: self._read(t)[b, :, :length].clone() for name, t in (("key", self.k), ("value", self.v))}
+
+    def load_layer_prefix(self, slot: int, layer: int, key: torch.Tensor, value: torch.Tensor, length: int) -> None:
+        """Harness boundary only: (slot, layer) holds key / value [n_kv, seq, head_dim] (natural order) at positions
+        [0, length), zeros after; the other slots / layers keep their contents."""
+        b = self.batch(slot, layer)
+        pos = blockcyclic_positions(self.sp, self.chunk, self.max_seq)
+        for name, src in (("k", key), ("v", value)):
+            old = getattr(self, name)
+            nat = self._read(old)
+            nat[b] = 0
+            nat[b, :, :length] = src[:, :length].float()
+            setattr(self, name, self._upload(nat[:, :, pos].contiguous()))
+            ttnn.deallocate(old)
+
     def cache_tensors(self) -> dict:
         return {"key": self.k, "value": self.v}
+
+    def free(self) -> None:
+        for t in (self.k, self.v):
+            ttnn.deallocate(t)

@@ -92,7 +92,7 @@ def device_component(mesh, spec, layer, step):
                 conv, rec = torch.zeros_like(conv), torch.zeros_like(rec)
             state = gdn.state_to_device(conv, rec)
             with _hooked_dispatch():
-                out, _ = gdn(_to_device(mesh, x), ctx.start, state)
+                out, _, _ = gdn(_to_device(mesh, x), ctx.start, state)
                 return _to_host(mesh, out, x.shape)
 
         return run
@@ -135,4 +135,8 @@ def device_component(mesh, spec, layer, step):
 
 
 def device_model(mesh, spec, layers, lm_head=True):
-    raise NotImplementedError("assemble stage: no device model yet")
+    """The all-device model (tt/model.py): hidden state on the device from the embedding to the final norm, the
+    served KV cache and GDN state (with restart snapshots) as its state."""
+    from models.demos.qwen38_27b.tt.model import TtQwen38Model
+
+    return TtQwen38Model(mesh, spec, layers, lm_head=lm_head)
