@@ -218,11 +218,18 @@ class PagedApc:
         t0 = time.perf_counter()
         ow, slabs = self.owners()
         halos = self.halos()
-        assert len(halos) == 40 and set(ow) == {2, 8, 14, 20}, (sorted(halos), ow)
+        assert ow and set(ow) <= {2, 8, 14, 20}, (
+            sorted(halos),
+            ow,
+        )  # (a model built with a subset of the layers keeps only those halos / owners)
         with memitem(self.model.md, "apc_paged_store"):
             self.ks = APS.KeyStore(self.model.md, self.model.U, ow, chunk=self.chunk, K=self.sizes["key"])
             self.hs = APS.HaloStore(
-                self.model.md, self.model.U, halo_a=self.sizes["halo_a"], halo_b=self.sizes["halo_b"]
+                self.model.md,
+                self.model.U,
+                halo_a=self.sizes["halo_a"],
+                halo_b=self.sizes["halo_b"],
+                layers=sorted(halos),
             )
         self.ks.warm(slabs)
         self.hs.warm(halos)

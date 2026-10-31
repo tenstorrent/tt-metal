@@ -342,12 +342,14 @@ class HaloStore:
     Allocate before the first trace capture; the halos passed to save / restore are the persistent per-layer ``halo`` tensors (written in place by restore).
     """
 
-    def __init__(self, md, U, halo_a=None, halo_b=None):
+    def __init__(self, md, U, halo_a=None, halo_b=None, layers=None):
         self.md, self.U = md, int(U)
         self.rows, self.cols = tuple(md.shape)
         a, b, _ = env_sizes()
         self.K = {"A": a if halo_a is None else int(halo_a), "B": b if halo_b is None else int(halo_b)}
         self.layers = {"A": PART_A, "B": PART_B}
+        if layers is not None:  # a model built with a subset of the layers (tests): only those halos exist
+            self.layers = {p: tuple(l for l in v if l in set(layers)) for p, v in self.layers.items()}
         self.store = {
             p: ttnn.zeros(
                 [self.K[p] * len(self.layers[p]), 1, WINDOW, HEAD_DIM],
@@ -356,7 +358,7 @@ class HaloStore:
                 device=md,
             )
             for p in "AB"
-            if self.K[p] > 0
+            if self.K[p] > 0 and self.layers[p]
         }
         n = self.rows * self.U
         self.save_tab = {p: table_device(md, n) for p in self.store}
