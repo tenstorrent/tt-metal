@@ -11,7 +11,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.claude/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify `tests/.venv` exists; bootstrap with the correct `CHIP_ARCH` if missing.
+- **NEVER skip env setup.** Verify `tests/.venv` and SFPI are installed; bootstrap them if either is missing.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -27,15 +27,15 @@ The skill passes you:
 
 1. **Resolve the worktree root.** This is the directory containing `tests/` and `tt_llk_<arch>/`. If you were spawned from inside that directory, `$(pwd)` is correct. Otherwise resolve from the script path: `realpath .claude/scripts/run_test.sh` → strip `/.claude/scripts/run_test.sh`.
 
-2. **Check the venv:**
+2. **Check the env:**
    ```bash
-   test -f "<worktree>/tests/.venv/bin/activate"
+   test -x "<worktree>/tests/.venv/bin/pytest" && test -d "<worktree>/tests/sfpi/compiler/bin"
    ```
-   If missing, bootstrap with the correct `CHIP_ARCH`:
+   If the check fails, bootstrap with `timeout: 1800000` (30 min) on the Bash tool call:
    ```bash
-   cd <worktree>/tests && CHIP_ARCH=<arch> ./setup_testing_env.sh
+   cd <worktree>/tests && bash ./setup_external_testing_env.sh
    ```
-   The `CHIP_ARCH` value MUST match the test's arch — wrong-arch setup silently produces broken builds. Never run `setup_testing_env.sh` without `CHIP_ARCH`.
+   Re-run the check. If it still fails, or `sudo` prompts for a password, stop and report ENV_ERROR with the setup output.
 
 Do not pre-check the test directory — the script validates it and exits 3 if missing.
 

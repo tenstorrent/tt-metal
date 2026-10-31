@@ -183,7 +183,7 @@ _validate() {
 
   if [[ ! -d "$VENV" ]]; then
     echo "ERROR: venv not found: ${VENV}" >&2
-    echo "       Run 'CHIP_ARCH=${ARCH} ./setup_testing_env.sh' in ${WORKTREE}/tests/ first." >&2
+    echo "       Run 'bash ./setup_external_testing_env.sh' in ${WORKTREE}/tests/ first." >&2
     exit 3
   fi
   if [[ ! -d "$TEST_DIR" ]]; then
