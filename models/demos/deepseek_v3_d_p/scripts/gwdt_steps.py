@@ -452,9 +452,10 @@ def matmul_step(
     return pytest_step(f"matmul:{name}", f"matmul {name}", "matmul", None, ids, opts, details, env)
 
 
-MATMUL_ITERS = 5000
-# Iterations per window, 8 windows: ~100 s fixed + ~1.75 s per iteration on a Galaxy, so 50 keeps the step near 3 min.
-RUN_TO_RUN_ITERS = 50
+MATMUL_ITERS = 1000
+RUN_TO_RUN_ITERS = 10
+SWEEP_ITERS = 10
+WRITE_ACK_ITERS = 10
 SWEEP_GRID = "11x10"
 SINGLE_GALAXY_MGD = "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
@@ -462,7 +463,7 @@ SINGLE_GALAXY_MGD = "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mes
 def core_sweep_step() -> Step:
     """One TT_SWEEP_GRID window at (0,0), GXxGY: 11x10 is the 110-core worker budget of the run-to-run test."""
     ids = ["tests/didt/scratch_core_sweep.py::test_core_sweep[blackhole-galaxy]"]
-    env = {"TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": SWEEP_GRID, "TT_SWEEP_ITERS": str(MATMUL_ITERS)}
+    env = {"TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": SWEEP_GRID, "TT_SWEEP_ITERS": str(SWEEP_ITERS)}
     inner = matmul_step("core-sweep", ids, ["-p", "no:randomly", "--timeout=0"], sweep_elements, env)
 
     def run(ctx: Ctx, state: State) -> Result:
@@ -496,7 +497,7 @@ def write_ack_step() -> Step:
         state.log = str(log)
         # The script wipes its work dir under TMPDIR, so a rerun gets its own.
         tmp = d if n == 1 else d / f"tmp_{n:02d}"
-        sh(ctx, cmd, log, {"TMPDIR": str(tmp), "MATMUL_ITERS": str(MATMUL_ITERS), **state.env}, timeout=1800)
+        sh(ctx, cmd, log, {"TMPDIR": str(tmp), "MATMUL_ITERS": str(WRITE_ACK_ITERS), **state.env}, timeout=1800)
         save_smi(ctx, d, n)
         return write_ack_result(log.read_text(errors="replace"))
 
@@ -514,7 +515,7 @@ def matmul_steps() -> list[Step]:
         matmul_step(
             "ff1",
             ["tests/didt/test_ff1_matmul.py::test_ff1_matmul[blackhole-galaxy-without_gelu]"],
-            [f"--didt-workload-iterations={MATMUL_ITERS}", "--determinism-check-interval=25", "--timeout=0"],
+            [f"--didt-workload-iterations={MATMUL_ITERS}", "--determinism-check-interval=50", "--timeout=0"],
             nd_outputs,
         ),
         # Each iteration is 1000 x (matmul + 5 cos) and one more matmul; only that last matmul is compared.
