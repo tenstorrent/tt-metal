@@ -204,6 +204,10 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
+        // calculate_gelu_appx stores through ADDR_MOD_2 (physical slot 6 under the SFPU addr-mod
+        // base): dest += 2 per row, the same programming typecast_init uses.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
         sfpi::vConstFloatPrgm0 = 0.5f;
 
         // LUT segments (6-entry piecewise linear)
@@ -222,33 +226,40 @@ void gelu_init() {
     // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
 
+// result = 0.5 * x + lut(x): 6-entry SFPLUTFP32 table in LReg0-2/4-6 and 0.5 in vConstFloatPrgm0
+// (LReg12), both loaded by gelu_init<true>.
+//
+// Raw TTI rather than sfpi::lut: sfpi serialises every row on LReg3, the register SFPLUTFP32 reads
+// its input from (load / lut / nop / mad / nop / store, 7 slots). The hardware leaves the LUT
+// destination free, so the result lives in LReg7 and the rows pipeline: the next row's SFPLOAD
+// and the previous row's SFPSTORE fill the LUT and SFPMAD shadows (5 slots per row). One SFPNOP
+// per row remains: LReg7 is the only free register next to the table, and the MAD needs both x
+// (LReg3) and lut(x) (LReg7) live. The steady-state body is recorded once and replayed; the store
+// walks dest through ADDR_MOD_2 -- physical slot 6 under the SFPU addr-mod base, programmed by
+// gelu_init as dest += 2 -- so no TTI_INCRWC per row. Same LUT mode bits and the same
+// x * LReg12 + lut MAD as before; only the destination register and the schedule change.
 template <int ITERATIONS>
 inline void calculate_gelu_appx() {
-    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    static_assert(ITERATIONS >= 2, "calculate_gelu_appx pipelines at least two rows");
+    constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_UPDATE;
 
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+    TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG7, p_sfpu::LREG7, 0);
+    // Body for row r: load row r+1, store row r (dest += 2), lut row r+1, nop, mad row r+1.
+    TTI_REPLAY(0, 5, 1, 1);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+    TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG7, p_sfpu::LREG7, 0);
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat half = sfpi::vConstFloatPrgm0;
-        sfpi::vFloat half_in = in * half;
-        sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
-        result = half_in + result;
-
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
+    for (int d = 2; d < ITERATIONS; d++) {
+        TTI_REPLAY(0, 5, 0, 0);
     }
-
-    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
