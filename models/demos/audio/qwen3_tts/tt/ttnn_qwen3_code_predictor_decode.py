@@ -15,7 +15,8 @@ One structural difference: **each step reads a different output head.** Step k p
 codebook k+1 through `lm_head[k]`, so the traced graph covers the five transformer layers
 and the head is applied outside it. The head is one [1024, 2048] matmul against five layers
 of work, so leaving it out of the trace costs little and keeps a single graph serving all
-15 steps.
+15 steps. It returns fp32 logits: the matmul already accumulates in fp32, and packing
+that result to bfloat16 flips argmax on the near-ties this sampler sits on.
 
 The cache is tiny, 16 positions rounded up to the 64 that flash decode requires, but the
 step count is what matters here: this is a dispatch-bound block, which is exactly what a
@@ -417,8 +418,16 @@ class TtCodePredictorCachedDecoder:
             ttnn.copy(self._zero_cache, cache)
 
     def _head(self, hidden, step):
-        """Codebook logits for this step, from its own output head."""
-        return ttnn.linear(hidden, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
+        """Codebook logits for this step, packed in fp32.
+
+        Accumulation is already fp32 (`compute_config`). Writing the result as bfloat16
+        flips top-1 wherever the top two logits sit inside one rounding step, which is
+        the usual case here. Same treatment as the talker's `codec_head`. Weights are
+        unchanged, and the head stays outside the trace.
+        """
+        return ttnn.linear(
+            hidden, self.p["lm_head"][step], compute_kernel_config=self.compute_config, dtype=ttnn.float32
+        )
 
     def _run(self, position):
         """One traced position, over whatever `_in` now holds."""
