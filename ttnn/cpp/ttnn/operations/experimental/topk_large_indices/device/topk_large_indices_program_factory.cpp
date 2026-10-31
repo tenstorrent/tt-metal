@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_large_indices_program_factory.hpp"
+#include "kernels/topk_large_indices_metadata.hpp"
 #include "kernels/topk_large_indices_runtime_args.hpp"
 
 #include <tt-metalium/base_types.hpp>
@@ -201,9 +202,10 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(
     const uint32_t split_rows = static_cast<uint32_t>(num_rows % num_cores);
     // Without the compiled transfer code the caller reads only start_row and num_rows, and the halved layout
     // does not describe a contiguous row range -- producing it anyway would drop rows. The geometry test is
-    // row_split_possible's, threaded through rather than re-derived, so the two cannot disagree.
-    const bool pair_split =
-        row_split && row_split_possible(num_rows, static_cast<uint32_t>(num_cores)) && num_chunks >= 2;
+    // row_split_possible's, threaded through rather than re-derived, so the two cannot disagree. The chunk test
+    // is row_halved's, which the kernels re-apply to a metadata length the host cannot see.
+    const bool pair_split = row_split && row_split_possible(num_rows, static_cast<uint32_t>(num_cores)) &&
+                            row_halved({.num_chunks = num_chunks, .tail_elements = 0});
 
     if (pair_split) {
         const uint64_t num_units = 2ull * split_rows;
@@ -290,6 +292,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_landing = tt::CBIndex::c_4;
     constexpr uint32_t cb_send = tt::CBIndex::c_5;
     constexpr uint32_t cb_acc = tt::CBIndex::c_6;
+    // Reader-to-writer mailbox: whether this core's pair row is really halved, which under a metadata length
+    // only the reader learns (row_halved).
+    constexpr uint32_t cb_split_gate = tt::CBIndex::c_7;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -356,6 +361,15 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         credit_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
         data_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     }
+    // A scalar length already gated the pair on the host, so only a metadata length needs the device to.
+    const uint32_t split_gate = row_split && has_meta ? 1u : 0u;
+    if (split_gate) {
+        constexpr uint32_t split_gate_bytes = 16;
+        const auto split_gate_cb_config =
+            tt::tt_metal::CircularBufferConfig(split_gate_bytes, {{cb_split_gate, tt::DataFormat::UInt32}})
+                .set_page_size(cb_split_gate, split_gate_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, split_gate_cb_config);
+    }
 
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
     interleaved_accessor_args(input).append_to(reader_compile_args);
@@ -383,7 +397,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
             .compile_args = reader_compile_args,
-            .named_compile_args = {{"row_split", row_split}}});
+            .named_compile_args = {
+                {"row_split", row_split}, {"split_gate", split_gate}, {"split_gate_cb", cb_split_gate}}});
 
     const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
     const bool rows_are_multi_chunk = multi_chunk_rows(k, input.logical_shape()[-1]);
@@ -452,7 +467,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_noc,
             .compile_args = writer_compile_args,
-            .named_compile_args = {{"row_split", row_split}}});
+            .named_compile_args = {
+                {"row_split", row_split}, {"split_gate", split_gate}, {"split_gate_cb", cb_split_gate}}});
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,

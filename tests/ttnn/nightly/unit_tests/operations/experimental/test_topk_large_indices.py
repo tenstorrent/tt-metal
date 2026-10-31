@@ -1327,8 +1327,8 @@ def test_topk_large_indices_leftover_rows_split(device, k, n, extra_rows):
 @pytest.mark.parametrize(
     "k,n,valid_length",
     [
-        # One valid chunk: the cut lands at 0, so the FIRST half is empty and folds in as one -inf chunk
-        # instead of stalling the body on an empty stream.
+        # One valid chunk: too short to halve (row_halved), so the first half's core reduces the row whole and
+        # its partner drops it, as an eager call with this length is scheduled.
         (2048, 131072, 2048),
         (1024, 131072, 1024),
         # Both halves non-empty, for contrast.
@@ -1337,8 +1337,8 @@ def test_topk_large_indices_leftover_rows_split(device, k, n, extra_rows):
     ],
 )
 def test_topk_large_indices_row_split_metadata_empty_half(device, k, n, valid_length):
-    # The length only reaches the device, so half_bounds cuts the row there. A half left with no valid chunk
-    # reduces as one all -inf chunk.
+    # The length only reaches the device, so the device decides whether to halve the row and half_bounds cuts
+    # it there.
     torch.manual_seed(3)
     torch_input = torch.randn(1, n, dtype=torch.bfloat16)
     torch_input[:, valid_length:] = 300.0
@@ -1351,6 +1351,53 @@ def test_topk_large_indices_row_split_metadata_empty_half(device, k, n, valid_le
     indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
     assert int(indices.max()) < valid_length
     _assert_topk_values_match_torch(torch_input[:, :valid_length], tt_indices, k)
+
+
+@pytest.mark.parametrize(
+    "n,valid_length",
+    [
+        # GLM-5.3 prefill (issue #63408): a 5120-wide cache row with a partial-chunk prompt. The host plans a
+        # metadata call from the physical width (3 chunks, halved) but an eager one from the length (1 chunk).
+        (5120, 896),
+        (5120, 2048),
+        # Two or more valid chunks: both forms halve the row, at the same cut.
+        (5120, 2049),
+        (5120, 5120),
+    ],
+)
+def test_topk_large_indices_metadata_split_rows_match_scalar_on_ties(device, n, valid_length):
+    """A metadata length (the traced form) must give the scalar length's (the eager form's) indices bit for
+    bit, ties included: a row halved in one form but not the other joins its halves in an unfused merge that
+    orders tied values differently, and the downstream sparse attention sums in that order."""
+    # Earlier cache-reuse tests disable caching on this module-scoped device, and a trace needs a cached program.
+    device.enable_program_cache()
+    k = 2048
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    # Leftover rows the host pairs, as in the 160-row-per-chip GLM-5.3 indexer.
+    num_rows = num_cores + num_cores // 2 - 2
+    torch_input = _make_tie_saturated_rows(num_rows=num_rows, n=n, distinct=8, seed=5)
+    tt_input = _to_device(torch_input, device)
+
+    scalar = ttnn.to_torch(
+        ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length), dtype=torch.uint32
+    )
+    metadata = _make_valid_length_metadata(device, valid_length)
+    eager_metadata = ttnn.to_torch(
+        ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length_tensor=metadata), dtype=torch.uint32
+    )
+    assert torch.equal(eager_metadata, scalar), "metadata length ordered ties differently from the scalar length"
+
+    ttnn.synchronize_device(device)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    traced_output = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length_tensor=metadata)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        traced = ttnn.to_torch(traced_output, dtype=torch.uint32)
+    finally:
+        ttnn.release_trace(device, trace_id)
+    assert torch.equal(traced, scalar), "traced call ordered ties differently from the eager one"
 
 
 @pytest.mark.parametrize("k,n", ROW_SPLIT_SHAPES, ids=lambda v: str(v))

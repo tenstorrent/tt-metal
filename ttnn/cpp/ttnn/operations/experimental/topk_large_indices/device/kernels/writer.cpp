@@ -108,10 +108,27 @@ FORCE_INLINE void write_row_indices(
 void kernel_main() {
     const uint32_t indices_addr = get_common_arg_val<uint32_t>(topk_common_args::output_address);
     const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::writer_start_row);
-    const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::writer_num_rows);
+    const uint32_t assigned_rows = get_arg_val<uint32_t>(topk_core_args::writer_num_rows);
     constexpr bool row_split = get_named_compile_time_arg_val("row_split") != 0;
-    const bool has_split = row_split && get_arg_val<uint32_t>(topk_core_args::writer_has_split) != 0;
+    constexpr bool split_gate = get_named_compile_time_arg_val("split_gate") != 0;
+    constexpr uint32_t split_gate_cb = get_named_compile_time_arg_val("split_gate_cb");
+    // The host paired this core on a row. Under a metadata length only the reader learns whether the row is
+    // really halved (row_halved); a scalar length was already gated on the host.
+    const bool pair_assigned = row_split && get_arg_val<uint32_t>(topk_core_args::writer_has_split) != 0;
     const bool second_half = row_split && get_arg_val<uint32_t>(topk_core_args::writer_second_half) != 0;
+    bool has_split = pair_assigned;
+    if constexpr (split_gate) {
+        if (pair_assigned) {
+            CircularBuffer gate_cb(split_gate_cb);
+            gate_cb.wait_front(1);
+            // Written by the reader RISC: drop any cached copy of the line before the load.
+            invalidate_l1_cache();
+            has_split = CoreLocalMem<volatile uint32_t>(gate_cb.get_read_ptr())[0] != 0;
+            gate_cb.pop_front(1);
+        }
+    }
+    // An unhalved pair row is written whole by the first half's core and dropped by the second's.
+    const uint32_t num_rows = pair_assigned && !has_split && second_half ? assigned_rows - 1 : assigned_rows;
     // The second half ships its survivor to the first, which merges it and writes the row.
     const bool receives_survivor = has_split && !second_half;
     const bool sends_survivor = has_split && second_half;
@@ -147,10 +164,11 @@ void kernel_main() {
     // here is created over the whole grid, so the allocator gives each core the same layout.
     const uint32_t landing_base = row_split ? landing_cb.get_write_ptr() : 0;
 
-    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
+    // The pair row, halved or not, is always the last one and always split_row.
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-        const bool is_split = has_split && local_row == num_whole_rows;
-        const uint32_t row = is_split ? split_row : start_row + local_row;
+        const bool is_pair_row = pair_assigned && local_row + 1 == assigned_rows;
+        const bool is_split = has_split && is_pair_row;
+        const uint32_t row = is_pair_row ? split_row : start_row + local_row;
 
         if (is_split && receives_survivor) {
             // The slot is free once the compute has consumed it: tell the partner to write.

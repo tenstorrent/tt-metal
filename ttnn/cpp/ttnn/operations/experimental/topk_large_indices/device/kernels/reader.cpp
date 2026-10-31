@@ -15,10 +15,13 @@
 void kernel_main() {
     const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
     const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::reader_start_row);
-    const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::reader_num_rows);
+    const uint32_t assigned_rows = get_arg_val<uint32_t>(topk_core_args::reader_num_rows);
     constexpr bool row_split = get_named_compile_time_arg_val("row_split") != 0;
+    constexpr bool split_gate = get_named_compile_time_arg_val("split_gate") != 0;
+    constexpr uint32_t split_gate_cb = get_named_compile_time_arg_val("split_gate_cb");
     const uint32_t split_row = row_split ? get_arg_val<uint32_t>(topk_core_args::reader_split_row) : 0;
-    const bool has_split = row_split && get_arg_val<uint32_t>(topk_core_args::reader_has_split) != 0;
+    // The host paired this core on a row; whether the row is really halved waits on its real length below.
+    const bool pair_assigned = row_split && get_arg_val<uint32_t>(topk_core_args::reader_has_split) != 0;
     const bool second_half = row_split && get_arg_val<uint32_t>(topk_core_args::reader_second_half) != 0;
     uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::search_length);
     const uint32_t input_page_bytes = get_common_arg_val<uint32_t>(topk_common_args::input_row_bytes);
@@ -100,11 +103,27 @@ void kernel_main() {
         }
     }
 
+    // A pair row too short to halve is reduced whole by the first half's core, and the second half's core
+    // drops it -- the schedule an eager call with this length gets from the host. The writer learns which.
+    const bool has_split = pair_assigned && row_halved(bounds);
+    const bool drops_pair_row = pair_assigned && !has_split && second_half;
+    if constexpr (split_gate) {
+        if (pair_assigned) {
+            CircularBuffer gate_cb(split_gate_cb);
+            gate_cb.reserve_back(1);
+            CoreLocalMem<uint32_t>(gate_cb.get_write_ptr())[0] = has_split ? 1u : 0u;
+            clobber_all_memory();
+            gate_cb.push_back(1);
+        }
+    }
+
     // One loop for both: without a split row, has_split is false and every row takes the whole-row bounds.
-    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
+    // The pair row, halved or not, is always the last one and always split_row.
+    const uint32_t num_rows = drops_pair_row ? assigned_rows - 1 : assigned_rows;
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-        const bool is_split = has_split && local_row == num_whole_rows;
-        const uint32_t row = is_split ? split_row : start_row + local_row;
+        const bool is_pair_row = pair_assigned && local_row + 1 == assigned_rows;
+        const bool is_split = has_split && is_pair_row;
+        const uint32_t row = is_pair_row ? split_row : start_row + local_row;
         const TopkSegmentBounds& segment = is_split ? split : whole;
         const uint32_t tail_chunk_bytes = segment.tail_elements * element_bytes;
         if (segment.empty) {
