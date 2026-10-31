@@ -91,6 +91,9 @@ struct program_output_helper<ProgramType, false> {
 template <typename ProgramType>
 using ProgramOutputTensors = typename program_output_helper<ProgramType>::type;
 
+// Peak DRAM bandwidth in decimal GB/s (1e9 bytes/s) used by OpPerformanceModelGeneral.
+float peak_dram_bandwidth_gb_per_s(tt::ARCH arch);
+
 template <class OutputTensorsT = Tensors>
 struct OpPerformanceModelGeneral {
     using OutputTensors = OutputTensorsT;
