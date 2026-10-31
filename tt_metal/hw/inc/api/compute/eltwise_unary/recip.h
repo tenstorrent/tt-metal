@@ -42,6 +42,7 @@ ALWI void recip_tile_init() {
 #else
     MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en)));
 #endif
+    MATH(ckernel::sfpu::reciprocal_bf16_tile_init<!DST_ACCUM_MODE>());
 }
 // clang-format off
 /**
