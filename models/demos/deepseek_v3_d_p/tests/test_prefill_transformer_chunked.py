@@ -2263,8 +2263,6 @@ def run_chunked_transformer_updated(
         # Zero them so the replay starts from the same state the untraced path starts from.
         _reset_kda_carries("after capture")
 
-    if determinism_check and num_iters < 2:
-        pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
     det_baseline = None
     det_failures = []
 
@@ -2927,6 +2925,9 @@ def test_kimi_k3_prefill_transformer_chunked(
     determinism_check,
     preload_isl,
 ):
+    # Skip here, before the weight load and trace capture.
+    if determinism_check and num_iters < 2:
+        pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_updated(
         variant,
