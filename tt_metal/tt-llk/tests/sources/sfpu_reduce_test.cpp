@@ -71,9 +71,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
     ckernel::sfpu::init_reduce<POOL_TYPE, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>();
 
-    if (REDUCE_DIM == ReduceDim::REDUCE_COL)
+    if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL || REDUCE_DIM == ReduceDim::REDUCE_SCALAR)
     {
-        // Column reduction can be done block by block
+        // Column and scalar reductions work one tile at a time, so they can be done block by block
         for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -104,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
     }
-    else if (REDUCE_DIM == ReduceDim::REDUCE_ROW)
+    else if constexpr (REDUCE_DIM == ReduceDim::REDUCE_ROW)
     {
         // Row reduction requires all tiles in destination at once
         LLK_ASSERT(num_blocks == 1, "Row reduction requires all tiles in one block");

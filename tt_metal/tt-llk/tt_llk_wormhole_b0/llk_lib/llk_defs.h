@@ -34,6 +34,7 @@ enum class PoolType : std::uint8_t
     AVG,
     MAX,
     MIN,
+    PROD, // SFPU reduce only (REDUCE_SCALAR); the FPU reduce rejects it
 };
 
 enum class DataCopyType : std::uint8_t

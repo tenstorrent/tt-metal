@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -38,9 +39,10 @@
 #include "test_golden_impls.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 
-// Metal-layer coverage for the Quasar SFPU reduce through the public Compute API; the tt-llk sweep
-// covers the kernel itself. Only the reduced axis is compared (row 0 per tile for REDUCE_COL,
-// column 0 per row for REDUCE_ROW): the kernel leaves fold leftovers in the rest of the tile.
+// Metal-layer coverage for the SFPU reduce through the public Compute API; the tt-llk sweep covers
+// the kernel itself. Only the reduced axis is compared (row 0 per tile for REDUCE_COL, column 0 per
+// row for REDUCE_ROW, element [0][0] per tile for REDUCE_SCALAR): the kernel leaves fold leftovers
+// in the rest of the tile. The column/row tests are Quasar-only; scalar PROD runs on every arch.
 
 namespace tt::tt_metal {
 
@@ -54,8 +56,8 @@ constexpr std::uint32_t kTileWidth = 32;
 
 constexpr float kFloatStimulusBound = 4.0f;
 
-enum class ReduceAxis { Column, Row };
-enum class ReducePool { Sum, Avg, Max, Min };
+enum class ReduceAxis { Column, Row, Scalar };
+enum class ReducePool { Sum, Avg, Max, Min, Prod };
 
 struct SfpuReduceConfig {
     // Tiles per tile row, and tile rows per block. A row reduce needs its whole block resident in
@@ -75,6 +77,7 @@ std::string pool_type_define(ReducePool pool) {
         case ReducePool::Avg: return "PoolType::AVG";
         case ReducePool::Max: return "PoolType::MAX";
         case ReducePool::Min: return "PoolType::MIN";
+        case ReducePool::Prod: return "PoolType::PROD";
     }
     TT_THROW("unreachable pool type");
 }
@@ -95,6 +98,7 @@ std::string pool_name(ReducePool pool) {
         case ReducePool::Avg: return "AVG";
         case ReducePool::Max: return "MAX";
         case ReducePool::Min: return "MIN";
+        case ReducePool::Prod: return "PROD";
     }
     TT_THROW("unreachable pool type");
 }
@@ -192,6 +196,20 @@ std::vector<double> as_seen_by_device(const std::vector<std::uint32_t>& encoded,
     return values;
 }
 
+// Scalar PROD tiles cycle through the stimuli before Count, by tile index.
+enum class ProdTile { PowerOfTwo, NearOne, Zero, Count };
+constexpr std::uint32_t kProdTileKinds = static_cast<std::uint32_t>(ProdTile::Count);
+// NearOne magnitudes lie in [1 - spread, 1 + spread]: the fp32 multiply chain rounds, and a 1024-value
+// product stays far inside fp16's range.
+constexpr double kProdNearOneSpread = 0.05;
+// Relative error the ~1023 fp32 multiplies may build up; covers 1023 * 2^-23, the all-truncating worst case.
+constexpr double kProdFp32ChainRtol = 3e-4;
+// A PowerOfTwo tile holds this many 0.5s and (tile % kProdPow2ExtraTwosCycle) + 1 more 2s than that.
+constexpr std::uint32_t kProdPow2HalvesPerTile = 64;
+constexpr std::uint32_t kProdPow2ExtraTwosCycle = 4;
+
+ProdTile prod_tile_kind(std::uint32_t tile) { return static_cast<ProdTile>(tile % kProdTileKinds); }
+
 // Stimulus in a range the accumulating pools can hold. A row reduce folds block_ct_dim * 32 terms,
 // so the bound is chosen against the widest fold the config asks for rather than a fixed span.
 std::vector<double> generate_stimulus(
@@ -200,7 +218,37 @@ std::vector<double> generate_stimulus(
     std::mt19937 gen(seed);
 
     std::vector<double> values(static_cast<size_t>(rows) * cols);
-    if (is_int_format(config.format)) {
+    if (config.pool == ReducePool::Prod) {
+        // PowerOfTwo is exact even in TF32: a lost sign or a dropped or duplicated +-2/+-0.5 mismatches; a dropped +-1
+        // does not. NearOne exercises fp32 rounding; Zero plants one 0, so its product must be exactly 0.
+        std::uniform_int_distribution<int> sign(0, 1);
+        std::uniform_real_distribution<double> near_one(1.0 - kProdNearOneSpread, 1.0 + kProdNearOneSpread);
+        std::uniform_int_distribution<std::uint32_t> position(0, kTileHeight * kTileWidth - 1);
+        std::uint32_t tile = 0;
+        for (std::uint32_t tr = 0; tr < rows / kTileHeight; ++tr) {
+            for (std::uint32_t tc = 0; tc < cols / kTileWidth; ++tc, ++tile) {
+                std::vector<double> tile_values(kTileHeight * kTileWidth, 1.0);
+                if (prod_tile_kind(tile) == ProdTile::PowerOfTwo) {
+                    const std::uint32_t twos = kProdPow2HalvesPerTile + (tile % kProdPow2ExtraTwosCycle) + 1;
+                    std::fill_n(tile_values.begin(), twos, 2.0);
+                    std::fill_n(tile_values.begin() + twos, kProdPow2HalvesPerTile, 0.5);
+                    std::shuffle(tile_values.begin(), tile_values.end(), gen);
+                } else {
+                    for (auto& v : tile_values) {
+                        v = near_one(gen);
+                    }
+                    if (prod_tile_kind(tile) == ProdTile::Zero) {
+                        tile_values[position(gen)] = 0.0;
+                    }
+                }
+                for (std::uint32_t i = 0; i < kTileHeight * kTileWidth; ++i) {
+                    const size_t row = static_cast<size_t>(tr) * kTileHeight + i / kTileWidth;
+                    const size_t col = static_cast<size_t>(tc) * kTileWidth + i % kTileWidth;
+                    values[row * cols + col] = sign(gen) ? -tile_values[i] : tile_values[i];
+                }
+            }
+        }
+    } else if (is_int_format(config.format)) {
         // Keep |sum| well inside Int32 so SUM stays exact and the test measures the fold, not
         // overflow. Signed, so MIN and MAX both see negatives.
         const std::int32_t bound = static_cast<std::int32_t>(1'000'000 / fold_width);
@@ -220,6 +268,7 @@ std::vector<double> generate_stimulus(
 // Fold `values` (row-major rows x cols) and return only the lane the kernel writes:
 //   Column -> one value per column, for each tile row       (block_rt_dim * num_blocks * cols)
 //   Row    -> one value per row                             (rows)
+//   Scalar -> one product per tile, its element [0][0]      (rows / 32 * cols / 32)
 std::vector<double> gold_sfpu_reduce(
     const std::vector<double>& values, const SfpuReduceConfig& config, std::uint32_t rows, std::uint32_t cols) {
     const auto fold = [&config](double acc, double x, bool first) {
@@ -231,11 +280,28 @@ std::vector<double> gold_sfpu_reduce(
             case ReducePool::Avg: return acc + x;
             case ReducePool::Max: return std::max(acc, x);
             case ReducePool::Min: return std::min(acc, x);
+            case ReducePool::Prod: return acc * x;
         }
         TT_THROW("unreachable pool type");
     };
 
     std::vector<double> golden;
+
+    if (config.axis == ReduceAxis::Scalar) {
+        // One product per tile, in tile order.
+        for (std::uint32_t tr = 0; tr < rows / kTileHeight; ++tr) {
+            for (std::uint32_t tc = 0; tc < cols / kTileWidth; ++tc) {
+                double product = 1.0;
+                for (std::uint32_t r = 0; r < kTileHeight; ++r) {
+                    for (std::uint32_t c = 0; c < kTileWidth; ++c) {
+                        product *= values[(static_cast<size_t>(tr) * kTileHeight + r) * cols + tc * kTileWidth + c];
+                    }
+                }
+                golden.push_back(product);
+            }
+        }
+        return golden;
+    }
 
     if (config.axis == ReduceAxis::Column) {
         const std::uint32_t tile_rows = rows / kTileHeight;
@@ -279,6 +345,14 @@ std::vector<double> gold_sfpu_reduce(
 std::vector<double> extract_written_lane(
     const std::vector<double>& values, const SfpuReduceConfig& config, std::uint32_t rows, std::uint32_t cols) {
     std::vector<double> lane;
+    if (config.axis == ReduceAxis::Scalar) {
+        for (std::uint32_t tr = 0; tr < rows / kTileHeight; ++tr) {
+            for (std::uint32_t tc = 0; tc < cols / kTileWidth; ++tc) {
+                lane.push_back(values[static_cast<size_t>(tr) * kTileHeight * cols + tc * kTileWidth]);
+            }
+        }
+        return lane;
+    }
     if (config.axis == ReduceAxis::Column) {
         const std::uint32_t tile_rows = rows / kTileHeight;
         lane.reserve(static_cast<size_t>(tile_rows) * cols);
@@ -309,9 +383,9 @@ double output_ulp(tt::DataFormat format, double value) {
     return std::ldexp(1.0, std::ilogb(value) - mantissa_bits);
 }
 
-// Allowed |device - golden| per element. MAX/MIN and the integer pools are exact. SUM/AVG fold in
-// fp32 and round once at the final store, so they get one ulp of the result plus fp32 fold headroom
-// (~1e-6 real error; the bound stays well below a result rounded to bf16 or tf32 precision).
+// Allowed |device - golden| per element. MAX/MIN and the integer pools are exact. SUM/AVG fold in fp32 and round once
+// at the final store, so they get one ulp of the result plus fp32 fold headroom (~1e-6 real error; the bound stays well
+// below a result rounded to bf16 or tf32 precision).
 double reduce_tolerance(const SfpuReduceConfig& config, std::uint32_t cols, double golden) {
     if (is_int_format(config.format) || config.pool == ReducePool::Max || config.pool == ReducePool::Min) {
         return 0.0;
@@ -322,6 +396,16 @@ double reduce_tolerance(const SfpuReduceConfig& config, std::uint32_t cols, doub
         fold /= num_terms;
     }
     return fold + kFp32FoldRtol * std::abs(golden) + output_ulp(config.format, golden);
+}
+
+// Allowed |device - golden| for scalar PROD tile `tile`. PowerOfTwo and Zero tiles are exact. A NearOne tile gets the
+// fp32 chain's error plus two output ulps: the store narrows once, truncating into a 16-bit Dest, and the chain's
+// result may sit in a different binade than the golden.
+double prod_tolerance(tt::DataFormat format, std::uint32_t tile, double golden) {
+    if (prod_tile_kind(tile) != ProdTile::NearOne) {
+        return 0.0;
+    }
+    return kProdFp32ChainRtol * std::abs(golden) + 2.0 * output_ulp(format, golden);
 }
 
 void run_single_core_sfpu_reduce(
@@ -381,7 +465,7 @@ void run_single_core_sfpu_reduce(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = experimental::CreateReaderDataMovementConfig(),
     };
 
     experimental::KernelSpec writer_spec{
@@ -390,7 +474,7 @@ void run_single_core_sfpu_reduce(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = experimental::CreateWriterDataMovementConfig(),
     };
 
     experimental::KernelSpec::CompilerOptions::Defines defines{
@@ -399,6 +483,8 @@ void run_single_core_sfpu_reduce(
     };
     if (config.axis == ReduceAxis::Row) {
         defines["REDUCE_AXIS_ROW"] = "1";
+    } else if (config.axis == ReduceAxis::Scalar) {
+        defines["REDUCE_AXIS_SCALAR"] = "1";
     }
 
     experimental::KernelSpec compute_spec{
@@ -487,7 +573,7 @@ void run_single_core_sfpu_reduce(
     log_info(
         tt::LogTest,
         "sfpu_reduce {} {} ct_dim={} rt_dim={} blocks={} format={} dest={}-bit seed={}",
-        config.axis == ReduceAxis::Row ? "row" : "column",
+        config.axis == ReduceAxis::Row ? "row" : (config.axis == ReduceAxis::Scalar ? "scalar" : "column"),
         pool_name(config.pool),
         config.block_ct_dim,
         config.block_rt_dim,
@@ -500,7 +586,9 @@ void run_single_core_sfpu_reduce(
 
     for (size_t i = 0; i < golden.size(); ++i) {
         const double diff = std::abs(golden[i] - device[i]);
-        const double tolerance = reduce_tolerance(config, cols, golden[i]);
+        const double tolerance = (config.pool == ReducePool::Prod)
+                                     ? prod_tolerance(config.format, static_cast<std::uint32_t>(i), golden[i])
+                                     : reduce_tolerance(config, cols, golden[i]);
         ASSERT_LE(diff, tolerance) << fmt::format(
             "mismatch at {}: golden={} device={} (tolerance={} seed={})", i, golden[i], device[i], tolerance, seed);
     }
@@ -625,6 +713,34 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceWid
                 .pool = pool,
                 .format = tt::DataFormat::Float16_b,
                 .wide_dest = true});
+    }
+}
+
+// Scalar PROD on every arch: one product per tile into its element [0][0]. Streams three tiles through Dest one at a
+// time and holds two two-tile blocks, so both cover every ProdTile kind; Float16_b also runs in a 32-bit Dest.
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeSfpuReduceScalarProd) {
+    std::vector<tt::DataFormat> formats = {tt::DataFormat::Float16_b, tt::DataFormat::Float32};
+    if (this->devices_.at(0)->arch() == tt::ARCH::QUASAR) {
+        formats.push_back(tt::DataFormat::Float16);  // WH/BH sfpu_reduce has no Float16
+    }
+    for (auto format : formats) {
+        for (const bool wide_dest : {false, true}) {
+            if (wide_dest && format != tt::DataFormat::Float16_b) {
+                continue;
+            }
+            for (const std::uint32_t block_ct_dim : {1u, 2u}) {
+                run_single_core_sfpu_reduce(
+                    this->devices_.at(0),
+                    SfpuReduceConfig{
+                        .block_ct_dim = block_ct_dim,
+                        .block_rt_dim = 1,
+                        .num_blocks = (block_ct_dim == 1) ? 3u : 2u,
+                        .axis = ReduceAxis::Scalar,
+                        .pool = ReducePool::Prod,
+                        .format = format,
+                        .wide_dest = wide_dest});
+            }
+        }
     }
 }
 }  // namespace tt::tt_metal

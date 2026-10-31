@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from dataclasses import dataclass
 
 import pytest
@@ -30,7 +31,20 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     parametrize,
 )
-from helpers.sfpu_domains import generated_nan_sign_is_asserted, specials_safe
+from helpers.reduce_prod import (
+    PROD_DIMENSIONS,
+    PROD_SPECIAL_CLASSES,
+    PROD_STIMULI,
+    check_prod_result,
+    generate_prod_special_tile,
+    generate_prod_stimuli,
+    prod_tile_results,
+)
+from helpers.sfpu_domains import (
+    generated_nan_sign_is_asserted,
+    nan_survives_to_l1,
+    specials_safe,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -461,6 +475,108 @@ def test_sfpu_reduce(
     )
 
 
+# Scalar PROD (REDUCE_SCALAR) multiplies each tile's 1024 values onto its element [0][0].
+PROD_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+]
+
+
+def _run_scalar_prod(formats, dest_acc, src_A, input_dimensions):
+    """Run the scalar PROD reduce over src_A and return the raw L1 result."""
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    src_B = torch.zeros_like(src_A)
+
+    configuration = TestConfig(
+        "sources/sfpu_reduce_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=MathOperation.ReduceScalar, pool_type=ReducePool.Prod),
+        ],
+        runtimes=[
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            TILE_COUNT(tile_cnt),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    return configuration.run().result
+
+
+@parametrize(
+    formats=PROD_FORMATS,
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.input_format.is_32_bit()
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    ),
+    stimulus=PROD_STIMULI,
+    dimension_combinations=PROD_DIMENSIONS,
+)
+def test_sfpu_reduce_prod(formats, dest_acc, stimulus, dimension_combinations):
+    input_dimensions = dimension_combinations
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    src_A = generate_prod_stimuli(stimulus, tile_cnt).to(
+        format_dict[formats.input_format]
+    )
+    res_from_L1 = _run_scalar_prod(formats, dest_acc, src_A, input_dimensions)
+    check_prod_result(res_from_L1, src_A, tile_cnt, stimulus, formats, dest_acc)
+
+
+@parametrize(formats=PROD_FORMATS, special=PROD_SPECIAL_CLASSES)
+def test_sfpu_reduce_prod_specials(formats, special):
+    """IEEE specials through the scalar PROD multiply chain, in the two cells specials_safe() accepts."""
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc)
+
+    tile, expected = generate_prod_special_tile(special)
+    src_A = tile.to(format_dict[formats.input_format])
+    res_from_L1 = _run_scalar_prod(formats, dest_acc, src_A, [TILE_DIM, TILE_DIM])
+    result = prod_tile_results(res_from_L1, 1, formats.output_format)[0].item()
+
+    if not math.isnan(expected):
+        # == also accepts -0.0 for a zero product: SFPMAD's zero sign differs per arch.
+        assert (
+            result == expected
+        ), f"PROD '{special}': device={result}, expected={expected}"
+    elif nan_survives_to_l1(formats.input_format, formats.output_format, dest_acc):
+        assert math.isnan(result), f"PROD '{special}': device={result}, expected NaN"
+    else:
+        assert math.isnan(result) or math.isinf(
+            result
+        ), f"PROD '{special}': device={result}, expected NaN or an infinity"
+
+
 def _run_integer_reduce(
     mathop,
     reduce_pool,
@@ -790,8 +906,8 @@ def test_uint32_reduce_max_min_bit31(block, reduce_pool):
 # the single output element, so one poisoned lane is the whole answer rather than one probe among
 # 4096.
 #
-# ReduceScalar is not covered by this sweep and is not driven below: sfpu_reduce_test.cpp branches
-# on REDUCE_COL and REDUCE_ROW only, so there is no scalar path to reach through this source.
+# ReduceScalar is not part of this specials sweep: the scalar path is PROD-only, and
+# test_sfpu_reduce_prod_specials covers its specials through the same source.
 #
 # The classes below are therefore about the interaction between a special and the fold, which no
 # element-wise sweep can express:

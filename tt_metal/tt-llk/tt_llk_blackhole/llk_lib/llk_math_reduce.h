@@ -485,6 +485,10 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
         type != PoolType::MIN,
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+    static_assert(
+        type != PoolType::PROD,
+        "The FPU reduce has no PROD: GAPOOL/GMPOOL have no product variant. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce with REDUCE_SCALAR).");
 
     reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape);
     reduce_configure_mop<type, dim, math_fidelity>(tensor_shape);
