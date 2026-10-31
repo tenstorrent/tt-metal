@@ -104,6 +104,14 @@ sliding_window::ParallelConfig determine_output_parallel_config(
 // Both are used as host divisors, so a zero (or, for the override, a non-tile multiple) must be rejected
 // before any division.
 void validate_stride(const std::array<uint32_t, 2>& stride);
+// Rejects zero channels, batch, kernel size, stride or groups, which the conv setup divides by.
+void validate_conv_params(
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    uint32_t groups);
 void validate_act_block_h_override(uint32_t act_block_h_override);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
