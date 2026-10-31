@@ -121,9 +121,11 @@ def test_sigmoid_bw_sub_tile_shape(dtype, rtol, device):
 
 def test_sigmoid_bw_bfloat16_keeps_intermediates_in_float32(device):
     """s(1 - s) cancels: for x beyond about +/-6 a bfloat16 s is within an ulp of 1.0 and
-    (1 - s) keeps only a couple of significant bits. The fused kernel holds s in float32 DEST
-    (UnaryBackwardKernelSpec::force_fp32_dest_acc), which the composite could not do because it
-    had to write each intermediate back to L1 as bfloat16. This pins that gain."""
+    (1 - s) keeps only a couple of significant bits. This call runs the generated BF16 kernel
+    (SIGMOID_BW_BF16), which forms the derivative from exp(-|x|) without 1 - s; the float32-DEST
+    kernel (UnaryBackwardKernelSpec::force_fp32_dest_acc) serves the calls it does not, and
+    test_backward_sigmoid.py value-checks those. A composite of bfloat16 forward ops, writing each
+    intermediate back to L1, could not hold this error. This pins that gain."""
     torch.manual_seed(0)
     shape = (1, 1, 32, 32)
     torch_input = torch.randn(shape, dtype=torch.float32) * 4.0
@@ -133,7 +135,10 @@ def test_sigmoid_bw_bfloat16_keeps_intermediates_in_float32(device):
     grad_tensor = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     output = ttnn.to_torch(ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]).float()
-    expected = _torch_sigmoid_bw(ttnn.to_torch(grad_tensor).float(), ttnn.to_torch(input_tensor).float())
+    # The exact derivative in float64: a float32 s * (1 - s) cancels for |x| beyond about 9 and is itself off by
+    # up to 35% there (x = 16.375), which a BF16 kernel within 1 ULP of the exact value would fail.
+    x64 = ttnn.to_torch(input_tensor).double()
+    expected = (ttnn.to_torch(grad_tensor).double() * torch.exp(-x64.abs()) / (1 + torch.exp(-x64.abs())) ** 2).float()
 
     relative_error = ((output - expected).abs() / expected.abs().clamp(min=1e-30)).max()
     # Composing the gradient out of bfloat16 forward ops reaches a relative error above 1.0 on
@@ -265,8 +270,8 @@ def test_sigmoid_bw_sharded(shard_inputs, device):
     assert (
         output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     ), f"expected a height-sharded result, got {output.memory_config().memory_layout}"
-    # Looser than the fused path's bar: this is the composite, which rounds each intermediate
-    # back to bfloat16 in L1, so (1 - s) loses precision the fused kernel keeps in float32 DEST.
+    # A loose bar: these sharded BF16 calls run the generated BF16 kernel, which
+    # test_backward_sigmoid.py holds within 1 ULP of torch in every layout.
     assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), 0.999)
 
 
