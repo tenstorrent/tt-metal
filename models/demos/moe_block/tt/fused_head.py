@@ -147,6 +147,7 @@ class HeadSE3:
         l1_hole=None,
         activations=ttnn.bfloat16,
         pack_precise=False,
+        max_grid=None,
     ):
         """activations: the shared expert's x / h in the engine (SeEngine3 x_dtype / h_dtype: bfloat16, or bfloat8_b -
         then run() takes x in that format as xq for the engine and the gather; the router keeps x). pack_precise:
@@ -169,6 +170,10 @@ class HeadSE3:
 
         self.mesh = mesh_device
         grid = mesh_device.compute_with_storage_grid_size()
+        if (
+            max_grid is not None
+        ):  # (MoEOptions.max_grid: the head's cores inside that many columns / rows, the movers too)
+            grid = ttnn.CoreCoord(min(grid.x, max_grid[0]), min(grid.y, max_grid[1]))
         assert GX < grid.x, "no column left for the movers"
         if activations != ttnn.bfloat16 and rs_dim is not None and rs_mode == "mrs":
             raise ValueError("HeadSE3: rs_mode mrs takes h in bf16 (the ported matmul_reduce_scatter's input)")
@@ -183,7 +188,7 @@ class HeadSE3:
         self.plan = None
         if self.rs_mode == "mrs":
             self._warm_rs(rows, H, I)
-        grid_y = mesh_device.compute_with_storage_grid_size().y
+        grid_y = grid.y
         # (the engine's layout: given; with the fused RS and the router chain the planner's (tt/head_plan.py: every
         # layout / K step / router placement whose L1 fits, by its cost model), tried in its order - the device's L1
         # may still refuse one; else head_layouts' first whose arena fits L1 - at a K step, the largest first)
@@ -436,6 +441,7 @@ class HeadSE3:
                 words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
                 port_words=self.port_words,
             )
+            self.router.host_build = max_grid is not None  # (its uploads: no device conversion on the whole grid)
             if self.router.on_engine and self.router_w_gate(router, latent):
                 self.router.gate = self.eng.gate_target()
         self.routing = None

@@ -156,3 +156,10 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
 - Tests: `tests/unit/test_mhc_post_output_buffers.py` 3 passed on the 8x4. Model-case regression `tests/test_mhc_post_ttnn.py`: 206 passed (5 first errored in the batch, passed on re-run). `tests/golden/` does not import here (no `eval` package, DS41 known issue).
 - Needed by: deepseek_v41_flash_d_p P.16 (FORK_OUT_BUFFERS, 2026-10-30)
 - Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_ttnn_device_operation{.hpp,.cpp,_types.hpp}`, `device/mhc_post_stats_device_operation.{hpp,cpp}`, `device/mhc_post_given_output.hpp`, `tests/unit/test_mhc_post_output_buffers.py`, `tests/test_mhc_post_ttnn.py` (mesh fixture: the whole box when no case was captured on a box of this size)
+
+### max_grid: the op's cores inside a rectangle (deepseek_v41_flash_d_p FIX.15)
+- What: option `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.mhc_post` (plain and stats_weight programs): every program of the op places its cores (and splits its work) inside (0, 0) .. (x - 1, y - 1) of the compute grid. Default: the device's whole grid, the call as before (same program, same hash).
+- Why: agent rule 18 (owner 2026-10-30): a Galaxy chassis' power supply trips when a chip's current rises too fast (di/dt); no op may run on more than 110 of a chip's 120 Tensix cores. DeepSeek-V4.1 passes tt/cores.max_grid() = 11 x 10 on a Galaxy, None elsewhere.
+- Measured: 8x4 Galaxy, one 5120-token chunk (mhc_post): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
+- Needed by: deepseek_v41_flash_d_p FIX.15
+- Files: device/mhc_post_stats_device_operation.cpp, device/mhc_post_stats_device_operation.hpp, device/mhc_post_stats_program_factory.cpp, device/mhc_post_ttnn_device_operation.cpp, device/mhc_post_ttnn_device_operation.hpp, device/mhc_post_ttnn_device_operation_types.hpp, device/mhc_post_ttnn_program_factory.cpp, device/mhc_post_ttnn_program_factory.hpp, mhc_post_ttnn.cpp, mhc_post_ttnn.hpp, mhc_post_ttnn_nanobind.cpp

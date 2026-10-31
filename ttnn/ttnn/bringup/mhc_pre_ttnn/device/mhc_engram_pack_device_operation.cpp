@@ -31,7 +31,7 @@ MhcEngramPackPlan mhc_engram_pack_plan(const MhcEngramPackParams& prm, const Mhc
         lead *= padded[i];
     }
     p.row_tiles = lead * (padded[-2] / TILE_HW);
-    const auto grid = in.streams.device()->compute_with_storage_grid_size();
+    const auto grid = cut_grid(in.streams.device()->compute_with_storage_grid_size(), prm.max_grid);
     const uint32_t cores = grid.x * grid.y;
     // the block width that minimises the busiest core's work, (units) x (B columns + a per-unit overhead of about
     // UNIT_COST columns: the 3 re-lays, totals and the partial write), with at most MAX_PARTIALS partials per row
@@ -94,6 +94,15 @@ MhcEngramPackDeviceOperation::tensor_return_value_t MhcEngramPackDeviceOperation
 
 ttsl::hash::hash_t MhcEngramPackDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.max_grid.has_value()) {  // FIX.15: the off hash is the one it always was
+        return tt::tt_metal::operation::hash_operation<MhcEngramPackDeviceOperation>(
+            attrs.n,
+            t.streams.tensor_spec(),
+            t.keys.tensor_spec(),
+            t.weight.tensor_spec(),
+            attrs.max_grid->x,
+            attrs.max_grid->y);
+    }
     return tt::tt_metal::operation::hash_operation<MhcEngramPackDeviceOperation>(
         attrs.n, t.streams.tensor_spec(), t.keys.tensor_spec(), t.weight.tensor_spec());
 }
@@ -103,9 +112,13 @@ ttsl::hash::hash_t MhcEngramPackDeviceOperation::compute_program_hash(
 namespace ttnn::prim::bringup {
 
 std::vector<ttnn::Tensor> mhc_engram_pack(
-    const ttnn::Tensor& streams, const ttnn::Tensor& keys, const ttnn::Tensor& weight, uint32_t n) {
+    const ttnn::Tensor& streams,
+    const ttnn::Tensor& keys,
+    const ttnn::Tensor& weight,
+    uint32_t n,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::mhc_pre_ttnn::MhcEngramPackDeviceOperation;
-    auto attrs = OperationType::operation_attributes_t{.n = n};
+    auto attrs = OperationType::operation_attributes_t{.n = n, .max_grid = max_grid};
     auto args = OperationType::tensor_args_t{.streams = streams, .keys = keys, .weight = weight};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }

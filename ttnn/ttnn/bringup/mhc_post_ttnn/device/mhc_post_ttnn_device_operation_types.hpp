@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 
@@ -25,7 +26,20 @@ struct MhcPostParams {
     // DM defines MHC_POST_POST_COL / MHC_POST_COMB_COL; 0 / 0 = the program it always was)
     uint32_t post_col = 0;
     uint32_t comb_col = 0;
+    // Fork option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle (0, 0) ..
+    // (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid. Hashed when set.
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
 };
+
+// the device's compute grid cut to max_grid (FIX.15)
+inline tt::tt_metal::CoreCoord cut_grid(
+    tt::tt_metal::CoreCoord g, const std::optional<tt::tt_metal::CoreCoord>& max_grid) {
+    if (max_grid.has_value()) {
+        g.x = std::max<std::size_t>(1, std::min<std::size_t>(g.x, max_grid->x));
+        g.y = std::max<std::size_t>(1, std::min<std::size_t>(g.y, max_grid->y));
+    }
+    return g;
+}
 
 struct MhcPostInputs {
     Tensor input;                  // F   (..., T, C)      the sublayer output

@@ -65,6 +65,7 @@ Tensor sparse_sdpa(
     bool fp32_output = false,
     bool fp32_scores = false,
     bool bf16_probs = false,
-    const std::optional<Tensor>& kv_window = std::nullopt);
+    const std::optional<Tensor>& kv_window = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::prim::bringup

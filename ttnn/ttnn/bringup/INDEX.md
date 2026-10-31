@@ -69,3 +69,11 @@ that use it. Its `CHANGELOG.md` has the source path and SHA and every change.
   Consider instead of: ttnn.experimental.deepseek_prefill.rotary_embedding_indexed (with per-chip pre-sliced cos / sin). -> rotary_embedding_indexed/README.md
 - `ttnn.bringup.topk_large_indices` (topk_large_indices): per-row top-k ids (uint32) of a bf16 ROW_MAJOR tensor, Blackhole; carries upstream's split LLK (#62035 / #62488 / #62411: row split across MATH / PACK and core pairs) with its own LLK copy, plus the K' 512 split segmented body (k 512 rows past 32 x 512: Classic -> fused, 1.8-2.4x).
   Consider instead of: ttnn.experimental.topk_large_indices. -> topk_large_indices/README.md
+- `ttnn.bringup.nlp_create_qkv_heads`, `nlp_create_q_heads_split` (nlp_create_qkv_heads): the stock head split with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap).
+  Consider instead of: ttnn.experimental.nlp_create_qkv_heads, ttnn.experimental.nlp_create_q_heads_split. -> nlp_create_qkv_heads/README.md
+- `ttnn.bringup.slice_write` (slice_write): the stock slice_write with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap).
+  Consider instead of: ttnn.experimental.slice_write. -> slice_write/README.md
+- `ttnn.bringup.embedding` (embedding): the stock ttnn.embedding with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap).
+  Consider instead of: ttnn.embedding. -> embedding/README.md
+- `ttnn.bringup.nlp_concat_heads` (nlp_concat_heads): the stock nlp_concat_heads with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap).
+  Consider instead of: ttnn.experimental.nlp_concat_heads. -> nlp_concat_heads/README.md

@@ -104,6 +104,12 @@ MhcPreXingDeviceOperation::tensor_return_value_t MhcPreXingDeviceOperation::crea
 ttsl::hash::hash_t MhcPreXingDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // The scalars (scale, base, eps, clamp, iterations) are runtime args patched on every call.
+    if (attrs.max_grid.has_value()) {  // FIX.15: the hash below, then the grid; the off hashes are unchanged
+        auto off = attrs;
+        off.max_grid.reset();
+        return tt::tt_metal::operation::hash_operation<MhcPreXingDeviceOperation>(
+            compute_program_hash(off, tensor_args), attrs.max_grid->x, attrs.max_grid->y);
+    }
     const auto& cc = attrs.compute_config;
     const bool has_streams = tensor_args.streams.has_value();
     if (attrs.partials > 1) {  // a separate program (define MHC_XING_PARTIALS); off: the hashes below, unchanged

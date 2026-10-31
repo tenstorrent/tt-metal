@@ -48,6 +48,7 @@ from .common import (
     gemm_input,
     tp_sum,
 )
+from .cores import from_torch
 from .norm import TtDistributedRmsNorm
 from .settings import settings
 
@@ -84,7 +85,7 @@ class TtAttnInProj:
             dims = (None, None)
         # DENSE_WEIGHTS (P.13): bf16 (exact) or bfloat8_b (the checkpoint's 8-bit width)
         wdt = dense_dtype(w_t, "attn." + " | ".join(cols))
-        self.weight = ttnn.from_torch(
+        self.weight = from_torch(
             w_t.reshape(1, 1, hidden, self.width),
             dtype=wdt,
             layout=ttnn.TILE_LAYOUT,

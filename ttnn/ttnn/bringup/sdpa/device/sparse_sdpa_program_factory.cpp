@@ -129,6 +129,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
 
     auto* device = t.q.device();
     tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
+    if (attrs.max_grid.has_value()) {  // fork option max_grid (FIX.15): a sub-rectangle of the grid
+        grid.x = std::max<uint32_t>(1, std::min<uint32_t>(grid.x, attrs.max_grid->x));
+        grid.y = std::max<uint32_t>(1, std::min<uint32_t>(grid.y, attrs.max_grid->y));
+    }
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
     const uint32_t num_cores = grid.x * grid.y;
     const uint32_t base = S / num_cores;

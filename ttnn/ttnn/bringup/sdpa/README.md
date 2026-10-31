@@ -32,6 +32,7 @@ Everything else as `ttnn.transformer.<same name>`.
 For any other SDPA call the fork is the source op; prefer `ttnn.transformer.*`.
 
 ## Options
+- `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.sparse_sdpa`: the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 Fork additions only; every other argument as the stock op (see `sdpa_nanobind.cpp` for the full signatures).
 
 Realistic (use by default):

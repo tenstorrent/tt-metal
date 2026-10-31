@@ -91,6 +91,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     to write; with ``input_rows``, write rows ``[input_row_offset, input_row_offset +
                     input_rows)`` of every head as if that slice were the input. Plain page copy only.
                 input_rows (int, optional, tensor form): rows in the window (multiple of 32).
+                max_grid (ttnn.CoreCoord, optional, either form): bring-up option, default None (the
+                    device's whole compute grid); the work split runs on the rectangle (0, 0) ..
+                    (max_grid - 1) of the grid (deepseek_v41_flash_d_p FIX.15: a Galaxy's 110-core cap).
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
@@ -108,7 +111,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 std::optional<uint32_t>,
                 std::optional<uint32_t>,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&update_padded_kv_cache),
+                const std::optional<Tensor>&,
+                std::optional<CoreCoord>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx"),
@@ -119,7 +123,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("valid_global") = nb::none(),
             nb::arg("tp_axis") = nb::none(),
             nb::arg("rope").noconvert() = nb::none(),
-            nb::arg("scales").noconvert() = nb::none()),
+            nb::arg("scales").noconvert() = nb::none(),
+            nb::arg("max_grid") = nb::none()),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -135,7 +140,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 const std::optional<Tensor>&,
                 const std::optional<Tensor>&,
                 uint32_t,
-                std::optional<uint32_t>>(&update_padded_kv_cache),
+                std::optional<uint32_t>,
+                std::optional<CoreCoord>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx").noconvert(),
@@ -148,7 +154,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("rope").noconvert() = nb::none(),
             nb::arg("scales").noconvert() = nb::none(),
             nb::arg("input_row_offset") = 0,
-            nb::arg("input_rows") = nb::none()));
+            nb::arg("input_rows") = nb::none(),
+            nb::arg("max_grid") = nb::none()));
 }
 
 }  // namespace ttnn::operations::bringup::update_padded_kv_cache::detail

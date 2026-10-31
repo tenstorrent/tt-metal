@@ -108,7 +108,7 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     const Tensor& stats = outputs.at(1);
     const Tensor& scratch = outputs.at(2);
     auto* device = f.device();
-    const MhcPostStatsPlan p = mhc_post_stats_plan(in);
+    const MhcPostStatsPlan p = mhc_post_stats_plan(in, params.max_grid);
     const uint32_t n = p.n, B = p.cols_per_block, NB = p.blocks, RT = p.row_tiles;
     const uint32_t terms = n * (n + 1);
     const uint32_t coef_tiles = (terms * 4 + TILE_HW - 1) / TILE_HW;  // per half (4 row blocks a half)
@@ -131,7 +131,7 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     }
     TT_FATAL(coef_tiles + n + 1 <= 8, "mhc_post stats: n={} does not fit the 8 fp32 DEST tiles", n);
 
-    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const CoreCoord grid = cut_grid(device->compute_with_storage_grid_size(), params.max_grid);
     auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
         tt::tt_metal::split_work_to_cores(grid, p.units, true);
     std::vector<CoreCoord> cores;

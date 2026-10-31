@@ -12,6 +12,7 @@ from loguru import logger
 import ttnn
 
 from . import ccl
+from .cores import init_caps, max_grid, sub_cores, sub_cores_tiled, worker_grid  # noqa: F401 (re-exported)
 from .settings import settings
 
 TP_AXIS = 1  # mesh columns: heads / hidden
@@ -28,9 +29,9 @@ def cast(x: ttnn.Tensor, dtype=ttnn.bfloat16, out: ttnn.Tensor | None = None) ->
     if x.dtype == dtype:
         return x
     if out is not None:  # (the object itself, not the op's new wrapper of its buffer: ccl.dealloc keeps it)
-        ttnn.typecast(x, dtype, output_tensor=out)
+        ttnn.typecast(x, dtype, output_tensor=out, sub_core_grids=sub_cores_tiled(x))
         return out
-    return ttnn.typecast(x, dtype, memory_config=DRAM)
+    return ttnn.typecast(x, dtype, memory_config=DRAM, sub_core_grids=sub_cores_tiled(x))
 
 
 def gemm_dtype() -> ttnn.DataType:
@@ -91,6 +92,7 @@ def fp32_acc(needed: bool = True) -> bool:
 
 def compute_config(mesh, needed: bool = True):
     """MATMUL_FIDELITY; fp32 accumulation per FP32_ACC (``needed``: this site keeps it under FP32_ACC=needed)."""
+    init_caps(mesh)  # FIX.15: the mesh's core cap for sub_cores() / max_grid() (every module builds its config here)
     return ttnn.init_device_compute_kernel_config(
         mesh.arch(),
         math_fidelity=getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")),
@@ -106,6 +108,7 @@ def attn_compute_config(mesh, needed: bool = True):
     the window / sparse sparse_sdpa, wo_a, wo_b (tt/attention.py), the indexer's weights_proj / wq_b and its ring score
     (tt/indexer.py) and the compressor's projections (tt/compressor.py). mHC, norms, router, experts, shared expert and
     every non-matmul op keep compute_config (MATMUL_FIDELITY)."""
+    init_caps(mesh)  # FIX.15 (as compute_config)
     return ttnn.init_device_compute_kernel_config(
         mesh.arch(),
         math_fidelity=getattr(ttnn.MathFidelity, settings.get("ATTN_FIDELITY")),

@@ -45,5 +45,6 @@ ttnn::Tensor rms_norm_ttnn(
     bool inplace,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::Tensor>& residual_sum = std::nullopt,
-    const std::optional<ttnn::Tensor>& output = std::nullopt);
+    const std::optional<ttnn::Tensor>& output = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 }  // namespace ttnn::prim::bringup

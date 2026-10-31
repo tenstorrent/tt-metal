@@ -15,6 +15,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "mhc_pre_xing_device_operation.hpp"  // cut_grid
 
 namespace ttnn::operations::bringup::mhc_pre_ttnn {
 
@@ -26,6 +27,9 @@ namespace ttnn::operations::bringup::mhc_pre_ttnn {
 // (..., T, 32) fp32, the other columns zero. W (..., 32, n C) fp32: the weight row replicated over the tile's 32 rows.
 struct MhcEngramPackParams {
     uint32_t n = 4;
+    // Fork option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle (0, 0) ..
+    // (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid. Hashed when set.
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
 };
 
 struct MhcEngramPackInputs {
@@ -73,5 +77,9 @@ struct MhcEngramPackDeviceOperation {
 
 namespace ttnn::prim::bringup {
 std::vector<ttnn::Tensor> mhc_engram_pack(
-    const ttnn::Tensor& streams, const ttnn::Tensor& keys, const ttnn::Tensor& weight, uint32_t n);
+    const ttnn::Tensor& streams,
+    const ttnn::Tensor& keys,
+    const ttnn::Tensor& weight,
+    uint32_t n,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 }  // namespace ttnn::prim::bringup

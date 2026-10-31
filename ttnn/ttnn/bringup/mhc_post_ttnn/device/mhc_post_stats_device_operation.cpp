@@ -21,7 +21,8 @@ constexpr uint32_t UNIT_COST = 4;           // a unit's fixed work in column-til
 constexpr uint32_t MAX_PARTIALS = 64;       // partials per row (the root's CB holds one row's)
 }  // namespace
 
-MhcPostStatsPlan mhc_post_stats_plan(const MhcPostStatsInputs& in) {
+MhcPostStatsPlan mhc_post_stats_plan(
+    const MhcPostStatsInputs& in, const std::optional<tt::tt_metal::CoreCoord>& max_grid) {
     MhcPostStatsPlan p;
     p.n = in.residual.logical_shape()[-1] / in.input.logical_shape()[-1];  // = post's last dim without offsets
     p.col_tiles = in.input.logical_shape()[-1] / TILE_HW;
@@ -31,7 +32,7 @@ MhcPostStatsPlan mhc_post_stats_plan(const MhcPostStatsInputs& in) {
         lead *= padded[i];
     }
     p.row_tiles = lead * (padded[-2] / TILE_HW);
-    const auto grid = in.input.device()->compute_with_storage_grid_size();
+    const auto grid = cut_grid(in.input.device()->compute_with_storage_grid_size(), max_grid);
     const uint32_t cores = grid.x * grid.y;
     // The block width that minimises the busiest core's work, (units) x (B columns + a per-unit overhead of about
     // UNIT_COST columns: the coefficient build, the partial and its write; measured 2x2, 1024 x 2560: B = 8 0.330 ms,
@@ -67,7 +68,7 @@ void MhcPostStatsDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& /*tensor_args*/) {}
 
 MhcPostStatsDeviceOperation::spec_return_value_t MhcPostStatsDeviceOperation::compute_output_specs(
-    const operation_attributes_t& /*attrs*/, const tensor_args_t& t) {
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
     auto layout = [](DataType d) {
         return tt::tt_metal::TensorLayout(
             d, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::DRAM_MEMORY_CONFIG);
@@ -82,7 +83,7 @@ MhcPostStatsDeviceOperation::spec_return_value_t MhcPostStatsDeviceOperation::co
     }
     dims.push_back(TILE_HW);
     specs.emplace_back(ttnn::Shape(dims), layout(DataType::FLOAT32));
-    const auto p = mhc_post_stats_plan(t);
+    const auto p = mhc_post_stats_plan(t, attrs.max_grid);
     specs.emplace_back(
         ttnn::Shape({1, 1, p.row_tiles * TILE_HW, p.blocks * TILE_HW}), layout(DataType::FLOAT32));  // scratch
     return specs;
@@ -101,6 +102,12 @@ MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::
 
 ttsl::hash::hash_t MhcPostStatsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.max_grid.has_value()) {  // FIX.15: the hash below, then the grid; the off hashes are unchanged
+        auto off = attrs;
+        off.max_grid.reset();
+        return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(
+            compute_program_hash(off, t), attrs.max_grid->x, attrs.max_grid->y);
+    }
     const auto& cc = attrs.compute_config;
     if (attrs.post_col != 0 || attrs.comb_col != 0) {  // P.19: column offsets, a separate program; off: below
         return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(
@@ -144,13 +151,15 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     uint32_t comb_col,
     const std::optional<ttnn::Tensor>& output_tensor,
     const std::optional<ttnn::Tensor>& stats_output,
-    const std::optional<ttnn::Tensor>& stats_scratch) {
+    const std::optional<ttnn::Tensor>& stats_scratch,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::mhc_post_ttnn::MhcPostStatsDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .compute_config = compute_config,
         .comb_transposed = comb_transposed,
         .post_col = post_col,
-        .comb_col = comb_col};
+        .comb_col = comb_col,
+        .max_grid = max_grid};
     auto args = OperationType::tensor_args_t{
         .input = input,
         .residual = residual,

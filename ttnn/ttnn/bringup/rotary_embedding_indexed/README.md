@@ -13,6 +13,7 @@ stock op's. Everything else is unchanged from the stock op.
 per chip) with `kv_actual_global` 0. That is the natural-block layout, where every chip reads from row 0.
 
 ## Options
+- `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.rotary_embedding_indexed`: the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 - `uniform` (bool, scalar form only, default `False` = the stock op's per-coordinate programs, unchanged): one program
   per mesh coordinate range. It requires `kv_actual_global == 0` and no `seq_subshard_axis`, checked on every call
   (miss and hit). It is in the program hash.

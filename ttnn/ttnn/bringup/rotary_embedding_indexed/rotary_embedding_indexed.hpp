@@ -52,7 +52,8 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t rotary_offset = 0,
     const std::optional<ttnn::Tensor>& concat_prefix = std::nullopt,
     bool uniform = false,
-    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    std::optional<CoreCoord> max_grid = std::nullopt);
 
 // (2) Tensor form (traceable): `kv_actual_global` is its OWN 1-element uint32 DRAM tensor that the reader
 //     reads on-device (element [0]). Off the host dispatch path, so one captured program replays across

@@ -41,6 +41,10 @@ struct SparseSDPAParams {
     // (nearest) in DEST after the row-sum, before P@V (DeepSeek's sparse_attn: fp32 scores / max / sum, bf16 P);
     // fp32_output may then be false (bf16 output). Compile-time (define SPARSE_SDPA_BF16_PROBS); hashed.
     bool bf16_probs = false;
+    // Fork option (deepseek_v41_flash_d_p FIX.15, agent rule 18: at most 110 Tensix cores an op on a Galaxy): the
+    // compute grid is cut to the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of the device's grid. Default
+    // (none) = the device's whole compute grid (the source program). Compile-time; hashed.
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
     bool has_scaled_kv() const { return kv_format == transformer::bringup::SparseKVFormat::SCALED_FP8; }
     // Fork option: bfloat4_b row records + a bf16 window tensor (define SPARSE_SDPA_ROW_BFP4; hashed via kv_format).
     bool has_row_bfp4() const { return kv_format == transformer::bringup::SparseKVFormat::ROW_BFP4; }

@@ -43,6 +43,7 @@ import ttnn
 from . import ccl
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast, fp32_acc, sum_cols
+from .cores import from_torch, sub_cores, sub_cores_tiled, to_rm
 from .settings import settings
 
 TILE = 32
@@ -151,7 +152,7 @@ class TtSharedExpert:
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
         def u32(t, mapper):
-            return ttnn.from_torch(
+            return from_torch(
                 t.to(torch.int32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -189,10 +190,10 @@ class TtSharedExpert:
         else:
             own = xq is None
             xq = cast(x, ttnn.bfloat16) if own else xq
-            xr = ttnn.to_layout(xq, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+            xr = to_rm(xq, memory_config=DRAM)
             if own and xq is not x:
                 dealloc(xq)
-            xr2 = ttnn.reshape(xr, [S, H])
+            xr2 = ttnn.reshape(xr, [S, H], sub_core_grids=sub_cores(xr))
             if P == 1:
                 y = self.fe(xr2, self.counts, self.regions, **kw)
             else:
@@ -201,20 +202,20 @@ class TtSharedExpert:
         if rows is not None:
             dealloc(rows)
         if P > 1:  # (the parts' outputs: disjoint intermediate slices of one MLP, summed in fp32)
-            acc = ttnn.slice(y, [0, 0], [S, H], memory_config=DRAM)
-            acc = ttnn.typecast(acc, ttnn.float32, memory_config=DRAM)
+            acc = ttnn.slice(y, [0, 0], [S, H], memory_config=DRAM, sub_core_grids=sub_cores(y))
+            acc = ttnn.typecast(acc, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(acc))
             for p in range(1, P):
-                part = ttnn.slice(y, [p * S, 0], [(p + 1) * S, H], memory_config=DRAM)
-                nxt = ttnn.add(acc, part, dtype=ttnn.float32, memory_config=DRAM)
+                part = ttnn.slice(y, [p * S, 0], [(p + 1) * S, H], memory_config=DRAM, sub_core_grids=sub_cores(y))
+                nxt = ttnn.add(acc, part, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(acc))
                 dealloc(acc)
                 dealloc(part)
                 acc = nxt
             dealloc(y)
             y = acc
-        out = ttnn.reshape(y, [1, 1, S, H])
+        out = ttnn.reshape(y, [1, 1, S, H], sub_core_grids=sub_cores(y))
         want = ccl.partial_dtype(self.mesh) if self.sum_mode == "gather_add" else ttnn.float32
         if out.dtype != want:  # (bf16 y; fp32 only off the shipped CCL_IMPL=fabric_bf16 path)
-            o2 = ttnn.typecast(out, want, memory_config=DRAM)
+            o2 = ttnn.typecast(out, want, memory_config=DRAM, sub_core_grids=sub_cores_tiled(out))
             dealloc(out)
             out = o2
         return out
@@ -230,7 +231,7 @@ class TtSharedExpert:
         if self.tp == 1:
             return ttnn.clone(part, memory_config=DRAM)
         if part.dtype != ttnn.float32 and not (self.sum_mode == "gather_add" and ccl.bf16_sums()):
-            pf = ttnn.typecast(part, ttnn.float32, memory_config=DRAM)
+            pf = ttnn.typecast(part, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(part))
             out = self.reduce(pf)
             dealloc(pf)
             return out

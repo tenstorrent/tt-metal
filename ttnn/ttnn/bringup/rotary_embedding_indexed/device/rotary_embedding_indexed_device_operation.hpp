@@ -40,6 +40,10 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // when the cos/sin row offset is the same on every chip: scalar path, kv_actual_global == 0 and no
         // seq_subshard_axis (per-chip pre-sliced cos/sin read from row 0). Hashed; checked on every call.
         bool uniform = false;
+        // Bring-up option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle
+        // (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid.
+        // Hashed when set.
+        std::optional<CoreCoord> max_grid = std::nullopt;
     };
 
     struct tensor_args_t {
@@ -128,6 +132,7 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
     bool uniform = false,
-    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    std::optional<CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::prim::bringup

@@ -30,7 +30,8 @@ Tensor mhc_post(
     bool comb_transposed = true,
     int64_t post_col = 0,
     int64_t comb_col = 0,
-    const std::optional<Tensor>& output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn
 
@@ -51,7 +52,8 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
     int64_t comb_col = 0,
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<Tensor>& stats_output = std::nullopt,
-    const std::optional<Tensor>& stats_scratch = std::nullopt);
+    const std::optional<Tensor>& stats_scratch = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 // The Python entry: X' without stats_weight (the op as it was), (X', stats) with it.
 std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
@@ -66,6 +68,7 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
     int64_t comb_col = 0,
     const std::optional<Tensor>& output_tensor = std::nullopt,
     const std::optional<Tensor>& stats_output = std::nullopt,
-    const std::optional<Tensor>& stats_scratch = std::nullopt);
+    const std::optional<Tensor>& stats_scratch = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

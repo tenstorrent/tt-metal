@@ -346,6 +346,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.fp32_output,
         attrs.fp32_scores,
         attrs.bf16_probs,
+        attrs.max_grid.has_value() ? attrs.max_grid->x : 0u,
+        attrs.max_grid.has_value() ? attrs.max_grid->y : 0u,
         // ROW_BFP4: the window tensor's memory config (its accessor's compile-time args); absent otherwise.
         t.kv_window.has_value() ? std::optional<tt::tt_metal::MemoryConfig>(t.kv_window->memory_config())
                                 : std::nullopt,
@@ -373,7 +375,8 @@ Tensor sparse_sdpa(
     bool fp32_output,
     bool fp32_scores,
     bool bf16_probs,
-    const std::optional<Tensor>& kv_window) {
+    const std::optional<Tensor>& kv_window,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     using OperationType = ttnn::prim::bringup::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -388,6 +391,7 @@ Tensor sparse_sdpa(
             .fp32_output = fp32_output,
             .fp32_scores = fp32_scores,
             .bf16_probs = bf16_probs,
+            .max_grid = max_grid,
         },
         OperationType::tensor_args_t{
             .q = q,

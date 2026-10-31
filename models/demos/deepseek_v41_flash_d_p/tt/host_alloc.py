@@ -41,6 +41,7 @@ import types
 import ttnn
 
 from . import ccl
+from .cores import worker_grid
 from .settings import settings
 
 _TAIL_OUT: dict = {}  # (id(mesh), chunk) -> (mesh, the fused tail's load-time output)
@@ -54,7 +55,7 @@ def norm_stats_width(mesh, rows: int, cols: int) -> int:
     """ttnn.bringup.rms_norm(stats_out=True)'s output width for [rows, cols] input (32 B): the fork's split plan
     (rms_norm_split_device_operation.cpp split_plan, MODE_STATS_OUT): B <= 2 dividing the column tiles, the fewest
     tile reads on the busiest core, the first on a tie."""
-    g = mesh.compute_with_storage_grid_size()
+    g = worker_grid(mesh)  # FIX.15: the fork runs on the capped grid (MAX_WORKER_CORES)
     nc = max(1, g.x * g.y)
     ht, wt = rows // 32, cols // 32
     best, bb = None, 1
@@ -266,7 +267,7 @@ def fork_out(mesh, site: str | None, shape, dtype):
 def post_scratch_shape(mesh, rows: int, cols: int) -> list[int]:
     """mhc_post(stats_weight=)'s scratch spec [1, 1, R, 32 blocks] for F [1, 1, rows, cols] (the op's plan: the block
     width minimising the busiest core's work, at most 64 partials a row, ties to the wider block)."""
-    g = mesh.compute_with_storage_grid_size()
+    g = worker_grid(mesh)  # FIX.15: the fork runs on the capped grid (MAX_WORKER_CORES)
     cores = max(1, g.x * g.y)
     col_tiles, row_tiles = cols // 32, rows // 32
     top = min(_POST_MAX_COLS, col_tiles)

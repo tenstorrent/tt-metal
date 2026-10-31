@@ -42,5 +42,6 @@ ttnn::Tensor mhc_post_ttnn(
     bool comb_transposed = true,
     uint32_t post_col = 0,
     uint32_t comb_col = 0,
-    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 }  // namespace ttnn::prim::bringup

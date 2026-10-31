@@ -37,6 +37,7 @@ import torch
 
 import ttnn
 
+from .cores import from_torch
 from .settings import settings
 
 _HASHERS = {}  # model path -> EngramHasher (the compressed token map takes seconds to build)
@@ -304,7 +305,7 @@ class TtEngramRows:
         s, w = rows.shape
         sp = self.mesh.shape[0]
         assert s % sp == 0, f"{s} rows do not split over {sp} mesh rows"
-        return ttnn.from_torch(
+        return from_torch(
             rows.reshape(1, 1, s, w).contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,

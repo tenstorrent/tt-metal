@@ -150,7 +150,7 @@ ProgramDescriptor build_ring_program_descriptor(
         qk_subblock_h);
 
     // --- banded-product schedule (DSA: group_count = Sqt/QC), on a grid REDUCED to leave AG worker columns. ---
-    const auto phys_grid = q.device()->compute_with_storage_grid_size();
+    const auto phys_grid = op_grid(q.device()->compute_with_storage_grid_size(), args.program_config);
     // Keep ALL compute ROWS and reserve COLUMNS for the AG workers. rows_for_groups() picks the largest DIVISOR
     // of the group count <= grid_y, so shaving even one row can halve the schedule (10 groups: grid_y 10->9 drops
     // group_rows 10->5 -> 55 cores instead of 110). cols_for_bands() just distributes the bands over min(bands,

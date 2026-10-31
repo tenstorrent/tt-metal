@@ -15,6 +15,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "mhc_post_ttnn_device_operation_types.hpp"  // cut_grid
 
 namespace ttnn::operations::bringup::mhc_post_ttnn {
 
@@ -29,6 +30,9 @@ struct MhcPostStatsParams {
     bool comb_transposed = true;
     uint32_t post_col = 0;  // P.19: post / comb column offsets (writer defines MHC_POST_POST_COL / _COMB_COL; 0 = off)
     uint32_t comb_col = 0;
+    // Fork option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle (0, 0) ..
+    // (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid. Hashed when set.
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
 };
 
 struct MhcPostStatsInputs {
@@ -49,7 +53,8 @@ struct MhcPostStatsInputs {
 struct MhcPostStatsPlan {
     uint32_t n = 0, col_tiles = 0, row_tiles = 0, cols_per_block = 0, blocks = 0, units = 0;
 };
-MhcPostStatsPlan mhc_post_stats_plan(const MhcPostStatsInputs& in);
+MhcPostStatsPlan mhc_post_stats_plan(
+    const MhcPostStatsInputs& in, const std::optional<tt::tt_metal::CoreCoord>& max_grid = std::nullopt);
 
 struct MhcPostStatsProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -94,5 +99,6 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     uint32_t comb_col = 0,
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& stats_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& stats_scratch = std::nullopt);
+    const std::optional<ttnn::Tensor>& stats_scratch = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 }  // namespace ttnn::prim::bringup

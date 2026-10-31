@@ -150,7 +150,8 @@ Tensor mhc_post(
     bool comb_transposed,
     int64_t post_col,
     int64_t comb_col,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& output_tensor,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
     check_shapes(input_tensor, residual, post, comb, post_col, comb_col);
@@ -163,7 +164,8 @@ Tensor mhc_post(
         comb_transposed,
         static_cast<uint32_t>(post_col),
         static_cast<uint32_t>(comb_col),
-        output_tensor);
+        output_tensor,
+        max_grid);
 }
 
 std::tuple<Tensor, Tensor> mhc_post_with_stats(
@@ -178,7 +180,8 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
     int64_t comb_col,
     const std::optional<Tensor>& output_tensor,
     const std::optional<Tensor>& stats_output,
-    const std::optional<Tensor>& stats_scratch) {
+    const std::optional<Tensor>& stats_scratch,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
     check_shapes(input_tensor, residual, post, comb, post_col, comb_col);
@@ -223,7 +226,8 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
         static_cast<uint32_t>(comb_col),
         output_tensor,
         stats_output,
-        stats_scratch);
+        stats_scratch,
+        max_grid);
     return {out.at(0), out.at(1)};  // out[2] is the partials scratch, freed with the vector
 }
 
@@ -239,7 +243,8 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
     int64_t comb_col,
     const std::optional<Tensor>& output_tensor,
     const std::optional<Tensor>& stats_output,
-    const std::optional<Tensor>& stats_scratch) {
+    const std::optional<Tensor>& stats_scratch,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     if (stats_weight.has_value()) {
         return mhc_post_with_stats(
             input_tensor,
@@ -253,13 +258,23 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
             comb_col,
             output_tensor,
             stats_output,
-            stats_scratch);
+            stats_scratch,
+            max_grid);
     }
     if (stats_output.has_value() || stats_scratch.has_value()) {
         throw ValueErrorCpp("mhc_post: stats_output / stats_scratch need stats_weight");
     }
     return mhc_post(
-        input_tensor, residual, post, comb, compute_kernel_config, comb_transposed, post_col, comb_col, output_tensor);
+        input_tensor,
+        residual,
+        post,
+        comb,
+        compute_kernel_config,
+        comb_transposed,
+        post_col,
+        comb_col,
+        output_tensor,
+        max_grid);
 }
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

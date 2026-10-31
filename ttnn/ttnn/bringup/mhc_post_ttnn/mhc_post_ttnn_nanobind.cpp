@@ -98,6 +98,8 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 only) the partials scratch ([1, 1, R, 32 blocks] float32 TILE DRAM, blocks = the op's column-block
                 count, mhc_post_stats_plan). Each must have exactly the spec the op would allocate (checked on every
                 call) and must not be an input; the results are tensors of those buffers (new Python objects).
+            max_grid (ttnn.CoreCoord, optional): default None = the device's whole compute grid
+                (deepseek_v41_flash_d_p FIX.15): the op runs on the rectangle (0, 0) .. (max_grid - 1) of the grid.
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
@@ -116,7 +118,8 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("comb_col") = 0,
         nb::arg("output_tensor") = nb::none(),
         nb::arg("stats_output") = nb::none(),
-        nb::arg("stats_scratch") = nb::none());
+        nb::arg("stats_scratch") = nb::none(),
+        nb::arg("max_grid") = nb::none());
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

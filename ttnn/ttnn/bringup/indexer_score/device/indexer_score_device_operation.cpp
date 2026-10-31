@@ -819,7 +819,7 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     const uint32_t KC = attrs.program_config.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC); shared with the factory
-    const auto grid = q.device()->compute_with_storage_grid_size();
+    const auto grid = op_grid(q.device()->compute_with_storage_grid_size(), attrs.program_config);
     uint32_t compute_grid_x = grid.x;
     if (attrs.has_fused_ring()) {
         const uint32_t ag_worker_cores = attrs.fused_ring->num_links * 2u;  // forward + backward per link

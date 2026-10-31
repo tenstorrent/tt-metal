@@ -179,6 +179,9 @@ class MoEOptions:
     # (ttnn.bringup.prepare_program once per descriptor, run_prepared each call: no per-call hashing or runtime-argument
     # re-application; host time only, the same programs); False: plain ttnn.generic_op
     tail_prepared: bool = False
+    # the most Tensix columns / rows (x, y) of a chip any of the block's own programs may use (a Galaxy's power supply
+    # trips on a full 12 x 10 grid's di/dt: DeepSeek-V4.1 FIX.15 runs 11 x 10 = 110 there); None: the device's grid
+    max_grid: tuple | None = None
     # the residual at the block's boundary: "sp_tp" main's layout [S/SP, H/TP] a chip; "owners" each chip's own tokens
     # at full width [S/N, H] (row-major chip order - the owners' rows: a model whose residual is split by tokens over
     # every chip, GLM-5.3-Flash's). The ops head gathers rows instead of width; the fused head (it reads the width
@@ -580,6 +583,7 @@ class MoEBlock(LightweightModule):
                     fidelity=dtypes.shared_fidelity,
                     activations=dtypes.shared_activations,
                     pack_precise=dtypes.shared_pack_precise,
+                    max_grid=options.max_grid,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -794,14 +798,13 @@ class MoEBlock(LightweightModule):
         ttnn.deallocate(out)
         ttnn.synchronize_device(mesh)
 
-    def _zeros(self, shape):
-        return ttnn.from_torch(
-            torch.zeros(shape),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+    def _zeros(self, shape, layout=ttnn.TILE_LAYOUT):
+        """Zeros on the mesh (the warm-ups). MoEOptions.max_grid: built on the host and copied (ttnn.from_torch with a
+        device converts on the device's whole grid)."""
+        kw = dict(dtype=ttnn.bfloat16, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device))
+        if self.options.max_grid is None:
+            return ttnn.from_torch(torch.zeros(shape), device=self.mesh_device, **kw)
+        return ttnn.to_device(ttnn.from_torch(torch.zeros(shape), **kw), self.mesh_device)
 
     def _warm_up_tail(self):
         """The tail once on zeros (the fused head's warm-up: before the head - see __init__)."""
@@ -810,13 +813,7 @@ class MoEBlock(LightweightModule):
             (1, 1, g.tokens_per_row, m.emb_dim // g.tp) if self.latent else (1, 1, g.tokens_per_chip, m.emb_dim)
         )
         if self.tail is not None:
-            y0 = ttnn.from_torch(
-                torch.zeros(1, 1, g.tokens_per_chip, m.routed_width),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+            y0 = self._zeros((1, 1, g.tokens_per_chip, m.routed_width), layout=ttnn.ROW_MAJOR_LAYOUT)
             out = self.tail(y0, se)
             for t in (out, y0, se):
                 ttnn.deallocate(t)
@@ -1227,6 +1224,7 @@ class FusedHead:
         fidelity=ttnn.MathFidelity.HiFi2,  # (the shared expert's: MoEDtypes.shared_fidelity)
         activations=ttnn.bfloat16,  # (the shared expert's x / h: MoEDtypes.shared_activations)
         pack_precise=False,  # (MoEDtypes.shared_pack_precise)
+        max_grid=None,  # (MoEOptions.max_grid: (x, y) the most columns / rows the head and its x copy may use)
     ):
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
 
@@ -1234,6 +1232,14 @@ class FusedHead:
         H, Is, latent = model.emb_dim, model.shared_expert_hidden_dim, model.latent_dim
         E, K, N = model.num_experts, model.top_k, g.chips
         grid = mesh.compute_with_storage_grid_size()
+        # (max_grid: the head's columns as a grid that narrow - the engine and its mover column inside it, as on a
+        # harvested grid; the x copy / typecast on those cores too. None: the whole grid, the call as before)
+        self.sub_cores = None
+        if max_grid is not None and (max_grid[0] < grid.x or max_grid[1] < grid.y):
+            grid = ttnn.CoreCoord(min(grid.x, max_grid[0]), min(grid.y, max_grid[1]))
+            self.sub_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            )
         if layout is not None:  # (a given layout: its logits placement too)
             router = "engine" if layout.on_engine else "router_cores"
         split = bool(layout.split) if layout is not None else router_split
@@ -1274,6 +1280,7 @@ class FusedHead:
             l1_hole=l1_hole,
             activations=activations,
             pack_precise=pack_precise,
+            max_grid=(grid.x, grid.y) if self.sub_cores is not None else None,
         )
         self.w, rw = self.layer_weights(w)
         # (the programs bake x's address: one x buffer - a new x tensor each call rebuilt every chip's program, ~175 ms of
@@ -1342,11 +1349,14 @@ class FusedHead:
         the outputs: rows, xbuf, route (and latent)). The arena's L1 given back after. arena: (an L1 tensor holding the
         head's arena range, its bytes a core) - the block's one arena a forward: run in it, the caller frees it."""
         if int(x.buffer_address()) != int(self.x.buffer_address()):  # (MoEBlock.input_buffer(): read in place)
-            ttnn.copy(x, self.x)
+            if self.sub_cores is None:
+                ttnn.copy(x, self.x)
+            else:  # (max_grid: ttnn.copy takes no core grid; a same-dtype typecast is the same bf16 copy on them)
+                ttnn.typecast(x, self.x.dtype, output_tensor=self.x, sub_core_grids=self.sub_cores)
         if arena is not None:
             self.head.use_arena(*arena)
         if self.xq is not None:
-            ttnn.typecast(self.x, self.xq.dtype, output_tensor=self.xq)
+            ttnn.typecast(self.x, self.xq.dtype, output_tensor=self.xq, sub_core_grids=self.sub_cores)
         se = self.head.run(self.x, self.w, xq=self.xq)
         out = dict(self.head.outputs)
         if arena is None:

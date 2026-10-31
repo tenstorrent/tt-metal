@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ttnn
 
+from .cores import sub_cores, sub_cores_tiled
 from .settings import settings
 
 TP_AXIS = 1
@@ -138,7 +139,11 @@ def partial_dtype(mesh) -> ttnn.DataType:
 def _rs_bf16(mesh, t: ttnn.Tensor, dim: int) -> ttnn.Tensor:
     """fp32 or bf16 partials ``t`` -> bf16 (typecast when fp32) -> fabric_reduce_scatter with its default FPU add
     (bf16 output, as GLM-5.3's scatter_rows). Does not consume ``t``."""
-    tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=DRAM)
+    tb = (
+        t
+        if t.dtype == ttnn.bfloat16
+        else ttnn.typecast(t, ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(t))
+    )
     out = ttnn.bringup.fabric_reduce_scatter(
         tb,
         cluster_axis=TP_AXIS,
@@ -156,12 +161,16 @@ def _rs_bf16(mesh, t: ttnn.Tensor, dim: int) -> ttnn.Tensor:
 def _exact_input(t: ttnn.Tensor) -> ttnn.Tensor:
     """A bf16 partial (partial_dtype) on a path that sums exactly: typecast to fp32 (exact). Returns ``t`` itself
     when it is fp32; the caller frees what it got only when it is not ``t``."""
-    return t if t.dtype == ttnn.float32 else ttnn.typecast(t, ttnn.float32, memory_config=DRAM)
+    return (
+        t
+        if t.dtype == ttnn.float32
+        else ttnn.typecast(t, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(t))
+    )
 
 
 def _to_fp32(t: ttnn.Tensor) -> ttnn.Tensor:
     """bf16 -> fp32 (exact), consuming ``t``: the consumers of the sums take fp32."""
-    out = ttnn.typecast(t, ttnn.float32, memory_config=DRAM)
+    out = ttnn.typecast(t, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(t))
     dealloc(t)
     return out
 
@@ -262,10 +271,10 @@ def _gather_add(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
     tp = mesh.shape[TP_AXIS]
     r, w = t.shape[-2], t.shape[-1]
     g = all_gather(t, 1, TP_AXIS)
-    acc = ttnn.slice(g, [0, 0, 0, 0], [1, 1, r, w])
+    acc = ttnn.slice(g, [0, 0, 0, 0], [1, 1, r, w], sub_core_grids=sub_cores(g))
     for c in range(1, tp):
-        part = ttnn.slice(g, [0, c, 0, 0], [1, c + 1, r, w])
-        nxt = ttnn.add(acc, part, dtype=ttnn.float32, memory_config=DRAM)
+        part = ttnn.slice(g, [0, c, 0, 0], [1, c + 1, r, w], sub_core_grids=sub_cores(g))
+        nxt = ttnn.add(acc, part, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(acc))
         dealloc(acc)
         dealloc(part)
         acc = nxt
