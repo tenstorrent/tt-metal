@@ -21,6 +21,8 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+from models.common.utility_functions import is_blackhole
+
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
@@ -83,9 +85,25 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     """Block sizes for an all-gather matmul of this `(K, N)` at sequence length `M`, or None to let
     the generic path decide. Uses the largest swept `per_core_M` that divides the runtime one.
     """
+    if not is_blackhole():
+        # Swept on Blackhole's 12x10 grid. On Wormhole the op runs an 8x8 worker grid, where these
+        # blockings measured 27-66% slower (M = 4736) than the Wormhole entries in `grid_88_configs`,
+        # so let `get_agmm_config` resolve those tables (and its ring-safe generic fallback) instead.
+        return None
     per_core_m = _per_core_m(m, n)
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
         return None
     return AGMM_BLOCK_SIZES[(k, n, max(divisors))]
+
+
+def agmm_force_transpose() -> bool:
+    """Whether the H3 linears should force the op's transposed core grid.
+
+    Blackhole keeps the op's own orientation (M > N decides), which the table above was swept for.
+    Wormhole's compute grid is 8x9: transposed, the op gets 8x8 workers with the mux row below;
+    non-transposed it gets only 7x8 (mux column) and measured about 30% slower for to_qkv at
+    M = 4736 (5.56 vs 3.87 ms), so Wormhole always transposes and uses the 8x8 table entries.
+    """
+    return not is_blackhole()

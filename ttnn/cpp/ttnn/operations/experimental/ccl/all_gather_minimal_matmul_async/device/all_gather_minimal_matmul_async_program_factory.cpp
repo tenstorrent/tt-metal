@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
 #include <tt-metalium/math.hpp>
@@ -775,6 +776,12 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
     }
 
+    // Per-stage cycle accounting in the kernels (agmm-* profiler zones) is opt-in: it only works in
+    // profiler builds and grows the in0 sender past Wormhole's 16 KB NCRISC IRAM in the non-transposed
+    // variant, so it stays off unless TT_AGMM_STAGE_TIMERS=1 is set.
+    if (const char* env = std::getenv("TT_AGMM_STAGE_TIMERS"); env != nullptr && std::string(env) == "1") {
+        defines["AGMM_STAGE_TIMERS"] = "1";
+    }
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";

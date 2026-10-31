@@ -286,6 +286,7 @@ void kernel_main() {
 #endif
 
     bool k_forward = true;
+    uint64_t agmm_t_acq = 0, agmm_t_credit = 0, agmm_t_out = 0;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -313,6 +314,7 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+                        AGMM_TIME(agmm_t_out);
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
                         uint32_t out_read_ptr = cb_out.get_read_ptr();
@@ -425,6 +427,7 @@ void kernel_main() {
                     }
                 }
                 if constexpr (is_injector_core) {
+                    AGMM_TIME(agmm_t_acq);
 #ifdef FSDP_FUSED
                     // Skewed-shard mirror of in0: the K-block's stripe == my_rank is this device's
                     // local weight slice (device_iter 0) — read from local weight DRAM; any other
@@ -511,6 +514,7 @@ void kernel_main() {
                         n_tile_end);
 #endif
                 } else {
+                    AGMM_TIME(agmm_t_acq);
                     in1_receiver_sem.set(INVALID);
                     in1_sender_sem.up(noc_obj, in1_sender_noc_x, in1_sender_noc_y, 1);
                     in1_receiver_sem.wait(VALID);
@@ -521,7 +525,10 @@ void kernel_main() {
                 cb_in1.push_back(in1_block_num_tiles);
 
                 if (!is_sink_core) {
-                    in1_sender_sem.wait(1);
+                    {
+                        AGMM_TIME(agmm_t_credit);
+                        in1_sender_sem.wait(1);
+                    }
                     in1_sender_sem.set(0);
 
                     /**
@@ -663,6 +670,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+                    AGMM_TIME(agmm_t_out);
 #ifdef FUSE_SWIGLU
                     write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
                         noc_obj,
@@ -709,6 +717,9 @@ void kernel_main() {
     }
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();
+    AGMM_REPORT("agmm-i1-acq", agmm_t_acq);
+    AGMM_REPORT("agmm-i1-credit", agmm_t_credit);
+    AGMM_REPORT("agmm-i1-out", agmm_t_out);
 
 #ifdef FSDP_FUSED
     if (fsdp_mux_backward.connection_valid) {

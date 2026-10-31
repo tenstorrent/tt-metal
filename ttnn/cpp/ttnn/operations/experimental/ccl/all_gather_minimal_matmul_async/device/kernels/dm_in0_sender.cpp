@@ -279,15 +279,22 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
 #ifdef USE_MUX
+    // Headers come from a per-RISC pool of 8, so only the core that sends in a direction allocates
+    // that direction's set (the "forward" chain core sends through pkt_hdrs_backward and the
+    // "backward" chain core through pkt_hdrs_forward; see the Ring/Linear send blocks below).
     auto pkt_hdrs_backward = allocate_and_init_packet_headers(
-        detail::valid_targets(1),
+        detail::valid_targets(1) && (in0_core_order_index == forward_in0_core_order_index),
         unicast_route_info_backward,
         in0_reader,
         num_tiles_to_write_per_packet,
         in3_tile_size);
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
-        detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+        detail::valid_targets(0) && (in0_core_order_index == backward_in0_core_order_index),
+        unicast_route_info_forward,
+        in0_reader,
+        num_tiles_to_write_per_packet,
+        in3_tile_size);
 
     // A following gather may reuse DRAM owned by the preceding collective. Its
     // remote writes must wait until every rank has entered this program. Data
@@ -327,6 +334,7 @@ void kernel_main() {
 
     bool k_forward = true;
     bool reuse_block = false;
+    uint64_t agmm_t_sem = 0, agmm_t_acq = 0, agmm_t_credit = 0, agmm_t_fab = 0, agmm_t_out = 0;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -350,6 +358,7 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+                        AGMM_TIME(agmm_t_out);
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
                         uint32_t out_read_ptr_swiglu = cb_out.get_read_ptr();
@@ -428,25 +437,28 @@ void kernel_main() {
                     k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
-                compute_actual_k_block<is_linear>(
-                    k_block_iter,
-                    K_num_blocks,
-                    my_rank,
-                    K_blocks_per_device,
-                    K_block_tiles,
-                    K_tiles_per_device,
-                    num_devices,
-                    k_forward,
-                    n_block_iter == 0,
-                    out_ready_sem_forward_addr_ptr,
-                    out_ready_sem_backward_addr_ptr,
-                    sem_target_forward,
-                    sem_target_backward,
-                    is_injector_core,
-                    1,
-                    k_left_tiles,
-                    k_block_left_tile,
-                    k_block_right_tile);
+                {
+                    AGMM_TIME(agmm_t_sem);
+                    compute_actual_k_block<is_linear>(
+                        k_block_iter,
+                        K_num_blocks,
+                        my_rank,
+                        K_blocks_per_device,
+                        K_block_tiles,
+                        K_tiles_per_device,
+                        num_devices,
+                        k_forward,
+                        n_block_iter == 0,
+                        out_ready_sem_forward_addr_ptr,
+                        out_ready_sem_backward_addr_ptr,
+                        sem_target_forward,
+                        sem_target_backward,
+                        is_injector_core,
+                        1,
+                        k_left_tiles,
+                        k_block_left_tile,
+                        k_block_right_tile);
+                }
                 if constexpr (is_linear) {
                     // For Linear tail, the right half is pure zero-fill padding (no real tiles).
                     // Point past the logical K end so read_in0_block_sync's `j < logical_d1` check
@@ -456,6 +468,7 @@ void kernel_main() {
                     }
                 }
                 if (is_injector_core) {
+                    AGMM_TIME(agmm_t_acq);
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         noc_obj,
                         in0_reader,
@@ -478,6 +491,7 @@ void kernel_main() {
                         k_right_tiles);
                 } else {
                     // Get from previous device
+                    AGMM_TIME(agmm_t_acq);
                     in0_receiver_sem.set(INVALID);
                     in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_sem.wait(VALID);
@@ -487,7 +501,10 @@ void kernel_main() {
                 // This frees sender to start next read earlier
                 cb_in0.push_back(in0_block_num_tiles);
                 if (!is_sink_core) {
-                    in0_sender_sem.wait(1);
+                    {
+                        AGMM_TIME(agmm_t_credit);
+                        in0_sender_sem.wait(1);
+                    }
                     in0_sender_sem.set(0);
 
                     /**
@@ -509,6 +526,7 @@ void kernel_main() {
                 }
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
+                    AGMM_TIME(agmm_t_fab);
                     if constexpr (is_linear) {
                         // Linear uni-ring: every (non-skipped) iter, every device sends ONE full
                         // K-block to its predecessor in the virtual ring. Dev 0
@@ -688,6 +706,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+                    AGMM_TIME(agmm_t_out);
 #ifdef FUSE_SWIGLU
                     write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
                         noc_obj,
@@ -735,6 +754,11 @@ void kernel_main() {
 
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();
+    AGMM_REPORT("agmm-i0-sem", agmm_t_sem);
+    AGMM_REPORT("agmm-i0-acq", agmm_t_acq);
+    AGMM_REPORT("agmm-i0-credit", agmm_t_credit);
+    AGMM_REPORT("agmm-i0-fab", agmm_t_fab);
+    AGMM_REPORT("agmm-i0-out", agmm_t_out);
 
 #ifdef USE_MUX
     if (mux_backward.connection_valid) {
