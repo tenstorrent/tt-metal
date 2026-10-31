@@ -3748,18 +3748,10 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
                 metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index));
         };
 
-        TT_FATAL(
-            state.offset <= max_size,
-            "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
-            state.offset,
-            max_size,
-            enchantum::to_string(programmable_core_type),
-            state.offset - max_size,
-            format_rows(breakdown()));
-
         // Recorded here, not per program: `state` is computed once per core type and then copied
         // into every program in the span, so recording inside the loop below would log the same
         // numbers N times for an N-program MeshWorkload (inflating count/total, and making min==max).
+        // The sizes are recorded before the size check so a program that does not fit is counted too.
         {
             const auto target = enchantum::to_string(programmable_core_type);
             const auto record_size = [&](std::string_view name, uint32_t bytes) {
@@ -3774,6 +3766,16 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             record_size("program_config_size.dataflow_buffer", state.dfb_size);
             record_size("program_config_size.kernel_text", state.kernel_text_size);
             record_size("program_config_size.total", state.offset);
+
+            TT_FATAL(
+                state.offset <= max_size,
+                "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
+                state.offset,
+                max_size,
+                enchantum::to_string(programmable_core_type),
+                state.offset - max_size,
+                format_rows(breakdown()));
+
             // Bytes left in the kernel config buffer; its min is how close any program came to the
             // TT_FATAL above. Core types the program doesn't use (offset 0) are skipped: their headroom
             // is the whole buffer, which would only inflate the metric's mean and max.
