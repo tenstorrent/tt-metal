@@ -174,6 +174,7 @@ from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     ChatFormat,
     ContextFull,
     UserSession,
+    decoded_token,
     open_mesh_device,
 )
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import REASONING_EFFORTS
@@ -1437,7 +1438,8 @@ class _OutputReader:
     meanwhile be blocked writing the next step's packet. Reading on a separate thread keeps
     the device draining whatever the scheduler is doing, as ``_OutputReader`` in
     ``tests/decode/test_multi_user_paged_decode_demo.py`` does. :meth:`expect` is called once
-    per step, in dispatch order; :attr:`results` yields ``(ticket, logits [1, V])`` in that
+    per step, in dispatch order; :attr:`results` yields ``(ticket, out)`` -- fp32 logits ``[1, V]``, or under
+    device sampling the int32 token page ``[1, words]`` -- in that
     order, or ``(ticket, exception)`` once a read fails, after which it stops; each item also carries the
     ``time.perf_counter()`` at which the read returned, and the token :meth:`arm` had it feed (else None) with
     the time its packet was written.
@@ -1493,7 +1495,11 @@ class _OutputReader:
             if ticket is self._STOP:
                 return
             try:
-                out = self._model.read_decoded_output().reshape(1, -1).float()
+                out = self._model.read_decoded_output().reshape(1, -1)
+                # A device-sampled step sends an int32 page with the token first; casting it would turn
+                # it into "logits" whose argmax is column 0, i.e. token 0.
+                if out.dtype != torch.int32:
+                    out = out.float()
             except BaseException as e:  # noqa: BLE001 - handed to the scheduler, which aborts
                 self.results.put((ticket, e, time.perf_counter(), None, 0.0))
                 return
@@ -1506,7 +1512,9 @@ class _OutputReader:
                 continue
             sampler, pos = feed
             try:
-                token = sampler(out) if sampler is not None else int(out[0].argmax().item())
+                # A device-sampled step's output is already the token: ``sampler`` (the turn's temperature)
+                # cannot apply, so it is the one case where a turn's own sampling is not honoured.
+                token = decoded_token(out) if sampler is None or out.dtype == torch.int32 else sampler(out)
                 with self._packet_lock:
                     self._model.write_step_packet(token, pos)
             except BaseException as e:  # noqa: BLE001 - handed to the scheduler, which aborts
@@ -2184,7 +2192,10 @@ class _Scheduler:
         if turn.error is not None:
             return
         if fed is None and (turn.phase == _Turn.DECODE or last_prompt_token):
-            turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
+            if turn.sampler is not None and out.dtype != torch.int32:
+                turn.next_id = turn.sampler(out)
+            else:
+                turn.next_id = decoded_token(out)
         if last_prompt_token:
             self._prompt_done(turn)
 
@@ -2242,6 +2253,7 @@ class _Scheduler:
         turn.t_replay = time.perf_counter()
         self.steps += n
         if turn.fed == len(turn.ids):
+            # The prefill model has a head of its own, so these are always logits here.
             out = row.reshape(1, -1)
             turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
             self._prompt_done(turn)
@@ -2746,10 +2758,22 @@ class GenerationServer:
             if max_tokens < 1:
                 raise RequestError(400, "max_tokens must be a positive integer")
 
-        temperature = body.get("temperature")
-        if temperature is None:
-            temperature = self.temperature
-        sampler = _make_sampler(temperature, body.get("top_p"))
+        # A request may override the server-wide default, unless the device is sampling (see below).
+        request_temperature, request_top_p = body.get("temperature"), body.get("top_p")
+        temperature = self.temperature if request_temperature is None else request_temperature
+        sampler = _make_sampler(temperature, request_top_p)
+        if self.engine.model.device_sampler is not None:
+            if request_temperature is not None or request_top_p is not None:
+                # The sampler lives in the captured decode trace, so it has one temperature for every
+                # turn; a request cannot bring its own.
+                raise RequestError(
+                    400,
+                    "this server samples on the device (--device-sampling), so a request cannot set "
+                    "temperature/top_p; set --temperature for the whole server instead",
+                )
+            # The engine already pointed the device sampler at the server's temperature, and its PRNG
+            # carries from step to step, so nothing is sampled or re-seeded on the host.
+            sampler = None
         # A slot is claimed per turn, not per user, so two requests run concurrently even
         # when they carry the same ``user`` (or none). Held until the reply is complete:
         # the turn decodes into this slot's KV session.
@@ -3384,7 +3408,25 @@ def build_parser(argv: list[str] | None = None, description: str = __doc__):
         type=float,
         default=None,
         help="sampling temperature for requests that send none (default: greedy argmax); "
-        "a request's own temperature overrides it, and 0 asks for greedy",
+        "a request's own temperature overrides it, and 0 asks for greedy. With --device-sampling it "
+        "is the one temperature every turn samples at, and requests cannot set their own",
+    )
+    p.add_argument(
+        "--device-sampling",
+        dest="device_sampling",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "0") not in ("0", "", "false", "False"),
+        help="pick each token on the output stage instead of reading the whole 129k-wide logits row back "
+        "per token: a greedy step then sends one int page over PCIe, and sampling costs nothing on the "
+        "host. One temperature for the whole server (--temperature), so requests cannot set their own; "
+        "--no-device-sampling samples on the host",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V4_SEED", "1234")),
+        help="seed of the device sampler's PRNGs (--device-sampling); it still advances from step to step, "
+        "so a reply is reproducible but not one token repeated",
     )
     p.add_argument(
         "--debug",
