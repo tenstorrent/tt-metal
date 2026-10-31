@@ -741,7 +741,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_page_size = detail::tile_size(tensor_return_value) + misalignment;
+    // Each cb_in entry has misalignment spare bytes for the reader to bounce a misaligned source line into place.
+    // Quasar's unpacker steps through a DFB one whole tile per entry, so there the reader bounces through a scratchpad.
+    const bool bounce_in_scratchpad = (misalignment > 0) && (input_tensor.device()->arch() == tt::ARCH::QUASAR);
+    uint32_t input_page_size = detail::tile_size(tensor_return_value) + (bounce_in_scratchpad ? 0 : misalignment);
+    const ScratchpadSpecName BOUNCE_SP{"bounce"};
 
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};
@@ -814,6 +818,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         writer_rta_names.push_back("end_padding_tile_idx");
     }
 
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    if (bounce_in_scratchpad) {
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = BOUNCE_SP, .accessor_name = "bounce"});
+    }
     KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -821,6 +830,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
             "reader_permute_interleaved_tiled_generic.cpp",
         .compiler_options = {.defines = pad_defines},
         .dfb_bindings = reader_dfb,
+        .scratchpad_bindings = reader_scratchpad_bindings,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args =
             {{"rank", rank},
@@ -848,7 +858,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              {"needs_x_padding", needs_x_padding},
              {"rows_per_x", non_x_rows},
              {"misalignment", misalignment},
-             {"read_alignment", read_alignment}},
+             {"read_alignment", read_alignment},
+             {"bounce_in_scratchpad", bounce_in_scratchpad}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * rank},
@@ -972,6 +983,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // ---- Assemble ----
     ProgramSpec spec;
     spec.name = "permute_tiled_generic";
+    if (bounce_in_scratchpad) {
+        spec.scratchpads = {
+            ScratchpadSpec{.unique_id = BOUNCE_SP, .size_per_node = 2 * read_alignment + subtile_line_bytes}};
+    }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = std::move(dataflow_buffers);
     spec.tensor_parameters = {

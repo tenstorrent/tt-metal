@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/scratchpad.h"
 
 void kernel_main() {
     // X = output width
@@ -58,6 +59,8 @@ void kernel_main() {
     constexpr uint32_t rows_per_x = get_arg(args::rows_per_x);
     constexpr uint32_t misalignment = get_arg(args::misalignment);
     constexpr uint32_t read_alignment = get_arg(args::read_alignment);
+    // The bounce scratchpad is bound only when this is set (Quasar), hence get_token_if_present below.
+    constexpr bool bounce_in_scratchpad = static_cast<bool>(get_arg(args::bounce_in_scratchpad));
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)
@@ -73,6 +76,13 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
+    // An aligned window of read_alignment bytes plus room for one line past its end.
+    uint32_t bounce_window = 0;
+    if constexpr (bounce_in_scratchpad) {
+        const uint32_t bounce_base =
+            Scratchpad<uint32_t>(*scratch::get_token_if_present<"bounce">()).get_base_address();
+        bounce_window = (bounce_base + read_alignment_minus_one) & ~read_alignment_minus_one;
+    }
 
     // For x-padding logic:
     constexpr uint32_t final_face_real_w = (W % FACE_WIDTH);
@@ -212,6 +222,12 @@ void kernel_main() {
                         uint32_t l1_base = l1_col_base + cb_w_offset;
                         if ((final_src_addr & read_alignment_minus_one) != (l1_base & read_alignment_minus_one)) {
                             uint32_t misaligned_addr = l1_base + misalignment;
+                            if constexpr (bounce_in_scratchpad) {
+                                // Land the line at the source's offset within an aligned window of the scratchpad,
+                                // as the DFB entries here hold exactly one tile and have no room for it.
+                                const uint32_t src_offset = (uint32_t)final_src_addr & read_alignment_minus_one;
+                                misaligned_addr = bounce_window + src_offset;
+                            }
                             CoreLocalMem<uint32_t> mis_dst(misaligned_addr);
                             noc.async_read(
                                 s,
