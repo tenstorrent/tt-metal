@@ -56,12 +56,16 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_endpoint_(sfpi::vFloat x) {
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i);
 
     sfpi::vFloat xy = x * y;
-    sfpi::vFloat c = (-y) * xy;
-    y = y * (sfpi::vConstFloatPrgm1 + c * (sfpi::vConstFloatPrgm2 + c));
+    // Negations folded into the operand order (SFPMAD rounding is sign-symmetric, so
+    // y*xy == -((-y)*xy) and c - P2 == -(P2 + (-c)) bit for bit) and the 0.5 scale
+    // applied in place to e (exact power-of-two scale), which removes three SFPMOV copies.
+    sfpi::vFloat c = y * xy;
+    y = y * (sfpi::vConstFloatPrgm1 + c * (c - sfpi::vConstFloatPrgm2));
 
     xy = x * y;
-    sfpi::vFloat e = 1.0f + (-y) * xy;
-    return e * (0.5f * xy) + xy;
+    sfpi::vFloat e = y * xy - 1.0f;
+    e = e * -0.5f;
+    return e * xy + xy;
 }
 
 // Both dest modes route through the fp32 bodies, whose endpoint sqrt reads the
@@ -459,8 +463,9 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     sfpi::vFloat ax = sfpi::abs(x);
     sfpi::vFloat d = 1.0f - ax;
     sfpi::vFloat cutoff = 0.5625f;
-    sfpi::vFloat half_d = d * 0.5f;
+    // t is independent of d, so issuing it first fills the d -> half_d dependency slot.
     sfpi::vFloat t = ax - cutoff;
+    sfpi::vFloat half_d = d * 0.5f;
 
     // Reduce the endpoint region using asin(|x|) = pi/2 - 2*asin(sqrt((1 - |x|)/2)).
     sfpi::vFloat z = _sfpu_sqrt_endpoint_(half_d);
@@ -479,13 +484,15 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     p = __builtin_rvtt_sfpmad(p.get(), s.get(), c.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     c = 0x1.55578cp-3f;
     p = __builtin_rvtt_sfpmad(p.get(), s.get(), c.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    sfpi::vFloat neg_two = -2.0f;
+    sfpi::vFloat neg_two = sfpi::sFloat16b(-2.0f);
     p *= s;
     sfpi::vFloat pio2 = PI_2;
     r = __builtin_rvtt_sfpmad(p.get(), z.get(), z.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    // Undo the endpoint reduction and restore the input sign.
-    v_if(t >= 0.0f) { r = pio2 + neg_two * r; }
+    // Undo the endpoint reduction and restore the input sign. One predicated SFPMAD
+    // (-2*r is exact, so pio2 + neg_two*r rounds once either way); writing r in place
+    // avoids the copy sfpi needs to keep r live for the disabled lanes.
+    v_if(t >= 0.0f) { r = __builtin_rvtt_sfpmad(r.get(), neg_two.get(), pio2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE); }
     v_endif;
 
     r = sfpi::copysgn(r, x);
@@ -502,8 +509,9 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     sfpi::vFloat ax = sfpi::abs(x);
     sfpi::vFloat d = 1.0f - ax;
     sfpi::vFloat cutoff = 0.5625f;
-    sfpi::vFloat half_d = d * 0.5f;
+    // t is independent of d, so issuing it first fills the d -> half_d dependency slot.
     sfpi::vFloat t = ax - cutoff;
+    sfpi::vFloat half_d = d * 0.5f;
 
     // Reduce the endpoint region with sqrt((1 - |x|)/2); the sign mapping below
     // reconstructs acos(x) for both signs of x.
