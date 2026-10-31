@@ -444,11 +444,15 @@ class MiMoV2ForCausalLM:
     # vLLM config get_kv_cache_spec recorded (set directly when driving the adapter without vLLM).
     prefill_token_budget = None
 
-    def __init__(self, generator, max_seq_len):
+    def __init__(self, generator, max_seq_len, per_lane=None):
+        """``per_lane``: the plugin's slots per lane (--max-num-seqs over the lanes; default the replicas' decode
+        users). A speculating launch with fewer slots than a verify pass (MIMO_SPEC_SLOTS=16 at 8 per lane) decodes
+        SPEC_SLOTS users per replica: the verify's slots past the lane's requests."""
         self.gen = generator
         self.models = generator.models
         self.dp = generator.dp
-        self.per_lane = generator.users_per_replica
+        self.per_lane = per_lane or generator.users_per_replica
+        assert self.per_lane <= generator.users_per_replica
         self.max_seq_len = max_seq_len
         self.already_warmed_up_prefill = False
         self.prefill_programs_compiled = False
@@ -542,7 +546,7 @@ class MiMoV2ForCausalLM:
         if SPEC_DECODE:
             if SPEC_DECODE not in ("mtp", "dflash"):
                 raise ValueError(f"MIMO_SPEC_DECODE={SPEC_DECODE!r}: MiMo drafts with its MTP layers (mtp) or DFlash")
-            if max_batch_size // dp < SPEC_SLOTS:
+            if max_batch_size // dp < SPEC_SLOTS and SPEC_SLOTS < 16:
                 raise ValueError(
                     f"a verify runs one request in {SPEC_SLOTS} decode slots: launch with --max-num-seqs >= "
                     f"{SPEC_SLOTS} per lane (got {max_batch_size // dp})"
@@ -565,14 +569,21 @@ class MiMoV2ForCausalLM:
             mtp_layers = (MTP_LAYER,) if MTP_LAYERS == 1 else tuple(range(MAX_DRAFTS))
             if MTP_BACKFILL and not DEVICE_ROPE:
                 logger.warning("MiMo vLLM: MIMO_MTP_BACKFILL needs the decode RoPE tables (MIMO_DEVICE_ROPE=1): off")
-        logger.info(f"MiMo vLLM: {dp} replicas x {max_batch_size // dp} users, {num_layers} layers, {path}")
+        per_lane = max_batch_size // dp
+        # 16 verify slots decode 16 users per replica, whatever the lane's requests (per_lane, at most 16).
+        decode_users = max(per_lane, SPEC_SLOTS) if SPEC_DECODE and SPEC_SLOTS == 16 else per_lane
+        if decode_users > 16 and SPEC_SLOTS == 16:
+            raise ValueError(f"MIMO_SPEC_SLOTS=16 serves at most 16 slots per lane (got {per_lane})")
+        logger.info(
+            f"MiMo vLLM: {dp} replicas x {per_lane} users ({decode_users} decode slots), {num_layers} layers, {path}"
+        )
         generator = MiMoGalaxyGenerator(
             mesh_device,
             cfg,
             MiMoCheckpoint(path, cfg),
             _cache_dir(path),
             dp=dp,
-            users_per_replica=max_batch_size // dp,
+            users_per_replica=decode_users,
             max_seq_len=max_seq_len,
             num_layers=num_layers,
             block_size=BLOCK_SIZE,
@@ -581,7 +592,7 @@ class MiMoV2ForCausalLM:
             mtp_backfill=MTP_BACKFILL and DEVICE_ROPE,
             dflash_path=dflash_path,
         )
-        return cls(generator, max_seq_len)
+        return cls(generator, max_seq_len, per_lane=per_lane)
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
@@ -609,9 +620,9 @@ class MiMoV2ForCausalLM:
             # argmax_ids for all-greedy steps; fused_sample (acceptance on device) when a sampled request shares
             # the step and the device sampler serves every request's sampling; logits otherwise (the plugin's host
             # accept walk then samples losslessly, ``_verify``).
-            # The device verify sampler serves as many slots as the replica's decode users (up to 8: launch
-            # MIMO_SPEC_SLOTS=8 with 8 sequences per lane); a verify with more accepts greedy requests only
-            # (GreedyVerify) and raises on a sampled one.
+            # The device verify sampler serves as many slots as the replica's decode users (up to 16: launch
+            # MIMO_SPEC_SLOTS=8 with 8 sequences per lane, or MIMO_SPEC_SLOTS=16); a verify with more accepts greedy
+            # requests only (GreedyVerify) and raises on a sampled one.
             accept_modes=("argmax_ids", "logits", "fused_sample"),
             drafter_state="internal",
             supports_narrow_decode=True,
@@ -747,7 +758,9 @@ class MiMoV2ForCausalLM:
                         self._buffer(model, buffers, ("v", t, attn.v_head_dim), num_blocks, attn.v_head_dim),
                     ]
                 )
-            model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_widths, pair_split=self.pair_split)
+            model.setup_vllm_kv_cache(
+                self.gen.users_per_replica, caches, groups, table_widths, pair_split=self.pair_split
+            )
             if DEVICE_ROPE:
                 model.setup_decode_rope_tables(compact_rope, rope_host)
             if model.mtp is not None:
