@@ -433,6 +433,23 @@ def test_bitwise_right_shift_uint32_out_of_range(device):
     assert torch.equal(actual, expected)
 
 
+def test_bitwise_right_shift_int32_out_of_range(device):
+    values = [1, 8, 47, 1024, 99999, 123456789, 2**31 - 1]
+    shifts = [-33, -8, -1, 32, 33, 63]
+    x_torch = torch.tensor([[v for v in values for _ in shifts]], dtype=torch.int32)
+    y_torch = torch.tensor([[s for _ in values for s in shifts]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    expected = golden_fn(x_torch, y_torch)
+    assert torch.equal(expected, torch.zeros_like(expected))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.bitwise_right_shift(x_tt, y_tt))
+
+    assert torch.equal(actual, expected)
+
+
 def test_logical_right_shift_uint32_out_of_range(device):
     x_torch = torch.tensor(
         [[0x80000000, 0xFFFFFFFF, 0x80000001, 0xDEADBEEF, 0x80000000, 0xFFFFFFFF]],
