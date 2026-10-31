@@ -908,6 +908,19 @@ class TtDS41Model:
         assert self.head_w is not None, "built without the LM head"
         return torch.nn.functional.linear(self.to_host(hidden)[rows], self.head_w)
 
+    def steady_state(self, start: int | None) -> None:
+        """Framework F236 (FIX.16, owner 2026-10-31), called before each TIMED run of the profile: the next run at
+        ``start`` takes the path of a chunk that follows a whole previous chunk (every layer's window carry from the
+        kept tail, no carry rebuild from the served cache: TtWindowCache.steady). Values may differ from a real
+        previous chunk (timing only). None, before an accuracy run: the normal path. Host only, no device work."""
+        st = self.state
+        if st is None:
+            return
+        if start is not None and settings.get("STEADY_STATE") == "off":  # (comparison: the rebuild in every run)
+            start = None
+        for c in st.window.values():
+            c.steady(start)
+
     def free(self, h) -> None:
         _free(h)
 

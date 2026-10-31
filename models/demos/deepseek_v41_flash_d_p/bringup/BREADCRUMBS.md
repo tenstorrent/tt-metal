@@ -4779,3 +4779,35 @@ overseer (P.20 revert, then the card-0 reset). The P.20 section above is the rej
   were cut: my shell moved the job to the background and killed it at its 10 min limit; SAFE_PYTEST caught the SIGTERM
   and marked cards 0-31 dirty (09:05). No device job run after it (agent rule 19): the next job resets the box
   (DS41-183). The position numbers above are from the first measure (same code before black's reformat).
+
+## FIX.16 (overseer, galaxy_8x4): steady_state(start) on the device model (framework F236)
+
+- What: `TtDS41Model.steady_state(start)` (tt/model.py) -> `TtWindowCache.steady(start)` (tt/attention.py) on every
+  layer of the active state. With a start (before each TIMED profile / wall / cProfile run) it marks the kept window
+  carry as the tail of a whole previous chunk ending at `start`, in the load-time buffers that chunk would leave it in:
+  bfp8_tiles (default) `rtail_end = start` (the last chip's neighbour send rewrites `rtail` every chunk); bfp8_blocks +
+  P.11 `_tail_blocks = (start, _tail_buf)`; GLUE_FOLD bf16 rows re-keyed only when kept (nothing allocated). With None
+  (before an accuracy run) every kept tail is dropped: the carry is rebuilt from the served cache, as before. Host
+  only, no device op, nothing allocated. The carry's values are the last run's tail, not [start - 128, start): timing
+  only. The ladder and the contract never call it.
+- Why: every timed run repeats the same chunk, so step 3 of `_window_region` (slice 1760x512 + to_layout 128x512 +
+  ckv_bfp4 into rtail) ran in every layer although consecutive serving chunks skip it (owner 2026-10-31).
+- Switch: `STEADY_STATE` on (default) / off (no-op; the old timed path, comparison only), tt/settings.py.
+- Measured (p51200 profile rung, chunk [51200, 56320), 40 layers; off = `DS41_STEADY_STATE=off`, same code, ad-hoc
+  results /tmp/fix16_off; on = this gate): clean wall median 279.1 -> 262.5 ms (-16.6; owner estimate 16.3 host);
+  device sections attention 59.10 -> 57.49 ms (-1.62), others within +-0.2 (experts 87.04 / 87.13, indexer 7.23 / 7.24);
+  gate device_ms_total 184.64.
+  Op counts (per layer section, ops file): attention 22 -> 19 rows a layer: exactly `bringup.ckv_bfp4` (the carry's),
+  `slice`, `to_layout` gone in every layer; 407 of 416 layer sections op-for-op identical, the other 9 are layer 1's
+  first sections that the off run's real-time profiler attributed to one "(other)" row (attribution artifact of that
+  run). ckv_bfp4 a chunk 80 -> 40 (on 5 cores each, unchanged; no new op, rule 18 n/a).
+- Gate: PASS FIX.16 (P.17#test_ladder, P.17#test_profile; ladder errors unchanged, e.g. err_final_hidden 0.18973,
+  top5 1.0; chunk_wall_ms 262.5 < 434, device_ms_total 184.64 <= 230), 1333 s.
+- OV-23: no Python-built op added or touched. OV-25: no fork suite run. OV-3: nothing padded.
+- Note: profile units take ~12 min, over the 10-min foreground tool limit: device jobs ran as background tasks with a
+  2 h limit, waited on (never two at once).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.16 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; baseline:
+  `DS41_STEADY_STATE=off BRINGUP_RESULTS_DIR=/tmp/x BRINGUP_RECORD_TASK=off BRINGUP_WALL_CLEAN=1 DS41_ENGRAM_TABLE=resident
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py` (after the
+  BRINGUP_PROFILE_WALL=1 run).
