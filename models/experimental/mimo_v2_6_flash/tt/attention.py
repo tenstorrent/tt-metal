@@ -186,7 +186,7 @@ def page_table_width(blocks):
 
 
 class SwaDecodeQkv:
-    """SWA decode, users in rows 0-3 (or 0-7: 8 users): the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
+    """SWA decode, users in rows 0-3 (or 0-7: 8 users, 0-15: 16): the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
     the height-sharded layout paged SDPA decode reads ([1, 32, nh, D], one [32, D] shard per user) and the RoPE'd key
     and the value written into the users' positions of the BFP8 paged caches, in one launch in place of
     nlp_create_qkv_heads_decode, two rotary_embedding_llama and two paged_update_cache.
@@ -235,13 +235,19 @@ class SwaDecodeQkv:
         )
         grid = device.compute_with_storage_grid_size()
         row_q, row_kv = 3, 4
-        assert num_heads <= grid.x and users <= grid.x
+        assert num_heads <= grid.x
         self.q_cores = [ttnn.CoreCoord(h, row_q) for h in range(num_heads)]
-        self.k_cores = [ttnn.CoreCoord(u, row_kv) for u in range(users)]
-        if 2 * users <= grid.x:  # K and V cores on one row
-            self.v_cores = [ttnn.CoreCoord(users + u, row_kv) for u in range(users)]
-        else:
-            self.v_cores = [ttnn.CoreCoord(u, row_kv + 1) for u in range(users)]
+        if users <= grid.x:
+            self.k_cores = [ttnn.CoreCoord(u, row_kv) for u in range(users)]
+            if 2 * users <= grid.x:  # K and V cores on one row
+                self.v_cores = [ttnn.CoreCoord(users + u, row_kv) for u in range(users)]
+            else:
+                self.v_cores = [ttnn.CoreCoord(u, row_kv + 1) for u in range(users)]
+        else:  # more users than a row's cores (16): K cores on two rows, V cores on the next two
+            assert users % 2 == 0 and users // 2 <= grid.x and row_kv + 4 <= grid.y, (users, grid)
+            half = users // 2
+            self.k_cores = [ttnn.CoreCoord(u % half, row_kv + u // half) for u in range(users)]
+            self.v_cores = [ttnn.CoreCoord(u % half, row_kv + 2 + u // half) for u in range(users)]
         self.all_ranges = ttnn.CoreRangeSet(
             [ttnn.CoreRange(self.q_cores[0], self.q_cores[-1])]
             + [ttnn.CoreRange(c[0], c[-1]) for c in (self.k_cores, self.v_cores)]

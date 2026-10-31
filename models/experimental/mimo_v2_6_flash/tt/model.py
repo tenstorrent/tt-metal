@@ -667,9 +667,9 @@ class TtMiMoModel:
         self._setup_swa_qkv()
 
     def _uses_swa_qkv(self):
-        """Every SWA layer decodes through the shared SwaDecodeQkv: compact decode (the BFP4 streaming MoE, at most 8
+        """Every SWA layer decodes through the shared SwaDecodeQkv: compact decode (the BFP4 streaming MoE, at most 16
         users) and not turned off (MIMO_SWA_QKV=0 keeps the ttnn ops)."""
-        if os.environ.get("MIMO_SWA_QKV", "1") != "1" or self.decode_users > 8:
+        if os.environ.get("MIMO_SWA_QKV", "1") != "1" or self.decode_users > 16:
             return False
         return all(layer.can_fuse_norms() for layer in self.layers if layer.is_swa)
 
