@@ -4,6 +4,10 @@
 
 #include "llama.hpp"
 
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/safetensors.hpp"
 
@@ -94,6 +98,32 @@ static std::vector<float> unpermute_proj_rows(
 
 namespace ttml::models::llama {
 
+uint32_t compute_rope_cache_sequence_length(const uint32_t max_sequence_length, const uint32_t cp_size) {
+    if (cp_size == 0U) {
+        throw std::invalid_argument("Context-parallel size must be non-zero when planning the RoPE cache");
+    }
+
+    constexpr uint32_t max_decode_padding = ttnn::TILE_SIZE - 1U;
+    constexpr uint64_t max_uint32 = std::numeric_limits<uint32_t>::max();
+    const uint64_t guarded_length = static_cast<uint64_t>(max_sequence_length) + max_decode_padding;
+    if (guarded_length > max_uint32) {
+        throw std::overflow_error(fmt::format(
+            "Max sequence length {} is too large to reserve {} padded decode positions",
+            max_sequence_length,
+            max_decode_padding));
+    }
+
+    const uint64_t remainder = guarded_length % cp_size;
+    const uint64_t rounded_length = guarded_length + (remainder == 0U ? 0U : cp_size - remainder);
+    if (rounded_length > max_uint32) {
+        throw std::overflow_error(fmt::format(
+            "Guarded RoPE cache length {} cannot be rounded to context-parallel size {} without overflow",
+            guarded_length,
+            cp_size));
+    }
+    return static_cast<uint32_t>(rounded_length);
+}
+
 Llama::Llama(const LlamaConfig& config) : m_config(config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
@@ -155,8 +185,16 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
         fmt::print("        Low freq factor: {}\n", config.low_freq_factor);
     }
 
+    uint32_t cp_size = 1U;
+    if (autograd::ctx().is_parallelism_context_initialized()) {
+        const auto& pctx = autograd::ctx().get_parallelism_context();
+        if (pctx.is_cp_enabled()) {
+            cp_size = pctx.get_cp_size();
+        }
+    }
+
     m_rope_params = ops::build_rope_params(
-        /*sequence_length=*/max_sequence_length,
+        /*sequence_length=*/compute_rope_cache_sequence_length(max_sequence_length, cp_size),
         /*head_dim=*/embedding_dim / num_heads,
         /*theta=*/theta,
         /*rope_scaling_params=*/rope_scaling_params);
