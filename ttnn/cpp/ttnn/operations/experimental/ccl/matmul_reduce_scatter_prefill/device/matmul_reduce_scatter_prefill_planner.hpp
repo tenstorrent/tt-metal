@@ -113,6 +113,9 @@ struct PlanInputs {
     uint32_t tW = 0;
     int32_t scatter_dim = -2;  // canonical: -1 or -2
     uint64_t budget = 0;       // L1 bank size - the call's l1_headroom
+    // bytes per core of a caller-held staging larger than the plan without it needs (0: the op allocates the staging
+    // exactly): the footprint counts the staging at this size, and only plans whose staging fits in it qualify
+    uint64_t staging_floor = 0;
 };
 
 // Planner constants the factory needs too.

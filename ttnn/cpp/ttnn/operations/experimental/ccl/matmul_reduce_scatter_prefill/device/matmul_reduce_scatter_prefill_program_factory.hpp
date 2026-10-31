@@ -82,8 +82,7 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 //   - traces: the staging is freed during capture, so an L1 buffer allocated after capture can land on it and is
 //     overwritten by every replay (tt-metal's general rule: buffers allocated while a trace exists are unsafe unless
 //     released before it runs).
-// Persistent staging (per mesh, per size, or grow-only) avoids both but holds 170-362 KiB per core for the life of the
-// mesh.
+// A caller-held staging_tensor (see the entry) avoids both: allocated once, it costs nothing per call and stays put.
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles);
 // The spec allocate_staging gives a call's staging on a grid of grid_size cores.
 tt::tt_metal::TensorSpec staging_spec(const CoreCoord& grid_size, uint32_t staging_tiles);

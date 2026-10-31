@@ -28,6 +28,12 @@ namespace ttnn::experimental {
 //   output_tensor          preallocated output; must match the spec the op allocates, never an input
 //   l1_headroom            bytes of each core's L1 the plan leaves free for tensors the op does not own (the
 //                          planner does not see them); default 64 KiB
+//   staging_tensor         caller-held staging (matmul_reduce_scatter_prefill_staging): the op then allocates none per
+//                          call. Any size at least the call's need serves, so one sized for the largest shape serves
+//                          all; a larger one counts at its full size, so a smaller shape's plan leaves room for it (it
+//                          may pick smaller K blocks or more chunks). Other stagings the caller holds are L1 the op
+//                          does not see (l1_headroom). The caller keeps it alive while calls that use it run (a trace
+//                          replays into it).
 Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -38,6 +44,18 @@ Tensor matmul_reduce_scatter_prefill(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
+    const std::optional<uint32_t>& l1_headroom = std::nullopt,
+    const std::optional<Tensor>& staging_tensor = std::nullopt);
+
+// A staging tensor for calls with these arguments (L1, height-sharded bf16 tiles over the full grid, replicated on the
+// mesh), to pass as staging_tensor; the same arguments resolve the same plan as the op.
+Tensor matmul_reduce_scatter_prefill_staging(
+    const Tensor& input_tensor,
+    const Tensor& weight,
+    int32_t cluster_axis,
+    int32_t scatter_dim = -2,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    const std::optional<int32_t>& num_links = std::nullopt,
     const std::optional<uint32_t>& l1_headroom = std::nullopt);
 
 }  // namespace ttnn::experimental
