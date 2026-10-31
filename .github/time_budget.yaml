@@ -468,7 +468,7 @@ models:
     bh_quietbox_2: 310
     wh_llmbox: 370
     bh_loudbox: 320
-    bh_galaxy: 140 # Qwen3-32B 65 + MiMo-V2.6-Flash 75
+    bh_galaxy: 150 # Qwen3-32B 65 + MiMo-V2.6-Flash 85
     wh_n150: 65
 umd:
   unit:

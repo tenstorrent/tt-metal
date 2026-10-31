@@ -104,7 +104,7 @@ export TT_METAL_HOME=<tt-metal build> PYTHONPATH=<this tt-metal checkout> MESH_D
 cd <this tt-metal checkout>   # the model's kernel sources resolve against the working directory first
 vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.6-Flash-MOPD --trust-remote-code \
   --data-parallel-size 4 --max-num-seqs 4 --max-model-len 32768 --block-size 64 \
-  --enable-chunked-prefill --max-num-batched-tokens 2048 --enable-prefix-caching \
+  --enable-chunked-prefill --max-num-batched-tokens 2048 --enable-prefix-caching --prefix-cache-retention-interval 1024 \
   --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice \
   --additional-config '{"tt": {"trace_mode": "decode_only", "trace_region_size": 1000000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_gather_ms": 200, "prefill_gather_quiet_ms": 25}}'
 ```
@@ -116,6 +116,12 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
   replica (150 MB is enough with `MIMO_PREFILL_TRACE=0` and `MIMO_PREFILL_CHUNK_TRACE=0`). `sample_on_device_mode` and the prefill gather need plugin `mimo-v2.6-flash/c16-throughput`.
 
 - `--max-num-seqs` is per lane (16 users in total). `--block-size 64` is required.
+- `--prefix-cache-retention-interval 1024`: the SWA layers' prefix-cache checkpoints. vLLM 0.30's default (0) keeps
+  a SWA group's cached blocks only for the window at the end of each prompt (and at a prefix two requests were seen
+  to share), so a request that shares a long prefix with an earlier one but not its whole prompt (same document,
+  another question) hits nothing: the global group hits, the SWA groups miss, and the hit is the shortest of the
+  groups. 1024 keeps a window's blocks every 1024 tokens, so such a hit lands at most 1023 tokens short of the
+  shared prefix; a multiple of 128 is required (the scheduler block), and 128 caches every SWA block.
 - vLLM starts one API server per DP rank (4) by default; that needs plugin 11dc5a9 or later (before it, every
   extra API server rejected the plugin's structured-output setting and `--api-server-count 1` was required).
   Checked: 24 concurrent completions, a chat and 4 JSON-schema requests over the 4 API servers all succeed.
