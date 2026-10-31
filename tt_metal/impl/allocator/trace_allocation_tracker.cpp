@@ -27,17 +27,12 @@ thread_local std::vector<std::unordered_set<const AllocatorImpl*>> corruptible_a
 thread_local std::vector<std::string> allocation_context_stack;
 const std::string empty_context;
 
-// The device Buffers of a per-core MeshBuffer share an ID, one entry each, so erase only one entry per allocation.
-void erase_pending_traceback_id(size_t buffer_unique_id) {
-    if (const auto it = std::ranges::find(pending_traceback_ids, buffer_unique_id); it != pending_traceback_ids.end()) {
-        pending_traceback_ids.erase(it);
-    }
-}
+void erase_pending_traceback_id(size_t buffer_unique_id) { std::erase(pending_traceback_ids, buffer_unique_id); }
 
 void erase_pending_traceback_ids(const std::unordered_map<size_t, std::string>& allocations) {
-    for (const auto& allocation : allocations) {
-        erase_pending_traceback_id(allocation.first);
-    }
+    std::erase_if(pending_traceback_ids, [&allocations](size_t buffer_unique_id) {
+        return allocations.contains(buffer_unique_id);
+    });
 }
 
 struct TracebackAllocatorRegistry {
