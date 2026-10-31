@@ -2,11 +2,12 @@
 # Review probe (not for main): A/B of LLK test modules on this runner's card, every side on the same card.
 # env: ARCH, REPS, SIDES ("base head" or "base head main"), MODULES (JSON list of {"func": file, "perf": file}, "" when
 # absent), <SIDE>_SHA; checkouts in $GITHUB_WORKSPACE/<side>, results in $GITHUB_WORKSPACE/out.
-# Per module and side: the functional module once, then only its failing ids once more; then the perf module is built
-# and its reps run interleaved over the sides. out/summary.json (summary.py) lists every step's pytest summary line,
-# rc and failing ids. The job fails when any step does.
+# Per module and side: the functional module once, then once more only its failing ids (at most 50, 120 s per test),
+# or the whole module when pytest crashed (no junit xml); then the perf module is built and its reps run interleaved
+# over the sides. out/summary.json (summary.py) lists every step's pytest summary line, rc and failing ids.
+# The job fails when any step does.
 set -u
-WS=$GITHUB_WORKSPACE; P=$WS/probe/review-probe; OUT=$WS/out; mkdir -p "$OUT"
+WS=$GITHUB_WORKSPACE; P=$WS/probe/review-probe; OUT=$WS/out; rm -rf "$OUT"; mkdir -p "$OUT"
 export CHIP_ARCH=$ARCH TT_LLK_DISABLE_ASSERTS=1 PERF_KEEP_RUNS=0
 T() { date -u +%T; }
 FAIL=0
@@ -45,11 +46,11 @@ for pair in "${MODS[@]}"; do
             b=$OUT/m${i}_func_$side
             step "m$i func $side $FUNC"
             PROBE_HASH_OUT=$b.hash.tsv pyt "$side" "$b.log" -p probe_hash -q -rA --timeout=300 --junitxml="$b.xml" "$FUNC"
-            python3 "$P/summary.py" failed "$b.xml" "$FUNC" > "$b.failed.txt"
-            mapfile -t ids < "$b.failed.txt"
+            python3 "$P/summary.py" rerun "$b.log" "$b.xml" "$FUNC" > "$b.rerun.txt"
+            mapfile -t ids < "$b.rerun.txt"
             if [ "${#ids[@]}" -gt 0 ]; then
-                step "m$i func rerun $side ${#ids[@]} ids"
-                PROBE_HASH_OUT=$b.rerun.hash.tsv pyt "$side" "$b.rerun.log" -p probe_hash -q -rA --timeout=300 \
+                step "m$i func rerun $side ${#ids[@]} ids, first ${ids[0]}"
+                PROBE_HASH_OUT=$b.rerun.hash.tsv pyt "$side" "$b.rerun.log" -p probe_hash -q -rA --timeout=120 \
                     --junitxml="$b.rerun.xml" "${ids[@]}"
             fi
         done
