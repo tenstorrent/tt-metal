@@ -560,7 +560,8 @@ void AttachBorrowedDFBBuffers(
         // Attach-time legality checks (analogous to dynamic CB's
         // CircularBufferConfig::set_globally_allocated_address_and_total_size validations).
         //   - L1-residency: only L1 buffers may back a DFB.
-        //   - Sizing: the DFB's total bytes must fit in the buffer's per-bank allocation.
+        //   - Sizing: the DFB's total bytes, from its borrowed_offset, must fit in the buffer's per-bank allocation.
+        //   - Alignment: borrowed_offset is a multiple of the buffer's alignment.
         // ProgramSpec-time validation already enforced the TensorSpec-level analogs; these
         // refine the check now that a concrete Buffer is in hand.
         TT_FATAL(
@@ -570,19 +571,29 @@ void AttachBorrowedDFBBuffers(
             tp_name);
         auto dfb_impl = program_impl.get_dataflow_buffer(dfb_id);
         const uint32_t dfb_total_bytes = dfb_impl->config.entry_size * dfb_impl->config.num_entries;
+        const uint64_t offset = dfb_impl->borrowed_offset_;
         TT_FATAL(
-            dfb_total_bytes <= buffer->aligned_size_per_bank(),
-            "Borrowed-memory DFB id {} (from TensorParameter '{}') has total size {} B, which exceeds the borrowed "
-            "Buffer's per-bank size of {} B.",
+            offset % buffer->alignment() == 0,
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has borrowed_offset {} B, which is not a multiple "
+            "of the borrowed Buffer's alignment of {} B.",
             dfb_id,
             tp_name,
+            offset,
+            buffer->alignment());
+        TT_FATAL(
+            offset + dfb_total_bytes <= buffer->aligned_size_per_bank(),
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has borrowed_offset {} B + total size {} B, which "
+            "exceeds the borrowed Buffer's per-bank size of {} B.",
+            dfb_id,
+            tp_name,
+            offset,
             dfb_total_bytes,
             buffer->aligned_size_per_bank());
 
         // Attach the address to the device-side DFB. Per-enqueue update_program_dispatch_commands
         // re-serializes the DFB config from the cache this populates, so no further dispatch-command
         // invalidation is needed for either first-call or re-entry.
-        const auto address = buffer->address();
+        const auto address = buffer->address() + offset;
         TT_FATAL(
             address <= std::numeric_limits<uint32_t>::max(),
             "Borrowed Buffer base address {} for DFB id {} (TensorParameter '{}') exceeds uint32_t max.",

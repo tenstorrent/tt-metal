@@ -212,6 +212,24 @@ struct DFBAdvancedOptions {
     Group<DFBSpecName> alias_with;
 
     ////////////////////////////////////////////////////////////////////////////////
+    // Borrowed-memory offset
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Byte offset of a borrowed-memory DFB from the start of its backing tensor's allocation on each node.
+    // The DFB is placed at the tensor's address plus borrowed_offset, so several DFBs can share one tensor
+    // at caller-planned locations (the Metal 2.0 analog of CBDescriptor::address_offset).
+    //
+    // Requirements:
+    //  - Only valid with DataflowBufferSpec::borrowed_from.
+    //  - A multiple of the L1 alignment.
+    //  - borrowed_offset + entry_size * num_entries fits in the tensor's per-bank allocation.
+    //  - Aliased DFBs must use the same borrowed_offset.
+    //
+    // CAUTION: The runtime does not check for overlap between DFBs placed in the same tensor.
+    //          The caller must ensure that DFBs with overlapping bytes have non-overlapping active lifetimes.
+    uint32_t borrowed_offset = 0;
+
+    ////////////////////////////////////////////////////////////////////////////////
     // DFB multi-bindings
     ////////////////////////////////////////////////////////////////////////////////
 

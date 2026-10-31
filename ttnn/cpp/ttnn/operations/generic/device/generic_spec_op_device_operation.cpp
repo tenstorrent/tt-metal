@@ -116,6 +116,7 @@ std::size_t hash_program_spec(const ProgramSpec& spec) {
         if (dfb.borrowed_from.has_value()) {
             combine(**dfb.borrowed_from);
         }
+        combine(dfb.advanced_options.borrowed_offset);
     }
     for (const auto& semaphore : spec.semaphores) {
         combine(*semaphore.unique_id, ttsl::hash::hash_objects_with_default_seed(semaphore.target_nodes));

@@ -277,6 +277,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
             program_impl.register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
+            program_impl.get_dataflow_buffer(dfb_id)->borrowed_offset_ = dfb_spec.advanced_options.borrowed_offset;
         }
     }
     return DataflowBufferHandles{

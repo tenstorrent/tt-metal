@@ -537,8 +537,10 @@ ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::Progra
         const auto dfb = program.get_dataflow_buffer(*handle.borrowed_dfb_id);
         TT_FATAL(
             dfb != nullptr, "Borrowed-memory DFB {} bound as '{}' not found", *handle.borrowed_dfb_id, accessor_name);
+        // The cross-op comparison keys on the tensor's address, so undo the DFB's offset within the tensor.
         ResolvedBufRw::Access access{
-            .param_name = handle.borrowed_tensor_parameter_name, .address = dfb->borrowed_addr_};
+            .param_name = handle.borrowed_tensor_parameter_name,
+            .address = dfb->borrowed_addr_ - dfb->borrowed_offset_};
         if (handle.produces) {
             out.writes.push_back(access);
         }

@@ -303,6 +303,7 @@ from ttnn.types import (
     MeshProgramDescriptor,
     DataMovementHardwareConfig,
     ComputeHardwareConfig,
+    DFBAdvancedOptions,
     DataflowBufferSpec,
     TensorParameter,
     DFBEndpointType,

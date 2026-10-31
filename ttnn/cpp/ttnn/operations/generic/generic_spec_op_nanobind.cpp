@@ -221,6 +221,24 @@ void bind_hardware_configs(nb::module_& mod) {
 }
 
 void bind_resources(nb::module_& mod) {
+    nb::class_<exp::DFBAdvancedOptions>(mod, "DFBAdvancedOptions", R"doc(
+        Rarely used DataflowBufferSpec options. Python has borrowed_offset only; the others are C++ only.
+
+        Args:
+            borrowed_offset (int): Byte offset of a borrowed_from buffer within its tensor's shard on each core, so
+                several buffers can share one tensor. A multiple of the L1 alignment, and the buffer must fit in the
+                shard after it. Nothing checks that buffers in one tensor do not overlap. Defaults to 0.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::DFBAdvancedOptions* self, uint32_t borrowed_offset) {
+                new (self) exp::DFBAdvancedOptions{};
+                self->borrowed_offset = borrowed_offset;
+            },
+            nb::kw_only(),
+            nb::arg("borrowed_offset") = 0)
+        .def_rw("borrowed_offset", &exp::DFBAdvancedOptions::borrowed_offset);
+
     nb::class_<exp::DataflowBufferSpec>(mod, "DataflowBufferSpec", R"doc(
         A Metal 2.0 dataflow buffer (the successor of a circular buffer).
 
@@ -234,6 +252,8 @@ void bind_resources(nb::module_& mod) {
             borrowed_from (str, optional): unique_id of an L1-resident TensorParameter. The buffer then lives in that
                 tensor's shard instead of its own L1 allocation, so its data is already in place: the producer only
                 pushes entries, without copying them.
+            advanced_options (DFBAdvancedOptions, optional): e.g. borrowed_offset, to place a borrowed_from buffer
+                within its tensor.
     )doc")
         .def(
             "__init__",
@@ -243,7 +263,8 @@ void bind_resources(nb::module_& mod) {
                uint32_t num_entries,
                std::optional<tt::tt_metal::DataType> data_format,
                std::optional<tt::tt_metal::Tile> tile,
-               std::optional<std::string> borrowed_from) {
+               std::optional<std::string> borrowed_from,
+               const exp::DFBAdvancedOptions& advanced_options) {
                 new (self) exp::DataflowBufferSpec{
                     .unique_id = exp::DFBSpecName{unique_id},
                     .entry_size = entry_size,
@@ -255,6 +276,7 @@ void bind_resources(nb::module_& mod) {
                     .tile_format_metadata = tile,
                     .borrowed_from =
                         borrowed_from.has_value() ? std::optional(exp::TensorParamName{*borrowed_from}) : std::nullopt,
+                    .advanced_options = advanced_options,
                 };
             },
             nb::kw_only(),
@@ -263,10 +285,12 @@ void bind_resources(nb::module_& mod) {
             nb::arg("num_entries"),
             nb::arg("data_format") = nb::none(),
             nb::arg("tile") = nb::none(),
-            nb::arg("borrowed_from") = nb::none())
+            nb::arg("borrowed_from") = nb::none(),
+            nb::arg("advanced_options") = exp::DFBAdvancedOptions{})
         .def_prop_ro("unique_id", [](const exp::DataflowBufferSpec& self) { return *self.unique_id; })
         .def_rw("entry_size", &exp::DataflowBufferSpec::entry_size)
-        .def_rw("num_entries", &exp::DataflowBufferSpec::num_entries);
+        .def_rw("num_entries", &exp::DataflowBufferSpec::num_entries)
+        .def_rw("advanced_options", &exp::DataflowBufferSpec::advanced_options);
 
     nb::class_<exp::TensorParameter>(mod, "TensorParameter", R"doc(
         A tensor the program reads or writes, named so kernels can bind it with a TensorBinding.
