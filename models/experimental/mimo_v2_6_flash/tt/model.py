@@ -1972,6 +1972,11 @@ class TtMiMoModel:
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         host = self.prepare_decode_inputs_host(tokens, positions)
         self._advance_swa(positions)
+        if DEBUG_ROWS:
+            logger.info(
+                f"MIMO_DEBUG_ROWS decode_enqueue trace={self.decode_trace is not None} "
+                f"tokens {tokens[:16].tolist()} positions {positions[:16].tolist()}"
+            )
         if self.decode_trace is not None:
             for h, d in zip(host, self.decode_trace["inputs"]):
                 ttnn.copy_host_to_device_tensor(h, d)
