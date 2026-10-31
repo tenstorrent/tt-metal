@@ -132,6 +132,9 @@ class Qwen36Model:
         for i in tqdm(self.layer_indices, desc="Loading layers"):
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
+        # QWEN36_TP1_GDN: the TP=1 GDN layers decode with the fused recurrence (batch 1 = max_batch_size).
+        if any(getattr(layer, "_tp1_gdn", False) for layer in self.layers):
+            self.set_gdn_fused_decode(True)
 
         # Framework RMSNorm (add_unit_offset=True). Single device: is_distributed=None.
         # 27B TP: hidden is sharded -> pass is_distributed + tt_ccl or use DistributedNorm.
@@ -4208,35 +4211,26 @@ class Qwen36Model:
             rows = torch.nn.functional.pad(rows, (0, 0, 0, required_rows - rows.shape[0]))
         return rows[:required_rows].view(B, S, self.args.vocab_size)
 
+    @staticmethod
+    def _deltanet_state_tensors(dn):
+        # TPGatedDeltaNet (QWEN36_TP1_GDN) keeps an fp32 rec_state and one conv state per tap.
+        if hasattr(dn, "rec_state"):
+            return [dn.rec_state, *dn.conv_states]
+        return [dn.recurrent_state, dn.fused_conv_state]
+
     def _save_deltanet_states(self):
         """Snapshot GDN state to host (guard across decode-trace capture's double forward)."""
-        saved = []
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                saved.append(
-                    {
-                        "recurrent": ttnn.to_torch(dn.recurrent_state),
-                        "conv": ttnn.to_torch(dn.fused_conv_state),
-                    }
-                )
-        return saved
+        return [
+            [ttnn.to_torch(t) for t in self._deltanet_state_tensors(layer.attention)]
+            for layer in self.layers
+            if not layer.is_full_attention
+        ]
 
     def _restore_deltanet_states(self, saved_states, device):
         """Restore GDN state via ttnn.copy (preserves trace-baked buffer addresses)."""
-        idx = 0
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                saved = saved_states[idx]
-                restored = ttnn.from_torch(
-                    saved["recurrent"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                )
-                ttnn.copy(restored, dn.recurrent_state)
+        gdn_layers = [layer for layer in self.layers if not layer.is_full_attention]
+        for layer, saved in zip(gdn_layers, saved_states):
+            for t, host in zip(self._deltanet_state_tensors(layer.attention), saved):
+                restored = ttnn.from_torch(host, dtype=t.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+                ttnn.copy(restored, t)
                 ttnn.deallocate(restored)
-                restored_conv = ttnn.from_torch(
-                    saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                )
-                ttnn.copy(restored_conv, dn.fused_conv_state)
-                ttnn.deallocate(restored_conv)
-                idx += 1

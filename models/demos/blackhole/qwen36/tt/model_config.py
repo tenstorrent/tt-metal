@@ -345,6 +345,11 @@ class Qwen36ModelArgs(ModelArgs):
         if getattr(self, "_tp1_args", None) is None:
             tp1 = copy.copy(self)
             tp1._init_tp_config(mesh_device)
+            # The 2D prefill configs are tuned per chip at TP=4; at TP=1 the full width lands on 8 grid columns
+            # (per_core_N 65 tiles for the GDN in-projection), past L1. Let ttnn pick the prefill config.
+            tp1.prefill_progcfg = lambda seq_len, k, n: None
+            # Prefill activations kept in L1 up to 2048 rows at TP=4 are 4x larger here; see TPGatedDeltaNet.
+            tp1.prefill_l1_seq_scale = 4
             self._tp1_args = tp1
         return self._tp1_args
 

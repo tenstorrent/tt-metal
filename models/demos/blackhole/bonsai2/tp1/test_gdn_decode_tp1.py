@@ -83,11 +83,11 @@ def _traced_ms(mesh_device, step, x_tt):
     return statistics.median(times)
 
 
-def _build(mesh_device):
+def _build(mesh_device, max_seq_len=256):
     """Both GDN modules for the first linear-attention layer, on one chip."""
     os.environ.setdefault("HF_MODEL", model_path())
     torch.manual_seed(0)
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
     assert args.num_devices == 1, "run on a single chip (MESH_DEVICE=P150)"
     tp1 = args.tp1_args(mesh_device)
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")

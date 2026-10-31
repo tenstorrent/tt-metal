@@ -788,7 +788,8 @@ class TPGatedDeltaNet:
             self._ensure_zero_rec_f32()
 
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
+        # prefill_l1_seq_scale: per-chip activations are that many times the TP=4 ones (4 at TP=1).
+        _L1 = tpc.prefill_act_mem(T * getattr(self.args, "prefill_l1_seq_scale", 1), ttnn.L1_MEMORY_CONFIG)
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
