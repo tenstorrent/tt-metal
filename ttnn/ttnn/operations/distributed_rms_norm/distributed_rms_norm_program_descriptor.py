@@ -81,6 +81,16 @@ LANDING_L1_RESERVE = 64 * 1024
 # grows with T. Above this many bytes per port the call is refused (NotImplementedError) instead of letting the
 # allocator OOM; the landing L1 is reserved on every core's bank, so it also comes out of every compute core's budget.
 PORT_LANDING_MAX_BYTES = 512 * 1024
+# Bounded landing (Refinement 4, TRANSPORT): when the call's full landing (every wave) exceeds PORT_LANDING_MAX_BYTES,
+# the landing becomes a ring of this many wave slots reused across waves under a credit protocol (a receiver returns a
+# credit per consumed wave; a sender writes wave w only after the credit for w - K). Clamped up to max(2, waves per
+# block) (deadlock-free: a root's publish of wave w waits for its own collect of w - K, which a block's compute order
+# allows only for K >= waves per block; K >= 2 for the own-slot flush). Calls whose full landing fits keep the
+# credit-free layout (K = num_waves: the ring code is compiled out).
+LANDING_RING_WAVES = 4
+# The predicate: the credit-free layout is kept while the full landing fits this many bytes (tests lower it to force the
+# ring on small shapes).
+LANDING_FULL_MAX_BYTES = PORT_LANDING_MAX_BYTES
 
 # ---- Transport constants ----
 RECORD_BYTES = TILE_DIM * 4  # one fp32 word per row of a tile-row
@@ -662,6 +672,8 @@ def select_plan(input_tensor, gamma, fp32_acc, available, G, budget, out_native=
 # ---------------------------------------------------------------------------
 
 _SEM_CACHE = {}
+# Test / diagnostics hook: the last call's exchange layout (num_waves, landing_waves K, landing_words).
+LAST_EXCHANGE_LAYOUT = {}
 
 
 def _landing_words_bucket(words):
@@ -823,7 +835,11 @@ def create_mesh_program_descriptor(
         n_roots_l = [sum(1 for gi in range(n_roots) if gi % L == l) for l in range(L)]
         seg_l = [n * Rw * RECORD_BYTES for n in n_roots_l]
         seg_stride = _align_up(max(max(seg_l), 4), SEG_ALIGN)
-        return Rw, nwpb, num_waves, n_roots_l, seg_l, seg_stride, num_waves * G * seg_stride // 4
+        # Credit-free fast path whenever the whole call fits; otherwise the bounded ring of K wave slots.
+        K = num_waves
+        if landing_bytes_for(num_waves * G * seg_stride // 4) > LANDING_FULL_MAX_BYTES:
+            K = min(num_waves, max(LANDING_RING_WAVES, nwpb, 2))
+        return Rw, nwpb, num_waves, K, n_roots_l, seg_l, seg_stride, K * G * seg_stride // 4
 
     l1_tensors = (input_tensor, output_tensor, gamma)
     # Persistent semaphores first: their L1 words bound the CB region of this call too (l1_budget).
@@ -848,14 +864,14 @@ def create_mesh_program_descriptor(
                 raise
             raise NotImplementedError(
                 f"distributed_rms_norm: the local plan does not fit L1 next to a {reserve} B exchange landing "
-                "(long sequence; a landing reused across waves is a deferred regime)"
+                "(long sequence)"
             ) from exc
-        Rw, nwpb, num_waves, n_roots_l, seg_l, seg_stride, landing_words = exchange_layout(plan)
+        Rw, nwpb, num_waves, K, n_roots_l, seg_l, seg_stride, landing_words = exchange_layout(plan)
         need = landing_bytes_for(landing_words)
         if need > PORT_LANDING_MAX_BYTES:
             raise NotImplementedError(
-                f"distributed_rms_norm: the exchange landing needs {need} B per port core (> {PORT_LANDING_MAX_BYTES}); "
-                "a landing reused across waves (credit protocol) is a deferred regime"
+                f"distributed_rms_norm: the exchange landing needs {need} B per port core (> {PORT_LANDING_MAX_BYTES}) "
+                f"even as a ring of {K} wave slots"
             )
         if need <= reserve:
             break
@@ -865,6 +881,7 @@ def create_mesh_program_descriptor(
             "distributed_rms_norm: the local plan and the exchange landing do not fit L1 together"
         )
     g, R, x_depth = plan.geometry, plan.block_rows, plan.x_depth
+    LAST_EXCHANGE_LAYOUT.update(num_waves=num_waves, landing_waves=K, landing_words=landing_words)  # test hook
     roots = plan.roots
     root_link = {(w.core.x, w.core.y): (gi % L, gi // L) for gi, w in enumerate(roots)}
 
@@ -921,6 +938,7 @@ def create_mesh_program_descriptor(
         num_waves,
         int(fp32_acc),
         int(READ_WAVE_GATE),
+        K,
     ]
     reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     compute_ct = [
@@ -960,7 +978,7 @@ def create_mesh_program_descriptor(
         if gamma is not None
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
-    port_ct = [G, num_waves, payload, MAX_HEADERS, SEM_OWN_STATS, SEM_OWN_COUNTED, int(PORT_OWN_AHEAD)]
+    port_ct = [G, num_waves, payload, MAX_HEADERS, SEM_OWN_STATS, SEM_OWN_COUNTED, int(PORT_OWN_AHEAD), K]
 
     inv_w_bits = _fp32_bits(1.0 / (G * g.W))
     eps_bits = _fp32_bits(epsilon)
@@ -1003,6 +1021,7 @@ def create_mesh_program_descriptor(
             g.num_w_chunks,
             Rw,
             nwpb,
+            K,
             G,
             L,
             ring,
@@ -1074,6 +1093,9 @@ def create_mesh_program_descriptor(
                 len(ch["entries"][BWD]),
                 p,
             ]
+            # bounded landing: the ports that return the credits for this root's landed slots (opposite direction)
+            fp = [_pack(virt(ports[(_OPP[d], l)])) for d in (FWD, BWD) if ch["entries"][d]] if is_root else []
+            args += [len(fp)] + fp + [0] * (2 - len(fp))
             args += [_pack(virt(slot_port(q, l))) for q in range(G)]
             args += list(ch["entries"][FWD]) + list(ch["entries"][BWD])  # slot of entry i per direction
             runs = member_runs[(w.root.x, w.root.y)] if is_root else []
@@ -1146,6 +1168,17 @@ def create_mesh_program_descriptor(
                     1 if NOTIFY_PER_ENTRY else max(1, len(entries)),  # notify quantum (lamp L4)
                     SEM_LANDED[d],
                 ]
+                # Bounded landing (K < num_waves): this port returns the credits of the sibling port D (opposite
+                # direction, same link) whose entries come from the peer I fence; D reports its flushed relays here.
+                credit_waves = num_waves - K
+                sib = _OPP[d]
+                sib_items = ch["items"][sib]
+                sib_entries = ch["entries"][sib]
+                n_credit_out = credit_waves if (ready_out and credit_waves > 0) else 0
+                credit_thr = (len(link_roots) if sib_entries else 0) + (1 if len(sib_items) > 1 else 0)
+                relay_done_to = _pack(virt(ports[(sib, l)])) if (credit_waves > 0 and len(items) > 1) else 0
+                n_credit_in = credit_waves if (items and credit_waves > 0) else 0
+                args += [n_credit_out, credit_thr, relay_done_to, n_credit_in]
                 args += arrival_addrs[: len(entries)]
                 for dst in dests:
                     dn = _node(mesh, dst)

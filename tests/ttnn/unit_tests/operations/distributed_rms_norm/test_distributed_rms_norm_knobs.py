@@ -40,3 +40,49 @@ def test_knobs(mesh_shape, min_blocks, num_waves, shape, dtype, mesh_device, mon
     monkeypatch.setattr(pd, "NUM_WAVES", num_waves)
     run_case(mesh_device, shape, cluster_axis=LINEAR_AXES[0], dtype=dtype, gamma_dtype=dtype)
     run_case(mesh_device, shape, cluster_axis=LINEAR_AXES[0], dtype=dtype, has_gamma=False, seed=3)
+
+
+RING_MESHES, needs_ring = _acc.RING_MESHES, _acc.needs_ring
+
+
+@needs_group
+@pytest.mark.parametrize("ring_waves", [2, 3])
+@pytest.mark.parametrize(
+    "shape,dtype,min_blocks",
+    [
+        ((1, 1, 16384, 256), ttnn.bfloat16, 3),
+        ((1, 1, 16384, 512), ttnn.float32, 4),
+        ((4, 1, 4096, 1792), ttnn.bfloat16, 8),
+    ],
+    ids=["16384x256", "16384x512-fp32", "4x4096x1792"],
+)
+def test_bounded_landing(shape, dtype, min_blocks, ring_waves, mesh_device, monkeypatch):
+    """Refinement 4: force the bounded landing (credit protocol) on small shapes with many waves per call; run twice
+    back to back so a missed re-arm of the ready / credit counter shows up as a hang or stale rows on the repeat."""
+    monkeypatch.setattr(pd, "LANDING_FULL_MAX_BYTES", 0)
+    monkeypatch.setattr(pd, "LANDING_RING_WAVES", ring_waves)
+    monkeypatch.setattr(pd, "MIN_BLOCKS_PER_CORE", min_blocks)
+    for seed in (0, 1):
+        run_case(mesh_device, shape, cluster_axis=LINEAR_AXES[0], dtype=dtype, gamma_dtype=dtype, seed=seed)
+        lay = pd.LAST_EXCHANGE_LAYOUT
+        assert lay["landing_waves"] < lay["num_waves"], f"bounded landing not engaged: {lay}"
+
+
+@needs_ring
+@pytest.mark.parametrize("mesh_shape,cluster_axis", RING_MESHES or [(None, 1)])
+@pytest.mark.parametrize("num_links", [1, 2])
+def test_bounded_landing_ring(mesh_shape, cluster_axis, num_links, mesh_device, monkeypatch):
+    monkeypatch.setattr(pd, "LANDING_FULL_MAX_BYTES", 0)
+    monkeypatch.setattr(pd, "LANDING_RING_WAVES", 2)
+    monkeypatch.setattr(pd, "MIN_BLOCKS_PER_CORE", 8)
+    for seed in (0, 1):
+        run_case(
+            mesh_device,
+            (4, 1, 4096, 1792),
+            cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=num_links,
+            seed=seed,
+        )
+        lay = pd.LAST_EXCHANGE_LAYOUT
+        assert lay["landing_waves"] < lay["num_waves"], f"bounded landing not engaged: {lay}"

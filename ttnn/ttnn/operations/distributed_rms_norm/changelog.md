@@ -162,3 +162,37 @@
   error, so the zones nest in braces.
 - Tests added: `tests/ttnn/unit_tests/operations/distributed_rms_norm/perf_zones.py` (measurement only, not collected).
   Unit regression net: acceptance 111/111, debug 6/6 (incl. `test_repeat_rows`), knobs 12/12, precision 20 + 4 skipped.
+
+## Refinement 4 — Bounded exchange landing for long sequences (TRANSPORT scheme change)
+- Date: 2026-10-31
+- What was done (label **TRANSPORT**, a scheme change on the landing's flow control):
+  - **Predicate.** When the call's full landing (`num_waves·G·seg_stride`, bucketed) fits `LANDING_FULL_MAX_BYTES`
+    (= `PORT_LANDING_MAX_BYTES`, 512 KiB), the credit-free layout is kept: `K = num_waves`, and every ring branch is
+    `if constexpr`-compiled out. Otherwise the landing is a ring of `K = max(LANDING_RING_WAVES=4, nwpb, 2)` wave slots:
+    wave w lives in slot `w mod K`. New CT arg `landing_waves` for the reader and port; K is in the program hash.
+  - **Credits on the reverse ready path.** For port D (direction d, link l), port E = opp(d) on the same chip already
+    sends the upstream sender U its cross-call ready. E now also sends one credit per consumed wave, as the same
+    header-only atomic inc on U's ready counter. U sends wave w ≥ K only when `ready ≥ w+1−K` (after the fence's own
+    `−1`), and consumes exactly `num_waves−K` at the end. No new persistent resource. Every global semaphore is
+    re-armed to 0 (trace-safe), and the cross-call fence semantics are unchanged.
+  - **Wave-freed reports.** These go to E's program semaphore `SEM_PORT_FREED` (id 0, which is unused on port cores):
+    +1 per wave from each root of the link (after it collected the wave, or right away for a wave that is empty for
+    it), and +1 from D after its relays of that wave are flushed.
+  - **Own slot.** A root publishes wave w ≥ K only after it collected `w−K`. In ring mode the port flushes its sends
+    before each `SEM_OWN_COUNTED` release.
+  - Reused: the ready fence's packet and records (now the `send_ready` lambda), the ready global semaphore, the
+    program semaphore set, the slot layout. Added: 4 port RT args, 3 reader RT args, 2 CT args, the
+    `LANDING_RING_WAVES` / `LANDING_FULL_MAX_BYTES` knobs, and the `LAST_EXCHANGE_LAYOUT` test hook.
+- Accuracy achieved: golden tolerance (PCC ≥ 0.98, DeepSeek translated) on prefill 131072 (per chip 131072×1792
+  bf16, RM γ, interleaved, 1×4 Linear axis 1). Unit acceptance tolerance on the forced-ring cases: 16384×256 bf16,
+  16384×512 fp32, 4×4096×1792 bf16 (K = 2, 3), and Ring 4×4096×1792 at 1 and 2 links on both axes. Each case runs
+  twice back to back to catch re-arm bugs.
+- Golden test progress: `test_ds_distributed_norm[random_weights-prefill-131072]` now passes (it was
+  NotImplementedError). The other DeepSeek random-weights configs (decode WIDTH_SHARDED, 128, 1024, 8192, 32768) still
+  pass. Expected total: 11,029 supported_pass, 0 supported_fail. The real-weights cells skip because the HF
+  checkpoint is absent.
+- Perf (fast path, `perf_measure.py` 5 experiments, focus 640×1792): 20.49 / 21.81 → 20.44 / 21.79 µs
+  (fastest / slowest chip). `ccl_perf compare`: null, so unchanged.
+- Issues encountered: None. Unit regression: acceptance 111/111, debug 6/6.
+- Tests added: `test_distributed_rms_norm_knobs.py::test_bounded_landing` (6 cases) and `::test_bounded_landing_ring`
+  (4 cases). Both force the ring through `LANDING_FULL_MAX_BYTES = 0` and assert `K < num_waves`.

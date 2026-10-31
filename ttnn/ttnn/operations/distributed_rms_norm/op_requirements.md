@@ -178,7 +178,7 @@ writes are starved (about 6.5 µs against 0.3 µs at the west edge), so they set
 destination direction. A first dynamic-NoC attempt hung a Linear 32×1792 case and was reverted, so it was not pursued
 here. `PORT_OWN_AHEAD` is a live knob parked off (measured null).
 
-### [ ] Refinement 4 — Bounded exchange landing for long sequences (TRANSPORT scheme change)
+### [x] Refinement 4 — Bounded exchange landing for long sequences (TRANSPORT scheme change)
 
 **Goal**: move `test_translated.py::test_ds_distributed_norm[random_weights-prefill-131072-0.98]` (and any longer
 sequence) to passing. Today it raises a clean `NotImplementedError: the exchange landing needs 1048576 B per port core`.
@@ -200,6 +200,11 @@ semantics. Refinement 5 reworks the same landing protocol, so do this one first.
 **Done when**: the prefill-131072 cell passes (or is documented as exceeding another, named limit), the credit-free
 fast path is unchanged on every INPUTS shape (no perf regression on the focus case, measured with the harness), and
 the golden suite stays green.
+
+**Outcome**: landed. Bounded ring of `K = max(LANDING_RING_WAVES=4, nwpb, 2)` wave slots with per-wave credits on the
+reverse ready path, gated on the full landing exceeding `LANDING_FULL_MAX_BYTES` (512 KiB). prefill-131072 passes
+(prefill-32768 and the other DeepSeek configs still pass on the fast path). Focus case unchanged on the fast path:
+20.49 / 21.81 → 20.44 / 21.79 µs, `ccl_perf compare` null.
 
 ### [ ] Refinement 5 — TRANSPORT: the per-call ready fence and the link count on the focus case
 

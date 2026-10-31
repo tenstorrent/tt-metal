@@ -159,7 +159,7 @@ Definitions (host, once, all `ceil`, per image; per device):
 | `cb_dev_partial` | `partial_depth` | 2 waves (`2·Rw` pages) | compute packs wave w+1's device partial while the reader still publishes wave w |
 | `cb_stats_gather` | `stats_depth` | 1 wave (`G·Rw` pages) | — compute consumes a wave's slots immediately (it is the only thing finalize waits on) |
 | `cb_partial_col`, `cb_gather`, `cb_rms_root`, `cb_inv_rms`, `cb_sumsq_partial`, `cb_x_gamma` | base sizing (block-wide: R or G_w·R or R·C) | base | inherited: base combine slot safety (`changelog.md` Refinement 4) |
-| port landing (L1 tensor, not a CB) | `num_waves` | all waves of the call (every slot written once per call) | no credit protocol: a slot is never reused within a call (`blackhole-ccl-kernels.md` §7) |
+| port landing (L1 tensor, not a CB) | `K` wave slots: `K = num_waves` when the full landing fits `LANDING_FULL_MAX_BYTES` (fast path), else `K = max(LANDING_RING_WAVES, nwpb, 2)` (Refinement 4) | fast path: all waves of the call (every slot written once per call); bounded: wave w in wave slot `w mod K` | fast path: no credit protocol (`blackhole-ccl-kernels.md` §7). Bounded: per-wave credits (below, Refinement 4) |
 
 `stream_depth` is one host constant (2), as in the base.
 
@@ -171,7 +171,7 @@ Definitions (host, once, all `ceil`, per image; per device):
 | Fabric payload `ttnn.get_tt_fabric_max_payload_size_bytes()` (14 KiB + 64 B on the perf box) | slot bytes per (wave, link) `seg = n_roots_l · Rw · 128 B` | the port splits a slot into `ceil(seg / payload)` packets, the last fused with the arrival increment (`port.cpp` `send_item`) | — (handled) |
 | Packet header pool: ≤ 12 headers per RISC (`port.cpp` static_assert, `blackhole-ccl-kernels.md` §14) | distinct destinations per port | relay sends only to the one-hop neighbour: 1 header per port | pool exhaustion |
 | Program-local semaphores: ≤ 16 ids per core, and `setup_fabric_connection` takes the lowest free ids (`blackhole-ccl-kernels.md` §2) | semaphore inventory on port and root cores | ids fixed and declared **before** the connection setup: `SEM_GATHER`, `SEM_INV`, `SEM_OWN_STATS`, `SEM_LANDED_FWD`, `SEM_LANDED_BWD`, `SEM_OWN_COUNTED` (6) + 2 per connection on ports | program build fails ("Semaphore id N already in use") |
-| Port landing in L1: `num_waves · G · seg_stride` bytes per port core, `seg_stride = align_up(seg, 64)` | `T · G` (total records per port ≈ `T/L · G`) | refuse (NotImplementedError) when `num_waves · G · seg_stride > port L1 budget` (≈ 1.3 MB). With `T ≤ 128` (largest INPUTS) and `G ≤ 8` it is ≤ 128 KiB. | allocation failure |
+| Port landing in L1: `K · G · seg_stride` bytes per port core, `seg_stride = align_up(seg, 64)` | `T · G` on the fast path (`K = num_waves`); bounded by `K` wave slots otherwise (Refinement 4) | fast path while `num_waves · G · seg_stride` fits `LANDING_FULL_MAX_BYTES` (= `PORT_LANDING_MAX_BYTES`, 512 KiB); else the bounded ring of `K` wave slots with credits; refuse (NotImplementedError) only when even the ring exceeds `PORT_LANDING_MAX_BYTES` | allocation failure |
 | fp32 DEST: 4 tiles in half-sync (`dest_helpers.hpp:103` `DEST_AUTO_LIMIT`) | `finalize` holds 2 DEST tiles live (running sum D0 + incoming slot D1) | 2 ≤ 4: the sum is a left fold over slots, never all G in DEST at once | — |
 | Lossless fp32 copy into DEST needs `UnpackToDestMode::UnpackToDestFp32` on the source CB (`tilize_helpers.inl:103-113`, `reduce_helpers_compute.hpp:240`) | `cb_stats_gather` → DEST | the op sets `unpack_to_dest_mode[cb_stats_gather] = UnpackToDestFp32` when `fp32_dest_acc_en` | the partials are truncated to tf32 in SrcA (the "fp32 on the wire and when summing" contract is broken) |
 | Record wire unit = 32 fp32 = one tile-row's column 0 | rows per record | fixed: one 128 B record per tile-row | — |
@@ -533,3 +533,15 @@ Remaining bottleneck (the timeline after): the output writes. 2.3 MB of writes r
 west edge, about 6.5 µs at the east edge (x = 13..15). The far cores lose link arbitration on the way to the DRAM
 columns, and those cores set the op's end. Next levers: use both NoCs for the writes (by destination direction, with a
 working dynamic-NoC mode), or weight less output onto the far columns.
+
+### Bounded exchange landing (Refinement 4, TRANSPORT)
+
+| Item | Design |
+|------|--------|
+| Predicate | full landing `num_waves·G·seg_stride` (bucketed) ≤ `LANDING_FULL_MAX_BYTES` → credit-free layout, `K = num_waves` (every ring branch is `if constexpr`-compiled out of the reader and port). Else `K = min(num_waves, max(LANDING_RING_WAVES = 4, nwpb, 2))`. CT arg `landing_waves` (reader, port) and in the program hash. |
+| Slot address | `landing + ((w mod K)·G + q)·seg_stride + rec_off` |
+| Credit path | the reverse of the data, on the ready path: entries of port D (direction d, link l) of chip c come from the upstream port U; port E = opp(d) of the same link on chip c already sends U its cross-call ready, and now also one **credit per wave** (the same header-only atomic inc on U's ready counter). The ready counter doubles as the credit counter: after the fence's own `−1`, U sends wave w ≥ K only when `ready ≥ w + 1 − K`, and consumes exactly `num_waves − K` at the end (it waited for every one: the last wave needs the last). A next-call ready arriving early cannot release a slot early: it is sent only once the receiver has finished this call. Persistent semaphore set unchanged; every counter is back to 0 at the end (trace-safe). |
+| "Wave freed" reports | on E's `SEM_PORT_FREED` (program semaphore id 0 = `SEM_INV`, unused on port cores): +1 per wave from each root of link l (it read its runs of that wave from D, or the wave is empty for it), +1 from D once its relays of that wave are flushed (only if D relays). E sends credit v when the count reaches `(v+1)·(n_roots_l + [D relays])`, for v < `num_waves − K`. |
+| Own slot | written by the link's roots into every sending port, read by the port's own send and by the root's own collect. Root publish of wave w ≥ K waits for its own collect of `w − K`; the port flushes its sends before each `SEM_OWN_COUNTED` release, so the send of `w − K` (K ≥ 2) has left L1 before the roots may overwrite it. |
+| Deadlock freedom | every new wait depends only on strictly earlier waves. `K ≥ nwpb`: compute reduces a whole block before it finalizes it, so the publish of wave w (block b+1) can only be waiting on the collect of a wave of block ≤ b, which compute has already finalized. |
+| Measured | DeepSeek prefill 131072 (per chip 131072×1792, full landing 1 MiB) passes. Focus case on the fast path: 20.49 / 21.81 → 20.44 / 21.79 µs (`ccl_perf compare`: null, i.e. unchanged). |

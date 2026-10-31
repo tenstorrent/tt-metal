@@ -69,6 +69,8 @@ constexpr uint32_t SEM_LANDED_FWD = 2;
 constexpr uint32_t SEM_LANDED_BWD = 3;
 constexpr uint32_t SEM_OWN_COUNTED = 4;
 constexpr uint32_t SEM_GATHER_BASE = 5;
+// On a PORT core: the "wave freed" reports of the bounded landing (SEM_INV's id is unused on a port core).
+constexpr uint32_t SEM_PORT_FREED = 0;
 constexpr uint32_t MAX_WAVES_PER_BLOCK = 8;
 
 constexpr uint32_t TILE_DIM = 32;
@@ -226,7 +228,12 @@ void kernel_main() {
     // wave is reduced locally, so the grid's wave-0 reads get the DRAM first (the exchange starts after the slowest
     // root publishes wave 0) instead of competing with the fast cores' wave-1 reads.
     constexpr bool read_wave_gate = get_compile_time_arg_val(19) != 0;
-    constexpr auto input_args = TensorAccessorArgs<20>();
+    // Bounded landing (Refinement 4, host LANDING_RING_WAVES): K wave slots reused across waves (wave w in slot w mod
+    // K). A root publishes wave w only after it collected wave w - K, and reports every collected wave to the ports
+    // that return the credits (SEM_PORT_FREED). K == num_waves_total: the credit-free fast path (compiled out).
+    constexpr uint32_t landing_waves = get_compile_time_arg_val(20);
+    constexpr bool ring = landing_waves < num_waves_total;
+    constexpr auto input_args = TensorAccessorArgs<21>();
     static_assert(num_w_chunks * C == WS || sharded, "interleaved rows are pushed as whole Wp windows");
 
     uint32_t a = 0;
@@ -248,6 +255,9 @@ void kernel_main() {
     const uint32_t n_in_fwd = get_arg_val<uint32_t>(a++);
     const uint32_t n_in_bwd = get_arg_val<uint32_t>(a++);
     const uint32_t my_slot = get_arg_val<uint32_t>(a++);
+    const uint32_t n_free = get_arg_val<uint32_t>(a++);  // ports I report collected waves to (bounded landing)
+    const uint32_t free_port[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
+    a += 2;
     const uint32_t slot_port_idx = a;  // G packed port coords: where slot q lands on this chip
     a += G;
     const uint32_t entry_slot_idx = a;  // n_in_fwd + n_in_bwd slot ids: entry i of a direction (landing order)
@@ -444,6 +454,30 @@ void kernel_main() {
         return true;
     };
 
+    // Collect cursor state (declared here: the bounded-landing publish gate reads it).
+    uint32_t wc = 0;
+    bool wc_open = false;
+    auto slot_wave = [](uint32_t w) -> uint32_t { return ring ? w % landing_waves : w; };
+    // Waves of the call this root no longer reads from the landing (collected, or empty for it).
+    [[maybe_unused]] auto consumed_waves = [&]() -> uint32_t { return wc >= own_waves ? num_waves_total : wc; };
+    // Bounded landing: report newly consumed waves (only the num_waves_total - K that gate a credit).
+    [[maybe_unused]] uint32_t freed_sent = 0;
+    auto try_free = [&]() {
+        if constexpr (ring) {
+            constexpr uint32_t credit_waves = num_waves_total - landing_waves;
+            uint32_t f = consumed_waves();
+            f = f < credit_waves ? f : credit_waves;
+            if (f > freed_sent) {
+                for (uint32_t i = 0; i < n_free; ++i) {
+                    noc_semaphore_inc(
+                        get_noc_addr(unpack_x(free_port[i]), unpack_y(free_port[i]), get_semaphore(SEM_PORT_FREED)),
+                        f - freed_sent);
+                }
+                freed_sent = f;
+            }
+        }
+    };
+
     auto try_publish = [&]() -> bool {
         if (wp >= num_waves_total) {
             return false;
@@ -455,6 +489,13 @@ void kernel_main() {
         if (wp > 0 && sem_value(SEM_OWN_COUNTED) < n_send * wp) {
             return false;
         }
+        if constexpr (ring) {
+            // Own slot wp mod K still holds wave wp - K until this root collected it (its port's send of it has left
+            // L1 by the SEM_OWN_COUNTED release above: the port flushes before it releases).
+            if (n > 0 && wp >= landing_waves && consumed_waves() + landing_waves <= wp) {
+                return false;
+            }
+        }
         DRMS_ZONE("rt_publish");
         if (n > 0) {
             // column 0 of each device-partial tile -> 32 contiguous fp32 words (bf16: exact widening)
@@ -463,7 +504,7 @@ void kernel_main() {
             for (uint32_t t = 0; t < n; ++t) {
                 tile_col0_to_record<interm_fp32>(src + t * T_i, own_staging + t * RECORD_BYTES);
             }
-            const uint32_t dst = landing + (wp * G + my_slot) * seg_stride + rec_off;
+            const uint32_t dst = landing + (slot_wave(wp) * G + my_slot) * seg_stride + rec_off;
             for (uint32_t i = 0; i < n_send; ++i) {
                 noc_async_write(
                     own_staging, get_noc_addr(unpack_x(send_port[i]), unpack_y(send_port[i]), dst), n * RECORD_BYTES);
@@ -483,8 +524,6 @@ void kernel_main() {
     // the own slot is read at once, every peer slot as soon as its entry is counted on SEM_LANDED_<d> (the ports
     // notify per landed entry, in (wave, entry) order), so at the last landing one slot is left to read and scatter.
     // Entries of waves this root does not collect (empty waves) are never read: the cursors jump past them.
-    uint32_t wc = 0;
-    bool wc_open = false;
     uint32_t pending = 0;  // slots of wave wc not yet in cb_stats_gather (bit q)
     uint32_t seen[2] = {0, 0};
     const uint32_t n_in[2] = {n_in_fwd, n_in_bwd};
@@ -493,7 +532,7 @@ void kernel_main() {
         const uint32_t pp = get_arg_val<uint32_t>(slot_port_idx + q);
         const uint32_t rec = staging + q * Rw * RECORD_BYTES;
         noc_async_read(
-            get_noc_addr(unpack_x(pp), unpack_y(pp), landing + (wc * G + q) * seg_stride + rec_off),
+            get_noc_addr(unpack_x(pp), unpack_y(pp), landing + (slot_wave(wc) * G + q) * seg_stride + rec_off),
             rec,
             n * RECORD_BYTES);
         noc_async_read_barrier();
@@ -607,6 +646,7 @@ void kernel_main() {
                 try_distribute();
             }
             try_collect();
+            try_free();
             try_publish();
             if constexpr (combine) {
                 try_gather();
@@ -627,6 +667,9 @@ void kernel_main() {
         if (done) {
             break;
         }
+    }
+    if (is_root) {
+        try_free();  // every wave consumed: the remaining reports
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

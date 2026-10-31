@@ -18,6 +18,12 @@
 //                  landing slot, the last one fused with an increment of the destination entry's arrival counter
 //                  (header-only for an empty segment)
 //   drain          re-arm the counters by what was consumed (back to 0: trace-safe)
+// Bounded landing (Refinement 4, host LANDING_RING_WAVES; CT landing_waves K < num_waves): wave w lives in wave slot
+// w mod K. A port sends wave w >= K only once the destination returned the credit for wave w - K (cumulative on the
+// ready counter, after the fence's own decrement). The credits travel the ready path in reverse: port E (opposite
+// direction, same link) of the receiving chip sends one per wave once the link's roots collected that wave
+// (SEM_PORT_FREED += 1 each) and its sibling port D (where the entries land) flushed its relays of it (+= 1).
+// K == num_waves is the credit-free fast path (every ring branch is compiled out).
 // Raw fabric API: the measured transport this op cites is this raw sender (op_design.md -> Helpers considered and
 // rejected: the kernel_lib CCL helper is unmeasured and has no relay-with-arrival-counter item model).
 
@@ -69,6 +75,11 @@ void kernel_main() {
     constexpr uint32_t sem_counted_id = get_compile_time_arg_val(5);
     // Own segment of wave w+1 may go ahead of wave w's relays (true) or strictly (w, k) order (false).
     constexpr bool own_ahead = get_compile_time_arg_val(6) != 0;
+    constexpr uint32_t landing_waves = get_compile_time_arg_val(7);  // K wave slots in the landing
+    constexpr bool ring = landing_waves < num_waves;                 // bounded landing: credit protocol on
+    // SEM_INV's id: unused on a port core, it counts the "wave freed" reports of the link's roots and sibling port.
+    constexpr uint32_t sem_port_freed_id = 0;
+    auto slot_wave = [](uint32_t w) -> uint32_t { return ring ? w % landing_waves : w; };
     static_assert(num_headers >= 1 && num_headers <= 12, "packet header pool: <= 12 headers per RISC");
 
     size_t a = 0;
@@ -90,6 +101,11 @@ void kernel_main() {
     const uint32_t notify_quantum = get_arg_val<uint32_t>(a++);
     // My own landed semaphore on the roots (one per direction: each port's notifies are counted separately, in order).
     const uint32_t landed_sem_addr = get_semaphore(get_arg_val<uint32_t>(a++));
+    // Bounded landing (all 0 on the fast path):
+    const uint32_t n_credit_out = get_arg_val<uint32_t>(a++);   // credits I send to the upstream port (waves)
+    const uint32_t credit_thr = get_arg_val<uint32_t>(a++);     // freed reports per wave (roots + relaying sibling)
+    const uint32_t relay_done_to = get_arg_val<uint32_t>(a++);  // packed sibling port E I report flushed relays to
+    const uint32_t n_credit_in = get_arg_val<uint32_t>(a++);    // credits my destination returns (waves)
     const uint32_t arrival_idx = a;  // n_in arrival counter addresses (entry i)
     a += n_in;
     const uint32_t dest_idx = a;
@@ -185,14 +201,19 @@ void kernel_main() {
         };
         // Fence between calls: this program running here means everything earlier on this chip is done, including
         // the roots that read the previous call's landing; the ports writing into it may now.
-        for (uint32_t k = 0; k < n_ready_out; ++k) {
-            const uint32_t t = ready_idx + k * READY_WORDS;
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header(get_arg_val<uint32_t>(t));
-            hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-                get_noc_addr(get_arg_val<uint32_t>(t + 1), get_arg_val<uint32_t>(t + 2), ready_addr), 1, true});
-            conn.wait_for_empty_write_slot();
-            conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
-        }
+        // A ready (and, bounded landing, a credit) is one header-only atomic inc of the upstream port's ready counter.
+        auto send_ready = [&]() {
+            for (uint32_t k = 0; k < n_ready_out; ++k) {
+                const uint32_t t = ready_idx + k * READY_WORDS;
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header(get_arg_val<uint32_t>(t));
+                hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                    get_noc_addr(get_arg_val<uint32_t>(t + 1), get_arg_val<uint32_t>(t + 2), ready_addr), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+            }
+        };
+        send_ready();
         if (n_ready_wait > 0) {
             DeviceZoneScopedN("prt_ready_wait");
             noc_semaphore_wait_min(ready, n_ready_wait);
@@ -231,22 +252,45 @@ void kernel_main() {
         // destination entry has its own arrival counter, so the two streams are independent. own_ahead: the own segment
         // of wave w+1 need not queue behind wave w's relays (lower wave first when both are ready); otherwise the
         // strict (w, k) order of the relay transport (host knob PORT_OWN_AHEAD).
+        // Bounded landing: wave w may overwrite wave slot w mod K at the destination once its credit for w - K is back.
+        auto credit_ok = [&](uint32_t w) -> bool {
+            if constexpr (ring) {
+                return w < landing_waves || *ready >= w + 1 - landing_waves;
+            } else {
+                return true;
+            }
+        };
+        volatile tt_l1_ptr uint32_t* freed =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_port_freed_id));
+        uint32_t credits_sent = 0;
         const uint32_t send_waves = n_send > 0 ? num_waves : 0;
         const uint32_t relay_waves = n_send > 1 ? num_waves : 0;
         uint32_t ow = 0;          // own cursor: next wave of item 0
         uint32_t rw = 0, rk = 1;  // relay cursor: (wave, item)
         {
             DeviceZoneScopedN("prt_exchange");
-            while (ow < send_waves || rw < relay_waves || notified < notify_total) {
+            while (ow < send_waves || rw < relay_waves || notified < notify_total || credits_sent < n_credit_out) {
                 invalidate_l1_cache();
-                const bool own_ready =
-                    ow < send_waves && (own_ahead || relay_waves == 0 || ow <= rw) && *own_stats >= (ow + 1) * n_roots;
+                const bool own_ready = ow < send_waves && (own_ahead || relay_waves == 0 || ow <= rw) &&
+                                       *own_stats >= (ow + 1) * n_roots && credit_ok(ow);
                 bool relay_ready = false;
                 if (rw < relay_waves && (own_ahead || rw < ow)) {
                     const uint32_t wait = get_arg_val<uint32_t>(send_idx + rk * SEND_WORDS + 3);
-                    relay_ready = *arrived(wait - 1) >= rw + 1;
+                    relay_ready = *arrived(wait - 1) >= rw + 1 && credit_ok(rw);
+                }
+                if constexpr (ring) {
+                    // Credits for the upstream port: wave credits_sent is consumed here once every report is in.
+                    if (credits_sent < n_credit_out && *freed >= (credits_sent + 1) * credit_thr) {
+                        send_ready();
+                        ++credits_sent;
+                    }
                 }
                 if (own_ready && !(relay_ready && rw < ow)) {
+                    if constexpr (ring) {
+                        // The roots overwrite own slot (ow + 1) mod K after this release: wave ow + 1 - K's send
+                        // (issued before this point, K >= 2) must have left L1.
+                        noc_async_writes_flushed();
+                    }
                     if (ow + 1 < num_waves) {
                         // Wave ow counted: release the roots' wave-(ow+1) increments (SEM_OWN_COUNTED on the host).
                         for (uint32_t k = 0; k < n_counted; ++k) {
@@ -256,13 +300,23 @@ void kernel_main() {
                     }
                     const uint32_t q = get_arg_val<uint32_t>(send_idx);
                     DeviceZoneScopedN("prt_send");
-                    send_item(0, landing + (ow * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + ow));
+                    send_item(0, landing + (slot_wave(ow) * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + ow));
                     ++ow;
                 } else if (relay_ready) {
                     const uint32_t q = get_arg_val<uint32_t>(send_idx + rk * SEND_WORDS);
                     DeviceZoneScopedN("prt_send");
-                    send_item(rk, landing + (rw * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + rw));
+                    send_item(rk, landing + (slot_wave(rw) * G + q) * seg_stride, get_arg_val<uint32_t>(seg_idx + rw));
                     if (++rk == n_send) {
+                        if constexpr (ring) {
+                            // Relays of wave rw have left L1: report it to the sibling port that returns the credits.
+                            if (relay_done_to != 0) {
+                                noc_async_writes_flushed();
+                                noc_semaphore_inc(
+                                    get_noc_addr(
+                                        relay_done_to >> 16, relay_done_to & 0xFFFF, get_semaphore(sem_port_freed_id)),
+                                    1);
+                            }
+                        }
                         rk = 1;
                         ++rw;
                     }
@@ -274,6 +328,10 @@ void kernel_main() {
             DeviceZoneScopedN("prt_close");
             noc_async_writes_flushed();
             conn.close();
+        }
+        if (n_credit_in > 0) {
+            // Bounded landing: every credit was waited for (the last wave's send needed the last one); consume them.
+            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - n_credit_in);
         }
     } else {
         while (notified < notify_total) {
