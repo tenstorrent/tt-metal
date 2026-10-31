@@ -77,6 +77,15 @@ class Plotter:
         test_data = test_info.get("tests", {}).get(test_id, {})
         return test_data.get("bandwidth_unit", "bpc")
 
+    def is_excluded_from_plots(self, test_id):
+        """Returns True if the test is marked as excluded from plots in test_information.yaml.
+        Defaults to False if metadata_loader is not available or the field is missing."""
+        if self.metadata_loader is None:
+            return False
+        test_info = self.metadata_loader.load_test_information()
+        test_data = test_info.get("tests", {}).get(test_id, {})
+        return bool(test_data.get("exclude_from_plots", False))
+
     def plot_dm_stats(self):
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
@@ -86,6 +95,18 @@ class Plotter:
         for kernel in self.aggregate_stats.keys():
             for stats in self.aggregate_stats[kernel].values():
                 test_ids.add(stats["attributes"]["Test id"])
+
+        # Drop tests that are marked as excluded from plots in test_information.yaml
+        excluded_test_ids = {test_id for test_id in test_ids if self.is_excluded_from_plots(test_id)}
+        if excluded_test_ids:
+            for test_id in sorted(excluded_test_ids):
+                test_name = (
+                    self.test_id_to_name.get(test_id, f"Test ID {test_id}")
+                    if self.test_id_to_name
+                    else f"Test ID {test_id}"
+                )
+                logger.info(f"Excluding test id {test_id} ({test_name}) from plots.")
+            test_ids -= excluded_test_ids
 
         test_ids = sorted(test_ids)  # Sort for consistent ordering
 
