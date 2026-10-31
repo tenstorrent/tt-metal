@@ -37,9 +37,22 @@ void ValidateBorrowedMemory(
     uint32_t l1_alignment,
     const NumBanksFromBufferType& num_banks_from_buffer_type) {
     if (!dfb.borrowed_from.has_value()) {
+        TT_FATAL(
+            dfb.advanced_options.borrowed_offset == 0,
+            "DFB '{}' sets borrowed_offset = {} but does not set borrowed_from; borrowed_offset places a "
+            "borrowed-memory DFB within its backing tensor.",
+            dfb.unique_id,
+            dfb.advanced_options.borrowed_offset);
         return;
     }
     const TensorParamName& tp_name = *dfb.borrowed_from;
+    const uint32_t offset = dfb.advanced_options.borrowed_offset;
+    TT_FATAL(
+        offset % l1_alignment == 0,
+        "DFB '{}' has borrowed_offset = {}, which is not a multiple of the L1 alignment ({} bytes).",
+        dfb.unique_id,
+        offset,
+        l1_alignment);
     auto it = collected.tensor_parameter_by_name.find(tp_name);
     TT_FATAL(
         it != collected.tensor_parameter_by_name.end(),
@@ -78,13 +91,14 @@ void ValidateBorrowedMemory(
     const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
     const size_t tensor_bytes = tensor_spec.compute_consumed_memory_bytes_per_bank(l1_alignment, num_banks);
     TT_FATAL(
-        dfb_bytes <= tensor_bytes,
-        "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than the per-bank allocation of its "
-        "borrowed TensorParameter '{}' ({} bytes).",
+        offset + dfb_bytes <= tensor_bytes,
+        "DFB '{}' (borrowed_offset {} + entry_size {} * num_entries {} = {} bytes) does not fit in the per-bank "
+        "allocation of its borrowed TensorParameter '{}' ({} bytes).",
         dfb.unique_id,
+        offset,
         dfb.entry_size,
         dfb.num_entries,
-        dfb_bytes,
+        offset + dfb_bytes,
         tp_name,
         tensor_bytes);
 }
@@ -748,6 +762,15 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 "of an alias group borrows, or all members borrow from the same TensorParameter.",
                 dfb.unique_id,
                 alias_name);
+            // Aliases take the primary's address, so they must also agree on where in the tensor it is.
+            TT_FATAL(
+                dfb.advanced_options.borrowed_offset == alias_spec->advanced_options.borrowed_offset,
+                "Aliased DFBs '{}' and '{}' have different borrowed_offset ({} vs {}). Aliased DFBs share one "
+                "address, so they must use the same borrowed_offset.",
+                dfb.unique_id,
+                alias_name,
+                dfb.advanced_options.borrowed_offset,
+                alias_spec->advanced_options.borrowed_offset);
         }
     }
 }

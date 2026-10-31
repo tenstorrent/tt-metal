@@ -98,6 +98,8 @@ struct DataflowBufferImpl {
 
     // Set by set_borrowed_memory_base_addr()
     uint32_t borrowed_addr_ = 0;
+    // Byte offset of a borrowed-memory DFB within its backing buffer (DFBAdvancedOptions::borrowed_offset).
+    uint32_t borrowed_offset_ = 0;
 
     // Bumped whenever a size or address that the serialized config depends on changes, so cached
     // dispatch commands re-serialize only DFBs that changed.

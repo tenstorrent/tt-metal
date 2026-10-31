@@ -132,6 +132,7 @@ MeshProgramDescriptor = ttnn._ttnn.program_descriptor.MeshProgramDescriptor
 # Metal 2.0 ProgramSpec types, for ttnn.generic_op(io_tensors, program_spec, run_args)
 DataMovementHardwareConfig = ttnn._ttnn.operations.generic.DataMovementHardwareConfig
 ComputeHardwareConfig = ttnn._ttnn.operations.generic.ComputeHardwareConfig
+DFBAdvancedOptions = ttnn._ttnn.operations.generic.DFBAdvancedOptions
 DataflowBufferSpec = ttnn._ttnn.operations.generic.DataflowBufferSpec
 TensorParameter = ttnn._ttnn.operations.generic.TensorParameter
 DFBEndpointType = ttnn._ttnn.operations.generic.DFBEndpointType
