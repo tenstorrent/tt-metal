@@ -150,6 +150,90 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
     y1 = sfpi::copysgn(sfpi::min(r1, 1.0f), x1);
 }
 
+#ifndef DISABLE_SFPLOADMACRO
+template <int P, int N>
+sfpi_inline void _tanh_bf16_lm_pairs_() {
+    if constexpr (P < N) {
+        TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4 * P);
+        TTI_SFPLOADMACRO((0 << 2) | 1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4 * P + 2);
+        if constexpr (P == 0) {
+            TTI_REPLAY(0, 14, 1, 1);
+            TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG4, 0);
+            TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, 0);
+            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 0);
+            TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG4, 0);
+            TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG5, 0);
+            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG4, 0);
+            TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG5, 0);
+            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG4, 0);
+            TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG5, 0);
+            TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+            TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
+            TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG4, 1);
+            TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG5, 1);
+        } else {
+            TTI_REPLAY(0, 14, 0, 0);
+        }
+        TTI_SFPLOADMACRO((1 << 2) | 0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4 * P);
+        TTI_SFPLOADMACRO((2 << 2) | 1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4 * P + 2);
+        _tanh_bf16_lm_pairs_<P + 1, N>();
+    }
+}
+#endif
+
+sfpi_inline void _tanh_fp32_row_head_() {
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+    TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+    TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG2, 0);
+    TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x394F);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATA, 0x15B5);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATA, 0x2044);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_USHORT, 0xAACF);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, 0x3D2A);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
+}
+
+sfpi_inline void _tanh_fp32_row_tail_() {
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x3F00);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+    TTI_SFPIADD(0x07E, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_neg1, p_sfpu::LREG5, p_sfpu::LREG6, 0);
+    TTI_SFPIADD(0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG6, 0);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0xFEF3);
+    TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG5, 2);
+    TTI_SFPIADD(
+        0x000, p_sfpu::LREG2, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
+    TTI_SFPIADD(0xFC3, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG5, 0);
+    TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG7, 1);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPIADD(0xF8D, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG1, 0);
+    TTI_SFPENCC(3, 0, 0, 10);
+    TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
@@ -178,13 +262,16 @@ inline void calculate_tanh() {
         l_reg[sfpi::LRegs::LReg5] = i23;
         l_reg[sfpi::LRegs::LReg6] = i45;
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = _sfpu_tanh_fp32_accurate_(val);
-            sfpi::dst_reg[0] = result;
-            sfpi::dst_reg++;
+        TTI_REPLAY(0, 16, 1, 1);
+        _tanh_fp32_row_head_();
+        _tanh_fp32_row_tail_();
+#pragma GCC unroll 2
+        for (int d = 1; d < ITERATIONS; d++) {
+            TTI_REPLAY(0, 16, 0, 0);
+            _tanh_fp32_row_tail_();
         }
     } else {
+#ifdef DISABLE_SFPLOADMACRO
         sfpi::vFloat c1 = TANH_POLY_C1;  // inline it and every datum pays an SFPLOADI pair
 
         // Walk dst_reg rather than index by d: a uniform body is what the replay buffer records
@@ -202,6 +289,20 @@ inline void calculate_tanh() {
             sfpi::dst_reg += 2;
         }
 
+#else
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x66DB);
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0xBEFA);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x1CA0);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, 0x3CFD);
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_USHORT, 0xBEC0);
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3F7F);
+        static_assert(ITERATIONS % 2 == 0, "tanh: ITERATIONS must be even");
+        _tanh_bf16_lm_pairs_<0, ITERATIONS / 2>();
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+#endif
+
         if constexpr (ITERATIONS % 2 != 0) {
             sfpi::vFloat result = _sfpu_tanh_polynomial_(sfpi::dst_reg[0]);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -212,7 +313,7 @@ inline void calculate_tanh() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool full_init = true>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
@@ -260,6 +361,24 @@ inline void tanh_init() {
             sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
             sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
             sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
+#ifndef DISABLE_SFPLOADMACRO
+            if constexpr (full_init) {
+                TTI_SFPABS(0, 0, 12, 1);
+                TTI_SFPSETSGN(0, p_sfpu::LREG4, 13, 0);
+                TTI_SFPSETSGN(0, p_sfpu::LREG5, 14, 0);
+                TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, 0, 15, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+                TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x00 | (0 << 3) | 4);
+                TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+                TTI_SFPCONFIG(0, 4 + 0, 0);
+                TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x80 | (0 << 3) | 5);
+                TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, ((0x40 | (2 << 3) | 3) << 8) | (0x40 | (1 << 3) | 7));
+                TTI_SFPCONFIG(0, 4 + 1, 0);
+                TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x80 | (0 << 3) | 6);
+                TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, ((0x40 | (2 << 3) | 3) << 8) | (0x40 | (1 << 3) | 7));
+                TTI_SFPCONFIG(0, 4 + 2, 0);
+                TTI_SFPCONFIG(0, 8, 1);
+            }
+#endif
         }
     }
 }
