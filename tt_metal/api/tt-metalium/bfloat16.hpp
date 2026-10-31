@@ -91,8 +91,12 @@ std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
     const std::vector<std::uint32_t>& data,
     const std::function<bfloat16(const bfloat16&)>& transform = bfloat16_identity_transform);
 
-// Equality functions
+// Equal leading significant digits. This is deprecated and will be removed; replace with is_within_n_sig_figs.
+[[deprecated("This is deprecated and will be removed; replace with is_within_n_sig_figs.")]]
 bool equal_within_n_sig_figs(float a, float b, int n);
+
+// |a - b| within half a unit in the nth significant digit of the larger magnitude.
+bool is_within_n_sig_figs(float a, float b, int n);
 
 // this follows the implementation of numpy's is_close
 bool is_close(float a, float b, float rtol = 0.01f, float atol = 0.001f);
