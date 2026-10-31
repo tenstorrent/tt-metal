@@ -47,6 +47,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_control_plane_link_health.cpp
     fabric_router/test_fsd_host_filter.cpp
     fabric_router/test_physical_node_id.cpp
+    fabric_router/test_fabric_node_id.cpp
     fabric_router/test_physical_system_descriptor_diff.cpp
     fabric_router/test_link_health.cpp
 )

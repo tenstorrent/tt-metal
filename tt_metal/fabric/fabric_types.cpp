@@ -45,7 +45,7 @@ bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs) {
 
 bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs) { return rhs < lhs; }
 
-bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(rhs > lhs); }
+bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(rhs < lhs); }
 
 bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs < rhs); }
 
