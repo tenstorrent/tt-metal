@@ -103,9 +103,9 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         }}},
     });
 
-    // To read from output tensor
+    // To read from output tensor: two sets of tiles, so the next chunk is read while the current one is computed
     desc.cbs.push_back(CBDescriptor{
-        .total_size = max_tiles_per_core * output_single_tile_size,
+        .total_size = 2 * max_tiles_per_core * output_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
@@ -136,9 +136,9 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         }}},
     });  // grad_cb_data_format doesn't matter here
 
-    // For tiles to be written to the output
+    // For tiles to be written to the output: two sets, so compute can start the next chunk while one is written back
     desc.cbs.push_back(CBDescriptor{
-        .total_size = max_tiles_per_core * output_single_tile_size,
+        .total_size = 2 * max_tiles_per_core * output_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
@@ -159,8 +159,7 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         (uint32_t)seq_len_tiles,
         (uint32_t)num_embeddings_tiles,
         (uint32_t)index_page_size,
-        (uint32_t)(tensor_args.index_tensor.dtype() == DataType::BFLOAT16),
-        (uint32_t)(tensor_return_value.dtype() == DataType::BFLOAT16)};
+        (uint32_t)(tensor_args.index_tensor.dtype() == DataType::BFLOAT16)};
     TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*index_tensor_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*out_buffer).append_to(reader_compile_time_args);
@@ -178,8 +177,22 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/compute/embedding_backward.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
+    // A FLOAT32 output is accumulated in 32-bit DEST. The partial output tile is unpacked straight to DEST so it is
+    // not rounded to TF32 on its way through SrcA. A bfloat16 or bfloat8_b gradient is exact in TF32, so it goes
+    // through SrcA into the FP32 DEST without a separate cast pass; only a FLOAT32 gradient needs the direct unpack.
+    const bool fp32_accumulate = tensor_return_value.dtype() == DataType::FLOAT32;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_accumulate) {
+        if (tensor_args.grad_tensor.dtype() == DataType::FLOAT32) {
+            unpack_to_dest_mode[CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        }
+        unpack_to_dest_mode[CBIndex::c_2] = UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_desc.compile_time_args = {max_tiles_per_core, input_height_tiles};
-    compute_desc.config = ComputeConfigDescriptor{};
+    compute_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = fp32_accumulate,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Run-time arguments

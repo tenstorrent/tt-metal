@@ -588,6 +588,24 @@ std::vector<bfloat16> reshuffle_rows_golden(const std::vector<bfloat16>& in, con
     return out;
 }
 
+// Same scatter-add in float. The inputs are multiples of 2^-20 below 8, so every partial sum is exact in float and
+// the golden is bit-exact; a Dest that rounds the running sum to 16 bits cannot match it.
+std::vector<float> reshuffle_rows_golden_fp32(const std::vector<float>& in, const std::vector<float>& acc) {
+    const auto mask = reshuffle_rows_mask();
+    std::vector<float> out = acc;
+    for (size_t base = 0; base < in.size(); base += 1024) {
+        for (size_t r = 0; r < 32; ++r) {
+            if (mask[r] >= 32) {
+                continue;
+            }
+            for (size_t c = 0; c < 32; ++c) {
+                out[base + tile_order_index(mask[r], c)] += in[base + tile_order_index(r, c)];
+            }
+        }
+    }
+    return out;
+}
+
 // Ops that move values across the tile, so their golden works on whole tiles.
 bool is_tile_layout_sfpu_op(const std::string& op_name) {
     return op_name == "tiled_prod" || op_name == "tiled_prod_next_tile" || op_name == "alt_complex_rotate90";
@@ -1496,6 +1514,22 @@ static vector<uint32_t> generate_div_operand(const unsigned int numel, const int
         v = bfloat16(sign * magnitude);
     }
     return pack_vector<uint32_t, bfloat16>(unpacked);
+}
+
+// Float32 stimuli for reshuffle_rows: every value is a multiple of 2^-20 with random low mantissa bits, so the low
+// 16 bits of the 24-bit mantissa carry information in the accumulator (1 <= acc < 2) and in the rows added to it.
+std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_reshuffle_rows_fp32_inputs(
+    const unsigned int numel, const int seed) {
+    const auto multiples_of_2_pow_neg_20 = [&](float lo, float hi, int s) {
+        std::mt19937 gen(s);
+        std::uniform_int_distribution<int> dist(static_cast<int>(lo * (1 << 20)), static_cast<int>(hi * (1 << 20)) - 1);
+        vector<uint32_t> words(numel);
+        for (auto& w : words) {
+            w = std::bit_cast<uint32_t>(static_cast<float>(dist(gen)) / static_cast<float>(1 << 20));
+        }
+        return words;
+    };
+    return {multiples_of_2_pow_neg_20(0.0f, 2.0f, seed), multiples_of_2_pow_neg_20(1.0f, 2.0f, seed + 1)};
 }
 
 // Per-operand stimuli for binary SFPU ops. LHS and RHS use independent seeds so
@@ -2614,13 +2648,30 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         &mesh_device);
 
     const bool is_int8_op = sfpu_util::is_int8_binary_sfpu_op(test_config.sfpu_op);
-    const size_t element_size = is_int8_op ? sizeof(int8_t) : sizeof(bfloat16);
+    // Float32 reshuffle_rows: the tiles stay 32-bit through unpack-to-dest, Dest and pack.
+    const bool is_fp32_reshuffle =
+        test_config.sfpu_op == "reshuffle_rows" && test_config.l1_input_data_format == tt::DataFormat::Float32;
+    const size_t element_size = is_int8_op ? sizeof(int8_t) : (is_fp32_reshuffle ? sizeof(float) : sizeof(bfloat16));
     const uint32_t numel = per_buffer_byte_size_input / element_size;
     const int seed = sfpu_test_seed;
-    auto [packed_lhs, packed_rhs] = sfpu_util::generate_packed_sfpu_binary_inputs(numel, test_config.sfpu_op, seed);
+    auto [packed_lhs, packed_rhs] =
+        is_fp32_reshuffle ? sfpu_util::generate_packed_reshuffle_rows_fp32_inputs(numel, seed)
+                          : sfpu_util::generate_packed_sfpu_binary_inputs(numel, test_config.sfpu_op, seed);
 
     std::vector<uint32_t> packed_golden;
-    if (is_int8_op) {
+    if (is_fp32_reshuffle) {
+        std::vector<float> lhs(numel);
+        std::vector<float> rhs(numel);
+        for (size_t i = 0; i < numel; ++i) {
+            lhs[i] = std::bit_cast<float>(packed_lhs[i]);
+            rhs[i] = std::bit_cast<float>(packed_rhs[i]);
+        }
+        const auto golden = sfpu_util::reshuffle_rows_golden_fp32(lhs, rhs);
+        packed_golden.resize(numel);
+        for (size_t i = 0; i < numel; ++i) {
+            packed_golden[i] = std::bit_cast<uint32_t>(golden[i]);
+        }
+    } else if (is_int8_op) {
         packed_golden = sfpu_util::compute_packed_int8_binary_golden(packed_lhs, packed_rhs, test_config.sfpu_op);
     } else {
         auto lhs = unpack_vector<bfloat16, uint32_t>(packed_lhs);
@@ -2697,6 +2748,34 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
     const experimental::KernelSpecName WRITER{"writer"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
+    // Quasar uses the 2xx config; Wormhole and Blackhole need a processor and NOC per data-movement kernel.
+    experimental::DataMovementHardwareConfig binary_reader_hw_config;
+    experimental::DataMovementHardwareConfig binary_writer_hw_config;
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        binary_reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
+        binary_writer_hw_config = binary_reader_hw_config;
+    } else {
+        binary_reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
+        binary_writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
+    }
+
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
@@ -2716,21 +2795,21 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .config_2xx =
-                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
-                        .disable_dfb_implicit_sync_for_all = true,
-                    },
-            },
+        .hw_config = binary_reader_hw_config,
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
+    experimental::ComputeHardwareConfig::ComputeUnpackModes binary_unpack_modes{};
+    if (is_fp32_reshuffle) {
+        binary_unpack_modes = {
+            {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToDest}, {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
     compute_hw_config = experimental::ComputeHardwareConfig{
         .sfpu_precision_mode =
             test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-        .enable_32_bit_dest =
-            is_int8_op || test_config.sfpu_op == "add_top_row" || sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op),
+        .enable_32_bit_dest = is_int8_op || is_fp32_reshuffle || test_config.sfpu_op == "add_top_row" ||
+                              sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op),
+        .unpack_modes = binary_unpack_modes,
     };
 
     experimental::KernelSpec compute_spec{
@@ -2762,9 +2841,12 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         .hw_config = compute_hw_config,
     };
 
+    experimental::KernelSpec binary_writer_spec = make_writer_unary_quasar_spec(WRITER, OUT_DFB);
+    binary_writer_spec.hw_config = binary_writer_hw_config;
+
     experimental::ProgramSpec spec{
         .name = "sfpu_binary_compute",
-        .kernels = {reader_spec, make_writer_unary_quasar_spec(WRITER, OUT_DFB), compute_spec},
+        .kernels = {reader_spec, binary_writer_spec, compute_spec},
         .dataflow_buffers =
             {make_dfb_spec(IN0_DFB, test_config, test_config.l1_input_data_format),
              make_dfb_spec(IN1_DFB, test_config, test_config.l1_input_data_format),
@@ -2801,6 +2883,10 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         params,
         {{input0_dram_buffer, &packed_lhs}, {input1_dram_buffer, &packed_rhs}},
         output_dram_buffer);
+    if (is_fp32_reshuffle) {
+        // Bit-exact: a 16-bit load/store of the running sum drops the low mantissa bits and cannot match.
+        return dest == packed_golden;
+    }
     return sfpu_util::is_close_packed_sfpu_output(dest, packed_golden, test_config.sfpu_op);
 }
 
@@ -3974,6 +4060,41 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
+
+// reshuffle_rows accumulates into a 32-bit Dest: the rows must be loaded and stored as FP32 (the kernel selects that
+// from DST_ACCUM_MODE), otherwise every store rounds the running sum to 16 bits. Runs on WH/BH, whose kernels this
+// covers; the bf16 cases above run on Quasar.
+class SingleCoreSingleMeshDeviceSfpuReshuffleRowsFp32Fixture : public LLKMeshDeviceFixture,
+                                                               public testing::WithParamInterface<size_t> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuReshuffleRowsFp32Fixture, TensixReshuffleRowsFp32) {
+    if (arch_ != tt::ARCH::WORMHOLE_B0 && arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Float32 reshuffle_rows covers the Wormhole and Blackhole kernels";
+    }
+    const size_t num_tiles = GetParam();
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 4 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float32,
+        .l1_output_data_format = tt::DataFormat::Float32,
+        .cores = core_range_set,
+        .sfpu_op = "reshuffle_rows",
+        .approx_mode = false,
+        .unpack_to_dest = true,
+        .en_32bit_dest = true};
+    log_info(tt::LogTest, "Testing Float32 reshuffle_rows num_tiles={}", num_tiles);
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(*device, test_config));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuReshuffleRowsFp32,
+    SingleCoreSingleMeshDeviceSfpuReshuffleRowsFp32Fixture,
+    ::testing::Values(1, 2),
+    [](const testing::TestParamInfo<size_t>& info) { return std::to_string(info.param) + "tiles"; });
 
 class SingleCoreSingleMeshDeviceSfpuTernaryParameterizedFixture
     : public LLKMeshDeviceFixture,

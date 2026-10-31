@@ -173,7 +173,53 @@ def test_embedding_bw_with_program_cache(
         logger.debug(comp_out)
         assert comp_pass
 
-    assert device.cache_entries_counter.total == 1
+    # One program each for the FLOAT32 accumulation and the typecast back to the output dtype; the second iteration
+    # must reuse both.
+    assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize(
+    "seq_len, embedding_dim, num_embeddings, hot_tokens",
+    [
+        # Most tokens hit index 0, as in a padded sequence.
+        (160, 2048, 128, 152),
+        # A small vocabulary: every row is hit about 60 times.
+        (2048, 256, 35, 0),
+    ],
+)
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+def test_embedding_bw_repeated_indices(seq_len, embedding_dim, num_embeddings, hot_tokens, output_dtype, device):
+    """A row hit by many indices must keep all of their gradients (#36341).
+
+    The reference sums the gradient values the device actually received, so the only error left is the final rounding
+    to the output dtype."""
+    torch.manual_seed(0)
+    if hot_tokens:
+        index = torch.cat([torch.randint(0, num_embeddings, (seq_len - hot_tokens,)), torch.zeros(hot_tokens)])
+    else:
+        index = torch.randint(0, num_embeddings, (seq_len,))
+    index = index.long()
+
+    grad_dtype = ttnn.bfloat16 if output_dtype == ttnn.float32 else output_dtype
+    grad = ttnn.from_torch(
+        torch.randn(1, 1, seq_len, embedding_dim), dtype=grad_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    index_tensor = ttnn.from_torch(index.reshape(1, seq_len).int(), dtype=ttnn.uint32, device=device)
+    weights = ttnn.from_torch(
+        torch.zeros(num_embeddings, embedding_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    out = ttnn.embedding_bw(index_tensor, weights, grad, dtype=output_dtype)
+    assert out.dtype == output_dtype
+    out = ttnn.to_torch(out).double().reshape(num_embeddings, embedding_dim)
+
+    grad_values = ttnn.to_torch(grad).double().reshape(seq_len, embedding_dim)
+    reference = torch.zeros(num_embeddings, embedding_dim, dtype=torch.float64).index_add_(0, index, grad_values)
+
+    row_scale = reference.abs().max(dim=1, keepdim=True).values.clamp_min(1e-30)
+    worst_row_error = float(((out - reference).abs() / row_scale).max())
+    tolerance = {ttnn.float32: 1e-5, ttnn.bfloat16: 1e-2, ttnn.bfloat8_b: 2e-2}[output_dtype]
+    assert worst_row_error < tolerance, f"worst row error {worst_row_error} relative to the row's largest gradient"
 
 
 def test_embedding_bw_rejects_sharded_index(device, expect_error):
