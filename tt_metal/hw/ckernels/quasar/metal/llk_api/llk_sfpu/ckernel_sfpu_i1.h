@@ -83,7 +83,10 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// Whether BF16 DEST runs the generated i1 kernel as one call over the whole tile.
+inline constexpr bool i1_bf16_whole_tile = false;
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_i1() {
     constexpr float I1_MAX_INPUT = 88.5f;
     constexpr float I1_THRESHOLD = 10.0f;
@@ -144,7 +147,7 @@ inline void calculate_i1() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void i1_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<APPROXIMATION_MODE>();
