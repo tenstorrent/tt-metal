@@ -434,60 +434,54 @@ def test_perf_matmul_llkx_sr(
         matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle)
     )
     main_templates = [
-        MATH_FIDELITY(math_fidelity),
         PACK_SRC_FROM_OUTPUT(),
-        DEST_SYNC(dest_sync),
-        THROTTLE_LEVEL(throttle),
         *form_keys,
         pack_block,
-        MATMUL_STOCH_RND(stoch),
+    ]
+
+    keyed_templates = [
+        PACK_SRC_FROM_OUTPUT(),
+        *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
+        *MATMUL_STREAM_NARROW.for_block(
+            formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+            math_fidelity=math_fidelity,
+        ),
+        *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync),
+        *MATMUL_STREAM_Z.for_block(
+            formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+            math_fidelity=math_fidelity,
+            kt_dim=dims.kt_dim,
+            throttle=throttle,
+        ),
+        *MATMUL_UNPACK_TTSYNC.for_block(
+            formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
+        ),
+        *MATMUL_K_LOOP.for_block(
+            formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, throttle=throttle
+        ),
+        *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
+        *MATMUL_ROW_MOP.for_block(
+            formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim
+        ),
+        *form_keys,
+        MATMUL_PACK_BLOCK(
+            matmul_pack_form(
+                formats,
+                dest_sync,
+                math_fidelity,
+                dims.rt_dim,
+                dims.ct_dim,
+                dims.kt_dim,
+                throttle=throttle,
+            )
+        ),
     ]
 
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
         run_types,
-        templates=main_templates if main_form else [
-            MATH_FIDELITY(math_fidelity),
-            PACK_SRC_FROM_OUTPUT(),
-            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
-            DEST_SYNC(dest_sync),
-            THROTTLE_LEVEL(throttle),
-            *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
-            ),
-            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync),
-            *MATMUL_STREAM_Z.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
-                kt_dim=dims.kt_dim,
-                throttle=throttle,
-            ),
-            *MATMUL_UNPACK_TTSYNC.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
-            ),
-            *MATMUL_K_LOOP.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, throttle=throttle
-            ),
-            *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
-            *MATMUL_ROW_MOP.for_block(
-                formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim
-            ),
-            *form_keys,
-            MATMUL_PACK_BLOCK(
-                matmul_pack_form(
-                    formats,
-                    dest_sync,
-                    math_fidelity,
-                    dims.rt_dim,
-                    dims.ct_dim,
-                    dims.kt_dim,
-                    throttle=throttle,
-                )
-            ),
-            MATMUL_STOCH_RND(stoch),
-        ],
+        templates=[MATH_FIDELITY(math_fidelity), DEST_SYNC(dest_sync), THROTTLE_LEVEL(throttle), MATMUL_STOCH_RND(stoch), *(main_templates if main_form else keyed_templates)],
         runtimes=[
             UNPACK_TRANS_FACES(transpose),
             NUM_FACES(),

@@ -71,33 +71,6 @@ constexpr bool llk_math_matmul_half_end_fold() {
     }
 }
 
-// The forms key of a kernel's matmul block: 0, main's form, where the block (block_rt, block_ct, block_kt: optional keys of the caller) is one of the cells
-// llk_matmul_forms.h keeps on main's form (the lookup the tt-llk harness runs); the caller's k steps per DEST section otherwise.
-template <std::uint32_t kt_per_section, std::uint32_t block_rt, std::uint32_t block_ct, std::uint32_t block_kt, DataFormat in0, DataFormat in1, DataFormat out_format, int throttle_level>
-constexpr std::uint32_t llk_matmul_form_key() {
-    if constexpr (block_rt != 0 && block_ct != 0 && block_kt != 0 && in0 != DataFormat::Invalid && in1 != DataFormat::Invalid) {
-#ifdef PACKER_L1_ACC
-        constexpr bool l1_acc = true;
-#else
-        constexpr bool l1_acc = false;
-#endif
-        return matmul_form_k<
-            MATH_FIDELITY,
-            DST_SYNC_MODE == DstSync::SyncHalf ? 0 : 1,
-            DST_ACCUM_MODE,
-            kt_per_section,
-            block_kt,
-            in0,
-            in1,
-            out_format,
-            block_ct,
-            block_rt,
-            throttle_level,
-            l1_acc>();
-    } else {
-        return kt_per_section;
-    }
-}
 
 template <
     MathFidelity math_fidelity,
