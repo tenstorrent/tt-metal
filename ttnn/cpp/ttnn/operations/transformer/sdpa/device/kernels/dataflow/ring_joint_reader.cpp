@@ -434,72 +434,23 @@ void kernel_main() {
     // argidx is final at this point; the compile-time sizes are derived below with the other CT args.
     const uint32_t rotated_args_base = argidx;
 
-    // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
-    // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
-    constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
-    constexpr uint32_t chain_receiver_semaphore_arg_offset = ring_joint::kChainReceiverSemaphoreCompileArgOffset;
-    constexpr uint32_t chain_valid_semaphore_arg_offset = ring_joint::kChainValidSemaphoreCompileArgOffset;
-    constexpr uint32_t chain_mcast_enabled_arg_offset = ring_joint::kChainMcastEnabledCompileArgOffset;
-    constexpr uint32_t chain_compile_arg_count = ring_joint::kChainCompileArgCount;
-
-    uint32_t head_sender_semaphore_id = 0;
-    uint32_t head_receiver_semaphore_id = 0;
-    uint32_t head_valid_semaphore_id = 0;
-    constexpr bool head_mcast_enabled = []() {
-        if constexpr (use_head_chain) {
-            return get_compile_time_arg_val(chains_base_offset + chain_mcast_enabled_arg_offset) == 1;
-        }
-        return false;
-    }();
-    if constexpr (use_head_chain) {
-        head_sender_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_sender_semaphore_arg_offset);
-        head_receiver_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_receiver_semaphore_arg_offset);
-        head_valid_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_valid_semaphore_arg_offset);
-    }
-    constexpr uint32_t head_chain_arg_count = use_head_chain ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_arg_count = enable_kv_chains && k_uses_batch_chain ? chain_compile_arg_count : 0;
-    constexpr uint32_t gqa_chain_arg_count = enable_kv_chains && gqa_grouped_kv ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_ct_offset = chains_base_offset + head_chain_arg_count;
-    constexpr uint32_t gqa_chain_ct_offset = batch_chain_ct_offset + batch_chain_arg_count;
-
-    // Batch chain semaphores (only present for non-GQA shared-K modes).
-    // Initialize to 0; will be overwritten if k_uses_batch_chain. Non-participants never use them.
-    uint32_t batch_sender_semaphore_id = 0;
-    uint32_t batch_receiver_semaphore_id = 0;
-    uint32_t batch_valid_semaphore_id = 0;
-
-    // batch_mcast_enabled: read from compile-time args if present, else false (for template instantiation)
-    constexpr bool batch_mcast_enabled = []() {
-        if constexpr (enable_kv_chains && k_uses_batch_chain) {
-            return get_compile_time_arg_val(batch_chain_ct_offset + chain_mcast_enabled_arg_offset) == 1;
-        }
-        return false;
-    }();
-
-    if constexpr (enable_kv_chains && k_uses_batch_chain) {
-        batch_sender_semaphore_id = get_compile_time_arg_val(batch_chain_ct_offset + chain_sender_semaphore_arg_offset);
-        batch_receiver_semaphore_id =
-            get_compile_time_arg_val(batch_chain_ct_offset + chain_receiver_semaphore_arg_offset);
-        batch_valid_semaphore_id = get_compile_time_arg_val(batch_chain_ct_offset + chain_valid_semaphore_arg_offset);
-    }
-
-    uint32_t gqa_sender_semaphore_id = 0;
-    uint32_t gqa_receiver_semaphore_id = 0;
-    uint32_t gqa_valid_semaphore_id = 0;
-    constexpr bool gqa_mcast_enabled = []() {
-        if constexpr (enable_kv_chains && gqa_grouped_kv) {
-            return get_compile_time_arg_val(gqa_chain_ct_offset + chain_mcast_enabled_arg_offset) == 1;
-        }
-        return false;
-    }();
-    if constexpr (enable_kv_chains && gqa_grouped_kv) {
-        gqa_sender_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_sender_semaphore_arg_offset);
-        gqa_receiver_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_receiver_semaphore_arg_offset);
-        gqa_valid_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_valid_semaphore_arg_offset);
-    }
+    // Compile-time semaphore ids and multicast flags of the head, shared-K and GQA chains, appended after all
+    // TensorAccessorArgs() (ring_joint_chain_layout.hpp); a chain the op does not use has no args.
+    using HeadChainArgs = ChainCompileArgs<use_head_chain, chains_base_offset>;
+    using BatchChainArgs =
+        ChainCompileArgs<enable_kv_chains && k_uses_batch_chain, chains_base_offset + HeadChainArgs::arg_count>;
+    using GqaChainArgs = ChainCompileArgs<
+        enable_kv_chains && gqa_grouped_kv,
+        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count>;
+    [[maybe_unused]] constexpr uint32_t head_sender_semaphore_id = HeadChainArgs::sender_semaphore_id;
+    [[maybe_unused]] constexpr uint32_t head_receiver_semaphore_id = HeadChainArgs::receiver_semaphore_id;
+    [[maybe_unused]] constexpr uint32_t head_valid_semaphore_id = HeadChainArgs::valid_semaphore_id;
+    constexpr bool head_mcast_enabled = HeadChainArgs::mcast_enabled;
+    constexpr bool batch_mcast_enabled = BatchChainArgs::mcast_enabled;
+    constexpr bool gqa_mcast_enabled = GqaChainArgs::mcast_enabled;
 
     constexpr uint32_t cb_arg_offset =
-        chains_base_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
+        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count + GqaChainArgs::arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -670,70 +621,11 @@ void kernel_main() {
     Noc noc;
 
     // Head chain (query-head level): MHA uses it for K/V; separate-V shared-K uses it for V only.
-    ChainLink<head_mcast_enabled, true> head_chain(
-        head_cfg.participates,
-        head_cfg.is_injector,
-        head_cfg.is_sink,
-        head_sender_semaphore_id,
-        head_receiver_semaphore_id,
-        head_valid_semaphore_id,
-        head_cfg.signal_target_x<head_mcast_enabled>(),
-        head_cfg.signal_target_y<head_mcast_enabled>(),
-        head_cfg.next_physical_x,
-        head_cfg.next_physical_y,
-        head_cfg.mcast_start_x,
-        head_cfg.mcast_start_y,
-        head_cfg.mcast_end_x,
-        head_cfg.mcast_end_y,
-        head_cfg.mcast_num_dests,
-        v_chunk_tiles,
-        v_tile_bytes,
-        head_cfg.head,
-        head_cfg.next_core_q_chunks);
-
-    // Shared-K chain used by K in non-GQA shared-K modes.
-    ChainLink<batch_mcast_enabled, false> batch_chain(
-        batch_cfg.participates,
-        batch_cfg.is_injector,
-        batch_cfg.is_sink,
-        batch_sender_semaphore_id,
-        batch_receiver_semaphore_id,
-        batch_valid_semaphore_id,
-        batch_cfg.signal_target_x<batch_mcast_enabled>(),
-        batch_cfg.signal_target_y<batch_mcast_enabled>(),
-        batch_cfg.next_physical_x,
-        batch_cfg.next_physical_y,
-        batch_cfg.mcast_start_x,
-        batch_cfg.mcast_start_y,
-        batch_cfg.mcast_end_x,
-        batch_cfg.mcast_end_y,
-        batch_cfg.mcast_num_dests,
-        k_chunk_tiles,
-        k_tile_bytes,
-        0,  // chain_head unused for the shared-K chain
-        batch_cfg.next_core_q_chunks);
-
+    auto head_chain = make_chain_link<HeadChainArgs, true>(head_cfg, v_chunk_tiles, v_tile_bytes, head_cfg.head);
+    // Shared-K chain used by K in non-GQA shared-K modes (no chain head).
+    auto batch_chain = make_chain_link<BatchChainArgs, false>(batch_cfg, k_chunk_tiles, k_tile_bytes, 0);
     // GQA grouped chain (head-level where head means KV head): used by both K and V in GQA_GROUPED_KV.
-    ChainLink<gqa_mcast_enabled, true> gqa_chain(
-        gqa_cfg.participates,
-        gqa_cfg.is_injector,
-        gqa_cfg.is_sink,
-        gqa_sender_semaphore_id,
-        gqa_receiver_semaphore_id,
-        gqa_valid_semaphore_id,
-        gqa_cfg.signal_target_x<gqa_mcast_enabled>(),
-        gqa_cfg.signal_target_y<gqa_mcast_enabled>(),
-        gqa_cfg.next_physical_x,
-        gqa_cfg.next_physical_y,
-        gqa_cfg.mcast_start_x,
-        gqa_cfg.mcast_start_y,
-        gqa_cfg.mcast_end_x,
-        gqa_cfg.mcast_end_y,
-        gqa_cfg.mcast_num_dests,
-        v_chunk_tiles,
-        v_tile_bytes,
-        gqa_cfg.head,
-        gqa_cfg.next_core_q_chunks);
+    auto gqa_chain = make_chain_link<GqaChainArgs, true>(gqa_cfg, v_chunk_tiles, v_tile_bytes, gqa_cfg.head);
 
     // Non-shared V uses the head chain, except GQA where K and V share the grouped KV-head chain.
     auto& v_chain = [&]() -> auto& {

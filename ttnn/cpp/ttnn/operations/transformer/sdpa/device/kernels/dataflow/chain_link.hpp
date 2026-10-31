@@ -284,3 +284,61 @@ private:
     uint32_t chunk_tiles_;
     uint32_t tile_bytes_;
 };
+
+/**
+ * One chain's compile-time args at compile-time arg offset kOffset (ring_joint_chain_layout.hpp: sender / receiver /
+ * valid semaphore ids, then the multicast flag). An absent chain (kPresent false) has no args: ids 0, unicast.
+ */
+template <bool kPresent, uint32_t kIndex>
+constexpr uint32_t chain_compile_arg() {
+    if constexpr (kPresent) {
+        return get_compile_time_arg_val(kIndex);
+    } else {
+        return 0;
+    }
+}
+
+template <bool kPresent, uint32_t kOffset>
+struct ChainCompileArgs {
+    static constexpr uint32_t arg_count =
+        kPresent ? ttnn::operations::transformer::sdpa::ring_joint::kChainCompileArgCount : 0;
+    static constexpr uint32_t sender_semaphore_id = chain_compile_arg<
+        kPresent,
+        kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainSenderSemaphoreCompileArgOffset>();
+    static constexpr uint32_t receiver_semaphore_id = chain_compile_arg<
+        kPresent,
+        kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainReceiverSemaphoreCompileArgOffset>();
+    static constexpr uint32_t valid_semaphore_id = chain_compile_arg<
+        kPresent,
+        kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainValidSemaphoreCompileArgOffset>();
+    static constexpr bool mcast_enabled =
+        chain_compile_arg<
+            kPresent,
+            kOffset + ttnn::operations::transformer::sdpa::ring_joint::kChainMcastEnabledCompileArgOffset>() == 1;
+};
+
+// The ChainLink of a chain from its compile-time args (Args: ChainCompileArgs) and runtime config.
+template <typename Args, bool is_head_level>
+ChainLink<Args::mcast_enabled, is_head_level> make_chain_link(
+    const ChainConfig& cfg, uint32_t chunk_tiles, uint32_t tile_bytes, uint32_t chain_head) {
+    return ChainLink<Args::mcast_enabled, is_head_level>(
+        cfg.participates,
+        cfg.is_injector,
+        cfg.is_sink,
+        Args::sender_semaphore_id,
+        Args::receiver_semaphore_id,
+        Args::valid_semaphore_id,
+        cfg.template signal_target_x<Args::mcast_enabled>(),
+        cfg.template signal_target_y<Args::mcast_enabled>(),
+        cfg.next_physical_x,
+        cfg.next_physical_y,
+        cfg.mcast_start_x,
+        cfg.mcast_start_y,
+        cfg.mcast_end_x,
+        cfg.mcast_end_y,
+        cfg.mcast_num_dests,
+        chunk_tiles,
+        tile_bytes,
+        chain_head,
+        cfg.next_core_q_chunks);
+}

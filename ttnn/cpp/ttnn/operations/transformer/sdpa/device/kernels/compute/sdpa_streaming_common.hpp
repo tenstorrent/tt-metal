@@ -412,3 +412,132 @@ static inline void begin_mask_l1_accumulate(uint32_t cb_qkt_im, uint32_t cb_mask
 }
 
 static inline void end_mask_l1_accumulate() { PACK((llk_pack_reconfig_l1_acc(0))); }
+
+/**
+ * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
+ * Consumes (pops) sum and output tiles, writes normalized output.
+ * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
+ */
+template <
+    bool profiling_enabled,
+    uint32_t head_dim_t_,
+    uint32_t dst_size,
+    uint32_t col_identity_cb,
+    uint32_t scratch_cb,
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32 = 0,
+    bool use_attention_sink = false,
+    uint32_t cb_attention_sink = INVALID_CB,
+    bool sink_per_row = false>
+static __attribute__((noinline, noclone)) void normalize_row_streaming(
+    uint32_t cur_sum_cb,
+    uint32_t cur_out_cb,
+    uint32_t sbh,
+    [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
+    [[maybe_unused]] uint32_t sink_row_offset = 0) {
+    // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
+    // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
+    if constexpr (use_attention_sink) {
+        CircularBuffer(cb_attention_sink).wait_front(sink_per_row ? sink_row_offset + sbh : 1);
+        CircularBuffer(cur_max_cb_rt).wait_front(sink_row_offset + sbh);
+    }
+    configure_single_tile_pack(scratch_cb);
+    for (uint32_t s = 0; s < sbh; s++) {
+        // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
+        {
+            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+            constexpr uint32_t N = 1;
+            matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
+            sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
+            // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
+            // when scratch and normalized output formats match, and reconfigures after rows that packed output.
+            sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
+
+            CircularBuffer(col_identity_cb).wait_front(N);
+            CircularBuffer(cur_sum_cb).wait_front(1);
+
+            CircularBuffer(scratch_cb).reserve_back(1);
+            tile_regs_acquire();
+            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+            if constexpr (use_attention_sink) {
+                // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
+                // max - sink with a negated scale is equivalent and avoids expanding the sink
+                // scalar to a first-column vector for every Q tile.
+                // The sink can have its own format (e.g. bfloat8_b): unpack from max/sink, then restore
+                // the matmul formats that the next row's folded reconfig assumes. scratch_cb stands in
+                // for cur_max: every caller allocates both in the intermediate format.
+                sdpa_maybe_reconfig_data_format<col_identity_cb, scratch_cb, scratch_cb, cb_attention_sink>();
+                if constexpr (sink_per_row) {
+                    // Sparse SDPA packs different heads in each row; both inputs hold a first-column vector.
+                    sub_init(cur_max_cb_rt, cb_attention_sink);
+                    sub_tiles(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, sink_row_offset + s, 1);
+                } else {
+                    sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
+                    sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
+                }
+                sdpa_maybe_reconfig_data_format<scratch_cb, col_identity_cb, cb_attention_sink, scratch_cb>();
+                // The custom first-column exp needs generic unary SFPU addrmod state, but not the
+                // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
+                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
+                constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+                constexpr uint16_t negated_scale_bf16 = scale_bf16 ^ 0x8000;
+                MATH((exp_tile_first_column<EXP_APPROX_MODE, negated_scale_bf16>(1)));
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+            }
+#ifdef ARCH_BLACKHOLE
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+#else
+            recip_tile_init();
+            MATH((recip_tile_first_column_wh_idst0_direct()));
+#endif
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(0, scratch_cb);
+            tile_regs_release();
+            CircularBuffer(scratch_cb).push_back(1);
+
+            CircularBuffer(cur_sum_cb).pop_front(1);
+        }
+
+        // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
+        // Process in batches of up to dst_size tiles (DST capacity).
+        {
+            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+            constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
+            mul_bcast_cols_init(cur_out_cb, scratch_cb);
+            // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
+            sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
+            CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
+            CircularBuffer(scratch_cb).wait_front(1);
+
+            CircularBuffer(normalized_out_cb).reserve_back(head_dim_t_);
+            for (uint32_t base = 0; base < head_dim_t_; base += batch) {
+                constexpr uint32_t last_batch = head_dim_t_ % batch;
+                const uint32_t cur_batch = (base + batch <= head_dim_t_) ? batch : last_batch;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < cur_batch; ++j) {
+                    mul_tiles_bcast_cols(cur_out_cb, scratch_cb, base + j, 0, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < cur_batch; ++j) {
+                    pack_tile(j, normalized_out_cb);
+                }
+                tile_regs_release();
+            }
+            CircularBuffer(normalized_out_cb).push_back(head_dim_t_);
+
+            CircularBuffer(scratch_cb).pop_front(1);
+            CircularBuffer(cur_out_cb).pop_front(head_dim_t_);
+        }
+    }
+    // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
+    // (e.g. salad_correct_fused on the next K-chunk's drain row) pack to F16b CBs
+    // with the right format. Without this, when normalized_out_cb has a different
+    // format (e.g. Bfp8 output dtype), the format register stays Bfp8 and the next
+    // pack to a F16b CB writes garbage that's later mis-decoded by F16b unpacks.
+    sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
+}

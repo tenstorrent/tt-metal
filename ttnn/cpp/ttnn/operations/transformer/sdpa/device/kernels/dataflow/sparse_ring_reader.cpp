@@ -17,14 +17,6 @@
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
 
-// Device-profiler zones around the reader's waits (when built with SPARSE_STEP_PROFILE, under
-// TT_METAL_DEVICE_PROFILER=1), so a stall shows up as a long RD_* zone on the core that waits instead of as a gap in
-// the compute zones.
-#if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE)
-#define SPARSE_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define SPARSE_ZONE(name)
-#endif
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -127,72 +119,23 @@ void kernel_main() {
 
     // The sparse runtime args follow the fused-op receiver block.
     const uint32_t sparse_args_base = argidx;
-    // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
-    // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
-    constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
-    constexpr uint32_t chain_receiver_semaphore_arg_offset = ring_joint::kChainReceiverSemaphoreCompileArgOffset;
-    constexpr uint32_t chain_valid_semaphore_arg_offset = ring_joint::kChainValidSemaphoreCompileArgOffset;
-    constexpr uint32_t chain_mcast_enabled_arg_offset = ring_joint::kChainMcastEnabledCompileArgOffset;
-    constexpr uint32_t chain_compile_arg_count = ring_joint::kChainCompileArgCount;
-
-    uint32_t head_sender_semaphore_id = 0;
-    uint32_t head_receiver_semaphore_id = 0;
-    uint32_t head_valid_semaphore_id = 0;
-    constexpr bool head_mcast_enabled = []() {
-        if constexpr (use_head_chain) {
-            return get_compile_time_arg_val(chains_base_offset + chain_mcast_enabled_arg_offset) == 1;
-        }
-        return false;
-    }();
-    if constexpr (use_head_chain) {
-        head_sender_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_sender_semaphore_arg_offset);
-        head_receiver_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_receiver_semaphore_arg_offset);
-        head_valid_semaphore_id = get_compile_time_arg_val(chains_base_offset + chain_valid_semaphore_arg_offset);
-    }
-    constexpr uint32_t head_chain_arg_count = use_head_chain ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_arg_count = enable_kv_chains && k_uses_batch_chain ? chain_compile_arg_count : 0;
-    constexpr uint32_t gqa_chain_arg_count = enable_kv_chains && gqa_grouped_kv ? chain_compile_arg_count : 0;
-    constexpr uint32_t batch_chain_ct_offset = chains_base_offset + head_chain_arg_count;
-    constexpr uint32_t gqa_chain_ct_offset = batch_chain_ct_offset + batch_chain_arg_count;
-
-    // Batch chain semaphores (only present for non-GQA shared-K modes).
-    // Initialize to 0; will be overwritten if k_uses_batch_chain. Non-participants never use them.
-    uint32_t batch_sender_semaphore_id = 0;
-    uint32_t batch_receiver_semaphore_id = 0;
-    uint32_t batch_valid_semaphore_id = 0;
-
-    // batch_mcast_enabled: read from compile-time args if present, else false (for template instantiation)
-    constexpr bool batch_mcast_enabled = []() {
-        if constexpr (enable_kv_chains && k_uses_batch_chain) {
-            return get_compile_time_arg_val(batch_chain_ct_offset + chain_mcast_enabled_arg_offset) == 1;
-        }
-        return false;
-    }();
-
-    if constexpr (enable_kv_chains && k_uses_batch_chain) {
-        batch_sender_semaphore_id = get_compile_time_arg_val(batch_chain_ct_offset + chain_sender_semaphore_arg_offset);
-        batch_receiver_semaphore_id =
-            get_compile_time_arg_val(batch_chain_ct_offset + chain_receiver_semaphore_arg_offset);
-        batch_valid_semaphore_id = get_compile_time_arg_val(batch_chain_ct_offset + chain_valid_semaphore_arg_offset);
-    }
-
-    uint32_t gqa_sender_semaphore_id = 0;
-    uint32_t gqa_receiver_semaphore_id = 0;
-    uint32_t gqa_valid_semaphore_id = 0;
-    constexpr bool gqa_mcast_enabled = []() {
-        if constexpr (enable_kv_chains && gqa_grouped_kv) {
-            return get_compile_time_arg_val(gqa_chain_ct_offset + chain_mcast_enabled_arg_offset) == 1;
-        }
-        return false;
-    }();
-    if constexpr (enable_kv_chains && gqa_grouped_kv) {
-        gqa_sender_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_sender_semaphore_arg_offset);
-        gqa_receiver_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_receiver_semaphore_arg_offset);
-        gqa_valid_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_valid_semaphore_arg_offset);
-    }
+    // Compile-time semaphore ids and multicast flags of the head, shared-K and GQA chains, appended after all
+    // TensorAccessorArgs() (ring_joint_chain_layout.hpp); a chain the op does not use has no args.
+    using HeadChainArgs = ChainCompileArgs<use_head_chain, chains_base_offset>;
+    using BatchChainArgs =
+        ChainCompileArgs<enable_kv_chains && k_uses_batch_chain, chains_base_offset + HeadChainArgs::arg_count>;
+    using GqaChainArgs = ChainCompileArgs<
+        enable_kv_chains && gqa_grouped_kv,
+        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count>;
+    [[maybe_unused]] constexpr uint32_t head_sender_semaphore_id = HeadChainArgs::sender_semaphore_id;
+    [[maybe_unused]] constexpr uint32_t head_receiver_semaphore_id = HeadChainArgs::receiver_semaphore_id;
+    [[maybe_unused]] constexpr uint32_t head_valid_semaphore_id = HeadChainArgs::valid_semaphore_id;
+    constexpr bool head_mcast_enabled = HeadChainArgs::mcast_enabled;
+    constexpr bool batch_mcast_enabled = BatchChainArgs::mcast_enabled;
+    constexpr bool gqa_mcast_enabled = GqaChainArgs::mcast_enabled;
 
     constexpr uint32_t cb_arg_offset =
-        chains_base_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
+        chains_base_offset + HeadChainArgs::arg_count + BatchChainArgs::arg_count + GqaChainArgs::arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -252,70 +195,11 @@ void kernel_main() {
     Noc noc;
 
     // Head chain (query-head level): MHA uses it for K/V; separate-V shared-K uses it for V only.
-    ChainLink<head_mcast_enabled, true> head_chain(
-        head_cfg.participates,
-        head_cfg.is_injector,
-        head_cfg.is_sink,
-        head_sender_semaphore_id,
-        head_receiver_semaphore_id,
-        head_valid_semaphore_id,
-        head_cfg.signal_target_x<head_mcast_enabled>(),
-        head_cfg.signal_target_y<head_mcast_enabled>(),
-        head_cfg.next_physical_x,
-        head_cfg.next_physical_y,
-        head_cfg.mcast_start_x,
-        head_cfg.mcast_start_y,
-        head_cfg.mcast_end_x,
-        head_cfg.mcast_end_y,
-        head_cfg.mcast_num_dests,
-        v_chunk_tiles,
-        v_tile_bytes,
-        head_cfg.head,
-        head_cfg.next_core_q_chunks);
-
-    // Shared-K chain used by K in non-GQA shared-K modes.
-    ChainLink<batch_mcast_enabled, false> batch_chain(
-        batch_cfg.participates,
-        batch_cfg.is_injector,
-        batch_cfg.is_sink,
-        batch_sender_semaphore_id,
-        batch_receiver_semaphore_id,
-        batch_valid_semaphore_id,
-        batch_cfg.signal_target_x<batch_mcast_enabled>(),
-        batch_cfg.signal_target_y<batch_mcast_enabled>(),
-        batch_cfg.next_physical_x,
-        batch_cfg.next_physical_y,
-        batch_cfg.mcast_start_x,
-        batch_cfg.mcast_start_y,
-        batch_cfg.mcast_end_x,
-        batch_cfg.mcast_end_y,
-        batch_cfg.mcast_num_dests,
-        k_chunk_tiles,
-        k_tile_bytes,
-        0,  // chain_head unused for the shared-K chain
-        batch_cfg.next_core_q_chunks);
-
+    auto head_chain = make_chain_link<HeadChainArgs, true>(head_cfg, v_chunk_tiles, v_tile_bytes, head_cfg.head);
+    // Shared-K chain used by K in non-GQA shared-K modes (no chain head).
+    auto batch_chain = make_chain_link<BatchChainArgs, false>(batch_cfg, k_chunk_tiles, k_tile_bytes, 0);
     // GQA grouped chain (head-level where head means KV head): used by both K and V in GQA_GROUPED_KV.
-    ChainLink<gqa_mcast_enabled, true> gqa_chain(
-        gqa_cfg.participates,
-        gqa_cfg.is_injector,
-        gqa_cfg.is_sink,
-        gqa_sender_semaphore_id,
-        gqa_receiver_semaphore_id,
-        gqa_valid_semaphore_id,
-        gqa_cfg.signal_target_x<gqa_mcast_enabled>(),
-        gqa_cfg.signal_target_y<gqa_mcast_enabled>(),
-        gqa_cfg.next_physical_x,
-        gqa_cfg.next_physical_y,
-        gqa_cfg.mcast_start_x,
-        gqa_cfg.mcast_start_y,
-        gqa_cfg.mcast_end_x,
-        gqa_cfg.mcast_end_y,
-        gqa_cfg.mcast_num_dests,
-        v_chunk_tiles,
-        v_tile_bytes,
-        gqa_cfg.head,
-        gqa_cfg.next_core_q_chunks);
+    auto gqa_chain = make_chain_link<GqaChainArgs, true>(gqa_cfg, v_chunk_tiles, v_tile_bytes, gqa_cfg.head);
 
     // Non-shared V uses the head chain, except GQA where K and V share the grouped KV-head chain.
     auto& v_chain = [&]() -> auto& {
@@ -453,7 +337,6 @@ void kernel_main() {
                         mesh_cols,
                         snake_orientation);
                 }
-                SPARSE_ZONE("RD_SYNC");  // the wait for this iteration's all-gather arrival signal
                 return packed_sources
                            ? packed_source_ids[0]
                            : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -495,7 +378,6 @@ void kernel_main() {
             }
             // 1. Q, once per pass. The reserve waits until compute has popped the previous pass's Q.
             if (!q_pushed) {
-                SPARSE_ZONE("RD_RES_Q");
                 for (uint32_t i = 0; i < n_res; ++i) {
                     const Slice q_slice(
                         res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
@@ -608,7 +490,6 @@ void kernel_main() {
                     cb_plan.get_write_ptr() + (plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
             };
             {
-                SPARSE_ZONE("RD_RES_BITS");  // mask rows of this core's chunks and of every chain member's
                 for (uint32_t i = 0; i < n_res; ++i) {
                     read_shard_slice(res_nq[i], res_qc[i]);
                     if constexpr (plan_rec_base != 0) {
@@ -656,7 +537,6 @@ void kernel_main() {
                 i0 = i1;
             }
             if constexpr (plan_rec_base != 0) {
-                SPARSE_ZONE("RD_RES_PLAN");
                 for (uint32_t i = 0; i < n_res; ++i) {
                     auto rec = plan_rec(i);
                     rec[kBlockWords] = seg_ulo[i];
@@ -665,7 +545,6 @@ void kernel_main() {
                 }
                 cb_plan.push_back(1);
             } else {
-                SPARSE_ZONE("RD_RES_PLAN");  // long when compute is behind: the reserve waits for the previous plan pop
                 for (uint32_t i = 0; i < n_res; ++i) {
                     if (i > 0) {
                         cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
@@ -734,14 +613,10 @@ void kernel_main() {
                     }
                 }
                 if (k_rx) {
-                    SPARSE_ZONE(
-                        "RD_CHAIN_RX");  // member: the wait for the upstream write (the ready signal went early)
                     k_chain.wait_data();
                 } else if (source_is_local) {
-                    SPARSE_ZONE("RD_FETCH_K");
                     fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 } else {
-                    SPARSE_ZONE("RD_FETCH_K");
                     fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 }
                 // Push before the forward: the forward only reads the page, its NoC write is flushed inside
@@ -760,7 +635,6 @@ void kernel_main() {
                     v_chain.signal_ready(noc);
                 }
                 if (k_chain.should_forward(k_head, 0)) {
-                    SPARSE_ZONE("RD_CHAIN_TX");  // the wait for the downstream ready signal, then the write
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 if (!v_reserved) {
@@ -843,8 +717,6 @@ void kernel_main() {
                         g_try_grant(true);
                     }
                     {
-                        SPARSE_ZONE(
-                            "RD_GROUP_RX");  // the wait for the producer's multicast (the credit went out earlier)
                         Semaphore<>(head_receiver_semaphore_id).wait_min(res_group_pieces + 1);
                     }
                     cb_k.push_back(k_chunk_tiles);
@@ -866,7 +738,6 @@ void kernel_main() {
                 const uint32_t k_addr = cb_k.get_write_ptr();
                 const uint32_t v_addr = cb_v.get_write_ptr();
                 {
-                    SPARSE_ZONE("RD_FETCH_K");
                     if (source_is_local) {
                         fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                         fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
@@ -883,7 +754,6 @@ void kernel_main() {
                 const uint32_t n_recv = get_arg_val<uint32_t>(g_base + 3);
                 const uint32_t n_rects = get_arg_val<uint32_t>(g_base + 4);
                 {
-                    SPARSE_ZONE("RD_GROUP_TX");  // the wait for the slowest consumer's credit, then the multicasts
                     Semaphore<>(head_sender_semaphore_id).wait_min(n_recv * res_group_pieces);
                     Semaphore<> count_src(head_valid_semaphore_id);
                     count_src.set(res_group_pieces);
@@ -920,7 +790,6 @@ void kernel_main() {
                 }
             };
             {
-                SPARSE_ZONE("RD_RES_PIECES");  // the whole piece stream of this iteration (fetch / chain / CB waits)
                 // Two passes over the same (piece, head group) order: a count first, so each streamed piece knows
                 // whether another follows in this iteration (the lookahead arms the next page), then the stream.
                 uint32_t j = 0;
@@ -977,7 +846,6 @@ void kernel_main() {
                     const auto pooled_v_generator = PaddedAddrGenerator(
                         TensorAccessor(pooled_v_args, pooled_v_addr),
                         TensorTileShape(1, NH, mask_n_blocks_pad / 32, vDHt));
-                    SPARSE_ZONE("RD_RES_POOLED");
                     if constexpr (plan_rec_base != 0) {
                         // The row reads below fill the whole scratch, records included: work in the free plan page
                         // (compute holds this iteration's page, reading its records in place, until the iteration

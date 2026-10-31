@@ -13,13 +13,6 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
-// Device-profiler zones around the writer's waits (when built with SPARSE_STEP_PROFILE, under
-// TT_METAL_DEVICE_PROFILER=1).
-#if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE)
-#define SPARSE_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define SPARSE_ZONE(name)
-#endif
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
@@ -149,7 +142,6 @@ void kernel_main() {
                 !is_last_active_ring_iter(active_ring_iter_mask, ring_iter)) {
                 continue;
             }
-            SPARSE_ZONE("WR_RES_OUT");  // cb_out waits (compute's final normalization) plus the output writes
             const uint32_t end_seq_tile = q_local_padded_Nt * (ring_id + 1);
             for (uint32_t q_flat = pass_q_start; q_flat < pass_q_end; ++q_flat) {
                 const auto decoded_q = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
