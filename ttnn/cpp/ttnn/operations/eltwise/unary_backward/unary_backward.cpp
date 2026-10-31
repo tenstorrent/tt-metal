@@ -803,8 +803,21 @@ std::vector<Tensor> square_bw(
 std::vector<Tensor> hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor hardshrink_result = ttnn::hardshrink(input_tensor, lambd, output_mem_config);
-    Tensor result = where(ttnn::eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
+    // A gradient flows wherever the forward pass leaves the input untouched, i.e. wherever
+    // |x| > lambd. Reconstructing that predicate from the forward output (hardshrink(x) == 0)
+    // mis-handles two inputs: x == 0 with lambd < 0, where every |x| > lambd holds but the
+    // forward value is 0, and NaN, whose comparisons are all false. Use PyTorch's own
+    // predicate instead: the gradient is zero exactly on -lambd <= x <= lambd.
+    Tensor inside = ttnn::logical_and(
+        ttnn::ge(input_tensor, -lambd, std::nullopt, output_mem_config),
+        ttnn::le(input_tensor, lambd, std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    // NaN also takes the zero branch: PyTorch evaluates (x < -lambd) || (x > lambd), which is false
+    // for NaN, so the gradient there is zero. x != x is true exactly for NaN.
+    inside = ttnn::logical_or(
+        inside, ttnn::ne(input_tensor, input_tensor, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result = where(inside, 0.0f, grad, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
