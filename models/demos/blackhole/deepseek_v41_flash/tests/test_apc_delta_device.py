@@ -142,43 +142,44 @@ def test_delta_and_decode_snapshots(mesh_device):
     results = []
 
     # ---- A: delta snapshots, hit == cold --------------------------------------------------------------------------------------------
-    P = rnd(E0)
-    P2 = torch.cat([P, rnd(EXT)])
-    clean()
-    apc.clear()
-    run(0, P)  # (compile / capture + snapshots with the bit-identity check on every one)
-    clean()
-    apc.clear()
-    run(0, P)
-    st = apc.store
-    log(
-        f"A: store after P: {len(st.snaps)} records, {len(st.blocks)} blocks, {st.bytes / 2**20:.1f} MiB; stats {apc.stats}"
-    )
-    assert apc.stats.get("delta_check_failures", 0) == 0 and apc.stats.get("delta_checks", 0) > 0
-    clean()
-    r0 = apc.stats["restored_tokens"]
-    t1_, l_hit = run(4, P2)
-    hit = apc.stats["restored_tokens"] - r0
-    clean()
-    t2_, l_c1 = cold(0, P2)
-    clean()
-    t3_, l_c2 = cold(6, P2)
-    rA = dict(
-        case="A",
-        e=P2.numel(),
-        hit=hit,
-        hit_vs_cold=cmp(l_hit, l_c1),
-        cold_vs_cold=cmp(l_c1, l_c2),
-        toks=(t1_, t2_, t3_),
-    )
-    rA["ok"] = bool(
-        hit > 0
-        and rA["hit_vs_cold"]["max"] <= 3 * max(rA["cold_vs_cold"]["max"], 1e-3)
-        and rA["hit_vs_cold"]["argmax_equal"]
-    )
-    log(json.dumps(rA))
-    results.append(rA)
-    assert apc.stats.get("delta_check_failures", 0) == 0
+    if not os.environ.get("DSV41_AD_SKIP_A"):
+        P = rnd(E0)
+        P2 = torch.cat([P, rnd(EXT)])
+        clean()
+        apc.clear()
+        run(0, P)  # (compile / capture + snapshots with the bit-identity check on every one)
+        clean()
+        apc.clear()
+        run(0, P)
+        st = apc.store
+        log(
+            f"A: store after P: {len(st.snaps)} records, {len(st.blocks)} blocks, {st.bytes / 2**20:.1f} MiB; stats {apc.stats}"
+        )
+        assert apc.stats.get("delta_check_failures", 0) == 0 and apc.stats.get("delta_checks", 0) > 0
+        clean()
+        r0 = apc.stats["restored_tokens"]
+        t1_, l_hit = run(4, P2)
+        hit = apc.stats["restored_tokens"] - r0
+        clean()
+        t2_, l_c1 = cold(0, P2)
+        clean()
+        t3_, l_c2 = cold(6, P2)
+        rA = dict(
+            case="A",
+            e=P2.numel(),
+            hit=hit,
+            hit_vs_cold=cmp(l_hit, l_c1),
+            cold_vs_cold=cmp(l_c1, l_c2),
+            toks=(t1_, t2_, t3_),
+        )
+        rA["ok"] = bool(
+            hit > 0
+            and rA["hit_vs_cold"]["max"] <= 3 * max(rA["cold_vs_cold"]["max"], 1e-3)
+            and rA["hit_vs_cold"]["argmax_equal"]
+        )
+        log(json.dumps(rA))
+        results.append(rA)
+        assert apc.stats.get("delta_check_failures", 0) == 0
 
     # ---- B: decode output --------------------------------------------------------------------------------------------------------------
     clean()

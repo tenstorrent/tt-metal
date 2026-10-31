@@ -702,21 +702,28 @@ def decode_halo_begin(model, b, s):
 
 
 def decode_keys_rows(model, b, L, q0, q1):
-    """rows [q0, q1) of the decode key slab of user ``b`` (index-key owner layer ``L``), one torch bf16 [1, 1, q1 - q0, 128] per mesh column"""
+    """rows [q0, q1) of the single-trace slab layout (per mesh column c: row q holds entry q * cols + c) of the keys of user ``b``, index-key owner layer ``L``, from the DECODE slab: one torch bf16
+    [1, 1, q1 - q0, 128] per mesh column. A column-sharded decode slab (entry e on column e % cols, slot e // cols) is the same layout: rows are read as they are; a replicated slab (entry e at row e)
+    is read from one chip and re-interleaved on the host."""
     dec = model.dec_idx[L]
     r, u, cols = b // model.U, b % model.U, model.cols
     if q1 <= q0:
         return [torch.zeros(1, 1, 0, 128, dtype=torch.bfloat16) for _ in range(cols)]
-    part = ttnn.slice(dec.k_cache, [u, 0, q0, 0], [u + 1, 1, q1, 128])
-    out = [
-        ttnn.to_torch(ttnn.get_device_tensors(part)[r * cols + c])
-        .to(torch.bfloat16)
-        .reshape(1, 1, q1 - q0, 128)
-        .clone()
-        for c in range(cols)
-    ]
+    if getattr(dec, "cs", False):
+        part = ttnn.slice(dec.k_cache, [u, 0, q0, 0], [u + 1, 1, q1, 128])
+        out = [
+            ttnn.to_torch(ttnn.get_device_tensors(part)[r * cols + c])
+            .to(torch.bfloat16)
+            .reshape(1, 1, q1 - q0, 128)
+            .clone()
+            for c in range(cols)
+        ]
+        ttnn.deallocate(part)
+        return out
+    part = ttnn.slice(dec.k_cache, [u, 0, q0 * cols, 0], [u + 1, 1, q1 * cols, 128])
+    ent = ttnn.to_torch(ttnn.get_device_tensors(part)[r * cols]).to(torch.bfloat16).reshape(-1, 128)
     ttnn.deallocate(part)
-    return out
+    return [ent[c::cols].reshape(1, 1, q1 - q0, 128).clone() for c in range(cols)]
 
 
 def decode_unsupported(model):
@@ -729,9 +736,8 @@ def decode_unsupported(model):
             if not (name.endswith(".keys") and sp.start >= 0):
                 return f"{name} is not a single-trace key slab"
             L = int(name[1:].split(".")[0])
-            dec = model.dec_idx.get(L)
-            if dec is None or not getattr(dec, "cs", False) or L not in model.index_owner:
-                return f"layer {L} has no column-sharded decode key slab"
+            if model.dec_idx.get(L) is None or L not in model.index_owner:
+                return f"layer {L} has no decode key slab"
         elif not name.endswith(".halo"):
             return f"carried tensor {name} has no decode source"
     for _, lid in _halo_names(model):
@@ -1482,6 +1488,14 @@ class PrefixCache:
             self._dec_ok = not why
             if why:
                 self.log(f"prefix cache: DSV41_APC_DECODE ignored ({why})")
+            else:
+                # the ring keeps the last ``ring_rows`` positions (a halo needs 128 of them, speculative writes run up to ~16 ahead): the halo of s can be gathered while n - s <= ring_rows - 128 - 16
+                # (a 128-row ring: only at n == s, which a plain decode step by step reaches exactly)
+                rr = int(getattr(getattr(self.m, "pool", None), "ring_rows", 288))
+                self.dec_lag = min(self.dec_lag, max(rr - 128 - 16, 0) if rr > 128 else 0)
+                self.log(
+                    f"prefix cache: decode-output snapshots on (ring {rr} rows, halo capture lag <= {self.dec_lag} tokens)"
+                )
         return self._dec_ok
 
     def decode_poll(self, b, n):
