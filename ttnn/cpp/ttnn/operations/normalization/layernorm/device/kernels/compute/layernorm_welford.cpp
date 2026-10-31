@@ -438,7 +438,7 @@ void kernel_main() {
         }
         for (auto block : generic::blocks(Wt, blk)) {
             if constexpr (compact_fp32_finalizer) {
-                reconfig_data_format(dfb_x, dfb_ex);
+                reconfig_data_format(dfb_x_welford, dfb_ex);
             } else {
                 reconfig_data_format(dfb_xmm, dfb_ex2pe);
             }
@@ -457,6 +457,9 @@ void kernel_main() {
                 for (uint32_t i = 0; i < block.size(); i += 2) {
                     const bool has_second_tile = i + 1 < block.size();
                     tile_regs_acquire();
+                    if (i > 0) {
+                        reconfig_data_format_srca(dfb_ex2pe_fp32, dfb_x_welford);
+                    }
                     copy_init(dfb_x_welford);
                     copy_tile(dfb_x_welford, i, data_dst);
                     if (has_second_tile) {
