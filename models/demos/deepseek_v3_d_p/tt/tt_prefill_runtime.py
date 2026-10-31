@@ -13,6 +13,8 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens
+from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.common.prefill.runners.layer_completion_ring_writer import NullLayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_ID_ROWS,
@@ -23,7 +25,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
-from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry
+from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry, write_chunk_metadata
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
@@ -40,6 +42,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
+from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
 
 @dataclass
@@ -50,6 +53,10 @@ class TtPrefillRuntimeConfig:
     # Chunked prefill streams tokens in chunks of `chunk_size`, with `num_users` independent cache
     # slots (user-major batch). The full cache holds num_users * num_layers slots of max_seq_len each.
     chunk_size: int = PREFILL_CHUNK_TOKENS
+    # Tokens per packed forward (prefill_forward): forward_tokens_budget // chunk_size chunks, possibly from
+    # different users. Attention runs per chunk; the FFN half / MoE runs once over every chunk's rows.
+    # None = chunk_size, one chunk per forward (prefill_chunk).
+    forward_tokens_budget: Optional[int] = None
     num_users: int = 2
     sp_axis: int = 0
     tp_axis: int = 1
@@ -122,6 +129,18 @@ class TtPrefillRuntimeConfig:
         return self.mesh_shape[self.tp_axis]
 
     @property
+    def forward_chunks(self) -> int:
+        """Chunks per forward: forward_tokens_budget // chunk_size (1 when no budget is set)."""
+        return (self.forward_tokens_budget or self.chunk_size) // self.chunk_size
+
+    @property
+    def cache_num_users(self) -> int:
+        """KV-cache slots the model addresses: num_users, plus one scratch slot for a traced packed forward.
+        A capture runs every chunk position, so an empty chunk still runs attention, into slot num_users.
+        The KV caches must be allocated with this many users."""
+        return self.num_users + (1 if self.forward_chunks > 1 and self.use_trace else 0)
+
+    @property
     def mtp_ack_levels(self) -> int:
         """MTP levels the KV table publishes and each chunk acks: decode's D, or K when unset."""
         levels = self.mtp_decode_levels or self.mtp_levels
@@ -171,6 +190,17 @@ class TtPrefillRuntime:
         self._dflash_v_cache = None
         self.mtp_predictor = None
 
+        budget = config.forward_tokens_budget
+        assert budget is None or (
+            budget > 0 and budget % config.chunk_size == 0
+        ), f"forward_tokens_budget ({budget}) must be a positive multiple of chunk_size ({config.chunk_size})"
+        if config.forward_chunks > 1:
+            # The packed path is single-rank, without MTP or DFlash, so far; fail at construction, not on the
+            # first forward.
+            assert not (
+                config.mtp_levels or config.dflash_enabled
+            ), "packed forwards (forward_tokens_budget > chunk_size) do not support MTP or DFlash"
+            assert config.is_first_rank and config.is_last_rank, "packed forwards are single-rank for now"
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
@@ -220,6 +250,10 @@ class TtPrefillRuntime:
         self._trace_slot_id = 0
         self._trace_pos_start = 0
         self._trace_pos_end = 0
+        # Traced packed forward (forward_chunks > 1): one ChunkMetadata per chunk position, and the MoE
+        # padding config, both persistent and refreshed before every replay (_stage_packed).
+        self._packed_metadata = None
+        self._packed_padding_config = None
 
         self._build_model(state_dict)
 
@@ -298,7 +332,7 @@ class TtPrefillRuntime:
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
             is_chunked=True,
-            slot_num=self.config.num_users,
+            slot_num=self.config.cache_num_users,
             kv_only_last_layer=self.config.kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,
             first_layer_idx=self.config.first_layer_idx,
@@ -308,6 +342,7 @@ class TtPrefillRuntime:
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
             mtp_predictor=self.mtp_predictor,
             tp_shard_kv=self.config.tp_shard_kv,
+            forward_chunks=self.config.forward_chunks,
         )
         self.model_built = True
 
@@ -672,6 +707,29 @@ class TtPrefillRuntime:
             )
         return self.make_placeholder_activation()
 
+    def make_forward_input(self, chunk_tokens: list, starts: list) -> ttnn.Tensor:
+        """Build one packed forward's device input for `prefill_forward`: per SP chip, every chunk's rotated
+        tokens back to back in chunk order (pack_forward_tokens, the layout the H2D producer emits), as an
+        SP-sharded uint32 ROW_MAJOR DRAM tensor. ``chunk_tokens`` holds one natural-order chunk_size list per
+        chunk (pad partial and empty chunks), ``starts`` each chunk's actual_start. First rank only."""
+        cfg = self.config
+        assert cfg.is_first_rank, "only the first rank builds a token input"
+        assert (
+            len(chunk_tokens) == cfg.forward_chunks
+        ), f"{len(chunk_tokens)} chunks for a forward of {cfg.forward_chunks}"
+        for token_ids in chunk_tokens:
+            assert len(token_ids) == cfg.chunk_size, f"a chunk is exactly {cfg.chunk_size} tokens, got {len(token_ids)}"
+        sp = cfg.sp_factor
+        tok = torch.tensor(pack_forward_tokens(chunk_tokens, starts, sp), dtype=torch.int32)
+        return ttnn.from_torch(
+            tok.reshape(sp, 1, cfg.forward_chunks * cfg.chunk_size // sp),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=cfg.mesh_shape, dims=(cfg.sp_axis, None)),
+        )
+
     def make_mtp_tokens_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build the MTP lookahead companion to :meth:`make_chunk_input`, out of the SAME
         `chunk_size + num_mtp_tokens` list. First rank only.
@@ -698,7 +756,13 @@ class TtPrefillRuntime:
         assert self.model_built
         chunk = self.config.chunk_size
         t0 = time.perf_counter()
-        if self.config.use_trace:
+        if self.config.forward_chunks > 1 and self.config.use_trace:
+            logger.info("TtPrefillRuntime.compile() — warming the traced packed forward; capture deferred")
+            self._kv_cache = kv_caches
+            self._prepare_trace_packed(kv_caches)
+        elif self.config.forward_chunks > 1:
+            self._compile_packed(kv_caches)
+        elif self.config.use_trace:
             logger.info(
                 f"TtPrefillRuntime.compile() — warming traced {chunk}-token chunk (metadata path); capture deferred to capture_trace()"
             )
@@ -743,6 +807,38 @@ class TtPrefillRuntime:
         )
         self.compiled = True
 
+    def _compile_packed(self, kv_caches: MlaKvCaches) -> None:
+        """Warm the programs a packed forward can run, as MiniMax-M3 does: (i) chunks filling slots 0, 1, ...
+        from position 0 (first-chunk and cache-read attention), (ii) one cache-read chunk then empties,
+        (iii) one ragged chunk then empties (the MoE padding-config variant). Writes slots the real run
+        overwrites. Completions go to a no-op sink so zero_pad_and_ack's programs compile here too (see
+        compile())."""
+        cfg = self.config
+        chunk, n = cfg.chunk_size, cfg.forward_chunks
+        per_slot = cfg.max_seq_len // chunk
+        cache_read_start = chunk if per_slot >= 2 else 0
+        empty = PrefillChunk(slot_id=0, actual_start=0, actual_end=0)
+
+        def fill(k):  # k-th chunk of filling slots 0, 1, ... in order; empty once every slot is full
+            slot_id, i = divmod(k, per_slot)
+            return PrefillChunk(slot_id, i * chunk, (i + 1) * chunk) if slot_id < cfg.num_users else empty
+
+        plan = [
+            [fill(k) for k in range(n)],
+            [PrefillChunk(0, cache_read_start, cache_read_start + chunk)] + [empty] * (n - 1),
+            [PrefillChunk(0, cache_read_start, cache_read_start + chunk // 2)] + [empty] * (n - 1),
+        ]
+        logger.info(f"TtPrefillRuntime.compile() — warming first / cache-read / ragged packed forwards ({n} x {chunk})")
+        prev_sink = self._layer_completion_sink
+        self._layer_completion_sink = NullLayerCompletionSink()
+        try:
+            for chunks in plan:
+                inp = self.make_forward_input([[0] * chunk] * n, [c.actual_start for c in chunks])
+                self.prefill_forward(inp, kv_caches, chunks)
+            ttnn.synchronize_device(self.mesh_device)
+        finally:
+            self._layer_completion_sink = prev_sink
+
     def capture_trace(self, kv_caches: MlaKvCaches) -> None:
         """Record the segmented trace, ONCE, after the driver receives the first chunk and before it runs.
 
@@ -758,6 +854,9 @@ class TtPrefillRuntime:
         over D2D) after every replay."""
         if not self.config.use_trace or self._trace_captured:
             return
+        assert self.config.forward_chunks == 1 or (
+            self._on_layer_complete is None and self._trace_d2h_service is None
+        ), "a traced packed forward has no per-chunk completion acks yet"
         controller = self._controller
         assert controller is not None, "capture_trace(): compile() must run first (prepares the trace)"
 
@@ -879,6 +978,84 @@ class TtPrefillRuntime:
             return None
         return activation, self._meta_words_dev(tuple(w & 0xFFFFFFFF for w in words))
 
+    def _forward_traced_packed(self, kv_caches: MlaKvCaches):
+        """The captured/warmed packed forward: every chunk position reads its (slot, start, end) from its own
+        persistent ChunkMetadata, and the MoE its padding config from a persistent tensor. Single rank."""
+        return self.model.forward_packed(
+            self._trace_input,
+            kv_caches.kvpe,
+            None,
+            index_kv_cache=kv_caches.index,
+            metadata=self._packed_metadata,
+            padding_config=self._packed_padding_config,
+        )
+
+    def _packed_padding_rows(self, rows: tuple) -> torch.Tensor:
+        return torch.tensor([[r, 0] for r in rows], dtype=torch.int32)
+
+    def _write_packed_padding_config(self, rows: tuple) -> None:
+        """Refresh the persistent MoE padding config in place (right padding, one row per SP chip)."""
+        host = ttnn.from_torch(
+            self._packed_padding_rows(rows),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+        )
+        # copy_host_to_device_tensor replaces the destination's declared topology; keep the original.
+        topology = self._packed_padding_config.tensor_topology()
+        ttnn.copy_host_to_device_tensor(host, self._packed_padding_config)
+        self._packed_padding_config.update_tensor_topology(topology)
+
+    def _stage_packed(self, input_tensor: ttnn.Tensor, chunks: list) -> None:
+        """Copy one packed forward's tokens, per-chunk metadata and MoE padding config into the captured
+        buffers. An empty chunk runs as a full chunk in the scratch slot; the padding config masks its rows."""
+        cfg = self.config
+        ttnn.copy(input_tensor, self._trace_input)
+        ttnn.deallocate(input_tensor)
+        scratch = (cfg.num_users, 0, cfg.chunk_size)
+        for meta, c in zip(self._packed_metadata, chunks):
+            write_chunk_metadata(
+                meta,
+                scratch if c.is_empty else (c.slot_id, c.actual_start, c.actual_end),
+                hf_config=self.hf_config,
+                mesh_device=self.mesh_device,
+                chunk_size_global=cfg.chunk_size,
+                sp_axis=cfg.sp_axis,
+            )
+        chunk_local = cfg.chunk_size // cfg.sp_factor
+        self._write_packed_padding_config(packed_real_rows(chunks, cfg.sp_factor, chunk_local))
+
+    def _prepare_trace_packed(self, kv_caches: MlaKvCaches) -> None:
+        """Packed counterpart of _prepare_trace: persistent token input, one ChunkMetadata per chunk position,
+        the persistent MoE padding config and the controller; then a warm pass with every position in the
+        scratch slot. capture_trace() records the capture later."""
+        cfg = self.config
+        chunk, n = cfg.chunk_size, cfg.forward_chunks
+        rope_setup = getattr(self.model, "rope_setup", None)
+        assert (
+            rope_setup is None or rope_setup.make_llama4_scale_buffer(chunk) is None
+        ), "a traced packed forward has no per-chunk llama4 query scale yet"
+        self._trace_input = self.make_forward_input([[0] * chunk] * n, [0] * n)
+        self._packed_metadata = [
+            ChunkMetadata(self._meta1_dev(cfg.num_users), self._meta1_dev(0), self._meta1_dev(chunk)) for _ in range(n)
+        ]
+        self._packed_padding_config = ttnn.from_torch(
+            self._packed_padding_rows((n * chunk // cfg.sp_factor,) * cfg.sp_factor),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+        )
+        controller = SubDeviceTraceController(self.mesh_device)
+        self.model.set_trace_controller(controller)
+        self._controller = controller
+        # Warm the staging copy too: a program compiled after the capture can land on trace memory.
+        empty = PrefillChunk(slot_id=0, actual_start=0, actual_end=0)
+        self._stage_packed(self.make_forward_input([[0] * chunk] * n, [0] * n), [empty] * n)
+        self._forward_traced(kv_caches)
+        ttnn.synchronize_device(self.mesh_device)
+
     def _forward_traced(self, kv_caches: MlaKvCaches):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
@@ -893,6 +1070,8 @@ class TtPrefillRuntime:
         MTP: the union is rebuilt from the persistent inputs on every replay; a non-last rank returns it
         packed under the hidden. DFlash: the drafter runs in the same capture; a non-last rank returns the
         packed [hidden | partial]."""
+        if self.config.forward_chunks > 1:
+            return self._forward_traced_packed(kv_caches)
         dflash = self.config.dflash_enabled
         if dflash:
             self.drafter.reset()
@@ -1076,6 +1255,74 @@ class TtPrefillRuntime:
 
         return on_layer_complete
 
+    def prefill_forward(
+        self,
+        input_tensor: ttnn.Tensor,
+        kv_caches: MlaKvCaches,
+        chunks: list,
+        request_id: int = 0,
+        d2h_service=None,
+        *,
+        metadata_msg: Optional[ttnn.Tensor] = None,
+    ) -> None:
+        """Prefill ONE packed forward of ``forward_chunks`` ``chunks`` (PrefillChunk) into the engine-owned
+        ``kv_caches``. Each layer runs attention once per non-empty chunk against its slot_id at its
+        actual_start, then ffn_norm + MoE once over every chunk's rows (TtPrefillTransformer.forward_packed).
+
+        Chunk rules are MiniMax-M3's (validate_chunks): a slot's chunks are one run of consecutive chunks,
+        only the run's last may be partial, empties only at the tail. A registered completion sink gets
+        one completion per non-empty chunk per layer, naming that chunk's (slot, start, end).
+
+        Args:
+            input_tensor: the forward's tokens (make_forward_input or the H2D socket). Deallocated here.
+            kv_caches: the engine-owned MlaKvCaches.
+            chunks: the forward's PrefillChunk list, in pack order.
+            request_id: the runner's forward index, part of the call contract; unused here.
+            d2h_service: must be None. Per-layer D2H acks name one chunk, so a packed forward acks through the
+                host completion sink; the runner refuses PREFILL_LAYER_ACK_D2H with packed forwards.
+            metadata_msg: the forward's raw socket metadata (PrefillBatchMetadata), part of the runner's call
+                contract. Unused: the chunks arrive decoded, and only a D2H ack would send the record on.
+
+        Returns None: single-rank only, the populated cache is the output. A pipeline would have to carry each
+        chunk's GLM-5.3 indexer indices between ranks; the runner refuses that for packed forwards.
+        """
+        cfg = self.config
+        assert self.model_built, "build the model before prefill_forward()"
+        assert d2h_service is None, "a packed forward acks through the host completion sink, not D2H"
+        validate_chunks(
+            chunks,
+            chunk_size=cfg.chunk_size,
+            forward_chunks=cfg.forward_chunks,
+            num_users=cfg.num_users,
+            max_seq_len=cfg.max_seq_len,
+        )
+        if cfg.use_trace:
+            assert self._trace_captured, "use_trace: capture_trace() must run before the first prefill_forward()"
+            assert self._layer_completion_sink is None, "a traced packed forward has no per-chunk completion acks yet"
+            self._stage_packed(input_tensor, chunks)
+            self._controller.replay()
+            return None
+        sink = self._layer_completion_sink
+        on_layer_complete = (
+            None
+            if sink is None
+            else (
+                lambda layer_idx, c: sink.layers_completed(
+                    layer_idx, layer_idx + 1, c.slot_id, c.actual_start, c.actual_end
+                )
+            )
+        )
+        self.model.forward(
+            input_tensor,
+            kv_caches.kvpe,
+            actual_isl=cfg.chunk_size,
+            chunks=chunks,
+            index_kv_cache=kv_caches.index,
+            on_layer_complete=on_layer_complete,
+        )
+        ttnn.deallocate(input_tensor)
+        return None
+
     def prefill_chunk(
         self,
         input_tensor: ttnn.Tensor,
@@ -1148,6 +1395,9 @@ class TtPrefillRuntime:
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
         assert self.model_built, "build the model before prefill_chunk()"
+        assert (
+            self.config.forward_chunks == 1
+        ), "a packed runtime (forward_tokens_budget > chunk_size) takes prefill_forward"
         # Host-side scalars are validated only when supplied. On the traced serving path they arrive
         # None: the per-chunk (slot_id, actual_start, actual_end) live on-device in metadata_msg and are
         # copied into the persistent buffers below, so there are no host ints to range-check.
