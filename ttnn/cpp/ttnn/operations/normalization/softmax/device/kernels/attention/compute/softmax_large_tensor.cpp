@@ -159,7 +159,7 @@ void apply_fused_attn_mask(
     const std::uint32_t dfb_out = dfb_out_obj.get_id();
     reconfig_data_format(dfb_in, dfb_fused_attn_mask);
     pack_reconfig_data_format(dfb_out);
-#ifdef CAUSAL_MASK
+#if defined(CAUSAL_MASK) || defined(MASK_FULL_ROWS)
     add_init(dfb_in, dfb_fused_attn_mask);
 #else
     add_bcast_rows_init(dfb_in, dfb_fused_attn_mask);
@@ -171,7 +171,7 @@ void apply_fused_attn_mask(
         dfb_in_obj.wait_front(static_cast<uint16_t>(rem));
         dfb_fused_attn_mask_obj.wait_front(static_cast<uint16_t>(rem));  // cumulative wait for up to wt tiles
         dfb_out_obj.reserve_back(static_cast<uint16_t>(rem));
-#ifdef CAUSAL_MASK
+#if defined(CAUSAL_MASK) || defined(MASK_FULL_ROWS)
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             add_tiles(dfb_in, dfb_fused_attn_mask, cur_dst, cur_dst, cur_dst);  // tile *= 1/(sum(exp(x)))
         }
