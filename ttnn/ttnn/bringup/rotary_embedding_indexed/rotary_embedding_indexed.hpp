@@ -37,7 +37,10 @@ namespace ttnn::operations::bringup::rotary_embedding_indexed {
 // rotary_dim. Channels outside that region are copied unchanged:
 
 // (1) Scalar form: `kv_actual_global` is a host scalar held in a common runtime arg, patched on cache
-//     hits.
+//     hits. Bring-up chain mode (deepseek_v41_flash_d_p P.22): `input_heads` > 0, `output_layout`, `output_dtype`,
+//     `group_heads` > 1 or a ROW_MAJOR input select the fused program of device/rope_chain_device_operation.hpp (the
+//     layout / dtype moves around the RoPE in the same op); it needs kv_actual_global 0 (per-chip pre-sliced cos /
+//     sin), no seq_subshard_axis and no concat_prefix.
 ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,
@@ -53,7 +56,11 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<ttnn::Tensor>& concat_prefix = std::nullopt,
     bool uniform = false,
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
-    std::optional<CoreCoord> max_grid = std::nullopt);
+    std::optional<CoreCoord> max_grid = std::nullopt,
+    uint32_t input_heads = 0,
+    const std::optional<tt::tt_metal::Layout>& output_layout = std::nullopt,
+    const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
+    uint32_t group_heads = 0);
 
 // (2) Tensor form (traceable): `kv_actual_global` is its OWN 1-element uint32 DRAM tensor that the reader
 //     reads on-device (element [0]). Off the host dispatch path, so one captured program replays across

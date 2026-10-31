@@ -4873,3 +4873,47 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   measures off vs on at 51200 / 512000).
 - Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.21` (quick);
   `scripts/run_safe_pytest.sh --mesh --run-all ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_twin.py`.
+
+## P.22 perf: ROPE_CHAINS (opportunities #2 and #4 as one pick), 2026-10-31
+- **What**: the three RoPE chains as one call each of `ttnn.bringup.rotary_embedding_indexed` in a new chain mode
+  (fork options `input_heads`, ROW_MAJOR input, `output_layout`, `output_dtype`, `group_heads`; a second device
+  operation `device/rope_chain_device_operation.cpp` with its own kernels `device/kernels/chain/`). Setting ROPE_CHAINS
+  (default on; off = the path before P.22). Model: `tt/rope.py:rope_chain` / `rope_chains`, `tt/attention.py`
+  (`_q` sp32 branch, `_out` sp32 branch; `_q_stock` split into `_q_proj` + split/rope, `_out_proj` into concat/cast +
+  `_out_wo`), `tt/indexer.py:_query_chain` (scores skips `_round` when the query is already bfloat4_b),
+  `tt/host_alloc.py` (no q / o rope output buffers when on).
+  - #4 attention q: wq_b [1, 1, 160, 64 x 512] bf16 TILE -> (heads read in place, tail roped, untilized) -> sparse_sdpa's
+    [1, 64, 160, 512] ROW_MAJOR q. Removes nlp_create_q_heads_split + to_rm (untilize): 2 ops a layer, 80 a chunk.
+  - #2 attention output: sparse_sdpa's ROW_MAJOR output -> (tilized, inverse rope, packed bfloat8_b, 8-head groups) ->
+    wo_a's [1, 8, 160, 4096] input in the HOST_ALLOC "attn.oa" buffer. Removes to_layout + nlp_concat_heads + typecast
+    (+ 2 reshape views): 3 ops a layer, 120 a chunk.
+  - #4 indexer q: wq_b [1, 1, 160, 32 x 128] -> bfloat4_b [1, 32, 160, 128] (RNE, bfp_round's SFPU rule, into the
+    LOWBIT_HOST query buffer). Removes split + bfp_round: 2 ops a layer, 16 a chunk (8 indexer layers).
+  - Total: 216 launches a chunk fewer. No sparse_sdpa option was needed: the heads <-> tokens transposition between
+    sparse_sdpa (32 heads of one token a tile) and RoPE / wo_a (32 tokens of one head a tile) stays in the ROW_MAJOR
+    tensor; the rope op tilizes / untilizes it in its compute kernel.
+- **Precision**: unchanged (bit-identical). Fork tests `tests/unit/test_chain.py`: 8 passed on the 8x4, each fused call
+  equal to the unfused chain on every chip, miss and hit. Model: `tt/perf_rope_chains.py` (on / off alternating, one
+  process, profile rung's last chunk): every run's final hidden state bit-identical, pcc vs golden 0.725092 both sides.
+- **Gotcha (DS41-137 used)**: the first bfp8 output differed from ttnn.typecast by one bfp8 step (max |d| 0.0625): the
+  packer without bfp8_pack_precise rounds twice; typecast packs precise. The chain compute sets bfp8_pack_precise for
+  a bfloat8_b output plus a define (CHAIN_BFP8_PACK_PRECISE: the kernel cache key leaves the flag out).
+- **Host design**: a ProgramDescriptor factory with plain uint32 addresses in common args and a factory-level
+  override_runtime_arguments (DS41-187: an output_tensor in tensor_args would push the binding fast path to a full
+  rebuild per hit); block split from [per, extra] common args and the core's logical (x, y) (as ckv_share, DS41-145:
+  no per-core runtime args). One program per mesh range (DS41-147).
+- **Cores**: every chain call on max_grid 11 x 10 = 110 cores (attention: 320 blocks a chip; indexer: 160).
+- **Measured** (not the gate's profile): q chain host a call 259.9 us (3 ops) -> 61.4 us (fused). Model warm wall,
+  same process, median of 3: off 273.8 ms, on 250.1 ms (-23.7 ms a chunk). Device ms a chunk: the orchestrator's A/B.
+- stock `ttnn.to_layout` (to_rm) instead of the chain is not used on the default path any more; the off path keeps it.
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/rotary_embedding_indexed/tests/unit/test_chain.py -k 8x4`;
+  `DS41_ENGRAM_TABLE=resident DS41_ROPE_CHAINS=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_rope_chains.py -s`;
+  `python -m models.demos.common.bringup.orchestrator measure --task P.22`.
+- **Final measure** (`measure --task P.22`, change on: ROPE_CHAINS=on ENGRAM_TABLE=resident): rc 0 on every part.
+  (A first attempt was killed by the agent tool's 10-minute background limit after its quick part; rerun in full.)
+  - quick: every err_* within its limit (99 checked; worst err_state_topk_idx_L08 at 0.903, as P.21), min layer PCC
+    0.725 (L39, as P.21), host_transfers_per_layer 0, chunk_wall_ms 232.3.
+  - p51200: wall 235.1 ms, device total 179.55 ms (attention 47.16, indexer 7.06), host cProfile 246.2 ms, 1746
+    launches. P.21's final measure (before this change): wall 254.1, device 190.79, cProfile 269.8, 2042 launches.
+  - p512000: wall 253.3 ms, device 219.0 ms (P.21: 270.7 / 231.35).
+  - The off side of the same run is the orchestrator's A/B; the P.21 numbers are another run.
