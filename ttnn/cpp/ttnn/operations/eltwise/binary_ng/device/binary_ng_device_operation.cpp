@@ -375,6 +375,15 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             dtype_b);
     }
 
+    if (output_tensor.has_value() && output_tensor->layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            input_tensor_a.layout() == Layout::ROW_MAJOR &&
+                (!input_tensor_b.has_value() || input_tensor_b->layout() == Layout::ROW_MAJOR),
+            "A ROW_MAJOR preallocated output requires ROW_MAJOR inputs, got input A {} and input B {}",
+            input_tensor_a.layout(),
+            input_tensor_b.has_value() ? input_tensor_b->layout() : input_tensor_a.layout());
+    }
+
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
