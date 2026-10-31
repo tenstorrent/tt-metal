@@ -135,6 +135,7 @@
   # without changing this infra-owned command. Keep the search roots aligned with the non-IOMMU suites above.
   cmd: |
     pytest \
+      tests/ttnn/nightly/unit_tests/operations/data_movement \
       tests/ttnn/nightly/unit_tests/operations/experimental \
       --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft \
       tests/ttnn/nightly/unit_tests/operations/sdpa \
@@ -335,7 +336,7 @@
   category: sdpa
 
 - name: ttnn nightly data_movement tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode and not requires_host_iommu" --timeout=600'
   ai_summary:
     authoritative_job_status: true
   skus:
