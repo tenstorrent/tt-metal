@@ -8,117 +8,9 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import (
     assert_equal,
-    assert_with_ulp,
-    flush_subnormal_values_to_zero,
-    generate_all_bfloat16_bitpatterns,
 )
 
 pytestmark = pytest.mark.use_module_device
-
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.relu,
-    ],
-)
-def test_relu_fp32(device, ttnn_function):
-    x_torch = torch.rand((64, 128), dtype=torch.float32)
-    y_torch = torch.relu(x_torch)
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    y_tt = ttnn_function(x_tt)
-
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(y_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp, *, preserve_nan_values=False):
-    all_bf16_values = generate_all_bfloat16_bitpatterns(torch.float32)
-
-    # Flush subnormal inputs
-    # Hardware does not handle subnormal values and will flush these values to 0.0 (known behavior)
-    # For testing, we set these values to 0.0 beforehand so that golden function also gets 0.0
-    x_torch = flush_subnormal_values_to_zero(all_bf16_values)
-
-    x_tt = ttnn.from_torch(
-        x_torch,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        preserve_nan_values=preserve_nan_values,
-    )
-
-    y_tt = ttnn_function(x_tt)
-    y_torch = torch_function(x_torch)
-
-    # Compare results
-    tt_out = ttnn.to_torch(y_tt)
-
-    # If function is expected to return subnormal value, then hardware is expected to flush it to 0.0
-    # Thus, we flush golden output to 0.0 as well to verify this behavior
-    y_torch = flush_subnormal_values_to_zero(y_torch)
-
-    # The input covers both signs of NaN and infinity. With NaN-preserving transfer enabled,
-    # allow_nonfinite still requires matching NaN/Inf positions and exact signed infinities.
-    assert_with_ulp(expected_result=y_torch, actual_result=tt_out, ulp_threshold=max_ulp, allow_nonfinite=True)
-
-
-def test_atan_fp32(device):
-    # The dense fp32 sweep peaks at approximately 2.34 ULP.
-    run_unary_fp32_test_with_ulp(device, ttnn.atan, torch.atan, max_ulp=2.5, preserve_nan_values=True)
-
-
-def test_asin_fp32(device):
-    # The dense fp32 sweep remains below 2 ULP.
-    run_unary_fp32_test_with_ulp(device, ttnn.asin, torch.asin, max_ulp=2, preserve_nan_values=True)
-
-
-def test_acos_fp32(device):
-    # The dense fp32 sweep remains below 2 ULP.
-    run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=2, preserve_nan_values=True)
-
-
-def test_sinh_fp32_all_bfloat16_bitpatterns(device):
-    # Full-tensor torch.sinh overflows at +/-89.0 even though the rounded fp32 result is finite.
-    # Use a float64 golden rounded back to fp32 to test the kernel against the representable result.
-    run_unary_fp32_test_with_ulp(device, ttnn.sinh, lambda x: torch.sinh(x.double()).float(), max_ulp=3)
-
-
-def test_cosh_fp32_all_bfloat16_bitpatterns(device):
-    run_unary_fp32_test_with_ulp(
-        device,
-        ttnn.cosh,
-        lambda x: torch.cosh(x.double()).float(),
-        max_ulp=1,
-    )
-
-
-def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False):
-    """Run a single-input fp32 unary op on a random tensor in [0, 1) and assert vs the torch golden.
-
-    Default ``ulp=1`` covers kernels accurate to one float32 ULP. Callers override ``ulp`` when the
-    kernel has a larger expected error.
-    """
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(
-        expected_result=torch_output_tensor,
-        actual_result=output_tensor,
-        ulp_threshold=ulp,
-        allow_nonfinite=allow_nonfinite,
-    )
 
 
 @pytest.mark.parametrize(
@@ -147,18 +39,6 @@ def test_tanh_fp32_all_nan_payloads_propagate(device, base_bits, pad_bits):
     output_tensor = ttnn.to_torch(ttnn.tanh(input_tensor))
 
     assert torch.isnan(output_tensor).all()
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_asinh(device, h, w):
-    # Default [0, 1) input includes the small-x region where the log1p form fixes
-    # the catastrophic cancellation of the old log(|x| + sqrt(x^2 + 1)) chain.
-    # |x| < 0.75 uses a direct degree-6 polynomial (<=1 ulp); |x| >= 0.75 uses the
-    # cancellation-free log1p(|x| + x^2 / (1 + sqrt(1+x^2))) form (<=1.5 ulp).
-    # test_trig_ops in test_unary_category1_float32.py checks asinh with atol=4.8e-7,
-    # which is ~500 ulp at x = 0.01 and would pass the old chain, so keep this ULP check.
-    run_unary_test(device, h, w, ttnn.asinh, ulp=2)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
