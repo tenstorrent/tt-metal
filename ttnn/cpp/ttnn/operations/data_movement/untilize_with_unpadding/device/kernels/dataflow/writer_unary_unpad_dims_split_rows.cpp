@@ -62,10 +62,9 @@ void kernel_main() {
 
             l1_read_addr += block_row_size;
             curr_stick_id++;
-
-            // Block write
-            noc.async_write_barrier();
         }
+        // Every row reads its own part of the block, so one barrier before releasing it is enough.
+        noc.async_write_barrier();
         dfb_out0.pop_front(num_tiles_block_c);
     };
 
