@@ -201,6 +201,18 @@ run each (`tests/test_mesh_long_context.py`, the README rows).
 
 ## 5. Workstream D: the served path
 
+First item after the checkpoint (2026-10-31): device sampling for sampled rows. Today the head's argmax is the only
+device sampler (`supports_sample_on_device` with `max_device_top_k: 1`), so every request with a temperature or top-p
+returns the full `[B, 1, 154880]` fp32 logits to the host each step and the plugin samples there: measured 4-6 tok/s
+per user (release_r2's r1_gpqa_diamond at temperature 1.0 / top-p 0.95: 41-44 tok/s aggregate at 10 running, 25-28 at
+4-5) against 16-17 greedy; the resident chain is bypassed. Design: reuse `models/common/sampling/tt_sampling.py`
+(`ttnn.sampling` over the per-TP-shard top-k gathered across the row's 4 chips: per-row `k` / `p` / `temp` (1/T)
+tensors of shape `[users]`, `ttnn.manual_seed` per user before the draw, one core per user, 1-32 users, a persistent
+output tensor) inside the traced decode step, feed the sampled id into the resident chain in place of the argmax, keep
+the host path for logprobs / penalties / min_p; raise `max_device_top_k` to the module's limit so the plugin routes
+sampled rows to the device. Validate: a short sampled A/B (128 x 128 at 32 users, temperature 1.0 / top-p 0.95) against
+the greedy ITL, then the eval entries' runtime.
+
 | item | change | where | status |
 |---|---|---|---|
 | D1 | the step gap (73 served vs 61 harness ms): device-side token feedback + position increment inside the traced step, ids-only read, then `supports_async_decode` | `tt/generator_vllm.py`, `tt/mesh_model.py`, `tt/packed_inputs.py` | packed inputs landed; the rest not started |
