@@ -468,6 +468,13 @@ def test_sampling_rows_admission_and_staging():
     g, k, top_p, inv_t, seed = row_sampling(sp, 2)
     assert (g, k, top_p, seed) == (False, 40, 0.95, None) and abs(inv_t - 0.5) < 1e-6
     assert row_sampling(SimpleNamespace(), 0) == (True, 1, 1.0, 1.0, None), "missing fields read as greedy"
+    assert row_sampling(SimpleNamespace(temperature=[1.0], top_k=[20], top_p=[0.9], seed=[None]), 0) == (
+        False,
+        20,
+        0.9,
+        1.0,
+        None,
+    ), "the plugin's seed list holds None for an unseeded row (the 18:20 served crash)"
     # the staging on the adapter's fakes: 2 rows x 4 users, rows independent -> flat slot = row * 4 + user
     a, model = _adapter(warm=False, independent=True)
     a.slots.allocate(0, at=(0, 1))

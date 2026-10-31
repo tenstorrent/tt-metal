@@ -862,7 +862,9 @@ def row_sampling(sampling_params, r: int) -> tuple[bool, int, float, float, int 
 
     def val(name, default):
         v = getattr(sampling_params, name, None)
-        return default if v is None or r >= len(v) else v[r]
+        if v is None or r >= len(v) or v[r] is None:  # the plugin's lists hold None for an unset field (seed)
+            return default
+        return v[r]
 
     t = float(val("temperature", 0.0))
     k = int(val("top_k", 1))
