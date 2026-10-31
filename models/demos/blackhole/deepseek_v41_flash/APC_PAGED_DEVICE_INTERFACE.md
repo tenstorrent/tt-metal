@@ -56,3 +56,4 @@ Slot id spaces are separate: key slots `0..K-1`, halo A `0..KA-1`, halo B `0..KB
 
 ## Changelog
 - 2026-10-31 02:40 UTC: first version (code written, CPU tests green, device tests pending a free host).
+- 2026-10-31 02:45 UTC: device tests verified on .32 (image rc2-95a82b1cadf3, log dev/out/t3.log): 6 passed (key save/load round trip for ratio 2 and 2+1 owners, bit-exact, per-(row,slot) masks, SKIP, repeated rounds with slot reuse, no write outside the listed history blocks; halo save/restore parts A and B, bit-exact, in place (same addresses), other users and other part untouched; key save + halo save inside a captured trace with tables refreshed by h2d between replays). Not yet done: wiring into DSV41Model (section 5) and timing of the launches.
