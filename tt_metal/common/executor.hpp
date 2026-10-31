@@ -22,9 +22,14 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 #include <taskflow/taskflow.hpp>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <future>
+#include <memory>
 #include <thread>
+#include <vector>
 
 namespace tt::tt_metal::detail {
 inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
@@ -137,5 +142,42 @@ auto async(F&& func, Args&&... args) {
     GetExecutor().silent_async([task] { (*task)(); });
     GetExecutorMutex().unlock();
     return res;
+}
+
+// Runs every job and returns once all have finished, then rethrows the exception of the lowest-index job that threw.
+// Jobs after the first are queued on the executor, and the caller runs each job no worker has claimed. The caller
+// waits only on jobs a worker has already started, so it is safe to call from an executor worker. Unlike
+// detail::async, it queues even when every worker is busy, and a queued job the caller runs stays queued as a no-op
+// until a worker takes it.
+inline void run_all(const std::vector<std::function<void()>>& jobs) {
+    struct Task {
+        std::atomic<bool> claimed{false};
+        std::packaged_task<void()> run;
+        void run_once() {
+            if (!claimed.exchange(true)) {
+                run();
+            }
+        }
+    };
+    std::vector<std::shared_ptr<Task>> tasks;
+    std::vector<std::future<void>> futures;
+    for (const auto& job : jobs) {
+        auto task = std::make_shared<Task>();
+        task->run = std::packaged_task<void()>(job);
+        futures.push_back(task->run.get_future());
+        if (!tasks.empty()) {
+            GetExecutor().silent_async([task] { task->run_once(); });
+        }
+        tasks.push_back(std::move(task));
+    }
+    for (const auto& task : tasks) {
+        task->run_once();
+    }
+    for (auto& future : futures) {
+        future.wait();
+    }
+    for (auto& future : futures) {
+        future.get();
+    }
 }
 }  // namespace tt::tt_metal::detail

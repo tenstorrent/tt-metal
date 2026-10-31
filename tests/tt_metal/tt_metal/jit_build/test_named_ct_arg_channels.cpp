@@ -326,11 +326,11 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, SameProgramDuplicateDoesNotRetryF
     while ((fd = open_build()) < 0) {
         ASSERT_EQ(compiled.wait_for(std::chrono::milliseconds(1)), std::future_status::timeout);
     }
-    // Once the duplicate defers, only the owner's task and its compile step remain.
-    for (int i = 0; i < 1000 && detail::GetExecutor().num_topologies() != 2; ++i) {
+    // Once the duplicate defers, only the owner's task remains: run_all runs a single compile on the calling thread.
+    for (int i = 0; i < 1000 && detail::GetExecutor().num_topologies() != 1; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    EXPECT_EQ(detail::GetExecutor().num_topologies(), 2u);
+    EXPECT_EQ(detail::GetExecutor().num_topologies(), 1u);
     ::close(fd);
     int retries = 0;
     while (compiled.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
