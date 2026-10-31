@@ -158,18 +158,28 @@ TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
     }
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementCountsSlotsOnSelectedNode) {
-    // Exceeding the DFB slot limit is rejected on a selected endpoint node.
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementCountsSlotsOnEndpointNodes) {
+    // Disjoint storage overrides do not increase the slot limit for shared endpoint kernels.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     const uint32_t count = static_cast<uint32_t>(::dfb::NUM_DFBS) + 1;
     auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, count);
-    spec.work_units[0].target_nodes = NodeRange({0, 0}, {2, 0});
-    for (auto& dfb : spec.dataflow_buffers) {
-        dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    for (uint32_t i = 0; i < count; ++i) {
+        spec.dataflow_buffers[i].advanced_options.override_placement = CoreRangeSet(CoreRange({i % 2, 0}));
     }
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(fixture_device, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DataflowBufferSpecs on node (2, 0)")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DataflowBufferSpecs on node")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsSlotGapWithoutOverrides) {
+    // Quasar requires contiguous device slots when no placement override is used.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeNestedQuasarDFBEndpointPlacementsForTest();
+    std::swap(spec.dataflow_buffers[0], spec.dataflow_buffers[1]);
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("requires contiguous DFB device slots")));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementDetectsL1OverflowOnSelectedNode) {

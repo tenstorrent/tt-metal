@@ -19,7 +19,9 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "command_queue_fixture.hpp"
+#include "device_fixture.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -91,6 +93,58 @@ void kernel_main() {
         .work_units = {MakeMinimalWorkUnit("transfer", NodeRange({0, 0}, {1, 0}), {"producer", "consumer"})}};
 }
 
+ProgramSpec MakeDifferentDFBMetadataSpecForTest() {
+    auto spec = MakeGuardedDFBTransferSpecForTest();
+    const KernelSpec::SourceCode source{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
+template <typename Binding>
+void transfer(Binding binding) {
+    DataflowBuffer buffer(binding);
+    auto* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::report_address));
+#ifdef PRODUCER
+    report[0] = static_cast<uint32_t>(buffer.get_dataformat());
+#else
+    report[1] = buffer.get_tile_size();
+#endif
+    for (uint32_t entry = 0; entry < get_arg(args::transfers); ++entry) {
+#ifdef PRODUCER
+        buffer.reserve_back(1);
+        auto* value = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer.get_write_ptr());
+        *value = get_arg(args::pattern) + entry;
+        buffer.push_back(1);
+#else
+        buffer.wait_front(1);
+        auto* value = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer.get_read_ptr());
+        report[2 + entry] = *value;
+        buffer.pop_front(1);
+#endif
+    }
+}
+
+void kernel_main() {
+    if (get_arg(args::enabled)) {
+        transfer(dfb::left);
+    } else {
+        transfer(dfb::right);
+    }
+}
+)"};
+    spec.dataflow_buffers = {MakeMinimalDFB("left", 1024, 2), MakeMinimalDFB("right", 4096, 2)};
+    spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
+    spec.dataflow_buffers[0].tile_format_metadata = Tile({16, 32});
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    spec.dataflow_buffers[1].data_format_metadata = tt::DataFormat::Float32;
+    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    spec.kernels[0].source = spec.kernels[1].source = source;
+    spec.kernels[0].compiler_options.defines["PRODUCER"] = "1";
+    spec.kernels[0].dfb_bindings = {ProducerOf(DFBSpecName{"left"}, "left"), ProducerOf(DFBSpecName{"right"}, "right")};
+    spec.kernels[1].dfb_bindings = {ConsumerOf(DFBSpecName{"left"}, "left"), ConsumerOf(DFBSpecName{"right"}, "right")};
+    return spec;
+}
+
 ProgramRunArgs MakeGuardedDFBTransferArgsForTest(uint32_t pattern) {
     ProgramRunArgs::KernelRunArgs producer{.kernel = KernelSpecName{"producer"}};
     ProgramRunArgs::KernelRunArgs consumer{.kernel = KernelSpecName{"consumer"}};
@@ -134,6 +188,13 @@ std::vector<uint32_t> ExpectedDFBReportForTest(uint32_t pattern, bool enabled = 
     return report;
 }
 
+std::vector<uint32_t> ExpectedDFBMetadataReportForTest(uint32_t pattern, tt::DataFormat format, uint32_t tile_size) {
+    auto report = ExpectedDFBReportForTest(pattern);
+    report[0] = static_cast<uint32_t>(format);
+    report[1] = tile_size;
+    return report;
+}
+
 std::vector<std::vector<uint32_t>> ExpectedDFBReportsForTest(const std::vector<uint32_t>& patterns) {
     std::vector<std::vector<uint32_t>> reports;
     std::ranges::transform(
@@ -154,6 +215,71 @@ std::vector<uint32_t> ReadExcludedDFBStorageForTest(distributed::MeshDevice& dev
     std::vector<uint32_t> storage;
     slow_dispatch::ReadFromL1(device, {1, 0}, DFBStorageAddressForTest(program), dfb_storage_bytes, storage);
     return storage;
+}
+
+ProgramSpec MakeQuasarDFBStartupSpecForTest(bool include_consumer_on_excluded_node = true) {
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    producer.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    auto report = Scratchpad<uint32_t>(scratch::report);
+    if (get_arg(args::enabled)) {
+        DataflowBuffer buffer(dfb::buffer);
+        report[0] = buffer.get_entry_size();
+    } else {
+        report[0] = 2;
+    }
+}
+)"};
+    producer.runtime_arg_schema.runtime_arg_names = {"enabled"};
+    producer.dfb_bindings = {ProducerOf(DFBSpecName{"buffer"}, "buffer")};
+    producer.scratchpad_bindings = {{ScratchpadSpecName{"report"}, "report"}};
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer", 2);
+    consumer.source = KernelSpec::SourceCode{"#include \"api/compute/common.h\"\nvoid kernel_main() {}"};
+    consumer.dfb_bindings = {AllConsumerOf(DFBSpecName{"buffer"}, "buffer")};
+    auto buffer = MakeMinimalDFB("buffer", 2048, 2);
+    buffer.data_format_metadata = tt::DataFormat::Float16_b;
+    ProgramSpec spec{
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {buffer},
+        .scratchpads = {{.unique_id = ScratchpadSpecName{"report"}, .size_per_node = 64}},
+        .work_units = {MakeMinimalWorkUnit("included", NodeCoord{0, 0}, {"producer", "consumer"})}};
+    const std::vector<std::string> excluded_kernels = include_consumer_on_excluded_node
+                                                          ? std::vector<std::string>{"producer", "consumer"}
+                                                          : std::vector<std::string>{"producer"};
+    spec.work_units.push_back(MakeMinimalWorkUnit("excluded", NodeCoord{1, 0}, excluded_kernels));
+    return spec;
+}
+
+ProgramRunArgs MakeQuasarDFBStartupArgsForTest() {
+    ProgramRunArgs::KernelRunArgs producer{.kernel = KernelSpecName{"producer"}};
+    AddRuntimeArgsForNode(producer.runtime_arg_values, {0, 0}, {{"enabled", 1}});
+    AddRuntimeArgsForNode(producer.runtime_arg_values, {1, 0}, {{"enabled", 0}});
+    return ProgramRunArgs{.kernel_run_args = {producer}};
+}
+
+uint32_t DFBStartupReportAddressForTest(const Program& program) {
+    return program.impl().get_kernel_by_spec_name("producer")->scratchpad_binding_handles()[0].allocated_address;
+}
+
+void ClearDFBStartupReportsForTest(distributed::MeshDevice& device, const Program& program) {
+    std::vector<uint32_t> zeros{0};
+    for (uint32_t x = 0; x < 2; ++x) {
+        slow_dispatch::WriteToL1(device, {x, 0}, DFBStartupReportAddressForTest(program), zeros);
+    }
+}
+
+std::vector<uint32_t> ReadDFBStartupReportsForTest(distributed::MeshDevice& device, const Program& program) {
+    std::vector<uint32_t> reports;
+    for (uint32_t x = 0; x < 2; ++x) {
+        std::vector<uint32_t> report;
+        slow_dispatch::ReadFromL1(device, {x, 0}, DFBStartupReportAddressForTest(program), sizeof(uint32_t), report);
+        reports.push_back(report.at(0));
+    }
+    return reports;
 }
 
 }  // namespace test_helpers
@@ -220,6 +346,21 @@ TYPED_TEST(DFBPlacementHardwareTest, GuardedAccessSkipsExcludedNode) {
     EXPECT_EQ(ReadDFBReportForTest(fixture_device, {1, 0}), ExpectedDFBReportForTest(0, false));
 }
 
+TYPED_TEST(DFBPlacementHardwareTest, DisjointDFBsUseDifferentMetadata) {
+    // Shared kernels transfer data with each node's selected DFB format and tile size.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto workload = MakeMeshWorkloadFromSpec(fixture_device, test_helpers::MakeDifferentDFBMetadataSpecForTest());
+    Program& program = workload.get_programs().begin()->second;
+    SetProgramRunArgs(program, MakeGuardedDFBTransferArgsForTest(0x300));
+    this->EnqueueFromTestFixture(workload);
+    EXPECT_EQ(
+        ReadDFBReportForTest(fixture_device, {0, 0}),
+        test_helpers::ExpectedDFBMetadataReportForTest(0x300, tt::DataFormat::Float16_b, 1024));
+    EXPECT_EQ(
+        ReadDFBReportForTest(fixture_device, {1, 0}),
+        test_helpers::ExpectedDFBMetadataReportForTest(0x300, tt::DataFormat::Float32, 4096));
+}
+
 TYPED_TEST(DFBPlacementHardwareTest, ExcludedNodeStorageRemainsUntouched) {
     // A kernel on an excluded node leaves memory at the DFB address unchanged.
     distributed::MeshDevice& fixture_device = this->fixture_device();
@@ -247,6 +388,49 @@ TYPED_TEST(DFBPlacementHardwareTest, RepeatedEnqueueTransfersNewData) {
         reports.push_back(ReadDFBReportForTest(fixture_device, {0, 0}));
     }
     EXPECT_EQ(reports, ExpectedDFBReportsForTest({0x100, 0x200, 0x300}));
+}
+
+class QuasarDFBPlacementHardwareTest : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    distributed::MeshDevice& fixture_device() { return *this->devices_.at(0); }
+
+    void SetUp() override {
+        QuasarMeshDeviceSingleCardFixture::SetUp();
+        if (this->IsSkipped()) {
+            return;
+        }
+        if (fixture_device().compute_with_storage_grid_size().x < 2) {
+            GTEST_SKIP() << "Requires two worker columns";
+        }
+    }
+};
+
+TEST_F(QuasarDFBPlacementHardwareTest, RemapperStartupCompletesOnExcludedNode) {
+    // Kernels start on both nodes when a DFB that needs the remapper reserves storage on one node.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto spec = test_helpers::MakeQuasarDFBStartupSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    test_helpers::ClearDFBStartupReportsForTest(fixture_device, program);
+    SetProgramRunArgs(program, test_helpers::MakeQuasarDFBStartupArgsForTest());
+    auto completed = LaunchProgram(fixture_device, std::move(program));
+    EXPECT_EQ(
+        test_helpers::ReadDFBStartupReportsForTest(fixture_device, completed.get_programs().begin()->second),
+        (std::vector<uint32_t>{2048, 2}));
+}
+
+TEST_F(QuasarDFBPlacementHardwareTest, RemapperStartupCompletesWithoutExcludedConsumer) {
+    // An excluded producer node starts without a consumer kernel when it skips DFB interaction.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto spec = test_helpers::MakeQuasarDFBStartupSpecForTest(/*include_consumer_on_excluded_node=*/false);
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    auto program = MakeProgramFromSpec(fixture_device, spec);
+    test_helpers::ClearDFBStartupReportsForTest(fixture_device, program);
+    SetProgramRunArgs(program, test_helpers::MakeQuasarDFBStartupArgsForTest());
+    auto completed = LaunchProgram(fixture_device, std::move(program));
+    EXPECT_EQ(
+        test_helpers::ReadDFBStartupReportsForTest(fixture_device, completed.get_programs().begin()->second),
+        (std::vector<uint32_t>{2048, 2}));
 }
 
 }  // namespace
