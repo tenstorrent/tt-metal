@@ -1283,7 +1283,8 @@ static void run_quasar_tilize_untilize_test(
         .face_c_dim = static_cast<int>(face_c_dim),
         .num_faces = static_cast<int>(num_faces),
         .tiny_tile = tiny_tile,
-        .datum_bytes = tt::datum_size(input_data_format)};
+        .datum_bytes = tt::datum_size(input_data_format),
+        .num_faces_c_dim = static_cast<int>(tile_shape_in_faces[1])};
     auto golden = is_tilize ? ::unit_tests::compute::gold_standard_tilize(src_vec, golden_config)
                             : ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
 
@@ -1382,13 +1383,16 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
     }
 }
 
-// Pack Untilize tiny tile (1x32, 2x32) via pack_untilize_block (unpack in the loop).
-// {faces_r, faces_c, face_r_dim}: 1x32 = {1, 2, 1}, 2x32 = {1, 2, 2}.
+// {faces_r, faces_c, face_r_dim}: 1x32..16x32, 16x16, 32x16.
+static const std::vector<std::array<std::uint32_t, 3>> QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES = {
+    {1, 2, 1}, {1, 2, 2}, {1, 2, 4}, {1, 2, 8}, {1, 2, 16}, {1, 1, 16}, {2, 1, 16}};
+
+// Pack Untilize tiny tile via pack_untilize_block (unpack in the loop).
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
-    std::vector<std::array<std::uint32_t, 3>> geometries = {{1, 2, 1}, {1, 2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
     for (auto& cfg : test_configs) {
-        for (auto& geo : geometries) {
+        for (const auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
                     this->device(),
@@ -1406,13 +1410,12 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) 
     }
 }
 
-// Pack Untilize Dst tiny tile (1x32, 2x32): tiles pre-loaded into dest via copy_tile.
-// {faces_r, faces_c, face_r_dim}: 1x32 = {1, 2, 1}, 2x32 = {1, 2, 2}.
+// Pack Untilize Dst tiny tile: tiles pre-loaded into dest via copy_tile.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
-    std::vector<std::array<std::uint32_t, 3>> geometries = {{1, 2, 1}, {1, 2, 2}};
+    const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
     for (auto& cfg : test_configs) {
-        for (auto& geo : geometries) {
+        for (const auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
                     this->device(),
