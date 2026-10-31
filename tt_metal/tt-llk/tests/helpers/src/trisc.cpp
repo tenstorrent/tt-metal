@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// RC experiment switches: which half of the L1 port-3 fix is on
+#define LLK_PORT3_AT_END   1
+#define LLK_PORT3_AT_START 1
 #include <algorithm>
 #include <cstdint>
 
@@ -98,6 +101,23 @@ int main(void)
     llk_profiler::sync_threads();
 #endif
 
+#if defined(ARCH_WORMHOLE) && defined(LLK_PORT3_AT_START)
+    // Start-of-kernel half of the port-3 fix (covers the first kernel after anything else ran on the core): all
+    // three TRISCs meet; while math and unpack spin on the release semaphore (PC buffer, not L1) the pack TRISC
+    // waits for them to settle and makes one L1 load, so it is the last port-3 requester before the kernel body.
+    llk_barrier::rendezvous(
+        llk_barrier::is_action_thread(),
+        []
+        {
+            constexpr std::uint64_t PORT3_START_SETTLE_CYCLES = 512;
+            const std::uint64_t settle_start                  = ckernel::read_wall_clock();
+            while (ckernel::read_wall_clock() - settle_start < PORT3_START_SETTLE_CYCLES)
+            {
+            }
+            (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(mailboxes_start));
+        });
+#endif
+
     {
         ZONE_SCOPED("KERNEL")
 
@@ -112,7 +132,7 @@ int main(void)
 
     llk_perf::read_last_zone();
 
-#if defined(ARCH_WORMHOLE) && defined(LLK_TRISC_PACK)
+#if defined(ARCH_WORMHOLE) && defined(LLK_TRISC_PACK) && defined(LLK_PORT3_AT_END)
     // Wormhole L1 port 3 is a round-robin arbiter over {0: TDMA (packer L1 writes, mover), 1: math TRISC,
     // 2: pack TRISC}. Its last-grant pointer survives TRISC soft reset and is cleared only by a tile reset, so the
     // L1 access rhythm of the next kernel (and its perf numbers) depended on which requester this kernel used last.
