@@ -847,6 +847,69 @@ def test_sparse_matmul_sparsity_wrong_layout(device, expect_error):
         )
 
 
+@pytest.mark.parametrize("sparsity_dtype", [ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint8])
+def test_sparse_matmul_sparsity_wrong_dtype(device, expect_error, sparsity_dtype):
+    """The kernels read one 16-bit word per batch, so other mask dtypes are rejected.
+
+    nnz is omitted so that a build without the check returns wrong batches instead of hanging on the nnz mismatch.
+    """
+    in0, in1, _, _, pc, dims = _make_sparse_inputs(device)
+    _, _, _, num_experts, tile_h, tile_w = dims
+
+    sparsity = ttnn.from_torch(
+        torch.ones((1, 4, 1, num_experts)),
+        dtype=sparsity_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "must be BFLOAT16 or UINT16"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+
+def test_sparse_matmul_uint16_sparsity_matches_bfloat16(device):
+    """A UINT16 mask (e.g. the output of moe_expert_token_remap) selects the same batches as a BFLOAT16 mask."""
+    in0, in1, _, _, pc, dims = _make_sparse_inputs(device)
+    _, _, _, num_experts, tile_h, tile_w = dims
+
+    torch.manual_seed(1)
+    mask = (torch.rand((1, 4, 1, num_experts)) < 0.5).to(torch.bfloat16)
+    mask[0, 0, 0, 0] = 1
+
+    outputs = []
+    for sparsity_dtype in (ttnn.bfloat16, ttnn.uint16):
+        sparsity = ttnn.from_torch(
+            mask,
+            dtype=sparsity_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output = ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+        outputs.append(ttnn.to_torch(output))
+
+    assert torch.equal(outputs[0], outputs[1])
+
+
 def test_sparse_matmul_rejects_same_volume_wrong_compact_shape(device, expect_error):
     """Compact detection must validate geometry, not only logical volume."""
     in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)

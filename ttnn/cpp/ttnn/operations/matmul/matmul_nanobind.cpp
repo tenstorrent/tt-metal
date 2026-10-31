@@ -1111,7 +1111,7 @@ void py_module(nb::module_& mod) {
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
         Keyword Args:
-            sparsity (ttnn.Tensor): the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.
+            sparsity (ttnn.Tensor): the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16 or uint16.
             program_config (ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig): the program configuration for the matmul operation. Only this config type is supported. ``mcast_in0`` must be set to True.
             nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime. If provided, it **must** be exactly equal to the number of non-zero entries in `sparsity` (i.e. `nnz == count_nonzero(sparsity)`). It is the user's responsibility to set this value correctly. If the equality condition is not met, the kernel will hang (deadlock) on device, since the receiver and compute kernels loop exactly `nnz` times while the sender only multicasts once per non-zero sparsity entry. Because `count_nonzero(sparsity)` is data-dependent and only known at runtime, this cannot be validated on the host; the mismatch is asserted on-device (failing loudly under watcher) but otherwise results in a hang.
             is_input_a_sparse (bool, optional): boolean indicating whether `input_tensor_a` is sparse. Defaults to `False`. Together with `is_input_b_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
@@ -1202,7 +1202,7 @@ void py_module(nb::module_& mod) {
 
                 * - dtype
                   - layout
-                * - BFLOAT16
+                * - BFLOAT16, UINT16
                   - ROW_MAJOR
 
         Memory Support:
