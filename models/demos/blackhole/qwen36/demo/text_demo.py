@@ -1628,9 +1628,26 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     for u in range(B):
         assert len(rows[u]) == max_generated_tokens, f"user {u}: {len(rows[u])} != {max_generated_tokens}"
     if not distinct and sampling is None:
-        # Replicated prompts + greedy must decode identically.
-        for u in range(B):
-            assert rows[u] == rows[0], f"user {u} diverged from user 0 (identical prompts must decode identically)"
+        # Replicated prompts + greedy must decode identically -- within each pair-rank class once the KV-pair split ran
+        # (QWEN36_ATTN_KV_SPLIT=user: a row's tokens depend on the parity of its engine row, tt/kv_split.py "Slot parity";
+        # with the flag off there is one class and this is the all-rows assert).
+        from models.demos.blackhole.qwen36.tt.kv_split import kv_split_identity_classes
+
+        _eng = getattr(dec, "engine", None)
+        _ksp = bool(_eng is not None and getattr(_eng, "kv_split_engaged", lambda: False)())
+        _classes = kv_split_identity_classes(B, _ksp)
+        for _cls in _classes:
+            for u in _cls:
+                assert rows[u] == rows[_cls[0]], (
+                    f"user {u} diverged from user {_cls[0]} (identical prompts must decode identically"
+                    f"{' within a pair-rank class: QWEN36_ATTN_KV_SPLIT ran' if _ksp else ''})"
+                )
+        if _ksp and len(_classes) == 2:
+            _d = next((i for i, (a, b) in enumerate(zip(rows[0], rows[1])) if a != b), None)
+            logger.info(
+                f"[TP SPEC B={B}] KV-pair split ran: even / odd rows "
+                f"{'identical' if _d is None else f'first differ at token {_d}'} (rows within a parity class identical)"
+            )
         assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
 
 

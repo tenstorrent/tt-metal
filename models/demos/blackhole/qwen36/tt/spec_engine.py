@@ -1110,17 +1110,24 @@ class MTPSpecEngine:
                 if bs.get(old, 0) > 0:
                     bs[old] -= 1
                     bs[cand] = bs.get(cand, 0) + 1
+                if self._ksp_gate() is not None:  # the split choice follows the new width
+                    if kw.pop("kv_split", None):
+                        self.kv_split_steps["verify"] -= 1
+                    self._ksp_kw(kw)
         if prev_bucket is not None and prev_bucket != self._vb:
             self.bucket_free_switch += 1
 
     def _bucket_kw(self, kw):
-        """Put the step's bucket into the verify kwargs and count the step (flag off: kw unchanged)."""
+        """Put the step's bucket into the verify kwargs and count the step (flag off: kw unchanged). The KV-split context gate
+        (QWEN36_ATTN_KV_SPLIT_MIN_CTX) adds kv_split=True when the step replays the bucket's split verify variant."""
         if self._bucketed():
             kw["bucket"] = self._vb
             bs = self.__dict__.setdefault("bucket_steps", {})
             bs[self._vb] = bs.get(self._vb, 0) + 1
             if self._vb_fell:
                 self.bucket_fallbacks += 1
+        if self._ksp_gate() is not None:
+            self._ksp_kw(kw)
         return kw
 
     def _dr_trace_for(self, b):
@@ -1130,9 +1137,10 @@ class MTPSpecEngine:
         return self._dr_traces.get(b, self._dr_trace)
 
     def _bucket_note_text(self):
-        """Tail of the periodic fused line: steps per bucket, fallbacks, row swaps (flag on only)."""
+        """Tail of the periodic fused line: steps per bucket, fallbacks, row swaps (flag on only); the KV-split gate's
+        split step counts when a gate is on."""
         if not self._bucketed():
-            return ""
+            return self._ksp_note_text()
         bs = self.__dict__.get("bucket_steps", {})
         return (
             "; buckets "
@@ -1140,6 +1148,7 @@ class MTPSpecEngine:
             + f", fallbacks {self.bucket_fallbacks}, row swaps {self.row_swaps}"
             + f", down-shifts hold {self.bucket_downs_hold} free {self.bucket_downs_free}"
             + f", free switches {self.bucket_free_switch}"
+            + self._ksp_note_text()
         )
 
     def _pending_rows(self):
@@ -1260,13 +1269,137 @@ class MTPSpecEngine:
         copy when ``dev`` already holds this exact table. Every write to a buffer must go through here, since the
         cache is the host copy of what that buffer holds (keyed by the buffer, dropped when it is freed)."""
         if not spec_hostfix_enabled():
-            return self._stage(host, dev, dtype, layout)
+            self._stage(host, dev, dtype, layout)
+            self._stage_split_twin(host, dev)
+            return
         cache = self.__dict__.setdefault("_stage_cache", {})
         hit = cache.get(id(dev))
         if hit is not None and hit[0] is dev and hit[1].shape == host.shape and torch.equal(hit[1], host):
             return
         self._stage(host, dev, dtype, layout)
+        self._stage_split_twin(host, dev)
         cache[id(dev)] = (dev, host.clone())
+
+    # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the per-device own-users twin of _mtp_pt (None = flag off) and the user
+    # count it was built for (the base family's B: an adaptive-K family of another width never stages or reads it)
+    _mtp_pt_own = None
+    _mtp_pt_own_rows = 0
+    # QWEN36_ATTN_KV_SPLIT context gate (KVSplitGate; None = no gate): the split variant widths this engine captured (verify,
+    # drafter), the context of the step being handled (kv_split_gate_ctx; None outside a step) and the split step counters
+    _ksp_vfy_widths = _ksp_dr_widths = ()
+    _ksp_ctx = None
+
+    def _kv_split_draft_plan(self):
+        """The model's KVSplitPlan when the drafter steps can take the KV-pair user split (the MTP attention loaded the
+        pair weights), else None (always with the flag off)."""
+        plan = getattr(self.model, "_kv_split_plan", None)
+        if plan is None or not getattr(self.mtp.attention, "_kv_split_ready", False):
+            return None
+        return plan
+
+    def _stage_split_twin(self, host, dev):
+        """QWEN36_ATTN_KV_SPLIT=user: whenever _mtp_pt is re-staged, re-stage its per-device own-users twin from the same
+        host table (no-op for every other buffer, and with the flag off)."""
+        if self._mtp_pt_own is None or dev is not self._mtp_pt or int(host.shape[0]) != int(self._mtp_pt_own_rows):
+            return
+        from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
+
+        h = ttnn.from_torch(
+            own_page_table_host(host, self.model.num_devices),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+        ttnn.copy_host_to_device_tensor(h, self._mtp_pt_own)
+
+    def _ksp_gate(self):
+        """The model's context gate (QWEN36_ATTN_KV_SPLIT_MIN_CTX) when it is in "gated" mode, else None (flag off, the
+        "always" K1 setting, "never")."""
+        model = getattr(self, "model", None)
+        if getattr(model, "_kv_split_plan", None) is None:
+            return None
+        g = getattr(model, "_kv_split_gate", None)
+        return g if g is not None and g.mode == "gated" else None
+
+    def _ksp_note_ctx(self, start_pos, active):
+        """Per step, next to the bucket choice: the context the split decisions of this step use (kv_split_gate_ctx over the
+        step's start positions: exact in a synchronous step, the runner's positions in deferred serving). No gate: None.
+        """
+        if self._ksp_gate() is None:
+            self._ksp_ctx = None
+            return
+        from models.demos.blackhole.qwen36.tt.kv_split import kv_split_gate_ctx
+
+        self._ksp_ctx = kv_split_gate_ctx(start_pos, active, self.T)
+
+    def _ksp_width(self):
+        """The width whose traces this step replays: its row bucket, or B (buckets off, or the eager seed / join)."""
+        return self._vb if (self._bucketed() and self._vb is not None) else self.B
+
+    def _ksp_on(self, part):
+        """Whether this step replays the split variant of ``part`` ("verify" / "draft"): the gate wants it for the step's
+        width at the step's context, and that width's variant was captured in the live family (the model's _vfy_bk_ksp /
+        the ("ksp", b) entries of _dr_traces; both swap with an adaptive-K family, so a family without variants stays
+        unsplit). Always False without a gate."""
+        g = self._ksp_gate()
+        if g is None or self._ksp_ctx is None:
+            return False
+        b = self._ksp_width()
+        if not g.want(part, b, self._ksp_ctx):
+            return False
+        if part == "verify":
+            return b in (getattr(self.model, "_vfy_bk_ksp", None) or {})
+        return ("ksp", b) in (self._dr_traces or {})
+
+    def _ksp_kw(self, kw):
+        """Put the step's verify split choice into the verify kwargs (only when it is True: no gate leaves kw as it was)."""
+        if self._ksp_on("verify"):
+            kw["kv_split"] = True
+            n = self.__dict__.setdefault("kv_split_steps", {"verify": 0, "draft": 0})
+            n["verify"] += 1
+        else:
+            kw.pop("kv_split", None)
+        return kw
+
+    def _ksp_draft_trace(self):
+        """The drafter trace id of this step (the split variant when _ksp_on("draft"), else _dr_trace_for(_vb))."""
+        if self._ksp_on("draft"):
+            n = self.__dict__.setdefault("kv_split_steps", {"verify": 0, "draft": 0})
+            n["draft"] += 1
+            return self._dr_traces[("ksp", self._ksp_width())]
+        return self._dr_trace_for(self._vb)
+
+    def kv_split_engaged(self):
+        """True when some step of this engine ran the KV-pair split (QWEN36_ATTN_KV_SPLIT=user): every split trace in the
+        gate's "always" mode, a counted split step in "gated" mode. Then rows of different parity may decode differently
+        from the same prompt (tt/kv_split.py "Slot parity"; kv_split_identity_classes)."""
+        model = getattr(self, "model", None)
+        if getattr(model, "_kv_split_plan", None) is None:
+            return False
+        g = getattr(model, "_kv_split_gate", None)
+        if g is not None and g.mode == "always":
+            return True
+        return sum(self.__dict__.get("kv_split_steps", {}).values()) > 0
+
+    def _ksp_note_text(self):
+        """Tail of the periodic fused line with a gate: split steps per part (empty otherwise)."""
+        if self._ksp_gate() is None:
+            return ""
+        n = self.__dict__.get("kv_split_steps", {"verify": 0, "draft": 0})
+        return f"; kv split steps verify {n['verify']} draft {n['draft']} (ctx {self._ksp_ctx})"
+
+    def _ksp_drafter_widths(self):
+        """The widths ((B,) + _dr_bks) that get a split drafter variant: gated mode, a "draft" threshold, the drafter split
+        available at that width (the twin was built for this engine's B, the plan has (b, 1), the "draft" part is on).
+        """
+        g = self._ksp_gate()
+        plan = self._kv_split_draft_plan()
+        if g is None or plan is None or self._mtp_pt_own is None or int(self._mtp_pt_own_rows) != int(self.B):
+            return ()
+        if "draft" not in plan.parts:
+            return ()
+        return tuple(b for b in g.variant_buckets("draft", (self.B,) + tuple(self._dr_bks)) if plan.has(b, 1))
 
     # class defaults of the join-seed trace state (set per instance in __init__; engines built without it read these)
     _fj_mask = _seed_trace = _seed_trace_bufs = _fj_mask_dims = None
@@ -1589,6 +1722,21 @@ class MTPSpecEngine:
         self._mtp_pt_rows = [
             self._alloc_host_replicated(pt[u : u + 1].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) for u in range(B)
         ]
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the per-device own-users twin of _mtp_pt for the drafter steps'
+        # split SDPA, re-staged with it (_stage_table). None with the flag off.
+        self._mtp_pt_own = None
+        if self._kv_split_draft_plan() is not None and B % 2 == 0:  # the twin needs pairs of users (odd B: no split)
+            from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
+
+            self._mtp_pt_own = ttnn.from_torch(
+                own_page_table_host(pt, self.model.num_devices),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._mtp_pt_own_rows = int(pt.shape[0])
         self._anchor_warmup(self._dim_frac, self._feed_dtype)
 
         cap = width * self.block_size
@@ -1695,6 +1843,17 @@ class MTPSpecEngine:
             self._dr_bks
         ):  # every verify bucket program is compiled here, before any capture (capture forbids cache misses)
             model.prepare_verify_buckets(self._dr_bks)
+        # QWEN36_ATTN_KV_SPLIT context gate: the split verify variants of the widths with a threshold, warmed after the
+        # buckets and before any capture (no gate: none, nothing allocated)
+        self._ksp_vfy_widths = ()
+        if self._ksp_gate() is not None:
+            self._ksp_vfy_widths = model.ksp_verify_variant_widths((B,) + tuple(self._dr_bks))
+            if self._ksp_vfy_widths:
+                model.prepare_verify_ksp_variants(self._ksp_vfy_widths)
+            logger.info(
+                f"[spec_engine] KV-split context gate {model._kv_split_gate.describe()}: split verify variants "
+                f"{self._ksp_vfy_widths or 'none'}"
+            )
         for dn in self._gdn:
             # The seed's sync_conv_win from the packed conv format (the gdn_decode_step op is the plain decode, e.g.
             # QWEN36_VERIFY_SPEC_STEP=1): compile its unpack / copies before capture_decode forbids cache misses.
@@ -1782,7 +1941,8 @@ class MTPSpecEngine:
                 ttnn.deallocate(z)
             for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
                 ttnn.deallocate(o)
-            if self._dr_bks:  # each drafter bucket body once, handing its ids over to stand-ins of the shared outputs
+            self._ksp_dr_widths = self._ksp_drafter_widths()  # QWEN36_ATTN_KV_SPLIT gate: split drafter variants
+            if self._dr_bks or self._ksp_dr_widths:  # each bucket / variant body once, ids handed to stand-ins
                 self._dr_standins = tuple(
                     ttnn.zeros(
                         [1, 1, B, 1],
@@ -1795,6 +1955,8 @@ class MTPSpecEngine:
                 )
                 for b in self._dr_bks:
                     self._drafter_body(feed, b, list(self._dr_standins))
+                for b in self._ksp_dr_widths:
+                    self._drafter_body(feed, b, list(self._dr_standins), kv_split=True)
             ttnn.synchronize_device(self.mesh)
             ttnn.deallocate(feed)
             if spec_fused_enabled():
@@ -2055,6 +2217,10 @@ class MTPSpecEngine:
                 ):  # V4, V2, V1 right after V8 (each main + logits + topk), before any drafter / accept capture
                     self.model.record_verify_buckets(self._dr_bks)
                     self._check_shared_addrs(snap, "after the verify buckets")
+                # QWEN36_ATTN_KV_SPLIT gate: V8s, V4s, V2s, before any drafter / accept capture too
+                if self._ksp_vfy_widths:
+                    self.model.record_verify_ksp_variants(self._ksp_vfy_widths)
+                    self._check_shared_addrs(snap, "after the split verify variants")
                 if self.recorded_drafter:  # ids outputs are read right after each replay
                     feed = self.model._vfy_rows_out
                     self._dr_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
@@ -2072,6 +2238,15 @@ class MTPSpecEngine:
                         ttnn.synchronize_device(self.mesh)
                         logger.info(f"[spec_engine] drafter bucket trace captured (b={b}: {b * self.T} reseed rows)")
                         self._log_trace_memory(f"D{b}")
+                    # QWEN36_ATTN_KV_SPLIT gate: D8s, D4s, ..: no new persistent outputs, they copy into _dr_outs in place
+                    for b in self._ksp_dr_widths:
+                        tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                        self._drafter_body(feed, b, self._dr_outs, kv_split=True)
+                        ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                        self._dr_traces[("ksp", b)] = tid
+                        ttnn.synchronize_device(self.mesh)
+                        logger.info(f"[spec_engine] split drafter variant captured (b={b}, QWEN36_ATTN_KV_SPLIT)")
+                        self._log_trace_memory(f"D{b}s")
                     self._check_shared_addrs(snap, "after the drafter buckets")
                     for t in self._dr_standins:  # warm-pass stand-ins of the shared K ids, used by no trace
                         ttnn.deallocate(t)
@@ -2268,6 +2443,10 @@ class MTPSpecEngine:
         for t in bufs:
             if t is not None:
                 ttnn.deallocate(t)
+        if self._mtp_pt_own is not None:  # QWEN36_ATTN_KV_SPLIT=user
+            ttnn.deallocate(self._mtp_pt_own)
+            self._mtp_pt_own = None
+            self._mtp_pt_own_rows = 0
         self._fj_sel = self._fj_mask = None
         self._last_hidden, self._last_sel = [], {}
         self._mtp_pt, self._mtp_pt_rows, self._hp_buf, self._anchor_sel, self._eager_sel, self._vfeed = (
@@ -3452,6 +3631,8 @@ class MTPSpecEngine:
         act = active.tolist() if spec_hostset_enabled() else active
         rows = [u for u in range(B) if act[u]]
         self._check_finishing_rows(rows)
+        if self._def_ctx is None:  # QWEN36_ATTN_KV_SPLIT gate context (deferred serving set it already)
+            self._ksp_note_ctx(start_pos, active)
         unknown = [u for u in rows if u not in self._active]
         if unknown:
             raise ValueError(f"rows {unknown} carry a request that was never prefilled into that slot")
@@ -4127,7 +4308,7 @@ class MTPSpecEngine:
             self._chain_exec(chain)
             handle = model.verify_stage_and_enqueue(*args, **kw, skip_tokens_h2d=True, skip_aux_h2d=True)
         ttnn.execute_trace(self.mesh, self._fa_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         # Every non-blocking D2H read is enqueued BEFORE the single synchronize (a from_device(blocking=False) issued
         # after it is never waited on: its host tensor is unfilled). The reads below it are blocking to_torch.
         dr_handles = self._ids_enqueue_reads(self._dr_outs)
@@ -4575,6 +4756,9 @@ class MTPSpecEngine:
         # ---- which rows chain
         if self._bucketed():
             self._bucket_step(self._active_rows(active))
+        # QWEN36_ATTN_KV_SPLIT gate: the step's context from the RUNNER's start positions (chain rows: its bound), so the
+        # split choice does not depend on whether the pending step was read back yet (kv_split_gate_ctx)
+        self._ksp_note_ctx(start0, active)
         reason = pre
         if cmask is not None and reason is None:
             if bool((active & ~cmask).any()):
@@ -4733,7 +4917,7 @@ class MTPSpecEngine:
                 *args, **kw, **extra, skip_tokens_h2d=True, skip_aux_h2d=True, skip_kv_check=True, flip_parity=True
             )
         ttnn.execute_trace(self.mesh, self._fa_trace if kind == "g" else self._fs_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         self._vfeed = model._vfy_rows_out
         self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
         res_t = read(fa.result_out if kind == "g" else fs.result_out)
@@ -5052,7 +5236,7 @@ class MTPSpecEngine:
                 *args, **kw, execute_topk=True, skip_tokens_h2d=True, skip_aux_h2d=True
             )
         ttnn.execute_trace(self.mesh, self._fs_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         dr_handles = self._ids_enqueue_reads(self._dr_outs)
         ttnn.synchronize_device(self.mesh)  # the only one of the step
         ids, vfeed, _ = model.verify_after_external_sync(handle)
@@ -5121,7 +5305,11 @@ class MTPSpecEngine:
         if same:
             return 0
         drafts = torch.as_tensor(tokens).reshape(B, T)[:, 1:]
-        explained = audit_boundary_users(ref, sampling["uniforms"], committed, counts, drafts, nv, B=B, K=K, M=fs.M)
+        # QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED: the kernel's float32 rounding (as the op graph's) can also flip a top-p tail edge
+        topp = sampling["top_p"] if getattr(fs, "_kernel", None) is not None else None
+        explained = audit_boundary_users(
+            ref, sampling["uniforms"], committed, counts, drafts, nv, B=B, K=K, M=fs.M, top_p=topp
+        )
         bad = [
             u
             for u in range(B)
@@ -5536,7 +5724,7 @@ class MTPSpecEngine:
             self._dr_rs_sin,
         ]
 
-    def _drafter_body(self, feed, b=None, dst_outs=None):
+    def _drafter_body(self, feed, b=None, dst_outs=None, kv_split=None):
         """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps; every input is a
         persistent buffer (device-input twin of _set_anchor + _reseed_mtp_batched + _draft). Returns the K ids
         tensors [1,1,B] uint32 (step k's drafts).
@@ -5545,11 +5733,16 @@ class MTPSpecEngine:
         per step), on the shared B-row inputs (sliced in the trace). Its K ids [1,1,b,1] are handed over IN PLACE (concat of
         the b new rows with the old rows b..B-1, then ttnn.copy: the destination keeps its address) into ``dst_outs`` (the
         shared K [1,1,B,1] outputs of the B-row trace, or stand-ins while warming), and ``dst_outs`` is returned. b = B or
-        None is the B-row body, unchanged."""
+        None is the B-row body, unchanged.
+
+        ``kv_split`` (QWEN36_ATTN_KV_SPLIT=user): True = the split variant of width b (the context gate's second drafter
+        trace; with ``dst_outs`` it hands its ids over like a bucket, at b == B too), False = never split, None = the
+        canonical trace (split only in the gate's "always" mode, as the K1 commit captured every even width)."""
         B, mtp = self.B, self.mtp
         b = B if b is None or int(b) == B else int(b)
         bucket = b < B
-        assert not bucket or dst_outs is not None, "a row-bucket drafter body needs the shared K ids outputs"
+        handoff = dst_outs is not None  # a row bucket or a split variant: the K ids go into dst_outs in place
+        assert not bucket or handoff, "a row-bucket drafter body needs the shared K ids outputs"
         d = self._dr_inputs(b)
         owned = list(d["owned"])
         if bucket:
@@ -5577,9 +5770,23 @@ class MTPSpecEngine:
             spec_n_users=b,
         )
         _free_maint(hn)
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the draft steps' SDPA reads this device's own users only, on the
+        # per-device own page table (rows 0..b/2-1 of _mtp_pt_own: the own users of rows 0..b-1) and the own positions of
+        # each step. Flag off (no own twin) / an unsplit width: _ksp_pt stays None and every step is today's, without
+        # touching mtp.attention (an explicit kv_split=True still asserts in _dr_ksp_want when the split is unavailable).
+        _ksp_pt = None
+        if (kv_split or getattr(self, "_mtp_pt_own", None) is not None) and self._dr_ksp_want(b, kv_split):
+            _ksp_pt = self._mtp_pt_own if b == B else ttnn.slice(self._mtp_pt_own, [0, 0], [b // 2, self.nb])
         h, tok, outs = hp, d["tok0"], []
         for k in range(self.K):
+            _ksp = self.model.kv_split_ctx(b, 1, d["pos"][k], _ksp_pt) if _ksp_pt is not None else None
+            if _ksp is not None:
+                mtp.attention._kv_split_ctx = _ksp
             logits, hn = mtp.forward_decode(h, tok, d["pos"][k], d["cos"][k], d["sin"][k], mtp_pt)
+            if _ksp is not None:
+                mtp.attention._kv_split_ctx = None
+                for _t in _ksp.get("owned", ()):
+                    ttnn.deallocate(_t)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
             tok = ttnn.reshape(idx, (b, 1))
@@ -5588,9 +5795,11 @@ class MTPSpecEngine:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
+        if _ksp_pt is not None and _ksp_pt is not self._mtp_pt_own:  # a bucket's slice (b < B: never full span)
+            ttnn.deallocate(_ksp_pt)
         for t in owned:
             ttnn.deallocate(t)
-        if not bucket:
+        if not handoff:
             return outs
         from models.demos.blackhole.qwen36.tt.spec_bucket import handoff_ids_concat
 
@@ -5598,6 +5807,27 @@ class MTPSpecEngine:
             handoff_ids_concat(idx, dst, b)  # in place (ttnn.copy), never slice_write: dst keeps its address
             ttnn.deallocate(idx)
         return dst_outs
+
+    def _dr_ksp_want(self, b, kv_split=None):
+        """Whether the drafter body of width ``b`` runs the split steps: ``kv_split`` True (a split variant: must be
+        available), False (never), None (the canonical trace: split only in the gate's "always" mode). Available = the
+        MTP attention loaded the pair weights, the plan has (b, 1), the "draft" part is on, and the own twin of _mtp_pt
+        was built for THIS engine width (an adaptive-K family of another width has none)."""
+        if kv_split is False:
+            return False
+        plan = self._kv_split_draft_plan()
+        avail = (
+            self._mtp_pt_own is not None
+            and plan is not None
+            and int(self._mtp_pt_own_rows) == int(self.B)
+            and plan.has(b, 1)
+            and "draft" in plan.parts
+        )
+        if kv_split is None:
+            gate = getattr(self.model, "_kv_split_gate", None)
+            return avail and gate is not None and gate.canonical_split()
+        assert avail, f"QWEN36_ATTN_KV_SPLIT: no split drafter for width {b}"
+        return True
 
     def _dr_seg_lens(self):
         B, K, R = self.B, self.K, self.B * self.T
@@ -5701,7 +5931,7 @@ class MTPSpecEngine:
             stage(pv, self._dr_pos[k], ttnn.int32, rm)
             stage(c, self._dr_cos[k], bf, tile)
             stage(s, self._dr_sin[k], bf, tile)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
 
@@ -5757,7 +5987,7 @@ class MTPSpecEngine:
         table = self._dr_rs_table(real, pt)
         if table is not None:
             self._stage(table, self._dr_rs_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._ksp_draft_trace(), cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
         self._prestage_next_verify(cpos, m)

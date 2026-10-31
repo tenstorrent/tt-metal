@@ -216,11 +216,51 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None, attn_dtype
         kn = (state_dict["k_norm.weight"].to(torch.float32) + 1.0).to(torch.bfloat16).reshape(1, 1, 1, -1)
         stacked = torch.cat([qn] * args.n_local_heads + [kn] * args.n_local_kv_heads, dim=1)
         tw["qk_norm_dense"] = tpc.replicate(stacked, mesh, None)
+    from models.demos.blackhole.qwen36.tt.kv_split import kv_split_supported
+
+    if fused_qkv and qg_deint and getattr(args, "proj_1d_decode", False) and kv_split_supported(args):
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): decode-only copies over the KV PAIR's 2*NH q heads -- the fused
+        # [q pair | k | v | gate pair] in-projection and the pair's o-projection rows -- next to the unchanged weights
+        # (prefill and the unsplit decode keep wqkv_fused / wo). Own cache stems; only loaded with the flag on.
+        nh, hd = args.n_local_heads, args.head_dim
+        tw["wqkvg_pair"] = tpc.shard_w(
+            tpc.prepare_attn_qkvg_pair(
+                state_dict["q_proj.weight"], k_proj, v_proj, nh, hd, args.n_local_kv_heads * hd, args.num_devices
+            ),
+            mesh,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=c("wqkvg_pair.kvsplit.il"),
+            dtype=_attn_dtype,
+        )
+        tw["wo_pair"] = ttnn.as_tensor(
+            state_dict["o_proj.weight"],
+            preprocess=lambda t: tpc.prepare_attn_wo_pair(
+                t.to(torch.bfloat16), nh, hd, args.num_devices
+            ).T.contiguous(),
+            dtype=_attn_dtype,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=c("wo_pair.kvsplit.il"),
+        )
+        # The split heads always take the dense layout (TPAttention._kv_split_heads): its q|k norm rows for the 2*NH
+        # pair heads + the KV head, the same bf16 (1+w) values as qk_norm_dense.
+        qn = (state_dict["q_norm.weight"].to(torch.float32) + 1.0).to(torch.bfloat16).reshape(1, 1, 1, -1)
+        kn = (state_dict["k_norm.weight"].to(torch.float32) + 1.0).to(torch.bfloat16).reshape(1, 1, 1, -1)
+        tw["qk_norm_dense_pair"] = tpc.replicate(
+            torch.cat([qn] * (2 * nh) + [kn] * args.n_local_kv_heads, dim=1), mesh, None
+        )
     return tw
 
 
 class TPAttention:
     """Standalone TP full-attention with internal per-head KV caches (decode)."""
+
+    # QWEN36_ATTN_KV_SPLIT=user class defaults (set per instance in __init__; modules built without it read these)
+    _kv_split_ctx = None
+    _kv_split_ready = False
 
     def __init__(self, mesh, args, tw, tt_ccl):
         self.mesh = mesh
@@ -261,6 +301,22 @@ class TPAttention:
         self.decode_sdpa_max_cores = None
         # False: forward_decode keeps the legacy path even where the lean one is eligible (see _decode_lean_eligible).
         self.lean_decode = True
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): the split context of the verify replay / drafter step being
+        # traced, set by the model (_forward_verify_bucket_tp) or the engine (_drafter_body) around the layer call and
+        # cleared after it: {"n_users", "T", "consts", "pos" (own positions), "pt" (own page table)}. None (always,
+        # with the flag off) = the unsplit path.
+        self._kv_split_ctx = None
+        self._kv_split_ready = "wqkvg_pair" in tw and "wo_pair" in tw and "qk_norm_dense_pair" in tw
+        if self._kv_split_ready:
+            _gw = getattr(args, "decode_grid_w", 8)
+            _nh2 = 2 * self.NH
+            # the sim-swept grids of the two pair matmuls (roofline/kplan/results/mmA3.txt: qkv_p0 60c, wo6 84c)
+            self._qkv_pair_pc = tpc.create_matmul_1d_decode_progcfg(
+                1, args.dim, (2 * _nh2 + 2 * self.NKV) * self.HD, num_cores=60, grid_w=_gw
+            )
+            self._wo_pair_pc = tpc.create_matmul_1d_decode_progcfg(
+                1, _nh2 * self.HD, args.dim, num_cores=84, grid_w=_gw
+            )
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -1478,6 +1534,11 @@ class TPAttention:
         B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG
         T = B // spec_n_users
+        if self._kv_split_ctx is not None and self._kv_split_verify_ok(B, spec_n_users, spec_user_page_table):
+            # QWEN36_ATTN_KV_SPLIT=user: the KV-pair user split of this verify (tt/kv_split.py)
+            return self._forward_verify_kv_split(
+                x, cur_pos_tt, cos_tt, sin_tt, decode_ar, spec_n_users, spec_user_page_table, spec_pos_groups
+            )
 
         qkv3, gate, _ = self._qkv(x, decode_qkv3_l1=True)
         if self._heads_dense_ok(B):  # QWEN36_VERIFY_HEADS_DENSE: same q / k / v, dense-layout data movement
@@ -1566,6 +1627,9 @@ class TPAttention:
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG
+        if self._kv_split_ctx is not None and not kv_only and self._kv_split_draft_ok(B, page_table):
+            # QWEN36_ATTN_KV_SPLIT=user: the KV-pair user split of this drafter step (tt/kv_split.py)
+            return self._forward_decode_kv_split(x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar)
 
         # q|k|v block (contiguous in the fused [q|k|v|gate] weight) in L1, gate (trailing block) in DRAM.
         qkv3, gate, _ = self._qkv(x, decode_qkv3_l1=True)
@@ -1672,6 +1736,231 @@ class TPAttention:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    # ---- QWEN36_ATTN_KV_SPLIT=user: KV-pair user split (tt/kv_split.py) ------------------------------------------------
+    def _kv_split_verify_ok(self, R, n_users, spec_user_page_table):
+        """The lean verify at R = n_users x T rows takes the split: the traced body staged a context for exactly this
+        width, the pair weights are loaded, the fused spec SDPA has a plan for the own users, and the per-user table
+        exists (the KV write keeps using it). Anything else runs the unsplit body."""
+        ctx = self._kv_split_ctx
+        if ctx is None or not self._kv_split_ready or spec_user_page_table is None:
+            return False
+        if ctx["n_users"] != n_users or ctx["T"] * n_users != R or R > tpc.TILE_SIZE:
+            return False
+        if not (0 < self.rope_dim < self.HD and self.rope_dim % ttnn.TILE_SIZE == 0):
+            return False
+        return self._spec_sdpa_plan(ctx["T"], ctx["consts"]["n_own"]) is not None
+
+    def _kv_split_draft_ok(self, B, page_table):
+        """A drafter step (lean decode, one row per user) takes the split: a context for exactly B users at T = 1."""
+        ctx = self._kv_split_ctx
+        if ctx is None or not self._kv_split_ready or page_table is None or not self.use_paged:
+            return False
+        if ctx["n_users"] != B or ctx["T"] != 1 or not self._kv_fused_cores_ok(B):
+            return False
+        return 0 < self.rope_dim < self.HD and self.rope_dim % ttnn.TILE_SIZE == 0
+
+    def _spec_sdpa_pack_heads_n(self, Tg, nh):
+        """spec_sdpa_pack_heads for nh q heads per candidate (the split runs 2*NH)."""
+        if not (SPEC_SDPA_PACK_SUPPORTED and tpc.spec_sdpa_packed_enabled()):
+            return 0
+        if nh > 16 or Tg * (nh + nh % 2) > ttnn.TILE_SIZE:
+            return 0
+        return nh
+
+    def _kv_split_qkv(self, x):
+        """Pair in-projection: x [1,1,R,dim] -> (q|k|v block [1,1,R,(2NH+2NKV)*HD] L1, gate [1,1,R,2NH*HD])."""
+        NH2, NKV, HD = 2 * self.NH, self.NKV, self.HD
+        qkv = tpc.matmul_1d_decode(
+            x, self.tw["wqkvg_pair"], self._qkv_pair_pc, self.qkv_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        qkv3_dim = NH2 * HD + 2 * NKV * HD
+        sh = list(qkv.shape)
+        qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
+        gate = ttnn.slice(qkv, (0, 0, 0, qkv3_dim), (sh[0], sh[1], sh[2], qkv3_dim + NH2 * HD))
+        ttnn.deallocate(qkv)
+        return qkv3, gate
+
+    def _kv_split_heads(self, qkv3, cos_tt, sin_tt, R):
+        """_verify_qkv_dense for the pair's 2*NH q heads, stopping before q's transpose: returns q [1, 2NH, R, HD] L1
+        (dense: head h's R rows in one tile-row, the layout the per-head row selection reads) and k / v [1, R, NKV, HD]
+        (the KV write's inputs). Same arithmetic per (row, head) as the unsplit dense heads. Consumes qkv3."""
+        NH2, NKV, HD, rd = 2 * self.NH, self.NKV, self.HD, self.rope_dim
+        NQK = NH2 + NKV
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv3, num_heads=NH2, num_kv_heads=NKV, transpose_k_heads=False, memory_config=_L1
+        )
+        ttnn.deallocate(qkv3)
+        qk = ttnn.concat([q, k], dim=1, memory_config=_L1)  # [1, NQK, R, HD]
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        normed = ttnn.rms_norm(qk, epsilon=1e-6, memory_config=_L1)
+        ttnn.deallocate(qk)
+        qk = ttnn.multiply(normed, self.tw["qk_norm_dense_pair"], memory_config=_L1)
+        ttnn.deallocate(normed)
+        cos_p = ttnn.reshape(
+            cos_tt, (1, 1, R, rd)
+        )  # a view when the caller staged [1,1,R,rd] (verify, hostset drafter)
+        sin_p = ttnn.reshape(sin_tt, (1, 1, R, rd))
+        part = ttnn.slice(qk, (0, 0, 0, 0), (1, NQK, R, rd), memory_config=_L1)
+        roped = ttnn.experimental.rotary_embedding_hf(part, cos_p, sin_p, is_decode_mode=False, memory_config=_L1)
+        ttnn.deallocate(part)
+        for _p, _src in ((cos_p, cos_tt), (sin_p, sin_tt)):
+            if not tpc.aliases(_p, _src):
+                ttnn.deallocate(_p)
+        tail = ttnn.slice(qk, (0, 0, 0, rd), (1, NQK, R, HD), memory_config=_L1)
+        ttnn.deallocate(qk)
+        qk = ttnn.concat([roped, tail], dim=-1, memory_config=_L1)
+        ttnn.deallocate(roped)
+        ttnn.deallocate(tail)
+        q_h = ttnn.slice(qk, (0, 0, 0, 0), (1, NH2, R, HD), memory_config=_L1)
+        k_h = ttnn.slice(qk, (0, NH2, 0, 0), (1, NQK, R, HD), memory_config=_L1)
+        ttnn.deallocate(qk)
+        k = ttnn.transpose(k_h, 1, 2, memory_config=_L1)  # [1, R, NKV, HD]
+        ttnn.deallocate(k_h)
+        vt = ttnn.transpose(v, 1, 2, memory_config=_L1)
+        ttnn.deallocate(v)
+        return q_h, k, vt
+
+    def _kv_split_select_q(self, q_h, R, consts):
+        """Own users' q rows: q_h [1, 2NH, R, HD] dense -> [1, Ro, 2NH, HD] DRAM (the paged SDPA's q). One per-device
+        one-hot matmul per head (consts["sel"] [1, 2NH, Ro, R], exact at HiFi4), then the transpose into the decode
+        layout. The selection sums over all 32 rows of a tile, so tile-padding rows past R are zero-filled first: they
+        are never read by the unsplit path and may hold anything. Consumes q_h."""
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        if R % ttnn.TILE_SIZE:
+            q_f = ttnn.fill_implicit_tile_padding(q_h, 0.0, memory_config=_L1)
+            if not tpc.aliases(q_f, q_h):
+                ttnn.deallocate(q_h)
+            q_h = q_f
+        q_own = ttnn.matmul(consts["sel"], q_h, compute_kernel_config=tpc.COMPUTE_SELECT, memory_config=_L1)
+        ttnn.deallocate(q_h)
+        q = ttnn.transpose(q_own, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, Ro, 2NH, HD]
+        ttnn.deallocate(q_own)
+        return q
+
+    def _kv_split_out(self, attn, gate, R, consts, decode_ar):
+        """attn [1, Ro, 2NH, HD] (own rows, pair heads) -> the o-proj partial all-reduced like the unsplit paths.
+        Heads to the flat layout (transpose: rows Ro..31 come out zero-padded, then the prefill head concat), the own
+        rows placed back on their global rows with zeros elsewhere (consts["scatter"] [1,1,R,Ro], exact at HiFi4), the
+        sigmoid gate on all R rows (zero rows stay zero), and the pair o-projection (wo_pair). The all-reduce then sums
+        the four owner devices of every row: each contributes its pair's six heads, the other device of the pair zero.
+        Consumes attn and gate."""
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        heads = ttnn.transpose(attn, 1, 2, memory_config=_L1)  # [1, 2NH, Ro, HD]
+        ttnn.deallocate(attn)
+        flat = ttnn.experimental.nlp_concat_heads(heads, memory_config=_L1)  # [1, 1, Ro, 2NH*HD]
+        ttnn.deallocate(heads)
+        full = ttnn.matmul(consts["scatter"], flat, compute_kernel_config=tpc.COMPUTE_SELECT, memory_config=_L1)
+        ttnn.deallocate(flat)
+        gated = ttnn.multiply(
+            full,
+            gate,
+            input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
+            memory_config=_L1,
+        )
+        ttnn.deallocate(full)
+        ttnn.deallocate(gate)
+        wo_partial = tpc.matmul_1d_decode(
+            gated, self.tw["wo_pair"], self._wo_pair_pc, self.wo_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(gated)
+        wo_partial = ttnn.reshape(wo_partial, (1, 1, R, wo_partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(wo_partial)
+        return tt_all_reduce(
+            wo_partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_verify_kv_split(
+        self, x, cur_pos_tt, cos_tt, sin_tt, decode_ar, n_users, spec_user_page_table, spec_pos_groups
+    ):
+        """QWEN36_ATTN_KV_SPLIT=user lean verify: pair in-projection, dense heads for the 2*NH pair heads, the unchanged
+        KV write (every row, global positions), the own users' q rows into the fused spec SDPA (n_users/2 groups of
+        Tg rows, twice the cores per group, the own page table and positions of the context), then _kv_split_out."""
+        HD = self.HD
+        NH2 = 2 * self.NH
+        R = x.shape[-2]
+        ctx = self._kv_split_ctx
+        T = ctx["T"]
+        c = ctx["consts"]
+        qkv3, gate = self._kv_split_qkv(x)
+        q_h, k, v = self._kv_split_heads(qkv3, cos_tt, sin_tt, R)
+        self._write_kv_fused_groups(k, v, cur_pos_tt, n_users, spec_user_page_table, spec_pos_groups, R)
+        q = self._kv_split_select_q(q_h, R, c)
+        _cfg, _groups, _tiles = self._spec_sdpa_plan(T, c["n_own"])
+        # The paged SDPA takes its batch from the page table's row count and checks nothing else: one own row per group.
+        assert ctx["pt"].shape[0] == _groups and ctx["pos"].shape[-1] == c["Ro"], (
+            f"KV split: own page table {tuple(ctx['pt'].shape)} / positions {tuple(ctx['pos'].shape)} for {_groups} "
+            f"groups x Tg={_tiles}"
+        )
+        _shape = ttnn.Shape([1, _groups, _tiles * ttnn.TILE_SIZE, HD])
+        q = ttnn.reshape(q, _shape, _shape)  # same bytes re-viewed as the op's groups (see forward_decode)
+        _pack = self._spec_sdpa_pack_heads_n(_tiles, NH2)
+        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            self.paged_k,
+            self.paged_v,
+            page_table_tensor=ctx["pt"],
+            cur_pos_tensor=ctx["pos"],
+            scale=self.scale,
+            program_config=_cfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            spec_multi_pos_tiles=_tiles,
+            **({"spec_pack_heads": _pack} if _pack else {}),
+        )
+        ttnn.deallocate(q)
+        Ro = c["Ro"]
+        attn = ttnn.reshape(attn, ttnn.Shape([1, Ro, NH2, HD]), ttnn.Shape([1, Ro, ttnn.TILE_SIZE, HD]))
+        return self._kv_split_out(attn, gate, R, c, decode_ar)
+
+    def _forward_decode_kv_split(self, x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar):
+        """QWEN36_ATTN_KV_SPLIT=user drafter step (B users, one row each): pair in-projection and dense heads as the
+        verify split, the lean decode's fused K+V write (every user, global positions, the full page table), the own
+        users' q into the paged decode SDPA (B/2 users x 2NH heads on the context's own page table / positions, the
+        instance's max_cores_per_head_batch), then _kv_split_out."""
+        B = x.shape[-2]
+        ctx = self._kv_split_ctx
+        c = ctx["consts"]
+        qkv3, gate = self._kv_split_qkv(x)
+        q_h, k, v = self._kv_split_heads(qkv3, cos_tt, sin_tt, B)
+        k_sh = ttnn.to_memory_config(k, self._kv_key_shard_cfg(B))
+        ttnn.deallocate(k)
+        v_sh = ttnn.to_memory_config(v, self._kv_shard_cfg(B))
+        ttnn.deallocate(v)
+        ttnn.experimental.paged_fused_update_cache(
+            self.paged_k, k_sh, self.paged_v, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table
+        )
+        ttnn.deallocate(k_sh)
+        ttnn.deallocate(v_sh)
+        q = self._kv_split_select_q(q_h, B, c)
+        _grid = self.mesh.compute_with_storage_grid_size()
+        cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(_grid.x, _grid.y),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+            **({} if self.decode_sdpa_max_cores is None else {"max_cores_per_head_batch": self.decode_sdpa_max_cores}),
+        )
+        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            self.paged_k,
+            self.paged_v,
+            page_table_tensor=ctx["pt"],
+            cur_pos_tensor=ctx["pos"],
+            scale=self.scale,
+            program_config=cfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q)
+        return self._kv_split_out(attn, gate, B, c, decode_ar)
 
     def forward_prefill_paged(
         self,

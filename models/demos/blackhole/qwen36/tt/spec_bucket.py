@@ -131,10 +131,14 @@ def handoff_rows_slice_write(src, dst, b):
 
 
 def handoff_rows_concat(src, dst, b):
-    """TILE rows: concat(src, dst rows b..B-1) then copy into dst (same shape, same address)."""
+    """TILE rows: concat(src, dst rows b..B-1) then copy into dst (same shape, same address). ``b`` == every row of dst
+    (a full-width split variant, QWEN36_ATTN_KV_SPLIT gate): a plain copy (nothing of dst survives)."""
     import ttnn
 
     B, d = dst.shape[-2], dst.shape[-1]
+    if int(b) >= int(B):
+        ttnn.copy(src, dst)
+        return
     rest = ttnn.slice(dst, [0, 0, b, 0], [1, 1, B, d])
     cat = ttnn.concat([src, rest], dim=2)
     ttnn.copy(cat, dst)
@@ -150,10 +154,13 @@ def handoff_ids_slice_write(src, dst, b):
 
 
 def handoff_ids_concat(src, dst, b):
-    """u32 ROW_MAJOR ids: concat(src, dst rows b..B-1) then copy into dst."""
+    """u32 ROW_MAJOR ids: concat(src, dst rows b..B-1) then copy into dst. ``b`` == B (a full-width split variant): a copy."""
     import ttnn
 
     B = dst.shape[-2]
+    if int(b) >= int(B):
+        ttnn.copy(src, dst)
+        return
     rest = ttnn.slice(dst, [0, 0, b, 0], [1, 1, B, 1])
     cat = ttnn.concat([src, rest], dim=2)
     ttnn.copy(cat, dst)

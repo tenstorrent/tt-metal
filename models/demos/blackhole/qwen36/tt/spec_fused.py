@@ -32,7 +32,13 @@ from typing import NamedTuple
 
 import torch
 
-from models.demos.blackhole.qwen36.tt.tp_common import HOSTSET_PACK_ALIGN, pack_u32_rows, rope_row_index
+from models.demos.blackhole.qwen36.tt.tp_common import (
+    HOSTSET_PACK_ALIGN,
+    pack_u32_rows,
+    rope_row_index,
+    spec_accept_kernel_cores,
+    spec_accept_kernel_enabled,
+)
 
 FUSED_AUX_ROWS = 7
 AUX_NUM_VALID, AUX_ACTIVE, AUX_DECLINED, AUX_KEEP, AUX_P0, AUX_CONSTS, AUX_DELTA = range(7)
@@ -199,7 +205,11 @@ class FusedGreedyDevice:
     Outputs: pack_out uint32 RM [2K+5,W] (= fused_greedy_reference .pack), rs_pt_out int32 RM [R,nb] (= .rs_pt),
              result_out int32 RM [2,W]: row 0 = committed flattened r = u*T+j (-1 past the count), row 1 = counts[B];
              both zero past their length.
-    All values are integers < 2^24, so the math runs in fp32 TILE and is exact; -1 is made in int32."""
+    All values are integers < 2^24, so the math runs in fp32 TILE and is exact; -1 is made in int32.
+    QWEN36_SPEC_ACCEPT_KERNEL=1: ``body`` is ONE kernel on the same buffers (spec_fused_kernels.AcceptKernel); the op graph
+    below stays the reference (and the fallback when the buffers do not fit the kernel)."""
+
+    _kernel = None  # QWEN36_SPEC_ACCEPT_KERNEL: the AcceptKernel of this device (None = the op graph)
 
     def __init__(self):
         self.bufs = {}
@@ -263,6 +273,10 @@ class FusedGreedyDevice:
         self.c_iota_k = f(torch.arange(K).reshape(1, K))
         self.c_ut = f((torch.arange(B) * T).reshape(B, 1))  # u * T
         self.c_one = f(torch.ones(1, 1))
+        if spec_accept_kernel_enabled() and cls is FusedGreedyDevice:  # the sampled subclass keeps its own body
+            from models.demos.blackhole.qwen36.tt.spec_fused_kernels import attach_accept_kernel
+
+            self._kernel = attach_accept_kernel(self, spec_accept_kernel_cores())
         return self
 
     def bind_ids(self, ids):
@@ -271,6 +285,8 @@ class FusedGreedyDevice:
         import ttnn
 
         self._check_bound("ids_in", ids, (1, 1, 1, 32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        if self._kernel is not None:  # the kernel was compiled on the stand-in: the live ids must share its layout
+            self._kernel.check_rebind(ids)
         self.ids_in = ids
 
     def _stage_one(self, dst, t, dt):
@@ -313,6 +329,9 @@ class FusedGreedyDevice:
         """The trace-capturable sequence. No host round trip, no allocation-dependent output address."""
         import ttnn
 
+        if self._kernel is not None:  # QWEN36_SPEC_ACCEPT_KERNEL: one program instead of the op graph
+            self._kernel.run()
+            return
         B, K, T, R, W, nb = self.B, self.K, self.T, self.R, self.W, self.nb
         TL, RM, f32 = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.float32
         tl = lambda x: ttnn.to_layout(x, TL)

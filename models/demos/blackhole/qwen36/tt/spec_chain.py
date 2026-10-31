@@ -44,7 +44,12 @@ from models.demos.blackhole.qwen36.tt.spec_fused import (
     row_delta_list,
     signed_rope_delta,
 )
-from models.demos.blackhole.qwen36.tt.tp_common import HOSTSET_PACK_ALIGN, pack_u32_rows, rope_row_index
+from models.demos.blackhole.qwen36.tt.tp_common import (
+    HOSTSET_PACK_ALIGN,
+    pack_u32_rows,
+    rope_row_index,
+    spec_chain_kernel_enabled,
+)
 
 RES_ROWS = 4
 RES_COMMITTED, RES_COUNTS, RES_P0, RES_OVERFLOW = range(4)
@@ -224,7 +229,11 @@ class ChainDevice:
              tok_out    uint32 RM [1, R]   (= model._vfy_token_buf)
              vaux_out   uint32 RM [3, W_v] (= model._vfy_aux_buf; W_v = align(max(R, spec_ctrl_words(B, Nv))))
              next_aux_out = aux_prev_in itself (int32 [7, W_a]): every value is read before the final copy.
-    All values are integers < 2^24, so fp32 TILE math is exact."""
+    All values are integers < 2^24, so fp32 TILE math is exact.
+    QWEN36_SPEC_CHAIN_KERNEL=1: ``body`` is ONE single-core kernel on the same buffers (spec_fused_kernels.ChainKernel); the op
+    graph below stays the reference (and the fallback when the buffers do not fit the kernel)."""
+
+    _kernel = None  # QWEN36_SPEC_CHAIN_KERNEL: the ChainKernel of this device (None = the op graph)
 
     @staticmethod
     def _dev(mesh, t, dtype, layout):
@@ -303,6 +312,10 @@ class ChainDevice:
         self.c_iota_k = f(torch.arange(K).reshape(1, K))
         self.c_iota_h = f(torch.arange(Nv).reshape(1, Nv))
         self.c_u = f(torch.arange(B).reshape(B, 1))
+        if spec_chain_kernel_enabled():
+            from models.demos.blackhole.qwen36.tt.spec_fused_kernels import attach_chain_kernel
+
+            self._kernel = attach_chain_kernel(self)
         return self
 
     def bind_draft_ins(self, draft_ins):
@@ -314,6 +327,8 @@ class ChainDevice:
         assert len(draft_ins) == self.K, (len(draft_ins), self.K)
         for i, t in enumerate(draft_ins):
             self._check_bound(f"draft_ins[{i}]", t, (1, 1, self.B, 1), ttnn.uint32)
+        if self._kernel is not None:  # the kernel was compiled on the stand-ins: the live ids must share their layout
+            self._kernel.check_rebind(draft_ins)
         self.draft_ins = list(draft_ins)
 
     def stage_ovr(self, ovr):
@@ -331,6 +346,9 @@ class ChainDevice:
         """The trace-capturable sequence (no host round trip, no allocation-dependent output address)."""
         import ttnn
 
+        if self._kernel is not None:  # QWEN36_SPEC_CHAIN_KERNEL: one program instead of the op graph
+            self._kernel.run()
+            return
         B, K, T, R, Nv = self.B, self.K, self.T, self.R, self.Nv
         W_a, W_v = self.W_a, self.W_v
         TL, RM, f32 = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.float32

@@ -266,6 +266,25 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.hidden_dim // tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
+        # QWEN36_MLP_GU_FUSED (default off; tp_common): one decode matmul over the pair-interleaved [gate|up] AGMM
+        # weight, [dim, 2*hidden/tp]. 1d: 88 cores -> 2 output tiles on each of 68 (TP=8), in0_block_w as gate/up, no
+        # fused activation (the split-SwiGLU kernel applies SiLU). dsmc: the DRAM-sharded pipeline on a width-sharded
+        # copy (17 tiles per bank at TP=8, no padding).
+        self.mlp_gu_fused = tpc.mlp_gu_fused_mode() if tp > 1 else None
+        if self.mlp_gu_fused is not None:
+            gu_n = 2 * (self.hidden_dim // tp)
+            self.mlp_gu_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+                M,
+                self.dim,
+                gu_n,
+                num_cores=int(os.environ.get("QWEN36_MLP_GU_CORES", "88")),
+                grid_w=self.decode_grid_w,
+                max_in0_block_w=mlp_decode_ibw,
+            )
+            if self.mlp_gu_fused == "dsmc":
+                workers, ibw, pcn = tpc.mlp_gu_dsmc_settings()
+                self.mlp_gu_dsmc_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, gu_n)
+                self.mlp_gu_dsmc_progcfg = tpc.create_dram_sharded_mc_progcfg(self.dim, gu_n, pcn, workers, ibw)
 
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
         # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.

@@ -547,6 +547,39 @@ def spec_chain_audit_every():
     return max(1, int(os.environ.get("QWEN36_SPEC_CHAIN_AUDIT_EVERY", "1")))
 
 
+def spec_chain_kernel_enabled():
+    """QWEN36_SPEC_CHAIN_KERNEL (default "0" = the 126-op ttnn graph, byte for byte; needs QWEN36_SPEC_CHAIN=1): the chain trace
+    body (spec_chain.ChainDevice.body) runs as ONE single-core generic_op kernel (tt/spec_fused_kernels.py,
+    kernels/spec_chain_fused.cpp) on the same input / output buffers, writing the same words. Read when a ChainDevice is
+    allocated (so the eager warm-up, the trace capture and every replay agree)."""
+    return os.environ.get("QWEN36_SPEC_CHAIN_KERNEL", "0") == "1"
+
+
+def spec_accept_kernel_enabled():
+    """QWEN36_SPEC_ACCEPT_KERNEL (default "0" = the 115-op ttnn graph, byte for byte; needs QWEN36_SPEC_FUSED=1): the GREEDY accept
+    trace body (spec_fused.FusedGreedyDevice.body) runs as ONE generic_op kernel (tt/spec_fused_kernels.py,
+    kernels/spec_accept_fused.cpp) on the same buffers, writing the same words. The sampled accept (FusedSampledDevice) keeps
+    its op graph. Read when a FusedGreedyDevice is allocated."""
+    return os.environ.get("QWEN36_SPEC_ACCEPT_KERNEL", "0") == "1"
+
+
+def spec_accept_kernel_cores():
+    """QWEN36_SPEC_ACCEPT_KERNEL_CORES (default 32; integer >= 1): cores of the accept kernel (the reseed page-table rows are
+    split into column chunks over them; capped by the grid and by the number of 64 B chunks of one row)."""
+    return max(1, int(os.environ.get("QWEN36_SPEC_ACCEPT_KERNEL_CORES", "32")))
+
+
+def spec_accept_kernel_sampled_enabled():
+    """QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED (default "0" = the sampled accept op graph, byte for byte; needs QWEN36_SPEC_FUSED=1
+    and the stage-S2 sampled accept, QWEN36_SPEC_FUSED_SAMPLED + the verify top-k trace): the SAMPLED accept trace body
+    (spec_fused_sampled.FusedSampledDevice.body) runs as ONE generic_op kernel on R cores (tt/spec_fused_kernels.py,
+    kernels/spec_accept_sampled_fused.cpp; bit-exact host model tt/spec_sampled_kernel_math.py) on the same buffers. Its
+    float32 math differs from fused_sampled_reference only by rounding (decisions flip within ~1e-7 of a threshold), so
+    the S2 audit also counts a top-p tail edge on an examined row as a float32 boundary while this flag is on. Read when
+    a FusedSampledDevice is allocated."""
+    return os.environ.get("QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED", "0") == "1"
+
+
 def spec_hostset_trace_enabled():
     """The part of QWEN36_SPEC_HOSTSET that changes the captured traces: one packed uint32 input buffer per trace with
     in-trace slices, and cos/sin rows looked up from the resident RoPE tables by position (ttnn.embedding) instead of
@@ -852,6 +885,13 @@ def draft_lmhead_bfp4_enabled():
 # logical width, so they never reach the logits (no -inf fill, no slice, no argmax change).
 LMHEAD_DSHARD_ENV = "QWEN36_LMHEAD_DSHARD"
 LMHEAD_DSHARD_READERS_ENV = "QWEN36_LMHEAD_DSHARD_READERS"
+# K6 knobs of the DRAM-sharded head. Each defaults to today's behaviour and only acts with QWEN36_LMHEAD_DSHARD on;
+# OUT_PCN / IBW / FP32_DEST apply to the "mc" pipeline only.
+LMHEAD_DSHARD_SCOPE_ENV = "QWEN36_LMHEAD_DSHARD_SCOPE"
+LMHEAD_DSHARD_OUT_PCN_ENV = "QWEN36_LMHEAD_DSHARD_OUT_PCN"
+LMHEAD_DSHARD_IBW_ENV = "QWEN36_LMHEAD_DSHARD_IBW"
+LMHEAD_DSHARD_FP32_DEST_ENV = "QWEN36_LMHEAD_DSHARD_FP32_DEST"
+LMHEAD_DSHARD_SCOPES = ("all", "draft", "base")
 
 
 def lm_head_dshard_mode():
@@ -887,6 +927,65 @@ def lm_head_dshard_readers(mode=None):
     return None
 
 
+def lm_head_dshard_scope():
+    """QWEN36_LMHEAD_DSHARD_SCOPE (default "all" = today): which LM-head calls take the DRAM-sharded copy.
+      all   - every decode-shaped call (base/verify/decode/prefill last row and the MTP drafter);
+      draft - only the MTP drafter's calls (they pass the head weight explicitly). The base/verify calls keep the plain
+              interleaved head, so the verify logits (and the greedy output) stay bit-identical; only the drafter's
+              proposals, and with them acceptance, can move;
+      base  - only the base calls (no explicit weight); the drafter keeps the plain head."""
+    raw = os.environ.get(LMHEAD_DSHARD_SCOPE_ENV, "all").strip().lower() or "all"
+    if raw not in LMHEAD_DSHARD_SCOPES:
+        raise ValueError(f"{LMHEAD_DSHARD_SCOPE_ENV}={raw!r} invalid ({'|'.join(LMHEAD_DSHARD_SCOPES)})")
+    return raw
+
+
+def lm_head_dshard_scope_takes(scope, draft):
+    """Whether a head call takes the DRAM-sharded copy under QWEN36_LMHEAD_DSHARD_SCOPE ``scope``. draft: the call is
+    the MTP drafter's (Qwen36Model._lm_head_linear sees an explicit weight), else a base call (weight None)."""
+    return scope == "all" or (scope == "draft") == bool(draft)
+
+
+def _env_positive_int(name):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    v = int(raw)
+    if v < 1:
+        raise ValueError(f"{name}={raw!r}: expected a positive integer")
+    return v
+
+
+def lm_head_dshard_out_pcn():
+    """QWEN36_LMHEAD_DSHARD_OUT_PCN (unset = the bank shard width, today): logits tiles per core of the "mc" head's L1
+    width-sharded output (the op lays it on ceil(N / OUT_PCN) cores, row-major). Every L1 buffer takes its address
+    range on every core (one free list for all L1 banks), so the default 122-tile shard holds 244 KB (bf16) / 488 KB
+    (fp32 drafter head) of the L1 the pipeline's circular buffers need; 10 spreads the 970 TP8 vocab tiles over 97
+    cores (20 / 40 KB) and makes the copy to DRAM 97-core wide. Output values do not depend on it."""
+    return _env_positive_int(LMHEAD_DSHARD_OUT_PCN_ENV)
+
+
+def lm_head_dshard_ibw():
+    """QWEN36_LMHEAD_DSHARD_IBW (unset = 2, the plain head's K blocking): the "mc" pipeline's weight block depth in K
+    tiles (in0_block_w). Its Dest pass stays ceil(8 / ibw) * ibw K tiles (8 for ibw <= 8), but the per-group K rotation
+    is in whole blocks, so the bits depend on it."""
+    return _env_positive_int(LMHEAD_DSHARD_IBW_ENV)
+
+
+def lm_head_dshard_fp32_dest():
+    """QWEN36_LMHEAD_DSHARD_FP32_DEST (default 0): the "mc" head's bf16-output (base/verify) calls keep each column
+    pass's whole K in fp32 Dest instead of 8 K tiles per 16-bit Dest pass + a Float16_b L1 accumulator: one rounding
+    to bf16 per logit instead of ~20 L1 accumulations and per-MVMUL 16-bit Dest rounding. Not bit-identical to the
+    plain head (neither is "mc" itself); closer to fp32. Calls that pass their own compute config (the drafter's fp32
+    head, QWEN36_LMHEAD_CFG) keep it."""
+    raw = os.environ.get(LMHEAD_DSHARD_FP32_DEST_ENV, "0").strip().lower()
+    if raw in ("", "0", "off", "false", "no"):
+        return False
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    raise ValueError(f"{LMHEAD_DSHARD_FP32_DEST_ENV}={raw!r} invalid (0|1)")
+
+
 def dram_multicore_workers(bank_tiles):
     """qb2's workers per DRAM bank for the multi-core pipeline: about one per 8 tiles of a bank, 2 to 4."""
     return min(4, max(2, (bank_tiles + 7) // 8))
@@ -896,16 +995,32 @@ def dram_multicore_workers(bank_tiles):
 # left for l1_small, the kernel config buffer and whatever the decode trace already holds in L1.
 LMHEAD_DSHARD_L1_BUDGET = 1400 * 1024
 _TILE_BYTES = {"bfloat16": 2048, "float32": 4096, "bfloat8_b": 1088, "bfloat4_b": 576}
+# The "mc" pipeline (create_program_dram_sharded_multicore_spec) puts its circular buffers on every core of its work
+# rectangle, and every L1 buffer (sharded or not) takes its address range on every core: one free list serves all L1
+# banks. So the pipeline's CBs, the head's activation shard, its logits shard and the L1 the decode trace holds (the
+# DecodeResidualAllReduce staging buffer: [32, dim * tp] bf16 over 40 cores = 64 KB at Qwen3.8 TP8, persistent) all
+# share one Blackhole L1 bank: 1536 KB - 112000 B unreserved base (MEM_MAP_END 41344 B + the 69 KB kernel config
+# buffer, 64 B aligned) - the production l1_small_size (24576 B) = 1436288 B.
+LMHEAD_DSHARD_MC_L1_BANK = 1536 * 1024 - 112000 - 24576
+LMHEAD_DSHARD_MC_L1_RESERVED = 64 * 1024  # the decode all-reduce staging buffer at TP8 (allocated before any trace)
+_MC_DST_TILES = 8  # the pipeline's tiles per column pass (dst_tiles)
+_MC_L1ACC_K_TILES = 8  # K tiles per 16-bit Dest pass without fp32_dest_acc_en (l1acc_k_tiles)
+_DRAM_ALIGN = 64  # Blackhole DRAM alignment (the pipeline aligns its weight entries to it)
 
 
 class LMHeadDShardPlan:
     """Shapes of the DRAM-sharded head (pure arithmetic, no device). k / n: the per-device weight [k, n]."""
 
-    def __init__(self, k, n, banks, mode="exact", readers=None):
+    def __init__(self, k, n, banks, mode="exact", readers=None, out_pcn=None, ibw=None):
         if mode not in ("exact", "mc"):
             raise ValueError(f"LM-head DRAM-shard mode {mode!r} invalid (exact|mc)")
         if k % TILE_SIZE:
             raise ValueError(f"LM-head K {k} is not a whole number of tiles")
+        if mode != "mc" and (out_pcn is not None or ibw is not None):
+            raise ValueError(
+                f"{LMHEAD_DSHARD_OUT_PCN_ENV} / {LMHEAD_DSHARD_IBW_ENV} apply to {LMHEAD_DSHARD_ENV}=mc only "
+                "(exact keeps the plain head's blocking and output layout)"
+            )
         self.mode = mode
         self.multicore = mode == "mc"
         self.banks = banks
@@ -914,6 +1029,9 @@ class LMHeadDShardPlan:
         # The plain head's auto 1D-mcast config streams K in 2-tile blocks when K is even (get_mcast_1d_config);
         # the same blocking keeps the per-tile accumulation order, which "exact" relies on.
         self.in0_block_w = 2 if self.k_tiles % 2 == 0 else 1
+        self.k6_ibw = ibw is not None
+        if self.k6_ibw:  # QWEN36_LMHEAD_DSHARD_IBW (mc): the pipeline takes a ragged last K block, any width works
+            self.in0_block_w = ibw
         if self.multicore:
             self.bank_tiles = math.ceil(self.n_tiles / banks)
             self.readers = dram_multicore_workers(self.bank_tiles) if readers is None else readers
@@ -933,14 +1051,89 @@ class LMHeadDShardPlan:
         if self.padded_tiles - self.n_tiles >= self.bank_tiles:
             raise ValueError(f"{self.n_tiles} vocab tiles leave a padding-only bank of {self.bank_tiles}")
         # Activation: width-sharded over one core per bank (the qb2 layout: output cores == activation cores),
-        # each shard a whole number of K blocks.
+        # each shard a whole number of K blocks. The mc pipeline reads activation rows straight from their shards
+        # (any block width), so with an explicit QWEN36_LMHEAD_DSHARD_IBW only the shards themselves must be even.
         self.act_cores = banks
-        if self.k_tiles % (self.act_cores * self.in0_block_w):
+        if self.k6_ibw:
+            if self.k_tiles % self.act_cores:
+                raise ValueError(f"K {self.k_tiles} tiles do not split into {banks} activation shards")
+        elif self.k_tiles % (self.act_cores * self.in0_block_w):
             raise ValueError(
                 f"K {self.k_tiles} tiles do not split into {banks} shards of {self.in0_block_w}-tile blocks"
             )
         self.act_shard_w = self.k_tiles // self.act_cores * TILE_SIZE
         self.per_core_N = self.bank_tiles
+        if out_pcn is not None:  # QWEN36_LMHEAD_DSHARD_OUT_PCN (mc): the logits shard width, not the bank shard
+            self.per_core_N = out_pcn
+        # Cores of the L1 width-sharded logits (matmul_device_operation: ceil(N / per_core_N), row-major on the grid).
+        self.out_cores = math.ceil(self.n_tiles / self.per_core_N)
+        if self.multicore:
+            self.mc_layout()  # raises on a worker count the pipeline factory rejects
+
+    def mc_layout(self):
+        """The multi-core pipeline's layout for this head (create_program_dram_sharded_multicore_spec), as a dict:
+        cn column groups and ck K-row groups per bank, p column passes of ncp tiles per core, kb K tiles per streamed
+        weight block, max_own output columns per core, work items. Raises on the layouts the factory TT_FATALs."""
+        if not self.multicore:
+            raise ValueError("mc_layout models the multi-core pipeline only")
+        nbt, kt, w = self.bank_tiles, self.k_tiles, self.readers
+        cn = min(w, nbt)
+        ck = w // nbt if w > nbt else 1
+        ncmax = math.ceil(nbt / cn)
+        p = math.ceil(ncmax / _MC_DST_TILES)
+        ncp = math.ceil(ncmax / p)
+        if not (ck == 1 or p == 1):
+            raise ValueError(f"{w} readers/bank: K row groups need a single column pass ({nbt} tiles/bank)")
+        if nbt // cn < p:
+            raise ValueError(f"{w} readers/bank leave a core fewer columns than its {p} passes ({nbt} tiles/bank)")
+        kb = min(self.in0_block_w, math.ceil(kt / ck))
+        max_own = 0
+        for c in range(cn):
+            width = nbt * (c + 1) // cn - nbt * c // cn
+            for kidx in range(ck):
+                max_own = max(max_own, width * (kidx + 1) // ck - width * kidx // ck)
+        work = math.ceil(self.n_tiles / nbt) * cn * ck
+        if work >= 256:
+            raise ValueError(f"{work} work items exceed the pipeline's one-byte role table")
+        return dict(cn=cn, ck=ck, p=p, ncp=ncp, kb=kb, max_own=max_own, max_blocks=math.ceil(math.ceil(kt / ck) / kb),
+                    work=work)
+
+    def mc_l1_bytes(self, out_dtype="bfloat16", act_dtype="bfloat16", weight_dtype="bfloat8_b", fp32_dest=False,
+                    two_streams=True):
+        """L1 of one mc call in bytes, from the factory's dataflow buffers: ``cb`` (per core of the work rectangle:
+        the whole-K activation copy x, two weight streams of depth-3 blocks, the output staging, the Float16_b
+        accumulator without fp32 Dest, the K-group partials when ck > 1), the L1 buffers ``act_shard`` and
+        ``out_shard`` (each takes its size on every core), and ``total``. Dtypes are ttnn dtype names."""
+        lay = self.mc_layout()
+        out_b, act_b = _TILE_BYTES[out_dtype], _TILE_BYTES[act_dtype]
+        w_b = -(-_TILE_BYTES[weight_dtype] // _DRAM_ALIGN) * _DRAM_ALIGN
+        part_b = _TILE_BYTES["float32"] if fp32_dest else _TILE_BYTES["bfloat16"]
+        streams, depth = (2, 3) if two_streams else (1, 5)
+        x = lay["max_blocks"] * lay["kb"] * act_b
+        w = streams * depth * lay["kb"] * lay["ncp"] * w_b
+        out = lay["max_own"] * out_b
+        acc = lay["max_own"] * part_b if (not fp32_dest and lay["ck"] == 1) else 0
+        part = (lay["ncp"] + lay["ck"] * lay["max_own"]) * part_b if lay["ck"] > 1 else 0
+        cb = x + w + out + acc + part
+        act_shard = (self.act_shard_w // TILE_SIZE) * act_b
+        out_shard = self.per_core_N * out_b
+        return dict(cb=cb, act_shard=act_shard, out_shard=out_shard, total=cb + act_shard + out_shard)
+
+    def mc_k_tiles_per_dest_pass(self, fp32_dest=False):
+        """K tiles one mc column pass accumulates in Dest before anything leaves it: the whole K range of the core with
+        fp32 Dest (one rounding at the pack), else ceil(8 / kb) streamed blocks in 16-bit Dest (8 K tiles for kb <= 8)
+        before each packer add into the Float16_b L1 accumulator. The plain head's 1D program does the same with 2."""
+        lay = self.mc_layout()
+        if fp32_dest:
+            return math.ceil(self.k_tiles / lay["ck"])
+        return math.ceil(_MC_L1ACC_K_TILES / lay["kb"]) * lay["kb"]
+
+    def mc_l1_need(self, weight_dtype="bfloat8_b", fp32_dest=False):
+        """Worst of the two mc calls the model makes: the drafter's fp32 head (fp32 Dest) and the bf16 base head
+        (fp32 Dest only with QWEN36_LMHEAD_DSHARD_FP32_DEST)."""
+        draft = self.mc_l1_bytes("float32", "bfloat16", weight_dtype, fp32_dest=True)
+        base = self.mc_l1_bytes("bfloat16", "bfloat16", weight_dtype, fp32_dest=fp32_dest)
+        return max(draft, base, key=lambda d: d["total"])
 
     def l1_bytes_per_core(self, out_dtype="float32", act_dtype="bfloat16", weight_dtype="bfloat8_b"):
         """Upper bound on one storage core's L1 for the single-reader program (matmul_multicore_reuse_mcast_dram_
@@ -959,9 +1152,29 @@ class LMHeadDShardPlan:
         out_shard = self.per_core_N * out_b
         return in1 + out_tiles * out_b + in0 + act_shard + out_shard
 
-    def check_l1(self, weight_dtype="bfloat8_b", budget=LMHEAD_DSHARD_L1_BUDGET):
-        """Raise at init (not inside the decode trace) when the fp32 drafter head would not fit in L1."""
+    def check_l1(self, weight_dtype="bfloat8_b", budget=LMHEAD_DSHARD_L1_BUDGET, fp32_dest=False, reserved=None):
+        """Raise at init (not inside the decode trace) when the fp32 drafter head would not fit in L1.
+
+        mc: the call's circular buffers + activation and logits shards (mc_l1_need) must fit the L1 bank
+        (LMHEAD_DSHARD_MC_L1_BANK) minus ``reserved`` bytes the trace already holds (default the decode all-reduce
+        staging buffer, plus one QWEN36_WEIGHT_PREFETCH GCB budget per enabled target: each GCB is a lockstep L1
+        allocation). A layout that does not fit would only fail later, at warm-up, with a circular-buffer / L1-buffer
+        clash."""
         if self.multicore:
+            if reserved is None:
+                reserved = LMHEAD_DSHARD_MC_L1_RESERVED + weight_prefetch.gcb_budget_bytes() * len(
+                    weight_prefetch.enabled_targets()
+                )
+            need = self.mc_l1_need(weight_dtype, fp32_dest)
+            avail = LMHEAD_DSHARD_MC_L1_BANK - reserved
+            if need["total"] > avail:
+                raise ValueError(
+                    f"LM-head DRAM-shard mc needs ~{need['total'] // 1024} KB of L1 (circular buffers "
+                    f"{need['cb'] // 1024} KB + activation shard {need['act_shard'] // 1024} KB + logits shard "
+                    f"{need['out_shard'] // 1024} KB) of {avail // 1024} KB free beside {reserved // 1024} KB the "
+                    f"trace holds; shrink the logits shard with {LMHEAD_DSHARD_OUT_PCN_ENV} (10 at Qwen3.8 TP8: 97 "
+                    f"cores x 10 tiles), use fewer {LMHEAD_DSHARD_READERS_ENV} or a smaller {LMHEAD_DSHARD_IBW_ENV}"
+                )
             return
         need = self.l1_bytes_per_core("float32", "bfloat16", weight_dtype)
         if need > budget:
@@ -985,12 +1198,30 @@ class LMHeadDShard:
     linear(x, ...) takes the same arguments the plain head call does and returns the same DRAM-interleaved
     [.., rows, vocab/TP] logits. ``applies(x)`` says whether x is decode-shaped (one tile of rows)."""
 
-    def __init__(self, weight, mesh_device, mode, readers=None):
+    def __init__(self, weight, mesh_device, mode, readers=None, out_pcn=None, ibw=None, fp32_dest=None):
         k, n = weight.shape[-2], weight.shape[-1]
         self.mesh_device = mesh_device
-        self.plan = p = LMHeadDShardPlan(k, n, mesh_device.dram_grid_size().x, mode, readers)
+        # K6 knobs (QWEN36_LMHEAD_DSHARD_OUT_PCN / _IBW / _FP32_DEST, mc only; the plan rejects them for exact): None
+        # reads the environment.
+        out_pcn = lm_head_dshard_out_pcn() if out_pcn is None else out_pcn
+        ibw = lm_head_dshard_ibw() if ibw is None else ibw
+        self.fp32_dest = lm_head_dshard_fp32_dest() if fp32_dest is None else bool(fp32_dest)
+        if self.fp32_dest and mode != "mc":
+            raise ValueError(
+                f"{LMHEAD_DSHARD_FP32_DEST_ENV} applies to {LMHEAD_DSHARD_ENV}=mc only "
+                "(exact keeps the plain head's Dest mode)"
+            )
+        self.plan = p = LMHeadDShardPlan(k, n, mesh_device.dram_grid_size().x, mode, readers, out_pcn, ibw)
+        if out_pcn is not None:
+            grid = mesh_device.compute_with_storage_grid_size()
+            if p.out_cores > grid.x * grid.y:
+                raise ValueError(
+                    f"{LMHEAD_DSHARD_OUT_PCN_ENV}={out_pcn}: {p.out_cores} logits cores exceed the "
+                    f"{grid.x}x{grid.y} grid"
+                )
         _w_names = {ttnn.bfloat8_b: "bfloat8_b", ttnn.bfloat4_b: "bfloat4_b", ttnn.bfloat16: "bfloat16"}
-        p.check_l1(_w_names.get(weight.dtype, "bfloat16"))  # unknown dtype: assume the largest weight tile
+        _w_name = _w_names.get(weight.dtype, "bfloat16")  # unknown dtype: assume the largest weight tile
+        p.check_l1(_w_name, fp32_dest=self.fp32_dest)
         self.k = k
         self.weight_dtype = weight.dtype
         bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(p.banks - 1, 0))})
@@ -1020,6 +1251,14 @@ class LMHeadDShard:
             f"{p.banks} banks x {p.bank_tiles} (= {p.padded_tiles}), in0_block_w {p.in0_block_w}, "
             f"{p.readers} reader(s)/bank, multicore={p.multicore}"
         )
+        if p.multicore and (out_pcn is not None or ibw is not None or self.fp32_dest):
+            need = p.mc_l1_need(_w_name, self.fp32_dest)
+            logger.info(
+                f"LM head mc K6: logits {p.per_core_N} tiles x {p.out_cores} cores, base-call fp32 Dest "
+                f"{self.fp32_dest}; worst call L1 {need['total'] // 1024} KB (CBs {need['cb'] // 1024} + act "
+                f"{need['act_shard'] // 1024} + logits {need['out_shard'] // 1024}) of "
+                f"{LMHEAD_DSHARD_MC_L1_BANK // 1024} KB"
+            )
 
     def applies(self, x):
         shape = x.shape
@@ -1034,8 +1273,10 @@ class LMHeadDShard:
 
     def compute_config(self, x_dtype, out_dtype):
         """The compute config the plain head call ends up with when it passes none (matmul_device_operation):
-        default fidelity, no approximation, fp32 Dest only for a float32 output, packer L1 acc otherwise."""
-        fp32 = out_dtype == ttnn.float32
+        default fidelity, no approximation, fp32 Dest only for a float32 output, packer L1 acc otherwise.
+        QWEN36_LMHEAD_DSHARD_FP32_DEST (mc): fp32 Dest for the bf16 output too (the pipeline then keeps each pass's
+        whole K in Dest and never accumulates in L1)."""
+        fp32 = out_dtype == ttnn.float32 or getattr(self, "fp32_dest", False)
         return ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=lm_head_default_fidelity(x_dtype, self.weight_dtype),
@@ -1194,6 +1435,94 @@ def mlp_fidelity(math_fidelity=None):
         _MLP_FIDELITY_LOGGED = True
         logger.info(f"MLP math fidelity: {name} ({MLP_FIDELITY_ENV})")
     return table[name]
+
+
+# QWEN36_MLP_GU_FUSED (default 0 = off): the dense MLP's decode gate and up projections as ONE matmul on the prefill
+# fused-swiglu AGMM weight (w_gate_up: per device [dim, 2*hidden/tp], tile-pair interleaved [g0 u0 g1 u1 ...]), then
+# the split-SwiGLU kernel (tt/mlp_swiglu.py) and the unchanged down projection. The decode-only w1/w3 copies are not
+# loaded (frees 2 x dim x hidden/tp BFP8 bytes per layer, ~1.5 GB per chip on Qwen3.8 TP=8). Modes:
+#   1d   - the 1D mcast matmul (QWEN36_MLP_GU_CORES cores, default 88; in0_block_w as gate/up, QWEN36_MLP_DECODE_IBW)
+#          reads w_gate_up directly: no extra DRAM, no extra cache file.
+#   dsmc - a DRAM-width-sharded copy of w_gate_up made on device at load (bit-identical tiles, 17 per bank at TP=8;
+#          same DRAM as r5's w1+w3) on the multi-core DRAM-sharded pipeline: QWEN36_MLP_GU_DSMC_W workers per bank
+#          (default 2), QWEN36_MLP_GU_DSMC_IBW (default 8), QWEN36_MLP_GU_DSMC_PCN output tiles per core (default 4).
+#          In-trace on the 8-chip TP mesh (k3bench2): the fused matmul is 63.2 us at W2 ibw8, 68.1 at W4, 81.2 at ibw16,
+#          against 39.7 + 37.2 us for r5's gate and up and 73.1 us for the 1d fused matmul.
+# Only the dense TP MLP on the 1D decode path with the AGMM weight takes it; everything else keeps today's path.
+MLP_GU_FUSED_ENV = "QWEN36_MLP_GU_FUSED"
+MLP_GU_FUSED_MODES = ("1d", "dsmc")
+_MLP_GU_FUSED_LOGGED = False
+# Tiles per column pass in the DRAM-sharded multi-core pipeline's compute (its factory's dst_tiles).
+_DSMC_DST_TILES = 8
+
+
+def parse_mlp_gu_fused(value):
+    """QWEN36_MLP_GU_FUSED value -> None (off) | "1d" | "dsmc". 1/on/true mean 1d."""
+    v = (value or "").strip().lower()
+    if v in ("", "0", "off", "false", "no"):
+        return None
+    if v in ("1", "on", "true", "yes"):
+        return "1d"
+    if v not in MLP_GU_FUSED_MODES:
+        raise ValueError(f"{MLP_GU_FUSED_ENV}={value!r} invalid; expected 0, 1d or dsmc")
+    return v
+
+
+def mlp_gu_fused_mode():
+    global _MLP_GU_FUSED_LOGGED
+    mode = parse_mlp_gu_fused(os.environ.get(MLP_GU_FUSED_ENV, "0"))
+    if mode is not None and not _MLP_GU_FUSED_LOGGED:
+        _MLP_GU_FUSED_LOGGED = True
+        logger.info(f"{MLP_GU_FUSED_ENV}={mode}: fused [gate|up] decode matmul on the AGMM weight + split-SwiGLU kernel")
+    return mode
+
+
+def dram_sharded_mc_layout(bank_tiles, workers):
+    """(CN, CK, P) of the multi-core DRAM-sharded pipeline: column groups per bank, K row groups per column group,
+    column passes (from anatarajan/qwen38-parity-bfp4-matmul)."""
+    cn = min(workers, bank_tiles)
+    ck = workers // bank_tiles if workers > bank_tiles else 1
+    passes = math.ceil(math.ceil(bank_tiles / cn) / _DSMC_DST_TILES)
+    return cn, ck, passes
+
+
+def dram_sharded_mc_workers_ok(bank_tiles, workers):
+    """The pipeline factory's layout rules (its TT_FATALs) for `workers` per bank on a bank of `bank_tiles` columns."""
+    if workers < 2:
+        return False
+    cn, ck, passes = dram_sharded_mc_layout(bank_tiles, workers)
+    return (ck == 1 or passes == 1) and bank_tiles // cn >= passes
+
+
+def create_dram_sharded_mc_progcfg(k, n, out_per_core_n, workers, ibw):
+    """Multi-core DRAM-sharded decode matmul config (M = 1 tile). per_core_N is the OUTPUT shard width (the op lays
+    its width-sharded output on ceil(N / per_core_N) cores, row-major on the compute grid, whatever shard spec the
+    caller passes), so it must divide the N tiles."""
+    n_tiles = math.ceil(n / TILE_SIZE)
+    if n_tiles % out_per_core_n:
+        raise ValueError(f"DRAM-sharded mc: per_core_N {out_per_core_n} does not divide {n_tiles} N tiles")
+    bank_tiles = _roundup(n, TILE_SIZE * DRAM_CORES) // TILE_SIZE // DRAM_CORES
+    if not dram_sharded_mc_workers_ok(bank_tiles, workers):
+        raise ValueError(f"DRAM-sharded mc: {workers} workers per bank is not a valid layout for {bank_tiles} tiles/bank")
+    if ibw < 1:
+        raise ValueError(f"DRAM-sharded mc: in0_block_w {ibw} must be at least 1")
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=ibw,
+        per_core_M=1,
+        per_core_N=out_per_core_n,
+        fused_activation=None,
+        num_workers_per_dram_bank=workers,
+        use_multicore_pipeline=True,
+    )
+
+
+def mlp_gu_dsmc_settings():
+    """(workers per DRAM bank, in0_block_w, output tiles per core) of QWEN36_MLP_GU_FUSED=dsmc."""
+    return (
+        int(os.environ.get("QWEN36_MLP_GU_DSMC_W", "2")),
+        int(os.environ.get("QWEN36_MLP_GU_DSMC_IBW", "8")),
+        int(os.environ.get("QWEN36_MLP_GU_DSMC_PCN", "4")),
+    )
 
 
 # Grid helpers
@@ -2363,6 +2692,45 @@ def prepare_attn_qkv_deint(q_w, k_w, v_w, nh_local, hd, kv_per, tp):
         parts.append(v_w[d * kv_per : (d + 1) * kv_per, :])
         parts.append(torch.cat(g_rows, dim=0))  # all_gate (last)
     return torch.cat(parts, dim=0)
+
+
+def prepare_attn_qkvg_pair(q_w, k_w, v_w, nh_local, hd, kv_per, tp):
+    """QWEN36_ATTN_KV_SPLIT decode weight: per device [q of the PAIR's heads | k | v | gate of the pair's heads].
+
+    Device d = 2p + r of KV pair p gets the q / gate rows of global heads 2p*nh_local .. (2p+2)*nh_local - 1 (device 2p's
+    heads, then 2p+1's: the pair-global order, the same on both members) and its own k / v rows (the replicated KV
+    head p). Same per-head [q, gate] de-interleave as prepare_attn_qkv_deint. q_w: [nh_total*hd*2, in] (interleaved
+    [q, gate] per head); k_w / v_w: the KV-replicated [tp*kv_per, in] weights. Returns [tp*(4*nh_local*hd + 2*kv_per),
+    in] for shard_w(dim=-1)."""
+    assert tp % 2 == 0, f"KV-pair split needs an even TP, got {tp}"
+    hd2 = hd * 2
+    parts = []
+    for d in range(tp):
+        heads = range((d // 2) * 2 * nh_local, (d // 2 + 1) * 2 * nh_local)
+        parts.append(torch.cat([q_w[g * hd2 : g * hd2 + hd, :] for g in heads], dim=0))
+        parts.append(k_w[d * kv_per : (d + 1) * kv_per, :])
+        parts.append(v_w[d * kv_per : (d + 1) * kv_per, :])
+        parts.append(torch.cat([q_w[g * hd2 + hd : (g + 1) * hd2, :] for g in heads], dim=0))
+    return torch.cat(parts, dim=0)
+
+
+def prepare_attn_wo_pair(o_w, nh_local, hd, tp):
+    """QWEN36_ATTN_KV_SPLIT decode o-projection: device d of pair p gets the wo input rows of the pair's 2*nh_local heads
+    (pair-global order). o_w: torch o_proj.weight [dim, nh_total*hd]. Returns [dim, tp*2*nh_local*hd] for
+    shard_w(dim=0) (which transposes and gives device d rows [d*2W, (d+1)*2W), W = nh_local*hd)."""
+    assert tp % 2 == 0, f"KV-pair split needs an even TP, got {tp}"
+    W2 = 2 * nh_local * hd
+    return torch.cat([o_w[:, (d // 2) * W2 : (d // 2 + 1) * W2] for d in range(tp)], dim=1)
+
+
+# QWEN36_ATTN_KV_SPLIT one-hot row selections (q rows of the own users, attention rows back to their global row): HiFi4
+# with fp32 accumulation, so 1.0 * x lands on x exactly (every output element has a single non-zero product).
+COMPUTE_SELECT = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+)
 
 
 def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):

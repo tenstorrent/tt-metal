@@ -54,12 +54,14 @@ def serve_device_decode_env_enabled():
 class VerifyHandle:
     """What ``verify_after_external_sync`` needs from ``verify_stage_and_enqueue``."""
 
-    __slots__ = ("rows", "B", "read_logits", "read_topk", "read_col0", "fused", "bucket")
+    __slots__ = ("rows", "B", "read_logits", "read_topk", "read_col0", "fused", "bucket", "kv_split")
 
-    def __init__(self, rows, B, read_logits, read_topk, read_col0, fused, bucket=None):
+    def __init__(self, rows, B, read_logits, read_topk, read_col0, fused, bucket=None, kv_split=False):
         self.rows, self.B = rows, B
         self.read_logits, self.read_topk, self.read_col0, self.fused = read_logits, read_topk, read_col0, fused
         self.bucket = bucket  # the row bucket b < B the step replayed (QWEN36_SPEC_BUCKETS), None = the B-row traces
+        # QWEN36_ATTN_KV_SPLIT gate: the step replayed the split variant of width ``bucket`` (B included; _vfy_bk_ksp)
+        self.kv_split = kv_split
 
 
 class _VfyBucket:
@@ -76,6 +78,8 @@ class _VfyBucket:
         self.narrow_ready = False
         self.handoff = {}  # "ids", "rows", "topk_vals", "topk_ids" -> destination tensor
         self.standins = []  # tensors freed once the bucket is captured
+        # QWEN36_ATTN_KV_SPLIT gate: a split variant of width b (b == B allowed), not a row bucket
+        self.kv_split = False
 
 
 class _ShortPrefillTrace:
@@ -324,6 +328,9 @@ class Qwen36Model:
         for i in tqdm(self.layer_indices, desc="Loading layers"):
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
+        # QWEN36_ATTN_KV_SPLIT=user (default off; tt/kv_split.py): per-device constants of the KV-pair user split of the
+        # spec verify and drafter SDPA. None (flag off / no KV pairs) -> no tensor, op or trace differs.
+        self._kv_split_plan = self._build_kv_split_plan()
 
         # Framework RMSNorm (add_unit_offset=True). Single device: is_distributed=None.
         # 27B TP: hidden is sharded -> pass is_distributed + tt_ccl or use DistributedNorm.
@@ -383,12 +390,18 @@ class Qwen36Model:
         # QWEN36_LMHEAD_DSHARD (default 0): decode-shaped head calls (<= 32 rows) read a DRAM-width-sharded copy of
         # the vocab-sharded weight (+1 head copy of DRAM per device); everything else keeps lm_head_weight.
         self._lm_head_dshard = None
+        # QWEN36_LMHEAD_DSHARD_SCOPE (K6, default "all"): which head calls the copy serves (draft = MTP drafter only,
+        # the verify/base head stays the plain interleaved one; base = the base calls only).
+        self._lm_head_dshard_scope = "all"
         _dshard_mode = _tpc.lm_head_dshard_mode()
         if _dshard_mode is not None:
             if self._lmhead_vocab_sharded:
+                self._lm_head_dshard_scope = _tpc.lm_head_dshard_scope()
                 self._lm_head_dshard = _tpc.LMHeadDShard(
                     self.lm_head_weight, mesh_device, _dshard_mode, _tpc.lm_head_dshard_readers(_dshard_mode)
                 )
+                if self._lm_head_dshard_scope != "all":
+                    logger.info(f"LM head DRAM-sharded copy serves the {self._lm_head_dshard_scope} head calls only")
             else:
                 logger.warning("QWEN36_LMHEAD_DSHARD ignored: the LM head is not vocab-sharded")
 
@@ -787,11 +800,16 @@ class Qwen36Model:
 
         weight: None (or lm_head_weight itself) takes the path above. Any other head copy (the MTP drafter's
         BFP4 head, QWEN36_DRAFT_LMHEAD_BFP4) runs the plain interleaved ttnn.linear: the DRAM-sharded copy
-        exists only for the base BFP8 weight."""
+        exists only for the base BFP8 weight. The drafter always passes its weight and the base calls never do,
+        which is what QWEN36_LMHEAD_DSHARD_SCOPE routes on."""
         if weight is not None and weight is not self.lm_head_weight:
             return ttnn.linear(x, weight, **kw)
         d = getattr(self, "_lm_head_dshard", None)  # absent on __new__-built test doubles
-        if d is not None and d.applies(x):
+        if (
+            d is not None
+            and d.applies(x)
+            and _tpc.lm_head_dshard_scope_takes(getattr(self, "_lm_head_dshard_scope", "all"), weight is not None)
+        ):
             return d.linear(x, **kw)
         return ttnn.linear(x, self.lm_head_weight, **kw)
 
@@ -1589,6 +1607,108 @@ class Qwen36Model:
 
         return logits
 
+    def _build_kv_split_plan(self):
+        """QWEN36_ATTN_KV_SPLIT=user: the KVSplitPlan (tt/kv_split.py) on a 1 x TP row with KV pairs whose full-attention
+        layers all loaded the pair weights, with the drafter-step constants (T = 1) of every even width; the verify's are
+        added by prepare_verify_trace. None otherwise (flag off: nothing is built)."""
+        from models.demos.blackhole.qwen36.tt.kv_split import KVSplitPlan, kv_split_supported
+
+        if self.num_devices <= 1 or not kv_split_supported(self.args) or 1 not in list(self.mesh_device.shape):
+            return None
+        attns = [l.attention for l in self.layers if l.is_full_attention]
+        if not attns or not all(getattr(a, "_kv_split_ready", False) for a in attns):
+            logger.warning("QWEN36_ATTN_KV_SPLIT=user ignored: the pair weights did not load on every attention layer")
+            return None
+        plan = KVSplitPlan(self.mesh_device, self.num_devices, self.args.n_local_heads)
+        for b in range(2, self.args.max_batch_size + 1, 2):
+            plan.prepare(b, 1)
+        from models.demos.blackhole.qwen36.tt.kv_split import KVSplitGate
+
+        # QWEN36_ATTN_KV_SPLIT_MIN_CTX / _MIN_CTX_DRAFT: which traces are split and when (tt/kv_split.py KVSplitGate)
+        self._kv_split_gate = KVSplitGate.from_env()
+        logger.info(
+            f"QWEN36_ATTN_KV_SPLIT=user: KV-pair user split ready on {len(attns)} full-attention layers; context gate "
+            f"{self._kv_split_gate.describe()}"
+        )
+        return plan
+
+    def kv_split_dram_budget(self, T=None):
+        """QWEN36_ATTN_KV_SPLIT=user: per-device DRAM the split adds (tt/kv_split.py, "DRAM budget"): {"weights": pair weights
+        of every attention module that loaded them (verify layers + the MTP layer), "variants": the bucket-local outputs of
+        the split verify variants the gate will capture (an estimate at ``T`` candidates per user, default
+        QWEN36_SPEC_K + 1), "total"}. None with the split off. Host arithmetic over the known layouts, no device query.
+        """
+        if getattr(self, "_kv_split_plan", None) is None:
+            return None
+        from models.demos.blackhole.qwen36.tt import kv_split as ks
+
+        attns = [l.attention for l in self.layers if l.is_full_attention]
+        mtp = getattr(self, "mtp", None)
+        if mtp is not None and getattr(getattr(mtp, "attention", None), "_kv_split_ready", False):
+            attns.append(mtp.attention)
+        attns = [a for a in attns if getattr(a, "_kv_split_ready", False)]
+        a0 = attns[0]
+        dt = str(getattr(a0.tw["wqkvg_pair"], "dtype", "bfloat8_b")).rsplit(".", 1)[-1].lower()  # DataType.BFLOAT8_B
+        dt = dt if dt in ("bfloat8_b", "bfloat4_b", "bfloat16") else "bfloat8_b"
+        weights = ks.kv_split_pair_weight_bytes(
+            self.args.dim, self.args.n_local_heads, self.args.n_local_kv_heads, self.args.head_dim, len(attns), dt
+        )
+        T = int(T if T is not None else int(os.environ.get("QWEN36_SPEC_K", "3")) + 1)
+        gate = getattr(self, "_kv_split_gate", None) or ks.KVSplitGate.from_env()
+        bks = gate.variant_buckets("verify", range(1, int(self.args.max_batch_size) + 1))
+        variants = ks.kv_split_variant_out_bytes(
+            [b * T for b in bks], self.args.dim, int(self.args.vocab_size), self.num_devices, topk=True
+        )
+        return {"weights": weights, "variants": variants, "total": weights + variants, "layers": len(attns)}
+
+    def kv_split_ctx(self, n_users, T, positions, page_table_own):
+        """In-trace split context for one verify body / drafter step of ``n_users`` users x T rows, or None (flag off,
+        width not split): the plan's constants, the per-device own positions derived from the replicated [n_users*T]
+        int32 row positions, and ``page_table_own`` (the per-device own page table, staged by the host). The caller frees
+        ctx["owned"] after the layers ran."""
+        plan = getattr(self, "_kv_split_plan", None)
+        if plan is None or page_table_own is None or not plan.has(n_users, T):
+            return None
+        pos = plan.own_positions(positions, n_users, T)
+        return {
+            "n_users": int(n_users),
+            "T": int(T),
+            "consts": plan.consts(n_users, T),
+            "pos": pos,
+            "pt": page_table_own,
+            "owned": [pos],
+        }
+
+    def _vfy_ksp_avail(self, n_users, T):
+        """The verify of ``n_users`` users x T candidates CAN take the split: the plan has its constants, the per-device own
+        group table exists, the lean verify runs, the "verify" part is on, and the split SDPA would be the packed fused
+        call (n_users/2 groups of Tg candidates x 2*NH heads in one q tile; Tg x 6 <= 32). The unpacked split SDPA (the
+        adaptive-K wide family: T = 6 / 8 in one group) never ran on a device: QWEN36_ATTN_KV_SPLIT_UNPACKED=1 allows it.
+        """
+        plan = getattr(self, "_kv_split_plan", None)
+        if plan is None or getattr(self, "_vfy_kvpt_own", None) is None or not verify_attn_lean_enabled():
+            return False
+        if not plan.has(n_users, T) or "verify" not in plan.parts:
+            return False
+        if os.environ.get("QWEN36_ATTN_KV_SPLIT_UNPACKED", "0") == "1":
+            return True
+        att0 = self._vfy_att0_layer()
+        sp = att0._spec_sdpa_plan(T, int(n_users) // 2)
+        return sp is not None and att0._spec_sdpa_pack_heads_n(sp[2], 2 * att0.NH) > 0
+
+    def _vfy_ksp_want(self, n_users, T, kv_split=None):
+        """Whether a verify body of ``n_users`` x T runs split: ``kv_split`` True (a split variant: must be available),
+        False (never), None (the canonical trace: split only in the context gate's "always" mode, the K1 setting where
+        every even width was captured split)."""
+        if kv_split is False:
+            return False
+        avail = self._vfy_ksp_avail(n_users, T)
+        if kv_split is None:
+            gate = getattr(self, "_kv_split_gate", None)
+            return avail and gate is not None and gate.canonical_split()
+        assert avail, f"QWEN36_ATTN_KV_SPLIT: no split verify for {n_users} users x T={T}"
+        return True
+
     def _forward_decode(
         self, token_ids_buf, cos, sin, cur_pos_tensor, page_table, sharded_lm_head=False, return_hidden=False
     ):
@@ -2318,7 +2438,7 @@ class Qwen36Model:
             self._vfy_narrow_ready = ready
         return ready
 
-    def _forward_verify_bucket_tp(self, n_users, bk=None):
+    def _forward_verify_bucket_tp(self, n_users, bk=None, kv_split=None):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
         logits + hidden. Reads only fixed-address buffers so it is trace-capturable. Full-attention
         layers run the decode flash kernel with the rows as pseudo-users (see capture_verify_trace).
@@ -2342,13 +2462,21 @@ class Qwen36Model:
         hands its ids and drafter-feed rows over to the shared B-row outputs (``bk.handoff``) inside the trace and returns
         (None, None, None, None, normed, shard_logits): normed / shard_logits are bucket-local (read by the bucket's logits
         / topk traces). ``n_users == B`` is the unchanged B-row body.
+
+        ``kv_split`` (QWEN36_ATTN_KV_SPLIT=user, tt/kv_split.py): True = the split variant of this width (its _VfyBucket
+        ``bk`` hands off like a row bucket, also at n_users == B), False = never split, None = the canonical trace (split
+        only in the gate's "always" mode, as the K1 commit captured every even width). See _vfy_ksp_want.
         """
         T = self._vfy_T
         rows = n_users * T
         bucket = n_users < self._vfy_B
+        # a row bucket, or a split variant (QWEN36_ATTN_KV_SPLIT): the outputs go to the shared B-row buffers
+        handoff = bk is not None
         if bucket:
             assert bk is not None and bk.b == n_users, f"bucket body of {n_users} rows needs its _VfyBucket"
             assert self._vfy_sharded, "row buckets need the sharded verify"
+        if handoff:
+            assert bk.b == n_users and self._vfy_sharded, f"hand-off body of {n_users} rows (bucket {bk.b})"
         kvpos, cos, sin, ctrl, owned = self._vfy_inputs(rows)
         pt_rows, pt_users, pt_groups = self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf
         if bucket:
@@ -2391,6 +2519,20 @@ class Qwen36Model:
             # The multi-row KV write (QWEN36_KV_WRITE_MULTIROW) reads kvpos whole: no per-candidate slices.
             if KV_GROUP_WRITE_OK and T > 1 and not kv_multirow_write_ok():
                 _pos_groups = [ttnn.slice(kvpos, (j,), (rows,), (T,)) for j in range(T)]
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): one split context per replay, shared by every full-attention layer:
+        # this device's own users' positions (derived in the trace from kvpos) and page table (the first n_users/2 rows
+        # of the host-staged per-device table). None with the flag off or for a width the split does not serve.
+        _ksp = None
+        _own = getattr(self, "_vfy_kvpt_own", None)
+        if self._vfy_ksp_want(n_users, T, kv_split):
+            if bucket:  # n_users < B, so never a full-span slice (which would alias the persistent buffer)
+                _own = ttnn.slice(_own, [0, 0], [(n_users // 2) * self._vfy_kvpt_own_gpu, self._vfy_nb])
+            _ksp = self.kv_split_ctx(n_users, T, kvpos, _own)
+            if bucket:
+                _ksp["owned"].append(_own)
+        _ksp_attns = [l.attention for l in self.layers if l.is_full_attention] if _ksp is not None else []
+        for _a in _ksp_attns:
+            _a._kv_split_ctx = _ksp
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -2433,6 +2575,10 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        for _a in _ksp_attns:
+            _a._kv_split_ctx = None
+        for _t in (_ksp or {}).get("owned", ()):
+            ttnn.deallocate(_t)
         for _new, _old in _tmp:  # per-trace temporaries (a reshape that aliased its source is not freed twice)
             if _new is not _old and not _tpc_aliases(_new, _old):
                 ttnn.deallocate(_new)
@@ -2456,12 +2602,13 @@ class Qwen36Model:
                 ttnn.deallocate(shard_logits)
                 keep = None
             if ids is None:  # [1,1,1,32] uint32 RM
-                ids = self._dl_greedy_token_row_batched(idx, val, bk.dl if bucket else self._vfy_dl)
+                ids = self._dl_greedy_token_row_batched(idx, val, bk.dl if handoff else self._vfy_dl)
             for t in owned:
                 ttnn.deallocate(t)
-            if bucket:
+            if handoff:
                 # In-trace hand-off into the shared B-row outputs the accept / chain / drafter / host read. ids lanes >= rows
-                # are 0 (the argmax pad); the drafter-feed rows >= rows of the shared buffer keep their content.
+                # are 0 (the argmax pad); the drafter-feed rows >= rows of the shared buffer keep their content. A split
+                # variant of the B-row width hands over every row (handoff_rows_concat copies the whole tensor then).
                 from models.demos.blackhole.qwen36.tt.spec_bucket import handoff_rows_concat
 
                 ttnn.copy(ids, bk.handoff["ids"])
@@ -2472,7 +2619,7 @@ class Qwen36Model:
                 ttnn.deallocate(rows_out)
                 return None, None, None, None, normed, keep
             return None, rows_out, ids, None, normed, keep
-        assert not bucket, "row buckets need the sharded verify"
+        assert not handoff, "row buckets and split variants need the sharded verify"
         logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x 151936 floats. ttnn.argmax needs ROW_MAJOR input (a TILE tensor
@@ -2666,6 +2813,20 @@ class Qwen36Model:
             pt1 = pt[:1].repeat(G, 1)  # fused path off: the buffer exists but is unread
         return pt.repeat_interleave(T, dim=0).contiguous(), pt.contiguous(), pt1.contiguous()
 
+    def _vfy_stage_own_page_table(self, pt):
+        """QWEN36_ATTN_KV_SPLIT=user: re-stage the per-device own page table (``_vfy_kvpt_own``, device d = its own users'
+        rows of ``pt`` [B, nb]) in place, next to the three replicated tables."""
+        from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
+
+        _h = ttnn.from_torch(
+            own_page_table_host(pt, self.num_devices, self._vfy_kvpt_own_gpu),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+        )
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpt_own)
+
     def _vfy_check_kv_writes(self, pt, positions):
         """Assert the grouped verify KV write has no same-tile, same-call collision between users
         for block tables ``pt`` [B, nb] and first verify slots ``positions`` (spec_kv_write_conflicts)."""
@@ -2707,9 +2868,10 @@ class Qwen36Model:
         """Release every row bucket's traces and bucket-local buffers (dl constants, stand-ins, trace outputs). No-op when
         there are none. release_verify_trace calls it, so shutdown and a re-prepare drop the buckets with the B-row trace.
         """
+        # QWEN36_ATTN_KV_SPLIT gate: the split variants (keyed by width, B included) go with the buckets
+        variants = getattr(self, "_vfy_bk_ksp", None) or {}
         bks = getattr(self, "_vfy_bk", None) or {}
-        for b in sorted(bks):
-            bk = bks[b]
+        for bk in [bks[b] for b in sorted(bks)] + [variants[b] for b in sorted(variants)]:
             for name in ("trace_id", "logits_trace_id", "topk_trace_id"):
                 if getattr(bk, name) is not None:
                     ttnn.release_trace(self.mesh_device, getattr(bk, name))
@@ -2725,6 +2887,8 @@ class Qwen36Model:
                 bk.dl.release()
                 bk.dl = None
         self._vfy_bk = {}
+        if variants:
+            self._vfy_bk_ksp = {}
         self._vfy_last_bucket = None
 
     @staticmethod
@@ -2851,6 +3015,27 @@ class Qwen36Model:
             ttnn.from_torch(h, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
             for h in self._vfy_page_table_host(pt)
         )
+        # QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py): a fourth persistent table, per device (its own users' rows), and the
+        # verify-width constants of every even bucket, before the warmup so both bake into the traces. Flag off: None.
+        if getattr(self, "_vfy_kvpt_own", None) is not None:
+            ttnn.deallocate(self._vfy_kvpt_own)
+        self._vfy_kvpt_own = None
+        _ksp_plan = getattr(self, "_kv_split_plan", None)
+        # one own-table row per fused-SDPA candidate group (groups per user = spec groups / B: 1 at T=4, 2 at T=8)
+        self._vfy_kvpt_own_gpu = _spec_groups // B if (_spec_groups >= B and _spec_groups % B == 0) else 0
+        if _ksp_plan is not None and B >= 2 and B % 2 == 0 and T >= 2 and self._vfy_kvpt_own_gpu:
+            from models.demos.blackhole.qwen36.tt.kv_split import own_page_table_host
+
+            self._vfy_kvpt_own = ttnn.from_torch(
+                own_page_table_host(pt, self.num_devices, self._vfy_kvpt_own_gpu),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=ttnn.ShardTensorToMesh(dev, dim=0),
+            )
+            for _b in range(2, B + 1, 2):
+                _ksp_plan.prepare(_b, T)
+            logger.info(f"QWEN36_ATTN_KV_SPLIT=user: spec verify split for 2..{B} (even) users x T={T}")
         # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
         # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
         # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
@@ -3071,23 +3256,58 @@ class Qwen36Model:
         for b in sorted((int(x) for x in buckets if int(x) < self._vfy_B), reverse=True):
             self.record_verify_bucket(b)
 
-    def prepare_verify_bucket(self, b):
+    # ---- QWEN36_ATTN_KV_SPLIT context gate: split verify variants (tt/kv_split.py KVSplitGate)
+    def ksp_verify_variant_widths(self, buckets):
+        """The widths among ``buckets`` (the engine's row buckets, B included) that get a split verify variant: gated mode,
+        a threshold for the width, and the split available at the prepared T (_vfy_ksp_avail). () otherwise (flag off).
+        """
+        gate = getattr(self, "_kv_split_gate", None)
+        if gate is None or getattr(self, "_vfy_prepared_key", None) is None:
+            return ()
+        T = self._vfy_T
+        return tuple(
+            b for b in gate.variant_buckets("verify", buckets) if b <= self._vfy_B and self._vfy_ksp_avail(b, T)
+        )
+
+    def prepare_verify_ksp_variants(self, widths):
+        """Warm the split verify variant of every width in ``widths`` (descending), after the buckets, before any capture."""
+        for b in sorted((int(x) for x in widths), reverse=True):
+            self.prepare_verify_bucket(b, kv_split=True)
+
+    def record_verify_ksp_variants(self, widths):
+        """Capture every warmed split variant (main + logits + topk, descending) right after the row buckets (V8s, V4s, V2s
+        after V1): before any drafter / accept capture, as the buckets."""
+        for b in sorted((int(x) for x in widths), reverse=True):
+            self.record_verify_bucket(b, kv_split=True)
+
+    def prepare_verify_bucket(self, b, kv_split=False):
         """Warm the b-row verify bucket (b < B) on the shared B-row state: allocate its persistent buffers (sharded-argmax
         constants, hand-off stand-ins shaped like the live B-row outputs) and run its main / logits / topk bodies once so
         every program is compiled before any capture (capture_decode forbids cache misses). Idempotent. The spec loop
-        seeds the GDN state after warmup, as for the B-row trace."""
+        seeds the GDN state after warmup, as for the B-row trace.
+        ``kv_split`` (QWEN36_ATTN_KV_SPLIT gate): the split variant of the even width b <= B instead (its own registry
+        ``_vfy_bk_ksp``; the body hands off like a bucket's, at b == B too)."""
         assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
         B, T = self._vfy_B, self._vfy_T
-        assert 1 <= b < B, f"row bucket {b} must be in [1, {B})"
-        assert self._vfy_sharded, "row buckets need the sharded verify (QWEN36_VERIFY_SHARDED_ARGMAX)"
-        if self._vfy_bk is None:
-            self._vfy_bk = {}
-        if b in self._vfy_bk:
+        if kv_split:
+            assert 2 <= b <= B and b % 2 == 0, f"split variant width {b} must be even in [2, {B}]"
+            assert self._vfy_sharded, "split variants need the sharded verify (QWEN36_VERIFY_SHARDED_ARGMAX)"
+            if getattr(self, "_vfy_bk_ksp", None) is None:
+                self._vfy_bk_ksp = {}
+            reg = self._vfy_bk_ksp
+        else:
+            assert 1 <= b < B, f"row bucket {b} must be in [1, {B})"
+            assert self._vfy_sharded, "row buckets need the sharded verify (QWEN36_VERIFY_SHARDED_ARGMAX)"
+            if self._vfy_bk is None:
+                self._vfy_bk = {}
+            reg = self._vfy_bk
+        if b in reg:
             return
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
         bk = _VfyBucket(b, b * T)
-        self._vfy_bk[b] = bk  # registered first: release_verify_buckets frees a half-built bucket
+        bk.kv_split = bool(kv_split)
+        reg[b] = bk  # registered first: release_verify_buckets frees a half-built bucket
         bk.dl = self._vfy_new_dl(bk.rows)
         torch_dt = {ttnn.bfloat16: torch.bfloat16, ttnn.uint32: torch.int32}
         for name, (shape, dt, layout, mc) in self._vfy_specs.items():
@@ -3100,7 +3320,7 @@ class Qwen36Model:
                 mesh_mapper=rep,
             )
         bk.standins = list(bk.handoff.values())
-        outs = self._forward_verify_bucket_tp(n_users=b, bk=bk)
+        outs = self._forward_verify_bucket_tp(n_users=b, bk=bk, **({"kv_split": True} if kv_split else {}))
         bk.normed = outs[4]
         _lg = self._forward_verify_logits_body(bk)
         bk.narrow_ready = self._vfy_warm_narrow(_lg[1], b)
@@ -3115,14 +3335,16 @@ class Qwen36Model:
             bk.shard_logits = None
         ttnn.synchronize_device(dev)
 
-    def record_verify_bucket(self, b):
+    def record_verify_bucket(self, b, kv_split=False):
         """Capture the b-row verify bucket's traces (main, logits, topk) after record_verify_trace: the B-row outputs it
         hands over to must exist, and they only overlap the B-row trace's own intermediates when captured right after it.
         Capture order: V8, then V4, V2, V1 (record_verify_buckets), each main + logits + topk, all before the drafter and
         accept captures: the bucket-local outputs (normed / shard logits / logits) are read lazily by fetch_verify_logits
-        after those traces replayed, so nothing captured later may reuse their memory. Logs the trace / DRAM memory."""
-        bk = (getattr(self, "_vfy_bk", None) or {}).get(b)
-        assert bk is not None, f"call prepare_verify_bucket({b}) first"
+        after those traces replayed, so nothing captured later may reuse their memory. Logs the trace / DRAM memory.
+        ``kv_split``: the split variant of width b (QWEN36_ATTN_KV_SPLIT gate; record_verify_ksp_variants, after the buckets
+        and before any drafter capture, for the same reason)."""
+        bk = (getattr(self, "_vfy_bk_ksp" if kv_split else "_vfy_bk", None) or {}).get(b)
+        assert bk is not None, f"call prepare_verify_bucket({b}{', kv_split=True' if kv_split else ''}) first"
         assert (
             getattr(self, "_vfy_trace_id", None) is not None
         ), "capture the B-row verify trace (record_verify_trace) first"
@@ -3136,7 +3358,7 @@ class Qwen36Model:
             "topk_ids": getattr(self, "_vfy_topk_ids_out", None),
         }
         bk.trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
-        outs = self._forward_verify_bucket_tp(n_users=b, bk=bk)
+        outs = self._forward_verify_bucket_tp(n_users=b, bk=bk, **({"kv_split": True} if kv_split else {}))
         ttnn.end_trace_capture(dev, bk.trace_id, cq_id=0)
         bk.normed, bk.shard_logits = outs[4], outs[5]
         bk.logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
@@ -3149,8 +3371,9 @@ class Qwen36Model:
         for t in bk.standins:  # warm-pass hand-off targets, used by no trace
             ttnn.deallocate(t)
         bk.standins = []
-        logger.info(f"Verify bucket trace (b={b} users x T={self._vfy_T} = {bk.rows} rows) captured")
-        self._log_trace_memory(f"V{b}")
+        _sv = " split variant (QWEN36_ATTN_KV_SPLIT)" if kv_split else ""
+        logger.info(f"Verify bucket trace (b={b} users x T={self._vfy_T} = {bk.rows} rows){_sv} captured")
+        self._log_trace_memory(f"V{b}{'s' if kv_split else ''}")
 
     def verify_traced(
         self,
@@ -3163,6 +3386,7 @@ class Qwen36Model:
         read_topk=False,
         read_col0=False,
         bucket=None,
+        kv_split=False,
     ):
         """Stage, replay, sync and read one verify step: ``verify_stage_and_enqueue`` then ``verify_sync_and_read``.
 
@@ -3210,6 +3434,7 @@ class Qwen36Model:
             read_topk=read_topk,
             read_col0=read_col0,
             bucket=bucket,
+            **({"kv_split": True} if kv_split else {}),
         )
         return self.verify_sync_and_read(handle)
 
@@ -3229,6 +3454,7 @@ class Qwen36Model:
         skip_kv_check=False,
         flip_parity=False,
         bucket=None,
+        kv_split=False,
     ):
         """First half of ``verify_traced`` (same arguments): validate, stage every per-replay input, and enqueue the
         main trace plus the optional logits / topk traces with ``blocking=False``. No synchronize and no readback.
@@ -3246,6 +3472,10 @@ class Qwen36Model:
         is the same B-row host state; the b-row traces use rows 0..b-1 of it and hand their outputs to the shared B-row buffers. The
         caller keeps every live row below b (the engine parks the others).
 
+        ``kv_split`` (QWEN36_ATTN_KV_SPLIT context gate): replay the split variant of width ``bucket`` (None = B) instead,
+        with exactly the same staging (the variants read the same persistent inputs and hand off into the same shared
+        outputs). A width without a captured variant replays its unsplit traces (counted in ``_vfy_ksp_fallbacks``).
+
         Returns a ``VerifyHandle`` for ``verify_sync_and_read`` (blocking read) or ``verify_after_external_sync``
         (the caller already synchronized the device). Exactly one of those must follow each call: the GDN window
         parity flips there, once per replay.
@@ -3254,7 +3484,12 @@ class Qwen36Model:
 
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         bk = None
-        if bucket is not None and int(bucket) != self._vfy_B:
+        if kv_split:  # QWEN36_ATTN_KV_SPLIT gate: the split variant of this width, when one was captured
+            bk = (getattr(self, "_vfy_bk_ksp", None) or {}).get(self._vfy_B if bucket is None else int(bucket))
+            if bk is None or bk.trace_id is None:
+                bk = None
+                self._vfy_ksp_fallbacks = getattr(self, "_vfy_ksp_fallbacks", 0) + 1
+        if bk is None and bucket is not None and int(bucket) != self._vfy_B:
             bk = (getattr(self, "_vfy_bk", None) or {}).get(int(bucket))
             assert bk is not None and bk.trace_id is not None, f"verify bucket {bucket} is not captured"
         _main_tid = self._vfy_trace_id if bk is None else bk.trace_id
@@ -3300,6 +3535,8 @@ class Qwen36Model:
                         host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
                     )
                     ttnn.copy_host_to_device_tensor(_h, buf)
+                if getattr(self, "_vfy_kvpt_own", None) is not None:  # QWEN36_ATTN_KV_SPLIT=user
+                    self._vfy_stage_own_page_table(pt)
                 self._vfy_pt_host = pt.clone()
 
         # Stage per-replay inputs into the persistent buffers (addresses preserved). Row-major flatten
@@ -3385,6 +3622,7 @@ class Qwen36Model:
             read_col0=read_col0,
             fused=_fused and not flip_parity,
             bucket=None if bk is None else bk.b,
+            kv_split=bool(bk is not None and bk.kv_split),
         )
 
     def verify_sync_and_read(self, handle):
@@ -3412,8 +3650,9 @@ class Qwen36Model:
         bk = None
         if getattr(handle, "bucket", None) is not None:
             # A row bucket replayed: ids / topk come from the shared B-row buffers (rows >= b*T hold zeros / pads), the logits from
-            # the bucket's own b-row copy. Every readback is zero-padded to the B-row shape the engine expects.
-            bk = self._vfy_bk[handle.bucket]
+            # the bucket's own b-row copy. Every readback is zero-padded to the B-row shape the engine expects. A split
+            # variant (QWEN36_ATTN_KV_SPLIT gate, B-row width included) reads the same way from its own copies.
+            bk = (self._vfy_bk_ksp if getattr(handle, "kv_split", False) else self._vfy_bk)[handle.bucket]
             if read_logits:
                 if read_col0 and bk.narrow_ready:
                     sl = self._vfy_narrow_logits(bk.logits_rm_out, bk.b)

@@ -206,11 +206,22 @@ def _trace_times(eng, model, mesh, tag, vb, sampled, med):
     bk = (getattr(model, "_vfy_bk", None) or {}).get(int(vb)) if int(vb) != B else None
     if bk is not None:
         vt = bk.trace_id
+    dr = eng._dr_trace_for(vb)
+    # QWEN36_ATTN_KV_SPLIT context gate: time the variants the deferred loop replayed for this width at the run's last
+    # context (the canonical traces stay unsplit with a gate). No gate: unchanged.
+    ksp = getattr(eng, "_ksp_gate", None) is not None and eng._ksp_gate() is not None
+    if ksp and eng._ksp_on("verify"):
+        bk = model._vfy_bk_ksp[eng._ksp_width()]
+        vt = bk.trace_id
+        tag += " [split verify]"
+    if ksp and eng._ksp_on("draft"):
+        dr = eng._dr_traces[("ksp", eng._ksp_width())]
+        tag += " [split drafter]"
     parts = {
         "chain": eng._ch_trace_s if sampled else eng._ch_trace_g,
         "verify": vt,
         "accept": eng._fs_trace if sampled else eng._fa_trace,
-        "drafter": eng._dr_trace_for(vb),
+        "drafter": dr,
     }
     if sampled:
         parts["topk"] = bk.topk_trace_id if bk is not None else getattr(model, "_vfy_topk_trace_id", None)

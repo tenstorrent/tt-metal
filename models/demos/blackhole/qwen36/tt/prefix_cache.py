@@ -260,6 +260,9 @@ class GdnPrefixStateCache:
         # The B=1 scratch (and its init buffers) must exist first: the slots mirror its shapes.
         model._ensure_gdn_prefill_scratch()
         self._dns = [dn for dn, *_ in model._gdn_prefill_scratch]
+        # QWEN36_ATTN_KV_SPLIT=user: the split's DRAM in slots of this cache (+ the opt-in trade); no-op otherwise
+        if num_slots is None:
+            self.num_slots = self._kv_split_slots(self.num_slots)
         self.fast_alloc = prefix_cache_fast_alloc()  # QWEN36_PREFIX_CACHE_FAST_ALLOC
         t_alloc = time.perf_counter()
         self._slots = []  # slot -> [(rec, conv_carry)] per GDN layer
@@ -303,6 +306,29 @@ class GdnPrefixStateCache:
             return tot * int(self._dns[0].mesh.get_num_devices()) / 2**20
         except Exception:  # noqa: BLE001 - logging aid only
             return 0.0
+
+    def _kv_split_slots(self, n):
+        """QWEN36_ATTN_KV_SPLIT=user (tt/kv_split.py "DRAM budget"): log what the KV-pair split adds per device in slots of
+        this cache and, with QWEN36_ATTN_KV_SPLIT_SLOT_TRADE=1, return ``n`` minus that slot equivalent (the device
+        footprint of the configuration then stays as without the split). ``n`` unchanged when the split is off."""
+        fn = getattr(self.model, "kv_split_dram_budget", None)
+        budget = fn() if callable(fn) else None
+        if not budget:
+            return n
+        from models.demos.blackhole.qwen36.tt import kv_split as ks
+
+        # (dn, rec_state, ..., conv_carry, ...): the shapes _alloc_pair mirrors
+        scratch = self.model._gdn_prefill_scratch[0]
+        slot = ks.prefix_slot_bytes(len(self._dns), list(scratch[1].shape), list(scratch[3].shape))
+        trade = ks.kv_split_slot_trade_enabled()
+        m = ks.kv_split_slots_after_trade(n, budget["total"], slot, trade)
+        logger.info(
+            f"{self.name}: QWEN36_ATTN_KV_SPLIT=user adds {budget['weights'] / 2**20:.1f} MiB pair weights "
+            f"({budget['layers']} attention layers) + ~{budget['variants'] / 2**20:.1f} MiB split-variant outputs per device "
+            f"= {ks.kv_split_slot_equivalent(budget['total'], slot)} slots of {slot / 2**20:.2f} MiB; "
+            f"{'QWEN36_ATTN_KV_SPLIT_SLOT_TRADE=1: ' + str(n) + ' -> ' + str(m) if trade else 'slot pool unchanged'} slots"
+        )
+        return m
 
     def _alloc_pair(self, dn):
         scratch = next(s for s in self.model._gdn_prefill_scratch if s[0] is dn)

@@ -18,6 +18,18 @@ class MLPWeights:
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_BFP4_MLP_DOWN=1, dense only)
     w3: ttnn.Tensor  # up_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_MLP_GATEUP_BFP8=0, dense only)
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
+    # QWEN36_MLP_GU_FUSED: "1d" | "dsmc" when decode runs the fused [gate|up] matmul (w1/w3 are then None); None = off.
+    gu_fused: str = None
+    w_gu_dec: ttnn.Tensor = None  # QWEN36_MLP_GU_FUSED=dsmc: DRAM-width-sharded copy of w_gate_up for decode
+
+
+def mlp_gu_fused_decode_mode(args, w_gate_up):
+    """QWEN36_MLP_GU_FUSED mode this MLP decodes with, or None: dense TP MLP on the default 1D decode path whose prefill
+    AGMM weight exists (its pair-interleaved columns are what the fused decode matmul reads)."""
+    mode = getattr(args, "mlp_gu_fused", None) if args is not None else None
+    if mode is None or w_gate_up is None or not getattr(args, "mlp_1d_decode", False):
+        return None
+    return mode
 
 
 def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
@@ -156,9 +168,20 @@ def load_mlp_weights(
                 dtype=gateup_dtype,
             )
 
-        # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill. Load order w1, w3, w2 as before.
-        w1 = gate_up("gate_proj", "mlp_w1_decode_1d_progcfg")
-        w3 = gate_up("up_proj", "mlp_w3_decode_1d_progcfg")
+        # QWEN36_MLP_GU_FUSED: decode reads w_gate_up (1d) or an on-device DRAM-sharded copy of it (dsmc), and prefill
+        # always takes the AGMM, so the decode-only w1/w3 are never loaded. w2 loads as below either way.
+        gu_mode = mlp_gu_fused_decode_mode(args, wgu)
+        if gu_mode is None:
+            # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill. Load order w1, w3, w2 as before.
+            w1 = gate_up("gate_proj", "mlp_w1_decode_1d_progcfg")
+            w3 = gate_up("up_proj", "mlp_w3_decode_1d_progcfg")
+        else:
+            if weight_prefetch.enabled("gateup"):
+                raise ValueError(
+                    f"{tpc.MLP_GU_FUSED_ENV}={gu_mode} replaces the w1/w3 decode weights that {weight_prefetch.ENV} "
+                    "gateup streams; drop gateup from one of them"
+                )
+            w1 = w3 = None
         w2 = tpc.shard_w(
             state_dict["down_proj.weight"],
             mesh_device,
@@ -185,7 +208,11 @@ def load_mlp_weights(
             ),
             _w2_pc,
         )
-        return MLPWeights(w1=w1, w2=w2, w3=w3, w_gate_up=wgu)
+        if gu_mode is None:
+            return MLPWeights(w1=w1, w2=w2, w3=w3, w_gate_up=wgu)
+        # dsmc: width-shard the AGMM weight's tiles across the DRAM banks on device (a copy, no host round trip).
+        w_gu_dec = ttnn.to_memory_config(wgu, args.mlp_gu_dsmc_weight_memcfg) if gu_mode == "dsmc" else None
+        return MLPWeights(w1=None, w2=w2, w3=None, w_gate_up=wgu, gu_fused=gu_mode, w_gu_dec=w_gu_dec)
 
     def load(name, dtype):
         return ttnn.as_tensor(
@@ -247,6 +274,15 @@ class Qwen36MLP:
             down_dtype=down_dtype,
             gateup_dtype=gateup_dtype,
         )
+        # QWEN36_MLP_GU_FUSED: decode gate|up as ONE matmul on the AGMM weight + the split-SwiGLU kernel (the mode
+        # load_mlp_weights chose; None keeps today's decode path).
+        self._gu_fused = self.weights.gu_fused
+        self._swiglu = None
+        if self._gu_fused is not None:
+            from models.demos.blackhole.qwen36.tt.mlp_swiglu import SwiGLUSplit
+
+            cores = int(os.environ.get("QWEN36_MLP_GU_SWIGLU_CORES", "0") or 0)
+            self._swiglu = SwiGLUSplit(mesh_device, pair=True, max_cores=cores or None)
         # Dense MLP: QWEN36_MLP_FIDELITY (default hifi2). MoE shared expert (down_dtype passed) stays LoFi.
         fid = tpc.mlp_fidelity(ttnn.MathFidelity.LoFi if down_dtype is not None else None)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -297,6 +333,9 @@ class Qwen36MLP:
         args = self.args
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
+
+        if self._gu_fused is not None and x.shape[-2] <= ttnn.TILE_SIZE:
+            return self._forward_tp_gu_fused_decode(x, ckc, decode_ar)
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
@@ -435,3 +474,57 @@ class Qwen36MLP:
             **tpc.prefill_rs_kwargs(partial.shape[-2]),
         )
         return out
+
+    def _forward_tp_gu_fused_decode(self, x, ckc, decode_ar):
+        """QWEN36_MLP_GU_FUSED decode (M <= 1 tile): ONE [gate|up] matmul on the pair-interleaved AGMM weight, the
+        split-SwiGLU kernel, then the down projection and all-reduce exactly as _forward_tp's 1D decode path.
+
+        1d  : interleave x (as the 1D path) -> 1D mcast matmul on w_gate_up -> L1-interleaved [M, 2*hidden/tp].
+        dsmc: the DRAM-sharded pipeline reads x in its ff-norm width shard (no interleave) and w_gu_dec ->
+              L1 width-sharded [M, 2*hidden/tp]; the split kernel reads either layout."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+        from models.demos.blackhole.qwen36.tt import weight_prefetch
+        from models.tt_transformers.tt.ccl import tt_all_reduce
+
+        w = self.weights
+        args = self.args
+        if self._gu_fused == "dsmc":
+            x_sh = x if x.memory_config() == args.act_shard_hidden else ttnn.to_memory_config(x, args.act_shard_hidden)
+            gu = ttnn.linear(
+                x_sh,
+                w.w_gu_dec,
+                program_config=args.mlp_gu_dsmc_progcfg,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            if x_sh is not x:
+                ttnn.deallocate(x_sh)
+        else:
+            x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            gu = ttnn.linear(
+                x_il,
+                w.w_gate_up,
+                program_config=args.mlp_gu_decode_1d_progcfg,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x_il)
+        hidden = self._swiglu(gu)  # [M, hidden/tp] L1 interleaved: the 1D down projection's in0, as r5's mul output
+        ttnn.deallocate(gu)
+        partial = weight_prefetch.linear(
+            hidden, w.w2, args.mlp_w2_decode_1d_progcfg, compute_kernel_config=ckc, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        ttnn.deallocate(hidden)
+        if decode_ar is not None:
+            return decode_ar.all_reduce(partial)
+        return tt_all_reduce(
+            partial,
+            self.device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
+            topology=args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(partial.shape[-2]),
+        )
