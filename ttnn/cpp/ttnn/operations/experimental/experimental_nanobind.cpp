@@ -65,6 +65,7 @@
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routed_combine/routed_combine_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul/grouped_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routing_metadata/routing_metadata_nanobind.hpp"
+#include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -220,6 +221,7 @@ void py_module(nb::module_& mod) {
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routed_combine(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_grouped_matmul(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routing_metadata(mod);
+    modulated_deform_conv2d::detail::bind_modulated_deform_conv2d(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);

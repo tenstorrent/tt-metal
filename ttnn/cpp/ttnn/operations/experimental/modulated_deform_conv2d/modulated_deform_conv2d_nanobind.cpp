@@ -1,0 +1,88 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "modulated_deform_conv2d_nanobind.hpp"
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
+#include <nanobind/stl/optional.h>
+#include "ttnn-nanobind/bind_function.hpp"
+
+#include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d.hpp"
+
+namespace ttnn::operations::experimental::modulated_deform_conv2d::detail {
+
+void bind_modulated_deform_conv2d(nb::module_& mod) {
+    const auto* doc =
+        R"doc(
+        A modulated deformable convolution (DCNv2), groups and deform_groups 1: the input
+        sampled bilinearly at every offset kernel position and scaled by the mask, times the
+        weight, plus the bias and an optional ReLU. The offsets and the mask logits come in one
+        tensor, as mmcv's ModulatedDeformConv2dPack offset conv emits them, and the mask's
+        sigmoid runs in the op; a separate offset and post-sigmoid mask, torchvision's form, are
+        not taken.
+
+        For output pixel m = (b, h_o, w_o), kernel position kk = k_h*K_w + k_w and
+        channel c::
+
+            y = h_o*stride_h - pad_h + k_h*dilation_h + offset_mask[b, h_o, w_o, 2*kk]
+            x = w_o*stride_w - pad_w + k_w*dilation_w + offset_mask[b, h_o, w_o, 2*kk + 1]
+            mask = sigmoid(offset_mask[b, h_o, w_o, 2*K*K + kk])
+            column[m, kk*C + c] = mask * bilinear(input[b, :, :, c], y, x)
+            out[m, :] = column[m, :] @ weight + bias
+
+        Corners outside the input contribute zero, as in mmcv and torchvision. The columns
+        never leave L1. They are bfloat16 and the products run at HiFi2 fidelity; each pass's
+        reduction, over at most 256 channels of one kernel position, accumulates in fp32, the sum
+        across passes and positions in bfloat16.
+
+        Each core keeps the outputs of all its 32-row blocks and two weight slices in L1, and
+        the op fails with the L1 it needs when they do not fit. The buffers are sized from the L1
+        left free by the tensors allocated at the call, so other L1 tensors can change the program
+        or make it fail; C over 256 takes several passes
+        per kernel position to keep the slices small, each over the largest chunk of at most 8
+        channel tiles that divides C / 32.
+
+        Limits: K_h*K_w at most 32; H plus its padding, W plus its padding, and the dilated
+        kernel span each at most 4096. Offsets and mask logits saturate at +-4096, so a non-finite offset samples zero
+        where mmcv and torchvision would give NaN.
+
+        Args:
+            * :attr:`input`: (B, H, W, C) ROW_MAJOR bfloat16, C a multiple of 32; INTERLEAVED, or
+              HEIGHT_SHARDED in L1 in whole 32-row shards when the output has the input's H and W,
+              so each core computes its own shard's rows
+            * :attr:`offset_mask`: (B, H_out, W_out, 3*K*K) ROW_MAJOR bfloat16 INTERLEAVED: the
+              offsets in pixels, (y, x) per kernel position as in DCNv2, then the mask logits,
+              before their sigmoid
+            * :attr:`weight`: (K_h*K_w*C, C_out) TILE bfloat16 INTERLEAVED, rows ordered
+              (kk, c), C_out a multiple of 32
+            * :attr:`bias`: (1, C_out) TILE bfloat16 INTERLEAVED, or None
+            * :attr:`kernel_size`: (K_h, K_w)
+            * :attr:`stride`, :attr:`padding`, :attr:`dilation`: (h, w) pairs
+            * :attr:`relu`: apply ReLU to the output
+            * :attr:`memory_config`: output memory config, interleaved; by default the input's, or DRAM
+              for a sharded input
+
+        Returns:
+            (1, 1, B*H_out*W_out, C_out) TILE bfloat16.
+        )doc";
+
+    ttnn::bind_function<"modulated_deform_conv2d", "ttnn.experimental.">(
+        mod,
+        doc,
+        &ttnn::experimental::modulated_deform_conv2d,
+        nb::arg("input"),
+        nb::arg("offset_mask"),
+        nb::arg("weight"),
+        nb::arg("bias") = nb::none(),
+        nb::kw_only(),
+        nb::arg("kernel_size"),
+        nb::arg("stride") = std::array<uint32_t, 2>{1, 1},
+        nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
+        nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
+        nb::arg("relu") = false,
+        nb::arg("memory_config") = nb::none());
+}
+
+}  // namespace ttnn::operations::experimental::modulated_deform_conv2d::detail

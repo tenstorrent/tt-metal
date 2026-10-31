@@ -265,9 +265,10 @@ CODER_BISECTION_STEPS = 22
 # backbone output.
 
 # Layers whose convs accumulate in an fp32 destination register (layer3 and layer4; a DCN conv2
-# always does): with bfloat16 accumulation, activations with outlier channels lose precision
-# through base's 26 blocks there until C5 falls below PCC 0.99. The tests' dummy weights have no
-# such channels and do not show it.
+# accumulates each pass, at most 256 channels of one kernel position, in fp32 and sums the passes
+# in bfloat16 whatever this says): with bfloat16 accumulation, activations with outlier channels
+# lose precision through base's 26 blocks there until C5 falls below PCC 0.99. The tests' dummy
+# weights have no such channels and do not show it.
 FP32_ACC_STAGES = (2, 3)
 
 # Layers whose activations are kept in DRAM: all four. layer1, layer2 and layer4 do not fit in
@@ -299,6 +300,12 @@ DRAM_CONV_SLICES = 8
 BLOCK_SHARDED_STAGES = (2, 3)
 BLOCK_SHARDED_LEVELS = _C3_C4_LEVELS
 
+# Layers whose DCNs take their input height-sharded rather than interleaved in L1: most bilinear
+# corners then lie in the core's own shard or a neighbour's. Sharding pays where each core owns many
+# blocks of a single channel pass, as in layer3; layer4's few blocks per core and two channel passes
+# do not amortize it.
+DCN_SHARDED_INPUT_STAGES = (2,)
+
 # conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
 # the block-sharded FPN output convs'. None of these, nor the sharding above, is tuned for 928x1600.
 STEM_ACT_BLOCK_H = 64
@@ -315,6 +322,7 @@ def tt_resnet_kwargs():
         dram_conv_slices=DRAM_CONV_SLICES,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
+        dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
         conv2_act_block_h=CONV2_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
