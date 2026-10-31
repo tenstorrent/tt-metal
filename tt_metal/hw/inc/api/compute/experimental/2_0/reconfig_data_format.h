@@ -115,6 +115,7 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
 /**
  * Reprograms the packer output data format for a new output operand. Updates src/dst format registers and
  * tile geometry; does not reconfigure tile-dimension addrmod state (is_tile_dim_reconfig_en is not ported).
+ * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
  * | Param Type | Name    | Description                                    | Type       | Valid Range | Required |
  * |------------|---------|-------------------------------------------------|------------|-------------|----------|
@@ -125,6 +126,10 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_reconfig_data_format(LLKOperand<Format, Shape> /*new_out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_reconfig_data_format: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack_reconfig_data_format: sub-32-row (partial-height) block-float tiles are not supported on the BH "
+        "compute datapath; use a full 32-row tile.");
     PACK((llk_pack_reconfig_data_format<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
 }
 

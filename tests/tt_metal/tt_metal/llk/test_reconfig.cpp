@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -1199,6 +1200,21 @@ struct ReconfigOperands {
     const Tile* payload_tile;
 };
 
+// One-page CB of `fmt` on `core`; a null tile is the full 32x32 tile.
+void add_single_page_cb(
+    Program& program,
+    CoreCoord core,
+    tt::CBIndex cb,
+    tt::DataFormat fmt,
+    std::uint32_t page_size,
+    const Tile* cb_tile) {
+    CircularBufferConfig config = CircularBufferConfig(page_size, {{cb, fmt}}).set_page_size(cb, page_size);
+    if (cb_tile != nullptr) {
+        config.set_tile_dims(cb, *cb_tile);
+    }
+    CreateCircularBuffer(program, core, config);
+}
+
 std::vector<std::uint32_t> run_reconfig_format_and_geometry(
     distributed::MeshDevice& mesh_device,
     ReconfiguredSrc src,
@@ -1223,11 +1239,7 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
             &mesh_device);
     };
     auto add_cb = [&](tt::CBIndex cb, tt::DataFormat fmt, std::uint32_t page_size, const Tile* cb_tile) {
-        CircularBufferConfig config = CircularBufferConfig(page_size, {{cb, fmt}}).set_page_size(cb, page_size);
-        if (cb_tile != nullptr) {
-            config.set_tile_dims(cb, *cb_tile);
-        }
-        CreateCircularBuffer(program, core, config);
+        add_single_page_cb(program, core, cb, fmt, page_size, cb_tile);
     };
 
     const bool srcb = src == ReconfiguredSrc::B;
@@ -1335,6 +1347,250 @@ TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
             word = (hi << 16) | lo;
         }
         run_both({tt::DataFormat::Float32, &tiny, tt::DataFormat::Float16_b, nullptr}, src_vec, "tiny 8x32 -> full");
+    }
+}
+
+// ============================================================================
+// Pack-side reconfig onto a Bfp8_b output CB whose tile is not the full 32x32 tile. The payload is copied
+// c_0 -> DST -> c_16 and c_16 is decoded on the host. The inputs are non-zero integers in [-127, 127] with one
+// |value| in [64, 127] per 16-datum row, so a Bfp8_b row (shared exponent, 7-bit mantissa) holds every datum
+// exactly and the decoded output must equal the input bit-for-bit. A wrong exponent-section size moves the
+// mantissa stream inside every tile, so the decode fails on the first tile.
+// ============================================================================
+namespace unit_tests::compute::reconfig {
+
+enum class PackReconfigMode : std::uint8_t { OneArg, TwoArg, TwoArgPackInit, HwStartupOnly };
+
+// Tiled-order payload: one anchor datum per 16-datum row keeps the shared exponent at 2^6.
+std::vector<float> make_bfp8_exact_payload(std::uint32_t num_datums, std::uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> small(1, 63);
+    std::uniform_int_distribution<int> anchor(64, 127);
+    std::uniform_int_distribution<int> sign(0, 1);
+    std::vector<float> payload(num_datums);
+    for (std::uint32_t i = 0; i < num_datums; ++i) {
+        const int magnitude = (i % 16 == 0) ? anchor(rng) : small(rng);
+        payload[i] = static_cast<float>(sign(rng) ? -magnitude : magnitude);
+    }
+    return payload;
+}
+
+// Copies num_tiles tiles of `payload` (Float16_b, out_tile shape) through DST into an `out_format` CB
+// (Bfp8_b or Float16_b) of the same tile shape. OneArg: the packer is configured for the output CB and
+// pack_reconfig_data_format(c_16) runs before the first pack. TwoArg: the packer is configured for an
+// `out_format` startup CB of `startup_tile` (c_2, never written; a null tile is the full 32x32 tile) and
+// pack_reconfig_data_format<true>(c_2, c_16) switches it. TwoArgPackInit: the same switch through the
+// default <false> pack_reconfig_data_format(c_2, c_16) followed by an explicit pack_init(c_16). HwStartupOnly: the hw
+// startup alone configures the packer for c_16 (control). Returns c_16 decoded to floats in tiled order.
+std::vector<float> run_pack_reconfig_geometry(
+    distributed::MeshDevice& mesh_device,
+    PackReconfigMode mode,
+    tt::DataFormat out_format,
+    const Tile& out_tile,
+    const std::vector<float>& payload,
+    std::uint32_t num_tiles,
+    const Tile* startup_tile = nullptr) {
+    static constexpr std::uint32_t k_dram_bank_id = 0;
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const std::uint32_t in_tile_size = out_tile.get_tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t out_tile_size = out_tile.get_tile_size(out_format);
+    if (payload.size() != num_tiles * out_tile.get_tile_hw()) {
+        throw std::invalid_argument("payload must hold num_tiles tiles");
+    }
+
+    auto src_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * in_tile_size},
+        {.page_size = num_tiles * in_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto dst_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * out_tile_size},
+        {.page_size = num_tiles * out_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+
+    auto add_cb = [&](tt::CBIndex cb, tt::DataFormat fmt, std::uint32_t page_size, const Tile* cb_tile) {
+        add_single_page_cb(program, core, cb, fmt, page_size, cb_tile);
+    };
+    add_cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, in_tile_size, &out_tile);
+    std::map<std::string, std::string> defines;
+    if (mode == PackReconfigMode::TwoArg || mode == PackReconfigMode::TwoArgPackInit) {
+        // Startup output: only ever configured, never packed to.
+        const std::uint32_t startup_tile_size =
+            startup_tile != nullptr ? startup_tile->get_tile_size(out_format) : tt::tile_size(out_format);
+        add_cb(tt::CBIndex::c_2, out_format, startup_tile_size, startup_tile);
+        defines[mode == PackReconfigMode::TwoArg ? "PACK_RECONFIG_TWO_ARG" : "PACK_RECONFIG_TWO_ARG_PACK_INIT"] = "1";
+    } else if (mode == PackReconfigMode::HwStartupOnly) {
+        defines["PACK_HW_STARTUP_ONLY"] = "1";
+    }
+    add_cb(tt::CBIndex::c_16, out_format, out_tile_size, &out_tile);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_pack_bfp_geometry.cpp",
+        core,
+        ComputeConfig{.compile_args = {num_tiles}, .defines = defines});
+
+    // Two bf16 datums per word, tiled order; every payload value is bf16-exact.
+    const std::vector<std::uint32_t> src_vec =
+        pack_vector<std::uint32_t, bfloat16>(std::vector<bfloat16>(payload.begin(), payload.end()));
+
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
+    SetRuntimeArgs(program, reader, core, {src_buffer->address(), k_dram_bank_id, num_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), k_dram_bank_id, num_tiles});
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
+    if (out_format == tt::DataFormat::Float16_b) {
+        const auto datums = unpack_vector<bfloat16, std::uint32_t>(result_vec);
+        return std::vector<float>(datums.begin(), datums.end());
+    }
+    return unpack_bfp8_tiles_into_float_vec(result_vec, /*row_major_output=*/false, /*is_exp_a=*/false, out_tile);
+}
+
+}  // namespace unit_tests::compute::reconfig
+
+// Unconditional pack_reconfig_data_format(c_16) onto a Bfp8_b CB of two faces whose height is below the
+// full tile: the exponent section is one 16-byte chunk when the faces are shorter than 16 rows (8x32:
+// 16 exponent bytes) and one chunk per face when they are full height (16x32: 32 exponent bytes), so the
+// flag that selects the single chunk must follow the face height, not the tile height.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpPartialFace) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    for (const auto& shape : {std::array<std::uint32_t, 2>{8, 32}, std::array<std::uint32_t, 2>{16, 32}}) {
+        const Tile out_tile(shape);
+        const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+            num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/42);
+        for (auto& device : this->devices_) {
+            const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+                *device, PackReconfigMode::OneArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles);
+            EXPECT_EQ(payload, result) << shape[0] << "x" << shape[1];
+        }
+    }
+}
+
+// Conditional pack_reconfig_data_format<true>(c_2, c_16) from a Bfp8_b 32x32 CB (four faces) to a Bfp8_b
+// 16x32 CB (two full-height faces): same format, face height and tile width, so only the face-count term
+// of the geometry compare fires; the exponent section must shrink from four chunks to two.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpFaceCount) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    const Tile out_tile({16, 32});
+    const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+        num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/43);
+    for (auto& device : this->devices_) {
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+            *device, PackReconfigMode::TwoArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles);
+        EXPECT_EQ(payload, result);
+    }
+}
+
+// Same-format Float16_b geometry switches through the conditional reconfig, 32x32 -> 8x32 (face height and
+// count) and 32x32 -> 32x16 (face count and tile width), with is_tile_dim_reconfig_en and with the default
+// <false> reconfig followed by an explicit pack_init. A non-block-float output has no exponent section, so the
+// reconfig the geometry change now triggers must leave the packer correct for the new tile.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigFloat16bGeometry) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    for (const auto& shape : {std::array<std::uint32_t, 2>{8, 32}, std::array<std::uint32_t, 2>{32, 16}}) {
+        const Tile out_tile(shape);
+        const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+            num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/47);
+        for (const auto mode : {PackReconfigMode::TwoArg, PackReconfigMode::TwoArgPackInit}) {
+            for (auto& device : this->devices_) {
+                const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+                    *device, mode, tt::DataFormat::Float16_b, out_tile, payload, num_tiles);
+                EXPECT_EQ(payload, result)
+                    << "32x32 -> " << shape[0] << "x" << shape[1]
+                    << (mode == PackReconfigMode::TwoArg ? " <true>" : " default <false> + explicit pack_init");
+            }
+        }
+    }
+}
+
+// Conditional pack_reconfig_data_format<true>(c_2, c_16) from a Bfp8_b 8x32 CB to a Bfp8_b 16x32 CB: same
+// format, same face count (two) and tile width, different face height, so only the face-height term of the
+// geometry compare fires; the exponent section must grow from the one chunk of the 8-row faces to two.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpFaceHeight) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    const Tile startup_tile({8, 32});
+    const Tile out_tile({16, 32});
+    const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+        num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/45);
+    for (auto& device : this->devices_) {
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+            *device, PackReconfigMode::TwoArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles, &startup_tile);
+        EXPECT_EQ(payload, result);
+    }
+}
+
+// Conditional pack_reconfig_data_format<true>(c_2, c_16) from a Bfp8_b 16x32 CB to a Bfp8_b 32x16 CB: same
+// format, same face height (16) and face count (two); only the tile width / narrow-tile flag differs. Both
+// tiles use two exponent chunks after hw startup. With the sanitizer enabled, this checks that the
+// reconfiguration updates its tile-shape state before the new output's pack init and execution.
+TEST_F(LLKMeshDeviceFixture, TensixPackReconfigBfpNarrowTile) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    const Tile startup_tile({16, 32});
+    const Tile out_tile({32, 16});
+    const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+        num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/46);
+    for (auto& device : this->devices_) {
+        const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+            *device, PackReconfigMode::TwoArg, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles, &startup_tile);
+        EXPECT_EQ(payload, result);
+    }
+}
+
+// The hw startup alone, no reconfig: 8x32 (one exponent chunk for two 8-row faces), 16x32 (one chunk per
+// full-height face: hw_configure must follow the face height, not the CB's tile-height partial_face flag)
+// and 32x16 (one chunk per full-height face).
+TEST_F(LLKMeshDeviceFixture, TensixPackHwStartupBfp) {
+    using unit_tests::compute::reconfig::PackReconfigMode;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar programs the packer geometry from buffer descriptors at op init";
+    }
+    constexpr std::uint32_t num_tiles = 4;
+    for (const auto& shape :
+         {std::array<std::uint32_t, 2>{8, 32},
+          std::array<std::uint32_t, 2>{16, 32},
+          std::array<std::uint32_t, 2>{32, 16}}) {
+        const Tile out_tile(shape);
+        const auto payload = unit_tests::compute::reconfig::make_bfp8_exact_payload(
+            num_tiles * out_tile.get_tile_hw() /*num_datums*/, /*seed=*/44);
+        for (auto& device : this->devices_) {
+            const auto result = unit_tests::compute::reconfig::run_pack_reconfig_geometry(
+                *device, PackReconfigMode::HwStartupOnly, tt::DataFormat::Bfp8_b, out_tile, payload, num_tiles);
+            EXPECT_EQ(payload, result) << shape[0] << "x" << shape[1];
+        }
     }
 }
 
