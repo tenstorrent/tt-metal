@@ -93,6 +93,18 @@ class THROTTLE_LEVEL(TemplateParameter):
 
 
 @dataclass
+class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
+    pack_untilize_benchmark: str
+
+    def convert_to_cpp(self) -> str:
+        is_perf = self.pack_untilize_benchmark != "functional"
+        return (
+            f"// pack_untilize benchmark: {self.pack_untilize_benchmark}\n"
+            f"constexpr bool PACK_UNTILIZE_IS_PERF = {str(is_perf).lower()};"
+        )
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 

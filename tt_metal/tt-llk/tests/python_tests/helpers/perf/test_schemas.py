@@ -404,31 +404,6 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_fast_untilize": "perf_fast_untilize"},
     },
-    "perf_fast_untilize_baseline_compare": {
-        "version": 4,
-        "columns": [
-            "block_ct_dim",
-            "block_rt_dim",
-            "dest_acc",
-            "formats.input_A",
-            "formats.input_B",
-            "formats.output",
-            "formats.register_A",
-            "formats.register_B",
-            "formats.sfpu_src",
-            "formats.sfpu_dst",
-            "full_ct_dim",
-            "full_rt_dim",
-            "loop_factor",
-            "marker",
-            "tile_cnt",
-            "unpack_to_dest",
-        ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-        "test_name_aliases": {
-            "perf_fast_untilize_baseline_compare": "perf_fast_untilize_baseline_compare"
-        },
-    },
     "perf_fused": {
         "version": 1,
         "columns": [
@@ -603,11 +578,12 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack": "perf_pack"},
     },
     "perf_pack_untilize": {
-        "version": 4,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -619,11 +595,19 @@ PERF_TEST_SCHEMAS = {
             "full_rt_dim",
             "loop_factor",
             "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "offset",
+            "pack_untilize_benchmark",
             "tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-        "test_name_aliases": {"perf_pack_untilize": "perf_pack_untilize"},
+        "test_name_aliases": {
+            "perf_fast_untilize_baseline_compare": "perf_pack_untilize",
+            "perf_pack_untilize": "perf_pack_untilize",
+        },
     },
     "perf_reduce": {
         "version": 4,
