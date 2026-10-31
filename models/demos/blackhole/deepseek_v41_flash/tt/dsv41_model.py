@@ -9,6 +9,7 @@ The hand-off prefill -> decode is in tt/prefill_handoff.py (ring rows, compresse
 history, per-user positions, device token feedback).
 """
 
+import contextlib
 import functools
 import gc
 import hashlib
@@ -1607,6 +1608,22 @@ class Model:
     def _lazy_key_export(self):
         return os.environ.get("DSV41_PF_LAZY_EXPORT", "1") == "1"
 
+    @contextlib.contextmanager
+    def _in_up1_ctx(self):
+        """run the body with the one-slot prefill context active (its carried key FIFO is what a recorded export of a short prompt reads), then restore the active context and slot count"""
+        pm, up1 = self.prefill_model, self._up1
+        if up1 is None or (pm.dyn is not None and pm.dyn.S_pad == up1["S"]):
+            yield
+            return
+        main, up = pm.dyn.S_pad, self.Up
+        pm.use_dyn(up1["S"])
+        self.Up = 1
+        try:
+            yield
+        finally:
+            self.Up = up
+            pm.use_dyn(main)
+
     def flush_key_exports(self, users=None, why=""):
         """Run the recorded key hand-offs (of ``users``; default every user) now. -> seconds (0.0 when nothing was pending)."""
         pend = self.__dict__.get("_kx_pending")
@@ -1621,10 +1638,20 @@ class Model:
             by_end.setdefault(pend[b][0], []).append(b)
         ends = {b: pend[b][1] for b in sel}
         i_src = {b: pend[b][2] for b in sel}
+        pend_ctx = {b: (pend[b][3] if len(pend[b]) > 3 else False) for b in sel}
         for b in sel:
             del pend[b]
+        in1 = {
+            b for b in sel if pend_ctx.get(b)
+        }  # (records of the one-slot context: its carried key FIFO lives in that context)
         for s_end in sorted(by_end):
-            self._export_keys_users(by_end[s_end], ends, s_end, lambda b: i_src[b])
+            plain = [b for b in by_end[s_end] if b not in in1]
+            one = [b for b in by_end[s_end] if b in in1]
+            if plain:
+                self._export_keys_users(plain, ends, s_end, lambda b: i_src[b])
+            if one:
+                with self._in_up1_ctx():
+                    self._export_keys_users(one, ends, s_end, lambda b: i_src[b])
         dt = time.perf_counter() - t0
         st = self.__dict__.setdefault("kx_stats", {"flushes": 0, "users": 0, "seconds": 0.0})
         st["flushes"] += 1
@@ -1802,8 +1829,12 @@ class Model:
         prompt that outgrows it is recomputed from position 0 in a larger one (always correct). Each group is one ``_prefill_interleaved_one`` call on its context.
         """
         pm = self.prefill_model
-        if self.__dict__.get("_up1") is not None and self._up1_pick(items, chunk, final, vis):
-            return self._prefill_up1(items, chunk, want_logits, vis, final, totals, rids)
+        if self.__dict__.get("_up1") is not None:
+            t_pick = time.perf_counter()
+            pick = self._up1_pick(items, chunk, final, vis)
+            t_pick = time.perf_counter() - t_pick
+            if pick:
+                return self._prefill_up1(items, chunk, want_logits, vis, final, totals, rids, t_pick)
         buckets = pm.dyn_buckets() if os.environ.get("DSV41_PF_SMALL_BUCKET", "1") != "0" else []
         if PSG.enabled() or self.__dict__.get("_up1") is not None:
             buckets = (
@@ -1890,13 +1921,17 @@ class Model:
             ),  # (paged cache: its commits read the carried tables by decode user: only a prompt shorter than one block, which commits nothing, may use the one-slot context)
         )
 
-    def _prefill_up1(self, items, chunk, want_logits, vis, final, totals, rids):
+    def _prefill_up1(self, items, chunk, want_logits, vis, final, totals, rids, t_pick=0.0):
         """Run the call on the one-slot context (``warm_serving`` built it): own carried tables / buffers / trace; the hand-off (pool pages, rings, compressor state, drafter taps, decode key slabs) goes to the same
         places as the Up = U path writes (keyed by decode user, exported eagerly). The Up = U slot bookkeeping of these users is dropped (their previous carried state is overwritten anyway).
         """
         pm, up1 = self.prefill_model, self._up1
         rows = self.rows
-        self.flush_key_exports(why="one-slot context")
+        t_in = time.perf_counter()
+        pend = self.__dict__.get("_kx_pending") or {}
+        self.flush_key_exports(
+            [b for b, v in pend.items() if len(v) > 3 and v[3]], why="one-slot context"
+        )  # (the previous short prompts' carried key FIFO is about to be overwritten)
         resume = self.__dict__.setdefault("pf_resume", {})
         of = self.__dict__.get("pf_slot_of", {})
         owner = self.__dict__.get("pf_slot_owner")
@@ -1909,15 +1944,16 @@ class Model:
         saved = (self.Up, self.__dict__.pop("pf_slot_owner", None), self.__dict__.pop("pf_slot_of", None))
         self.__dict__.pop("_look", None)
         pm.use_dyn(up1["S"])
+        t_sw = time.perf_counter() - t_in
         self.Up = 1
-        self._up1_active, self._kx_eager = True, True
+        self._up1_active = True
         self.__dict__["pf_slot_owner"] = [None] * rows
         self.__dict__["pf_slot_of"] = {}
         try:
             res = self._prefill_interleaved_one(items, chunk, up1["S"], want_logits, vis, final, totals, rids)
             tm = dict(self.timing)
         finally:
-            self._up1_active, self._kx_eager = False, False
+            self._up1_active = False
             self.Up = saved[0]
             self.__dict__.pop("pf_slot_owner", None)
             self.__dict__.pop("pf_slot_of", None)
@@ -1925,8 +1961,11 @@ class Model:
                 self.__dict__["pf_slot_owner"] = saved[1]
             if saved[2] is not None:
                 self.__dict__["pf_slot_of"] = saved[2]
+            t_b = time.perf_counter()
             pm.use_dyn(up1["main"])
+            t_back = time.perf_counter() - t_b
         tm["up1"] = 1.0
+        tm["up1_pick_s"], tm["up1_enter_s"], tm["up1_back_s"] = t_pick, t_sw, t_back
         self.timing = tm
         return res
 
@@ -2251,7 +2290,7 @@ class Model:
                     if lazy_kx:
                         pend = self.__dict__.setdefault("_kx_pending", {})
                         for b, x in done:
-                            pend[b] = (x, ends[b], slot_of[b] % Up if general else b % U)
+                            pend[b] = (x, ends[b], slot_of[b] % Up if general else b % U, up1_)
                     else:
                         for s_end in sorted({x for _, x in done}):
                             self._export_keys_users(
