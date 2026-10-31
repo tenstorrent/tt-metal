@@ -585,6 +585,10 @@ Restore cost per hit: about 2 ms of host time (3 table uploads + 6 launches, `re
 
 **Limits.** Copies up to 65,536 tokens (the slot reads are per block), no copy at B=16 (no paged cache there). The copy programs are not in the boot warm-up. Only the tip of the copied path keeps a halo record on the receiving row.
 
+## 8.28 One-slot (Up=1) prefill context for short prompts (`DSV41_PF_UP1_SHORT=1`, default off; under test, not in the catalog)
+
+At B=8 (`DSV41_PREFILL_UP=2`) a lone short prompt pays for an idle second slot in every chunk replay (window 0.4-0.5 s at 40 layers; 150 ms vs 90 ms replay in the 10-layer probe). A second prefill context with one slot per mesh row (`PrefillModel.compile_dyn_up`, `tt/pf_up1.py`) serves from-scratch prompts that fit one chunk, at most one per mesh row, no image, no host-tier restore; anything else runs the Up=2 trace unchanged. `DSV41_PF_UP1_SPAD`, live A/B file `DSV41_PF_UP1_FILE`. Design, selection rules and results: `PF_UP1_NOTES.md`; CPU tests `tests/test_pf_up1_cpu.py`. The APC delta / decode-output / cross-row switches of 8.25-8.27 are likewise off by default and not in the catalog (tests turn them on by environment override).
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
