@@ -394,7 +394,7 @@ void ControlPlane::init_control_plane(
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
     const auto& cluster = this->cluster_.get();
-    const auto& driver = cluster.get_driver();
+    const auto& driver = this->cluster_.get().get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
 
@@ -551,7 +551,7 @@ void ControlPlane::init_control_plane(
 
 void ControlPlane::init_control_plane_auto_discovery() {
     const auto& cluster = this->cluster_.get();
-    const auto& driver = cluster.get_driver();
+    const auto& driver = this->cluster_.get().get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
     // MGD_DEFAULT is allowed: it is resolved below from the mesh graph auto-discovery generates.
@@ -633,6 +633,19 @@ void ControlPlane::init_control_plane_auto_discovery() {
         topology_mapping_timeout,
         this->physical_system_descriptor_.get());
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
+
+    // Horizon x2: AXI crossbar is invisible to UMD ethernet APIs.
+    // Override the ethernet-based solver's 1x1 mapping with a direct enumeration of all chips.
+    // cluster.user_exposed_chip_ids() is populated from the cluster descriptor YAML, not ethernet.
+    if (this->is_fabric_over_noc()) {
+        std::map<FabricNodeId, ChipId> horizon_mapping;
+        LogicalChipId logical_idx = 0;
+        for (const auto physical_chip_id : cluster.user_exposed_chip_ids()) {
+            horizon_mapping[FabricNodeId(MeshId{0}, logical_idx)] = physical_chip_id;
+            ++logical_idx;
+        }
+        this->load_physical_chip_mapping(horizon_mapping);
+    }
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
@@ -1609,6 +1622,137 @@ size_t ControlPlane::get_num_live_routing_planes(
     return this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
 }
 
+bool ControlPlane::is_fabric_over_noc() const {
+    if (this->logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+        return false;
+    }
+    const auto& first = *this->logical_mesh_chip_id_to_physical_chip_id_mapping_.begin();
+    const uint32_t phys_id = first.second;
+    const auto ip_variant = this->cluster_.get().get_soc_desc(phys_id).get_arch_descriptor().get_ip_variant();
+    return this->cluster_.get().arch() == tt::ARCH::QUASAR && ip_variant == tt::IpVariant::HORIZON;
+}
+
+void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
+    this->fabric_over_noc_routing_tables_.clear();
+
+    for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        tt::tt_fabric::fabric_over_noc_routing_l1_info_t info = {};
+        info.my_mesh_id = *src_node.mesh_id;
+        info.my_device_id = src_node.chip_id;
+        {
+            const auto my_cores =
+                this->cluster_.get().get_soc_desc(src_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0);
+            if (!my_cores.empty()) {
+                info.my_noc_x = my_cores[0].x;
+                info.my_noc_y = my_cores[0].y;
+            }
+        }
+
+        for (const auto& [dst_node, dst_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+            // Index by physical chip ID — the kernel receives dst_dev_id as the physical chip ID.
+            const uint32_t dst_chip = dst_phys;
+
+            if (dst_phys == src_phys) {
+                // For Horizon x2: the physical chip hosts one logical device per NOC column.
+                // Logical device id = physical NOC column (x). Device-local core (0, y) -> physical (dev_id, y).
+                for (uint32_t dev_id = 0; dev_id < tt::tt_fabric::MAX_HORIZON_NOC_X; dev_id++) {
+                    for (uint32_t local_y = 0; local_y < tt::tt_fabric::MAX_HORIZON_NOC_Y; local_y++) {
+                        const uint32_t phys_x = dev_id;
+                        const uint32_t phys_y = local_y;
+                        const uint32_t selector = phys_x + phys_y * tt::tt_fabric::HORIZON_ATT_WORKER_GRID_X;
+                        const bool is_self = (phys_x == info.my_noc_x && phys_y == info.my_noc_y);
+                        const uint64_t addr =
+                            is_self ? tt::tt_fabric::HORIZON_LOCAL_WINDOW_COMPARE
+                                    : tt::tt_fabric::HORIZON_REMOTE_WINDOW_COMPARE |
+                                          (uint64_t(selector) << tt::tt_fabric::HORIZON_REMOTE_ENDPOINT_SHIFT);
+                        info.flat_addr[0][dev_id][0][local_y] = addr;
+                    }
+                }
+                continue;
+            }
+            if (dst_chip >= tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH) {
+                log_warning(
+                    tt::LogFabric,
+                    "Horizon routing table: dst chip {} >= MAX_HORIZON_DEVS_PER_MESH ({}), skipping",
+                    dst_chip,
+                    tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
+                continue;
+            }
+
+            auto* dst_device = this->cluster_.get().get_driver()->get_tt_device(dst_phys);
+            if (!dst_device) {
+                continue;
+            }
+            const auto access_points = dst_device->get_access_points();
+            if (access_points.empty()) {
+                continue;
+            }
+            // Select the first AP whose flat address falls outside LOCAL and REMOTE windows.
+            // APs inside those windows loop back to the local chip rather than crossing the crossbar.
+            size_t selected_ap_idx = access_points.size();
+            {
+                const auto probe_cores =
+                    this->cluster_.get().get_soc_desc(dst_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0);
+                if (!probe_cores.empty()) {
+                    const auto& probe_core = probe_cores[0];
+                    for (size_t i = 0; i < access_points.size(); ++i) {
+                        const auto probe_addr = dst_device->get_flat_address(
+                            access_points[i],
+                            probe_core,
+                            tt::umd::WindowFlags::UnicastWrite,
+                            tt::umd::IoOrdering::Posted,
+                            0);
+                        if (!probe_addr.has_value()) {
+                            continue;
+                        }
+                        const bool in_local = (*probe_addr >> tt::tt_fabric::HORIZON_LOCAL_WINDOW_MASK_BITS) ==
+                                              (tt::tt_fabric::HORIZON_LOCAL_WINDOW_COMPARE >>
+                                               tt::tt_fabric::HORIZON_LOCAL_WINDOW_MASK_BITS);
+                        const bool in_remote = (*probe_addr >> tt::tt_fabric::HORIZON_REMOTE_WINDOW_MASK_BITS) ==
+                                               (tt::tt_fabric::HORIZON_REMOTE_WINDOW_COMPARE >>
+                                                tt::tt_fabric::HORIZON_REMOTE_WINDOW_MASK_BITS);
+                        if (!in_local && !in_remote) {
+                            selected_ap_idx = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            TT_FATAL(
+                selected_ap_idx < access_points.size(),
+                "Horizon routing table: no valid cross-chip AP for src={} dst={}: "
+                "all {} APs fall within LOCAL or REMOTE window",
+                src_phys,
+                dst_phys,
+                access_points.size());
+
+            for (const auto& core :
+                 this->cluster_.get().get_soc_desc(dst_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
+                if (core.x >= tt::tt_fabric::MAX_HORIZON_NOC_X || core.y >= tt::tt_fabric::MAX_HORIZON_NOC_Y) {
+                    continue;
+                }
+                const auto flat = dst_device->get_flat_address(
+                    access_points[selected_ap_idx],
+                    core,
+                    tt::umd::WindowFlags::UnicastWrite,
+                    tt::umd::IoOrdering::Posted,
+                    /*offset=*/0);
+                if (flat.has_value()) {
+                    info.flat_addr[0][dst_chip][core.x][core.y] = *flat;
+                }
+            }
+        }
+
+        this->fabric_over_noc_routing_tables_[src_phys] = info;
+        log_info(
+            tt::LogFabric,
+            "Horizon routing table built for chip {} (my_mesh={} my_device={})",
+            src_phys,
+            info.my_mesh_id,
+            info.my_device_id);
+    }
+}
+
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
@@ -1795,7 +1939,10 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 
     // Stub: For mock or emulated devices, return a synthetic FabricNodeId for any unmapped chip
     // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    if (this->cluster_.get().is_mock_or_emulated()) {
+    // LOCAL horizon_x2 spike (not for upstream): a partitioned simulator build's chips have no
+    // Ethernet, so auto-discovery maps none of them; give them synthetic ids too.
+    if (this->cluster_.get().is_mock_or_emulated() ||
+        this->cluster_.get().get_target_device_type() == tt::TargetDevice::Simulator) {
         return FabricNodeId(MeshId{0}, physical_chip_id);
     }
 
@@ -2964,6 +3111,24 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
 }
 
 void ControlPlane::write_routing_tables_to_all_chips() const {
+    if (this->is_fabric_over_noc()) {
+        // Horizon: write pre-built flat-address routing tables (populated during discovery phase).
+        for (const auto& [phys_chip_id, info] : this->fabric_over_noc_routing_tables_) {
+            write_to_all_cores(
+                *this,
+                this->cluster_,
+                this->hal_,
+                &info,
+                sizeof(info),
+                tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
+                phys_chip_id,
+                tt::tt_metal::HalProgrammableCoreType::TENSIX);
+            this->cluster_.get().l1_barrier(phys_chip_id);
+        }
+        return;
+    }
+
+    // WH/BH/Quasar: Ethernet-based direction routing tables.
     // Configure the routing tables on the chips
     TT_ASSERT(
         this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),
@@ -3433,7 +3598,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated =
         tensix_config.get_translated_dispatch_mux_cores();
 
-    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+    const auto& soc_desc = this->cluster_.get().get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
         soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
 

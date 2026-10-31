@@ -188,6 +188,7 @@ private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED by default
 
     // Builder context (lazy init on first access)
+    mutable std::once_flag builder_context_init_flag_;
     mutable std::unique_ptr<FabricBuilderContext> builder_context_;
 };
 

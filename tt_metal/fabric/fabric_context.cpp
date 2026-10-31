@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include <map>
@@ -247,16 +248,14 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
 // ============ Builder Context Access ============
 
 FabricBuilderContext& FabricContext::get_builder_context() {
-    if (!builder_context_) {
-        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
-    }
+    std::call_once(
+        builder_context_init_flag_, [this]() { builder_context_ = std::make_unique<FabricBuilderContext>(*this); });
     return *builder_context_;
 }
 
 const FabricBuilderContext& FabricContext::get_builder_context() const {
-    if (!builder_context_) {
-        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
-    }
+    std::call_once(
+        builder_context_init_flag_, [this]() { builder_context_ = std::make_unique<FabricBuilderContext>(*this); });
     return *builder_context_;
 }
 

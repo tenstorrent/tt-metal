@@ -131,6 +131,8 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
+    bool is_fabric_over_noc() const;
+    void configure_routing_tables_for_fabric_over_noc();
     void configure_routing_tables_for_fabric_ethernet_channels();
     void write_routing_tables_to_all_chips() const;
     void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
@@ -481,6 +483,9 @@ private:
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+    // Horizon (fabric-over-NOC): pre-built routing structs keyed by physical chip id.
+    // Populated by configure_routing_tables_for_fabric_over_noc() during discovery phase.
+    std::map<uint32_t, tt::tt_fabric::fabric_over_noc_routing_l1_info_t> fabric_over_noc_routing_tables_;
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;

@@ -199,20 +199,7 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     // Compute max channel counts for this fabric instance
     compute_max_channel_counts();
 
-    // Create configs using computed max
-    router_config_ = create_edm_config();
-    for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
-        router_with_mux_config_[direction] =
-            create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
-    }
-
     tensix_config_ = nullptr;
-
-    // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
-    const auto& control_plane = fabric_context.get_control_plane();
-    for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
-        stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
-    }
 
     // Initialize per-device build state
     const auto& cluster = fabric_context.get_cluster();
@@ -221,8 +208,28 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     if (num_devices_ != 4 && num_pcie_devices == 4) {
         num_devices_ += num_pcie_devices;
     }
+
+    const auto arch = fabric_context.get_hal().get_arch();
+    const auto ip_variant =
+        cluster.get_soc_desc(*cluster.all_chip_ids().begin()).get_arch_descriptor().get_ip_variant();
+
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
+
+    if (arch == tt::ARCH::QUASAR && ip_variant == tt::IpVariant::HORIZON) {
+        // Horizon has no ERISC cores -- skip EDM config and stream assignments entirely.
+    } else {
+        router_config_ = create_edm_config();
+        for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
+            router_with_mux_config_[direction] =
+                create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
+        }
+        // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
+        const auto& control_plane = fabric_context.get_control_plane();
+        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+        }
+    }
 }
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(

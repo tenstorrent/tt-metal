@@ -319,14 +319,16 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
-            for (auto* dev : devices_) {
-                const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
-                cluster_.get_driver()->register_sim_fabric_node_id(
-                    dev->id(), uint32_t(fabric_node_id.mesh_id.get()), uint32_t(fabric_node_id.chip_id));
-                for (const auto& [eth_chan, direction] :
-                     control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
-                    cluster_.get_driver()->register_sim_fabric_endpoint_direction(
-                        dev->id(), uint32_t(eth_chan), uint32_t(direction));
+            if (!control_plane_.is_fabric_over_noc()) {
+                for (auto* dev : devices_) {
+                    const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+                    cluster_.get_driver()->register_sim_fabric_node_id(
+                        dev->id(), uint32_t(fabric_node_id.mesh_id.get()), uint32_t(fabric_node_id.chip_id));
+                    for (const auto& [eth_chan, direction] :
+                         control_plane_.get_active_fabric_eth_channels(fabric_node_id)) {
+                        cluster_.get_driver()->register_sim_fabric_endpoint_direction(
+                            dev->id(), uint32_t(eth_chan), uint32_t(direction));
+                    }
                 }
             }
         }
@@ -348,6 +350,12 @@ void FabricFirmwareInitializer::configure() {
     // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
+        initialized_.test_and_set();
+        return;
+    }
+
+    if (control_plane_.is_fabric_over_noc()) {
+        // Horizon fabric runs over NOC — no ERISC routers to sync.
         initialized_.test_and_set();
         return;
     }
@@ -374,6 +382,14 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     }
 
     if (devices_.empty()) {
+        devices_.clear();
+        initialized_.clear();
+        init_done.erase(key);
+        return;
+    }
+
+    if (control_plane_.is_fabric_over_noc()) {
+        // Horizon fabric runs over NOC — no ERISC routers to terminate.
         devices_.clear();
         initialized_.clear();
         init_done.erase(key);

@@ -363,10 +363,19 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // Emit a per-variant define so kernel headers can gate on the specific Quasar IP.
+        // Uses the same env var as includes() so firmware and kernel builds agree.
+        // Add a new branch when a new IP variant needs its own kernel header path.
+        static const char* const quasar_variant_for_defines = std::getenv("TT_METAL_QUASAR_VARIANT");
+        if (quasar_variant_for_defines != nullptr && (std::string(quasar_variant_for_defines) == "horizon" ||
+                                                      std::string(quasar_variant_for_defines) == "2.0.1")) {
+            defines.push_back("IP_VARIANT_HORIZON");
+        }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
         if (params.rtoptions.get_simulator_path().extension() == ".so") {
             defines.push_back("TT_METAL_TTSIM");
+            defines.push_back("IP_VARIANT_HORIZON");  // ttsim always uses Horizon; variant env var not set
         }
         // The map comes from RunTimeOptions (TT_METAL_NOC_ATT, or the qsr.s1 default MetalEnvImpl
         // installs) and is fixed for the process, so the firmware and kernel builds see the same map.
