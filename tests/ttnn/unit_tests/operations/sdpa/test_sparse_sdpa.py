@@ -159,6 +159,22 @@ def test_sparse_sdpa_scaled_fp8_kv_multi_query_tile(device):
 
 
 @run_for_blackhole()
+@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["q_bf16", "q_fp8"])
+def test_sparse_sdpa_fp8_kv_multi_query_group(device, q_dtype):
+    """fp8 inputs need fp32 DEST, which holds four query tiles, so H=256 runs as two query groups. Each group's
+    QK must unpack K and Q in their own formats, not the bf16 the previous group's PV left behind."""
+    H, S, T, TOPK, kc, dim = 256, 1, 64, 32, 32, 64  # small head dim so eight query tiles fit in L1
+    q, kv, indices = make_inputs(H, S, T, TOPK, dim, lambda s: TOPK, seed=256)
+    out, scale = run_op(q, kv, indices, device, k_chunk_size=kc, v_dim=dim, kv_dtype=ttnn.fp8_e4m3, q_dtype=q_dtype)
+    # Golden uses what the device holds after fp8 quantization.
+    q_g = q.to(torch.float8_e4m3fn).to(torch.float32) if q_dtype == ttnn.fp8_e4m3 else q
+    kv_g = kv.to(torch.float8_e4m3fn).to(torch.float32)
+    expected = golden(q_g, kv_g, indices, scale, dim)
+    group_scores = [pcc(out[:, start : start + 128], expected[:, start : start + 128]) for start in (0, 128)]
+    assert min(group_scores) >= 0.99, f"fp8 KV H=256 sparse SDPA query-group PCCs {group_scores}"
+
+
+@run_for_blackhole()
 def test_sparse_sdpa_scaled_fp8_rejects_malformed_packed_width(device, expect_error):
     H, S, T, TOPK = 32, 32, 128, 32
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
