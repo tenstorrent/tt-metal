@@ -3,7 +3,8 @@
 
 """The whole Blackhole pack sweep space for counter attribution: every valid pair of the six formats, every tile shape from 32x32 to 128x128, dest indices
 0, 1, 3 and 7 (the first and the last tile of a DEST section, the sweep of perf_pack), both syncs, for the per-tile pack, the block pack, the W offset block pack and the blocks of two and four tiles from a dest index.
-perf_pack and perf_pack_cov2 run the part of it that the other pack perf modules do not."""
+perf_pack and perf_pack_cov2 run the part of it that the other pack perf modules do not.
+The block rows (pack_block True and 2) are the calls llk_pack_block makes with the W offset on, its default; the W offset rows (3) and the fast rows (4) are library forms on purpose."""
 
 import pytest
 from conftest import skip_for_wormhole
@@ -47,6 +48,16 @@ def test_perf_pack_cov3(perf_report, formats, dest_acc, input_dimensions, relu_t
 
 
 COV3_BLOCK_SWEEP = {**COV3_SWEEP, "input_dimensions": BLOCK_DIMS, "dest_index": [0]}
+
+
+@pytest.mark.perf
+@skip_for_wormhole
+@parametrize(**COV3_BLOCK_SWEEP)
+def test_perf_pack_cov3_block_fast(perf_report, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, run_types, loop_factor, is_perf):
+    """The fast block forms (pack_block 4), a library form on purpose: the matmul harness packs with them, llk_pack_block does not."""
+    run_pack(
+        formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, run_types=run_types, loop_factor=loop_factor, is_perf=is_perf, perf_report=perf_report, pack_block=4
+    )
 
 
 @pytest.mark.perf

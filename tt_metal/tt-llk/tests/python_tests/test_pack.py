@@ -19,6 +19,7 @@ from helpers.constraints import (
     get_valid_dest_indices,
 )
 from helpers.data_format_inference import infer_data_formats
+from helpers.bfp_format_utils import QUANTIZE_TO_FORMAT
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     FACES_PER_TILE,
@@ -62,6 +63,11 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 PACK_BLOCK_MIN_TILES = 4
+
+
+def golden_src_f32(src_A):
+    """The stimuli as the Float32 bit patterns a 32-bit DEST holds, as int32."""
+    return src_A.to(torch.float32).contiguous().view(torch.int32)
 
 PACK_FORMATS = input_output_formats(
     [
@@ -108,8 +114,9 @@ def test_pack(
     loop_factor: int = 1,
     pack_block: bool = False,
     block_tiles: int | None = None,
+    allow_int32_mix: bool = False,
 ):
-    if (formats.input_format == DataFormat.Int32) ^ (
+    if not allow_int32_mix and (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
     ):
         pytest.skip(
@@ -134,6 +141,28 @@ def test_pack(
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
+    if (
+        formats.output_format in (DataFormat.Int32, DataFormat.Int8, DataFormat.UInt8)
+        and not formats.input_format.is_integer()
+        and dest_acc == DestAccumulation.Yes
+    ):
+        # A float in a 32-bit DEST packed to an integer format is the bit pattern read as a sign-magnitude Int32 (the early conversion is a bitcast), saturated to the output width
+        bits = golden_src_f32(src_A)
+        magnitude = (bits & 0x7FFFFFFF).to(torch.int64)
+        wide = torch.where(bits < 0, -magnitude, magnitude)
+        if formats.output_format == DataFormat.Int8:
+            wide = wide.clamp(-127, 127)
+        elif formats.output_format == DataFormat.UInt8:
+            wide = wide.abs().clamp(0, 255)
+        golden_tensor = wide.to(format_dict[formats.output_format])
+        golden_tensor = golden_tensor.view(tile_cnt_A, -1)[:, : FACES_PER_TILE * 16 * 16].reshape(-1)
+
+    if formats.output_format in QUANTIZE_TO_FORMAT:
+        # block float and FP8 outputs the packer narrows: the golden carries the same quantization
+        golden_tensor = QUANTIZE_TO_FORMAT[formats.output_format](golden_tensor).to(
+            format_dict[formats.output_format]
+        )
+
     # To come as close as possible to actual hardware behavior, we infer data formats here
     # and use the inferred pack_src format for ReLU operations.
     data_formats = infer_data_formats(
@@ -183,14 +212,18 @@ def test_pack(
         data_formats.pack_src,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
+    if block_tiles is None:
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            dest_sync,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Standard,
+        )
+    else:
+        # sized below from block_tiles: the tile count need not divide into a DEST section
+        num_blocks, num_tiles_in_block = 0, 0
 
     if block_tiles is not None:
         # A block of block_tiles tiles from dest index dest_index, the call a kernel makes with a tile index (welford groupnorm packs two tiles from index 1).

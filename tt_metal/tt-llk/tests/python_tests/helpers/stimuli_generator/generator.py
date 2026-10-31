@@ -5,7 +5,11 @@ from typing import Optional
 
 import torch
 
-from ..bfp_format_utils import bfp2b_to_float16b, bfp4b_to_float16b
+from ..bfp_format_utils import (
+    QUANTIZE_TO_FORMAT,
+    bfp2b_to_float16b,
+    bfp4b_to_float16b,
+)
 from ..format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from ..llk_params import format_dict
 from ..tile_constants import (
@@ -173,6 +177,8 @@ def _generate_source_tensor(
             tensor = bfp4b_to_float16b(tensor)
         elif stimuli_format == DataFormat.Bfp2_b:
             tensor = bfp2b_to_float16b(tensor)
+        elif stimuli_format in QUANTIZE_TO_FORMAT:
+            tensor = QUANTIZE_TO_FORMAT[stimuli_format](tensor)
         return tensor
 
     strategy = lookup_strategy(spec.distribution)
@@ -196,6 +202,8 @@ def _generate_source_tensor(
         tensor = bfp4b_to_float16b(tensor)
     elif stimuli_format == DataFormat.Bfp2_b:
         tensor = bfp2b_to_float16b(tensor)
+    elif stimuli_format in QUANTIZE_TO_FORMAT:
+        tensor = QUANTIZE_TO_FORMAT[stimuli_format](tensor)
 
     return tensor
 

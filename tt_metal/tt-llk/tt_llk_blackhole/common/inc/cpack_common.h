@@ -301,15 +301,19 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 // Internal linkage lets a kernel without a closed block drop the store.
 static std::uint32_t pack_ch1_w_stride = 0;
 
+// W offset block packs are the default; LLK_PACK_W_OFFSET_OFF takes llk_pack_block back to programming the output on every call.
+#if !defined(LLK_PACK_W_OFFSET) && !defined(LLK_PACK_W_OFFSET_OFF)
+#define LLK_PACK_W_OFFSET
+#endif
 #ifdef LLK_PACK_W_OFFSET
 // W offset block packs (llk_pack_block under LLK_PACK_W_OFFSET): the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
 // Anything that writes L1_Dest_addr or the channel-1 W stride makes the state stale (LLK_PACK_W_INVALIDATE), the next block call programs the base again.
-static bool pack_w_valid               = false;
-static std::uint8_t pack_w_out         = 0;
-static std::uint32_t pack_w_page       = 0;
-static std::uint32_t pack_w_next       = 0;
-static std::uint32_t pack_w_tiles      = 0;
-static std::uint8_t pack_w_last        = 0xff;
+[[maybe_unused]] static bool pack_w_valid               = false;
+[[maybe_unused]] static std::uint8_t pack_w_out         = 0;
+[[maybe_unused]] static std::uint32_t pack_w_page       = 0;
+[[maybe_unused]] static std::uint32_t pack_w_next       = 0;
+[[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
+[[maybe_unused]] static std::uint8_t pack_w_last        = 0xff;
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
 #else
 #define LLK_PACK_W_INVALIDATE() ((void)0)
@@ -340,6 +344,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     pack_ch1_w_stride = 0;
     LLK_PACK_W_INVALIDATE();
+    LLK_ASSERT_BLOCK(llk_assert_pack_fast_untilize = false);
     TTI_NOP;
     TTI_NOP;
 }

@@ -36,7 +36,7 @@ TINY_PERF_RUN_TYPES = [PerfRunType.PACK_ISOLATE, PerfRunType.L1_TO_L1]
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=TINY_PERF_DIMS,
     num_tiles=[2, 4, 8],
-    pack_mode=[0, 1, 2, 3],
+    pack_mode=[0, 1, 2, 3, 4],
     loop_factor=[32],
 )
 def test_perf_pack_tiny_tile_block(perf_report, formats, dest_acc, tile_dims, num_tiles, pack_mode, loop_factor):

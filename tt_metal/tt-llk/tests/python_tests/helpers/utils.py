@@ -92,6 +92,7 @@ tolerances = {
     DataFormat.Float16: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.Float16_b: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.Float32: Tolerance(atol=0.05, rtol=0.05),
+    DataFormat.Tf32: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.Int32: Tolerance(atol=0, rtol=0),
     DataFormat.UInt32: Tolerance(atol=0, rtol=0),
     DataFormat.Int16: Tolerance(atol=0, rtol=0),
@@ -100,8 +101,12 @@ tolerances = {
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),
     DataFormat.Int4: Tolerance(atol=0, rtol=0),
     DataFormat.UInt4: Tolerance(atol=0, rtol=0),
+    DataFormat.Bfp8: Tolerance(atol=0.1, rtol=0.2),
     DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
+    DataFormat.Bfp4: Tolerance(atol=0.125, rtol=0.3),
     DataFormat.Bfp4_b: Tolerance(atol=0.125, rtol=0.3),
+    DataFormat.Bfp2: Tolerance(atol=0.5, rtol=0.4),
+    DataFormat.Lf8: Tolerance(atol=0.5, rtol=0.3),
     DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
@@ -958,7 +963,7 @@ def passed_test(
         # block-aware compare in would mean max_ulp was not the enforced maximum. So a
         # Bfp8_b budget charges for block quantization too, and is usable only where that
         # quantization is exact -- see _ULP_PROXY_DTYPES in helpers.ulp.
-    elif output_data_format == DataFormat.Bfp8_b:
+    elif output_data_format in (DataFormat.Bfp8, DataFormat.Bfp8_b):
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
         # that as a mismatch. But Bfp8_b's lattice is fine enough that one step can be
@@ -978,12 +983,12 @@ def passed_test(
             is_valid = is_valid | _bfp_block_aware_compare(
                 golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
             )
-    elif output_data_format == DataFormat.Bfp4_b:
+    elif output_data_format in (DataFormat.Bfp4, DataFormat.Bfp4_b):
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
         is_valid = _bfp_block_aware_compare(
             golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp
         )
-    elif output_data_format == DataFormat.Bfp2_b:
+    elif output_data_format in (DataFormat.Bfp2, DataFormat.Bfp2_b):
         is_valid = _bfp_block_aware_compare(
             golden_tensor, res_tensor, mantissa_bits=1, max_ulp_diff=1
         )
@@ -1239,9 +1244,11 @@ def passed_test(
     #     values with less precision (Bfp8_b) and drops below 99% in that case
     if output_data_format == DataFormat.Bfp8_b:
         target_pcc = pow(0.99, L1_to_L1_iterations)
-    elif output_data_format == DataFormat.Bfp4_b:
+    elif output_data_format == DataFormat.Bfp8:
+        target_pcc = pow(0.99, L1_to_L1_iterations)
+    elif output_data_format in (DataFormat.Bfp4_b, DataFormat.Bfp4):
         target_pcc = 0.97
-    elif output_data_format == DataFormat.Bfp2_b:
+    elif output_data_format in (DataFormat.Bfp2_b, DataFormat.Bfp2):
         target_pcc = (
             0.90  # Bfp2_b has only 1 mantissa bit; precision is severely limited
         )

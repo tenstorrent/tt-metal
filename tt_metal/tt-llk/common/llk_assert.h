@@ -67,3 +67,12 @@ extern bool llk_assert_fp32_dest_acc_en;
 // Asserts that a passed is_fp32_dest_acc_en matches the configured dest accumulation mode.
 #define LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en) \
     LLK_ASSERT(((is_fp32_dest_acc_en) == llk_assert_fp32_dest_acc_en), "is_fp32_dest_acc_en does not match the configured dest accumulation mode")
+
+// Set by _llk_pack_fast_untilize_init_, cleared by set_packer_strides (its uninit and pack hw_configure): the fast untilize leaves the packer strides and counters
+// set for its own program, so a block pack issued before the uninit writes to the wrong addresses and the W offset state would read them as its own.
+#ifdef ENABLE_LLK_ASSERT
+inline bool llk_assert_pack_fast_untilize = false;
+#else
+extern bool llk_assert_pack_fast_untilize;
+#endif
+#define LLK_ASSERT_PACK_NOT_FAST_UNTILIZE() LLK_ASSERT(!llk_assert_pack_fast_untilize, "pack_block after fast_untilize needs _llk_pack_fast_untilize_uninit_ first")

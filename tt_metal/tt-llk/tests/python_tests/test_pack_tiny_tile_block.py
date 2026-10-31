@@ -56,8 +56,10 @@ def _make_config(
     loop_factor=1,
     is_perf=False,
     run_types=None,
+    block_tiles=None,
+    dest_index=0,
 ):
-    """Build TestConfig for a given tile shape and tile count."""
+    """Build TestConfig for a given tile shape and tile count (block_tiles: tiles per block, which must divide num_tiles; dest_index: first DEST tile)."""
     tile_r, tile_c = tile_dims
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -92,6 +94,8 @@ def _make_config(
     elif pack_mode != 0:
         max_tiles_in_dest = 4  # whole-tile slots of a 32-bit DEST half, whatever the harness picks for the DEST width
 
+    if block_tiles is not None:
+        max_tiles_in_dest = block_tiles
     num_tiles_in_block = min(tile_cnt_A, max_tiles_in_dest)
     num_blocks = tile_cnt_A // num_tiles_in_block
 
@@ -105,7 +109,7 @@ def _make_config(
         "formats": formats,
         "templates": [TINY_PACK_MODE(pack_mode)],
         "runtimes": [
-            DEST_INDEX(0),
+            DEST_INDEX(dest_index),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(face_r_dim),
@@ -161,7 +165,7 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
-    pack_mode=[0, 1, 2, 3],
+    pack_mode=[0, 1, 2, 3, 4],
 )
 def test_pack_tiny_tile_block(
     formats,
@@ -192,7 +196,7 @@ def test_pack_tiny_tile_block(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[(16, 32)],  # face_r_dim=16, num_faces=2: block-float faces need 16 rows
     num_tiles=[2, 4, 8],
-    pack_mode=[1, 2],
+    pack_mode=[1, 2, 4],
 )
 def test_pack_tiny_tile_block_bfp(
     formats,

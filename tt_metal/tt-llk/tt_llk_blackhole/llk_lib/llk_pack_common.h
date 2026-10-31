@@ -198,6 +198,11 @@ inline void _llk_pack_dest_init_()
     _llk_init_packer_dest_offset_registers_<Dst>();
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
+    // Bit 31 of the destination register stays set: the full-sync per-tile pack writes only the three low bytes
+    if constexpr (Dst == DstSync::SyncFull)
+    {
+        TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    }
 }
 
 /**
