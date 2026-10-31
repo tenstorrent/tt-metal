@@ -112,6 +112,8 @@
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/attn_res_block_mix_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_stats/attn_res_block_stats_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc_nanobind.hpp"
 
@@ -186,6 +188,8 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(mod);
+    deepseek_prefill::attn_res_block_mix::detail::bind_attn_res_block_mix(mod);
+    deepseek_prefill::attn_res_block_stats::detail::bind_attn_res_block_stats(mod);
     deepseek_prefill::attn_res_gather_softmax::detail::bind_attn_res_gather_softmax(mod);
     deepseek_prefill::attn_res_weighted_reduce_nc::detail::bind_attn_res_weighted_reduce_nc(mod);
     deepseek_prefill::pack_scaled_fp8_kv_cache::detail::bind_pack_scaled_fp8_kv_cache(mod);

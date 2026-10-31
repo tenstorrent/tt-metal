@@ -365,17 +365,19 @@ class TtKimiK3Transformer(LightweightModule):
     def _pack_handoff(self, live, sealed):
         """Fuse the live stream and the sealed set into the one tensor the D2D socket carries.
 
-        `[1,1,N,d]` and `[1,k,N,d]` concatenate on dim 1 into `[1,k+1,N,d]`: plane 0 is the
+        `sealed` is the list of snapshot tensors in seal order, `[1,S_i,N,d]` each, so with the
+        live stream they concatenate on dim 1 into `[1,k+1,N,d]`: plane 0 is the
         live stream at a constant offset, planes `1..k` the sealed set in seal order. The mesh
         mapper shards dims 2 and 3, so dim 1 only widens the per-chip shard and the global
         tensor still means what it says.
 
         Both inputs are owned here (`handoff` transferred them) and are freed once copied.
         """
-        packed = live if sealed is None else ttnn.concat([live, sealed], dim=1)
+        packed = live if sealed is None else ttnn.concat([live, *sealed], dim=1)
         if sealed is not None:
             ttnn.deallocate(live)
-            ttnn.deallocate(sealed)
+            for snapshot in sealed:
+                ttnn.deallocate(snapshot)
         assert packed.shape[1] == self.outbound_planes, (
             f"handoff packed {packed.shape[1]} planes, but this rank's outbound spec is "
             f"{self.outbound_planes}; the socket would reject it far from here"

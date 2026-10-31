@@ -73,6 +73,11 @@ class TtAttnResImplicitSemaphores(TtAttnRes):
             topology=self.topology[self.tp_axis],
         )
 
+    def _fuses_scores(self, queries):
+        # The fused scoring path gathers inside its own program and allocates nothing per
+        # call, so the control takes the composed one, whose collective is the all-reduce above.
+        return False
+
 
 def _l1_small_per_bank(mesh_device):
     return ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_allocated_per_bank

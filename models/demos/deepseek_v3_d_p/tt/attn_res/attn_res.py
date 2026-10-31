@@ -31,7 +31,7 @@ a rank boundary.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links, per_axis_topology
 
 HIDDEN_SIZE = 7168
 BLOCK_SIZE = 12
@@ -72,6 +72,14 @@ ONE_PASS_SQUARES_MAX_WIDTH = 177 * ttnn.TILE_SIZE
 FOLD_MIN_CANDIDATES = 4
 
 
+def as_sealed_list(sealed):
+    """A sealed set as the list of snapshot tensors it was sealed as: None is the empty set,
+    and a single `[1, S, N, d]` tensor is a one-element list."""
+    if sealed is None:
+        return []
+    return list(sealed) if isinstance(sealed, (list, tuple)) else [sealed]
+
+
 class TtAttnRes(LightweightModule):
     """The AttnRes read, composed from ttnn primitives.
 
@@ -94,7 +102,9 @@ class TtAttnRes(LightweightModule):
             checks its input against it. The tensor-parallel axis must be wider than
             one chip: the read's exchange is what its one dispatch is built around,
             and there is no exchange to absorb at `tp_factor == 1`.
-        num_links: fabric links for the statistics all-reduce.
+        num_links: fabric links for the statistics collective. Defaults to every link the
+            box has on the tensor-parallel axis: the block's statistics are the largest
+            payload AttnRes moves, and one link left the all-gather half idle.
         topology: one `ttnn.Topology` **per mesh axis**, not a scalar. Defaults to
             what the opened fabric actually wraps, which is the only source that
             cannot disagree with it: naming `Ring` on an axis the fabric does not
@@ -143,7 +153,7 @@ class TtAttnRes(LightweightModule):
         dtype=ttnn.bfloat16,
         sp_axis=0,
         tp_axis=1,
-        num_links=1,
+        num_links=None,
         topology=None,
         stats_dtype=ttnn.float32,
         fold_stats=True,
@@ -157,13 +167,14 @@ class TtAttnRes(LightweightModule):
         self.dtype = dtype
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
-        self.num_links = num_links
+        self.num_links = get_num_links(mesh_device, tp_axis) if num_links is None else num_links
         self.stats_dtype = stats_dtype
         self.fold_stats = fold_stats
         self.one_pass_stats = one_pass_stats
         self.tt_ccl = tt_ccl
         # Sized by the token count, which reaches the op and not the constructor.
         self._exchange_scratch = {}
+        self._gathered_stats_by_shape = {}
         self._exchange_sem = None
         # Creating a global semaphore resets it through a blocking mesh write, and a write
         # inside a trace capture region is fatal. The set has to predate any capture, so it
@@ -221,6 +232,7 @@ class TtAttnRes(LightweightModule):
         # its queries so an address cannot be recycled under the key.
         self._column_by_query_id = {}
         self._stack_by_query_ids = {}
+        self._score_stack_by_query_ids = {}
         self.weights = weights
         if weights is not None:
             assert weights.tensor_parallel_axis == tp_axis, (
@@ -463,6 +475,82 @@ class TtAttnRes(LightweightModule):
             self._stack_by_query_ids[key] = (list(queries), stack)
         return self._stack_by_query_ids[key][1]
 
+    def _score_columns(self, queries):
+        """R folded queries -> one `[1, 1, d/tp, 32]` operand whose column 1 + r is query r.
+
+        Column 0 and the columns past the last site are zero, so the matmul against it
+        lands each site's dot in the column `attn_res_block_mix` reads it from and leaves
+        column 0 free for the sum of squares — which `rms_norm_pre_all_gather` writes to
+        column 0 of an otherwise zero tile, so one `add` packs both statistics into a
+        single tile column and one collective carries them.
+
+        Built on first use and held, like `_query_columns`, so it never lands in a trace.
+        """
+        key = tuple(id(q) for q in queries)
+        if key not in self._score_stack_by_query_ids:
+            columns = [self._query_column(q) for q in queries]
+            # Zeros allocated outright and one concat. `zeros_like` of a column and a
+            # `ttnn.pad` up to the tile both left garbage in the stack on a mesh.
+            zeros = lambda width: ttnn.zeros(
+                [1, 1, self.shard_width, width],
+                dtype=columns[0].dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+            blocks = [zeros(1), *columns]
+            if len(blocks) < ttnn.TILE_SIZE:
+                blocks.append(zeros(ttnn.TILE_SIZE - len(blocks)))
+            stack = ttnn.concat(blocks, dim=3)
+            ttnn.deallocate(blocks[0])
+            if len(blocks) > 1 + len(columns):
+                ttnn.deallocate(blocks[-1])
+            self._score_stack_by_query_ids[key] = (list(queries), stack)
+        return self._score_stack_by_query_ids[key][1]
+
+    def _fuses_scores(self, queries):
+        """Whether `inter_block` can take the fused scoring path for this many sites.
+
+        The op reads both statistics out of one fp32 tile column, so it needs the one-pass
+        sum of squares, fp32 statistics, and no more sites than the column has room for
+        beside the sum of squares.
+        """
+        return self.one_pass_squares and self.stats_dtype == ttnn.float32 and len(queries) < ttnn.TILE_SIZE
+
+    def _inter_block_fused(self, sealed, queries, num_closed):
+        """`inter_block` as two dispatches: both statistics in one pass over the sealed set,
+        gathered across the tensor-parallel axis in the same program, then the scoring and
+        the mixture in a second pass.
+
+        Each pass reads every sealed tile once, for all the block's read sites. The composed
+        chain reads the set three times and adds a dozen more dispatches — typecasts around
+        the collective, a second collective, the folds, the composite max and sum, the
+        site-major permutes — each billed to the host when the walk runs untraced, which is
+        how prefill runs. The scores are also kept in fp32 the whole way here, where the
+        composed chain narrowed the reduced statistics to bf16.
+        """
+        # Gathered rather than reduced: the mixture sums the ranks' partials in fp32 dest, so
+        # the exchange only has to move them — and moves each candidate's rows while the
+        # pass is still reducing the next, rather than after it as a separate collective.
+        stats = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
+            sealed,
+            self._score_columns(queries),
+            gathered=self._gathered_stats(sealed, sealed[0].shape[-2]),
+            cluster_axis=self.tp_axis,
+            topology=self.topology[self.tp_axis],
+            num_links=self.num_links,
+            compute_kernel_config=STATS_FIDELITY,
+        )
+
+        outputs = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+            sealed,
+            stats,
+            num_sites=len(queries),
+            inv_hidden_size=1.0 / self.hidden_size,
+            eps=self.eps,
+            num_closed_sites=num_closed,
+        )
+        return tuple(outputs)
+
     def _dots_by_site(self, v, queries):
         """[1, C, N, d/tp] against R queries -> [1, C, N, R], globally summed.
 
@@ -552,6 +640,26 @@ class TtAttnRes(LightweightModule):
             self._exchange_scratch[num_tokens] = stats
         return stats
 
+    def _gathered_stats(self, sealed, num_tokens):
+        """Where a block's statistics are gathered: `[1, C, N, 32 * tp]` float32, rank p's in
+        tile column p.
+
+        Kept for the walk, one per sealed-set depth, for the same reason as the read's
+        exchange buffer: peers write into it by address, so it has to sit at the same
+        address on every chip and must not be freed and reallocated while a chip that has
+        not caught up could still be using that memory.
+        """
+        num_candidates = sum(snapshot.shape[1] for snapshot in sealed)
+        key = (num_candidates, num_tokens)
+        if key not in self._gathered_stats_by_shape:
+            self._gathered_stats_by_shape[key] = ttnn.zeros(
+                [1, num_candidates, num_tokens, ttnn.TILE_SIZE * self.tp_factor],
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+        return self._gathered_stats_by_shape[key]
+
     def _mix(self, v, weights):
         """Weighted sum over the candidate axis, one per read site batched on
         `weights`' dim 0: `[1, C, N, d/tp]` and `[R, C, N, 1]` -> `[R, 1, N, d/tp]`.
@@ -569,7 +677,7 @@ class TtAttnRes(LightweightModule):
         the score chain's output to hand it over."""
         return ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(v, weights, dim=1)
 
-    def inter_block(self, block_residual, queries):
+    def inter_block(self, sealed, queries, num_closed=0):
         """Sealed-snapshot half of the mixture, for every read site in a block.
 
         Everything that does not depend on the read site runs once for the whole
@@ -584,17 +692,51 @@ class TtAttnRes(LightweightModule):
         one site already paid for.
 
         Args:
-            block_residual: `[1, S, N, d/tp_factor]`. Not None — the walk places no
-                read site before the first seal, so every executed read has one.
+            sealed: the sealed set, one `[1, S, N, d/tp_factor]` tensor or the list of
+                them it was sealed as, whose planes in order are the candidates. Not
+                empty — the walk places no read site before the first seal, so every
+                executed read has one.
             queries: sequence of `[1, 1, 1, d/tp_factor]` folded queries.
+            num_closed: how many leading sites have no live stream to fold in. Their read
+                is the sealed set's mixture alone, `sum_i e_i v_i / sum_i e_i`, and comes
+                back whole rather than as a batch entry.
 
         Returns:
             The partials `[R, 1, N, d/tp_factor]`, each site's holding `sum_i e_i v_i`,
-            and the shifts and masses `[R, 1, N, 1]`, all batched over read sites in
-            the online-softmax convention `e_i = exp(s_i - m)`. `merge` takes the
-            batches whole and names the site; keep them alive until the block's last
-            read.
+            and the shifts and masses `[R, 1, N, 1]`, all batched over the open read
+            sites in the online-softmax convention `e_i = exp(s_i - m)`. `merge` takes
+            the batches whole and names the site; keep them alive until the block's last
+            read. With `num_closed`, a fourth: the closed sites' reads,
+            `[num_closed, 1, N, d/tp_factor]`, and the batches start at the first open site.
         """
+        sealed = as_sealed_list(sealed)
+        assert sealed, "inter_block needs a sealed snapshot to score against"
+        if self._fuses_scores(queries):
+            return self._inter_block_fused(sealed, queries, num_closed)
+        if len(sealed) == 1:
+            return self._inter_block_composed(sealed[0], queries, num_closed)
+        # The composed chain takes the set as one tensor.
+        whole = ttnn.concat(sealed, dim=1)
+        batches = self._inter_block_composed(whole, queries, num_closed)
+        ttnn.deallocate(whole)
+        return batches
+
+    def _close_sites(self, exponentials, site_masses, num_closed):
+        """Site-major weights with the leading `num_closed` sites' over their mass, consuming
+        `exponentials`: a closed site's mixture is then its read."""
+        head, head_masses = exponentials[:num_closed], site_masses[:num_closed]
+        closed = ttnn.div(head, head_masses)
+        ttnn.deallocate(head)
+        ttnn.deallocate(head_masses)
+        if num_closed == exponentials.shape[0]:
+            ttnn.deallocate(exponentials)
+            return closed
+        tail = exponentials[num_closed:]
+        ttnn.deallocate(exponentials)
+        return self._concat_sites([closed, tail], dim=0)
+
+    def _inter_block_composed(self, block_residual, queries, num_closed):
+        """`inter_block` from ttnn primitives, for configurations the fused ops do not take."""
         reciprocal_rms = self._reciprocal_rms(block_residual)
         dots = self._dots_by_site(block_residual, queries)
         scores = ttnn.mul(dots, reciprocal_rms)
@@ -616,6 +758,8 @@ class TtAttnRes(LightweightModule):
         exponentials = self._site_major(exponentials)
         site_shifts = self._site_major(site_shifts)
         site_masses = self._site_major(site_masses)
+        if num_closed:
+            exponentials = self._close_sites(exponentials, site_masses, num_closed)
 
         # `merge` reads these alongside the live stream's statistics through one
         # circular buffer, which is one unpack configuration and so one dtype.
@@ -627,7 +771,14 @@ class TtAttnRes(LightweightModule):
         partials = self._mix(block_residual, exponentials)
 
         ttnn.deallocate(exponentials)
-        return partials, site_shifts, site_masses
+        if not num_closed:
+            return partials, site_shifts, site_masses
+        # The closed sites' weights were normalized above, so their mixture is the read.
+        split = lambda batch: (batch[:num_closed], batch[num_closed:])
+        (closed, partials_open), (_, shifts_open), (_, masses_open) = map(split, (partials, site_shifts, site_masses))
+        for tensor in (partials, site_shifts, site_masses):
+            ttnn.deallocate(tensor)
+        return partials_open, shifts_open, masses_open, closed
 
     def merge(self, partial, shift, mass, running_sum, q, site=0, pending=None):
         """Fold the live stream into a precomputed sealed-snapshot partial.

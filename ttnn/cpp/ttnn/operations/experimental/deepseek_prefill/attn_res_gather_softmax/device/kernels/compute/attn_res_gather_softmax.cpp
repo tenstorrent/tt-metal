@@ -15,16 +15,16 @@
 // So the gather is not a general collective over a tensor — it is a fixed
 // 2-tile exchange between the cores that hold the same token rows on each rank.
 //
-// Two passes, and the grid is divided differently for each. Pass one reduces a token
-// row along the whole of its width, so a row belongs entirely to one core and the
-// pass cannot use more than Ht of them. Pass two has no such tie — every output tile
-// is independent once the row weights exist — so it is split by tile across the rest
-// of the grid, and a core's fold run is generally not the rows it reduced.
+// Two passes over one split: a core owns runs of token rows (see attn_res_core_runs.hpp),
+// reduces them in pass one and folds the same runs in pass two. The stream it reduced
+// stays resident between the passes, so it is read from DRAM once. A row's statistics
+// reduce along its whole width, so where rows are split into chunks, each chunk's core
+// reduces its own run and the row's chunk 0 core sums the row's partials before they
+// cross the fabric.
 //
-// The two are separated by a barrier and not merely by data: the exchange is funnelled
-// through a single fabric-holding core that cannot send until every statistics core
-// has parked every row, so no tile can fold before all of them have been produced.
-// `running_sum` is therefore read twice, once per pass, over different rows.
+// The two passes are separated by a barrier and not merely by data: the exchange is
+// funnelled through a single fabric-holding core that cannot send until every row's
+// statistics are parked, so no tile can fold before all of them have been produced.
 
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
@@ -42,6 +42,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_core_runs.hpp"
 
 using namespace ckernel;
 
@@ -58,6 +59,8 @@ constexpr auto cb_local_stats = tt::CBIndex::c_7;  // this rank's pair, handed t
 constexpr auto cb_pending = tt::CBIndex::c_10;     // a residual write not yet in the stream
 constexpr auto cb_total = tt::CBIndex::c_11;       // the settled stream, reduced here
 constexpr auto cb_total_out = tt::CBIndex::c_12;   // the same row again, for the writer
+constexpr auto cb_chunk_stats = tt::CBIndex::c_14;  // a row leader's: its other chunks' pairs
+constexpr auto cb_row_stats = tt::CBIndex::c_15;    // a row leader's: the row's summed pair
 constexpr auto cb_out = tt::CBIndex::c_16;
 
 constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -69,16 +72,19 @@ constexpr uint32_t inv_hidden_size = get_compile_time_arg_val(2);
 constexpr uint32_t eps = get_compile_time_arg_val(3);
 // Whether a deferred residual write is settled into the stream on the way through.
 constexpr bool fuse_add = get_compile_time_arg_val(4) == 1;
+using Split = AttnResSplit<5>;
+constexpr uint32_t chunk_tiles = Split::chunk_tiles;
+constexpr uint32_t chunks_per_row = Split::chunks_per_row;
 
-// What the statistics are taken over. A sum of squares does not distribute across the
-// two addends, so where there is a write to settle it has to be summed for real first;
-// the fold in pass two has no such tie and distributes instead.
+// What the statistics are taken over and the fold weights, resident from pass one to
+// pass two: the live stream, or with a write to settle, the settled sum.
 constexpr auto cb_stream = fuse_add ? cb_total : cb_prefix;
 
 constexpr uint32_t kFixedScalars = 2;
 constexpr uint32_t kStatsPerPartial = 2;
 constexpr uint32_t kScalars = kFixedScalars + kStatsPerPartial * num_partials;
 constexpr uint32_t kRowWeights = 2;
+constexpr uint32_t kStatsPerRow = 2;
 constexpr uint32_t onetile = 1;
 
 constexpr uint32_t dst_a = 0;
@@ -91,19 +97,19 @@ constexpr uint32_t dst_acc = 0;
 // row: fill it, reduce it, fill it again. `init` re-establishes the unpack and
 // pack configuration the previous reduce left changed.
 template <typename DFB, typename Init, typename TransformOne>
-ALWI void reduce_transformed_row(DFB& tmp_buf, Init init, TransformOne transform_one) {
+ALWI void reduce_transformed_run(DFB& tmp_buf, Init init, TransformOne transform_one) {
     init();
-    tmp_buf.reserve_back(Wt);
-    for (uint32_t wt = 0; wt < Wt; ++wt) {
+    tmp_buf.reserve_back(chunk_tiles);
+    for (uint32_t k = 0; k < chunk_tiles; ++k) {
         tile_regs_acquire();
-        transform_one(wt);
+        transform_one(k);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_tmp, wt);
+        pack_tile(0, cb_tmp, k);
         tile_regs_release();
     }
-    tmp_buf.push_back(Wt);
+    tmp_buf.push_back(chunk_tiles);
 
     compute_kernel_lib::reduce<
         PoolType::SUM,
@@ -111,40 +117,69 @@ ALWI void reduce_transformed_row(DFB& tmp_buf, Init init, TransformOne transform
         cb_tmp,
         cb_scaler,
         cb_local_stats,
-        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+        compute_kernel_lib::ReduceInputBlockShape::row(chunk_tiles));
 }
 
-// Settle a deferred residual write into the row the statistics are about to be taken
-// over. The row is packed twice out of one dest register: a circular buffer has a single
-// consumer, and the sum is wanted both by the two reduces here and by the writer that
-// parks it as the stream the caller carries forward.
+// Settle a deferred residual write into the run the statistics are about to be taken
+// over. The run is packed twice out of one dest register: a circular buffer has a single
+// consumer, and the sum is wanted both here — by the two reduces and the fold, which keep
+// it resident — and by the writer that parks it as the stream the caller carries forward.
 template <typename PrefixDFB, typename PendingDFB, typename TotalDFB, typename TotalOutDFB>
-ALWI void settle_row(PrefixDFB& prefix_buf, PendingDFB& pending_buf, TotalDFB& total_buf, TotalOutDFB& total_out_buf) {
-    prefix_buf.wait_front(Wt);
-    pending_buf.wait_front(Wt);
-    total_buf.reserve_back(Wt);
-    total_out_buf.reserve_back(Wt);
+ALWI void settle_run(PrefixDFB& prefix_buf, PendingDFB& pending_buf, TotalDFB& total_buf, TotalOutDFB& total_out_buf) {
+    prefix_buf.wait_front(chunk_tiles);
+    pending_buf.wait_front(chunk_tiles);
+    total_buf.reserve_back(chunk_tiles);
+    total_out_buf.reserve_back(chunk_tiles);
 
     reconfig_data_format(cb_prefix, cb_pending);
     pack_reconfig_data_format(cb_total);
     add_init(cb_prefix, cb_pending);
 
-    for (uint32_t wt = 0; wt < Wt; ++wt) {
+    for (uint32_t k = 0; k < chunk_tiles; ++k) {
         tile_regs_acquire();
-        add_tiles(cb_prefix, cb_pending, wt, wt, 0);
+        add_tiles(cb_prefix, cb_pending, k, k, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_total, wt);
-        pack_tile(0, cb_total_out, wt);
+        pack_tile(0, cb_total, k);
+        pack_tile(0, cb_total_out, k);
         tile_regs_release();
     }
 
-    total_buf.push_back(Wt);
-    total_out_buf.push_back(Wt);
-    prefix_buf.pop_front(Wt);
-    pending_buf.pop_front(Wt);
-    total_buf.wait_front(Wt);
+    total_buf.push_back(chunk_tiles);
+    total_out_buf.push_back(chunk_tiles);
+    prefix_buf.pop_front(chunk_tiles);
+    pending_buf.pop_front(chunk_tiles);
+}
+
+// A row leader's: its own pair plus the row's other chunks', summed in fp32 dest.
+void sum_row_stats() {
+    CircularBuffer cb_local_obj(cb_local_stats);
+    CircularBuffer cb_chunk_obj(cb_chunk_stats);
+    CircularBuffer cb_row_obj(cb_row_stats);
+
+    cb_local_obj.wait_front(kStatsPerRow);
+    cb_chunk_obj.wait_front(kStatsPerRow * (chunks_per_row - 1));
+    cb_row_obj.reserve_back(kStatsPerRow);
+    copy_init(cb_local_stats);
+    pack_reconfig_data_format(cb_row_stats);
+    for (uint32_t s = 0; s < kStatsPerRow; ++s) {
+        tile_regs_acquire();
+        copy_tile(cb_local_stats, s, dst_a);
+        add_binary_tile_init();
+        for (uint32_t c = 1; c < chunks_per_row; ++c) {
+            copy_tile(cb_chunk_stats, kStatsPerRow * (c - 1) + s, dst_b);
+            add_binary_tile(dst_a, dst_b, dst_a);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(dst_a, cb_row_stats);
+        tile_regs_release();
+    }
+    cb_row_obj.push_back(kStatsPerRow);
+    cb_chunk_obj.pop_front(kStatsPerRow * (chunks_per_row - 1));
+    cb_local_obj.pop_front(kStatsPerRow);
 }
 
 // The scalars live in column 0 of their tile — the only column BroadcastType::COL
@@ -227,10 +262,10 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
 
     cb_row_obj.wait_front(kRowWeights);
 
-    // `partial`, `running_sum` and any deferred write are separate CBs here rather than
-    // one interleaved set, so the MAC alternates its srcA operand. That is only safe
-    // because the device operation rejects a dtype mismatch among them — one
-    // `bcast_init` configures the unpacker for all of them.
+    // `partial` and the stream are separate CBs here rather than one interleaved set, so
+    // the MAC alternates its srcA operand. That is only safe because the device
+    // operation rejects a dtype mismatch among them — one `bcast_init` configures the
+    // unpacker for all of them.
     bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_partial, cb_row);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         cb_partial, cb_row, 1 /*acc_to_dest*/)));
@@ -241,15 +276,10 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
 }  // namespace
 
 void kernel_main() {
-    // Statistics are split by token row and the fold by output tile, so a core's two
-    // runs are unrelated. `num_stat_rows` is zero on a core that only folds.
-    const uint32_t num_stat_rows = get_arg_val<uint32_t>(0);
-    const uint32_t num_fold_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t fold_start_tile = get_arg_val<uint32_t>(2);
+    const auto [first_unit, num_units] = Split::core_units();
 
     CircularBuffer cb_partial_obj(cb_partial);
-    CircularBuffer cb_prefix_obj(cb_prefix);
-    CircularBuffer cb_pending_obj(cb_pending);
+    CircularBuffer cb_stream_obj(cb_stream);
     CircularBuffer cb_row_obj(cb_row);
     CircularBuffer cb_scalars_obj(cb_scalars);
     CircularBuffer cb_out_obj(cb_out);
@@ -264,100 +294,71 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_prefix, cb_q, cb_tmp);
 
-    // Pass one: this rank's statistics for every row this core carries, which is what
-    // the writer parks and the gather core then puts on the wire. A core that only
-    // folds skips the pass whole — the reader does not push q or the scaler to it.
-    if (num_stat_rows > 0) {
-        // q and the reduce scaler are the same for every row this core owns; the
-        // reader pushes each once and nothing pops them until the pass is done.
-        q_buf.wait_front(Wt);
+    // Pass one: this rank's statistics for every run this core carries, which the writer
+    // parks — or hands to the row's leader — and the gather core then puts on the wire.
+    // q and the reduce scaler are the same for every run; the reader pushes each once.
+    q_buf.wait_front(chunk_tiles);
+    for (uint32_t i = 0; i < num_units; ++i) {
+        // The stream stays resident for the fold, so a run's tiles sit after the earlier
+        // runs' in its buffer.
+        const uint32_t base = i * chunk_tiles;
+        if constexpr (fuse_add) {
+            settle_run(prefix_buf, pending_buf, total_buf, total_out_buf);
+        }
+        cb_stream_obj.wait_front(base + chunk_tiles);
 
-        for (uint32_t row = 0; row < num_stat_rows; ++row) {
-            if constexpr (fuse_add) {
-                settle_row(prefix_buf, pending_buf, total_buf, total_out_buf);
-            } else {
-                prefix_buf.wait_front(Wt);
-            }
+        reduce_transformed_run(
+            tmp_buf,
+            [] {
+                reconfig_data_format(cb_stream, cb_stream);
+                pack_reconfig_data_format(cb_tmp);
+                mul_init(cb_stream, cb_stream);
+            },
+            [base](uint32_t k) { mul_tiles(cb_stream, cb_stream, base + k, base + k, 0); });
 
-            reduce_transformed_row(
-                tmp_buf,
-                [] {
-                    reconfig_data_format(cb_stream, cb_stream);
-                    pack_reconfig_data_format(cb_tmp);
-                    mul_init(cb_stream, cb_stream);
-                },
-                [](uint32_t wt) { mul_tiles(cb_stream, cb_stream, wt, wt, 0); });
+        reduce_transformed_run(
+            tmp_buf,
+            [] {
+                reconfig_data_format(cb_stream, cb_q);
+                pack_reconfig_data_format(cb_tmp);
+                mul_bcast_rows_init(cb_stream, cb_q);
+            },
+            [base](uint32_t k) { mul_tiles_bcast_rows(cb_stream, cb_q, base + k, k, 0); });
 
-            reduce_transformed_row(
-                tmp_buf,
-                [] {
-                    reconfig_data_format(cb_stream, cb_q);
-                    pack_reconfig_data_format(cb_tmp);
-                    mul_bcast_rows_init(cb_stream, cb_q);
-                },
-                [](uint32_t wt) { mul_tiles_bcast_rows(cb_stream, cb_q, wt, wt, 0); });
-
-            if constexpr (fuse_add) {
-                total_buf.pop_front(Wt);
-            } else {
-                prefix_buf.pop_front(Wt);
+        if constexpr (chunks_per_row > 1) {
+            if (Split::unit(first_unit + i).chunk == 0) {
+                sum_row_stats();
             }
         }
-
-        q_buf.pop_front(Wt);
-        scaler_buf.pop_front(1);
     }
+    q_buf.pop_front(chunk_tiles);
+    scaler_buf.pop_front(1);
 
-    // Pass two: the fold, over a contiguous run of output tiles. The writer only
-    // pushes scalar sets once every rank's slots have landed, so waiting on
-    // `cb_scalars` is the whole of this kernel's participation in the collective.
-    //
-    // One derivation per token row the run touches, not per tile: the run is
-    // contiguous, so a row's tiles are consecutive and the weights hold across them.
-    bool row_weights_live = false;
-    for (uint32_t i = fold_start_tile; i < fold_start_tile + num_fold_tiles; ++i) {
-        if (!row_weights_live) {
-            cb_scalars_obj.wait_front(kScalars);
-            derive_row_weights(cb_row_obj);
-            row_weights_live = true;
+    // Pass two: the fold, over the same runs. The writer only pushes a run's scalar set
+    // once every rank's slots have landed, so waiting on `cb_scalars` is the whole of
+    // this kernel's participation in the collective. A run lies within one token row, so
+    // one derivation of the row weights serves it.
+    cb_partial_obj.wait_front(num_units * chunk_tiles);
+    for (uint32_t i = 0; i < num_units; ++i) {
+        cb_scalars_obj.wait_front(kScalars);
+        derive_row_weights(cb_row_obj);
+
+        for (uint32_t k = i * chunk_tiles; k < (i + 1) * chunk_tiles; ++k) {
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(cb_partial, cb_row, k, 0, dst_acc);
+            mul_tiles_bcast_cols(cb_stream, cb_row, k, 1, dst_acc);
+            tile_regs_commit();
+
+            cb_out_obj.reserve_back(onetile);
+            tile_regs_wait();
+            pack_tile(dst_acc, cb_out);
+            tile_regs_release();
+            cb_out_obj.push_back(onetile);
         }
 
-        cb_partial_obj.wait_front(onetile);
-        cb_prefix_obj.wait_front(onetile);
-        if constexpr (fuse_add) {
-            cb_pending_obj.wait_front(onetile);
-        }
-        tile_regs_acquire();
-        mul_tiles_bcast_cols(cb_partial, cb_row, 0, 0, dst_acc);
-        // The stream's weight is distributed over the two addends — `b*(prefix + pending)`
-        // as `b*prefix + b*pending` — so the fold never waits on the settled row landing
-        // in DRAM. It is one more MAC into the accumulator already open.
-        mul_tiles_bcast_cols(cb_prefix, cb_row, 0, 1, dst_acc);
-        if constexpr (fuse_add) {
-            mul_tiles_bcast_cols(cb_pending, cb_row, 0, 1, dst_acc);
-        }
-        tile_regs_commit();
-
-        cb_out_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst_acc, cb_out);
-        tile_regs_release();
-        cb_out_obj.push_back(onetile);
-
-        cb_partial_obj.pop_front(onetile);
-        cb_prefix_obj.pop_front(onetile);
-        if constexpr (fuse_add) {
-            cb_pending_obj.pop_front(onetile);
-        }
-
-        if ((i + 1) % Wt == 0) {
-            cb_scalars_obj.pop_front(kScalars);
-            cb_row_obj.pop_front(kRowWeights);
-            row_weights_live = false;
-        }
-    }
-    if (row_weights_live) {
         cb_scalars_obj.pop_front(kScalars);
         cb_row_obj.pop_front(kRowWeights);
     }
+    cb_partial_obj.pop_front(num_units * chunk_tiles);
+    cb_stream_obj.pop_front(num_units * chunk_tiles);
 }

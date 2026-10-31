@@ -6,10 +6,10 @@ The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
 
   * **Boundary layer** (the rank's first): the most expensive AttnRes layer of the stack, and every AttnRes
-    program it has — the 1-site `inter_block` over the inherited set for the read that straddles the rank
-    boundary, the pre-attention read, the seal (the largest concat of any full block), the 24-site
-    `inter_block` at the largest sealed count of any full block, past the statistics fold's threshold, and the
-    post-attention read. The last block has one more snapshot but only 9 layers, so it batches 19 sites, not 24.
+    program it has — the seal of the inherited live stream, the 25-site `inter_block` at the largest sealed
+    count of any full block, which carries the read that straddles the rank boundary as its first site, that
+    read copied out of the batch, and the post-attention read. The last block has one more snapshot but only 9
+    layers, so it batches 19 sites, not 24.
   * **Ordinary layer** (the ones after it): two reads, each settling the module write the walk deferred into
     it. 85 of the 93 layers are this, and it is about 60% of AttnRes time over the model, which the boundary
     layer alone weights at under 10%.
@@ -75,18 +75,22 @@ _SAMPLES = 5
 _WALL_SAMPLES = 30
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power): the median of runs
-# 41112791430, 41117934062 and 41130107396 (2026-10-30), on bh-glx-120-d08u08, -d06u02 and -d09u02. Traced held
-# within 0.4% across the three boxes (boundary 1716-1722, ordinary 140.4-141.2); untraced within 1.5% on the
-# boundary layer (4596-4664) and 4% on the ordinary one (313-326). Untraced is host-dispatch bound here, with
-# the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Off the pool,
-# bh-glx-120-b07u02 measures the traced boundary layer 6% high, so a run there may need
-# ATTN_RES_PERF_REPORT_ONLY=1.
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41209975005,
+# 41209981451 and 41209987401. Production prefill runs untraced, so the untraced walk is held to the traced time
+# and band wherever it reaches it: the boundary layer does (419-425 us untraced against 435 traced). The ordinary
+# layer does not yet: a read costs more host time to dispatch on the 8x4 mesh (~81 us, 32 per-chip programs for
+# its exchange) than it runs on device (~62 us), so untraced it measured 146-157 us. It gets its own reference
+# and, being host-bound and so following the host CPU, the wider band, until the read is one program across
+# chips. Within a box the spread is under 2%; bh-glx-120-b07u02 measures these layers ~4% above CI, so a run
+# off the CI pool may need ATTN_RES_PERF_REPORT_ONLY=1.
 _REFERENCE_E2E_US = {
-    "traced": {"boundary": 1720.0, "ordinary": 141.0},
-    "untraced": {"boundary": 4620.0, "ordinary": 323.0},
+    "traced": {"boundary": 435.0, "ordinary": 119.0},
+    "untraced": {"boundary": 435.0, "ordinary": 150.0},
 }
-_MARGIN = {"traced": 0.05, "untraced": 0.10}
+_MARGIN = {
+    "traced": {"boundary": 0.05, "ordinary": 0.05},
+    "untraced": {"boundary": 0.05, "ordinary": 0.10},
+}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
 
@@ -224,7 +228,8 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
             pre_ffn = residual.read()
             residual.write(module(pre_ffn))
             residual.release(pre_ffn)
-        for tensor in residual.handoff():
+        live, sealed = residual.handoff()
+        for tensor in (live, *sealed):
             ttnn.deallocate(tensor)
 
     def baseline(num_layers):
@@ -279,7 +284,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     _log_ops("boundary", median_layers[0])
     _log_ops("ordinary", median_layers[1])
 
-    references, margin = _REFERENCE_E2E_US[mode], _MARGIN[mode]
+    references, margins = _REFERENCE_E2E_US[mode], _MARGIN[mode]
     logger.info(
         f"AttnRes layers {LAYER}-{LAYER + ORDINARY_LAYERS} (S = {INHERITED_SNAPSHOTS} -> {INHERITED_SNAPSHOTS + 1}), "
         f"{num_tokens} tokens, SP8xTP4 torus-XY, {mode}:"
@@ -287,7 +292,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     failures = []
     for name, label in zip(LAYERS, (f"layer {LAYER}", f"mean of {LAYER + 1}-{LAYER + ORDINARY_LAYERS}")):
         line = f"  {name:8s} ({label}) e2e {e2e_us[name]:9.1f} us"
-        reference = references[name]
+        reference, margin = references[name], margins[name]
         if reference is not None:
             lower, upper = reference * (1 - margin), reference * (1 + margin)
             ok = lower <= e2e_us[name] <= upper
@@ -317,7 +322,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
         "device_samples_us": [us for us, _, _ in per_sample],
         "handoff_add_us": handoff_us,
         "reference_e2e_us": references,
-        "margin_pct": margin * 100.0,
+        "margin_pct": {name: margin * 100.0 for name, margin in margins.items()},
     }
     print("ATTN_RES_PERF=" + json.dumps(result, sort_keys=True))
     gated = not _REPORT_ONLY and tp_axis_is_wrapped(mesh_device) and all(v is not None for v in references.values())
