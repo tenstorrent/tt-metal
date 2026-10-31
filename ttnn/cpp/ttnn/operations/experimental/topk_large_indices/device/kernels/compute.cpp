@@ -501,14 +501,13 @@ FORCE_INLINE void settle_next_program(uint32_t input_cb) {
 }  // namespace
 
 void kernel_main() {
-    const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::compute_num_rows);
+    const uint32_t assigned_rows = get_arg_val<uint32_t>(topk_core_args::compute_num_rows);
     constexpr bool row_split = get_named_compile_time_arg_val("row_split") != 0;
     constexpr bool split_whole_rows = get_named_compile_time_arg_val("split_whole_rows") != 0;
     constexpr bool long_rows = get_named_compile_time_arg_val("long_rows") != 0;
-    const bool has_split = row_split && get_arg_val<uint32_t>(topk_core_args::compute_has_split) != 0;
+    // The host paired this core on a row; whether the row is really halved waits on its real length below.
+    const bool pair_assigned = row_split && get_arg_val<uint32_t>(topk_core_args::compute_has_split) != 0;
     const bool second_half = row_split && get_arg_val<uint32_t>(topk_core_args::compute_second_half) != 0;
-    const bool sends_survivor = has_split && second_half;
-    const bool receives_survivor = has_split && !second_half;
     const uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::compute_search_length);
 
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -575,6 +574,13 @@ void kernel_main() {
         split_tail_elements = split.tail_elements;
         split_first_chunk = split.first_chunk;
     }
+
+    // As the reader decides it: a pair row too short to halve is reduced whole by the first half's core and
+    // dropped by the second's, so it takes the single fused reduction an eager call gives it.
+    const bool has_split = pair_assigned && row_halved({num_chunks, tail_elements});
+    const uint32_t num_rows = pair_assigned && !has_split && second_half ? assigned_rows - 1 : assigned_rows;
+    const bool sends_survivor = has_split && second_half;
+    const bool receives_survivor = has_split && !second_half;
 
     CircularBuffer input(input_cb);
     CircularBuffer indices(indices_cb);

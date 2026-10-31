@@ -61,6 +61,11 @@ constexpr TopkSegmentBounds half_bounds(TopkMetadataBounds row, uint32_t chunk_e
         row, chunk_elements, second_half ? mid : 0, second_half ? row.num_chunks : mid);
 }
 
+// The program-namespace test, taking the row's real bounds.
+constexpr bool row_halved(TopkMetadataBounds row) {
+    return ttnn::operations::experimental::topk_large_indices::program::row_halved(row.num_chunks);
+}
+
 // A core's whole rows are always the whole row, never a chunk range.
 constexpr TopkSegmentBounds whole_row_bounds(TopkMetadataBounds row) {
     return {.first_chunk = 0, .num_chunks = row.num_chunks, .tail_elements = row.tail_elements, .empty = false};
