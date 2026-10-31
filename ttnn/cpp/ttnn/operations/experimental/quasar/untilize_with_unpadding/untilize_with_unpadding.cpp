@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 
 static ttnn::Shape squeeze_vector_shape(ttnn::Shape output_shape) {
     if (output_shape.rank() > 4) {
-        ttsl::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
+        ttsl::SmallVector<uint32_t> output_shape_4d(4);
         output_shape_4d[0] = 1;
         int extra_rank = output_shape.size() - 4;
         for (int i = extra_rank; i >= 0; i--) {
@@ -42,20 +42,27 @@ using MassagedUntilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>
 using MassagedUntilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedUntilizeVal build_ndiml_untilize_val(
-    BaseUntilizeValType base_untilize, const std::optional<CoreRangeSet>& sub_core_grids) {
-    auto original_shape = std::make_shared<Shape>();
+    BaseUntilizeValType base_untilize,
+    const Shape& output_tensor_end,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto output_shape = std::make_shared<Shape>();
 
     return MassagedUntilizeVal(MassagedUntilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
-            *original_shape = input_tensor.logical_shape();
+            ttsl::SmallVector<uint32_t> output_shape_vector;
+            output_shape_vector.reserve(output_tensor_end.rank());
+            for (auto index = 0; index < output_tensor_end.rank(); ++index) {
+                output_shape_vector.push_back(output_tensor_end[index] + 1);
+            }
+            *output_shape = ttnn::Shape(std::move(output_shape_vector));
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor, sub_core_grids);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
             auto unsqueezed_tensor = ttnn::operations::experimental::quasar::reshape(
                 output,
-                *original_shape,
+                *output_shape,
                 std::nullopt,              /*Memory Config*/
                 std::nullopt,              /*Pad value*/
                 TileReshapeMapMode::CACHE, /*Reshape map mode*/
@@ -81,15 +88,38 @@ Tensor untilize_with_unpadding(
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
+    const auto& input_padded_shape = input_tensor.padded_shape();
+    for (auto index = 0; index < input_shape.rank(); ++index) {
+        // Unpadding only shrinks. An end past the input would ask the prim for a larger output than it has,
+        // and on rank > 4 the fusion below would hide an overshoot on one leading dim behind the others.
+        TT_FATAL(
+            output_tensor_end[index] < input_padded_shape[index],
+            "untilize_with_unpadding: output_tensor_end {} is out of range for dimension {} of input {}",
+            output_tensor_end,
+            index,
+            input_padded_shape);
+        output_end_vector.push_back(output_tensor_end[index]);
+    }
+
     if (input_shape.rank() > 4) {
-        for (auto index = 0; index < input_shape.rank(); ++index) {
-            output_end_vector.push_back(input_shape[index] - 1);
+        // The prim sees the leading rank - 3 dims fused into its outermost dim and keeps a prefix of it,
+        // which is the requested crop only if no fused dim is cut after an outer one keeps several indices.
+        bool outer_keeps_several = false;
+        for (size_t index = 0; index + 3 < input_shape.rank(); ++index) {
+            TT_FATAL(
+                !outer_keeps_several || output_tensor_end[index] + 1 == input_shape[index],
+                "untilize_with_unpadding: cannot crop dimension {} of the rank {} input {} to output_tensor_end {}. "
+                "Its leading {} dimensions are unpadded as one fused dimension, which can only be cut to a prefix: "
+                "once a leading dimension keeps more than one index, every later leading dimension must be kept whole",
+                index,
+                input_shape.rank(),
+                input_shape,
+                output_tensor_end,
+                input_shape.rank() - 3);
+            outer_keeps_several = outer_keeps_several || output_tensor_end[index] > 0;
         }
         output_end = squeeze_vector_shape(ttnn::Shape(std::move(output_end_vector)));
     } else {
-        for (auto index = 0; index < input_tensor.logical_shape().rank(); ++index) {
-            output_end_vector.push_back(output_tensor_end[index]);
-        }
         output_end = ttnn::Shape(std::move(output_end_vector));
     }
 
@@ -140,7 +170,7 @@ Tensor untilize_with_unpadding(
             sub_core_grids);
     };
 
-    return build_ndiml_untilize_val(base_untilize, sub_core_grids)(input_tensor);
+    return build_ndiml_untilize_val(base_untilize, output_tensor_end, sub_core_grids)(input_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::quasar
