@@ -5833,6 +5833,28 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    if (fp32_dest_acc_en) {
+        auto is_32bit = [](tt::DataFormat format) {
+            return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
+                   format == tt::DataFormat::UInt32;
+        };
+        m2::ComputeHardwareConfig::ComputeUnpackModes& modes = compute_hw_config.unpack_modes;
+        if (is_32bit(interm0_data_format)) {
+            modes.emplace(RO_INTERM0_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+        }
+        if (is_32bit(in0_data_format)) {
+            modes.emplace(RO_IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            if (in0_transpose_tile) {
+                modes.emplace(RO_IN0_TRANSPOSE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            }
+        }
+        if (is_32bit(in1_data_format)) {
+            modes.emplace(RO_IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+        if (bias_tensor.has_value() && is_32bit(bias_data_format)) {
+            modes.emplace(RO_BIAS_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -6861,6 +6883,28 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    if (fp32_dest_acc_en) {
+        auto is_32bit = [](tt::DataFormat format) {
+            return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
+                   format == tt::DataFormat::UInt32;
+        };
+        m2::ComputeHardwareConfig::ComputeUnpackModes& modes = compute_hw_config.unpack_modes;
+        if (is_32bit(interm0_data_format)) {
+            modes.emplace(RO_INTERM0_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+        }
+        if (is_32bit(in0_data_format)) {
+            modes.emplace(RO_IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            if (in0_transpose_tile) {
+                modes.emplace(RO_IN0_TRANSPOSE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            }
+        }
+        if (is_32bit(in1_data_format)) {
+            modes.emplace(RO_IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+        if (bias_tensor.has_value() && is_32bit(bias_data_format)) {
+            modes.emplace(RO_BIAS_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
@@ -7247,11 +7291,25 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
         });
+        m2::ComputeHardwareConfig noop_compute_hw_config = compute_hw_config;
+        noop_compute_hw_config.unpack_modes.clear();
+        if (fp32_dest_acc_en) {
+            auto is_32bit = [](tt::DataFormat format) {
+                return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
+                       format == tt::DataFormat::UInt32;
+            };
+            if (is_32bit(in1_data_format)) {
+                noop_compute_hw_config.unpack_modes.emplace(RO_IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            }
+            if (bias_tensor.has_value() && is_32bit(bias_data_format)) {
+                noop_compute_hw_config.unpack_modes.emplace(RO_BIAS_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            }
+        }
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
             .source = std::filesystem::path(NOOP_COMPUTE_KERNEL_PATH),
             .dfb_bindings = std::move(noop_compute_dfb),
-            .hw_config = compute_hw_config,
+            .hw_config = noop_compute_hw_config,
         });
         work_units.push_back(m2::WorkUnitSpec{
             .name = "wu_noop",
