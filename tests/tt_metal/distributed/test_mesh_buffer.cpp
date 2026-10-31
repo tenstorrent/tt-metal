@@ -650,8 +650,9 @@ TEST_F(MeshBufferTestSuite, UniqueId) {
     auto view = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), owner->address());
     EXPECT_FALSE(view->unique_id().has_value());
 
+    // The ID identifies the allocation for the MeshBuffer's lifetime, as Buffer::unique_id() does.
     owner->deallocate();
-    EXPECT_FALSE(owner->unique_id().has_value());
+    EXPECT_EQ(owner->unique_id(), owner_id);
 }
 
 TEST_F(MeshBufferTestSuite, MoveConstructor) {

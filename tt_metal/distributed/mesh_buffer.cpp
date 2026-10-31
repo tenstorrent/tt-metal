@@ -438,7 +438,6 @@ void MeshBuffer::deallocate() {
         {
             std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
             state_.swap(old_state);
-            unique_id_.reset();
         }
     };
 
