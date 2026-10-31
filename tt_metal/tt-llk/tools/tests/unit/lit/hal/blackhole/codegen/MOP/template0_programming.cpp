@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -DENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -d %t.o | FileCheck %s --enable-var-scope
-// RUN: %{blackhole_objdump} -d %t.o | FileCheck %s --check-prefix=ASSERT
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
+// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
+// RUN: %{blackhole_compare_codegen} %t.dump
+
+// Compare each HAL function with its adjacent reference_ function. Disable
+// identical-code folding so both bodies are emitted independently.
 
 #include <cstdint>
 
@@ -12,166 +15,104 @@
 
 namespace mop = hal::mop;
 
-using Template0Config = mop::MopConfig<mop::MopTemplate::Template0>;
+// Template 0 MopCfg words: 1 = flags (bit 0 InsnB, bit 1 InsnA1-3), 2 = InsnB,
+// 3 = InsnA0, 4-6 = InsnA1-3, 7 = SkipA0, 8 = SkipB. Words of a disabled group
+// are not written.
+inline volatile std::uint32_t *reference_mop_cfg()
+{
+    return reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+}
 
-// MopCfg word i is stored at 0xffb80000 + 4 * i. Every write follows the
-// mop_sync store/load/and handshake. Distinct operation words with zero low
-// bits materialize as one lui each; an omitted operation is TT_OP_NOP (0x02000000).
-inline constexpr std::uint32_t OP_START        = 0x10001000;
-inline constexpr std::uint32_t OP_MID_A        = 0x10002000;
-inline constexpr std::uint32_t OP_MID_B        = 0x10003000;
-inline constexpr std::uint32_t OP_MID_C        = 0x10004000;
-inline constexpr std::uint32_t OP_END          = 0x10005000;
-inline constexpr std::uint32_t OP_START_SHADOW = 0x10006000;
-inline constexpr std::uint32_t OP_END_SHADOW   = 0x10007000;
-
-inline constexpr Template0Config all_groups {
-    .start_op        = OP_START,
-    .mid_ops         = {.op_a = OP_MID_A, .op_b = OP_MID_B, .op_c = OP_MID_C},
-    .end_op          = OP_END,
-    .start_op_shadow = OP_START_SHADOW,
-    .end_op_shadow   = OP_END_SHADOW,
-};
+inline constexpr std::uint32_t OP_A0     = 0x10001000;
+inline constexpr std::uint32_t OP_A1     = 0x10002000;
+inline constexpr std::uint32_t OP_A2     = 0x10003000;
+inline constexpr std::uint32_t OP_A3     = 0x10004000;
+inline constexpr std::uint32_t OP_B      = 0x10005000;
+inline constexpr std::uint32_t OP_SKIP_A = 0x10006000;
+inline constexpr std::uint32_t OP_SKIP_B = 0x10007000;
 
 extern "C" __attribute__((noinline, used)) void program_all_groups()
 {
-    mop::program<all_groups>();
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_A1, OP_A2, OP_A3, OP_B), mop::otherwise(OP_SKIP_A, OP_SKIP_B)));
 }
 
-// Word 1 enables the end group (bit 0) and the middle group (bit 1).
-// CHECK-LABEL: <program_all_groups>:
-// CHECK: sw [[Z:a[0-7]]],0([[SYNC:a[0-7]]])
-// CHECK-NEXT: lw [[DONE:a[0-7]]],0([[SYNC]])
-// CHECK-NEXT: and zero,zero,[[DONE]]
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[FLAGS:a[0-7]]],3
-// CHECK-NEXT: sw [[FLAGS]],4([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10005
-// CHECK-NEXT: sw [[V]],8([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10001
-// CHECK-NEXT: sw [[V]],12([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10002
-// CHECK-NEXT: sw [[V]],16([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10003
-// CHECK-NEXT: sw [[V]],20([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10004
-// CHECK-NEXT: sw [[V]],24([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10006
-// CHECK-NEXT: sw [[V]],28([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10007
-// CHECK-NEXT: sw [[V]],32([[CFG]])
-// CHECK-NEXT: ret
-
-inline constexpr Template0Config start_only {
-    .start_op        = OP_START,
-    .start_op_shadow = OP_START_SHADOW,
-};
-
-extern "C" __attribute__((noinline, used)) void program_start_only()
+extern "C" __attribute__((noinline, used)) void reference_program_all_groups()
 {
-    mop::program<start_only>();
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 3;
+    mop_cfg[2] = OP_B;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[4] = OP_A1;
+    mop_cfg[5] = OP_A2;
+    mop_cfg[6] = OP_A3;
+    mop_cfg[7] = OP_SKIP_A;
+    mop_cfg[8] = OP_SKIP_B;
 }
 
-// Both optional groups are disabled and their slots hold NOP.
-// CHECK-LABEL: <program_start_only>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: sw zero,4([[CFG]])
-// CHECK-NEXT: lui [[NOP:a[0-7]]],0x2000
-// CHECK-NEXT: sw [[NOP]],8([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10001
-// CHECK-NEXT: sw [[V]],12([[CFG]])
-// CHECK-NEXT: sw [[NOP]],16([[CFG]])
-// CHECK-NEXT: sw [[NOP]],20([[CFG]])
-// CHECK-NEXT: sw [[NOP]],24([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10006
-// CHECK-NEXT: sw [[V]],28([[CFG]])
-// CHECK-NEXT: sw [[NOP]],32([[CFG]])
-// CHECK-NEXT: ret
-
-inline constexpr Template0Config end_group {
-    .start_op        = OP_START,
-    .end_op          = OP_END,
-    .start_op_shadow = OP_START_SHADOW,
-    .end_op_shadow   = OP_END_SHADOW,
-};
-
-extern "C" __attribute__((noinline, used)) void program_end_group()
+// A set mask bit issues a NOP SkipA0 when otherwise is omitted.
+extern "C" __attribute__((noinline, used)) void program_a0_only()
 {
-    mop::program<end_group>();
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0)));
 }
 
-// CHECK-LABEL: <program_end_group>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[FLAGS:a[0-7]]],1
-// CHECK-NEXT: sw [[FLAGS]],4([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10005
-// CHECK-NEXT: sw [[V]],8([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10001
-// CHECK-NEXT: sw [[V]],12([[CFG]])
-// CHECK-NEXT: lui [[NOP:a[0-7]]],0x2000
-// CHECK-NEXT: sw [[NOP]],16([[CFG]])
-// CHECK-NEXT: sw [[NOP]],20([[CFG]])
-// CHECK-NEXT: sw [[NOP]],24([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10006
-// CHECK-NEXT: sw [[V]],28([[CFG]])
-// CHECK-NEXT: lui [[V:a[0-7]]],0x10007
-// CHECK-NEXT: sw [[V]],32([[CFG]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void program_runtime_operations(std::uint32_t start, std::uint32_t mid, std::uint32_t start_shadow)
+extern "C" __attribute__((noinline, used)) void reference_program_a0_only()
 {
-    mop::program(Template0Config {
-        .start_op        = start,
-        .mid_ops         = {.op_a = mid, .op_b = mid, .op_c = mid},
-        .start_op_shadow = start_shadow,
-    });
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 0;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[7] = TT_OP_NOP;
 }
 
-// CHECK-LABEL: <program_runtime_operations>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: li [[FLAGS:a[0-7]]],2
-// CHECK-NEXT: sw [[FLAGS]],4([[CFG]])
-// CHECK-NEXT: lui [[NOP:a[0-7]]],0x2000
-// CHECK-NEXT: sw [[NOP]],8([[CFG]])
-// CHECK-NEXT: sw a0,12([[CFG]])
-// CHECK-NEXT: sw a1,16([[CFG]])
-// CHECK-NEXT: sw a1,20([[CFG]])
-// CHECK-NEXT: sw a1,24([[CFG]])
-// CHECK-NEXT: sw a2,28([[CFG]])
-// CHECK-NEXT: sw [[NOP]],32([[CFG]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void program_runtime_config(const Template0Config& config)
+extern "C" __attribute__((noinline, used)) void program_b_group()
 {
-    mop::program(config);
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_B), mop::otherwise(OP_SKIP_A, OP_SKIP_B)));
 }
 
-// A configuration whose shape is known only at runtime gets all four shape
-// checks; constant shapes fold them away.
-// ASSERT-LABEL: <program_runtime_operations>:
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <program_runtime_config>:
-// ASSERT-COUNT-4: ebreak
-// ASSERT-NOT: ebreak
-// ASSERT-LABEL: <write_mid_op_b>:
-// CHECK-LABEL: <program_runtime_config>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: or [[FLAGS:[a-t][0-7]]],{{[a-t][0-7]}},{{[a-t][0-7]}}
-// CHECK-NEXT: sw [[FLAGS]],4([[CFG]])
-// CHECK-COUNT-7: sw {{[a-t][0-7]}},{{[0-9]+}}([[CFG]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_mid_op_b(std::uint32_t operation)
+extern "C" __attribute__((noinline, used)) void reference_program_b_group()
 {
-    mop::write<mop::Template0Field::MidOpB>(operation);
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 1;
+    mop_cfg[2] = OP_B;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[7] = OP_SKIP_A;
+    mop_cfg[8] = OP_SKIP_B;
 }
 
-// CHECK-LABEL: <write_mid_op_b>:
-// CHECK: and zero,zero,{{a[0-7]}}
-// CHECK-NEXT: lui [[CFG:a[0-7]]],0xffb80
-// CHECK-NEXT: sw a0,20([[CFG]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void program_a123_group()
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(OP_A0, OP_A1, OP_A2, OP_A3), mop::otherwise(OP_SKIP_A)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_a123_group()
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 2;
+    mop_cfg[3] = OP_A0;
+    mop_cfg[4] = OP_A1;
+    mop_cfg[5] = OP_A2;
+    mop_cfg[6] = OP_A3;
+    mop_cfg[7] = OP_SKIP_A;
+}
+
+// The argument count fixes the shape, so runtime operations keep the flags constant.
+extern "C" __attribute__((noinline, used)) void program_runtime_operations(const std::uint32_t a0, const std::uint32_t mid, const std::uint32_t skip_a0)
+{
+    mop::program(mop::foreach_mask_bit(mop::if_clear(a0, mid, mid, mid), mop::otherwise(skip_a0)));
+}
+
+extern "C" __attribute__((noinline, used)) void reference_program_runtime_operations(
+    const std::uint32_t a0, const std::uint32_t mid, const std::uint32_t skip_a0)
+{
+    volatile std::uint32_t *mop_cfg = reference_mop_cfg();
+    ckernel::mop_sync();
+    mop_cfg[1] = 2;
+    mop_cfg[3] = a0;
+    mop_cfg[4] = mid;
+    mop_cfg[5] = mid;
+    mop_cfg[6] = mid;
+    mop_cfg[7] = skip_a0;
+}
