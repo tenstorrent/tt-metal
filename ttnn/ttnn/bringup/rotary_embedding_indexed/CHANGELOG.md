@@ -45,3 +45,23 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Measured: 8x4 Galaxy, one 5120-token chunk (rotary_embedding_indexed): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: device/rotary_embedding_indexed_device_operation.cpp, device/rotary_embedding_indexed_device_operation.hpp, rotary_embedding_indexed.cpp, rotary_embedding_indexed.hpp, rotary_embedding_indexed_nanobind.cpp
+
+### chain mode: input_heads, ROW_MAJOR in / out, output_dtype, group_heads (deepseek_v41_flash_d_p P.22)
+- What: new scalar-form options `input_heads`, `output_layout`, `output_dtype`, `group_heads`, and a ROW_MAJOR input;
+  any of them selects a second device operation (`device/rope_chain_device_operation.{hpp,cpp}`, a ProgramDescriptor
+  factory, one program per mesh range, common runtime args only, addresses patched on hits) with its own kernels
+  (`device/kernels/chain/`: reader, writer, compute). Heads read in place from a [B, 1, S, H W] TILE input; a
+  ROW_MAJOR input tilized in compute; the RoPE region by rotary_embedding_llama's arithmetic step for step; the head's
+  tiles assembled in the output format (bfloat8_b with bfp8_pack_precise = ttnn.typecast; bfloat4_b after the
+  bfp_round SFPU round to nearest even); ROW_MAJOR output untilized in compute; grouped output pages for wo_a. Default
+  (no option, TILE input): the existing program, unchanged.
+- Why: DeepSeek-V4.1's three RoPE chains (attention q: nlp_create_q_heads_split -> rope -> untilize; attention output:
+  to_layout -> inverse rope -> nlp_concat_heads -> typecast bfp8; indexer q: split -> rope -> bfp_round) were 2-3
+  extra launches each over the same data (opportunities report #2, #4: ~7.7 ms device / ~15 ms host a chunk).
+- Measured: bit-identical to the unfused chains on 8x4 (every chip, miss and hit); q chain host 259.9 -> 61.4 us a
+  call; model warm wall 273.8 -> 250.1 ms a chunk (median of 3, same process, bit-identical output).
+- Tests: `tests/unit/test_chain.py` (8 passed on the 8x4, 2026-10-31). Fork regression not run (OV-25: task F.1).
+- Needed by: deepseek_v41_flash_d_p P.22 (ROPE_CHAINS)
+- Files: `device/rope_chain_device_operation.{hpp,cpp}`, `device/kernels/chain/{reader_rope_chain,writer_rope_chain,
+  compute_rope_chain}.cpp`, `device/kernels/chain/chain_share.hpp`, `rotary_embedding_indexed.{hpp,cpp}`,
+  `rotary_embedding_indexed_nanobind.cpp`, `CMakeLists.txt`, `tests/unit/test_chain.py`

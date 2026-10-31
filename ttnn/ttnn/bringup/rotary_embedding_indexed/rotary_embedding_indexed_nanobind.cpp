@@ -87,6 +87,19 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 max_grid (ttnn.CoreCoord, optional): bring-up option, scalar form only, default None (the
                     device's whole compute grid). The op runs on the rectangle (0, 0) .. (max_grid - 1) of the
                     grid (deepseek_v41_flash_d_p FIX.15: a Galaxy's 110-core cap).
+                input_heads (int): bring-up chain option, scalar form only, default 0. H > 0: the input is
+                    [B, 1, S, H W] TILE (a projection's output) and head h is read from its tile columns in place
+                    (what nlp_create_q_heads splits); rotary_dim / rotary_offset are within the head width W.
+                output_layout (ttnn.Layout, optional): bring-up chain option. ROW_MAJOR: the output [B, H, S, W]
+                    bf16 rows, untilized in the op (what sparse_sdpa reads).
+                output_dtype (ttnn.DataType, optional): bring-up chain option. bfloat8_b: the bf16 result packed as
+                    ttnn.typecast packs it; bfloat4_b: rounded to nearest even onto the bfp4 grid
+                    (ttnn.bringup.bfp_round's rule), bit for bit.
+                group_heads (int): bring-up chain option, default 0. G > 1: the output [B, H / G, S, G W] TILE, head
+                    h in group h / G at columns (h % G) W (nlp_concat_heads of [B H / G, G, S, W]).
+                A ROW_MAJOR [B, H, S, W] input (tilized in the op) or any chain option selects the chain program:
+                one fused op, the stock RoPE arithmetic, per-chip pre-sliced cos / sin (kv_actual_global 0, no
+                seq_subshard_axis, no concat_prefix), one program for the mesh, no per-core runtime args.
 
             Returns:
                 ttnn.Tensor: a rotary-embedded tensor, with concat_prefix channels first when supplied.
@@ -108,7 +121,11 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const std::optional<Tensor>&,
                 bool,
                 const std::optional<Tensor>&,
-                std::optional<CoreCoord>>(&rotary_embedding_indexed),
+                std::optional<CoreCoord>,
+                uint32_t,
+                const std::optional<tt::tt_metal::Layout>&,
+                const std::optional<tt::tt_metal::DataType>&,
+                uint32_t>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -123,7 +140,11 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("concat_prefix") = std::nullopt,
             nb::arg("uniform") = false,
             nb::arg("output_tensor") = std::nullopt,
-            nb::arg("max_grid") = std::nullopt),
+            nb::arg("max_grid") = std::nullopt,
+            nb::arg("input_heads") = 0,
+            nb::arg("output_layout") = std::nullopt,
+            nb::arg("output_dtype") = std::nullopt,
+            nb::arg("group_heads") = 0),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<

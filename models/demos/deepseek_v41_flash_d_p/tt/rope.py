@@ -160,6 +160,35 @@ def rope_stock(
     )
 
 
+def rope_chains() -> bool:
+    """ROPE_CHAINS=on (P.22): the attention q / output and indexer q chains as single chain-mode calls of the fork
+    ttnn.bringup.rotary_embedding_indexed (tt/settings.py); takes effect on the ROPE_IMPL=on paths named there."""
+    return settings.get("ROPE_CHAINS") == "on"
+
+
+def rope_chain(x, cos, sin, trans, rotary_offset: int, out=None, **chain) -> ttnn.Tensor:
+    """ROPE_CHAINS=on (P.22): ONE fork call doing a RoPE chain (``chain``: the fork's input_heads / output_layout /
+    output_dtype / group_heads), per-chip pre-sliced cos / sin [1, 1, rows, R] (kv_actual_global 0), the rotated
+    region [rotary_offset, rotary_offset + R) of each head; ``out``: a load-time output (output_tensor), returned
+    itself. Does not consume its inputs."""
+    r = ttnn.bringup.rotary_embedding_indexed(
+        x,
+        cos,
+        sin,
+        trans,
+        0,
+        SP_AXIS,
+        memory_config=DRAM,
+        rotary_dim=cos.shape[-1],
+        rotary_offset=rotary_offset,
+        uniform=True,
+        output_tensor=out,
+        max_grid=max_grid(),
+        **chain,
+    )
+    return out if out is not None else r
+
+
 def indexer_glue() -> bool:
     """INDEXER_GLUE=on (P.16): the indexer / shared-source glue folded into ops or computed once per chunk (the
     rope rows memo here, tt/sparse_attention.ChunkMemo, the score op's block max / bias; tt/settings.py)."""
