@@ -165,6 +165,8 @@ public:
     virtual void wait_for_completion(bool) {}
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}
+    // Rethrows an exception stored by the completion-queue reader thread, if any.
+    virtual void throw_if_reader_failed() {}
 };
 
 }  // namespace tt::tt_metal::distributed

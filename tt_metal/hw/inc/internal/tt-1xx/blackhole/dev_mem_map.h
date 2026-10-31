@@ -64,7 +64,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 2560)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 3072)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 2560
 #define MEM_TRISC0_FIRMWARE_SIZE 2560
@@ -116,7 +116,12 @@
 
 #define MEM_LLK_DEBUG_BASE (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
 
-#define MEM_BRISC_FIRMWARE_BASE (MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE)
+// L1 ECC halt record and BRISC release code (l1_ecc_halt_slot_t). Nothing else may write it: the next device open
+// reads the record, and a latched BRISC runs the code before firmware starts.
+#define MEM_L1_ECC_HALT_BASE (MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE)
+#define MEM_L1_ECC_HALT_SIZE 32
+
+#define MEM_BRISC_FIRMWARE_BASE (MEM_L1_ECC_HALT_BASE + MEM_L1_ECC_HALT_SIZE)
 #define MEM_NCRISC_FIRMWARE_BASE (MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE)
 #define MEM_TRISC0_FIRMWARE_BASE (MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE)
 #define MEM_TRISC1_FIRMWARE_BASE (MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE)

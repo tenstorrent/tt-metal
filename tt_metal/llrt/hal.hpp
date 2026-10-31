@@ -101,6 +101,7 @@ enum class HalL1MemAddrType : uint8_t {
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
     ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
+    L1_ECC_HALT,    // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
     COUNT           // Keep this last so it always indicates number of enum options
 };
 
@@ -195,6 +196,24 @@ enum class EthDebugReg : uint8_t {
     COUNT,
 };
 
+// Hardware debug registers on Tensix cores. Populated only on Blackhole.
+enum class TensixDebugReg : uint8_t {
+    // L1 ECC control register (view select, IRQ enables, counter/IRQ clears)
+    L1_ECC_CTRL,
+    // L1 ECC status register (contents depend on the view selected in L1_ECC_CTRL)
+    L1_ECC_STATUS,
+    // PIC register holding the IRQ BRISC is handling; non-zero while BRISC is inside an interrupt handler
+    BRISC_INT_NO,
+    // PIC hardware IRQ 3 (ECC errors and watchdog); reads 1 while raised
+    PIC_HW_INT_3,
+    // PIC table of interrupt handler addresses, one word per BRISC_INT_NO value
+    PIC_INT_PCS,
+    // Watchdog control; bit 2 raises IRQ 3 until cleared
+    WDT_CNTL,
+    // Number of debug register entries
+    COUNT,
+};
+
 // Query dispatch related features depending on the arch
 enum class DispatchFeature : uint8_t {
     // Ethernet Firmware supports the usage of the mailbox API
@@ -228,6 +247,7 @@ private:
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     std::vector<uint32_t> eth_debug_regs_;
+    std::vector<uint32_t> tensix_debug_regs_;
     // The physical RISCs the core has.
     std::optional<uint32_t> num_physical_riscs_;
     bool supports_cbs_ = false;
@@ -253,7 +273,8 @@ public:
         dev_msgs::Factory dev_msgs_factory,
         tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory,
         realtime_profiler_msgs::Factory realtime_profiler_msgs_factory,
-        std::vector<uint32_t> eth_debug_regs = {}) :
+        std::vector<uint32_t> eth_debug_regs = {},
+        std::vector<uint32_t> tensix_debug_regs = {}) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -263,6 +284,7 @@ public:
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
         eth_debug_regs_(std::move(eth_debug_regs)),
+        tensix_debug_regs_(std::move(tensix_debug_regs)),
         supports_cbs_(supports_cbs),
         supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
@@ -467,6 +489,7 @@ private:
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
     bool has_tile_counter_registers_{};
+    uint32_t num_dataflow_buffers_{};
     bool supports_implicit_dfb_sync_{};
     uint32_t num_tile_counters_{};
 
@@ -610,8 +633,8 @@ public:
     float get_nan() const { return nan_; }
     float get_inf() const { return inf_; }
 
-    // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
-    uint32_t get_num_dataflow_buffers() const { return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS; }
+    // Max dataflow buffers (circular buffers on Gen1) per core: the number of device slots a core's DFBs can occupy.
+    uint32_t get_num_dataflow_buffers() const { return num_dataflow_buffers_; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 
@@ -649,6 +672,7 @@ public:
     bool get_supports_eth_debug_regs() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
     uint32_t get_eth_debug_reg_addr(EthDebugReg reg) const;
+    uint32_t get_tensix_debug_reg_addr(TensixDebugReg reg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
@@ -1006,6 +1030,12 @@ inline uint32_t Hal::get_eth_debug_reg_addr(EthDebugReg reg) const {
     const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].eth_debug_regs_[ttsl::as_underlying_type<EthDebugReg>(reg)];
+}
+
+inline uint32_t Hal::get_tensix_debug_reg_addr(TensixDebugReg reg) const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::TENSIX);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].tensix_debug_regs_[ttsl::as_underlying_type<TensixDebugReg>(reg)];
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {

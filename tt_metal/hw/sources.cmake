@@ -246,6 +246,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/streaming_profiler_common.h
+    inc/hostdev/l1_ecc_halt_constants.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/hostdev/fabric_edm_packet_header.hpp
@@ -346,11 +347,13 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/configs/horizon_2x3_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h
+    inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_uncapped_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program_data.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program_types.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/grendel_qsr1_att_data.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/quasar_aether_2x3_att_data.h
+    inc/internal/tt-2xx/quasar/noc/att/temporary_programming/quasar_aether_2x3_uncapped_att_data.h
     inc/internal/tt-2xx/quasar/noc/noc.h
     inc/internal/tt-2xx/quasar/noc/noc_overlay_parameters.h
     inc/internal/tt-2xx/quasar/noc/noc_parameters.h
