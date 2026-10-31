@@ -862,11 +862,34 @@ void jit_build_genfiles_triscs_src(
 
 namespace {
 
+// What a copy of chlkc_descriptors.h holds. A kernel with a precompiled header also gets the
+// Declarations and Values copies: its PCH is built against the declarations, and the kernel
+// includes the values after the PCH (see CB_TABLE_DECLARATIONS_HEADER).
+enum class CbTables { Full, Declarations, Values };
+
+struct CbTableOut {
+    CbTableOut(std::ostream& out, CbTables tables = CbTables::Full) : out(out), tables(tables) {}
+    std::ostream& out;
+    CbTables tables;
+};
+
 template <std::ranges::range Range>
 void emit_formats_array(
-    std::ostream& out, std::string_view array_type, std::string_view array_name, int array_size, const Range& arr) {
+    CbTableOut out, std::string_view array_type, std::string_view array_name, int array_size, const Range& arr) {
+    if (out.tables == CbTables::Declarations) {
+        // "constexpr T" becomes "extern const T"; the kernel's constexpr definition completes the declaration.
+        constexpr std::string_view qualifier = "constexpr ";
+        TT_ASSERT(array_type.starts_with(qualifier));
+        fmt::format_to(
+            std::ostreambuf_iterator<char>(out.out),
+            "extern const {} {}[{}];\n",
+            array_type.substr(qualifier.size()),
+            array_name,
+            array_size);
+        return;
+    }
     fmt::format_to(
-        std::ostreambuf_iterator<char>(out),
+        std::ostreambuf_iterator<char>(out.out),
         "{} {}[{}] = {{\n    {}\n}};\n",
         array_type,
         array_name,
@@ -875,7 +898,7 @@ void emit_formats_array(
 }
 
 void emit_formats_array(
-    std::ostream& out,
+    CbTableOut out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
@@ -906,7 +929,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
 }
 
 void emit_unpack_data_formats(
-    std::ostream& out,
+    CbTableOut out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_dfbs) {
@@ -959,7 +982,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 }
 
 void emit_pack_data_formats(
-    std::ostream& out,
+    CbTableOut out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_dfbs) {
@@ -1105,7 +1128,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
     return {r_dims, c_dims};
 }
 
-void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+void emit_unpack_tile_dims(CbTableOut out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_dfbs, desc.buf_partial_face_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
@@ -1120,7 +1143,7 @@ void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t 
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
-void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+void emit_pack_tile_dims(CbTableOut out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_dfbs, desc.buf_partial_face_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
@@ -1135,7 +1158,11 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
-void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
+void emit_compute_scalar_descriptors(CbTableOut table_out, const JitBuildOptions& options, tt::ARCH arch) {
+    if (table_out.tables == CbTables::Values) {
+        return;
+    }
+    std::ostream& out = table_out.out;
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
@@ -1152,61 +1179,93 @@ void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& o
     }
 }
 
-void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
+void emit_math_scalar_descriptors(CbTableOut table_out, const tt_hlk_desc& desc) {
+    if (table_out.tables == CbTables::Values) {
+        return;
+    }
     fmt::format_to(
-        std::ostreambuf_iterator<char>(out),
+        std::ostreambuf_iterator<char>(table_out.out),
         "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n"
         "constexpr bool APPROX = {};\n",
         static_cast<std::uint32_t>(desc.get_hlk_math_fidelity()),
         desc.get_hlk_math_approx_mode());
 }
 
-void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
+void write_descriptors(
+    const string& path,
+    CbTables tables,
+    const JitBuildEnv& env,
+    const JitBuildOptions& options,
+    const ComputedDataFormats& fmts) {
     const uint32_t max_dfbs = env.get_max_dfbs();
     const tt_hlk_desc& desc = options.hlk_desc;
 
-    const string descriptors_path = options.path + "chlkc_descriptors.h";
-    jit_build::utils::FileRenamer tmp(descriptors_path);
+    jit_build::utils::FileRenamer tmp(path);
     ofstream out(tmp.path());
     if (!out) {
-        throw std::runtime_error("Cannot create file: " + descriptors_path);
+        throw std::runtime_error("Cannot create file: " + path);
+    }
+    const CbTableOut table_out{out, tables};
+
+    // The declarations share the full file's include guard, so that once a kernel PCH has included
+    // them, the kernel's own #include "chlkc_descriptors.h" adds nothing. The values apply only after
+    // the declarations: if GCC rejects the PCH and parses its headers, the full file defines the tables.
+    switch (tables) {
+        case CbTables::Full: out << "#ifndef CHLKC_DESCRIPTORS_H\n#define CHLKC_DESCRIPTORS_H\n\n"; break;
+        case CbTables::Declarations:
+            out << "#ifndef CHLKC_DESCRIPTORS_H\n#define CHLKC_DESCRIPTORS_H\n#define CHLKC_DESCRIPTORS_DECLARED\n\n";
+            break;
+        case CbTables::Values: out << "#pragma once\n#if defined(CHLKC_DESCRIPTORS_DECLARED)\n\n"; break;
     }
 
-    auto fmts = compute_data_formats(options, env.get_arch(), max_dfbs);
-
-    out << "#pragma once\n\n"
-           "#if defined(UCK_CHLKC_MATH)\n"
+    out << "#if defined(UCK_CHLKC_MATH)\n"
            "#include \"llk_defs.h\"\n";
-    emit_math_scalar_descriptors(out, desc);
+    emit_math_scalar_descriptors(table_out, desc);
     out << "#endif\n\n";
 
     out << "#if defined(UCK_CHLKC_PACK)\n"
            "#include \"llk_defs.h\"\n";
-    emit_math_scalar_descriptors(out, desc);
+    emit_math_scalar_descriptors(table_out, desc);
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_PACK)\n";
-    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
-    emit_unpack_tile_dims(out, desc, max_dfbs);
+    emit_unpack_data_formats(table_out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
+    emit_unpack_tile_dims(table_out, desc, max_dfbs);
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
-    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_dfbs);
-    emit_pack_tile_dims(out, desc, max_dfbs);
+    emit_pack_data_formats(table_out, fmts.pack_src, fmts.pack_dst, max_dfbs);
+    emit_pack_tile_dims(table_out, desc, max_dfbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src);
+    emit_formats_array(table_out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src);
     out << "#endif\n";    // if pack
     out << "#endif\n\n";  // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
-    emit_compute_scalar_descriptors(out, options, env.get_arch());
+    emit_compute_scalar_descriptors(table_out, options, env.get_arch());
     out << "#endif\n";
+    out << (tables == CbTables::Values ? "\n#endif  // CHLKC_DESCRIPTORS_DECLARED\n" : "\n#endif  // CHLKC_DESCRIPTORS_H\n");
 
     if (!out) {
-        throw std::runtime_error("Failed to write file: " + descriptors_path);
+        throw std::runtime_error("Failed to write file: " + path);
+    }
+}
+
+void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
+    const auto fmts = compute_data_formats(options, env.get_arch(), env.get_max_dfbs());
+    write_descriptors(options.path + "chlkc_descriptors.h", CbTables::Full, env, options, fmts);
+    if (options.cb_tables_for_pch) {
+        write_descriptors(
+            options.path + string(jit_build::utils::CB_TABLE_DECLARATIONS_HEADER),
+            CbTables::Declarations,
+            env,
+            options,
+            fmts);
+        write_descriptors(
+            options.path + string(jit_build::utils::CB_TABLE_VALUES_HEADER), CbTables::Values, env, options, fmts);
     }
 }
 

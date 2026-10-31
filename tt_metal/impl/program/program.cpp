@@ -568,6 +568,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 },
             },
             kernel_descriptor.config);
+        std::visit([&](auto& c) { c.precompiled_header = kernel_descriptor.precompiled_header; }, config);
 
         auto kernel_handle =
             is_file
@@ -3246,6 +3247,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
         JitBuildOptions build_options(build_env.build_env);
         kernel->set_build_options(build_options);
+        build_options.cb_tables_for_pch = !kernel->get_precompiled_header().empty();
         if (this->compiled_.empty()) {
             this->set_remote_circular_buffer_init(kernel);
         }

@@ -8,10 +8,7 @@
 //      Need to make sure no other file includes these lists since it also include global parameter definitions
 // 2) instantiate global variables
 
-#include "defines_generated.h"
-
-#include "internal/firmware_common.h"
-#include "api/compile_time_args.h"
+#include "trisck_prefix.h"
 
 #include "chlkc_list.h"
 

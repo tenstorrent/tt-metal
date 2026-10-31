@@ -601,6 +601,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
                         build_config.processor_class == HalProcessorClassType::COMPUTE;
     // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
     this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
+    if (const auto header = jit_build_query.kernel_prefix_header(params); !header.empty()) {
+        this->kernel_prefix_header_ = env_.root_ + header;
+    }
     // Includes
     {
         auto it = std::back_inserter(this->includes_);
@@ -831,21 +834,12 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 
     // Add the machine-local PCH here so exported recipes remain portable.
     // Exclude build-map dump flags from the PCH profile.
-    const std::string pch = tt::jit_build::ensure_pch(
-        env_.gpp_,
-        recipe.compiler_opt_level,
-        recipe.cflags,
-        recipe.pch_umbrella,
-        fs::path(env_.out_root_) / "pch");
-
+    const auto pch = tt::jit_build::select_pch(
+        env_.gpp_, recipe, fs::path(out_dir).parent_path().parent_path(), fs::path(env_.out_root_) / "pch");
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
-    if (!pch.empty()) {
-        // Load the PCH before any other force-included header emits C++ tokens.
-        defines.insert(defines.begin(), {"-include", pch});
-        // Warn if GCC rejects the PCH, while allowing textual fallback.
-        cflags += " -Winvalid-pch -Wno-error=invalid-pch";
-    }
+    defines.insert(defines.begin(), pch.includes.begin(), pch.includes.end());
+    cflags += pch.cflags;
 
     // Per-TU half of the structural device zone id (STREAMING profiler only; the DRAM profiler's 16-bit
     // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
@@ -1246,6 +1240,15 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
                     defines.emplace_back(tt::jit_build::utils::NAMED_CT_ARG_MAP_HEADER);
                 }
             });
+    }
+    // Not with a named compile-time-arg map: it is force-included after the PCH, too late for the PCH's
+    // compile_time_args.h. Not with the device profiler: its zone records come from each compile's
+    // log, and the streaming profiler defines a per-source TT_PROFILER_TU_ID the PCH cannot share.
+    const auto& rtoptions = env_.get_rtoptions();
+    if (settings && !kernel_prefix_header_.empty() && !settings->get_precompiled_header().empty() &&
+        std::ranges::find(defines, jit_build::utils::NAMED_CT_ARG_MAP_HEADER) == defines.end() &&
+        !rtoptions.get_profiler_enabled() && !rtoptions.get_streaming_profiler_enabled()) {
+        target.kernel_pch_headers = {kernel_prefix_header_, settings->get_precompiled_header()};
     }
     target.defines = std::move(defines);
 

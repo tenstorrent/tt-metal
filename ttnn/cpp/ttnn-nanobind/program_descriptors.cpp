@@ -994,6 +994,11 @@ void py_module_types(nb::module_& mod) {
             "compiler_include_paths",
             &tt::tt_metal::KernelDescriptor::compiler_include_paths,
             "Additional include paths passed to the kernel compiler as -I flags")
+        .def_rw(
+            "precompiled_header",
+            &tt::tt_metal::KernelDescriptor::precompiled_header,
+            "Header the kernel source includes first, precompiled once for the kernels that share it; see "
+            "DataMovementConfig::precompiled_header")
         .def(
             "clear_runtime_args",
             [](tt::tt_metal::KernelDescriptor& self) { self.runtime_args.clear(); },

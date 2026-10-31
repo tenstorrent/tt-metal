@@ -277,8 +277,12 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
 
 #ifdef DATA_FORMATS_DEFINED
 
+// These helpers are templates so that a constant expression reads the CB tables where it is evaluated.
+// A kernel's precompiled header declares the tables without values, and the kernel defines them after it.
+
 // this API is used by both the reader and writer side of the CB
 // it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
+template <typename = void>
 constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
     std::uint32_t input = operand;
 
@@ -289,16 +293,19 @@ constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
     return num_words;
 }
 
+template <typename = void>
 constexpr inline uint32_t get_tile_hw(const std::int32_t operand) {
     std::uint32_t input = operand;
     return (uint32_t)unpack_tile_r_dim[input] * (uint32_t)unpack_tile_c_dim[input];
 }
 
+template <typename = void>
 constexpr inline uint32_t get_tile_num_faces(const std::int32_t operand) {
     std::uint32_t input = operand;
     return (uint32_t)unpack_tile_num_faces[input];
 }
 
+template <typename = void>
 constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
     return static_cast<DataFormat>((uint)unpack_src_format[operand]);
 }

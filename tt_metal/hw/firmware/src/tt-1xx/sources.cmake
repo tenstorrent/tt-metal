@@ -6,6 +6,7 @@ set(FIRMWARE_JIT_API_FILES
     active_erisck.cc
     brisc.cc
     brisck.cc
+    brisck_prefix.h
     drisc.cc
     drisck.cc
     erisc.cc
@@ -15,9 +16,11 @@ set(FIRMWARE_JIT_API_FILES
     idle_erisck.cc
     ncrisc.cc
     ncrisck.cc
+    ncrisck_prefix.h
     subordinate_erisc.cc
     tdma_xmov.c
     trisc.cc
     trisck.cc
+    trisck_prefix.h
     tt_eth_api.cpp
 )

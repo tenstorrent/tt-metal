@@ -142,6 +142,9 @@ protected:
     // processor does not support it. Appended to a kernel's recipe cflags only when that
     // kernel opted in (JitBuildSettings::get_rvv_enabled), so default builds are unchanged.
     std::string rvv_cflags_;
+    // Absolute path of HalJitBuildQueryInterface::kernel_prefix_header; empty when kernels of this
+    // state cannot have a precompiled header.
+    std::string kernel_prefix_header_;
 
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
