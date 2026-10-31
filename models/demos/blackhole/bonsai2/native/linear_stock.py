@@ -97,6 +97,8 @@ class TernaryLinearStock:
         self.n, self.k, self.group = n, k, group
         self.num_groups = k // group
         self.rows = padded_rows(self.num_groups)
+        self._scales = np.asarray(scales)
+        self._mask_cache: dict = {}
 
         # bfloat4_b holds these three values exactly, which is what makes the
         # whole scheme lossless on the code side.
@@ -127,6 +129,47 @@ class TernaryLinearStock:
         """BFP4 codes plus the fp32 scale table, the real streaming cost."""
         return self.n * self.k // 2 + (self.n * self.k // 16) + self.rows * self.n * 4
 
+    def _tiled_scale(self, m: int):
+        """``[1, 1, m * rows, N]`` scales, row ``t*rows + g`` = group g's scale for token t.
+
+        Cached like the mask: it depends only on the token count.
+        """
+        key = ("s", m)
+        if key in self._mask_cache:
+            return self._mask_cache[key]
+        sm = scale_matrix(self._scales, self.group)  # [rows, N]
+        tiled = np.tile(sm, (m, 1))
+        t = ttnn.from_torch(
+            torch.from_numpy(tiled).reshape(1, 1, m * self.rows, self.n),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._mask_cache[key] = t
+        return t
+
+    def _tiled_mask(self, m: int):
+        """``[m * rows, 1, 1, K]`` mask: row ``t*rows + g`` covers group g for token t.
+
+        Built lazily and cached, because it depends only on the token count and is
+        the one tensor the multiply cannot broadcast for itself.
+        """
+        if m in self._mask_cache:
+            return self._mask_cache[m]
+        base = block_mask(self.k, self.group)
+        tiled = np.tile(base, (m, 1))
+        t = ttnn.from_torch(
+            torch.from_numpy(tiled).reshape(1, 1, m * self.rows, self.k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._mask_cache[m] = t
+        return t
+
+
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """``x`` is ``[M, K]`` (M is the token count); returns ``[M, N]``."""
         x = x.to(torch.bfloat16)
@@ -138,17 +181,33 @@ class TernaryLinearStock:
             x.reshape(1, 1, m, self.k), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
             device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # [M, K] -> [M, G, K] masked: every token gets its own G rows.
-        x_bd = ttnn.mul(t_x, self.mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x_bd = ttnn.reshape(x_bd, (1, 1, m * self.rows, self.k))
+        # [M, K] -> [M*G, K] masked, token-major: row (t*G + g) is token t with
+        # only group g's columns kept.
+        #
+        # Both operands are tiled to the full shape rather than broadcast.
+        # ttnn's eltwise broadcast accepts exactly one axis of unit extent
+        # (binary_ng_device_operation.cpp throws "Invalid subtile broadcast type"
+        # when both H extents are non-unit and the broadcast is over the middle
+        # axis), and this multiply needs the token axis expanded, which is the
+        # middle axis here. Tiling costs one host-side numpy repeat of a [M, K]
+        # array, which is negligible next to the weight read.
+        x_tiled = np.repeat(x.numpy(), self.rows, axis=0)  # [m*rows, K]
+        t_x = ttnn.from_torch(
+            torch.from_numpy(x_tiled).reshape(1, 1, m * self.rows, self.k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        x_bd = ttnn.mul(t_x, self._tiled_mask(m), memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(t_x)
 
         p = ttnn.linear(x_bd, self.w, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x_bd)
-        # [M*G, N] -> [M, G, N], scale per group, then sum over the G axis.
-        p = ttnn.reshape(p, (1, 1, m * self.rows, self.n))
-        scaled = ttnn.multiply(p, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # [M*G, N] * [M*G, N] elementwise (scale tiled per token, same reason as the
+        # mask), then sum the G rows of each token.
+        scaled = ttnn.multiply(p, self._tiled_scale(m), memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(p)
-        y = ttnn.sum(scaled, dim=2)  # sum over G
+        y = ttnn.sum(ttnn.reshape(scaled, (1, 1, m * self.rows, self.n)), dim=2)
         ttnn.deallocate(scaled)
         return ttnn.to_torch(y).reshape(m, self.n).float()
