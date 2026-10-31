@@ -6,7 +6,8 @@ combine -> tail with the shared arena, on zero / uninitialized weights. Checks t
 together (the arena spec accepted by the head and the combine, the output's shape) and reports the block's host time a
 forward on program-cache hits. No numerics (the ops' own tests check those bit-exact).
 
-Runs on the mock Galaxy (no execution) or on hardware:
+Needs an 8x4 Galaxy (the routed experts' DRISC weight senders); on the mock Galaxy, which has no programmable DRAM
+cores, it skips:
 
     TT_METAL_MOCK_CLUSTER_DESC_PATH=$TT_METAL_HOME/tt_metal/third_party/umd/tests/cluster_descriptor_examples/\
 blackhole_galaxy.yaml pytest models/demos/moe_block/tests/test_moe_block_smoke.py
@@ -68,6 +69,8 @@ def mesh():
 
 def test_moe_block_smoke(mesh):
     mb = ttnn.experimental.moe_block
+    if not mb.FlatDriscSenders.supported(mesh):  # (the mock Galaxy has no programmable DRAM cores)
+        pytest.skip("the routed experts need programmable DRAM cores (DRISC weight senders)")
     fw = _flat_weights_module()
     dims = _glm53()
     E, H, I, Is, N = dims.num_experts, dims.emb_dim, dims.routed_expert_hidden_dim, 2048, R * C
