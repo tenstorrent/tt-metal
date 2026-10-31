@@ -87,3 +87,35 @@
 - The first gate run timed out at pytest's 300 s while it was still recording passing metrics. The JSON writes on
   NFS were about 10 s apart. The re-run took 137 s. The test body's run time varies with host and NFS load.
 - Re-run: `bfw job check --task C.linear.mlp --gate-only`.
+
+## C.attn.attention (device gated GQA attention, layer 3), 2026-10-31
+
+- `tt/attention.py` `TtGatedAttention`, stock TTNN only. TP column c holds q heads 6c..6c+5 and KV head c. Each chip
+  works on its own 640 rows. One fp32 matmul gives `[q 1536 | k 256 | v 256 | gate 1536]`, then
+  `nlp_create_qkv_heads` (transpose_k_heads False). q_norm / k_norm are `rms_norm` with an fp32 (1 + w) gamma. Partial
+  RoPE (dims 0-63) is rotate-half by slice / neg / concat in fp32. Its cos / sin rows are sliced from load-time
+  tables in cache-local block-cyclic row order (`rope_offsets(start)` = the writer's update_idxt per chip; a mask
+  sum over the SP row id when the chips differ, at a start inside a chunk). K / V are cast to bfp8 and written by
+  `update_padded_kv_cache(kv_actual_global=start, cluster_axis=0)`. Then comes
+  `ring_joint_scaled_dot_product_attention` over the cache (axis 0, Linear, 2 links, `kv_actual_isl=start`,
+  `logical_n=start+T`, scale 1/16, causal, unbalanced), then `nlp_concat_heads`, `* sigmoid(gate)` in fp32, o_proj
+  (fp32 partials), `all_reduce(axis 1)` and bf16. That is 43 device ops.
+- `tt/kv_cache.py` `TtKVCache`: the served layout. K / V are `[slots * layers, 1, max_seq / 8, 256]` per chip, bfp8
+  TILE, ND-sharded `[1, 1, 32, 256]` ROUND_ROBIN_1D over the DRAM banks, KV head h on TP column h. `load_prefix` is
+  the harness-boundary upload of the golden prefix (whole cache, zeros past `start`); `cache_tensors()` returns it.
+  The component hook builds one cache with 1 slot and 1 layer.
+- SDPA: `kv_actual_isl` needs the streaming kernel, so SDPA fp32 dest acc is off (rule-7 exception, `SDPA_FIDELITY`
+  HiFi4). q128 / k128 with `segmented_accumulation=True` (`SDPA_SEGMENTED`). k256 + segmented overflows the kernel
+  config buffer by 112 B (TT_FATAL program.cpp:3760).
+- Decision: `ATTN_QKV_HILO`. The q/k/v/gate weight runs as two bfp8 matmuls, bfp8(W) plus the bfp8 residual
+  W - bfp8(W), with the residual taken from ttnn's own rounding. With one bfp8 weight the gate failed only the row
+  norm ratio vs the golden (min 0.9805, limit 1 +- 0.0176; auto_margin_min 0.81-0.90 over k128 / k256 / segmented).
+  Cause, from a CPU model on the golden: layer 3's attn_norm has an outlier channel (|x| up to 92, median channel max
+  1.9). bfp8 q_proj / v_proj alone move the median row norm by -0.28 % / -0.23 % (all weights -0.54 %). Blocks along
+  the output dim, weight-column power-of-2 smoothing and per-row least-squares scales each recover less than half
+  of it; hi + lo recovers it (model: median -0.04 %).
+- Result: PCC 0.999978, rel vs CPU 0.0050 (limit 0.0142), vs golden 0.0066, row ratio [0.9863, 1.0143],
+  auto_margin_min 1.23, 43 device ops, host FLOPs 0, deterministic.
+- Not done yet (later tasks): pad rows past actual_end (`valid_global` + `zero_padded_kv_cache`), the
+  trace-safe tensor forms of slot / start, and a multi-slot / multi-layer cache from the model.
+- Re-run: `bfw job check --task C.attn.attention --gate-only`.

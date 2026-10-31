@@ -96,6 +96,27 @@ def device_component(mesh, spec, layer, step):
                 return _to_host(mesh, out, x.shape)
 
         return run
+    if step == "attention" and spec.block_type_of(layer) == "attn":
+        from models.demos.qwen38_27b.tt.attention import TtGatedAttention
+        from models.demos.qwen38_27b.tt.kv_cache import TtKVCache
+
+        cfg = Config.load(str(spec.hf_dir))
+        ckpt = Checkpoint(str(spec.hf_dir))
+        p = f"{PREFIX}layers.{layer}.self_attn."
+        w = {"self_attn." + n[len(p) :]: ckpt.get(n, torch.bfloat16) for n in ckpt.index if n.startswith(p)}
+        max_seq, chunk = spec.get("target")["seq"], spec.get("target")["chunk"]
+        attn = TtGatedAttention(mesh, cfg, w, max_seq, chunk)
+        cache = TtKVCache(mesh, cfg.n_kv, cfg.head_dim, max_seq, chunk)
+
+        def run(ctx, x):
+            # the served cache holds the golden prefix [0, ctx.start) (zeros past it), uploaded at the boundary
+            prefix = ctx.extra.get("state_prefix") or {}
+            empty = torch.zeros(cfg.n_kv, 0, cfg.head_dim)
+            cache.load_prefix(prefix.get("key", empty), prefix.get("value", empty), ctx.start)
+            with _hooked_dispatch():
+                return _to_host(mesh, attn(_to_device(mesh, x), ctx.start, cache), x.shape)
+
+        return run
     if step == "mlp":
         from models.demos.qwen38_27b.tt.mlp import TtMLP
 

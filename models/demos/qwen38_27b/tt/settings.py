@@ -31,6 +31,32 @@ TABLE = {
         "32: the rank-3 flat path with in-kernel l2 norm (faster)",
     ),
     "MLP_FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi3", "HiFi2", "LoFi"), "rule 7 default: MLP matmuls at HiFi4"),
+    "ATTN_FIDELITY": Setting(
+        "HiFi4", ("HiFi4", "HiFi3", "HiFi2", "LoFi"), "rule 7 default: attention projections / q-k norms at HiFi4"
+    ),
+    "ATTN_FP32_ACC": Setting(True, (True, False), "rule 7 default: attention projections / norms accumulate in fp32"),
+    "ATTN_QKV_HILO": Setting(
+        True,
+        (True, False),
+        "q/k/v/gate projection as bfp8(W) + bfp8(W - bfp8(W)) (two bfp8 weights): with one bfp8 weight, layer 3's "
+        "outlier input channel (|x| 92) shrinks the attention output row norms by 0.5 % on average (row ratio 0.980 "
+        "vs golden, limit 0.982)",
+    ),
+    "SDPA_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "ring_joint SDPA fidelity; its fp32 accumulation stays off (kv_actual_isl runs only on the streaming kernel)",
+    ),
+    "SDPA_Q_CHUNK": Setting(128, (64, 128, 256, 320, 640), "ring_joint SDPA q chunk (divides the 640 local rows)"),
+    "SDPA_K_CHUNK": Setting(128, (64, 128, 256, 512), "ring_joint SDPA k chunk (head_dim 256 caps it by L1)"),
+    "SDPA_SEGMENTED": Setting(
+        True,
+        (True, False),
+        "ring_joint segmented accumulation: per-ring-step accumulators instead of bf16 running sums over the whole "
+        "prefix (needs one Q chunk per core)",
+    ),
+    "SDPA_NUM_LINKS": Setting(2, (1, 2), "fabric links of the ring SDPA K/V exchange (Blackhole: 2)"),
+    "SDPA_TOPOLOGY": Setting("Linear", ("Linear", "Ring"), "ring SDPA CCL topology (minimax_m3 / DeepSeek: Linear)"),
     "MLP_FP32_ACC": Setting(True, (True, False), "rule 7 default: MLP matmuls accumulate in fp32"),
 }
 
@@ -43,6 +69,11 @@ MAX_PRECISION = {
     "GDN_CHUNK": 64,
     "MLP_FIDELITY": "HiFi4",
     "MLP_FP32_ACC": True,
+    "ATTN_FIDELITY": "HiFi4",
+    "ATTN_FP32_ACC": True,
+    "ATTN_QKV_HILO": True,
+    "SDPA_FIDELITY": "HiFi4",
+    "SDPA_SEGMENTED": True,
 }
 
 settings = Settings("QWEN38_27B_", TABLE, max_precision=MAX_PRECISION)
