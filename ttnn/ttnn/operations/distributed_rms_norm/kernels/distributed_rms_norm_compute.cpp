@@ -51,6 +51,46 @@
 
 namespace ckl = compute_kernel_lib;
 
+// ---- Column-vector SFPU tile ops for finalize_wave (raw LLK, documented deviation) ----
+// The kernel_lib SFPU elements (AddBinary, MulUnary, AddUnary, Rsqrt) run VectorMode::RC (all 4 faces). The finalize
+// tiles carry data in column 0 only (the records are scattered into column 0; the inv_rms consumers are the Col
+// broadcast and the faces-0/2 distribution), so faces 1 / 3 are don't-care. These are the same LLK calls as the API
+// (eltwise_binary_sfpu.h, binop_with_scalar.h, rsqrt.h) with VectorMode::C: faces 0 + 2, half the SFPU passes, on the
+// exchange's critical tail (collect -> finalize -> distribute). The inits are the API's own (*_tile_init).
+namespace ckernel {
+ALWI void drms_add_binary_tile_col(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */, DST_ACCUM_MODE, ckernel::DstRoundingMode::Default),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::C)));
+}
+template <int OP>
+ALWI void drms_binop_scalar_tile_col(uint32_t idst, uint32_t param1) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (APPROX, OP, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        idst,
+        VectorMode::C,
+        param1));
+}
+ALWI void drms_rsqrt_tile_col(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsqrt,
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false),
+        idst,
+        VectorMode::C));
+}
+}  // namespace ckernel
+
 namespace {
 
 constexpr uint32_t cb_x_tiles = 1;
@@ -67,6 +107,29 @@ constexpr uint32_t cb_sumsq_acc = 13;
 constexpr uint32_t cb_output = 16;
 constexpr uint32_t cb_dev_partial = 17;
 constexpr uint32_t cb_stats_gather = 18;
+
+template <ckl::Dst In0, ckl::Dst In1, ckl::Dst Out>
+struct AddBinaryCol : ckl::BinaryOp<AddBinaryCol<In0, In1, Out>, In0, In1, Out> {
+    static ALWI void init() { add_binary_tile_init(); }
+    static ALWI void exec_impl(uint32_t off) {
+        ckernel::drms_add_binary_tile_col(ckl::to_u32(In0) + off, ckl::to_u32(In1) + off, ckl::to_u32(Out) + off);
+    }
+};
+template <int OP, ckl::Dst Slot>
+struct BinopScalarCol : ckl::UnaryOp<BinopScalarCol<OP, Slot>, Slot> {
+    uint32_t param0;
+    constexpr explicit BinopScalarCol(uint32_t p) noexcept : param0(p) {}
+    constexpr BinopScalarCol() noexcept : param0(0) {}
+    static ALWI void init() { binop_with_scalar_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t off) const {
+        ckernel::drms_binop_scalar_tile_col<OP>(ckl::to_u32(Slot) + off, param0);
+    }
+};
+template <ckl::Dst Slot>
+struct RsqrtCol : ckl::UnaryOp<RsqrtCol<Slot>, Slot> {
+    static ALWI void init() { rsqrt_tile_init(); }
+    static ALWI void exec_impl(uint32_t off) { ckernel::drms_rsqrt_tile_col(ckl::to_u32(Slot) + off); }
+};
 
 // finalize_wave: the cross-device sum of the G slots of each of the wave's n tile-rows (slot q of tile-row t is tile
 // t*G + q of the waited window), then inv_rms = rsqrt(ss * (1/W_global) + eps). Left fold over the slots: 2 DEST
@@ -85,11 +148,11 @@ ALWI void finalize_wave_impl(
         std::make_tuple(ckl::CopyTile<slot_in, ckl::Dst::D0>{ckl::StridedTileRange{0, G}}),
         std::make_tuple(
             ckl::CopyTile<slot_in, ckl::Dst::D1>{ckl::StridedTileRange{Q + 1, G}},
-            ckl::AddBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{})...,
+            AddBinaryCol<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{})...,
         std::make_tuple(
-            ckl::MulUnary<ckl::Dst::D0>{inv_w_bits},
-            ckl::AddUnary<ckl::Dst::D0>{eps_bits},
-            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
+            BinopScalarCol<ckernel::MUL_UNARY, ckl::Dst::D0>{inv_w_bits},
+            BinopScalarCol<ckernel::ADD_UNARY, ckl::Dst::D0>{eps_bits},
+            RsqrtCol<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{}));
     std::apply([&](auto... e) { ckl::eltwise_chain(ckl::IterationShape::grid(n, 1), e...); }, elems);
 }

@@ -9,3 +9,4 @@
 {"event":"test_run","status":"pass","test":"perf_measure.py focus","detail":"linked mcast inv distribution per member row-run (L6): fastest 22.09->21.79; PORT_OWN_AHEAD knob null (parked False)","ts":"2026-10-31T00:36:52+00:00"}
 {"event":"test_run","status":"pass","test":"perf_measure.py focus + acceptance 111/111","detail":"non-blocking load cursor: fastest 21.79->21.23, slowest 23.48->22.83 (win)","ts":"2026-10-31T00:39:01+00:00"}
 {"event":"test_run","status":"pass","test":"perf_measure.py focus","detail":"READ_WAVE_GATE wave-ordered reads: fastest 21.23->21.05, slowest 22.83->22.52 (win)","ts":"2026-10-31T00:45:19+00:00"}
+{"event":"test_run","status":"pass","test":"perf_measure.py focus","detail":"finalize SFPU ops VectorMode::C (faces 0/2): fastest 21.05->20.51, slowest 22.52->21.77 (win)","ts":"2026-10-31T00:48:04+00:00"}
