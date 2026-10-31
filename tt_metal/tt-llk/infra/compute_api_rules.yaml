@@ -1,0 +1,217 @@
+# Compute-kernel API ordering rules, expressed as data.
+#
+# Read by check_compute_api_order.py. Every entry is scoped to one Tensix thread because the same
+# kernel source is compiled once per thread and each thread keeps its own hardware state.
+#
+# Schema
+# ------
+# operations[]:
+#   id             unique rule id (kebab-case)
+#   op             compute-API function that requires the configuration
+#   init           compute-API function that configures it
+#   thread         one of UNPACK, MATH, PACK -- the thread whose state the rule protects
+#   arg_match      init argument index -> op argument index that must agree
+#   requires_uninit  true when the op must be closed by `uninit` before another op configures
+#   uninit         the closing call, when requires_uninit is true
+#   configured_at_entry  true when the thread starts with this configuration already applied
+#                  (compute_kernel_hw_startup and friends), so a kernel need not call `init`
+#   invalidated_by calls that drop the configured state before `op` runs
+#   arch           architectures the rule is checked on (Quasar is out of scope)
+#   source         file:line the rule was mined from
+#   note           the behaviour a reviewer needs to judge a finding
+#
+# deprecated_inits[]:
+#   id             matches the entry in .github/deprecations.json
+#   inits          functions that must not be used in new or edited kernels
+#   source         file:line, plus the deprecation entry that schedules their removal
+#
+# Argument matching is only claimed for arguments that are compile-time values in the kernel. The
+# checker reports anything else as unknown rather than guessing, so a rule is never matched on a
+# runtime-only value.
+
+version: 1
+
+architectures:
+  - wormhole_b0
+  - blackhole
+
+operations:
+  - id: eltwise-binary-add
+    op: add_tiles
+    init: add_init
+    thread: MATH
+    arg_match:
+      - [0, 0]  # icb0 -> SrcA
+      - [1, 1]  # icb1 -> SrcB
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/eltwise_binary.h:87
+    note: >-
+      add_init configures both the math and unpack sides (binary_tiles_init<full_init=true>);
+      add_tiles then reads SrcA/SrcB. An unpack init or a data-format reconfig for a different
+      operand in between leaves SrcA/SrcB pointed at the wrong buffer.
+
+  - id: eltwise-binary-sub
+    op: sub_tiles
+    init: sub_init
+    thread: MATH
+    arg_match:
+      - [0, 0]
+      - [1, 1]
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/eltwise_binary.h:131
+    note: Same state as eltwise-binary-add; the op is not interchangeable with add_tiles.
+
+  - id: eltwise-binary-mul
+    op: mul_tiles
+    init: mul_init
+    thread: MATH
+    arg_match:
+      - [0, 0]
+      - [1, 1]
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/eltwise_binary.h:179
+    note: Same state as eltwise-binary-add; the op is not interchangeable with add_tiles.
+
+  - id: eltwise-binary-add-reuse-dest
+    op: add_reuse_dest_tiles
+    init: add_reuse_dest_init
+    thread: MATH
+    arg_match:
+      - [0, 0]  # only the non-DST operand is unpacked
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/eltwise_binary.h:109
+    note: >-
+      The two-operand and dest-reuse forms are deliberately separate names; add_init does not
+      configure the dest-reuse path and vice versa.
+
+  - id: eltwise-binary-sub-reuse-dest
+    op: sub_reuse_dest_tiles
+    init: sub_reuse_dest_init
+    thread: MATH
+    arg_match:
+      - [0, 0]
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/eltwise_binary.h:153
+    note: Same state as the add dest-reuse rule.
+
+  - id: eltwise-binary-mul-reuse-dest
+    op: mul_reuse_dest_tiles
+    init: mul_reuse_dest_init
+    thread: MATH
+    arg_match:
+      - [0, 0]
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/eltwise_binary.h:201
+    note: Same state as the add dest-reuse rule.
+
+  - id: matmul-tiles
+    op: matmul_tiles
+    init: matmul_init
+    thread: MATH
+    arg_match:
+      - [0, 0]  # in0_cb_id
+      - [1, 1]  # in1_cb_id
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/matmul.h:107
+    note: >-
+      matmul_init calls state_configure(in1_cb_id, in0_cb_id) -- the sentinel stores SrcB from the
+      first argument and SrcA from the second. A checker that assumes init(a, b) maps to
+      (SrcA, SrcB) in order will invert this rule; argument matching must stay per-argument.
+
+  - id: matmul-block
+    op: matmul_block
+    init: matmul_block_init
+    thread: MATH
+    arg_match:
+      - [0, 0]
+      - [1, 1]
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/matmul.h:208
+    note: matmul_block_init is its own state; matmul_init does not configure it.
+
+  - id: tilize
+    op: tilize_block
+    init: tilize_init
+    thread: UNPACK
+    arg_match:
+      - [0, 0]  # icb
+      - [1, 1]  # block
+      - [2, 2]  # ocb
+    requires_uninit: true
+    uninit: tilize_uninit
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/tilize.h:51
+    note: >-
+      tilize_init reprograms the unpacker and the packer; tilize_uninit is required before a
+      different op configures either. This op is in the curated uninit set, not a blanket rule.
+
+  - id: fast-tilize
+    op: fast_tilize_block
+    init: fast_tilize_init
+    thread: UNPACK
+    arg_match:
+      - [0, 0]  # icb
+      - [1, 1]  # full_dim
+      - [2, 2]  # ocb
+    requires_uninit: true
+    uninit: fast_tilize_uninit
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/tilize.h:277
+    note: Blackhole and Wormhole have separate fast-tilize implementations; the rule is the same.
+
+  - id: untilize
+    op: untilize_block
+    init: untilize_init
+    thread: UNPACK
+    arg_match:
+      - [0, 0]  # icb
+    requires_uninit: true
+    uninit: untilize_uninit
+    invalidated_by: [reconfig_data_format, reconfig_data_format_srca, reconfig_data_format_srcb]
+    source: tt_metal/hw/inc/api/compute/untilize.h:39
+    note: untilize_init takes only the input CB; untilize_block also takes full_ct_dim and ocb.
+
+  - id: pack-tile
+    op: pack_tile
+    init: pack_init
+    thread: PACK
+    arg_match:
+      - [0, 1]  # pack_init(ocb) -> pack_tile(ifrom_dst, icb)
+    configured_at_entry: true
+    invalidated_by: [pack_init, pack_reconfig_l1_acc, pack_relu_config]
+    source: tt_metal/hw/inc/api/compute/pack.h:32
+    note: >-
+      The output CB is pack_tile's second argument, hence the 0 -> 1 mapping. Kernels that rely on
+      compute_kernel_hw_startup's pack configuration are treated as configured at entry.
+
+  - id: sfpu-exp
+    op: exp_tile
+    init: exp_tile_init
+    thread: MATH
+    arg_match: []
+    invalidated_by: []
+    source: tt_metal/hw/inc/api/compute/eltwise_unary/exp.h:37
+    note: SFPU unary ops follow the *_tile_init / *_tile convention.
+
+  - id: sfpu-sqrt
+    op: sqrt_tile
+    init: sqrt_tile_init
+    thread: MATH
+    arg_match: []
+    invalidated_by: []
+    source: tt_metal/hw/inc/api/compute/eltwise_unary/sqrt.h:17
+    note: Same convention as exp_tile.
+
+deprecated_inits:
+  - id: copy-eltwise-unary-legacy-inits
+    inits:
+      - copy_tile_init
+      - copy_tile_to_dst_init_short
+      - copy_tile_to_dst_init_short_with_dt
+      - unary_op_init_common
+      - init_sfpu
+    source: .github/deprecations.json
+    note: >-
+      Replaced by compute_kernel_hw_startup(icb, ocb) + copy_init(icb), with data-format
+      reconfiguration via reconfig_data_format_srca. The deprecation entry records the removal
+      date, so a rule hit is reported as deprecated-init rather than as a missing init.
