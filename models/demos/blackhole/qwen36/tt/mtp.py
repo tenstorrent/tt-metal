@@ -21,6 +21,14 @@ from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.tt_transformers.tt.common import Mode
 
 
+def _aliases(a, b):
+    """Whether two handles name the same device buffer (tp_common.aliases; True when the address is unavailable, so a
+    caller skips the extra free rather than double-freeing an alias)."""
+    from models.demos.blackhole.qwen36.tt.tp_common import aliases
+
+    return aliases(a, b)
+
+
 def argmax_last(logits):
     """argmax over the vocab dim of drafter logits -> [1,1,B,1] uint32 ROW_MAJOR (one id per row).
 
@@ -138,6 +146,35 @@ class Qwen36MTP:
                 cache_file_name=(str(mtp_cache / "fc") if mtp_cache is not None else None),
             )
 
+        # r6 drafter bundle (tp_common, TP only; every flag off = today's drafter, byte for byte):
+        #   QWEN36_MTP_FC_PROGCFG -> _fc_decode_pc (explicit 1D decode progcfg for the fc, see _fuse)
+        #   QWEN36_MTP_EMBED_ROW  -> _embed_row (one-tile-row token embedding, see _embed_rows)
+        #   QWEN36_MTP_LAYER_BFP4 -> bfloat4_b drafter layer weights (attention and/or MLP)
+        self._fc_decode_pc = None
+        self._embed_row = False
+        _bfp4_parts = frozenset()
+        if self.num_devices > 1:
+            from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+            self._fc_decode_pc = tpc.mtp_fc_decode_progcfg(
+                2 * args.dim, args.dim // self.num_devices, getattr(args, "decode_grid_w", 8)
+            )
+            self._embed_row = tpc.mtp_embed_row_enabled()
+            _bfp4_parts = tpc.mtp_layer_bfp4_parts()
+            if self._fc_decode_pc is not None:
+                logger.info(f"MTP drafter: fc decode program config {self._fc_decode_pc} (QWEN36_MTP_FC_PROGCFG=1)")
+            if self._embed_row:
+                logger.info("MTP drafter: one-tile-row token embedding (QWEN36_MTP_EMBED_ROW=1)")
+            if _bfp4_parts:
+                logger.info(
+                    f"MTP drafter: layer weights in BFP4 + LoFi for {sorted(_bfp4_parts)} (QWEN36_MTP_LAYER_BFP4)"
+                )
+        _layer_kw = {}
+        if "attn" in _bfp4_parts:
+            _layer_kw["attn_dtype"] = ttnn.bfloat4_b
+        if "mlp" in _bfp4_parts:
+            _layer_kw["mlp_dtype"] = ttnn.bfloat4_b
+
         # Reuse the full-attention decoder layer for mtp.layers.0. Remap the checkpoint keys to a
         # full-attention layer index L so is_full_attention_layer(L) is True and the substate loader
         # finds layers.{L}.self_attn.* / .mlp.* / .{input,post_attention}_layernorm.
@@ -154,7 +191,7 @@ class Qwen36MTP:
         # Dedicated cache root (.../mtp/) so the reused layer's sharded weights never collide with
         # the real layer L's cache.
         self.decoder = Qwen36DecoderLayer(
-            mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl
+            mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl, **_layer_kw
         )
         # KV accessor for allocate_kv_caches / rollback.
         self.attention = self.decoder.attention
@@ -472,13 +509,50 @@ class Qwen36MTP:
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
         e = self.pre_fc_norm_embedding(token_emb, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
         h = self.pre_fc_norm_hidden(hidden_states, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
-        cat = ttnn.concat([e, h], dim=-1)  # [1,1,*,2*dim]  (order: [embedding, hidden])
+        # QWEN36_MTP_FC_PROGCFG: a decode-width fc takes the explicit 1D decode progcfg on an L1 concat (mcast_in0 reads
+        # in0 interleaved). None (flag off, prefill rows, a head built without __init__) = today's auto-config call.
+        pc = getattr(self, "_fc_decode_pc", None)
+        if pc is not None and (mode != Mode.DECODE or e.shape[-2] > ttnn.TILE_SIZE):
+            pc = None
+        cat_kw = {} if pc is None else {"memory_config": ttnn.L1_MEMORY_CONFIG}
+        cat = ttnn.concat([e, h], dim=-1, **cat_kw)  # [1,1,*,2*dim]  (order: [embedding, hidden])
         ttnn.deallocate(e)
         ttnn.deallocate(h)
         kw = dict(compute_kernel_config=self._fc_compute_cfg) if self._fc_compute_cfg is not None else {}
+        if pc is not None:
+            kw["program_config"] = pc
         fused = ttnn.linear(cat, self.fc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)  # [1,1,*,dim/tp]
         ttnn.deallocate(cat)
         return fused
+
+    def _embed_rows(self, token_ids):
+        """QWEN36_MTP_EMBED_ROW: the token embedding of ``token_ids`` ([B,1] or [1,B] uint32) as [1,1,B,dim/tp] TILE in
+        DRAM, from a row-major lookup viewed as one [1,1,B,dim/tp] row block, zero-padded to whole 32-row tiles in
+        row-major (a pad of B < 32 rows straight into the tilize takes a slow path: 23 us at B=8 vs 7 us for 32 rows),
+        tilized, and viewed back to B logical rows (the padded shape is kept: a metadata view). The TILE lookup it
+        replaces pads every id to its own 32-row tile ([B,1,dim/tp]) and needs a reshape copy to gather the rows; both
+        produce the same bf16 rows (pure data movement), so the drafter's input is byte-identical."""
+        rows = int(token_ids.shape[0]) * int(token_ids.shape[-1])
+        rm = ttnn.embedding(
+            token_ids, self.embd.weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        width = int(rm.shape[-1])
+        view = ttnn.reshape(rm, (1, 1, rows, width))  # same pages (a row per id): a metadata view
+        pad_rows = -rows % ttnn.TILE_SIZE
+        if pad_rows:
+            full = ttnn.pad(view, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)  # zero rows, row-major
+            tiled = ttnn.to_layout(full, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.reshape(tiled, ttnn.Shape([1, 1, rows, width]), ttnn.Shape([1, 1, rows + pad_rows, width]))
+            if out is not tiled and not _aliases(out, tiled):
+                ttnn.deallocate(tiled)
+            ttnn.deallocate(full)
+        else:
+            out = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # A reshape is a metadata alias or a copy; deallocate is a no-op on an already-freed buffer, so freeing both
+        # handles frees each buffer once.
+        ttnn.deallocate(view)
+        ttnn.deallocate(rm)
+        return out
 
     def forward_decode(
         self,
@@ -510,8 +584,11 @@ class Qwen36MTP:
         not None.
         """
         mode = Mode.DECODE
-        tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
-        tok_emb = ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
+        if getattr(self, "_embed_row", False):  # QWEN36_MTP_EMBED_ROW (a head built without __init__ has none)
+            tok_emb = self._embed_rows(token_ids)  # [1,1,B,dim/tp]
+        else:
+            tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
+            tok_emb = ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
         fused = self._fuse(tok_emb, hidden_states, mode)
         ttnn.deallocate(tok_emb)
 

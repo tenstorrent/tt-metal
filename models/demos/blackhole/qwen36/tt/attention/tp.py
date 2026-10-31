@@ -81,8 +81,11 @@ def _free_unless_view(src, padded):
         ttnn.deallocate(src)
 
 
-def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
-    """Shard one full-attention layer's weights across the mesh."""
+def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None, attn_dtype=None):
+    """Shard one full-attention layer's weights across the mesh.
+
+    attn_dtype: QKV + wo weight dtype override (the MTP drafter layer under QWEN36_MTP_LAYER_BFP4); None (every other
+    caller) keeps the QWEN36_BFP4_ATTN choice below."""
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -94,6 +97,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # Distinct cache names — as_tensor reload ignores requested memcfg.
     # QKV + wo weight dtype (QWEN36_BFP4_ATTN, default off): BFP8; =1 -> BFP4. Cache stems unchanged (dtype is in the file name).
     _attn_dtype = ttnn.bfloat4_b if tpc.bfp4_attn_enabled() else ttnn.bfloat8_b
+    if attn_dtype is not None:
+        _attn_dtype = attn_dtype
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv

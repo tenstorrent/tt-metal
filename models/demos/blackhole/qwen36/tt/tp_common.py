@@ -262,6 +262,78 @@ def mtp_kv_only_enabled():
     return os.environ.get("QWEN36_MTP_KV_ONLY", "0") == "1"
 
 
+# -------------------------------------------------------------------------------------------------------------------- #
+# r6 drafter bundle: MTP drafter micro-optimizations, each behind its own flag. Every default is off, and off is today's
+# drafter byte for byte. They change only the DRAFTER's programs: the verify arbitrates every draft, so the output stays
+# lossless and only acceptance can move. All are read when the MTP head is built (Qwen36MTP.__init__), TP only.
+# Measured on a BH Galaxy TP8 row (r5 stack, K=3, 32K KV, production-loop harness): FC_PROGCFG + EMBED_ROW (+ the
+# existing QWEN36_DECODE_AR_FUSE_RESIDUAL) 33.8 -> 33.05 ms per step at 8 users, + LAYER_BFP4 32.9; output md5 and
+# acceptance unchanged on the 32K / 4K A/Bs. A sliding-window drafter SDPA was tried and dropped: W = 2K..16K of a 32K
+# context cost 10-13% of the accepted drafts (W = 28K: 3%), far more than its 3% shorter step.
+# -------------------------------------------------------------------------------------------------------------------- #
+MTP_FC_PROGCFG_ENV = "QWEN36_MTP_FC_PROGCFG"
+MTP_FC_IBW_ENV = "QWEN36_MTP_FC_IBW"
+MTP_FC_CORES_ENV = "QWEN36_MTP_FC_CORES"
+MTP_LAYER_BFP4_ENV = "QWEN36_MTP_LAYER_BFP4"
+MTP_EMBED_ROW_ENV = "QWEN36_MTP_EMBED_ROW"
+
+
+def _env_int(name, default=0):
+    """Integer env value; unset or blank -> ``default``. A non-integer raises ValueError (no silent default)."""
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else default
+
+
+def mtp_fc_decode_progcfg(k, n, grid_w):
+    """QWEN36_MTP_FC_PROGCFG (default "0"): the MTP fc (eh_proj, [rows, 2*dim] x [2*dim, dim/tp] BFP8, HiFi2) of a
+    decode-width call (rows <= 32: the draft steps, the batched reseed, the join warms) runs on an explicit 1D mcast
+    program config, its concat input in L1, instead of ttnn's auto config on a DRAM input. Auto picks in0_block_w=2 for
+    this K (2*dim = 320 k-tiles): 160 in0 multicast rounds, 145-148 us per call (7 MB at ~48 GB/s), 4 calls per K=3
+    iteration (sp5 drafter profile).
+    QWEN36_MTP_FC_IBW (default 32) caps in0_block_w (largest divisor of the k-tiles <= the cap; 32 -> 10 rounds) and
+    QWEN36_MTP_FC_CORES (default 20 = one 32-wide output column per core at dim/tp = 640) is the core budget, shaped
+    wide-first on the device grid width ``grid_w``. The K-block partial sums reassociate, so a near-tie can draft a
+    different token: only acceptance can move (measured: 143 -> 28 us per call at 8 rows, bit-identical to auto at <= 8
+    rows, 1 bf16 ulp at 32 rows; acceptance unchanged). Returns the program config (built once by the caller), or None
+    when off."""
+    if os.environ.get(MTP_FC_PROGCFG_ENV, "0") != "1":
+        return None
+    ibw = _env_int(MTP_FC_IBW_ENV, 32)
+    cores = _env_int(MTP_FC_CORES_ENV, 20)
+    if ibw <= 0 or cores <= 0:
+        raise ValueError(f"{MTP_FC_IBW_ENV}={ibw} / {MTP_FC_CORES_ENV}={cores}: both must be > 0")
+    return create_matmul_1d_decode_progcfg(TILE_SIZE, k, n, num_cores=cores, grid_w=grid_w, max_in0_block_w=ibw)
+
+
+def mtp_layer_bfp4_parts():
+    """QWEN36_MTP_LAYER_BFP4 (default "0"): the MTP drafter layer's (mtp.layers.0) weights in bfloat4_b with LoFi
+    decode matmuls, for the drafter only. The drafter layer has its own checkpoint weights and its own cache files (the
+    dtype is in the file name), so the base model and the verify keep their dtypes and no extra DRAM is needed (the
+    BFP4 copies replace the drafter layer's BFP8 ones). "1" / "all": attention (fused q|k|v|gate and wo) and MLP
+    (gate/up/down); "attn" or "mlp" (or "attn,mlp") picks parts. Measured with "1": -0.15 ms per K=3 step; accepted
+    drafts unchanged at 32K / 8 users, 4K / 4 users (K=7) and 4K / 8 users, -0.01 committed per verify on a 32K
+    verbatim-retrieval prompt. Returns a frozenset of {"attn", "mlp"}, empty when off."""
+    raw = os.environ.get(MTP_LAYER_BFP4_ENV, "0").strip().lower()
+    if raw in ("", "0", "off", "none"):
+        return frozenset()
+    if raw in ("1", "all"):
+        return frozenset({"attn", "mlp"})
+    parts = frozenset(p.strip() for p in raw.split(",") if p.strip())
+    bad = parts - {"attn", "mlp"}
+    if bad or not parts:
+        raise ValueError(f"{MTP_LAYER_BFP4_ENV}={raw!r}: expected 0, 1, all, attn, mlp or attn,mlp")
+    return parts
+
+
+def mtp_embed_row_enabled():
+    """QWEN36_MTP_EMBED_ROW (default "0"): the MTP drafter's token embedding (Qwen36MTP.forward_decode) is looked up
+    row-major, viewed as [1,1,rows,dim/tp] and tilized as ONE tile row, instead of the TILE lookup over [rows,1] ids
+    that gives every id its own padded 32-row tile and then re-packs the rows with a reshape copy (sp5: a 27 us tilize
+    + a 6 us reshape per draft step, 30 + 20 us for the 32-row reseed; 8.8 us at 1-16 rows with this flag). The same
+    bf16 rows reach the same place, so the drafter's input, its drafts and the output are byte-identical."""
+    return os.environ.get(MTP_EMBED_ROW_ENV, "0") == "1"
+
+
 def spec_hostfix_enabled():
     """Host-side spec-step fixes (QWEN36_SPEC_HOSTFIX, default 1; 0 = the old code paths): conflict check without
     tolist, one read of the drafter ids, vectorized row loops, drafter page tables skipped when unchanged.

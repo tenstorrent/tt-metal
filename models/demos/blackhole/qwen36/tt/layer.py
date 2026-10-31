@@ -20,9 +20,23 @@ class Qwen36DecoderLayer:
 
     Pattern: x → attention_norm → attention → residual → ff_norm → MLP → residual
     Attention is either GatedAttention (full, with RoPE) or GatedDeltaNet (linear).
+
+    attn_dtype / mlp_dtype (TP full-attention / dense-MLP only; default None = the flag-driven dtypes): weight dtype
+    overrides, used by the MTP drafter layer under QWEN36_MTP_LAYER_BFP4. bfloat4_b also switches that module's decode
+    matmuls to LoFi, which reads every mantissa bit of a BFP4 weight.
     """
 
-    def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None):
+    def __init__(
+        self,
+        mesh_device,
+        args,
+        state_dict,
+        layer_num,
+        tensor_cache_path=None,
+        tt_ccl=None,
+        attn_dtype=None,
+        mlp_dtype=None,
+    ):
         self.layer_num = layer_num
         self.device = mesh_device
         self.args = args
@@ -93,9 +107,15 @@ class Qwen36DecoderLayer:
                 from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
 
                 tw = load_attention_weights_tp(
-                    mesh_device, substate(state_dict, f"layers.{layer_num}.self_attn"), args, cache_dir=tp_cache
+                    mesh_device,
+                    substate(state_dict, f"layers.{layer_num}.self_attn"),
+                    args,
+                    cache_dir=tp_cache,
+                    attn_dtype=attn_dtype,
                 )
                 self.attention = TPAttention(mesh_device, args, tw, tt_ccl)
+                if attn_dtype == ttnn.bfloat4_b:  # QWEN36_MTP_LAYER_BFP4 (drafter layer): LoFi decode QKV / wo
+                    self.attention.qkv_cfg = self.attention.wo_cfg = tpc.COMPUTE_LOFI
             else:
                 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 
@@ -124,7 +144,9 @@ class Qwen36DecoderLayer:
                 mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
             )
         else:
-            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+            # mlp_dtype (QWEN36_MTP_LAYER_BFP4, drafter layer): explicit gate/up/down dtypes, which also select LoFi.
+            _mlp_kw = {} if mlp_dtype is None else {"down_dtype": mlp_dtype, "gateup_dtype": mlp_dtype}
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl, **_mlp_kw)
 
     def _make_norm(
         self,
