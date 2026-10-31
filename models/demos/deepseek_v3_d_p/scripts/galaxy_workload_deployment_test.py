@@ -46,6 +46,11 @@ COLOR = {
 }
 
 
+def device_rows(r: Result) -> list[tuple[str, Result]]:
+    rows = [d.partition(": ") for d in r.details]
+    return [(label, Result(Status.FAIL, why)) for label, _, why in rows]
+
+
 class Screen:
     def __init__(self, steps: list[Step], header: list[str], status_json: Path, meta: dict[str, str]):
         self.steps, self.header, self.status_json, self.meta = steps, header, status_json, meta
@@ -74,6 +79,11 @@ class Screen:
         for s in matmul:
             out.append(self.model_row(3, s.key.split(":")[1], s.state.result, s.state.start, s.state.end))
             out += [self.model_row(5, label, r) for label, r in self.sub_rows(s)]
+            if rerun := s.state.rerun:
+                env = " ".join(f"{k}={v}" for k, v in rerun.env.items())
+                r = Result(rerun.result.status, f"{env}  {rerun.result.reason}".rstrip())
+                out.append(self.model_row(5, "rerun", r, rerun.start, rerun.end))
+                out += [self.model_row(7, label, r) for label, r in device_rows(rerun.result)]
         models = list(dict.fromkeys(s.model for s in self.steps if s.model))
         if models:
             out += ["", "MODELS"]
@@ -117,8 +127,7 @@ class Screen:
     def sub_rows(self, step: Step) -> list[tuple[str, Result]]:
         """Layer-type rows for pytest steps, loop rows for multi-loop stress steps, device rows for matmul runs."""
         if step.group == "matmul":
-            rows = [d.partition(": ") for d in step.state.result.details]
-            return [(label, Result(Status.FAIL, why)) for label, _, why in rows]
+            return device_rows(step.state.result)
         if len(step.state.loops) > 1:
             return [(f"loop {i}/{len(step.state.loops)}", r) for i, r in enumerate(step.state.loops, 1)]
         if step.collect is None or step.group in ("smoke", "soak"):
@@ -153,6 +162,16 @@ class Screen:
                     "log": s.state.log,
                     "start": s.state.start,
                     "end": s.state.end,
+                    "rerun": s.state.rerun
+                    and {
+                        "env": s.state.rerun.env,
+                        "status": s.state.rerun.result.status.name,
+                        "reason": s.state.rerun.result.reason,
+                        "details": s.state.rerun.result.details,
+                        "log": s.state.rerun.log,
+                        "start": s.state.rerun.start,
+                        "end": s.state.rerun.end,
+                    },
                 }
                 for s in self.steps
             ],
