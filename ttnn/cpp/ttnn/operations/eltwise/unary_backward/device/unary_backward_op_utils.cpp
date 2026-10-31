@@ -37,6 +37,15 @@ const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
             };
             return spec;
         }
+        case UnaryBackwardOpType::TANH_BW_BF16: {
+            // The generated kernel evaluates the gradient over BF16 DEST.
+            static const UnaryBackwardKernelSpec spec{
+                .compute_kernel_path =
+                    "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/compute/"
+                    "eltwise_bw_tanh_bf16.cpp",
+            };
+            return spec;
+        }
         case UnaryBackwardOpType::GELU_BW: {
             // GeluVariant::ACCURATE: the exact-GELU derivative by polynomial.
             static const UnaryBackwardKernelSpec spec{
@@ -67,6 +76,7 @@ std::string_view to_string(UnaryBackwardOpType op_type) {
     switch (op_type) {
         case UnaryBackwardOpType::SIGMOID_BW: return "SIGMOID_BW";
         case UnaryBackwardOpType::TANH_BW: return "TANH_BW";
+        case UnaryBackwardOpType::TANH_BW_BF16: return "TANH_BW_BF16";
         case UnaryBackwardOpType::GELU_BW: return "GELU_BW";
         case UnaryBackwardOpType::GELU_TANH_BW: return "GELU_TANH_BW";
     }
