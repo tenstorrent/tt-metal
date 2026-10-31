@@ -103,7 +103,7 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  * Performs a 32x32 transpose operation *B[w,h] = A[h,w]* on a tile in the CB
  * at a given index and writes the result to the DST register at index
  * dst_tile_index. The DST register buffer must be in acquired state via
- * *acquire_dst* call.
+ * *tile_regs_acquire* call.
  *
  * This call is blocking and is only available on the compute engine.
  *
@@ -167,7 +167,7 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
  * the transpose op group: its body is a simple loop over `transpose_tile`, so it inherits
  * `transpose_tile`'s semantics and requires the same initialization (`transpose_init`, preceded once by
  * `compute_kernel_hw_startup(icb, ocb)`) to have been called first. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single

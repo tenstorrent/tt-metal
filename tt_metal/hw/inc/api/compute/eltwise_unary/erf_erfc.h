@@ -25,7 +25,7 @@ ALWI void erf_tile_init() {
 /**
  * Performs element-wise computation of error function on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -51,7 +51,7 @@ ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (tru
 /**
  * Performs element-wise computation of complimentary error function on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None

@@ -26,7 +26,7 @@ namespace ckernel {
  * NaN by 1.0 returns infinity for the same reason). A NaN operand does propagate as NaN on a
  * float32 destination.
  * Output overwrites first operand in DST.
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
  * compute engine.
  *
  * Return value: None

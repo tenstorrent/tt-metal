@@ -12,7 +12,8 @@
 namespace ckernel {
 
 /**
- * @deprecated This function is deprecated, please use `tile_regs_acquire()` instead.
+ * @deprecated Use `tile_regs_acquire()` followed by `tile_regs_wait()`: acquire_dst does both (MATH waits for DST,
+ * PACK waits for MATH), so tile_regs_acquire() alone drops the PACK-side wait.
  * See https://github.com/tenstorrent/tt-metal/issues/5868#issuecomment-2101726935
  *
  * Acquires an exclusive lock on the internal DST register for the current
@@ -28,7 +29,7 @@ namespace ckernel {
  * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel
  * configuration.
  */
-[[deprecated("Use tile_regs_acquire() instead")]]
+[[deprecated("Use tile_regs_acquire() + tile_regs_wait() instead (acquire_dst also blocks PACK until MATH is done).")]]
 ALWI void acquire_dst() {
     UNPACK((llk_unpack_wait_for_dest_available()));
     MATH((llk_math_wait_for_dest_available()));
@@ -65,7 +66,8 @@ ALWI void tile_regs_wait() {
 }
 
 /**
- * @deprecated This function is deprecated, please use `tile_regs_release()` instead.
+ * @deprecated Use `tile_regs_commit()` followed by `tile_regs_release()`: release_dst does both, so
+ * tile_regs_release() alone drops the MATH-side commit.
  * See https://github.com/tenstorrent/tt-metal/issues/5868#issuecomment-2101726935
  *
  * Releases the exclusive lock on the internal DST register for the current
@@ -78,7 +80,7 @@ ALWI void tile_regs_wait() {
  * configuration.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-[[deprecated("Use tile_regs_release() instead")]]
+[[deprecated("Use tile_regs_commit() + tile_regs_release() instead (release_dst also commits the MATH section).")]]
 ALWI void release_dst() {
     UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));

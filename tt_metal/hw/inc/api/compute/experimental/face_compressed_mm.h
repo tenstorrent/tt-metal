@@ -98,7 +98,7 @@ ALWI void face_compressed_mm_block_init_short(
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the in0 activation block and the
  * BFP-compressed weights streamed from the meta buffer, writing the result to DST. The DST register
- * buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Face-granular (16x16) variant of compressed_custom_mm: in1 is BFP-compressed per 16x16 face and

@@ -122,7 +122,7 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
 /**
  * Performs a reduction operation *B = reduce(A)* using reduce_func for dimension reduction on a tile in the CB at a given index and writes the
  * result to the DST register at index *dst_tile_index*. Reduction can be of type *Reduce::R*, *Reduce::C*, or *Reduce::RC*, identifying the
- * dimension(s) to be reduced in size to 1. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * dimension(s) to be reduced in size to 1. The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  *
  * The `icb_scaler` circular buffer must contain the scaling factors for the reduction. The most straightforward way of filling the `icb_scaler` with the scaling
  * factors is to populate first row of each face with the following values:
@@ -170,7 +170,7 @@ ALWI void reduce_tile(
  * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
  * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
  * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
- * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * for every tile in the block. The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single

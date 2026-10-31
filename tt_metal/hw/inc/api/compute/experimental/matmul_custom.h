@@ -64,7 +64,7 @@ ALWI void mm_no_mop_init_short(
 /**
  * Performs a block-sized matrix multiplication C=A*B using direct replay buffer execution instead of
  * a MOP. Accumulates the result into DST (DST += C). The DST register buffer must be in acquired
- * state via acquire_dst call. This call is blocking and is only available on the compute engine.
+ * state via tile_regs_acquire call. This call is blocking and is only available on the compute engine.
  *
  * Return value: None
  *

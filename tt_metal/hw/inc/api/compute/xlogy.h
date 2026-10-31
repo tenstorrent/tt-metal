@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Performs element-wise xlogy operation y = xlogy(x0, x1) with x0 as first operand and x1 as second operand.
  * Output overwrites first operand in DST.
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
  * compute engine.
  *
  * Return value: None

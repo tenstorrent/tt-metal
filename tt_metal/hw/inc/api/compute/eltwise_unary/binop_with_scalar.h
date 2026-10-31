@@ -100,7 +100,7 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
 // clang-format off
 /**
 * Performs element-wise add operation with int32 scalar. The DST
-* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
 * compute engine.
 *
 * Return value: None
@@ -126,7 +126,7 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 // clang-format off
 /**
 * Performs element-wise sub operation with int32 scalar. The DST
-* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available on the
 * compute engine.
 *
 * Return value: None
