@@ -2036,7 +2036,14 @@ def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHa
         document, expected_device_nodes=set(hardware_profile.device_nodes)
     )
     derivation: dict[str, Any] = {"cluster_descriptor": str(descriptor_path), "chips_with_mmio": chips_with_mmio}
-    if hardware_profile.ethernet_graph == "line":
+    if not hardware_profile.derive_route:
+        # The default system mesh opens without physical ids, in the order the fabric solver picks; the placement
+        # needs that order before the open, so the caller names it (QWEN38_X8_ROUTE, e.g. 0,4,5,6,7,3,2,1; the mesh
+        # open checks it against the real order) or gets the sorted chip ids.
+        named = os.environ.get("QWEN38_X8_ROUTE")
+        route = tuple(int(value) for value in named.split(",")) if named else tuple(sorted(chips_with_mmio))
+        derivation["route_derivation"] = "default_system_mesh"
+    elif hardware_profile.ethernet_graph == "line":
         route = physical_route.derive_canonical_line_route(document, chips_with_mmio)
         derivation["route_derivation"] = physical_route.derive_canonical_line_route.__name__
     else:
@@ -2104,7 +2111,7 @@ def open_partition_b_mesh(
         marker("before-mesh-open")
         mesh = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*physical_shape),
-            physical_device_ids=list(route),
+            **({"physical_device_ids": list(route)} if hardware_profile.derive_route else {}),
             l1_small_size=24576,
             trace_region_size=0,
             **({"num_command_queues": command_queues} if command_queues != 1 else {}),

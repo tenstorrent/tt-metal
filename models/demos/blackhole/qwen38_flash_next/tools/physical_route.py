@@ -47,15 +47,14 @@ def parse_chips_with_mmio(
             raise PhysicalRouteError(f"duplicate logical chip ID {logical_chip_id}")
         chips_with_mmio[logical_chip_id] = device_node
 
-    if len(chips_with_mmio) != 4 or len(set(chips_with_mmio.values())) != 4:
-        raise PhysicalRouteError(f"expected four distinct local chips and device nodes: {chips_with_mmio}")
+    count = 4 if expected_device_nodes is None else len(expected_device_nodes)
+    if count not in (4, 8) or len(chips_with_mmio) != count or len(set(chips_with_mmio.values())) != count:
+        raise PhysicalRouteError(f"expected {count} distinct local chips and device nodes: {chips_with_mmio}")
     if expected_device_nodes is not None:
-        if (
-            type(expected_device_nodes) not in {tuple, set}
-            or len(expected_device_nodes) != 4
-            or any(type(value) is not int for value in expected_device_nodes)
+        if type(expected_device_nodes) not in {tuple, set} or any(
+            type(value) is not int for value in expected_device_nodes
         ):
-            raise PhysicalRouteError("expected leased device nodes must be four exact integers")
+            raise PhysicalRouteError("expected leased device nodes must be exact integers")
         if set(chips_with_mmio.values()) != set(expected_device_nodes):
             raise PhysicalRouteError(
                 "cluster descriptor PCIe device nodes differ from the leased partition: "
@@ -224,6 +223,6 @@ def route_device_nodes(
         type(chip) is not int or type(node) is not int for chip, node in chips_with_mmio.items()
     ):
         raise PhysicalRouteError("route mapping identities must be exact integers")
-    if len(route) != 4 or len(set(route)) != 4 or set(route) != set(chips_with_mmio):
+    if len(route) not in (4, 8) or len(set(route)) != len(route) or set(route) != set(chips_with_mmio):
         raise PhysicalRouteError(f"route and chips_with_mmio name different chips: {route}, {chips_with_mmio}")
     return tuple(chips_with_mmio[chip_id] for chip_id in route)
