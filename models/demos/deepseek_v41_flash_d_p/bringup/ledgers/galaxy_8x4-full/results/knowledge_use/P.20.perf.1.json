@@ -1,0 +1,81 @@
+{
+ "used": [
+  {
+   "id": "DS41-175",
+   "how": "SP=8 sweep on single cards without fabric (test_sweep_card, P23_SHARD=i/12, --device auto), candidates held to the capture's 12x10 grid and L1",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-114",
+   "how": "the capture's free L1 for CBs (1357 KiB at every SP=8 call) is what the filler holds each candidate to",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-113",
+   "how": "SP=8 wo_a (batch 2) swept only on 2D mcast fuse_batch=False / bmm; the rule's 2D nofuse bw32 kept (bit-identical to auto)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-139",
+   "how": "the report sets SP=8's column-split projections (wq_b 0.075, wo_b 0.074, wo_a 0.059 ms) against P.19's replicated-weight SP=32 ones (0.190 / 0.151 / 0.206)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "test_matmul_sweep's capture and sweep file names were keyed only by MATMUL_CONFIG / shard: a second layout's sweep would overwrite P.19's files (P23_TAG / P23_NAME added)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding: only GALAXY table entries and sweep-harness file names changed"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; only matmul program configs (C++ ops)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suites run; only the sweep harness and measure --task P.20 --part quick"
+  },
+  {
+   "id": "OV-27",
+   "answer": "done",
+   "evidence": "SP=8 capture at 51200 and BRINGUP_POS=512000 (calls_sp8.json / calls_sp8_p512000.json): identical 187 calls, 12 distinct, same configs and L1; P.19's captures untouched; swept on single cards in parallel; only the 5120-token chunk's calls tuned"
+  },
+  {
+   "id": "OV-29",
+   "answer": "done",
+   "evidence": "the SP=8 capture has 12 distinct calls, so 12 shards (P23_SHARD=i/12) put one call on each of 12 cards in parallel, the most parallelism there is; 32 shards would leave 20 cards with no call. All 12 rc 0, about 3 minutes"
+  },
+  {
+   "id": "OV-31",
+   "answer": "done",
+   "evidence": "no 110-core cap applied: new entries run on 120 (minimal 12x10: wq_b, wo_b, q_a), 110 (wo_a 11x10, compressor 1024 11x10), 80 (compressor 512 8x10), 10 (weights_proj 1x10) cores"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.20",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T23:58:56",
+  "head": "db89d6a7e38",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.20.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py"
+  ]
+ }
+}

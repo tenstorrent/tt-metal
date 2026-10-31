@@ -11,6 +11,7 @@ a mesh row over 4 columns). Everything else is the stock op.
 depth is not a multiple of 32 rows.
 
 ## Options
+- `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.update_padded_kv_cache` (scalar and tensor / metadata forms): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 None (the relaxed check applies to ROW_MAJOR copy calls only; calls the stock op accepts run the same program).
 
 ## Measured

@@ -27,6 +27,7 @@ import ttnn
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, act_dtype, compute_config, dense_dtype, gemm_input
+from .cores import from_torch
 from .layout import streams_cols_to_chip_major
 
 BLOCKS = 5  # hc_mult keys + one value
@@ -50,7 +51,7 @@ class TtEngramKv:
         w_t = streams_cols_to_chip_major(w_t, hidden, tp, BLOCKS)  # [K, tp x 5 x H/TP]: chip column c's block
         dims = (None, 3) if TP_AXIS == 1 else (3, None)
         w_t = w_t.reshape(1, 1, k, BLOCKS * hidden).contiguous()
-        self.weight = ttnn.from_torch(
+        self.weight = from_torch(
             w_t,
             dtype=dense_dtype(w_t, "engram.wkv"),  # DENSE_WEIGHTS (P.13): bf16 (exact) or bfloat8_b
             layout=ttnn.TILE_LAYOUT,

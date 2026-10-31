@@ -38,3 +38,10 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Tests: `tests/unit/test_output_tensor.py` passed on the 8x4 (with the fork's uniform tests: 14 passed). Regression: unit 22 passed / 44 skipped, source 9 passed.
 - Needed by: deepseek_v41_flash_d_p P.16 (FORK_OUT_BUFFERS, 2026-10-30)
 - Files: `rotary_embedding_indexed.{hpp,cpp}`, `rotary_embedding_indexed_nanobind.cpp`, `device/rotary_embedding_indexed_device_operation.{hpp,cpp}`, `tests/unit/test_output_tensor.py`
+
+### max_grid: the op's cores inside a rectangle (deepseek_v41_flash_d_p FIX.15)
+- What: option `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.rotary_embedding_indexed`: every program of the op places its cores (and splits its work) inside (0, 0) .. (x - 1, y - 1) of the compute grid. Default: the device's whole grid, the call as before (same program, same hash).
+- Why: agent rule 18 (owner 2026-10-30): a Galaxy chassis' power supply trips when a chip's current rises too fast (di/dt); no op may run on more than 110 of a chip's 120 Tensix cores. DeepSeek-V4.1 passes tt/cores.max_grid() = 11 x 10 on a Galaxy, None elsewhere.
+- Measured: 8x4 Galaxy, one 5120-token chunk (rotary_embedding_indexed): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
+- Needed by: deepseek_v41_flash_d_p FIX.15
+- Files: device/rotary_embedding_indexed_device_operation.cpp, device/rotary_embedding_indexed_device_operation.hpp, rotary_embedding_indexed.cpp, rotary_embedding_indexed.hpp, rotary_embedding_indexed_nanobind.cpp

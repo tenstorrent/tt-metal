@@ -26,6 +26,7 @@ import ttnn
 from . import host_alloc
 from .ccl import dealloc
 from .common import DRAM, cast
+from .cores import max_grid, sub_cores, sub_cores_tiled
 from .layout import HC
 from .settings import settings
 
@@ -34,7 +35,11 @@ MIX_MODES = ("fused", "addcmul")
 
 def _fp32(y: ttnn.Tensor) -> ttnn.Tensor:
     """y as fp32 (exact): y itself when it already is; the caller frees what it got only when it is not y."""
-    return y if y.dtype == ttnn.float32 else ttnn.typecast(y, ttnn.float32, memory_config=DRAM)
+    return (
+        y
+        if y.dtype == ttnn.float32
+        else ttnn.typecast(y, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(y))
+    )
 
 
 class TtHcResidual:
@@ -96,10 +101,13 @@ class TtHcResidual:
                 comb_col=2 * n,
                 stats_output=ro,
                 stats_scratch=so,
+                max_grid=max_grid(),
             )
             return out, (row if ro is None else ro)  # (the kept object, DS41-149)
-        post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM)
-        comb = ttnn.slice(mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM)
+        post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM, sub_core_grids=sub_cores(mix))
+        comb = ttnn.slice(
+            mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM, sub_core_grids=sub_cores(mix)
+        )
         # stats_weight: fp32 X with fp32 F, or bf16 X (P.20) with bf16 F (mhc_post_ttnn README "Limits")
         yf = _fp32(y) if x.dtype == ttnn.float32 else (y if y.dtype == ttnn.bfloat16 else cast(y, ttnn.bfloat16))
         out, row = ttnn.bringup.mhc_post(
@@ -111,6 +119,7 @@ class TtHcResidual:
             compute_kernel_config=hc.post_cfg,
             stats_output=ro,
             stats_scratch=so,
+            max_grid=max_grid(),
         )
         row = row if ro is None else ro
         if yf is not y:
@@ -129,22 +138,31 @@ class TtHcResidual:
     def _fused(self, x, mix, y, rows):
         n = self.n
         if self.fold:  # GLUE_FOLD=on (P.19): post / comb read from the packed mixes
-            return ttnn.bringup.mhc_post(y, x, mix, mix, post_col=n, comb_col=2 * n)
-        post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM)
-        comb = ttnn.slice(mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM)
-        out = ttnn.bringup.mhc_post(y, x, post, comb)  # comb_transposed=True (default): output k reads comb[j n + k]
+            return ttnn.bringup.mhc_post(y, x, mix, mix, post_col=n, comb_col=2 * n, max_grid=max_grid())
+        post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM, sub_core_grids=sub_cores(mix))
+        comb = ttnn.slice(
+            mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM, sub_core_grids=sub_cores(mix)
+        )
+        out = ttnn.bringup.mhc_post(
+            y, x, post, comb, max_grid=max_grid()
+        )  # comb_transposed=True (default): output k reads comb[j n + k]
         dealloc(post)
         dealloc(comb)
         return out
 
     def _addcmul(self, x, mix, y, rows, w):
         n = self.n
-        col = lambda k: ttnn.slice(mix, [0, 0, 0, k], [1, 1, rows, k + 1], memory_config=DRAM)  # noqa: E731
-        xs = [ttnn.slice(x, [0, 0, 0, j * w], [1, 1, rows, (j + 1) * w], memory_config=DRAM) for j in range(n)]
+        col = lambda k: ttnn.slice(
+            mix, [0, 0, 0, k], [1, 1, rows, k + 1], memory_config=DRAM, sub_core_grids=sub_cores(mix)
+        )  # noqa: E731
+        xs = [
+            ttnn.slice(x, [0, 0, 0, j * w], [1, 1, rows, (j + 1) * w], memory_config=DRAM, sub_core_grids=sub_cores(x))
+            for j in range(n)
+        ]
         outs = []
         for k in range(n):
             p = col(n + k)
-            o = ttnn.multiply(y, p, dtype=ttnn.float32, memory_config=DRAM)
+            o = ttnn.multiply(y, p, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(y))
             dealloc(p)
             for j in range(n):
                 c = col(2 * n + j * n + k)
@@ -155,7 +173,7 @@ class TtHcResidual:
             outs.append(o)
         for t in xs:
             dealloc(t)
-        z = ttnn.concat(outs, dim=-1, memory_config=DRAM)
+        z = ttnn.concat(outs, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores(outs))
         for t in outs:
             dealloc(t)
         return z
@@ -169,7 +187,9 @@ class TtHcFfnResidual(TtHcResidual):
 
     def __call__(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         out = super().__call__(x, mix, y)
-        pre = ttnn.slice(mix, [0, 0, 0, 0], [1, 1, mix.shape[-2], self.n], memory_config=DRAM)
+        pre = ttnn.slice(
+            mix, [0, 0, 0, 0], [1, 1, mix.shape[-2], self.n], memory_config=DRAM, sub_core_grids=sub_cores(mix)
+        )
         return out, pre
 
 

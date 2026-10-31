@@ -448,6 +448,9 @@ void bind_sdpa(nb::module_& mod) {
                 bfloat8_b row records (ttnn.bringup.ckv_bfp4(dtype=ttnn.bfloat8_b)), read into bfloat8_b K tiles.
                 kv_format ROW_BFP8 (fork option, a window-only layer): kv [1, 1, T, 576] uint8 bfloat8_b row records,
                 TOPK == k_chunk_size, no kv_window.
+            max_grid (ttnn.CoreCoord, optional): bring-up fork option, default None (the device's whole compute
+                grid). The op runs on the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of it (a Galaxy's
+                110-core cap, deepseek_v41_flash_d_p FIX.15).
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.
@@ -471,7 +474,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("fp32_output") = false,
         nb::arg("fp32_scores") = false,
         nb::arg("bf16_probs") = false,
-        nb::arg("kv_window") = nb::none());
+        nb::arg("kv_window") = nb::none(),
+        nb::arg("max_grid") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,

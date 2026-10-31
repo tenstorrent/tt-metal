@@ -27,7 +27,8 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor(
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
     bool comb_transposed = true,
     uint32_t post_col = 0,
-    uint32_t comb_col = 0);
+    uint32_t comb_col = 0,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 struct MhcPostProgramFactory {
     // Cache miss: build the whole descriptor.

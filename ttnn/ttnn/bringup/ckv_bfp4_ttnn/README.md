@@ -19,6 +19,7 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
   only NoC-writes the 32 records (and the rounded tiles); no data-movement RISC touches the bytes.
 
 ## Options
+- `max_grid` (ttnn.CoreCoord or (x, y), default None) on `ttnn.bringup.ckv_bfp4` and `bfp_round` (prepared and plain dispatch alike): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 - `rounded` (default False): also return the rounded values as a new bf16 TILE tensor `[1, 1, n, 512]` (else None).
 - `memory_config` (default DRAM): the memory config of the `rounded` output.
 - `prepared` (default False: the ProgramDescriptor rebuilt in Python and dispatched through generic_op every

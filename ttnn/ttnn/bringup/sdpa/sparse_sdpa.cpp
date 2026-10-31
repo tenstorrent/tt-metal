@@ -27,7 +27,8 @@ ttnn::Tensor sparse_sdpa(
     bool fp32_output,
     bool fp32_scores,
     bool bf16_probs,
-    const std::optional<ttnn::Tensor>& kv_window) {
+    const std::optional<ttnn::Tensor>& kv_window,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -103,7 +104,8 @@ ttnn::Tensor sparse_sdpa(
         fp32_output,
         fp32_scores,
         bf16_probs,
-        kv_window);
+        kv_window,
+        max_grid);
 }
 
 }  // namespace ttnn::transformer::bringup

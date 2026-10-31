@@ -279,3 +279,10 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 - Tests: `tests/unit/test_rms_norm_ttnn_output_tensor.py` 4 passed on the 8x4 (bytes equal to the allocating call, refusals). Source regression: 26 passed; the unit suite was stopped by the owner (F.1 runs it).
 - Needed by: deepseek_v41_flash_d_p P.16 (FORK_OUT_BUFFERS, 2026-10-30)
 - Files: `rms_norm_ttnn.{hpp,cpp}`, `rms_norm_ttnn_nanobind.cpp`, `device/rms_norm_ttnn_device_operation{.hpp,.cpp,_types.hpp}`, `device/rms_norm_split_device_operation.{hpp,cpp}`, `tests/unit/test_rms_norm_ttnn_output_tensor.py`
+
+### max_grid: the op's cores inside a rectangle (deepseek_v41_flash_d_p FIX.15)
+- What: option `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.rms_norm` (its default and split programs): every program of the op places its cores (and splits its work) inside (0, 0) .. (x - 1, y - 1) of the compute grid. Default: the device's whole grid, the call as before (same program, same hash).
+- Why: agent rule 18 (owner 2026-10-30): a Galaxy chassis' power supply trips when a chip's current rises too fast (di/dt); no op may run on more than 110 of a chip's 120 Tensix cores. DeepSeek-V4.1 passes tt/cores.max_grid() = 11 x 10 on a Galaxy, None elsewhere.
+- Measured: 8x4 Galaxy, one 5120-token chunk (rms_norm): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
+- Needed by: deepseek_v41_flash_d_p FIX.15
+- Files: device/rms_norm_split_device_operation.cpp, device/rms_norm_split_device_operation.hpp, device/rms_norm_ttnn_device_operation.cpp, device/rms_norm_ttnn_device_operation.hpp, device/rms_norm_ttnn_device_operation_types.hpp, device/rms_norm_ttnn_program_factory.cpp, rms_norm_ttnn.cpp, rms_norm_ttnn.hpp, rms_norm_ttnn_nanobind.cpp

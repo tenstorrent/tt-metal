@@ -53,6 +53,7 @@ import ttnn
 from . import ccl, host_alloc
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, act_dtype, cast, fp32_acc, tp_sum
+from .cores import from_torch, max_grid, sub_cores
 from .settings import settings
 
 PACK_N = 1  # mhc_pre_xing_pack with one "stream": the sum of squares lands in column n (n + 2) = 3
@@ -96,7 +97,7 @@ class TtDistributedRmsNorm:
         # w as [1, 1, 1, H] fp32 TILE, the last dim split over the TP axis (chip column c holds w[c H/TP, (c+1) H/TP)),
         # replicated over the SP axis; split=False: replicated everywhere.
         dims = ((None, 3) if TP_AXIS == 1 else (3, None)) if split else (None, None)
-        self.weight = ttnn.from_torch(
+        self.weight = from_torch(
             weight.float().reshape(1, 1, 1, hidden).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -108,21 +109,23 @@ class TtDistributedRmsNorm:
     def rstd(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, R, H/TP] fp32 -> rsqrt(mean over the full row of x^2 + eps) [1, 1, R, 1] fp32, replicated over TP."""
         rows = x.shape[-2]
-        mix = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, 32], memory_config=DRAM)
-        packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=PACK_N)
+        mix = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, 32], memory_config=DRAM, sub_core_grids=sub_cores(x))
+        packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=PACK_N, max_grid=max_grid())
         dealloc(mix)
-        part = ttnn.slice(packed, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1], memory_config=DRAM)
+        part = ttnn.slice(
+            packed, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1], memory_config=DRAM, sub_core_grids=sub_cores(packed)
+        )
         dealloc(packed)
         if self.split:
             ss = tp_sum(self.mesh, part)
             dealloc(part)
         else:
             ss = part
-        ms = ttnn.multiply(ss, self.inv_h, dtype=ttnn.float32, memory_config=DRAM)
+        ms = ttnn.multiply(ss, self.inv_h, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(ss))
         dealloc(ss)
-        t = ttnn.add(ms, self.eps, dtype=ttnn.float32, memory_config=DRAM)
+        t = ttnn.add(ms, self.eps, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(ms))
         dealloc(ms)
-        rs = ttnn.rsqrt(t, memory_config=DRAM)
+        rs = ttnn.rsqrt(t, memory_config=DRAM, sub_core_grids=sub_cores(t))
         dealloc(t)
         return rs
 
@@ -138,14 +141,14 @@ class TtDistributedRmsNorm:
                 kw["input_window"] = tuple(window)
             out = self._out(self.site, rows, self.hidden)
             if out is None:
-                return ttnn.bringup.rms_norm(x, **kw)
-            ttnn.bringup.rms_norm(x, output_tensor=out, **kw)
+                return ttnn.bringup.rms_norm(x, **kw, max_grid=max_grid())
+            ttnn.bringup.rms_norm(x, output_tensor=out, **kw, max_grid=max_grid())
             return out  # (the kept object: the op returns a new wrapper of its buffer, DS41-149)
         assert window is None, "a column-split norm takes its whole input"
         w = x.shape[-1]
         so = None if self.site is None else self._out(self.site + ".stats", rows, self._stats_w(rows, w), ttnn.float32)
         part = ttnn.bringup.rms_norm(
-            x, stats_out=True, compute_kernel_config=self.ckc, memory_config=DRAM, output_tensor=so
+            x, stats_out=True, compute_kernel_config=self.ckc, memory_config=DRAM, output_tensor=so, max_grid=max_grid()
         )
         if so is not None:
             part = so
@@ -155,7 +158,9 @@ class TtDistributedRmsNorm:
         else:
             gathered = part
         out = self._out(self.site, rows, w)
-        y = ttnn.bringup.rms_norm(x, partial_stats=gathered, stats_width=self.hidden, output_tensor=out, **kw)
+        y = ttnn.bringup.rms_norm(
+            x, partial_stats=gathered, stats_width=self.hidden, output_tensor=out, **kw, max_grid=max_grid()
+        )
         if out is not None:
             y = out
         dealloc(gathered)
@@ -185,16 +190,18 @@ class TtDistributedRmsNorm:
             return self._fork(x, window)
         if window is not None:  # off (the P.17 path): the caller's slice, here
             rows = x.shape[-2]
-            xs = ttnn.slice(x, [0, 0, 0, window[0]], [1, 1, rows, window[1]], memory_config=DRAM)
+            xs = ttnn.slice(
+                x, [0, 0, 0, window[0]], [1, 1, rows, window[1]], memory_config=DRAM, sub_core_grids=sub_cores(x)
+            )
             y = self(xs)
             dealloc(xs)
             return y
         assert x.dtype == ttnn.float32, f"NORM_IMPL=off takes fp32 rows ({x.dtype}; BF16_ACTIVATIONS=on needs on)"
         assert x.shape[-1] * self.tp == self.hidden, (x.shape, self.hidden)
         rs = self.rstd(x)
-        xn = ttnn.multiply(x, rs, dtype=ttnn.float32, memory_config=DRAM)
+        xn = ttnn.multiply(x, rs, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(x))
         dealloc(rs)
-        y = ttnn.multiply(xn, self.weight, dtype=self.out_dtype, memory_config=DRAM)
+        y = ttnn.multiply(xn, self.weight, dtype=self.out_dtype, memory_config=DRAM, sub_core_grids=sub_cores(xn))
         dealloc(xn)
         if not self.gather:
             return y

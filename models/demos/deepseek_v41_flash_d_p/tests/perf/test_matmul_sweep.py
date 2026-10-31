@@ -395,9 +395,13 @@ def _distinct(calls: list[dict]) -> dict:
 
 @mesh_parametrize
 def test_sweep(mesh_device):
-    """The sweep on the spec's mesh (every chip runs each candidate). P.19 sweeps on single cards instead
-    (test_sweep_card, OV-27)."""
-    _sweep(mesh_device, None)
+    """The sweep on the spec's mesh (every chip runs each candidate), every candidate held to the grid the model's
+    matmuls may use (tt/cores.worker_grid: 11 x 10 under MAX_WORKER_CORES on a Galaxy, FIX.15; the whole grid
+    elsewhere). P.19 swept on single cards (test_sweep_card, OV-27); FIX.15 on the mesh (agent rule 19: no single-card
+    job on a Galaxy whose mesh the run depends on)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.cores import worker_grid
+
+    _sweep(mesh_device, worker_grid(mesh_device))
 
 
 def _card_params() -> dict:

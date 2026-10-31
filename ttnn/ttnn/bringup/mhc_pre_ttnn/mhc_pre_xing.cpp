@@ -70,7 +70,8 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     const std::optional<Tensor>& collapse_pre,
     int64_t partials,
     const std::optional<Tensor>& hc_output,
-    const std::optional<Tensor>& y_output) {
+    const std::optional<Tensor>& y_output,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     if (!cfg.fp32_dest_acc_en) {
         throw UnsupportedAxisError("mhc_pre_xing: fp32_dest_acc_en=False not in SUPPORTED [True]");
@@ -181,6 +182,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     p.clamp_max = clamp_max;
     p.deepseek = deepseek;
     p.compute_config = cfg;
+    p.max_grid = max_grid;
     auto out = ttnn::prim::bringup::mhc_pre_xing(input, streams, p, collapse_pre, hc_output, y_output);
     std::optional<Tensor> hc, y;
     size_t k = 0;
@@ -199,7 +201,8 @@ Tensor mhc_pre_xing_pack(
     int64_t n,
     const std::optional<Tensor>& engram_keys,
     const std::optional<Tensor>& engram_weight,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& output_tensor,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     if (n < 1 || n > 4) {
         throw ValueErrorCpp(fmt::format("mhc_pre_xing_pack: n={} must be in [1, 4]", n));
     }
@@ -237,7 +240,8 @@ Tensor mhc_pre_xing_pack(
         if (lead != 1 || ws[-2] != TILE_HW || ws[-1] != ss[-1]) {
             throw ValueErrorCpp("mhc_pre_xing_pack: engram_weight must be (..., 32, n*C) with leading dims 1");
         }
-        return ttnn::prim::bringup::mhc_engram_pack(streams, *engram_keys, *engram_weight, static_cast<uint32_t>(n))
+        return ttnn::prim::bringup::mhc_engram_pack(
+                   streams, *engram_keys, *engram_weight, static_cast<uint32_t>(n), max_grid)
             .at(0);  // [1] is the partials scratch, freed with the vector
     }
     if (!mix_opt.has_value()) {
@@ -267,6 +271,7 @@ Tensor mhc_pre_xing_pack(
     p.compute_coef = false;
     p.pack_stats = true;
     p.compute_config = default_compute_kernel_config();
+    p.max_grid = max_grid;
     return ttnn::prim::bringup::mhc_pre_xing(mix, streams, p, std::nullopt, output_tensor).at(0);
 }
 

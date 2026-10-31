@@ -30,6 +30,7 @@ With fp32 DEST off, ratio 1 / 4, `natural_query_blocks=False` and no block epilo
 prefer the source op then.
 
 ## Options
+- `max_grid_x` / `max_grid_y` (int, default 0 = no limit) in `ttnn.bringup.IndexerScoreProgramConfig` (indexer_score_dsa, ring_indexer_score_dsa): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 Fork additions marked; the rest as the source (`indexer_score_nanobind.cpp`).
 
 Realistic (use by default):

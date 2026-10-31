@@ -1,0 +1,179 @@
+{
+ "used": [
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/fix15_core_probe/ (attempt 2's and this attempt's tt-probe scripts) before finishing",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-55",
+   "how": "ran pre-commit (black / autoflake / isort / clang-format rewrote 22 files) before the one gate --check, then rebuilt for the 3 reformatted C++ files",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile on every model-sized run (core audits, matmul capture / sweep, position profiles)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run p51200 / p512000 position metrics from generated/bringup_adhoc/FIX.15.json, not the ledger",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-103",
+   "how": "accepted that cores.from_torch's host conversion rounds fp32 -> bf16 to nearest even where the device packer rounded ties away; gate unchanged (err_final_hidden 0.18973 vs 0.18954)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "K-57",
+   "evidence": "Fix 'touch /tmp/tt-device-{0..N}.dirty (whole-box reset)' is now forbidden: agent rule 19 / OV-33 / OV-34 (2026-10-31): never trigger a reset by any back door; a box that does not open is a stop. FIX.15 attempt 2's dirty-flag reset of card 0 left the 8x4 mesh unable to open until the owner reset the box.",
+   "cited": true
+  },
+  {
+   "id": "DS41-175",
+   "evidence": "Out of date: agent rule 19 / OV-34 forbid single-card device jobs (--device N|auto) on a Galaxy whose mesh the run depends on; FIX.15 attempt 2's single-card probe hung, the runner reset card 0 alone and cluster discovery then failed. FIX.15 swept the 12 calls on the 8x4 mesh instead (test_matmul_sweep.py test_sweep, 5:44 for all 12).",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "which stock ops ignore or refuse a core grid (ttnn.copy, ttnn.maximum, ROW_MAJOR typecast, slice into output_tensor, a no-op slice of an ND-sharded tensor, to_layout(RM) over one tile row): now DS41-176",
+  "ttnn.from_torch(device=...) and DRAMZeroFill run device programs on the whole grid: now DS41-177",
+  "scripts/tt-probe.sh mesh mode resets the whole box after every probe, a passing one too: now DS41-178",
+  "the brief's knowledge-use path models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/ is outside the step's allowed paths; this report is in the ledger's results/knowledge_use (as attempts 1 and 2)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.15",
+   "answer": "done",
+   "evidence": "MAX_WORKER_CORES=110 (tt/settings.py, Galaxy only) read through tt/cores.py; forks / MoE block / stock ops capped; test_core_audit CORES_LOAD=1 strict: 0 programs over 110 in load, compile and warm chunk (before: 77 op rows at 120 / 114); matmuls re-swept on the 8x4 mesh at 11 x 10 (12 calls, 2 new winners in GALAXY); per-op cores and ms, chunk device / wall at the rung, p51200, p512000 in BREADCRUMBS FIX.15; gate PASS"
+  },
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated; whole-slab reads are 2 slices + a concat of the same rows"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the only Python-built program added (served._zero_fill_capped) dispatches through ttnn.bringup.prepared_program.generic_op; ckv_bfp4 / bfp_round keep prepared=True with max_grid"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run; new forks carry tests/source.yaml skeletons for F.1"
+  },
+  {
+   "id": "OV-32",
+   "answer": "done",
+   "evidence": "tree checked: P.20's code changes are not present (GALAXY had P.19's 12 entries, attention SP settings as committed); its BREADCRUMBS record left as found"
+  },
+  {
+   "id": "OV-33",
+   "answer": "done",
+   "evidence": "no tt-smi, no dirty flag, no provoked run; disclosed: the one tt-probe.sh mesh probe (ended 05:29, probe_002) was followed by the probe runner's own whole-box reset, its documented mesh-mode behaviour (DS41-178); afterwards only run_safe_pytest"
+  },
+  {
+   "id": "OV-34",
+   "answer": "done",
+   "evidence": "attempt 2's edits checked and kept; no --device job: audits, the probe and the matmul sweep ran on the 8x4 mesh"
+  }
+ ],
+ "cited_only": [
+  "DS41-176",
+  "DS41-178",
+  "DS41-180"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.15",
+  "role": "overseer",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-31T07:42:24",
+  "head": "1f795762116",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.15.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.15_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.15_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.15_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.15.overseer.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_core_audit.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/collapse.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/cores.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/router.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "models/demos/moe_block/moe_block.py",
+   "models/demos/moe_block/tt/fused_head.py",
+   "models/demos/moe_block/tt/router_stream.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/README.md",
+   "ttnn/ttnn/bringup/embedding/CHANGELOG.md",
+   "ttnn/ttnn/bringup/embedding/README.md",
+   "ttnn/ttnn/bringup/embedding/tests/source.yaml",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_ttnn_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.hpp",
+   "ttnn/ttnn/bringup/nlp_concat_heads/CHANGELOG.md",
+   "ttnn/ttnn/bringup/nlp_concat_heads/CMakeLists.txt",
+   "ttnn/ttnn/bringup/nlp_concat_heads/README.md",
+   "ttnn/ttnn/bringup/nlp_concat_heads/sources.cmake",
+   "ttnn/ttnn/bringup/nlp_concat_heads/tests/source.yaml",
+   "ttnn/ttnn/bringup/nlp_create_qkv_heads/CHANGELOG.md",
+   "ttnn/ttnn/bringup/nlp_create_qkv_heads/CMakeLists.txt",
+   "ttnn/ttnn/bringup/nlp_create_qkv_heads/README.md",
+   "ttnn/ttnn/bringup/nlp_create_qkv_heads/sources.cmake",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/README.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/README.md",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/README.md",
+   "ttnn/ttnn/bringup/slice_write/CHANGELOG.md",
+   "ttnn/ttnn/bringup/slice_write/README.md",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/CHANGELOG.md",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/README.md"
+  ]
+ }
+}

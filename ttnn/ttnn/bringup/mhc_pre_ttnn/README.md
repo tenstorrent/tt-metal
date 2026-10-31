@@ -32,6 +32,7 @@ Single device; the caller does the mesh reduction (all_reduce / all_gather + add
   products and sums of squares (DeepSeek-V4 engram gates).
 
 ## Options
+- `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.mhc_pre_xing` and `mhc_pre_xing_pack` (engram pack too): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 Realistic (use by default): every option below.
 
 `mhc_pre` (from `mhc_pre_ttnn_nanobind.cpp`):

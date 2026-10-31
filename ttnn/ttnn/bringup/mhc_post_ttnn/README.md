@@ -17,6 +17,7 @@ same pass: stats (..., T, 32) = X' @ W (FPU, fp32 DEST) with column n (n + 2) = 
 - With an identity comb: instead of per-stream `ttnn.addcmul` + `ttnn.concat` for X'_k = post_k F + X_k (an exact replacement: the zero terms add exact zeros).
 
 ## Options
+- `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.mhc_post` (plain and stats_weight programs): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 (from `mhc_post_ttnn_nanobind.cpp`)
 
 Realistic (use by default): every option below.

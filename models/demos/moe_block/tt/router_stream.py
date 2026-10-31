@@ -965,7 +965,7 @@ class RouterStream:
         wt = w_router.float()  # [E, H]
         glob = torch.cat([wt[:, c * H // C : (c + 1) * H // C] for c in range(C)], dim=1)  # [E, C H / C]
         glob = torch.cat([glob] * R, dim=0)
-        w = ttnn.from_torch(
+        w = self._upload(
             glob,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -973,7 +973,7 @@ class RouterStream:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, dims=(0, 1), mesh_shape=(R, C)),
         )
-        b = ttnn.from_torch(
+        b = self._upload(
             bias.float().reshape(-1, 1).expand(-1, 32).contiguous(),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -981,7 +981,7 @@ class RouterStream:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
-        ix = ttnn.from_torch(
+        ix = self._upload(
             torch.arange(E, dtype=torch.int32).reshape(-1, 1).expand(-1, 32).contiguous(),
             dtype=ttnn.uint16,
             layout=ttnn.TILE_LAYOUT,
@@ -990,6 +990,15 @@ class RouterStream:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
         return w, b, ix
+
+    # (MoEOptions.max_grid set: the uploads built on the host and copied - ttnn.from_torch with a device converts on
+    # the device's whole grid; the head sets this)
+    host_build = False
+
+    def _upload(self, t, *, device, memory_config, **kw):
+        if not self.host_build:
+            return ttnn.from_torch(t, device=device, memory_config=memory_config, **kw)
+        return ttnn.to_device(ttnn.from_torch(t, **kw), device, memory_config=memory_config)
 
     def out_tensor(self):
         return ttnn.allocate_tensor_on_device(

@@ -108,7 +108,7 @@ tt::tt_metal::ProgramDescriptor MhcEngramPackProgramFactory::create_descriptor(
         TT_FATAL(t->buffer()->page_size() == page, "mhc_pre_xing_pack engram: weight / row must be fp32 tiles");
     }
 
-    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const CoreCoord grid = cut_grid(device->compute_with_storage_grid_size(), params.max_grid);
     auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
         tt::tt_metal::split_work_to_cores(grid, p.units, true);
     std::vector<CoreCoord> cores;

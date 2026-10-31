@@ -1186,3 +1186,4 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   attempt aborted (OV-33), orchestrator paused. A killed mesh run had marked all 32 cards dirty: the next safe-runner
   job would tt-smi -r the box. Asked the owner how to reset. Lesson (skill + agent rule, after the box is back): no
   single-card device job on a Galaxy whose mesh a run depends on, or only without the per-card reset.
+- 05:06 owner reset the boards; dirty marks cleared; box test PASS (13 s); note OV-34 (FIX.15: mesh-only, rule 19); resumed --until FIX.15.

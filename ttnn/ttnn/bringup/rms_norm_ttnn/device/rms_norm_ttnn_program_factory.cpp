@@ -48,6 +48,27 @@ namespace ttnn::operations::bringup::rms_norm_ttnn {
 namespace {
 
 namespace kh = ttnn::kernel_lib::host;
+
+// Fork option max_grid (deepseek_v41_flash_d_p FIX.15): the grid create_descriptor builds this call's program on.
+// Set for the duration of one create_descriptor call (MaxGridScope); every planner below reads the grid through
+// op_grid(), so the default (unset) is the device's whole compute grid, as before.
+thread_local std::optional<CoreCoord> t_max_grid;
+
+CoreCoord op_grid(tt::tt_metal::distributed::MeshDevice* device) {
+    auto g = device->compute_with_storage_grid_size();
+    if (t_max_grid.has_value()) {
+        g.x = std::max<std::size_t>(1, std::min<std::size_t>(g.x, t_max_grid->x));
+        g.y = std::max<std::size_t>(1, std::min<std::size_t>(g.y, t_max_grid->y));
+    }
+    return g;
+}
+
+struct MaxGridScope {
+    explicit MaxGridScope(const std::optional<CoreCoord>& g) { t_max_grid = g; }
+    ~MaxGridScope() { t_max_grid.reset(); }
+    MaxGridScope(const MaxGridScope&) = delete;
+    MaxGridScope& operator=(const MaxGridScope&) = delete;
+};
 using tt::tt_metal::BufferType;
 using tt::tt_metal::CBDescriptor;
 using tt::tt_metal::CBFormatDescriptor;
@@ -597,7 +618,7 @@ bool same_shard_spec(const Tensor& a, const Tensor& b) {
 }
 
 CoreRangeSet full_grid(tt::tt_metal::distributed::MeshDevice* device) {
-    const auto grid = device->compute_with_storage_grid_size();
+    const auto grid = op_grid(device);
     return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
 }
 
@@ -780,7 +801,7 @@ KernelDescriptor::ConfigDescriptor reader_dm_config(const Plan& plan) {
 int64_t width_group_cores(int64_t Wt, int64_t cap) { return largest_divisor_at_most(Wt, std::max<int64_t>(1, cap)); }
 
 std::pair<int64_t, int64_t> auto_width_split(tt::tt_metal::distributed::MeshDevice* device, int64_t Rt, int64_t Wt) {
-    const auto grid = device->compute_with_storage_grid_size();
+    const auto grid = op_grid(device);
     const int64_t num_cores = static_cast<int64_t>(grid.x) * grid.y;
     const int64_t row_cores = std::max<int64_t>(1, std::min(Rt, num_cores));
     int64_t best_gw = 1, best_gh = 1, best_total = row_cores;
@@ -807,7 +828,7 @@ std::pair<int64_t, int64_t> resolve_width_split(tt::tt_metal::distributed::MeshD
     if (GRID_W == 0) {
         return auto_width_split(device, Rt, Wt);
     }
-    const auto grid = device->compute_with_storage_grid_size();
+    const auto grid = op_grid(device);
     const int64_t num_cores = static_cast<int64_t>(grid.x) * grid.y;
     const int64_t cap = std::min(GRID_W, num_cores);
     const int64_t gh = cap > static_cast<int64_t>(grid.x) ? 1 : std::max<int64_t>(1, std::min<int64_t>(Rt, grid.y));
@@ -823,7 +844,7 @@ Plan plan_interleaved_width_split(
     int64_t R_rm,
     int64_t gw,
     int64_t gh) {
-    const auto grid = device->compute_with_storage_grid_size();
+    const auto grid = op_grid(device);
     const int64_t wt_per_core = Wt / gw;
     const auto mc_cfg = mcast_cfg(false);
     Plan p;
@@ -1606,7 +1627,7 @@ ProgramDescriptor create_program_descriptor(
         };
 
         const int64_t stream_depth = depth_candidates[0];
-        const auto grid = device->compute_with_storage_grid_size();
+        const auto grid = op_grid(device);
         int64_t active = 0;
         for (const auto& a : plan.assignment) {
             if (a.row_count) {
@@ -2261,6 +2282,7 @@ ProgramDescriptor create_program_descriptor(
 
 tt::tt_metal::ProgramDescriptor RmsNormProgramFactory::create_descriptor(
     const RmsNormParams& operation_attributes, const RmsNormInputs& tensor_args, Tensor& output) {
+    const MaxGridScope max_grid_scope(operation_attributes.max_grid);
     return create_program_descriptor(
         tensor_args.input,
         output,

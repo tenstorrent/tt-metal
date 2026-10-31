@@ -53,10 +53,11 @@ import torch
 
 import ttnn
 
-from . import ccl
+from . import ccl, cores
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, tp_sum
+from .cores import from_torch, max_grid, sub_cores, to_rm
 from .norm import TtDistributedRmsNorm
 from .rope import (
     PairPerm,
@@ -76,7 +77,7 @@ from .settings import settings
 
 
 def _upload(mesh, t, dtype, layout, dims=None):
-    return ttnn.from_torch(
+    return from_torch(
         t.contiguous(),
         dtype=dtype,
         layout=layout,
@@ -131,8 +132,10 @@ class CompressRope:
         assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         out = []
         for t in (self.cos, self.sin):
-            sl = ttnn.slice(t, [0, 0, g0, 0], [1, 1, g0 + n, self.width], memory_config=DRAM)
-            tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
+            sl = ttnn.slice(
+                t, [0, 0, g0, 0], [1, 1, g0 + n, self.width], memory_config=DRAM, sub_core_grids=sub_cores(t)
+            )
+            tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
             dealloc(sl)
             if sp > 1:
                 part = ttnn.mesh_partition(tl, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
@@ -219,7 +222,9 @@ class AttnTable:
         dst = self.win if self.bfp4 else self.buf
         n = rows_rm.shape[-2]
         assert rows_rm.shape[-1] == self.width and 0 <= row0 and row0 + n <= self.rows, (rows_rm.shape, row0, self.rows)
-        ttnn.experimental.slice_write(rows_rm, dst, [0, 0, row0, 0], [1, 1, row0 + n, self.width], [1, 1, 1, 1])
+        ttnn.bringup.slice_write(
+            rows_rm, dst, [0, 0, row0, 0], [1, 1, row0 + n, self.width], [1, 1, 1, 1], max_grid=max_grid()
+        )
 
     def append(self, rows_rm: ttnn.Tensor, g0: int) -> None:
         """History: compressed rows [g0, g0 + n) = rows_rm [1, 1, n, 512] bf16 ROW_MAJOR, replicated (device)."""
@@ -233,7 +238,9 @@ class AttnTable:
         """
         assert self.bfp4 and g0 + rows_tile.shape[-2] <= self.hist, (self.bfp4, g0, rows_tile.shape, self.hist)
         prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # (P.7: the program built once, row0 patched)
-        return ttnn.bringup.ckv_bfp4(rows_tile, self.buf, g0, rounded=rounded, memory_config=DRAM, prepared=prepared)
+        return ttnn.bringup.ckv_bfp4(
+            rows_tile, self.buf, g0, rounded=rounded, memory_config=DRAM, prepared=prepared, max_grid=max_grid()
+        )
 
     def put_records(self, records: ttnn.Tensor, g0: int) -> None:
         """CKV_FORMAT=bfp4_rows, CKV_PACK_BEFORE_GATHER=on (P.11): history rows [g0, g0 + n) from gathered row
@@ -241,7 +248,9 @@ class AttnTable:
         ``append_tiles`` of their rows."""
         n = records.shape[-2]
         assert self.bfp4 and g0 + n <= self.hist and records.shape[-1] == BFP4_ROW_BYTES, (g0, records.shape, self.hist)
-        ttnn.experimental.slice_write(records, self.buf, [0, 0, g0, 0], [1, 1, g0 + n, BFP4_ROW_BYTES], [1, 1, 1, 1])
+        ttnn.bringup.slice_write(
+            records, self.buf, [0, 0, g0, 0], [1, 1, g0 + n, BFP4_ROW_BYTES], [1, 1, 1, 1], max_grid=max_grid()
+        )
 
     def put_window(self, carry: ttnn.Tensor, kv_rm: ttnn.Tensor) -> None:
         """The window region = [carry 128 | chunk S] (device; both bf16 ROW_MAJOR, replicated, not consumed)."""
@@ -338,13 +347,21 @@ class TtServedRows:
         args = dict(layer_idx=self.slab.row, num_layers=self.slab.layers, cluster_axis=SP_AXIS, tp_axis=self.tp_axis)
         if self.ratio == 1:
             ttnn.bringup.update_padded_kv_cache(
-                self.slab.tensor, slab, slot_idx=self.slab.slot, kv_actual_global=start, valid_global=end, **args
+                self.slab.tensor,
+                slab,
+                slot_idx=self.slab.slot,
+                kv_actual_global=start,
+                valid_global=end,
+                **args,
+                max_grid=max_grid(),
             )
             return
         slot = self._slot.at(self.slab.slot)
         kv = self._pos.at(start // 32)  # start / r
         valid = self._pos.at(-(-end // 32))  # ceil32(end) / r: the last record's rows (zero past the groups)
-        ttnn.bringup.update_padded_kv_cache(self.slab.tensor, slab, slot, kv, valid_global=valid, **args)
+        ttnn.bringup.update_padded_kv_cache(
+            self.slab.tensor, slab, slot, kv, valid_global=valid, **args, max_grid=max_grid()
+        )
         for t in (slot, kv, valid):
             self._slot.release(t) if t is slot else self._pos.release(t)
 
@@ -356,15 +373,16 @@ class TtServedRows:
         assert start % 32 == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end, self.max_seq)
         k = (start % g.chunk) // 32
         idx = self.tables.srv_row(k)  # GLUE_FOLD=on (P.19): sliced once per start for the chunk's writes
-        rows = ttnn.embedding(
-            ttnn.reshape(idx, [1, g.w]),
-            ttnn.reshape(rows_rm, [g.chunk, self.tok_width]),
+        rows = ttnn.bringup.embedding(
+            ttnn.reshape(idx, [1, g.w], sub_core_grids=sub_cores(idx)),
+            ttnn.reshape(rows_rm, [g.chunk, self.tok_width], sub_core_grids=sub_cores(rows_rm)),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=DRAM,
+            max_grid=max_grid(),
         )
         self.tables.release_srv(idx)
-        slab = ttnn.reshape(rows, [1, 1, g.w // self.ratio, self.width])
+        slab = ttnn.reshape(rows, [1, 1, g.w // self.ratio, self.width], sub_core_grids=sub_cores(rows))
         self._put(slab, start, end)
         if self.table is not None and table:  # STATIC_TABLES=on (P.21): the same rows into the table, natural order
             self.table.append(rows_rm, start // self.ratio)
@@ -513,31 +531,33 @@ class TtCompressor:
     def _pool(self, p: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, R, 2 hd] = [kv | gate] per token -> the pair-pooled latent [1, 1, R / 2, hd] fp32."""
         rows, hd = p.shape[-2], self.hd
-        pr = ttnn.reshape(p, [1, 1, rows // 2, 4 * hd])  # [kv_0 | g_0 | kv_1 | g_1]
+        pr = ttnn.reshape(p, [1, 1, rows // 2, 4 * hd], sub_core_grids=sub_cores(p))  # [kv_0 | g_0 | kv_1 | g_1]
 
         def col(i):
-            return ttnn.slice(pr, [0, 0, 0, i * hd], [1, 1, rows // 2, (i + 1) * hd], memory_config=DRAM)
+            return ttnn.slice(
+                pr, [0, 0, 0, i * hd], [1, 1, rows // 2, (i + 1) * hd], memory_config=DRAM, sub_core_grids=sub_cores(pr)
+            )
 
         kv0, g0, kv1, g1 = col(0), col(1), col(2), col(3)
-        m = ttnn.maximum(g0, g1, memory_config=DRAM)
+        m = cores.maximum(g0, g1, memory_config=DRAM)
         e = []
         for g in (g0, g1):
-            d = ttnn.subtract(g, m, dtype=ttnn.float32, memory_config=DRAM)
-            e.append(ttnn.exp(d, memory_config=DRAM))
+            d = ttnn.subtract(g, m, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(g))
+            e.append(ttnn.exp(d, memory_config=DRAM, sub_core_grids=sub_cores(d)))
             dealloc(d)
             dealloc(g)
         dealloc(m)
-        den = ttnn.add(e[0], e[1], dtype=ttnn.float32, memory_config=DRAM)
+        den = ttnn.add(e[0], e[1], dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores())
         acc = None
         for kv, ei in zip((kv0, kv1), e):
-            wt = ttnn.divide(ei, den, memory_config=DRAM)
-            t = ttnn.multiply(kv, wt, dtype=ttnn.float32, memory_config=DRAM)
+            wt = ttnn.divide(ei, den, memory_config=DRAM, sub_core_grids=sub_cores(ei))
+            t = ttnn.multiply(kv, wt, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(kv))
             for u in (wt, ei, kv):
                 dealloc(u)
             if acc is None:
                 acc = t
             else:
-                nxt = ttnn.add(acc, t, dtype=ttnn.float32, memory_config=DRAM)
+                nxt = ttnn.add(acc, t, dtype=ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores(acc))
                 dealloc(acc)
                 dealloc(t)
                 acc = nxt
@@ -621,7 +641,7 @@ class TtCompressor:
         """[1, 1, n, w] bf16 TILE row-split -> [1, 1, SP n, w] bf16 ROW_MAJOR on every chip (natural order), rows at
         or past ``valid`` zero."""
         g = self._gathered_tile(t, valid)
-        rm = ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        rm = to_rm(g, memory_config=DRAM)
         if g is not t and rm is not g:
             dealloc(g)
         return rm
@@ -640,12 +660,18 @@ class TtCompressor:
             iota = (
                 self.tables.iota
                 if full
-                else ttnn.slice(self.tables.iota, [0, 0, 0, 0], [1, 1, total, 1], memory_config=DRAM)
+                else ttnn.slice(
+                    self.tables.iota,
+                    [0, 0, 0, 0],
+                    [1, 1, total, 1],
+                    memory_config=DRAM,
+                    sub_core_grids=sub_cores(self.tables.iota),
+                )
             )
             keep = ttnn.lt(iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
             if not full:
                 dealloc(iota)
-            masked = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM)
+            masked = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(g))
             dealloc(keep)
             if g is not t:
                 dealloc(g)
@@ -668,7 +694,7 @@ class TtCompressor:
                 rounded = table.append_tiles(g, start // self.ratio)
                 if g is not t:
                     dealloc(g)
-                rm = ttnn.to_layout(rounded, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+                rm = to_rm(rounded, memory_config=DRAM)
                 if rm is not rounded:
                     dealloc(rounded)
                 cache.write(rm, start, end, table=False)
@@ -688,7 +714,14 @@ class TtCompressor:
         masked = tables.mask_local(t, valid)
         prepared = settings.get("CKV_BFP4_PREPARED") == "on"
         rounded = ttnn.bringup.ckv_bfp4(
-            masked, tables.packed("rows", n), 0, rounded=True, memory_config=DRAM, prepared=prepared, compact=True
+            masked,
+            tables.packed("rows", n),
+            0,
+            rounded=True,
+            memory_config=DRAM,
+            prepared=prepared,
+            compact=True,
+            max_grid=max_grid(),
         )
         if masked is not t:
             dealloc(masked)
@@ -696,7 +729,7 @@ class TtCompressor:
         cache.table.put_records(gat, start // self.ratio)
         if not tables.is_kept(gat):
             dealloc(gat)
-        rm = ttnn.to_layout(rounded, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        rm = to_rm(rounded, memory_config=DRAM)
         if rm is not rounded:
             dealloc(rounded)
         cache.write_local(rm, start, end)

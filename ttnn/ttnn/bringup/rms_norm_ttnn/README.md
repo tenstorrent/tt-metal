@@ -23,6 +23,7 @@ Cores: rows split over the full compute grid; where rows under-fill the grid the
 - Not for an exact fp32 RMS statistic: see Limits (DS41-44); use `ttnn.bringup.mhc_pre_xing_pack` for that.
 
 ## Options
+- `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.rms_norm` (its default and split programs): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 (from `rms_norm_ttnn_nanobind.cpp`)
 
 Realistic (use by default): every option below.

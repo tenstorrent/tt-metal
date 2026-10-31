@@ -159,7 +159,7 @@ ProgramDescriptor create_xing_program_descriptor(
     TT_FATAL(!has_streams || x.buffer()->page_size() == x_page, "mhc_pre_xing: streams must be fp32 or bf16 tiles");
     const uint32_t y_page = y.buffer()->page_size();
 
-    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const CoreCoord grid = cut_grid(device->compute_with_storage_grid_size(), p.max_grid);
     auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
         tt::tt_metal::split_work_to_cores(grid, static_cast<uint32_t>(units), true);
 

@@ -52,6 +52,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // offset is a runtime arg. nullopt input_rows = every row from the offset on.
         uint32_t input_row_offset = 0;
         std::optional<uint32_t> input_rows;
+        // Bring-up option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18), either form: the work split runs
+        // on the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of the compute grid. Default (none) = the
+        // whole grid. Hashed when set.
+        std::optional<CoreCoord> max_grid = std::nullopt;
     };
 
     struct tensor_args_t {
@@ -148,6 +152,7 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
     uint32_t input_row_offset = 0,
-    std::optional<uint32_t> input_rows = std::nullopt);
+    std::optional<uint32_t> input_rows = std::nullopt,
+    std::optional<CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::prim::bringup

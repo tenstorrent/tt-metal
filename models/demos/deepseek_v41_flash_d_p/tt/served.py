@@ -27,6 +27,7 @@ import ttnn
 
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
+from .cores import from_torch, max_grid, sub_cores
 
 
 def alloc_served(mesh, width: int, rows: int, shard_rows: int, batches: int, dedup: bool) -> ttnn.Tensor:
@@ -50,7 +51,10 @@ def alloc_served(mesh, width: int, rows: int, shard_rows: int, batches: int, ded
     t = ttnn.allocate_tensor_on_device(
         ttnn.Shape([batches, 1, rows, width]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, mc
     )
-    DRAMZeroFill.op(t)
+    if max_grid(mesh) is None:
+        DRAMZeroFill.op(t)
+    else:
+        _zero_fill_capped(t, max_grid(mesh))
     phys = ttnn.MeshShape(mesh.shape[0], mesh.shape[1])
     coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(phys)]
     if dedup and mesh.shape[TP_AXIS] > 1:
@@ -60,6 +64,47 @@ def alloc_served(mesh, width: int, rows: int, shard_rows: int, batches: int, ded
         topo = ttnn.TensorTopology(ttnn.MeshShape([n]), [ttnn.PlacementReplicate()], coords)
     t.update_tensor_topology(topo)
     return t
+
+
+def _zero_fill_capped(t: ttnn.Tensor, grid: ttnn.CoreCoord) -> None:
+    """DRAMZeroFill.op (models/demos/deepseek_v3_b1/micro_ops/dram_zero_fill/op.py) on ``grid`` (FIX.15,
+    MAX_WORKER_CORES: the op takes the device's whole grid, 120 cores on a Galaxy; its kernel partitions the pages over
+    whatever rectangle it is given). The same kernel, CB and arguments; dispatched prepared (OV-23)."""
+    from ttnn.bringup.prepared_program import generic_op as prepared_generic_op
+
+    from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill import op as zf
+
+    page_size, total_pages = t.buffer_aligned_page_size(), t.buffer_num_pages()
+    gx, gy = grid.x, grid.y
+    per_core = (total_pages + gx * gy - 1) // (gx * gy)
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+    named = [
+        ("output_cb", zf.OUTPUT_CB),
+        ("total_pages", total_pages),
+        ("pages_per_core", per_core),
+        ("page_size", page_size),
+        ("grid_start_x", 0),
+        ("grid_start_y", 0),
+        ("grid_end_x", gx - 1),
+        ("grid_end_y", gy - 1),
+    ]
+    fmt = dict(buffer_index=zf.OUTPUT_CB, data_format=t.dtype, page_size=page_size)
+    if t.layout == ttnn.TILE_LAYOUT:
+        fmt["tile"] = ttnn.TileDescriptor(zf.TILE_32x32)
+    cb = ttnn.CBDescriptor(total_size=page_size, core_ranges=cores, format_descriptors=[ttnn.CBFormatDescriptor(**fmt)])
+    kd = zf.UnifiedKernelDescriptor(
+        kernel_source=zf.KERNEL_PATH,
+        core_ranges=cores,
+        ncrisc_compile_time_args=ttnn.TensorAccessorArgs(t).get_compile_time_args(),
+        ncrisc_named_compile_time_args=named,
+        ncrisc_common_runtime_args=[t.buffer_address()],
+        trisc_compute_config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=t.dtype == ttnn.fp8_e4m3),
+    )
+    desc = ttnn.ProgramDescriptor(kernels=kd.get_kernel_descriptors().kernels, cbs=[cb])
+    rows, cols = tuple(t.device().shape)
+    md = ttnn.MeshProgramDescriptor()
+    md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(rows - 1, cols - 1))] = desc
+    prepared_generic_op([t, t], md)
 
 
 class CacheSlab:
@@ -89,10 +134,27 @@ class CacheSlab:
         """Local rows [lo, hi) of this slab -> [1, 1, hi - lo, width] ROW_MAJOR, DRAM interleaved (a new tensor;
         ``out``: written into that tensor and returned, HOST_ALLOC=on, P.15)."""
         b = self.batch
-        if out is not None:
+        sc = sub_cores(self.tensor)
+        if out is not None and sc is None:
             ttnn.slice(self.tensor, [b, 0, lo, 0], [b + 1, 1, hi, self.width], memory_config=DRAM, output_tensor=out)
             return out
-        return ttnn.slice(self.tensor, [b, 0, lo, 0], [b + 1, 1, hi, self.width], memory_config=DRAM)
+        # FIX.15 (MAX_WORKER_CORES): under the cap no output_tensor (slice lands it with a ttnn.copy on the whole grid)
+        # and no whole-tensor slice (a no-op slice converts the ND-sharded slab with to_memory_config on the whole
+        # grid): two capped slices and a capped concat instead (the same rows)
+        whole = sc is not None and lo == 0 and hi == self.rows and int(self.tensor.shape[0]) == 1 and hi > 32
+        if not whole:
+            return ttnn.slice(
+                self.tensor, [b, 0, lo, 0], [b + 1, 1, hi, self.width], memory_config=DRAM, sub_core_grids=sc
+            )
+        m = (hi // 2) // 32 * 32
+        parts = [
+            ttnn.slice(self.tensor, [0, 0, a, 0], [1, 1, e, self.width], memory_config=DRAM, sub_core_grids=sc)
+            for a, e in ((0, m), (m, hi))
+        ]
+        res = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sc)
+        for t in parts:
+            dealloc(t)
+        return res
 
     def host_rows(self) -> list[torch.Tensor]:
         """This slab's local rows [rows, width] of every chip (chip-linear r TP + c), host."""
@@ -123,7 +185,7 @@ class DeviceScalars:
         self.n = v.shape[0]
         if self.n < 2:  # a one-row slice of a one-row table is full-range: ttnn.slice returns the table's own buffer,
             v = torch.cat([v, torch.zeros(2 - self.n, 1, dtype=torch.int64)])  # which the caller frees (DS41-52)
-        self.t = ttnn.from_torch(
+        self.t = from_torch(
             v.to(torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -136,12 +198,12 @@ class DeviceScalars:
         """The k-th value; release it with ``release`` (memo: kept while it is among the latest MEMO)."""
         assert 0 <= k < self.n, (k, self.n)
         if self._memo is None:
-            return ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM)
+            return ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM, sub_core_grids=sub_cores(self.t))
         t = self._memo.get(k)
         if t is not None:
             self._memo.move_to_end(k)
             return t
-        t = self._memo[k] = ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM)
+        t = self._memo[k] = ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM, sub_core_grids=sub_cores(self.t))
         while len(self._memo) > self.MEMO:
             dealloc(self._memo.popitem(last=False)[1])
         return t

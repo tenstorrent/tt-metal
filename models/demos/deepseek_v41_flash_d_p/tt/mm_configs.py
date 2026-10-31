@@ -18,6 +18,7 @@ import math
 
 import ttnn
 
+from .cores import worker_grid
 from .settings import settings
 
 TILE = 32
@@ -323,6 +324,187 @@ GALAXY: dict = {
             "fuse_batch": True,
         },
     ),
+    # FIX.15 (MAX_WORKER_CORES, agent rule 18): the same 12 calls swept on the 8x4 mesh with every candidate held to
+    # the capped 11 x 10 grid (tests/perf/test_matmul_sweep.py test_sweep, P23_CALLS=calls_cap110.json, P23_MIN_MS=0;
+    # the capped program_config keys on grid 11 x 10, so the 12 x 10 entries above serve an uncapped 12 x 10 grid only).
+    # Same acceptance as P.19; all 12 bit-identical to auto. Per-site numbers: BREADCRUMBS FIX.15.
+    # attn.wo_a x40 a chunk: 0.2062 -> 0.2062 ms (current)
+    ((1, 8, 160, 4096), (1, 8, 4096, 1024), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT8_B", True, 11, 10): (
+        "2d",
+        {
+            "grid": (11, 5),
+            "transpose_mcast": False,
+            "fuse_batch": False,
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "out_block_h": 1,
+            "out_block_w": 3,
+            "per_core_M": 1,
+            "per_core_N": 3,
+        },
+    ),
+    # attn.wo_b x40 a chunk: 0.1364 -> 0.1364 ms (current)
+    ((1, 1, 160, 8192), (1, 1, 8192, 5120), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "mcast_in0": True,
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 5,
+            "out_block_w": 2,
+            "per_core_M": 5,
+            "per_core_N": 2,
+        },
+    ),
+    # attn.wq_b x40 a chunk: 0.1972 -> 0.1972 ms (current)
+    ((1, 1, 160, 1280), (1, 1, 1280, 32768), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "mcast_in0": True,
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 5,
+            "out_block_w": 10,
+            "per_core_M": 5,
+            "per_core_N": 10,
+        },
+    ),
+    # compressor x3 a chunk: 0.0432 -> 0.0432 ms (current)
+    ((1, 1, 160, 5120), (1, 1, 5120, 1024), "BFLOAT16", "BFLOAT16", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (11, 5),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "out_block_h": 1,
+            "out_block_w": 3,
+            "per_core_M": 1,
+            "per_core_N": 3,
+        },
+    ),
+    # compressor x1 a chunk: 0.0297 -> 0.0297 ms (current)
+    ((1, 1, 160, 5120), (1, 1, 5120, 512), "BFLOAT16", "BFLOAT16", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (8, 5),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 1,
+            "out_block_w": 2,
+            "per_core_M": 1,
+            "per_core_N": 2,
+        },
+    ),
+    # compressor x3 a chunk: 0.0042 -> 0.0042 ms (current)
+    ((1, 1, 320, 512), (1, 1, 512, 128), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 11, 10): (
+        "2d",
+        {
+            "grid": (4, 10),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+        },
+    ),
+    # compressor x1 a chunk: 0.0067 -> 0.0067 ms (current)
+    ((1, 1, 640, 512), (1, 1, 512, 128), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 11, 10): (
+        "2d",
+        {
+            "grid": (4, 10),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 2,
+            "out_subblock_w": 1,
+            "out_block_h": 2,
+            "out_block_w": 1,
+            "per_core_M": 2,
+            "per_core_N": 1,
+        },
+    ),
+    # engram_kv x2 a chunk: 0.2806 -> 0.2284 ms (minimal M4 K16 N8 sb1x4)
+    ((1, 1, 640, 6144), (1, 1, 6144, 6400), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "minimal",
+        {"grid": (11, 10), "M_block_size": 4, "K_block_size": 16, "N_block_size": 8, "subblock_h": 1, "subblock_w": 4},
+    ),
+    # hc.fn x1 a chunk: 0.0300 -> 0.0300 ms (current)
+    ((1, 1, 640, 5120), (1, 1, 5120, 32), "BFLOAT16", "FLOAT32", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (1, 10),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 2,
+            "out_subblock_w": 1,
+            "out_block_h": 2,
+            "out_block_w": 1,
+            "per_core_M": 2,
+            "per_core_N": 1,
+        },
+    ),
+    # indexer.weights_proj x8 a chunk: 0.0169 -> 0.0169 ms (current)
+    ((1, 1, 160, 5120), (1, 1, 5120, 32), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 11, 10): (
+        "2d",
+        {
+            "grid": (1, 5),
+            "transpose_mcast": False,
+            "fuse_batch": True,
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+        },
+    ),
+    # indexer.wq_b x8 a chunk: 0.0286 -> 0.0286 ms (current)
+    ((1, 1, 160, 1280), (1, 1, 1280, 4096), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "mcast_in0": True,
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 5,
+            "out_block_w": 2,
+            "per_core_M": 5,
+            "per_core_N": 2,
+        },
+    ),
+    # q_a x40 a chunk: 0.0551 -> 0.0474 ms (1d in0 pm5 pn1 bw16 sb1x1)
+    ((1, 1, 160, 5120), (1, 1, 5120, 1792), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 5,
+            "out_block_w": 1,
+            "per_core_M": 5,
+            "per_core_N": 1,
+            "mcast_in0": True,
+        },
+    ),
 }
 
 # minimal_matmul blocking (tiles): the sweep's best within 1-2 % on every bf16-output projection of this run
@@ -452,7 +634,7 @@ def program_config(x, w, dtype, ckc, batched: bool = False):
     if batched and math.prod(wshape[:-2]) > 1 and settings.get("WO_A_CONFIG") == "auto":
         return None
     dev = x.device()
-    grid = dev.compute_with_storage_grid_size()
+    grid = worker_grid(dev)  # FIX.15: the grid under MAX_WORKER_CORES (11 x 10 on a Galaxy), the whole grid elsewhere
     fp32 = _ckc_fp32(ckc)
     galaxy = mode() == "galaxy"
     key = (shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y, galaxy)

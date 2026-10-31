@@ -56,8 +56,18 @@ uint32_t folded_rows(const Tensor& t) {
 
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
-uint32_t num_cores_of(const Tensor& t) {
-    const auto g = t.device()->compute_with_storage_grid_size();
+// the op's grid: the device's compute grid, cut to max_grid (fork option, FIX.15)
+CoreCoord op_grid(const RmsNormSplitParams& a, const Tensor& t) {
+    auto g = t.device()->compute_with_storage_grid_size();
+    if (a.max_grid.has_value()) {
+        g.x = std::max<std::size_t>(1, std::min<std::size_t>(g.x, a.max_grid->x));
+        g.y = std::max<std::size_t>(1, std::min<std::size_t>(g.y, a.max_grid->y));
+    }
+    return g;
+}
+
+uint32_t num_cores_of(const RmsNormSplitParams& a, const Tensor& t) {
+    const auto g = op_grid(a, t);
     return static_cast<uint32_t>(g.x * g.y);
 }
 
@@ -167,7 +177,7 @@ RmsNormSplitDeviceOperation::spec_return_value_t RmsNormSplitDeviceOperation::co
     auto shape = t.input.logical_shape();
     DataType dt = a.out_dtype;
     if (a.stats_out) {
-        const auto plan = split_plan(a, t, num_cores_of(t.input));
+        const auto plan = split_plan(a, t, num_cores_of(a, t.input));
         shape[-1] = TILE * plan.B;
         dt = DataType::FLOAT32;
     } else {
@@ -220,7 +230,9 @@ ttsl::hash::hash_t RmsNormSplitDeviceOperation::compute_program_hash(
         a.dst_full_sync_en,
         t.input.tensor_spec(),
         spec_of(t.weight),
-        spec_of(t.partial_stats));
+        spec_of(t.partial_stats),
+        a.max_grid.has_value() ? a.max_grid->x : 0u,
+        a.max_grid.has_value() ? a.max_grid->y : 0u);
 }
 
 tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
@@ -231,8 +243,7 @@ tt::tt_metal::ProgramDescriptor RmsNormSplitProgramFactory::create_descriptor(
     const bool has_stats = t.partial_stats.has_value();
     const uint32_t mode = mode_of(a, t);
 
-    auto* device = input.device();
-    const auto grid = device->compute_with_storage_grid_size();
+    const auto grid = op_grid(a, input);
     const CoreRange core_range({0, 0}, {grid.x - 1, grid.y - 1});
     const CoreRangeSet cores_set(core_range);
     const uint32_t num_cores = core_range.size();

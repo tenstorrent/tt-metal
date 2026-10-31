@@ -143,6 +143,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         hc_output / y_output (ttnn.Tensor, optional; default None = the op allocates them; deepseek_v41_flash_d_p
         P.16): the caller's buffers for hc and y, each exactly the spec the op would allocate (checked on every
         call), none of them an input; the results are tensors of those buffers (new Python objects).
+        max_grid (ttnn.CoreCoord, optional; default None = the device's whole compute grid; deepseek_v41_flash_d_p
+        FIX.15): the op runs on the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of the grid.
 
         Returns:
             tuple[ttnn.Tensor | None, ttnn.Tensor | None]: (hc, y); hc when computed, y when streams are given.
@@ -166,7 +168,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::arg("collapse_pre") = nb::none(),
         nb::arg("partials") = 1,
         nb::arg("hc_output") = nb::none(),
-        nb::arg("y_output") = nb::none());
+        nb::arg("y_output") = nb::none(),
+        nb::arg("max_grid") = nb::none());
 
     ttnn::bind_function<"mhc_pre_xing_pack", "ttnn.bringup.">(
         mod,
@@ -186,6 +189,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
                 all 32 rows.
             output_tensor (ttnn.Tensor, optional): default None = the op allocates its output
                 (deepseek_v41_flash_d_p P.16; not in engram mode): the caller's buffer, exactly the output's spec.
+            max_grid (ttnn.CoreCoord, optional): default None = the device's whole compute grid
+                (deepseek_v41_flash_d_p FIX.15): the op runs on the rectangle (0, 0) .. (max_grid - 1) of the grid.
 
         Returns:
             ttnn.Tensor: mix with column n (n + 2) = sum over the row of streams^2 (exact fp32 on the SFPU). Engram
@@ -199,7 +204,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::arg("n") = 4,
         nb::arg("engram_keys") = nb::none(),
         nb::arg("engram_weight") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("max_grid") = nb::none());
 
     mod.def(
         "_mhc_pre_ttnn_program_descriptor",

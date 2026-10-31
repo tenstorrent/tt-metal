@@ -59,10 +59,11 @@ import torch
 
 import ttnn
 
-from . import ccl
+from . import ccl, cores
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, gemm_input, tp_sum
+from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
 from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads, rope_stock
 from .settings import settings
 
@@ -97,11 +98,11 @@ def topk_large_indices(x: ttnn.Tensor, **kw) -> ttnn.Tensor:
         if settings.get("INDEX_TOPK_OP") == "fork"
         else ttnn.experimental.topk_large_indices
     )
-    return op(x, **kw)
+    return op(x, sub_core_grids=sub_cores(x), **kw)  # FIX.15: the capped grid (MAX_WORKER_CORES), None elsewhere
 
 
 def _upload(mesh, t, dtype, layout=ttnn.TILE_LAYOUT, dims=None):
-    return ttnn.from_torch(
+    return from_torch(
         t.contiguous(),
         dtype=dtype,
         layout=layout,
@@ -172,8 +173,13 @@ class TtIndexer:
         # the q work unit divides the chip's query rows (indexer_score: whole q chunks): 64 at the seed's 1280 rows,
         # 32 at 8x4's 160 (5 tiles; DS41-117)
         q_chunk = max(q for q in range(32, min(Q_CHUNK, self.sq) + 1, 32) if self.sq % q == 0)
+        mg = max_grid(mesh)  # FIX.15 (MAX_WORKER_CORES): the score and its all-gather workers on the capped grid
         self.score_cfg = ttnn.bringup.IndexerScoreProgramConfig(
-            q_chunk_size=q_chunk, k_chunk_size=K_CHUNK, head_group_size=0
+            q_chunk_size=q_chunk,
+            k_chunk_size=K_CHUNK,
+            head_group_size=0,
+            max_grid_x=0 if mg is None else mg.x,
+            max_grid_y=0 if mg is None else mg.y,
         )
         self.score_ckc = attn_compute_config(mesh)  # the ring score: ATTN_FIDELITY (P.7)
         self._kbuf = {}  # compressed capacity T -> the ring's persistent gathered-key buffer [1, 1, T, hd]
@@ -198,7 +204,7 @@ class TtIndexer:
         """The ring's gathered-key buffer for this cache's capacity (allocated once per capacity)."""
         t = self._capacity(cache)
         if t not in self._kbuf:
-            self._kbuf[t] = ttnn.from_torch(
+            self._kbuf[t] = from_torch(
                 torch.zeros(1, 1, t, self.hd),
                 dtype=self.k_dtype,
                 layout=ttnn.TILE_LAYOUT,
@@ -223,20 +229,23 @@ class TtIndexer:
         comes after every reader of the last one on the queue); off: a new tensor each call (FIX.14's path)."""
         dtype = self.k_dtype if what == "keys" else ttnn.bfloat4_b
         if not self.lowbit_host:
-            return ttnn.bringup.bfp_round(x, dtype, memory_config=DRAM, prepared=self.prepared), False
+            return (
+                ttnn.bringup.bfp_round(x, dtype, memory_config=DRAM, prepared=self.prepared, max_grid=max_grid()),
+                False,
+            )
         key = (what, tuple(x.shape))
         out = self._rounded.get(key)
         if out is None:
             out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)), dtype, ttnn.TILE_LAYOUT, self.mesh, DRAM)
             self._rounded[key] = out
-        return ttnn.bringup.bfp_round(x, out=out, prepared=self.prepared, compact=True), True
+        return ttnn.bringup.bfp_round(x, out=out, prepared=self.prepared, compact=True, max_grid=max_grid()), True
 
     def _keys(self, cache) -> ttnn.Tensor:
         """The served index-key cache's slab [1, 1, rows / r, hd] bf16 ROW_MAJOR (ND-sharded) -> compressed rows
         [1, 1, rows / r, hd] bf16 TILE (INDEX_K_FORMAT=bfp4: rounded to bfloat4_b), interleaved: the ring's k_local
         (block-cyclic layout unchanged)."""
         rm = cache.slab.slice_rows(0, cache.crows)
-        kt = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        kt = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(rm))
         dealloc(rm)
         if self.k_dtype == ttnn.bfloat16:
             return kt
@@ -276,18 +285,18 @@ class TtIndexer:
             dealloc(part)
             if sub.dtype == ttnn.bfloat16:
                 return sub
-            out = ttnn.typecast(sub, ttnn.bfloat16, memory_config=DRAM)
+            out = ttnn.typecast(sub, ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(sub))
             dealloc(sub)
             return out
         if part.dtype != ttnn.float32:  # (tp_sum's stock / untiled path sums fp32)
-            pf = ttnn.typecast(part, ttnn.float32, memory_config=DRAM)
+            pf = ttnn.typecast(part, ttnn.float32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(part))
             dealloc(part)
             part = pf
         full = tp_sum(self.mesh, part)
         dealloc(part)
         sub = self._sub(full)
         dealloc(full)
-        out = ttnn.typecast(sub, ttnn.bfloat16, memory_config=DRAM)
+        out = ttnn.typecast(sub, ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(sub))
         dealloc(sub)
         return out
 
@@ -305,7 +314,7 @@ class TtIndexer:
             return self._query_stock(q, start)
         if self.rope.pairs is not None:
             return self._query_glue(q, start)
-        q4 = ttnn.reshape(q, [1, self.sq, self.nh, self.hd])
+        q4 = ttnn.reshape(q, [1, self.sq, self.nh, self.hd], sub_core_grids=sub_cores(q))
         qh = ttnn.permute(q4, (0, 2, 1, 3), memory_config=DRAM)  # [1, nh, Sq, hd]
         dealloc(q)
         cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
@@ -321,8 +330,8 @@ class TtIndexer:
         """ROPE_IMPL=on (P.17): wq_b's bf16 output [1, 1, Sq, nh hd] (consumed) -> the index queries [1, nh, Sq, hd]
         bf16: the heads split by nlp_create_q_heads_split, then ONE stock rotary op on the [.., 64] tails with the
         nope prepended (tt/rope.rope_stock, concat_prefix)."""
-        qn, qt = ttnn.experimental.nlp_create_q_heads_split(
-            q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM
+        qn, qt = ttnn.bringup.nlp_create_q_heads_split(
+            q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM, max_grid=max_grid()
         )
         dealloc(q)
         cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
@@ -337,8 +346,8 @@ class TtIndexer:
         bf16, the values of the reshape + permute path bit for bit: the heads split by nlp_create_q_heads_split (a
         data move), RoPE on the [.., 64] tails only, its last ops writing bf16, the interleave a PairPerm matmul on the
         bf16 tail."""
-        qn, qt = ttnn.experimental.nlp_create_q_heads_split(
-            q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM
+        qn, qt = ttnn.bringup.nlp_create_q_heads_split(
+            q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM, max_grid=max_grid()
         )
         dealloc(q)
         cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
@@ -347,9 +356,9 @@ class TtIndexer:
         self.rope.free(cos, sin)
         ti = self.rope.pairs(tb, self.rope.pairs.to_inter)
         dealloc(tb)
-        nb = ttnn.typecast(qn, ttnn.bfloat16, memory_config=DRAM)
+        nb = ttnn.typecast(qn, ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores_tiled(qn))
         dealloc(qn)
-        out = ttnn.concat([nb, ti], dim=-1, memory_config=DRAM)
+        out = ttnn.concat([nb, ti], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         dealloc(nb)
         dealloc(ti)
         return out
@@ -490,12 +499,14 @@ class TtCandidateIndexer(TtIndexer):
         nbv = kv_len // self.block
         bm = self._bmax[t]
         if nbv >= self.ctopk:
-            rm = ttnn.typecast(bm, ttnn.bfloat16, memory_config=DRAM)
+            rm = cores.typecast(bm, ttnn.bfloat16, memory_config=DRAM)
             out = topk_large_indices(rm, k=self.ctopk, valid_length=nbv)
             dealloc(rm)
             return out
-        sl = ttnn.slice(bm, [0, 0, 0, 0], [1, 1, self.sq, nbv], memory_config=DRAM)  # fewer blocks than k: pad -inf
-        rm = ttnn.typecast(sl, ttnn.bfloat16, memory_config=DRAM)
+        sl = ttnn.slice(
+            bm, [0, 0, 0, 0], [1, 1, self.sq, nbv], memory_config=DRAM, sub_core_grids=sub_cores(bm)
+        )  # fewer blocks than k: pad -inf
+        rm = cores.typecast(sl, ttnn.bfloat16, memory_config=DRAM)
         if not _same(sl, bm):  # DS41-52: a full-range slice is a wrapper over the persistent buffer
             dealloc(sl)
         padded = ttnn.pad(rm, [(0, 0), (0, 0), (0, 0), (0, self.ctopk - nbv)], value=float("-inf"))
@@ -509,7 +520,9 @@ class TtCandidateIndexer(TtIndexer):
         b = self.block
         nb = -(-(kv_len // b) // 32) * 32  # block columns, tile-aligned
         sq = self.sq
-        lg = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, sq, kv_len], memory_config=DRAM)  # logits itself if kv_len == T
+        lg = ttnn.slice(
+            logits, [0, 0, 0, 0], [1, 1, sq, kv_len], memory_config=DRAM, sub_core_grids=sub_cores(logits)
+        )  # logits itself if kv_len == T
         if nb * b > kv_len:
             padded = ttnn.pad(lg, [(0, 0), (0, 0), (0, 0), (0, nb * b - kv_len)], value=float("-inf"))
             if not _same(lg, logits):  # K-1: a full-range slice returns its input's buffer
@@ -517,34 +530,40 @@ class TtCandidateIndexer(TtIndexer):
             lg = padded
         acc = None
         for i in range(b):  # block max: column j of slice i = score j b + i
-            part = ttnn.slice(lg, [0, 0, 0, i], [1, 1, sq, nb * b], [1, 1, 1, b], memory_config=DRAM)
+            part = ttnn.slice(
+                lg, [0, 0, 0, i], [1, 1, sq, nb * b], [1, 1, 1, b], memory_config=DRAM, sub_core_grids=sub_cores(lg)
+            )
             if acc is None:
                 acc = part
                 continue
-            nxt = ttnn.maximum(acc, part, memory_config=DRAM)
+            nxt = cores.maximum(acc, part, memory_config=DRAM)
             dealloc(acc)
             dealloc(part)
             acc = nxt
         if not _same(lg, logits):
             dealloc(lg)
-        blk = ttnn.to_layout(acc, ttnn.TILE_LAYOUT, memory_config=DRAM)  # [1, 1, Sq, nb] bf16
+        blk = ttnn.to_layout(
+            acc, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(acc)
+        )  # [1, 1, Sq, nb] bf16
         if not _same(blk, acc):  # K-1
             dealloc(acc)
         # pin: block (start + row offset) // b of every query row
-        pos = ttnn.add(self.row_pos, float(start), memory_config=DRAM)
-        pin = ttnn.floor(ttnn.multiply(pos, 1.0 / b, memory_config=DRAM), memory_config=DRAM)  # b a power of two
+        pos = ttnn.add(self.row_pos, float(start), memory_config=DRAM, sub_core_grids=sub_cores(self.row_pos))
+        pin = ttnn.floor(
+            ttnn.multiply(pos, 1.0 / b, memory_config=DRAM, sub_core_grids=sub_cores(pos)), memory_config=DRAM
+        )  # b a power of two
         dealloc(pos)
-        cols = ttnn.slice(self._cols[t], [0, 0, 0, 0], [1, 1, 1, nb], memory_config=DRAM)
+        cols = ttnn.slice(self._cols[t], [0, 0, 0, 0], [1, 1, 1, nb], memory_config=DRAM, sub_core_grids=sub_cores())
         hit = ttnn.eq(cols, pin, dtype=ttnn.float32, memory_config=DRAM)  # [1, 1, Sq, nb] 1 at the pinned block
         dealloc(pin)
         if not _same(cols, self._cols[t]):  # K-1: never free the load-time iota
             dealloc(cols)
-        boost = ttnn.multiply(hit, BIG, dtype=ttnn.bfloat16, memory_config=DRAM)
+        boost = ttnn.multiply(hit, BIG, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(hit))
         dealloc(hit)
-        pinned = ttnn.add(blk, boost, dtype=ttnn.bfloat16, memory_config=DRAM)
+        pinned = ttnn.add(blk, boost, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(blk))
         for u in (blk, boost):
             dealloc(u)
-        rm = ttnn.to_layout(pinned, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        rm = to_rm(pinned, memory_config=DRAM)
         if not _same(rm, pinned):
             dealloc(pinned)
         if nb < self.ctopk:  # fewer blocks than k: the rest are none (-inf -> 0xFFFFFFFF)
@@ -621,15 +640,17 @@ class TtReindexer(TtIndexer):
         b, sq = self.block, self.sq
         nb = -(-(kv_len // b) // 16) * 16
         neg = self._neg[t]
-        base = ttnn.slice(neg, [0, 0, 0, 0], [1, 1, sq, nb], memory_config=DRAM)
-        blk = ttnn.scatter(base, -1, cands, self.src, memory_config=DRAM)  # does not write its input
+        base = ttnn.slice(neg, [0, 0, 0, 0], [1, 1, sq, nb], memory_config=DRAM, sub_core_grids=sub_cores(neg))
+        blk = ttnn.scatter(
+            base, -1, cands, self.src, memory_config=DRAM, sub_core_grids=sub_cores(base)
+        )  # does not write its input
         if not _same(base, neg):  # K-1 / DS41-52: never free the load-time row
             dealloc(base)
         full = ttnn.repeat_interleave(blk, b, dim=-1, memory_config=DRAM)  # [1, 1, Sq, nb b]
         dealloc(blk)
         if nb * b == kv_len:
             return full
-        out = ttnn.slice(full, [0, 0, 0, 0], [1, 1, sq, kv_len], memory_config=DRAM)
+        out = ttnn.slice(full, [0, 0, 0, 0], [1, 1, sq, kv_len], memory_config=DRAM, sub_core_grids=sub_cores(full))
         dealloc(full)
         return out
 
@@ -638,8 +659,12 @@ class TtReindexer(TtIndexer):
         [1, 1, Sq, 2048] uint32 ROW_MAJOR (read, not consumed) -> top-k [1, 1, W, 512] uint32, gathered over TP."""
         t = self._capacity(cache)
         if self.glue:  # INDEXER_GLUE=on (P.16): the score op applies the block bias itself (fork block epilogue)
-            brm = ttnn.scatter(self._neg[t], -1, cands, self.src, memory_config=DRAM)  # [1, 1, Sq, NB]: 0 / -inf
-            bias = ttnn.to_layout(brm, ttnn.TILE_LAYOUT, memory_config=DRAM)  # the op reads it by tiles
+            brm = ttnn.scatter(
+                self._neg[t], -1, cands, self.src, memory_config=DRAM, sub_core_grids=sub_cores()
+            )  # [1, 1, Sq, NB]: 0 / -inf
+            bias = ttnn.to_layout(
+                brm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(brm)
+            )  # the op reads it by tiles
             dealloc(brm)
             logits, kv_len = self.scores(x, qr, start, cache, block_keys=self.block, block_bias=bias)
             dealloc(bias)
@@ -647,9 +672,13 @@ class TtReindexer(TtIndexer):
             dealloc(logits)
             return out
         logits, kv_len = self.scores(x, qr, start, cache)
-        lg = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, self.sq, kv_len], memory_config=DRAM)
+        lg = ttnn.slice(
+            logits, [0, 0, 0, 0], [1, 1, self.sq, kv_len], memory_config=DRAM, sub_core_grids=sub_cores(logits)
+        )
         bias = self.bias_of(cands, kv_len, t)
-        masked = ttnn.add(lg, bias, memory_config=DRAM)  # ROW_MAJOR bf16 [1, 1, Sq, kv_len]
+        masked = ttnn.add(
+            lg, bias, memory_config=DRAM, sub_core_grids=sub_cores(lg)
+        )  # ROW_MAJOR bf16 [1, 1, Sq, kv_len]
         if not _same(lg, logits):  # K-1 / DS41-52: a full-range slice is a wrapper over the scores' buffer
             dealloc(lg)
         dealloc(bias)
