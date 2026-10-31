@@ -229,3 +229,58 @@
 - Issues encountered: `generated/profiler/.logs/zone_src_locations.log` had built up 16-bit zone-hash collisions
   across builds; deleting it fixed `perf_zones.py` (`Source location hashes are colliding`).
 - Tests added: none. Unit regression: acceptance 111/111, debug 6/6 (including `test_repeat_rows`), knobs 22/22.
+
+## Refinement 6 — Local-half headroom on the perf-flagged case (only if Refinements 3 and 5 leave it)
+- Date: 2026-10-31
+- What was done (perf, local half; the focus case 640×1792 Ring 2 links). Re-measured first: 20.46 / 21.74 µs
+  (fastest / slowest), exchange ablated 18.47, well above the base op's ~12.6 µs efficiency, so the refinement ran.
+  - Breakdown. New measurement hooks: `DRMS_ABLATE_WRITE` (writes stubbed: 16.56) and `DRMS_ABLATE_FINALIZE` (root
+    finalize math stubbed: 19.65; the slot fold alone 19.57, the rsqrt alone 19.93). Zones: the reads take ~5 µs;
+    the first inv_rms reaches the members at ~23.9 µs; then 2.3 MB of output is written in ~7.5–8 µs. That is the
+    DRAM write ceiling on this box (~285 GB/s; the base op measured 278 GB/s write-only). So the write burst cannot
+    shrink, and what moves the end is how early the first wave's inv_rms lands.
+  1. **One-pass finalize fold** (`FINALIZE_ONE_PASS`, default on): G copies into D0..D(G−1), then one column-face
+     SFPU pass with the same left-fold adds (bit-identical sums), instead of G−1 copy / add pairs that re-init the
+     math MOP and the SFPU per element. A documented raw-LLK in-kernel chain element (`SumSlotsCol`), like the
+     Refinement 3 column elements. 20.48 / 21.82 → 20.33 / 21.55 (win).
+  2. **Output on both NoCs** (`OUT_NOC_SPLIT`, default `alternate`). The writer posts each output quantum on local
+     program semaphores and writes its NOC1 tiles. The reader writes the NOC0 share (odd DRAM banks) from its poll
+     loop, and the writer pops after the reader reports it flushed, so the writer stays cb_output's only consumer.
+     Direction-aware masks (`direction`, by the bank's DRAM column against the core's physical x) were slower:
+     21.09, and 21.66 flipped. They flatten the east/west gradient, but the DRAM-bound end stays. `alternate` was
+     null alone and a win on top of (1): 20.30 / 21.60 → 20.16 / 21.31, 3 repeats each. It regressed decode
+     (114 KB output, +0.23 µs), so it is path-gated to ≥ `OUT_NOC_SPLIT_MIN_BYTES` (512 KiB) of output per chip.
+  - Not built: G-MC (γ is the row-0 prefix of 6 tiles per core, < 1 % of the bytes; the base measured it at noise
+    on the 640-row shape).
+  - Reused: the writer's quantum loop, the reader's non-blocking poll loop (one new cursor), the chain element pattern
+    of Refinement 3, the program semaphore set. Added: 3 compute-core program semaphores; 6 + 1 reader CT args (plus
+    the output accessor) and 6 writer CT args; 1 reader RT arg (`out_addr`); 1 compute CT arg; the knobs
+    `OUT_NOC_SPLIT`, `OUT_NOC_SPLIT_MIN_BYTES`, `FINALIZE_ONE_PASS`. No CB change (`l1_ledger.md` notes the reader's
+    read-only access to cb_output).
+- Perf (`perf_measure.py`, 5 experiments, `CCL_PERF_CASES=all`, old knobs vs new on the same build; all
+  `ccl_perf compare` wins):
+  - 640×1792 (PERF FOCUS): 20.50 / 21.82 → **20.18 / 21.33**, spread 1.15;
+  - 32×1792: 9.78 / 10.70 → 9.69 / 10.60;
+  - 2048×1280: 42.67 / 45.44 → **40.93 / 43.66**.
+  - Exposed transport at the focus case: 1.97 → 1.68 µs (exchange ablated 18.50).
+- Accuracy achieved: unchanged math. The fold is bit-identical (same SFPU adds in the same order). The output split
+  only changes which NoC carries a tile. Precision baseline: 20 passed / 4 skipped (as before).
+  `test_repeat_rows` bit-identical repeats pass.
+- Golden test progress:
+  - Slice (640×768 TILE interleaved, 4×512×512 fp32 interleaved, 2048×2048 bf8b interleaved, 64×1000
+    WIDTH_SHARDED): 292 passed, 896 skipped (invalid), 60 xfailed, 0 failed.
+  - `test_translated.py` random-weights (decode … prefill-131072): 6 / 6.
+  - The three perf cases are checked against the golden reference in `perf_measure.py`.
+- Issues encountered: `(a | b) != 0` on two CT constants is a `-Werror=tautological-compare` error. The custom sfpi
+  function must sit under `#ifdef TRISC_MATH`. A chain element template argument cannot name a function-local
+  `constexpr` from a lambda (made `static constexpr`).
+- Tests added: `test_distributed_rms_norm_knobs.py::test_out_noc_split`. It covers 12 cases: every mask mode, the
+  split forced below its gate on decode, ragged-W, bf8b R1 with the 2-tile fold, and fp32 multi-block, plus a
+  HEIGHT_SHARDED input → DRAM output call. Each is run twice back to back. Unit regression net: acceptance 111/111,
+  debug 6/6, knobs 34/34, precision 20 + 4 skipped.
+- Finding (remaining headroom, not a follow-up): the focus case is now read (~5 µs at ~450 GB/s) → first-wave
+  chain (~7 µs: in-device combine, publish, ~1.7 µs exposed fabric hops, collect, finalize, distribute) → write
+  burst at the DRAM write ceiling (~8 µs). DRAM is idle during the chain. The next lever is to overlap the write
+  burst with the reads, since mixed traffic exceeds the write-only ceiling (the base measured ~430 GB/s mixed). That
+  needs the first wave's inv_rms while later rows are still being read, i.e. a cheaper per-wave chain so that more
+  waves pay off (L1 + L2; 3–4 waves were slower in Refinement 3). That is an OVERLAP scheme change, not a local knob.

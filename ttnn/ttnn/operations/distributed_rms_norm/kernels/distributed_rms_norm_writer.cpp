@@ -18,6 +18,12 @@
 //   write flush per quantum, through the output TensorAccessor (interleaved, or a shard placed differently from the
 //   input: a non-local write). Native (output shard == input shard): cb_output IS the output shard, compute packs
 //   into it; nothing to write.
+// Output on both NoCs (host OUT_NOC_SPLIT, DRAM-interleaved output >= OUT_NOC_SPLIT_MIN_BYTES): a tile whose DRAM
+//   bank (page % NUM_DRAM_BANKS) is in this core's NOC0 set (default: the odd banks; the set may depend on the core's
+//   physical x against a DRAM column, the "direction" mode) is written by the READER on NOC0 instead of here on NOC1,
+//   so the burst (DRAM-write-bound) is injected on both NoCs. This writer stays cb_output's ONLY consumer: per quantum
+//   it posts the quantum's L1 address + count on two local semaphore words, writes its NOC1 tiles, and pops only once
+//   the reader reported its NOC0 tiles flushed (one quantum outstanding).
 // Raw NoC / CB calls: no kernel_lib helper reads a γ row-0 prefix or relays a γ stick into a tile's row 0.
 
 #include <stdint.h>
@@ -52,7 +58,15 @@ void kernel_main() {
     constexpr uint32_t es_g = get_compile_time_arg_val(10);
     constexpr uint32_t Wp = get_compile_time_arg_val(11);
     constexpr bool gamma_resident = get_compile_time_arg_val(12) != 0;
-    constexpr auto output_args = TensorAccessorArgs<13>();
+    // Output NoC split (0 / 0: off, every tile on this NoC). The same CT values reach the reader.
+    constexpr uint32_t out_split_x = get_compile_time_arg_val(13);
+    constexpr uint32_t noc0_banks_west = get_compile_time_arg_val(14);
+    constexpr uint32_t noc0_banks_east = get_compile_time_arg_val(15);
+    constexpr uint32_t sem_out_ready = get_compile_time_arg_val(16);  // writer -> reader: quanta posted
+    constexpr uint32_t sem_out_done = get_compile_time_arg_val(17);   // reader -> writer: quanta flushed
+    constexpr uint32_t sem_out_addr = get_compile_time_arg_val(18);   // L1 address of the posted quantum
+    constexpr bool out_split = (noc0_banks_west != 0 || noc0_banks_east != 0) && !sharded;
+    constexpr auto output_args = TensorAccessorArgs<19>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -122,6 +136,15 @@ void kernel_main() {
     constexpr bool gamma_streams = has_gamma && !gamma_resident;
     if constexpr (!sharded || gamma_streams) {
         [[maybe_unused]] const auto out_accessor = TensorAccessor(output_args, out_addr, T_out);
+        // my_x[0]: this core's physical NoC0 x (the same value on the reader).
+        [[maybe_unused]] const uint32_t noc0_banks = my_x[0] < out_split_x ? noc0_banks_west : noc0_banks_east;
+        [[maybe_unused]] volatile tt_l1_ptr uint32_t* out_ready =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_out_ready));
+        [[maybe_unused]] volatile tt_l1_ptr uint32_t* out_done =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_out_done));
+        [[maybe_unused]] volatile tt_l1_ptr uint32_t* out_l1 =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_out_addr));
+        [[maybe_unused]] uint32_t posted = 0;
         for (uint32_t b = 0; b < num_blocks; ++b) {
             const uint32_t rem = rows - b * R;
             const uint32_t rb = rem < R ? rem : R;
@@ -144,10 +167,26 @@ void kernel_main() {
                     cb_wait_front(cb_output, C);
                     const uint32_t l1 = get_read_ptr(cb_output);
                     const uint32_t page0 = tile_row * Wt + w0 + first;
+                    if constexpr (out_split) {
+                        *out_l1 = l1;
+                        *out_ready = ++posted;  // after the address: the reader reads both once it sees the count
+                    }
+#ifndef DRMS_ABLATE_WRITE
                     for (uint32_t j = 0; j < valid; ++j) {
+                        if constexpr (out_split) {
+                            if ((noc0_banks >> ((page0 + j) % NUM_DRAM_BANKS)) & 1) {
+                                continue;  // the reader's NOC0 share
+                            }
+                        }
                         noc_async_write_tile(page0 + j, out_accessor, l1 + j * T_out);
                     }
+#endif
                     noc_async_writes_flushed();
+                    if constexpr (out_split) {
+                        do {
+                            invalidate_l1_cache();
+                        } while (*out_done < posted);
+                    }
                     cb_pop_front(cb_output, C);
                 }
             }

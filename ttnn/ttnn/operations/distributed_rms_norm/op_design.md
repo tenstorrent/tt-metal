@@ -278,6 +278,8 @@ The ports run independently of this loop. At kernel start each port opens its fa
 | L6 **inv_rms distribution** | unicast to `G_w − 1` members per wave (≤ 13 writes of 2 KiB at decode) | multicast (`McastArgs`) for groups whose cores form a rectangle |
 | L7 **Links** (TRANSPORT) | `num_links = None` uses every usable link. The ring-exchange example measured 2 links equal or slower than 1 for 128 B–8 KiB slots (each link pays its own fence). | the perf case pins `num_links = 2`. Compare against `num_links = 1` on the perf case and report it; the contract keeps `None` = all. |
 | L8 **Port placement** (TRANSPORT) | Ports sit on logical row 0, centred (the placement the ring-exchange numbers were measured with), not under their link's Ethernet core. That costs bandwidth (`blackhole-fabric.md` rule 6), which this payload does not use. | probe-based placement (`fabric_all_gather.probe_ethernet_cores`). Its one-time probe is a second dispatch on the first call, so it must move to resource creation outside the op's call path. |
+| L10 **Output on both NoCs** (Refinement 6, built) | The output write burst runs on NOC1 only. On this Blackhole the burst is DRAM-write-bound (~285 GB/s, the base op's write-only ceiling), so routing alone does not shorten it, but sharing the injection over both NoCs helps once the chain before it is shorter. | `OUT_NOC_SPLIT` (`alternate` default, `direction`, `flipped`, `off`, explicit masks), gated on `OUT_NOC_SPLIT_MIN_BYTES` per chip |
+| L11 **Finalize fold** (Refinement 6, built) | The root's cross-device slot fold ran G−1 copy / SFPU-add pairs, each a math-MOP ↔ SFPU re-init, on the first-inv critical path (≈ 0.8 µs measured by ablation). | `FINALIZE_ONE_PASS`: G copies into D0..D(G−1), one column-face SFPU pass (same adds, same order) |
 | L9 **Precision under 16-bit DEST** | With `fp32_dest_acc_en = False` the device partial is packed from 16-bit DEST, so the fp32 record carries a 16-bit value. The cross-device sum then folds in 16-bit DEST. | keep an fp32 DEST for `collapse` / `finalize` only. Measure the precision matrix at W_global = 8192 (base L8 found 16-bit Σx² not binding up to W = 8192 on one chip). |
 
 **Stall-shadow check.**
@@ -350,6 +352,9 @@ Members' readers keep the base order: send the partials of every wave of the blo
 | `DRMS_ABLATE_EXCHANGE` (host constant → define on ports and roots; 0 in production) | Ports skip the connection, fence and sends; each port copies its own slot into every peer slot locally and runs arrival/notify/re-arm as usual. Output is wrong, timing is valid. The exposed transport time is `t(op) − t(op, ablated)` on the fastest chip (`perf_measure.py`). |
 | `DRMS_DEFER_FENCE` (env → port define; never in production) | The ports wait for the ready fence after their sends instead of before them. Unsafe, fast path only. It is the upper bound of a fence-free steady state (Refinement 5: null on the focus case, the fence is hidden behind the local reads). |
 | `DRMS_PORT_X0` (env → host `PORT_X0`; unset = centred) | The first x of the port row (lamp L8). Refinement 5: west-shift null, east edge slower. |
+| `DRMS_ABLATE_WRITE` (env → define on every kernel; never in production) | The writer (and the reader's NOC0 share) skip the output NoC writes; the CB protocol is kept. Output wrong, timing valid. Refinement 6: 640×1792 20.46 → 16.56 µs. |
+| `DRMS_ABLATE_FINALIZE` (env → compute define; never in production) | The root's finalize copies slot 0 to its output (sum / scale / eps / rsqrt stubbed). Refinement 6: 20.43 → 19.65 µs. |
+| `DRMS_OUT_NOC_SPLIT`, `DRMS_OUT_NOC_SPLIT_MIN_BYTES`, `DRMS_FINALIZE_ONE_PASS` (env → host knobs) | Override the Refinement 6 knobs (`OUT_NOC_SPLIT` mode / size gate, `FINALIZE_ONE_PASS`) for measurement. |
 | Device zones | ports: `prt_conn`, `prt_ready_wait`, `prt_exchange`, `prt_close` (from `port.cpp`); roots: `rt_publish`, `rt_landed_wait`, `rt_collect`, `rt_distribute`; plus the base's per-stage zones. |
 
 ## Work Distribution
@@ -547,3 +552,23 @@ working dynamic-NoC mode), or weight less output onto the far columns.
 | Own slot | written by the link's roots into every sending port, read by the port's own send and by the root's own collect. Root publish of wave w ≥ K waits for its own collect of `w − K`; the port flushes its sends before each `SEM_OWN_COUNTED` release, so the send of `w − K` (K ≥ 2) has left L1 before the roots may overwrite it. |
 | Deadlock freedom | every new wait depends only on strictly earlier waves. `K ≥ nwpb`: compute reduces a whole block before it finalizes it, so the publish of wave w (block b+1) can only be waiting on the collect of a wave of block ≤ b, which compute has already finalized. |
 | Measured | DeepSeek prefill 131072 (per chip 131072×1792, full landing 1 MiB) passes. Focus case on the fast path: 20.49 / 21.81 → 20.44 / 21.79 µs (`ccl_perf compare`: null, i.e. unchanged). |
+
+## Implementation notes (Refinement 6 — local half on the focus case)
+
+Breakdown (640×1792, Ring, 2 links; `perf_measure.py` fastest / slowest µs, ablations by `perf_ablate.py`): op 20.46 /
+21.74; writes stubbed 16.56; exchange ablated 18.47; finalize math stubbed 19.65 (slot fold alone stubbed 19.57,
+rsqrt alone 19.93). Zones: the grid reads x in ~5 µs (~450 GB/s); the first inv_rms reaches the members at ~23.9 µs
+(the first wave's chain: last remote slot lands ~21.3, root finalize ~1.3 µs, distribute ~0.6, mcast landing); then
+2.3 MB of output is written in ~7.5–8 µs, i.e. at the DRAM write ceiling (~285 GB/s; the base op measured 278 GB/s
+write-only on this box). Since the writes are throughput-bound from the first inv on, what moves the end is how early
+the first wave's inv_rms lands and how well the burst is injected.
+
+| Lever | What | Result |
+|-------|------|--------|
+| Output NoC split (L10) | The writer posts each C-page output quantum on two local program semaphores (address, count); it writes the tiles whose DRAM bank (`page % NUM_DRAM_BANKS`) is not in the core's NOC0 set on NOC1 and pops only after the reader reports its NOC0 tiles flushed (third semaphore). The reader serves the quanta in the writer's order from its non-blocking poll loop (`try_help`, first in the loop). The writer stays cb_output's only consumer. Both kernels derive the NOC0 set from the same CT values and `my_x[0]` (physical x). | `direction` (short x path per bank) 21.09 / 22.72 and `flipped` 21.66: slower; the gradient flattens but the DRAM-bound end does not move. `alternate` (odd banks on NOC0): null alone, a win on top of L11 (20.30 / 21.60 → 20.16 / 21.31, 3 repeats). Decode (114 KB output) regressed +0.23 µs → gated on `OUT_NOC_SPLIT_MIN_BYTES = 512 KiB` per chip. |
+| One-pass finalize fold (L11) | `SumSlotsCol`: an in-kernel chain element (documented raw-LLK deviation, like the Refinement 3 column elements) running `_llk_math_eltwise_binary_sfpu_params_` with a sfpi left fold `((s0+s1)+s2)+…` over D0..D(G−1), VectorMode::C. Same SFPU adds in the same order as the AddBinaryCol fold, so the sum is bit-identical. Needs G ≤ the DEST limit; otherwise the 2-tile fold. | 20.48 / 21.82 → 20.33 / 21.55 (`ccl_perf compare`: win). Decode 9.78 → 9.67. |
+
+Final (both on, defaults): 640×1792 20.50 / 21.82 → **20.18 / 21.33**; 32×1792 9.78 / 10.70 → 9.69 / 10.60; 2048×1280
+42.67 / 45.44 → **40.93 / 43.66** (all `ccl_perf compare` wins). Exposed transport at the focus case 1.97 → 1.68 µs
+(exchange-ablated 18.50). G-MC was not built: γ is 6 row-0 prefixes per core (< 1 % of the bytes; the base measured
+it at noise on the 640-row shape).

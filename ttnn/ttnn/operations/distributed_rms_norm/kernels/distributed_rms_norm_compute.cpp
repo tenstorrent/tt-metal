@@ -30,6 +30,9 @@
 // DEVIATION (Refinement 3): finalize_wave's SFPU elements are in-kernel chain elements (AddBinaryCol, BinopScalarCol,
 // RsqrtCol) issuing the API's own LLK calls with VectorMode::C (faces 0 + 2): the kernel_lib elements hardcode
 // VectorMode::RC and the finalize tiles are valid in column 0 only (measured 21.05 -> 20.51 us at 640x1792).
+// DEVIATION (Refinement 6): SumSlotsCol folds the G slots (copied into D0..D(G-1)) in ONE sfpi pass instead of G-1
+// AddBinaryCol elements: no kernel_lib element sums N DEST tiles, and each copy / add pair re-inits the math MOP and
+// the SFPU on the first-inv critical path (finalize ablation: ~0.8 us). Same adds, same order: bit-identical.
 
 #include <stdint.h>
 
@@ -83,6 +86,34 @@ ALWI void drms_binop_scalar_tile_col(uint32_t idst, uint32_t param1) {
         VectorMode::C,
         param1));
 }
+// One-pass slot fold (Refinement 6, host FINALIZE_ONE_PASS): DEST tiles d0 .. d0+N-1 hold the N gathered slots;
+// faces 0 / 2 of tile d0 <- ((s0 + s1) + s2) + ... in slot order. The same SFPU adds, in the same order, as the
+// AddBinaryCol fold (calculate_sfpu_binary ADD = in0 + in1), so the sum is bit-identical; it replaces N-1 copy / add
+// element pairs (each a math-MOP <-> SFPU re-init on the exchange's critical tail) by N copies + one SFPU pass.
+#ifdef TRISC_MATH
+namespace sfpu {
+template <int ITERATIONS, uint32_t N>
+inline void drms_calculate_sum_slots(const uint32_t d0, const uint32_t /*d_last*/, const uint32_t d_out) {
+    constexpr uint32_t dst_tile_size_sfpi = 32;  // rows of a DEST tile as seen by sfpi load / store
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat acc = sfpi::dst_reg[d0 * dst_tile_size_sfpi];
+#pragma GCC unroll 8
+        for (uint32_t q = 1; q < N; ++q) {
+            acc = acc + sfpi::dst_reg[(d0 + q) * dst_tile_size_sfpi];
+        }
+        sfpi::dst_reg[d_out * dst_tile_size_sfpi] = acc;
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace sfpu
+#endif
+template <uint32_t N>
+ALWI void drms_sum_slots_tile_col(uint32_t idst0, uint32_t odst) {
+    MATH(
+        (_sfpu_binary_check_<DST_SYNC_MODE>(idst0, idst0 + N - 1, odst, VectorMode::C),
+         _llk_math_eltwise_binary_sfpu_params_(
+             ::ckernel::sfpu::drms_calculate_sum_slots<8, N>, idst0, idst0 + N - 1, odst, VectorMode::C)));
+}
 ALWI void drms_rsqrt_tile_col(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -118,6 +149,13 @@ struct AddBinaryCol : ckl::BinaryOp<AddBinaryCol<In0, In1, Out>, In0, In1, Out> 
         ckernel::drms_add_binary_tile_col(ckl::to_u32(In0) + off, ckl::to_u32(In1) + off, ckl::to_u32(Out) + off);
     }
 };
+// N slots in D0 .. D(N-1) folded into Out (faces 0 / 2), one SFPU pass. Advertises D(N-1) as its second input so
+// the chain's DEST-capacity accounting sees every slot it reads.
+template <uint32_t N, ckl::Dst Last, ckl::Dst Out>
+struct SumSlotsCol : ckl::BinaryOp<SumSlotsCol<N, Last, Out>, ckl::Dst::D0, Last, Out> {
+    static ALWI void init() { add_binary_tile_init(); }
+    static ALWI void exec_impl(uint32_t off) { ckernel::drms_sum_slots_tile_col<N>(off, ckl::to_u32(Out) + off); }
+};
 template <int OP, ckl::Dst Slot>
 struct BinopScalarCol : ckl::UnaryOp<BinopScalarCol<OP, Slot>, Slot> {
     uint32_t param0;
@@ -140,18 +178,40 @@ struct RsqrtCol : ckl::UnaryOp<RsqrtCol<Slot>, Slot> {
 template <uint32_t G, uint32_t cb_out, uint32_t... Q>
 ALWI void finalize_wave_impl(
     uint32_t n, uint32_t inv_w_bits, uint32_t eps_bits, std::integer_sequence<uint32_t, Q...>) {
-    constexpr auto slot_in = ckl::input(
+    static constexpr auto slot_in = ckl::input(
         cb_stats_gather,
         ckl::WaitPolicy::None,
         ckl::PopPolicy::None,
         ckl::InputTileMapping::Col,
         ckl::DataFormatReconfig::Enabled,
         ckl::TileAddressing::Strided);
+#ifdef DRMS_ABLATE_FINALIZE
+    // measurement only: slot 0 straight to the output (sync scaffolding kept, math stubbed)
+    ckl::eltwise_chain(
+        ckl::IterationShape::grid(n, 1),
+        ckl::CopyTile<slot_in, ckl::Dst::D0>{ckl::StridedTileRange{0, G}},
+        ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{});
+    return;
+#endif
+    // Host FINALIZE_ONE_PASS (CT arg 14): every slot copied into its own DEST tile, then one SFPU fold pass; needs G
+    // DEST tiles (else the 2-tile left fold below, whatever G is).
+    constexpr bool one_pass = get_compile_time_arg_val(14) != 0 && G >= 2 && G <= ckl::DEST_AUTO_LIMIT;
+    auto fold = [&]() {
+        if constexpr (one_pass) {
+            return std::make_tuple(
+                ckl::CopyTile<slot_in, ckl::Dst::D0>{ckl::StridedTileRange{0, G}},
+                ckl::CopyTile<slot_in, static_cast<ckl::Dst>(Q + 1)>{ckl::StridedTileRange{Q + 1, G}}...,
+                SumSlotsCol<G, static_cast<ckl::Dst>(G - 1), ckl::Dst::D0>{});
+        } else {
+            return std::tuple_cat(
+                std::make_tuple(ckl::CopyTile<slot_in, ckl::Dst::D0>{ckl::StridedTileRange{0, G}}),
+                std::make_tuple(
+                    ckl::CopyTile<slot_in, ckl::Dst::D1>{ckl::StridedTileRange{Q + 1, G}},
+                    AddBinaryCol<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{})...);
+        }
+    };
     auto elems = std::tuple_cat(
-        std::make_tuple(ckl::CopyTile<slot_in, ckl::Dst::D0>{ckl::StridedTileRange{0, G}}),
-        std::make_tuple(
-            ckl::CopyTile<slot_in, ckl::Dst::D1>{ckl::StridedTileRange{Q + 1, G}},
-            AddBinaryCol<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{})...,
+        fold(),
         std::make_tuple(
             BinopScalarCol<ckernel::MUL_UNARY, ckl::Dst::D0>{inv_w_bits},
             BinopScalarCol<ckernel::ADD_UNARY, ckl::Dst::D0>{eps_bits},

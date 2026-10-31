@@ -91,6 +91,58 @@ LANDING_RING_WAVES = 4
 # Port placement (lamp L8, TRANSPORT): the first x of the port row (logical row 0). None = centred on the grid (the
 # ring-exchange placement). Refinement 5 measured west / east alternatives against it on the focus case.
 PORT_X0 = int(os.environ["DRMS_PORT_X0"]) if os.environ.get("DRMS_PORT_X0", "") != "" else None
+# Output NoC split (Refinement 6): a DRAM-interleaved output tile is written on NOC0 (by the reader) instead of NOC1
+# (the writer) when its DRAM bank is in the core's NOC0 set.
+#   "alternate" (default): the odd banks on NOC0, the even banks on NOC1 (every core). Measured at 640x1792 with the
+#               one-pass finalize: 20.30 / 21.60 -> 20.16 / 21.31 us (3 repeats each).
+#   "direction": each bank on the NoC whose x path from the core to the bank's DRAM column is short (Blackhole: banks
+#               0-3 in physical column 0, 4-7 in column 9). Measured slower (21.09 / 22.72 vs 20.43 / 21.79): the
+#               write burst is DRAM-write-bound (~285 GB/s), so re-routing only moves which cores finish last.
+#   "flipped": the opposite of "direction" (21.66, a control). "off": every tile on NOC1 (the writer alone).
+#   "<west hex>,<east hex>": explicit NOC0 bank masks for cores west / east of the split column.
+# Env DRMS_OUT_NOC_SPLIT overrides (measurement).
+OUT_NOC_SPLIT = os.environ.get("DRMS_OUT_NOC_SPLIT", "") or "alternate"
+# Path gate: the split only pays where the output write burst is bandwidth-bound. Below this many output bytes per
+# chip it is latency-bound and the writer <-> reader handshake only adds latency (32x1792, 114 KB: 9.67 -> 10.01 us
+# with "alternate"); 640x1792 (2.3 MB) and 2048x1280 (5.2 MB) win. Env DRMS_OUT_NOC_SPLIT_MIN_BYTES overrides.
+OUT_NOC_SPLIT_MIN_BYTES = int(os.environ.get("DRMS_OUT_NOC_SPLIT_MIN_BYTES", "") or 512 * 1024)
+# Root finalize (Refinement 6): fold the G gathered slots in one SFPU pass over G DEST tiles (True; G <= the DEST
+# limit, else the 2-tile fold) instead of G-1 copy / add element pairs (False). Bit-identical sums (same adds, same
+# order). Env DRMS_FINALIZE_ONE_PASS=0/1 overrides (measurement).
+FINALIZE_ONE_PASS = os.environ.get("DRMS_FINALIZE_ONE_PASS", "1") not in ("", "0")
+# Blackhole physical DRAM columns (soc descriptor: channels 0-3 at x = 0, 4-7 at x = 9; bank id = channel).
+_BH_DRAM_SPLIT_X = 9
+_BH_WEST_BANKS = 0x0F
+_BH_EAST_BANKS = 0xF0
+# Program semaphores of the output split, after the gather semaphores (compute cores only).
+SEM_OUT_OFFSETS = 3  # ready, done, addr
+
+
+def out_noc_split(output_tensor, out_bytes):
+    """(split_x, noc0 banks of a core west of split_x, of a core east of it); (0, 0, 0) = off (every tile on NOC1).
+    Only a DRAM-interleaved output on Blackhole splits (the bank columns are Blackhole's), and only a write burst of at
+    least OUT_NOC_SPLIT_MIN_BYTES per chip."""
+    mc = output_tensor.memory_config()
+    mode = OUT_NOC_SPLIT
+    if (
+        mode == "off"
+        or out_bytes < OUT_NOC_SPLIT_MIN_BYTES
+        or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+        or mc.buffer_type != ttnn.BufferType.DRAM
+        or output_tensor.device().arch() != ttnn.device.Arch.BLACKHOLE
+    ):
+        return (0, 0, 0)
+    if mode == "alternate":
+        odd = sum(1 << b for b in range(1, 32, 2))
+        return (_BH_DRAM_SPLIT_X, odd, odd)
+    if mode == "direction":
+        return (_BH_DRAM_SPLIT_X, _BH_EAST_BANKS, _BH_WEST_BANKS)
+    if mode == "flipped":
+        return (_BH_DRAM_SPLIT_X, _BH_WEST_BANKS, _BH_EAST_BANKS)
+    west, east = (int(v, 16) for v in mode.split(","))
+    return (_BH_DRAM_SPLIT_X, west, east)
+
+
 # The predicate: the credit-free layout is kept while the full landing fits this many bytes (tests lower it to force the
 # ring on small shapes).
 LANDING_FULL_MAX_BYTES = PORT_LANDING_MAX_BYTES
@@ -779,10 +831,11 @@ def _port_defines():
 
 
 def _zone_defines():
-    """Measurement-only: DRMS_ZONES=1 turns on the per-stage device zones of every kernel (DRMS_ZONE in the kernels)."""
-    if os.environ.get("DRMS_ZONES", "0") not in ("", "0"):
-        return [("DRMS_ZONES", "1")]
-    return []
+    """Measurement-only: DRMS_ZONES=1 turns on the per-stage device zones of every kernel (DRMS_ZONE in the kernels).
+    DRMS_ABLATE_WRITE=1: the writer skips the output NoC writes (CB protocol kept; output wrong by design).
+    DRMS_ABLATE_FINALIZE=1: the root's finalize copies slot 0 to its output (the sum / scale / rsqrt math stubbed)."""
+    keys = ("DRMS_ZONES", "DRMS_ABLATE_WRITE", "DRMS_ABLATE_FINALIZE")
+    return [(k, os.environ[k]) for k in keys if os.environ.get(k, "0") not in ("", "0")]
 
 
 def _compute_config(cfg, fp32_acc):
@@ -922,6 +975,12 @@ def create_mesh_program_descriptor(
     w_valid_last = g.W % TILE_DIM or TILE_DIM
     es_zero = 0 if input_tensor.dtype == ttnn.bfloat8_b else g.es
 
+    # ---- output NoC split (ids after the gather semaphores; declared on the compute cores only) ----
+    out_bytes = tensor_tile_rows_of(input_tensor) * g.Wt * g.T_out
+    out_split = (0, 0, 0) if g.out_native else out_noc_split(output_tensor, out_bytes)
+    sem_out = [SEM_GATHER_BASE + nwpb + i for i in range(SEM_OUT_OFFSETS)]
+    out_split_ct = [*out_split, *sem_out]
+
     # ---- compile-time args (identical on every chip) ----
     reader_ct = [
         R,
@@ -945,8 +1004,11 @@ def create_mesh_program_descriptor(
         int(fp32_acc),
         int(READ_WAVE_GATE),
         K,
+        *out_split_ct,
+        g.T_out,
     ]
     reader_ct += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    reader_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     compute_ct = [
         int(g.has_gamma),
         R,
@@ -962,6 +1024,7 @@ def create_mesh_program_descriptor(
         nwpb,
         G,
         int(g.gamma_resident),
+        int(FINALIZE_ONE_PASS),
     ]
     writer_ct = [
         int(g.has_gamma),
@@ -977,6 +1040,7 @@ def create_mesh_program_descriptor(
         g.es_g,
         g.Wp,
         int(g.gamma_resident),
+        *out_split_ct,
     ]
     writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     writer_ct += (
@@ -1036,6 +1100,8 @@ def create_mesh_program_descriptor(
             NOTIFY_PER_ENTRY,
             PORT_OWN_AHEAD,
             READ_WAVE_GATE,
+            out_split,
+            FINALIZE_ONE_PASS,
             fp32_acc,
             compute_kernel_config.math_fidelity,
             compute_kernel_config.math_approx_mode,
@@ -1053,7 +1119,7 @@ def create_mesh_program_descriptor(
         # Our semaphores first: the fabric setup takes the lowest free ids on the port cores.
         program.semaphores = [
             ttnn.SemaphoreDescriptor(id=s, core_ranges=all_crs, initial_value=0) for s in range(SEM_GATHER_BASE + nwpb)
-        ]
+        ] + [ttnn.SemaphoreDescriptor(id=s, core_ranges=compute_crs, initial_value=0) for s in sem_out]
         program.cbs = cbs
 
         send_dirs = [d for d in (FWD, BWD) if ch["items"][d]]
@@ -1098,6 +1164,7 @@ def create_mesh_program_descriptor(
                 len(ch["entries"][FWD]),
                 len(ch["entries"][BWD]),
                 p,
+                out_addr,
             ]
             # bounded landing: the ports that return the credits for this root's landed slots (opposite direction)
             fp = [_pack(virt(ports[(_OPP[d], l)])) for d in (FWD, BWD) if ch["entries"][d]] if is_root else []

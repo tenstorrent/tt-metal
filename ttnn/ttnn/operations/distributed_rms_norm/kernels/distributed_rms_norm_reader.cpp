@@ -29,6 +29,10 @@
 //               fp32 inputs in slot order)
 //     distribute (R3) own copy into cb_inv_rms first; then per member row-run a linked multicast of faces 0/2 into
 //               the members' cb_inv_rms + a multicast set of the cumulative wave count on SEM_INV (no ack barrier)
+//   help write  (host OUT_NOC_SPLIT) the NOC0 share of each output quantum the writer posted (sem_out_ready /
+//               sem_out_addr): the tiles whose DRAM bank is in this core's NOC0 set, flushed, then sem_out_done += 1.
+//               The writer stays cb_output's only consumer (it pops after sem_out_done); this RISC never touches the
+//               CB, it only reads the posted pages.
 // Raw NoC / CB calls: no kernel_lib helper reads TILE pages with W-pad zeroing, moves a face-strided subset of a tile,
 // extracts / scatters a tile's column 0, or polls several event sources without blocking (op_design.md -> Helpers
 // considered and rejected).
@@ -233,7 +237,17 @@ void kernel_main() {
     // that return the credits (SEM_PORT_FREED). K == num_waves_total: the credit-free fast path (compiled out).
     constexpr uint32_t landing_waves = get_compile_time_arg_val(20);
     constexpr bool ring = landing_waves < num_waves_total;
-    constexpr auto input_args = TensorAccessorArgs<21>();
+    // Output NoC split (writer.cpp: the same CT values; 0 / 0 = off).
+    constexpr uint32_t out_split_x = get_compile_time_arg_val(21);
+    constexpr uint32_t noc0_banks_west = get_compile_time_arg_val(22);
+    constexpr uint32_t noc0_banks_east = get_compile_time_arg_val(23);
+    constexpr uint32_t sem_out_ready = get_compile_time_arg_val(24);
+    constexpr uint32_t sem_out_done = get_compile_time_arg_val(25);
+    constexpr uint32_t sem_out_addr = get_compile_time_arg_val(26);
+    constexpr uint32_t T_out = get_compile_time_arg_val(27);
+    constexpr bool out_split = (noc0_banks_west != 0 || noc0_banks_east != 0);
+    constexpr auto input_args = TensorAccessorArgs<28>();
+    [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     static_assert(num_w_chunks * C == WS || sharded, "interleaved rows are pushed as whole Wp windows");
 
     uint32_t a = 0;
@@ -255,6 +269,7 @@ void kernel_main() {
     const uint32_t n_in_fwd = get_arg_val<uint32_t>(a++);
     const uint32_t n_in_bwd = get_arg_val<uint32_t>(a++);
     const uint32_t my_slot = get_arg_val<uint32_t>(a++);
+    [[maybe_unused]] const uint32_t out_addr = get_arg_val<uint32_t>(a++);
     const uint32_t n_free = get_arg_val<uint32_t>(a++);  // ports I report collected waves to (bounded landing)
     const uint32_t free_port[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
     a += 2;
@@ -635,9 +650,50 @@ void kernel_main() {
         return true;
     };
 
+    // ---- help write (out_split): the writer's quanta in its order (block, chunk, tile-row), one outstanding ----
+    uint32_t hq = 0, hb = 0, hc = 0, hr = 0;
+    const uint32_t total_q = out_split ? rows * num_w_chunks : 0;
+    [[maybe_unused]] const uint32_t noc0_banks = my_x[0] < out_split_x ? noc0_banks_west : noc0_banks_east;
+    auto try_help = [&]() -> bool {
+        if constexpr (!out_split) {
+            return false;
+        } else {
+            if (hq >= total_q || sem_value(sem_out_ready) <= hq) {
+                return false;
+            }
+            DRMS_ZONE("rd_help");
+            const uint32_t l1 = sem_value(sem_out_addr);
+            const uint32_t first = hc * C;
+            const uint32_t left = V > first ? V - first : 0;
+            const uint32_t valid = left < C ? left : C;
+            const uint32_t page0 = (start_tile_row + hb * R + hr) * Wt + w0 + first;
+#ifndef DRMS_ABLATE_WRITE
+            const auto out_accessor = TensorAccessor(output_args, out_addr, T_out);
+            for (uint32_t j = 0; j < valid; ++j) {
+                if ((noc0_banks >> ((page0 + j) % NUM_DRAM_BANKS)) & 1) {
+                    noc_async_write_tile(page0 + j, out_accessor, l1 + j * T_out);
+                }
+            }
+            noc_async_writes_flushed();
+#endif
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_out_done)) = ++hq;
+            const uint32_t rem = rows - hb * R;
+            const uint32_t rb = rem < R ? rem : R;
+            if (++hr == rb) {
+                hr = 0;
+                if (++hc == num_w_chunks) {
+                    hc = 0;
+                    ++hb;
+                }
+            }
+            return true;
+        }
+    };
+
     // ---- the poll loop ----
     while (true) {
         invalidate_l1_cache();
+        try_help();  // first: the writer is blocked on it, and a quantum is a few non-blocking writes
         try_load();
         if (is_root) {
             // Downstream first: a ready distribute / collect of wave w is on the critical chain to the output
@@ -655,7 +711,7 @@ void kernel_main() {
             try_send();
             try_receive();
         }
-        bool done = sharded || lb >= num_blocks;
+        bool done = (sharded || lb >= num_blocks) && hq >= total_q;
         if (is_root) {
             done = done && wp >= num_waves_total && wc >= own_waves;
             if constexpr (combine) {

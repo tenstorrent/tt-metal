@@ -73,7 +73,10 @@ def test_perf_measure(inputs, axes, extras, perf_mesh, request):
     call, check = prepare_distributed_rms_norm(
         inputs, mesh_device=perf_mesh, extras=extras, op=distributed_rms_norm, **axes
     )
-    if os.environ.get("DRMS_ABLATE_EXCHANGE", "0") in ("", "0"):
+    if all(
+        os.environ.get(k, "0") in ("", "0")
+        for k in ("DRMS_ABLATE_EXCHANGE", "DRMS_ABLATE_WRITE", "DRMS_ABLATE_FINALIZE")
+    ):
         check(call())
     else:
         call()

@@ -244,7 +244,7 @@ stay, and a shared fence is bounded by (1). (3) Port placement (`PORT_X0`): west
 overflow. The exposed transport (~2 µs) is the send → relay → notify hop chain plus the root's collect/finalize, not
 synchronization. Next: Refinement 6 / the output write burst (Refinement 3's finding).
 
-### [ ] Refinement 6 — Local-half headroom on the perf-flagged case (only if Refinements 3 and 5 leave it)
+### [x] Refinement 6 — Local-half headroom on the perf-flagged case (only if Refinements 3 and 5 leave it)
 
 **Type**: perf
 
@@ -260,3 +260,16 @@ in the changelog.
 
 **Done when**: a measured device-ns win on the focus case (fastest chip lower beyond noise, slowest not higher) with
 the golden suite green and no regression across the guard set, or a documented measured null.
+
+**Outcome**: focus case 20.50 / 21.82 → **20.18 / 21.33 µs** (fastest / slowest; `ccl_perf compare`: win). The guards
+also win: 32×1792 9.78 → 9.69, 2048×1280 42.67 / 45.44 → 40.93 / 43.66. Exposed transport 1.97 → 1.68 µs. Two levers
+landed:
+- a one-pass finalize fold (G slot copies, then one column-face SFPU fold, bit-identical);
+- the output write burst split over both NoCs. The reader writes the odd DRAM banks' tiles on NOC0 and the writer
+  stays the only CB consumer. It is gated to outputs ≥ 512 KiB per chip; direction-aware masks were slower.
+
+Ablations: writes stubbed 16.56 µs, finalize stubbed 19.65. The bottleneck now is a 2.3 MB write burst at the DRAM
+write ceiling (~285 GB/s), which can only start after the first wave's exchange chain (~7 µs, DRAM idle). Next would
+be overlapping the writes with the reads (mixed traffic beats write-only). That needs a cheaper per-wave chain so more
+waves pay off. It is an OVERLAP scheme change and was out of this local-half scope. G-MC was not built (γ < 1 % of the
+bytes, noise in the base).
