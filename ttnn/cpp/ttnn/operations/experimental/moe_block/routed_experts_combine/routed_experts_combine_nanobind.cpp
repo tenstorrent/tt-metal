@@ -93,9 +93,6 @@ void bind_routed_experts_combine(nb::module_& mod) {
             resources: the block's MoEBlockResources (config, placement, persistent words, the DRISC senders).
             max_tokens_per_expert: the flat expert's capacity m.
             activation: the experts' activation (se3_compute SE_ACT: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU).
-            route: with MoEBlockConfig.experts_during_dispatch, the dispatch's route words [1, 1, 1, RW S] uint32: the
-                dispatch runs as the first phase of the combine's port kernels and fills dispatched (the flat x relays
-                wait for it); None otherwise.
             route: with MoEBlockConfig.experts_during_dispatch, the dispatch's route words [1, 1, 1, RW S] uint32 (the
                 dispatch then runs as the first phase of the combine's port kernels and fills dispatched; the flat x
                 relays wait for it); None otherwise.
