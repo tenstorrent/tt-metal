@@ -162,8 +162,9 @@ public:
     Buffer* get_backing_buffer() const;
 
     // Identifies the device allocation this MeshBuffer owns. The Buffers holding the allocation share this ID, so the
-    // allocator and graph tracking report the allocation under it.
-    // std::nullopt if the MeshBuffer owns no allocation: it was created at an explicit address, or is deallocated.
+    // allocator and graph tracking report the allocation under it. Like Buffer::unique_id(), it stays the same after
+    // the MeshBuffer is deallocated.
+    // std::nullopt if the MeshBuffer never owned an allocation: it was created at an explicit address.
     std::optional<std::uint64_t> unique_id() const { return unique_id_; }
 
     uint32_t datum_size_bytes() const;
