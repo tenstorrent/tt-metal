@@ -469,6 +469,16 @@ Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `c
 
 **Evidence** (`dsv4-logs/apc_img/res/`, device regression client `tests/serving_apc_image_repeat.py`, 33 repeat runs over the image cases): v3b image 17 of 33 repeats wrong (15 of the wrong ones with cached blocks > 0); with the plugin fix 33 of 33 right, 0 cached. Mixed stress (`tests/serving_mixed_image_batch.py`, image prompts alongside long text prompts, 150 requests): v3b and fix both pass (the v3b run did not reproduce a failure there). The catalog is unchanged.
 
+## 8.19 APC with images (`DSV41_APC_IMAGES=1`)
+
+**What changed.** Image prompts take part in the model-owned automatic prefix cache (before: 8.18 skipped prefix-cache reads for them). The prefix-cache key is the token chain plus per-image content hashes; a hit is restored at a continuation piece (image users take part in the restore wave); the Engram n-gram state is DEAD at image positions; the request's `cache_salt` is passed to the model (plugin `mm_cache_salt`, so different salts never share a restore). Tests: `tests/test_prefix_images.py` (CPU), device regression `tests/serving_apc_image_hits.py` (hits and correctness, salts, boundary) and `tests/serving_image_recompute_waste.py`.
+
+**Deviation.** Snapshots inside an image span are allowed (keyed by the image identity). `DSV41_APC_IMAGES_STRICT=1` restores the strict no-snapshot-inside-an-image-span rule. `TT_MM_PREFIX_CACHE` controls vLLM's own prefix-cache reads of image requests (unset: the plugin skip of 8.18 stays).
+
+**Measured** (device runs on host .46, rc2 image with worktree mounts; rc3 end to end pending): cold -> repeat TTFT with 10 / 50 / 100 / 250 images: 3.3 -> 1.5 s, 8.8 -> 6.0 s, 16.3 -> 11.1 s, 41.1 -> 22.8 s.
+
+**Catalog.** `DSV41_APC_IMAGES: "1"` in all deepseek_v41 entries (B=4, B=8, B=16; text and vision).
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
