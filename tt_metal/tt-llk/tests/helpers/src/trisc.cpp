@@ -94,7 +94,9 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    // RC memset knock-out c1: clear unchanged, one more re-align barrier after it.
     llk_profiler::reset();
+    llk_profiler::sync_threads();
     llk_profiler::sync_threads();
 #endif
 
