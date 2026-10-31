@@ -488,6 +488,11 @@ std::vector<Tensor> log_sigmoid_bw(
     neg_input.deallocate();
     Tensor grad_result = ttnn::multiply(grad, sigmoid_neg, std::nullopt, output_mem_config);
     sigmoid_neg.deallocate();
+    // A NaN input has no finite derivative, so it has to come back non-finite
+    // instead of silently yielding one. Note that a bfloat16 Dest cannot carry
+    // NaN: the marker materialises as an infinity there, so on bf16 this op
+    // returns inf rather than NaN. Both are non-finite, which is what the
+    // tests and callers check for.
     Tensor is_nan = ttnn::isnan(input, output_mem_config);
     grad_result = ttnn::where(is_nan, std::nanf(""), grad_result, output_mem_config);
     is_nan.deallocate();
