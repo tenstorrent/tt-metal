@@ -169,6 +169,12 @@ def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, ful
     return ""
 
 
+def row_mop_form(fidelity, kb, fp32_dest, in_format, out_format, full_sync, rt, ct, several_blocks=False, sections=1, in_format_b=None) -> str:
+    """matmul_row_mop_form of llk_matmul_forms.h: the forced form that replaces the opt-in row MOP ('' where it stays): any forced cell at half sync, 'R' and 'h' at full sync."""
+    form = forced_form(fidelity, kb, fp32_dest, in_format, out_format, out_format, full_sync, rt, ct, several_blocks, sections, in_format_b=in_format_b)
+    return form if form and (not full_sync or form in ("R", "h")) else ""
+
+
 MAIN_FORM = (("tile", False), None)  # main's form: tile MOP, per-row unpack, unknown format key
 
 

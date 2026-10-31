@@ -147,7 +147,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
     def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, sections: int = 1, several_blocks: bool = False) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
-        from helpers.matmul_prod_keys import forced_form, main_form_cell, m2_row_mop
+        from helpers.matmul_prod_keys import main_form_cell, m2_row_mop, row_mop_form
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
             return []
@@ -165,10 +165,8 @@ class MATMUL_ROW_MOP(TemplateParameter):
             return []
         if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, several_blocks, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
             return []
-        if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B):
-            return []
-        # a full sync cell that takes the hoisted form of its own ('r' cells keep the kernels' row MOP)
-        if dest_sync == DestSync.Full and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, True, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B) in ("R", "h"):
+        # matmul_row_mop_form of llk_matmul_forms.h: the cells that take a forced form in place of the opt-in row MOP
+        if row_mop_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, dest_sync == DestSync.Full, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 

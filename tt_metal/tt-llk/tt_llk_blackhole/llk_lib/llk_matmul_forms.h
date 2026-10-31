@@ -1536,6 +1536,16 @@ constexpr DataFormat matmul_forced_form_key(const char form)
     return form == 'R' ? DataFormat::Bfp2 : (form == 'h' ? DataFormat::Bfp2_b : (form == 'r' ? DataFormat::Bfp4 : DataFormat::Invalid));
 }
 
+// The forced form that replaces the row MOP a caller opts into (the row_mop argument of the math calls), as the harness runs it: 0 where the row MOP stays. At half sync every
+// forced cell takes the place of the row MOP, at full sync the hoisted forms ('R', 'h'). h, w and kt_dim are the caller's block keys (rt, ct and k steps of the block).
+template <MathFidelity math_fidelity, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, int sync, std::uint32_t h, std::uint32_t w, std::uint32_t kt_dim, std::uint32_t kt_per_section = 0>
+constexpr char matmul_row_mop_form()
+{
+    constexpr std::uint32_t sections = (kt_per_section == 0 || kt_per_section >= kt_dim) ? 1 : 2;
+    constexpr char form              = matmul_forced_form<math_fidelity, kt_dim, fp32_dest, in0, in1, out_format, out_format, sync, h, w, false, sections>();
+    return (form != 0 && (sync == 0 || form == 'R' || form == 'h')) ? form : 0;
+}
+
 
 /**
  * @brief The math fidelity whose phases cover every nonzero mantissa slice of the two matmul operands.

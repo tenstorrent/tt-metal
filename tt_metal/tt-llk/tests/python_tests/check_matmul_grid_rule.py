@@ -127,7 +127,7 @@ def check_forced() -> int:
     """matmul_forced_form of the header against matmul_prod_keys.forced_form over a cross product of formats, block shapes, k steps and syncs (every cell of the table is hit)."""
     from itertools import product
 
-    from helpers.matmul_prod_keys import forced_form
+    from helpers.matmul_prod_keys import forced_form, row_mop_form
 
     cases = [
         (fi, sy, acc, i0, i1, o, rt, ct, kb, 1)
@@ -148,17 +148,20 @@ def check_forced() -> int:
         calls = "\n".join(
             "putchar(matmul_forced_form<MathFidelity::%s,%d,%s,DataFormat::%s,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,false,%d>() ?: '-');"
             % (fi, kb, "true" if acc else "false", NAME[i0], NAME[i1], NAME[o], NAME[o], sy, rt, ct, sec)
+            + "putchar(matmul_row_mop_form<MathFidelity::%s,%s,DataFormat::%s,DataFormat::%s,DataFormat::%s,%d,%d,%d,%d>() ?: '-');"
+            % (fi, "true" if acc else "false", NAME[i0], NAME[i1], NAME[o], sy, rt, ct, kb)
             for fi, sy, acc, i0, i1, o, rt, ct, kb, sec in cases
         )
         (Path(d) / "t.cpp").write_text('#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nint main(){\n' + calls + "\n}\n")
         subprocess.run(["g++", "-std=c++20", "-O0", "-fconstexpr-ops-limit=1000000000", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
         cpp = subprocess.run([str(Path(d) / "t")], check=True, capture_output=True, text=True).stdout
     py = "".join(
-        forced_form(getattr(MathFidelity, fi), kb, acc, getattr(DataFormat, NAME[i1]), getattr(DataFormat, NAME[o]), getattr(DataFormat, NAME[o]), sy == 1, rt, ct, False, sec, in_format_b=getattr(DataFormat, NAME[i0])) or "-"
+        (forced_form(getattr(MathFidelity, fi), kb, acc, getattr(DataFormat, NAME[i1]), getattr(DataFormat, NAME[o]), getattr(DataFormat, NAME[o]), sy == 1, rt, ct, False, sec, in_format_b=getattr(DataFormat, NAME[i0])) or "-")
+        + (row_mop_form(getattr(MathFidelity, fi), kb, acc, getattr(DataFormat, NAME[i1]), getattr(DataFormat, NAME[o]), sy == 1, rt, ct, False, sec, in_format_b=getattr(DataFormat, NAME[i0])) or "-")
         for fi, sy, acc, i0, i1, o, rt, ct, kb, sec in cases
     )
     bad = sum(x != y for x, y in zip(cpp, py)) + (len(cpp) != len(py))
-    print(f"forced form: {len(cases)} cases, C++ forces {len(cpp) - cpp.count('-')}, python {len(py) - py.count('-')}, {bad} differ")
+    print(f"forced form: {len(cases)} cases, C++ forced or row MOP replaced {len(cpp) - cpp.count('-')}, python {len(py) - py.count('-')}, {bad} differ")
     return bad
 
 

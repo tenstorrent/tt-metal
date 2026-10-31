@@ -55,6 +55,17 @@ constexpr std::uint32_t llk_matmul_form_key() {
 #endif
 }
 
+// The forced form (llk_matmul_forms.h matmul_row_mop_form) that replaces the row MOP a caller opts into for its block, 0 where the row MOP stays or the block keys are not given.
+template <bool row_mop, std::uint32_t kt_per_section, std::uint32_t block_rt, std::uint32_t block_ct, std::uint32_t block_kt, DataFormat in0, DataFormat in1, DataFormat out_format>
+constexpr char llk_matmul_row_mop_form() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (row_mop && block_rt != 0 && block_ct != 0 && block_kt != 0 && in0 != DataFormat::Invalid && in1 != DataFormat::Invalid) {
+        return matmul_row_mop_form<MATH_FIDELITY, DST_ACCUM_MODE, in0, in1, out_format, DST_SYNC_MODE == DstSync::SyncHalf ? 0 : 1, block_rt, block_ct, block_kt, kt_per_section>();
+    }
+#endif
+    return 0;
+}
+
 // The fidelity whose phases a matmul runs for operand formats known at compile time (matmul_phase_fidelity); the requested
 // one when they are Invalid, mixed, or the output and DEST width are a cell that measured slower with the phases dropped.
 // Only the math calls take it; the unpack and math forms stay keyed on the requested fidelity (MATH_FIDELITY).
@@ -330,6 +341,9 @@ ALWI void matmul_block_init(
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
+    constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+    constexpr bool row_mop_on = row_mop && row_mop_form == 0;
+    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
@@ -341,12 +355,12 @@ ALWI void matmul_block_init(
     MATH((llk_math_matmul_init<
           matmul_elided_fidelity<in0_format, in1_format, out_format>(),
           MM_THROTTLE,
-          row_mop,
-          llk_math_matmul_tile_mop<row_mop, kt_key, out_format>(),
+          row_mop_on,
+          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
           in1_order,
           reuse_dir,
           row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
@@ -415,6 +429,9 @@ ALWI void matmul_block(
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
+    constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+    constexpr bool row_mop_on = row_mop && row_mop_form == 0;
+    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
@@ -422,12 +439,12 @@ ALWI void matmul_block(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_key, out_format, reuse_dir, stream_z>(
+    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_key, form_out, reuse_dir, stream_z>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<
-          row_mop,
-          llk_math_matmul_tile_mop<row_mop, kt_key, out_format>(),
+          row_mop_on,
+          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
           in1_order,
           false,
           in0_format,
@@ -435,7 +452,7 @@ ALWI void matmul_block(
           out_format,
           reuse_dir,
           row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
@@ -486,6 +503,9 @@ ALWI void matmul_block_k(
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
+    constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+    constexpr bool row_mop_on = row_mop && row_mop_form == 0;
+    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
@@ -497,8 +517,8 @@ ALWI void matmul_block_k(
     UNPACK((llk_unpack_AB_matmul_k<stream_z>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, num_k, in1_k_stride)));
     MATH((matmul_block_math_dynamic_throttle<
-        row_mop,
-        llk_math_matmul_tile_mop<row_mop, kt_key, out_format>(),
+        row_mop_on,
+        llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
         in1_order,
         true,
         in0_format,
@@ -506,7 +526,7 @@ ALWI void matmul_block_k(
         out_format,
         0,
         row_end_fold,
-        llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(
+        llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>()>(
         in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, num_k)));
 #else
     for (std::uint32_t k = 0; k < num_k; k++) {
