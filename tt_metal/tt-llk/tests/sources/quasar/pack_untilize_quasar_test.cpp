@@ -117,14 +117,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (unpack_to_dest)
         {
+            constexpr std::uint32_t num_blocks = (FULL_RT_DIM * FULL_CT_DIM) / BLOCK_CT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                for (std::uint32_t block_idx = 0; block_idx < num_blocks; block_idx++)
                 {
                     // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
                     // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
                     // ZEROACC to wipe subsequent tile rows after packing the first one.
-                    _llk_unpack_unary_operand_to_dest_block_(block_rt * BLOCK_CT_DIM /*l1_tile_idx*/, 0 /*dst_tile_idx*/, BLOCK_CT_DIM);
+                    _llk_unpack_unary_operand_to_dest_block_(block_idx * BLOCK_CT_DIM /*l1_tile_idx*/, 0 /*dst_tile_idx*/, BLOCK_CT_DIM);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -191,7 +192,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
-                const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM;
+                const std::uint32_t src_handshake_iters = LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM;
                 if constexpr (is_fp32_dest_acc_en)
                 {
                     _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
@@ -203,9 +204,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
+                constexpr std::uint32_t num_blocks = (FULL_RT_DIM * FULL_CT_DIM) / BLOCK_CT_DIM;
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                    for (std::uint32_t block_idx = 0; block_idx < num_blocks; block_idx++)
                     {
                         for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                         {
@@ -216,9 +218,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
+                constexpr std::uint32_t num_blocks = (FULL_RT_DIM * FULL_CT_DIM) / BLOCK_CT_DIM;
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                    for (std::uint32_t block_idx = 0; block_idx < num_blocks; block_idx++)
                     {
                         for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                         {
@@ -308,44 +311,51 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+            constexpr std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                for (std::uint32_t y = 0; y < FULL_RT_DIM; y++)
                 {
-                    // Each tile row is produced in alternating banks (SyncHalf).
-                    // Read from dest_idx 0; section_done zeroes the current bank
-                    // and switches the packer to the other bank.
-                    if (tensor_shape.total_num_faces() == NUM_FACES)
+                    for (std::uint32_t block_num = 0; block_num < num_blocks_per_col; block_num++)
                     {
-                        _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external);
-                        _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
-                    }
-                    else
-                    {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(
-                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
+                        const std::uint32_t l1_tile_offset = y * y_stride_external + block_num * BLOCK_CT_DIM;
+                        if (tensor_shape.total_num_faces() == NUM_FACES)
+                        {
+                            _llk_pack_untilize_set_dst_offset_(tensor_shape, l1_tile_offset);
+                            _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
+                        }
+                        else
+                        {
+                            _llk_pack_untilize_strided_<FULL_CT_DIM>(
+                                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, l1_tile_offset, 0 /*src_tile_idx*/);
+                        }
                     }
                 }
             }
         }
         else
         {
+            constexpr std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                for (std::uint32_t y = 0; y < FULL_RT_DIM; y++)
                 {
-                    if (tensor_shape.total_num_faces() == NUM_FACES)
+                    for (std::uint32_t block_num = 0; block_num < num_blocks_per_col; block_num++)
                     {
-                        _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external);
-                        _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
+                        const std::uint32_t l1_tile_offset = y * y_stride_external + block_num * BLOCK_CT_DIM;
+                        if (tensor_shape.total_num_faces() == NUM_FACES)
+                        {
+                            _llk_pack_untilize_set_dst_offset_(tensor_shape, l1_tile_offset);
+                            _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
+                        }
+                        else
+                        {
+                            _llk_pack_untilize_strided_<FULL_CT_DIM>(
+                                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, l1_tile_offset, 0 /*src_tile_idx*/);
+                        }
+                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
-                    else
-                    {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(
-                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
-                    }
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
