@@ -67,7 +67,7 @@ Independent references use the pinned Diffusers revision in `requirements-refere
 
 The bf16 one-edit comparison meets the original, unchanged editing gates. The fp32 failure remains: its trajectory differs from the model's bf16 arithmetic, and the independent fp32/bf16 references also diverge. The bf16 scores above use an independent float64 PCC calculation; the original float32 scorer reports 0.999663/0.999716 and reaches the same verdict. All 40 saved bf16 states are finite; seeded noise and step tensors were verified. Device repeats are bit-identical. This establishes agreement for one fixed edit with CPU bf16, not CUDA equivalence or broad task quality.
 
-The weekly HTTP checks separately compare text RGB to the publisher's CUDA artifact (PCC **0.987758**, gate 0.97) and the two-image edit to the publisher's P150 artifact (PCC **0.975105**, gate 0.97). The latter is explicitly a regression check, not an independent correctness oracle. The original author's exact CUDA reference commit and editing tensors were not published.
+The weekly HTTP checks separately compare text RGB to the publisher's CUDA artifact (PCC **0.987758**, gate 0.97) and the two-image edit to the publisher's P150 artifact (PCC **0.975105**, gate 0.95). The latter is explicitly a regression check, not an independent correctness oracle. The original author's exact CUDA reference commit and editing tensors were not published.
 
 To generate the one-image bf16 reference with the qualified CPU VAE layout, use the original package's `media/edit_ref_llama.jpg` (SHA256 `acb2dba9fe4966197f18c16f166dcfb9c717b974b6fa08c2004c111d8fc17b37`):
 
