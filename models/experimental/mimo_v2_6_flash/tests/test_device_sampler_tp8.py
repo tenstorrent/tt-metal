@@ -324,8 +324,9 @@ def test_device_sampler_grammar(mesh_device, users):
             tokens = read_tokens(sampler(logits_tt, token_input=token_input))
             compare(f"logits {s} params {i} lifted", tokens, logits, [None] * users, params, uniform)
 
-        # Traced: captured under the mask; replays under it, under another mask and with the constraint lifted, each
-        # uploaded in place between replays as the generator does.
+        # Traced: captured under the mask; replays under it, under its complement (the same rows constrained: only the
+        # mask uploads), under another mask and with the constraint lifted, each uploaded in place between replays as
+        # the generator does.
         if s == len(SCALES) - 1:
             sampler.set_grammar(mask, rows)
             sampler(logits_tt, token_input=token_input)
@@ -334,12 +335,21 @@ def test_device_sampler_grammar(mesh_device, users):
             trace = ttnn.begin_trace_capture(plan.mesh_device, cq_id=0)
             out = sampler(logits_tt, token_input=token_input)
             ttnn.end_trace_capture(plan.mesh_device, trace, cq_id=0)
-            for tag, current in (("replay", allowed), ("replay other", allowed[::-1]), ("replay lifted", None)):
+            complement = [None if a is None else ~a for a in allowed]
+            for tag, current in (
+                ("replay", allowed),
+                ("replay complement", complement),
+                ("replay other", allowed[::-1]),
+                ("replay lifted", None),
+            ):
+                flags = sampler.grammar_flags
                 if current is None:
                     sampler.set_grammar()
                     current = [None] * users
                 else:
                     sampler.set_grammar(*pack_mask(current))
+                if current is complement:
+                    assert sampler.grammar_flags is flags, "unchanged flags uploaded the parameters again"
                 for d in range(DRAWS):
                     uniform = streams.draw(sampled)
                     ttnn.execute_trace(plan.mesh_device, trace, cq_id=0, blocking=False)

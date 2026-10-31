@@ -187,6 +187,9 @@ class DeviceSampler:
             mesh_mapper=plan.shard(-1),
             **dram_rm,
         )
+        # ``set_grammar``'s host copy of the mask, reused (the shard upload copies it out); its padding stays -1.
+        self.mask_host = torch.full((users, plan.tp, self.mask_stride), -1, dtype=torch.int32)
+        self.grammar_flags = torch.zeros(max_batch, dtype=torch.bool)  # the rows ``params`` flags (``set_grammar``)
         # The tokens of the last step, persistent (the trace writes them; reads and the feedback use them).
         self.next_tokens = persistent((1, max_batch), ttnn.uint32, **dram_rm)
         self.compute_config = ttnn.ComputeConfigDescriptor(
@@ -250,36 +253,40 @@ class DeviceSampler:
         ttnn.copy_host_to_device_tensor(hosts[0], self.params)
         ttnn.copy_host_to_device_tensor(hosts[1], self.rng)
         self.rows = self.pending_rows
+        self.grammar_flags = torch.zeros(self.max_batch, dtype=torch.bool)
 
     def set_grammar(self, mask=None, rows=None):
         """Constrains the next draws of the users ``rows`` (bool [n], n <= users) to the tokens ``mask`` allows: int32
         [n, words] in vLLM's packing (bit j of word w allows token 32 * w + j; the tokens of words past ``words`` are
         disallowed). The rows keep the parameters and streams ``set_params`` gave them. ``mask`` None lifts every row's
-        constraint. Uploads the parameters again (with each row's flag) and the mask rows of the flagged users."""
+        constraint. Uploads the mask rows of the flagged users, and the parameters again (with each row's flag) when
+        the flags differ from the ones ``params`` holds: a steady structured decode uploads only its masks."""
         flags = torch.zeros(self.max_batch, dtype=torch.bool)
         if mask is not None:
             n = mask.shape[0]
             assert n <= self.users and rows.numel() == n
             flags[:n] = rows
-            words = self.plan.tp * self.mask_words
-            given = min(words, mask.shape[1])
-            full = torch.full((self.users, words), -1, dtype=torch.int32)
-            full[:n] = 0
-            full[:n, :given] = mask[:, :given]
-            padded = torch.full((self.users, self.plan.tp, self.mask_stride), -1, dtype=torch.int32)
-            padded[:, :, : self.mask_words] = full.reshape(self.users, self.plan.tp, self.mask_words)
+            tp, words = self.plan.tp, self.mask_words
+            given = mask[:, : tp * words]
+            if given.shape[1] < tp * words:  # the tokens of the words past the mask's are disallowed
+                given = torch.nn.functional.pad(given, (0, tp * words - given.shape[1]))
+            self.mask_host[:n, :, :words] = given.reshape(n, tp, words)
+            self.mask_host[n:, :, :words] = -1
             host = ttnn.from_torch(
-                padded.reshape(self.users, -1),
+                self.mask_host.reshape(self.users, -1),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=self.plan.shard(-1),
             )
             ttnn.copy_host_to_device_tensor(host, self.mask)
+        if torch.equal(flags, self.grammar_flags):
+            return
         params = self._params(*self.rows, grammar=flags)
         host = ttnn.from_torch(
             params, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
         )
         ttnn.copy_host_to_device_tensor(host, self.params)
+        self.grammar_flags = flags
 
     def read_rng(self):
         """The rows' stream states (Python ints), blocking."""
