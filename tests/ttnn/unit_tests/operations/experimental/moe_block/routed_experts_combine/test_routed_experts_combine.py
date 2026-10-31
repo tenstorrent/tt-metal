@@ -80,8 +80,17 @@ class _Call:
         combine.arena_bytes = cfg["arena_bytes"]
         self.kw = dict(max_tokens_per_expert=cfg["m"], activation=weights_py.ACTS[cfg["activation"]], combine=combine)
 
-    def call(self):
-        return mb.routed_experts_combine(*self.args, **self.kw)
+    def call(self, arena=None):
+        return mb.routed_experts_combine(*self.args, arena=arena, **self.kw)
+
+    def arena_spec(self):
+        """The block's shared arena (here: the op's need alone)."""
+        cfg = self.cfg
+        rows_cap = int(self.ref[(0, 0)]["table"].shape[-2]) * 32
+        return mb.routed_experts_combine_arena_spec(
+            self.res, rows_cap=rows_cap, max_tokens_per_expert=cfg["m"], activation=self.kw["activation"],
+            combine=self.kw["combine"],
+        )  # fmt: skip
 
     def close(self):
         self.layer.close()
@@ -118,10 +127,14 @@ def test_routed_experts_combine(mesh_device, case):
     meta, ref = _case(mesh_device, case)
     run = _Call(mesh_device, meta, ref)
     try:
-        for _ in range(3):  # (a miss, then hits on the same addresses: the per-call zeroing and counters)
-            out = run.call()
+        # a miss, hits on the same addresses (the per-call zeroing and counters), then hits on the block's arena
+        # (another address: the patches of the moved source only)
+        shared = ttnn.allocate_tensor_on_device(run.arena_spec(), mesh_device)
+        for arena in (None, None, None, shared, shared):
+            out = run.call(arena)
             got = harness.from_mesh(out, tuple(meta["mesh_shape"]))
             harness.assert_bit_exact({ch: {"y_own": t} for ch, t in got.items()}, ref, ["y_own"])
+        ttnn.deallocate(shared)
     finally:
         run.close()
 
@@ -148,6 +161,17 @@ def test_routed_experts_combine_host_time(mesh_device, case):
         for _ in range(CALLS):
             ttnn.deallocate(ttnn.allocate_tensor_on_device(*spec))
         arena = (time.perf_counter() - t0) / CALLS * 1e6
+        # the block's path: one arena the block allocated (shared with the fused head), passed in
+        shared = ttnn.allocate_tensor_on_device(run.arena_spec(), mesh_device)
+        run.call(shared)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(CALLS):
+            run.call(shared)
+        given = (time.perf_counter() - t0) / CALLS * 1e6
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(shared)
+        print(f"routed_experts_combine {case}: {given:.1f} us a call with the block's arena (arena=)")
         print(
             f"routed_experts_combine {case}: {host:.1f} us a call (host, cache hit, {CALLS} calls), of which the arena's "
             f"allocation + free ~{arena:.1f} us, the rest (plan lookup, hash, address patches, enqueue) "

@@ -32,9 +32,16 @@ CombineBuffers buffers_of(const RoutedExpertsCombineInputs& t, const ttnn::Tenso
     return b;
 }
 
+std::array<uint32_t, 3> report_addrs(const CombineBuffers& b) {
+    return {
+        static_cast<uint32_t>(b[CombineBuf::Arena]->address()),
+        static_cast<uint32_t>(b[CombineBuf::Table]->address()),
+        static_cast<uint32_t>(b[CombineBuf::Bar]->address())};
+}
+
 void set_report(
     tt::tt_metal::Program& program,
-    const RoutedExpertsCombineFactory::shared_variables_t& sv,
+    RoutedExpertsCombineFactory::shared_variables_t& sv,
     const RoutedExpertsCombineParams& p,
     const CombineBuffers& b) {
     flat_routed_expert::set_flat_combine_report(
@@ -45,6 +52,7 @@ void set_report(
             .collector = sv.combine.collector,
             .counts_addr = static_cast<uint32_t>(b[CombineBuf::Arena]->address()) + sv.combine.counts_offset,
             .l1_args = resolve_l1_args(sv.combine, b)});
+    sv.report = report_addrs(b);
 }
 
 }  // namespace routed_experts_combine_factory_detail
@@ -94,7 +102,9 @@ void RoutedExpertsCombineFactory::override_runtime_arguments(
         auto& program = cached.workload.get_programs().at(range);
         flat_routed_expert::override_flat_routed_expert_addresses(program, sv.flat, t.flat);
         override_combine_addresses(program, sv.combine, bufs);
-        set_report(program, sv, p, bufs);
+        if (sv.report != report_addrs(bufs)) {
+            set_report(program, sv, p, bufs);
+        }
     }
 }
 

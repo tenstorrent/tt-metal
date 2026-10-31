@@ -99,6 +99,8 @@ void bind_routed_experts_combine(nb::module_& mod) {
             route: with MoEBlockConfig.experts_during_dispatch, the dispatch's route words [1, 1, 1, RW S] uint32 (the
                 dispatch then runs as the first phase of the combine's port kernels and fills dispatched; the flat x
                 relays wait for it); None otherwise.
+            arena: the block's shared L1 arena (routed_experts_combine_arena_spec; the fused head ran in it first);
+                None: the op allocates one for the call.
             layout: FlatLayoutOptions.
             combine: CombineConfig.
 
@@ -120,8 +122,27 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("max_tokens_per_expert"),
         nb::arg("activation"),
         nb::arg("route") = nb::none(),
+        nb::arg("arena") = nb::none(),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
         nb::arg("combine") = CombineConfig{});
+
+    mod.def(
+        "routed_experts_combine_arena_spec",
+        &routed_experts_combine_arena_spec,
+        nb::arg("resources"),
+        nb::kw_only(),
+        nb::arg("rows_cap"),
+        nb::arg("max_tokens_per_expert"),
+        nb::arg("activation"),
+        nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
+        nb::arg("combine") = CombineConfig{},
+        nb::arg("other_bytes") = 0,
+        R"doc(
+        The TensorSpec of the L1 arena the block allocates once a call (ttnn.allocate_tensor_on_device) and passes to
+        fused_head(..., arena=) and routed_experts_combine(..., arena=): height-sharded over every worker core,
+        max(this op's need, other_bytes) a core - other_bytes: the head's arena bytes. rows_cap: the hand-off table's
+        rows. Plans the op on first use (the same arguments as the op's).
+        )doc");
 
     mod.def(
         "routed_experts_combine_flat_plan",

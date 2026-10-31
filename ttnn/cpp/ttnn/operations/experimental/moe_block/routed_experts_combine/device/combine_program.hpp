@@ -163,7 +163,8 @@ CombineHandles add_combine_program(
     const CombineBuffers& buffers,
     const FlatHandoff& flat);
 
-// Re-applies the buffers' addresses (a program-cache hit).
+// Re-applies the buffers' addresses (a program-cache hit): a source's args (and the arena's CBs) only when its address
+// moved.
 void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& buffers);
 
 // The writers' l1_args with the buffers' current addresses.

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+
 #include "combine_program.hpp"
 #include "routed_experts_combine_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -19,6 +21,7 @@ struct RoutedExpertsCombineFactory {
     struct shared_variables_t {
         CombineHandles combine;
         flat_routed_expert::FlatProgramHandles flat;
+        std::array<uint32_t, 3> report{};  // (the arena, table and bar addresses the y writers' report holds)
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

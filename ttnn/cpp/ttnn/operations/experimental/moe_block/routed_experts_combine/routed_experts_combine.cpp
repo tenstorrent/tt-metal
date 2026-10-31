@@ -34,7 +34,9 @@ struct CombineState {
     std::shared_ptr<const CombinePlan> plan;
     ttnn::Tensor out, bar, hcache;
     std::optional<ttnn::Tensor> lut, sems;
-    std::optional<tt::tt_metal::TensorSpec> arena_spec, y_spec;
+    std::optional<tt::tt_metal::TensorSpec> arena_spec;
+    std::optional<ttnn::Tensor> y;  // the flat expert's y (never written with the L1 hand-off)
+    uint32_t rows_cap = 0;
 };
 
 tt::tt_metal::TensorSpec rm_spec(const ttnn::Shape& shape, DataType dt, const MemoryConfig& mc) {
@@ -145,8 +147,9 @@ CombineState make_state(
         rm_spec(ttnn::Shape({8, hcache_page_bytes(N) / 4}), DataType::UINT32, DRAM_MEMORY_CONFIG));
     s.out = res.persistent_tensor(
         "routed_experts_combine/out", rm_spec(ttnn::Shape({1, 1, in.S, in.W}), DataType::BFLOAT16, DRAM_MEMORY_CONFIG));
-    // (the flat expert's y: with the L1 hand-off never written, its spec only)
-    s.y_spec = rm_spec(ttnn::Shape({rows_cap, in.W}), DataType::BFLOAT16, DRAM_MEMORY_CONFIG);
+    s.rows_cap = rows_cap;
+    s.y = res.persistent_tensor(
+        "routed_experts_combine/y", rm_spec(ttnn::Shape({rows_cap, in.W}), DataType::BFLOAT16, DRAM_MEMORY_CONFIG));
     if (s.plan->perchip) {
         const auto& lut16 = s.plan->lut;
         std::vector<uint32_t> words((lut16.size() + 1) / 2, 0);
@@ -172,7 +175,51 @@ CombineState make_state(
     return s;
 }
 
+const CombineState& state(
+    MoEBlockResources& res,
+    uint32_t rows_cap,
+    uint32_t m,
+    uint32_t activation,
+    const fre::FlatLayoutOptions& layout,
+    const CombineConfig& combine) {
+    // (planned once per resources: a cache hit does a lookup, the hash and the address patches)
+    const auto& st = res.plan<CombineState>(
+        "routed_experts_combine/state", [&] { return make_state(res, m, activation, layout, combine, rows_cap); });
+    TT_FATAL(
+        st.combine == combine && st.flat_config.activation == activation &&
+            st.flat_config.max_tokens == (m + 31) / 32 * 32 && st.layout == layout && st.rows_cap == rows_cap,
+        "routed_experts_combine: the resources' combine was planned for another config");
+    return st;
+}
+
 }  // namespace routed_experts_combine_detail
+
+tt::tt_metal::TensorSpec routed_experts_combine_arena_spec(
+    MoEBlockResources& resources,
+    uint32_t rows_cap,
+    uint32_t max_tokens_per_expert,
+    uint32_t activation,
+    const flat_routed_expert::FlatLayoutOptions& layout,
+    const CombineConfig& combine,
+    uint32_t other_bytes) {
+    using namespace routed_experts_combine_detail;
+    const auto& st = state(resources, rows_cap, max_tokens_per_expert, activation, layout, combine);
+    const auto& sh = *st.arena_spec->memory_config().shard_spec();
+    const uint32_t need = sh.shape[0] * 64;
+    if (other_bytes <= need) {
+        return *st.arena_spec;
+    }
+    const uint32_t rows = (other_bytes / 64 + 31) / 32 * 32;
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape({static_cast<uint32_t>(sh.grid.num_cores()) * rows, 32}),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(Layout::TILE),
+            MemoryConfig(
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                tt::tt_metal::ShardSpec(sh.grid, {rows, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR))));
+}
 
 flat_routed_expert::FlatRoutedExpertConfig routed_experts_combine_flat_config(
     MoEBlockResources& resources,
@@ -199,21 +246,30 @@ ttnn::Tensor routed_experts_combine(
     uint32_t max_tokens_per_expert,
     uint32_t activation,
     const std::optional<ttnn::Tensor>& route,
+    const std::optional<ttnn::Tensor>& arena,
     const flat_routed_expert::FlatLayoutOptions& layout,
     const CombineConfig& combine) {
     using namespace routed_experts_combine_detail;
     const uint32_t rows_cap = table.logical_shape()[-2] * 32;
-    // (planned once per resources: a cache hit does a lookup, the arena's allocation, the hash and the patches)
-    const auto& st = resources.plan<CombineState>("routed_experts_combine/state", [&] {
-        return make_state(resources, max_tokens_per_expert, activation, layout, combine, rows_cap);
-    });
-    TT_FATAL(
-        st.combine == combine && st.flat_config.activation == activation &&
-            st.flat_config.max_tokens == (max_tokens_per_expert + 31) / 32 * 32 && st.layout == layout,
-        "routed_experts_combine: the resources' combine was planned for another config");
+    const auto& st = state(resources, rows_cap, max_tokens_per_expert, activation, layout, combine);
     auto& mesh = resources.mesh_device();
-    ttnn::Tensor arena = create_device_tensor(*st.arena_spec, &mesh);
-    const auto y = resources.persistent_tensor("routed_experts_combine/y", *st.y_spec);
+    // the call's arena: the block's shared one (the fused head ran in it first), else one of our own for the call
+    std::optional<ttnn::Tensor> own;
+    if (arena) {
+        const auto& mc = arena->memory_config();
+        const auto& want = *st.arena_spec->memory_config().shard_spec();
+        TT_FATAL(
+            mc.buffer_type() == BufferType::L1 && mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                mc.shard_spec().has_value() && mc.shard_spec()->grid.contains(want.grid),
+            "routed_experts_combine: the arena must be an L1 tensor height-sharded over every worker core");
+        TT_FATAL(
+            arena->buffer()->aligned_size_per_bank() >= want.shape[0] * 64,
+            "routed_experts_combine: the arena holds {} B a core, the combine needs {} B",
+            arena->buffer()->aligned_size_per_bank(),
+            want.shape[0] * 64);
+    } else {
+        own = create_device_tensor(*st.arena_spec, &mesh);
+    }
     RoutedExpertsCombineParams params;
     params.combine = combine;
     params.S = st.plan->S;
@@ -244,11 +300,13 @@ ttnn::Tensor routed_experts_combine(
                 .gate_up_weights = gate_up_weights,
                 .down_weights = down_weights,
                 .done_words = st.flat.done_words,
-                .arena = arena,
+                .arena = arena ? *arena : *own,
                 .words = st.flat.relay_words,
-                .output = y,
+                .output = *st.y,
                 .token_index = token_index}});
-    arena.deallocate(true);
+    if (own) {
+        own->deallocate(true);
+    }
     return out;
 }
 
