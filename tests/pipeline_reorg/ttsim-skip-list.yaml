@@ -25,6 +25,12 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # heaviside aborts every xdist worker on ttsim since #62846 (raw SFPU body with SFPLZ NOSGN|CC_NE0).
+  # Hardware is green. Tracked in #63279 -- remove once ttsim handles it.
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_category4_bfloat16.py::test_heaviside_op
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_category4_float32.py::test_heaviside
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py::test_heaviside_signed_zero
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
