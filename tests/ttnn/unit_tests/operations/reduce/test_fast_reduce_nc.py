@@ -238,3 +238,13 @@ def test_fast_reduce_nc_rejects_hw_dims(device, dims, expect_error):
     x, _, _ = get_tensors([1, 1, 32, 128], [1, 1, 32, 128], device, with_padding=False)
     with expect_error(RuntimeError, "FastReduceNC reduces only outer dims"):
         ttnn.experimental.fast_reduce_nc(x, dims=dims)
+
+
+@pytest.mark.parametrize("input_shape", [[1, 8, 128, 4096], [1, 32, 128, 2880]], ids=["dense8", "experts32"])
+def test_fast_reduce_nc_float32_default_config(input_shape, device):
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.float32)
+    x = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.experimental.fast_reduce_nc(x, dims=[1]))
+    ref = torch.sum(torch_input.double(), dim=1, keepdim=True).float()
+    torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-5)
