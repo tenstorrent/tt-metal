@@ -116,9 +116,12 @@ def verify_grouped():
 # request scans on 64 cores, two on 32 each. MIMO_VERIFY_VARIANTS=0: one trace over every group.
 VERIFY_VARIANTS = os.environ.get("MIMO_VERIFY_VARIANTS", "1") == "1"
 # The cores still split evenly over the attended groups, so the longest context sets the time when the requests'
-# contexts differ (AgentX: tens of K beside hundreds of K). MIMO_VERIFY_SEQUENTIAL=1: one SDPA per group, each on the
-# whole grid, back to back (the time is then the sum of the contexts' scans, plus a launch per group).
-VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "0") == "1"
+# contexts differ (AgentX: tens of K beside hundreds of K). A sequential variant runs one SDPA per group, each on the
+# whole grid, back to back: the time is then the sum of the contexts' scans plus a launch per group. One chip, local
+# keys (tests/perf/sdpa_balance_bench.py, ms per global layer): 400K + 3 x 25K grouped 1.29, sequential 0.80; 4 x 100K
+# grouped 0.46, sequential 0.62. The adapter picks it per step (verify_variant ``sequential``) when one request's
+# context dwarfs the others'. MIMO_VERIFY_SEQUENTIAL: 0 never, 1 always (with two or more groups), auto (default).
+VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "auto")
 
 
 def verify_variants():
@@ -131,17 +134,22 @@ def verify_variants():
     for width in WIDTHS:
         groups = SPEC_SLOTS // width
         counts = [n for n in (1, 2, 4, 8) if n < groups] if VERIFY_VARIANTS else []
-        out += [(width, n) for n in counts + [groups]]
+        for n in counts + [groups]:
+            if n > 1 and VERIFY_SEQUENTIAL == "auto":
+                out.append((width, n, True))
+            out.append((width, n, n > 1 and VERIFY_SEQUENTIAL == "1"))
     return out
 
 
-def verify_variant(used_groups, width=GROUP_SLOTS):
+def verify_variant(used_groups, width=GROUP_SLOTS, sequential=False):
     """The narrowest captured verify (verify_variants) in groups of ``width`` slots attending groups 0 ..
-    ``used_groups`` - 1."""
+    ``used_groups`` - 1, with one SDPA per group when ``sequential`` and such a variant was captured."""
     variants = verify_variants()
     if variants == [None]:
         return None
-    return next(v for v in variants if v[0] == width and v[1] >= max(1, used_groups))
+    fits = [v for v in variants if v[0] == width and v[1] >= max(1, used_groups)]
+    n = fits[0][1]
+    return next((v for v in fits if v[1] == n and v[2] == sequential), next(v for v in fits if v[1] == n))
 
 
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
@@ -1269,7 +1277,8 @@ class TtMiMoAttention:
             **({"spec_multi_pos_packed": True} if packed else {}),
         )
         mla = ttnn.transformer.paged_flash_multi_latent_attention_decode
-        if VERIFY_SEQUENTIAL and groups > 1:
+        sequential = used[2] if used is not None else VERIFY_SEQUENTIAL == "1"
+        if sequential and groups > 1:
             parts = []
             for g in range(groups):
                 q_g = ttnn.slice(q_grouped, (0, g, 0, 0), (1, g + 1, cands * TILE, dk))

@@ -286,6 +286,19 @@ def _cache_dir(model_path):
     return os.path.join(root, os.path.basename(os.path.normpath(model_path)), "model_bfp4experts")
 
 
+# A verify's global SDPA runs one launch per group (attention.verify_variants' sequential variants) when the longest
+# context is at least this long and twice the others' mean: tests/perf/sdpa_balance_bench.py.
+SEQUENTIAL_MIN_CONTEXT = int(os.environ.get("MIMO_VERIFY_SEQUENTIAL_MIN", "131072"))
+
+
+def _imbalanced(contexts):
+    """Whether a pass's groups' contexts (their last positions) are better attended one group at a time."""
+    live = sorted(c for c in contexts if c > 0)
+    if len(live) < 2 or live[-1] < SEQUENTIAL_MIN_CONTEXT:
+        return False
+    return live[-1] >= 2 * sum(live[:-1]) / (len(live) - 1)
+
+
 class VerifyHandle:
     """An accept-mode verify's result pages, one per pass, each copied to the host right behind its pass without
     blocking (SpecChain.read_async), and the events recorded after each lane's last copy. A deferred verify returns
@@ -1532,9 +1545,13 @@ class MiMoV2ForCausalLM:
         model.set_vllm_page_tables({s: by_row[row] for s, row in enumerate(vp.table_rows) if row is not None})
         self._verify_tables_s += time.perf_counter() - t
         chain = None if chain is None else torch.tensor(chain, dtype=torch.int32)
-        # The narrowest verify variant that attends every group the pass uses (the widest is the default replay).
+        # The narrowest verify variant that attends every group the pass uses (the widest is the default replay), one
+        # SDPA per group when one request's context dwarfs the others' (the grouped SDPA splits its cores evenly).
         used = 1 + max((s // vp.width for s, p in enumerate(vp.positions) if p >= 0), default=0)
-        variant = verify_variant(used, vp.width)
+        contexts = [
+            max([p for p in vp.positions[g * vp.width : (g + 1) * vp.width] if p >= 0], default=0) for g in range(used)
+        ]
+        variant = verify_variant(used, vp.width, sequential=_imbalanced(contexts))
         narrow = {"groups": variant} if variant is not None and variant != verify_variants()[-1] else {}
         return model.verify_enqueue(tok, pos, chain, accept=accept, **narrow)
 
