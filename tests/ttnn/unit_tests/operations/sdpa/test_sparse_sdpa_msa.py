@@ -393,6 +393,50 @@ def test_msa_native_causal_vs_noncausal_differs(device):
     assert pcc(out_causal, out_block_only) < 0.999, "causal mask had no effect vs block-only"
 
 
+@run_for_blackhole()
+def test_msa_native_honors_math_approx_mode(device):
+    """math_approx_mode=False must select the accurate P exponential. One selected block holds two score levels,
+    1 and 0 after the scale, with V = 1 on the first and 0 on the second, so every output element is exactly
+    sigmoid(1). The modes must differ, and the accurate one must meet the same 0.005 gate as
+    test_sparse_sdpa_accurate_mode_known_answer in test_sparse_sdpa_exp_mode.py."""
+    # topk=16 -> TOPK*4 is 64B-aligned; 15 of the 16 index slots are the sentinel tail
+    d, H, S, topk, nblk = 64, 32, 8, 16, 16
+    q = torch.zeros(1, H, S, d)
+    k = torch.zeros(1, 1, nblk * BLK_KV, d)
+    v = torch.zeros(1, 1, nblk * BLK_KV, d)
+    q[..., 0] = 1
+    k[0, 0, : BLK_KV // 2, 0] = 2  # scale 0.5: half the block scores 1, the other half 0
+    v[0, 0, : BLK_KV // 2, :] = 1
+    indices = torch.full((1, 1, S, topk), SENTINEL, dtype=torch.int32)
+    indices[..., 0] = 0
+    k_tt, v_tt = _tile(k, device), _tile(v, device)
+
+    outputs = {}
+    for approx in (False, True):
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=approx,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        tt_out = ttnn.transformer.sparse_sdpa_msa(
+            _rm(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            k_tt,
+            v_tt,
+            _rm(indices, device, ttnn.uint32),
+            scale=0.5,
+            block_size=BLK_KV,
+            compute_kernel_config=compute_config,
+        )
+        outputs[approx] = ttnn.to_torch(tt_out).float()
+
+    assert not torch.equal(outputs[False], outputs[True]), "math_approx_mode False and True returned identical outputs"
+    expected = torch.sigmoid(torch.tensor(1.0)).item()
+    error = (outputs[False] - expected).abs().max().item()
+    assert error <= 0.005, f"accurate mode is {error:.5f} from sigmoid(1), above 0.005"
+
+
 # ---- block-cyclic remap: block-ids are NATURAL positions but the K/V cache is stored block-cyclic across SP
 # ---- shards. sp is DERIVED from the mesh (block_cyclic_sp_axis = the striped axis). On ONE device the mesh is
 # ---- 1x1 so sp=1 and the block-granular remap reduces to identity (shard=0, BC_SLAB_STRIDE_GAP=0 => phys=block)
