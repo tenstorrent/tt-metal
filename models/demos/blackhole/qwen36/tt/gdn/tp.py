@@ -376,6 +376,15 @@ class TPGatedDeltaNet:
         # The durable shift register as one [B, K, qkv_dim_tp] tensor, mirroring conv_states[0..K-1]
         # with the user axis folded in (tap j of user u == _conv_win_buf[u, j, :]).
         self._conv_win_buf = None
+        # Single-chip decode (QWEN36_TP1_GDN=1) writes the recurrent state IN PLACE through the fused
+        # recurrence's ring mode, so the per-layer Copy of the fp32 [B,Nv,Dk,Dv] state disappears. The
+        # shared TP=4 module never sets this: a ring write would break its bucketed B<Bmax path and its
+        # state is sharded per device. _rec_ring_idx is the [BH] block index the mode requires.
+        self._inplace_rec_state = (
+            getattr(args, "num_devices", 1) == 1 and os.environ.get("QWEN36_TP1_GDN") == "1"
+        )
+        self._rec_ring_idx = None
+        self._rec_ring_idx_bh = -1
         # One-hot matmul config: HiFi4 + fp32 accumulate keep a 0/1 selector matmul exact in bf16.
         self._cfg_onehot = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -468,6 +477,9 @@ class TPGatedDeltaNet:
         # Fresh (zero) taps and no window: neither mirror is behind.
         self._conv_taps_stale = False
         self._conv_win_stale = False
+        # The ring index is sized by B*Nv and B changes when the prefill scratch binds.
+        self._rec_ring_idx = None
+        self._rec_ring_idx_bh = -1
 
     def _ensure_zero_rec_f32(self):
         """Batch-1 zero initial state the delta op reads when forward_prefill(carry_state=False), allocated once.
@@ -1426,6 +1438,29 @@ class TPGatedDeltaNet:
             **tpc.prefill_rs_kwargs(self.args),
         )
 
+    def _ensure_rec_ring_idx(self, BH):
+        """The [BH] uint32 ROW_MAJOR block index the fused recurrence's in-place (ring) mode reads.
+
+        Block h means "head h's state slot", so arange(BH) makes each head read from and write back to
+        exactly the rec_state slot it came from. Allocated on the first decode (before any trace capture)
+        and reallocated only if BH changes, so nothing allocates at request time.
+        """
+        if self._rec_ring_idx is not None and self._rec_ring_idx_bh == BH:
+            return self._rec_ring_idx
+        if self._rec_ring_idx is not None:
+            ttnn.deallocate(self._rec_ring_idx)
+            self._rec_ring_idx = None
+        self._rec_ring_idx = ttnn.from_torch(
+            torch.arange(BH, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._rec_ring_idx_bh = BH
+        return self._rec_ring_idx
+
     def forward_decode(self, x):
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
@@ -1503,17 +1538,39 @@ class TPGatedDeltaNet:
             # near-tie flips between them and acceptance drops (measured 2.82 -> 2.00 /3 when the
             # two paths disagreed at ~1e-5).
             assert B == Bmax, "fused recurrent decode path supports full-batch only (spec decode)"
-            o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
-                q,
-                k,
-                v,
-                beta,
-                g,
-                scale=self.scale,
-                initial_state=self.rec_state,
-                device=self.mesh,
-                high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
-            )
+            # Single-chip decode writes the state straight into rec_state through the ring mode: the op is
+            # handed a VIEW of that buffer as its state ring and writes block h = head h back into it, so
+            # the 15.8 us Copy of the fp32 state goes away. At T=1 every head starts and ends at block h,
+            # so arange(BH) is exactly the decode case, and the kernel takes the same path it takes with
+            # per_token=false (per_token || last is true either way) -- see test_gdn_ring_inplace.py for
+            # the output- and state-identical check.
+            rec_in_place = self._inplace_rec_state and B == Bmax
+            if rec_in_place:
+                o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
+                    q,
+                    k,
+                    v,
+                    beta,
+                    g,
+                    scale=self.scale,
+                    initial_state=ttnn.reshape(self.rec_state, (B * Nv, Dk, Dv)),  # metadata view
+                    device=self.mesh,
+                    output_per_token_state=True,
+                    initial_state_block_idx=self._ensure_rec_ring_idx(B * Nv),
+                    high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+                )
+            else:
+                o, new_rec = fused_recurrent_gated_delta_rule_ttnn(
+                    q,
+                    k,
+                    v,
+                    beta,
+                    g,
+                    scale=self.scale,
+                    initial_state=self.rec_state,
+                    device=self.mesh,
+                    high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+                )
         else:
             o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
                 q,
@@ -1529,7 +1586,9 @@ class TPGatedDeltaNet:
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
         # In-place update preserves rec_state address for decode trace replay
-        if B == Bmax:
+        if self.use_fused_recurrent_decode and rec_in_place:
+            pass  # already written through the ring view; new_rec IS that view, not a new buffer
+        elif B == Bmax:
             ttnn.copy(new_rec, self.rec_state)
             ttnn.deallocate(new_rec)
         else:
