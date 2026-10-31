@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -c %s -o %t.o
-// RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -UENABLE_LLK_ASSERT -fno-ipa-icf -c %s -o %t.o
+// RUN: %{blackhole_objdump} -drz %t.o > %t.dump
+// RUN: %{blackhole_compare_codegen} %t.dump
 
+// Compare each HAL function with its adjacent reference_ function. Disable
+// identical-code folding so both bodies are emitted independently.
 // LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
+// Semaphore selectors are one bit per semaphore: S<n> is bit n.
 
 #include "hal/sync.h"
 
@@ -19,12 +23,13 @@ extern "C" __attribute__((noinline, used)) void stall_variants()
     sync::wait::stall<sync::StallTarget::Thcon, sync::StallCondition::SrcAValid | sync::StallCondition::SrcBValid>();
 }
 
-// CHECK-LABEL: <stall_variants>:
-// CHECK-NEXT: ttstallwait 384,2064
-// CHECK-NEXT: ttstallwait 511,8191
-// CHECK-NEXT: ttstallwait 0,0
-// CHECK-NEXT: ttstallwait 32,384
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_stall_variants()
+{
+    TTI_STALLWAIT(384 /*stall_res*/, 2064 /*wait_res*/);
+    TTI_STALLWAIT(511 /*stall_res*/, 8191 /*wait_res*/);
+    TTI_STALLWAIT(0 /*stall_res*/, 0 /*wait_res*/);
+    TTI_STALLWAIT(32 /*stall_res*/, 384 /*wait_res*/);
+}
 
 extern "C" __attribute__((noinline, used)) void semaphore_wait_variants()
 {
@@ -43,11 +48,12 @@ extern "C" __attribute__((noinline, used)) void semaphore_wait_variants()
         sync::Semaphore::S7>();
 }
 
-// CHECK-LABEL: <semaphore_wait_variants>:
-// CHECK-NEXT: ttsemwait 66,2,1
-// CHECK-NEXT: ttsemwait 4,129,2
-// CHECK-NEXT: ttsemwait 8,255,3
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_semaphore_wait_variants()
+{
+    TTI_SEMWAIT(66 /*stall_res*/, 0x02 /*sem_sel*/, 1 /*wait_sem_cond*/);
+    TTI_SEMWAIT(4 /*stall_res*/, 0x81 /*sem_sel*/, 2 /*wait_sem_cond*/);
+    TTI_SEMWAIT(8 /*stall_res*/, 0xff /*sem_sel*/, 3 /*wait_sem_cond*/);
+}
 
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
@@ -55,29 +61,21 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
     TTI_INSN((sync::wait::semaphore_operation<sync::StallTarget::Mover, sync::SemaphoreCondition::WhileZero, sync::Semaphore::S2>()));
 }
 
-// CHECK-LABEL: <issue_encoded_operations>:
-// CHECK-NEXT: ttstallwait 4,8
-// CHECK-NEXT: ttsemwait 16,4,1
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_issue_encoded_operations()
+{
+    TTI_STALLWAIT(4 /*stall_res*/, 8 /*wait_res*/);
+    TTI_SEMWAIT(16 /*stall_res*/, 0x04 /*sem_sel*/, 1 /*wait_sem_cond*/);
+}
 
 extern "C" __attribute__((noinline, used)) void stall_runtime(const sync::StallTarget targets, const sync::StallCondition conditions)
 {
     sync::wait::stall(targets, conditions);
 }
 
-// CHECK-LABEL: <stall_runtime>:
-// CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: add a0,a0,a1
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa2000
-// CHECK-NEXT: lui [[R1:a[0-7]]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a0,a0,[[R0]]
-// CHECK-NEXT: mv [[R1]],[[R1]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a0,0([[R1]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_stall_runtime(const sync::StallTarget targets, const sync::StallCondition conditions)
+{
+    TT_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
+}
 
 extern "C" __attribute__((noinline, used)) void semaphore_runtime(
     const sync::StallTarget targets, const sync::Semaphore semaphore, const sync::SemaphoreCondition conditions)
@@ -85,19 +83,8 @@ extern "C" __attribute__((noinline, used)) void semaphore_runtime(
     sync::wait::semaphore(targets, semaphore, conditions);
 }
 
-// CHECK-LABEL: <semaphore_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa6000
-// CHECK-NEXT: add a2,a2,[[R0]]
-// CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: li [[R0]],4
-// CHECK-NEXT: sll a1,[[R0]],a1
-// CHECK-NEXT: add a0,a0,a2
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a0,a0,a1
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a0,0([[R0]])
-// CHECK-NEXT: ret
+extern "C" __attribute__((noinline, used)) void reference_semaphore_runtime(
+    const sync::StallTarget targets, const sync::Semaphore semaphore, const sync::SemaphoreCondition conditions)
+{
+    TT_SEMWAIT(hal::to_underlying(targets), 1u << hal::to_underlying(semaphore), hal::to_underlying(conditions));
+}
