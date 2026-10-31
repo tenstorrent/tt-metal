@@ -139,7 +139,7 @@ from ..reference.spec_decode import (
     plan_verify_passes,
     planned_drafts,
 )
-from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped
+from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
@@ -1081,7 +1081,7 @@ class MiMoV2ForCausalLM:
             handles.append((lane, last - first, handle))
             live = [s for s in range(last - first) if active[s]]
             self._seen(lane, live)
-            groups = self._draft_groups(lane, live) if len(live) <= DRAFT_GROUPS else {}
+            groups = self._draft_groups(lane, live, compact=True) if len(live) <= DRAFT_GROUPS else {}
             if live and all(groups.get(s) is not None for s in live):
                 self.spec_sources[lane] = [DraftSource(row=first + s, slots=[s], group=groups[s]) for s in live]
                 self.source_positions[lane] = {first + s: int(pos[s]) + 1 for s in live}
@@ -1208,7 +1208,12 @@ class MiMoV2ForCausalLM:
             self._seen(lane, live)
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
-                groups = {first + s: g for s, g in self._draft_groups(lane, live).items() if g is not None}
+                # A pass the host builds may move its requests into the lowest groups (the narrowest verify
+                # variant); a relayed row keeps its group, whose result page the relay step reads.
+                compact = not any(first <= r < last for r in relayed)
+                groups = {
+                    first + s: g for s, g in self._draft_groups(lane, live, compact=compact).items() if g is not None
+                }
             # The grouped verify attention scans each group's KV once: one request per group (verify_grouped).
             passes = plan_verify_passes(active, groups=groups, aligned=KV_PAIR_SPLIT and verify_grouped())
             lanes.append(passes)
@@ -1503,7 +1508,11 @@ class MiMoV2ForCausalLM:
         model.set_vllm_page_tables({s: by_row[row] for s, row in enumerate(vp.table_rows) if row is not None})
         self._verify_tables_s += time.perf_counter() - t
         chain = None if chain is None else torch.tensor(chain, dtype=torch.int32)
-        return model.verify_enqueue(tok, pos, chain, accept=accept)
+        # The narrowest verify variant that attends every group the pass uses (the widest is the default replay).
+        used = 1 + max((s // GROUP_SLOTS for s, p in enumerate(vp.positions) if p >= 0), default=0)
+        variant = verify_variant(used)
+        narrow = {"groups": variant} if variant is not None and variant != verify_variant(DRAFT_GROUPS) else {}
+        return model.verify_enqueue(tok, pos, chain, accept=accept, **narrow)
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         """Drafts for the next step: the drafter drafts for the requests of each lane whose last step ran one pass (one
@@ -1624,12 +1633,15 @@ class MiMoV2ForCausalLM:
         mtp.enqueue(slot_tokens, plan)
         return [plan.anchor]
 
-    def _draft_groups(self, lane, slots, prompt=False):
+    def _draft_groups(self, lane, slots, prompt=False, compact=False):
         """{slot: draft group} of the requests in lane ``slots`` (a step's live slots, or a prompt's slot): a request
         keeps its group while it runs, so its drafter state (rings, stash) stays its own. A slot without one takes a
-        group no live slot owns, the one whose request ran least recently; None when every group belongs to another
-        live slot (more requests than groups: the step drafts for none). A prompt's slot always takes one (the request
-        that owned it is gone or will be found without one). One draft group: always 0."""
+        group no live slot owns: the lowest unowned one, else the one whose request ran least recently; None when
+        every group belongs to another live slot (more requests than groups: the step drafts for none). A prompt's
+        slot always takes one (the request that owned it is gone or will be found without one). ``compact`` (a step
+        the host lays out): requests in groups past the narrowest verify variant that holds them all
+        (attention.verify_variant) move into the lowest free groups, whose rings the next draft backfills. One draft
+        group: always 0."""
         if DRAFT_GROUPS == 1:
             return {s: 0 for s in slots}
         owners, seen = self.group_owners[lane], self.slot_seen[lane]
@@ -1643,9 +1655,18 @@ class MiMoV2ForCausalLM:
             if not free:
                 out[s] = None
                 continue
-            g = min(free, key=lambda g: (owners[g] is not None, seen.get(owners[g], -1)))
+            g = min(free, key=lambda g: (owners[g] is not None, g if owners[g] is None else seen.get(owners[g], -1)))
             owners[g], out[s] = s, g
             self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None  # another request's rows
+        if compact and not prompt and len(slots) <= DRAFT_GROUPS:
+            width = verify_variant(len(slots))
+            while width is not None and max(out.values()) >= width:
+                s = max(out, key=out.get)
+                g = min(g for g in range(width) if owners[g] is None or owners[g] not in slots)
+                owners[out[s]] = None
+                owners[g], out[s] = s, g
+                self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None
+                self.group_moves = getattr(self, "group_moves", 0) + 1
         return out
 
     def _seen(self, lane, slots):

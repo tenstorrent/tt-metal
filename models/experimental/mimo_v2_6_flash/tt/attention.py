@@ -56,6 +56,7 @@ import torch
 
 import ttnn
 
+from ..reference.kv_pair_split import NO_KEY_LSE
 from ..reference.spec_decode import GROUP_SLOTS, SPEC_SLOTS
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
@@ -106,6 +107,32 @@ def verify_grouped():
     candidates, and a ttnn build with spec_multi_pos_tiles on paged MLA decode). 8 candidates (DFlash's one group)
     need 128-token K chunks and at most 32 cores per request to fit L1 beside decode's buffers: not wired."""
     return VERIFY_GROUPED and GROUPED_VERIFY_OPS and GROUP_SLOTS in (2, 4)
+
+
+# The grouped SDPA splits its cores evenly over the groups it is given, used or not: with 4 groups of 2 slots a lone
+# request scans its keys on 16 of the 64 cores, a quarter of the bandwidth (at 256K, 0.58 ms per global layer for one
+# request as for four). So the verify is captured once per count of leading groups it attends (verify_variants), and
+# the adapter packs a step's requests into the lowest groups and replays the narrowest trace that holds them: one
+# request scans on 64 cores, two on 32 each. MIMO_VERIFY_VARIANTS=0: one trace over every group.
+VERIFY_VARIANTS = os.environ.get("MIMO_VERIFY_VARIANTS", "1") == "1"
+
+
+def verify_variants():
+    """The leading-group counts the verify is captured for (the last is every group); [None] without grouping."""
+    if not verify_grouped():
+        return [None]
+    groups = SPEC_SLOTS // GROUP_SLOTS
+    if not VERIFY_VARIANTS:
+        return [groups]
+    return [n for n in (1, 2, 4, 8) if n < groups] + [groups]
+
+
+def verify_variant(used_groups):
+    """The narrowest captured verify (verify_variants) attending groups 0 .. ``used_groups`` - 1."""
+    variants = verify_variants()
+    if variants == [None]:
+        return None
+    return next(n for n in variants if n >= max(1, used_groups))
 
 
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
@@ -1192,7 +1219,7 @@ class TtMiMoAttention:
         )
         return attn, lse
 
-    def _verify_grouped(self, q, kv_cache, table, cur_pos):
+    def _verify_grouped(self, q, kv_cache, table, cur_pos, used=None):
         """A verify's global SDPA with its LSE, one KV scan per request (paged MLA decode's spec_multi_pos_tiles): the
         pass's SPEC_SLOTS slots are SPEC_SLOTS / GROUP_SLOTS groups, each one request's candidates (the adapter packs
         them so: reference.spec_decode.plan_verify_passes with ``aligned``), candidate j of group g in slot
@@ -1202,10 +1229,13 @@ class TtMiMoAttention:
         NO_KEY_LSE). Returns what _paged_mla_decode_lse returns for the slots: output [1, SPEC_SLOTS, 16, 128] in L1,
         lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads).
         With GROUPED_PACKED_OPS the op computes two candidates per tile (spec_multi_pos_packed, half the compute) on
-        the same views."""
+        the same views. ``used`` (a verify variant, verify_variants): attend only groups 0 .. used - 1, on all the
+        cores; the other slots' output is 0 and their lse NO_KEY_LSE, as for an idle group."""
         k_cache, v_cache = kv_cache
-        slots, cands = SPEC_SLOTS, GROUP_SLOTS
-        groups = slots // cands
+        cands = GROUP_SLOTS
+        all_slots = SPEC_SLOTS
+        groups = all_slots // cands if used is None else used
+        slots = groups * cands
         nh, dk, width = q.shape[-2], q.shape[-1], table.shape[-1]
         packed = GROUPED_PACKED_OPS and cands % 2 == 0 and 2 * nh == TILE
         q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
@@ -1218,6 +1248,8 @@ class TtMiMoAttention:
         if groups > 1:
             for t in rows:
                 t.deallocate(True)
+        if slots < all_slots:
+            cur_pos = ttnn.slice(cur_pos, (0,), (slots,))
         attn, lse = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_grouped,
             k_cache,
@@ -1235,10 +1267,35 @@ class TtMiMoAttention:
         )  # [1, groups, cands * 32, 128], [.., 1]
         q_slots.deallocate(True)
         group_table.deallocate(True)
+        if slots < all_slots:
+            cur_pos.deallocate(True)
         dv = attn.shape[-1]
         out = ttnn.reshape(attn, ttnn.Shape([1, slots, nh, dv]), ttnn.Shape([1, slots, TILE, dv]))
         lse = ttnn.reshape(lse, ttnn.Shape([1, slots, nh, 1]), ttnn.Shape([1, slots, TILE, TILE]))
+        if slots < all_slots:
+            out, lse = self._pad_idle_slots(out, lse, all_slots - slots)
         return out, lse
+
+    def _pad_idle_slots(self, out, lse, idle):
+        """``out`` [1, s, 16, 128] and ``lse`` [1, s, 16, 1] followed by ``idle`` idle slots (output 0, lse
+        NO_KEY_LSE), in ``out``'s memory config: what the grouped SDPA leaves for a group with no candidate."""
+        zero = ttnn.slice(out, (0, 0, 0, 0), (1, 1, out.shape[2], out.shape[3]))
+        zero = ttnn.multiply(zero, 0.0)
+        pad = ttnn.repeat(zero, ttnn.Shape([1, idle, 1, 1])) if idle > 1 else zero
+        out_all = ttnn.concat([out, pad], dim=1, memory_config=out.memory_config())
+        if pad is not zero:
+            pad.deallocate(True)
+        zero.deallocate(True)
+        no_key = ttnn.slice(lse, (0, 0, 0, 0), (1, 1, lse.shape[2], 1))
+        no_key = ttnn.add(ttnn.multiply(no_key, 0.0), NO_KEY_LSE)
+        pad = ttnn.repeat(no_key, ttnn.Shape([1, idle, 1, 1])) if idle > 1 else no_key
+        lse_all = ttnn.concat([lse, pad], dim=1, memory_config=lse.memory_config())
+        if pad is not no_key:
+            pad.deallocate(True)
+        no_key.deallocate(True)
+        out.deallocate(True)
+        lse.deallocate(True)
+        return out_all, lse_all
 
     def _paged_mla_decode_lse(self, q, kv_cache, page_table, cur_pos):
         """Global decode SDPA with its LSE (the ops' interface in runs/kvsplit/SPEC.md): q (height-sharded, 16 heads)
@@ -1498,7 +1555,8 @@ class TtMiMoAttention:
         # A verify over exactly its pass's slots (the compact rows): one KV scan per request.
         grouped = positions.get("pair_serial") and verify_grouped() and pos is not positions["pair_sdpa"]
         if grouped and pos.shape[0] == SPEC_SLOTS:
-            attn, lse = self._verify_grouped(q_rot, kv_cache, table, pos)  # [1, SPEC_SLOTS, 16, 128], [.., 16, 1]
+            # [1, SPEC_SLOTS, 16, 128], [.., 16, 1]
+            attn, lse = self._verify_grouped(q_rot, kv_cache, table, pos, positions.get("verify_groups"))
         else:
             attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
         q_rot.deallocate(True)
