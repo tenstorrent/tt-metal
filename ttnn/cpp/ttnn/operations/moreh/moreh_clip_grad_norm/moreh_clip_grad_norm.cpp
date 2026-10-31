@@ -65,13 +65,12 @@ Tensor moreh_clip_grad_norm(
             norm_type);
     }
     auto* device = inputs.at(0).device();
-    const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(
-            device->arch(),
-            compute_kernel_config,
-            tt::tt_metal::MathFidelity::HiFi4,
-            /*default_approx_mode=*/true,
-            /*default_fp32_acc=*/true);
+    const auto compute_kernel_config_val = init_device_compute_kernel_config(
+        device->arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/true);
 
     // Loop variable
     const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(*device);
