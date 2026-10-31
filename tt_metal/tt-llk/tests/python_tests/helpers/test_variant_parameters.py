@@ -924,6 +924,27 @@ class ITERATIONS(TemplateParameter):
 
 
 @dataclass
+class XMOV_XFER_16B(TemplateParameter):
+    """Size of each mover transfer in 16-byte units, for ``xmov_wait_till_idle_test.cpp``."""
+
+    xfer_16b: int
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t XMOV_XFER_16B = {self.xfer_16b};"
+
+
+@dataclass
+class XMOV_READ_GAP(TemplateParameter):
+    """Number of ``nop``s between ``xmov_wait_till_idle`` returning and the first destination
+    read, for ``xmov_wait_till_idle_test.cpp``."""
+
+    read_gap: int
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t XMOV_READ_GAP = {self.read_gap};"
+
+
+@dataclass
 class FAST_MODE(TemplateParameter):
     fast_mode: FastMode = FastMode.No
 
