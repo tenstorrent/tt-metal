@@ -36,11 +36,13 @@ void kernel_main() {
     const uint32_t bank = get_arg_val<uint32_t>(2);
     const uint32_t ids_addr = get_arg_val<uint32_t>(3);
 
+    MOE_MARK(50);
     // The expert count: word 0 of the stick (the reader keeps its own copy in cb_ids).
     const uint32_t ids_l1 = get_write_ptr(cb_ids) + ids_bytes;
     noc_async_read(get_noc_addr_from_bank_id<true>(0, ids_addr), ids_l1, ids_bytes);
     noc_async_read_barrier();
     const uint32_t experts = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ids_l1)[0];
+    MOE_MARK(51);
 
     const InterleavedAddrGen<false> act_gen = {.bank_base_address = act_addr, .page_size = act_page_bytes};
     cb_reserve_back(cb_h, experts * kt);
@@ -50,6 +52,7 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(cb_h, experts * kt);
+    MOE_MARK(52);
 
     const InterleavedAddrGen<true> out_gen = {.bank_base_address = out_addr, .page_size = bf16_tile_bytes};
     for (uint32_t g = 0; g < groups; g++) {
@@ -70,6 +73,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     cb_pop_front(cb_out, groups * ct);
+    MOE_MARK(53);
     if constexpr (signal_args_at > 0) {
         const uint32_t n = get_arg_val<uint32_t>(signal_args_at);
         for (uint32_t i = 0; i < n; i++) {

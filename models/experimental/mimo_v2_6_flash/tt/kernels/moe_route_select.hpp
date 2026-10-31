@@ -84,15 +84,24 @@ inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* wei
         keys[i] = 0;
         ids[i] = 0;
     }
+    // The k-th largest key so far, in a register; a face row's 16 values are loaded before any is compared, so the
+    // loads overlap instead of each stalling its compare.
+    uint32_t thresh = 0;
     for (uint32_t t = 0; t < expert_tiles; t++) {
         for (uint32_t f = 0; f < 2; f++) {
             volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 stage + t * Stage::tile_bytes + f * Stage::face_bytes + u * kStageRowBytes);
             const uint32_t e0 = t * 32 + f * 16;
+            uint32_t vals[16];
+#pragma GCC unroll 16
             for (uint32_t c = 0; c < 16; c++) {
-                const uint32_t b = row[c];
+                vals[c] = row[c];
+            }
+#pragma GCC unroll 16
+            for (uint32_t c = 0; c < 16; c++) {
+                const uint32_t b = vals[c];
                 const uint32_t key = b ^ (static_cast<uint32_t>(static_cast<int32_t>(b) >> 31) | 0x80000000u);
-                if (key <= keys[topk - 1]) {
+                if (key <= thresh) {
                     continue;
                 }
                 uint32_t j = topk - 1;
@@ -103,6 +112,7 @@ inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* wei
                 }
                 keys[j] = key;
                 ids[j] = e0 + c;
+                thresh = keys[topk - 1];
             }
         }
     }

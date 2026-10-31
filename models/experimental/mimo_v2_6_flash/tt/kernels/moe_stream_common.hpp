@@ -5,6 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include "api/debug/kernel_profiler.hpp"
+
+// A profiler point (TT_METAL_DEVICE_PROFILER=1; nothing otherwise): the time this RISC reached point ``id`` of its
+// kernel (tests/perf/moe_zone_profile.py reads them).
+#define MOE_MARK(id) DeviceTimestampedData("MOE", id)
 
 namespace mimo_moe {
 

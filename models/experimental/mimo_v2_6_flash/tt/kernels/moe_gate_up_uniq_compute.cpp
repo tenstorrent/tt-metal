@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/reconfig_data_format.h"
+#include "moe_stream_common.hpp"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_silu.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -36,12 +37,14 @@ void kernel_main() {
     constexpr uint32_t kt = block_k * blocks_per_pair;
     constexpr uint32_t silu_iterations = rows / 2;  // SFPU rows per face iteration: 2
 
+    MOE_MARK(30);
     constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
     custom_mm_block_init<false, dest_layout>(cb_x, cb_w, cb_h, ct);
     cb_wait_front(cb_x, kt);
     cb_wait_front(cb_cnt, 1);
     const uint32_t n = read_tile_value(cb_cnt, 0, 0);
     cb_pop_front(cb_cnt, 1);
+    MOE_MARK(31);
 
     for (uint32_t j = 0; j < n; j++) {
         tile_regs_acquire();
@@ -81,6 +84,10 @@ void kernel_main() {
 
         // The SFPU and copy inits reprogram address modes and the unpacker the matmul relies on.
         custom_mm_block_init_short<false, dest_layout>(cb_x, cb_w, cb_h, ct);
+        if (j == 0) {
+            MOE_MARK(32);
+        }
     }
     cb_pop_front(cb_x, kt);
+    MOE_MARK(33);
 }

@@ -21,6 +21,9 @@ from .common import TILE, pad_to
 KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels"
 # MIMO_MOE_DEDUP=0: stream every (user, top-k) pair's expert, as before the deduplicated stream (GateUpStream).
 DEDUP = os.environ.get("MIMO_MOE_DEDUP", "1") == "1"
+FUSED = os.environ.get("MIMO_MOE_FUSED", "1") == "1"
+# Timing experiments on FusedStream only, results wrong: 1 = no weight reads, 2 = no matmuls.
+STREAM_DEBUG = int(os.environ.get("MIMO_MOE_STREAM_DEBUG", "0"))
 
 
 _BANK_CORES = {}  # device ids of a (sub)mesh -> bank cores registered by set_dram_bank_cores
@@ -597,6 +600,195 @@ class DownStream:
             return section
         program = ttnn.ProgramDescriptor(kernels=section["kernels"], cbs=section["cbs"], semaphores=[])
         ttnn.generic_op([act, ids, w_down, out], program)
+        return out
+
+
+class FusedStream:
+    """A deduplicated GateUpStream and DownStream in one launch on the bank cores (MIMO_MOE_FUSED=0 turns it off).
+
+    Each bank core streams, back to back from its DRAM bank, the gate|up slice and then the down slice of every
+    distinct expert. Its h tile (h column ``bank``) of each expert goes straight into every bank core's L1 (cb_hall),
+    so the down matmul starts once the last expert's h lands everywhere, without a second launch or the activation's
+    DRAM round trip, and with its weights already prefetched. Down accumulates all of a core's output tiles in fp32
+    dest at once (the Compact layout), so its blocks are each expert's contiguous slice, two K rows of ``cols``
+    tiles: the gate|up block's tile count, so one weight ring serves both. Routing, the expert list, the h values and
+    the compact output are the two streams' (same order, same arithmetic)."""
+
+    DOWN_ROWS = 2  # K rows of w_down per block
+    CB_HALL, CB_OUT = 10, 11
+    READY_SEM, DONE_SEM = 0, 1
+
+    def __init__(self, plan, gate_up, down):
+        assert gate_up.dedup and down.dedup and gate_up.rows == down.rows
+        assert gate_up.cores == down.cores and gate_up.num_pairs == down.num_pairs
+        self.gu, self.dn = gate_up, down
+        self.cols = down.cols
+        assert self.DOWN_ROWS * self.cols == gate_up.block_tiles, (self.cols, gate_up.block_tiles)
+        assert down.kt % self.DOWN_ROWS == 0
+        self.down_blocks = down.kt // self.DOWN_ROWS
+        assert self.down_blocks * gate_up.block_bytes == down.expert_bytes
+        self.peers = noc_coords(plan.mesh_device, gate_up.cores)
+        assert self.peers is not None, "the h exchange needs the bank cores' NoC coordinates"
+        tiny = ttnn.Tile([gate_up.rows, TILE])
+        page = tiny.get_tile_size(ttnn.bfloat16)
+
+        def cb(index, pages):
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index, data_format=ttnn.bfloat16, page_size=page, tile=ttnn.TileDescriptor(tiny)
+            )
+            return ttnn.CBDescriptor(total_size=pages * page, core_ranges=gate_up.core_ranges, format_descriptors=[fmt])
+
+        self.cbs = list(gate_up.cbs) + [cb(self.CB_HALL, gate_up.num_pairs * down.kt), cb(self.CB_OUT, self.cols)]
+        self.semaphores = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=gate_up.core_ranges, initial_value=0)
+            for i in (self.READY_SEM, self.DONE_SEM)
+        ]
+
+    def __call__(self, x, scores, biased, token_mask, w_gate_up, w_down, out, signal=None, launch=True):
+        """GateUpStream's inputs plus w_down [1, E, I, H] BFP4 and ``out`` from DownStream.compact_output; fills
+        ``out`` and returns it. ``signal`` / ``launch=False``: as DownStream (a section for a merged program)."""
+        gu, dn = self.gu, self.dn
+        for t in (x, scores, biased, w_gate_up, w_down, out):
+            assert t.layout == ttnn.TILE_LAYOUT and is_dram_interleaved(t)
+        assert x.dtype == ttnn.bfloat16 and w_gate_up.dtype == ttnn.bfloat4_b and w_down.dtype == ttnn.bfloat4_b
+        assert scores.dtype == ttnn.float32 and biased.dtype == ttnn.float32
+        assert w_down.shape[-2] == dn.inter_local and w_down.shape[-1] == dn.hidden
+        assert out.dtype == ttnn.bfloat16 and out.shape[-2] == TILE and out.shape[-1] == dn.compact_width
+        has_mask = token_mask is not None
+        if has_mask:
+            assert token_mask.layout == ttnn.TILE_LAYOUT and token_mask.dtype == ttnn.bfloat16
+            assert is_dram_interleaved(token_mask)
+        mask_addr = token_mask.buffer_address() if has_mask else 0
+
+        route_ct = [gu.expert_tiles, gu.norm, gu.has_scale, gu.scale_bits, 1 if has_mask else 0]
+        reader_ct = [
+            gu.cb_w,
+            gu.cb_local,
+            gu.cb_rstage,
+            gu.cb_sel,
+            gu.num_pairs,
+            gu.topk,
+            gu.block_bytes,
+            gu.block_tiles,
+            gu.blocks_per_pair,
+            gu.packet_bytes,
+            gu.packets_per_block,
+            gu.expert_bytes,
+            gu.NUM_BUFFERS,
+            gu.IN_FLIGHT,
+            gu.reader_users,
+            gu.stage_pages,
+            *route_ct,
+            gu.rows,
+            self.down_blocks,
+            dn.expert_bytes,
+            STREAM_DEBUG,
+        ]
+        banks = len(gu.cores)
+        writer_ct = [
+            gu.cb_x,
+            gu.cb_h,
+            gu.kt,
+            gu.num_pairs,
+            gu.topk,
+            gu.cb_wstage,
+            gu.cb_sel,
+            gu.reader_users,
+            gu.users,
+            gu.stage_pages,
+            *route_ct,
+            gu.cb_local,
+            gu.cb_cnt,
+            gu.cb_wt,
+            gu.rows,
+            self.CB_HALL,
+            dn.kt,
+            banks,
+            self.READY_SEM,
+            self.DONE_SEM,
+            self.CB_OUT,
+            self.cols,
+            dn.compact_tiles,
+            6 + 2 * banks if signal else 0,  # signal args follow the writer's other runtime args
+            0,
+        ]
+        compute_ct = [
+            gu.cb_x,
+            gu.cb_w,
+            gu.cb_h,
+            gu.cb_cnt,
+            gu.cb_wt,
+            gu.blocks_per_pair,
+            gu.BLOCK_K,
+            gu.rows,
+            self.CB_HALL,
+            self.CB_OUT,
+            dn.kt,
+            self.down_blocks,
+            self.DOWN_ROWS,
+            self.cols,
+            STREAM_DEBUG,
+        ]
+        peers = [v for c in self.peers for v in (c.x, c.y)]
+        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for bank, core in enumerate(gu.cores):
+            reader_rt[core.x][core.y] = [
+                bank,
+                gu.vcs[bank],
+                w_gate_up.buffer_address(),
+                biased.buffer_address(),
+                scores.buffer_address(),
+                mask_addr,
+                w_down.buffer_address(),
+            ]
+            args = [
+                x.buffer_address(),
+                out.buffer_address(),
+                bank,
+                biased.buffer_address(),
+                scores.buffer_address(),
+                mask_addr,
+            ] + peers
+            if signal:
+                args += [len(signal)] + [v for c in signal for v in (c.x, c.y)]
+            writer_rt[core.x][core.y] = args
+            compute_rt[core.x][core.y] = []
+
+        def kernel(name, ct, rt, config):
+            return ttnn.KernelDescriptor(
+                kernel_source=f"{KERNEL_DIR}/{name}",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=gu.core_ranges,
+                compile_time_args=ct,
+                runtime_args=rt,
+                config=config,
+            )
+
+        kernels = [
+            kernel(
+                "moe_fused_uniq_reader.cpp",
+                reader_ct,
+                reader_rt,
+                ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
+                ),
+            ),
+            kernel(
+                "moe_fused_uniq_writer.cpp",
+                writer_ct,
+                writer_rt,
+                ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default
+                ),
+            ),
+            kernel("moe_fused_uniq_compute.cpp", compute_ct, compute_rt, gu.compute_config),
+        ]
+        tensors = [x, scores, biased] + ([token_mask] if has_mask else []) + [w_gate_up, w_down]
+        section = dict(kernels=kernels, cbs=list(self.cbs), semaphores=list(self.semaphores), tensors=tensors)
+        if not launch:
+            return section
+        program = ttnn.ProgramDescriptor(kernels=kernels, cbs=section["cbs"], semaphores=section["semaphores"])
+        ttnn.generic_op(tensors + [out], program)
         return out
 
 

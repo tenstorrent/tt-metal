@@ -33,8 +33,10 @@ from .common import (
 )
 from .moe_stream import (
     DownStream,
+    FusedStream,
     GateUpStream,
     DEDUP,
+    FUSED,
     PendingCompact,
     ReduceExpand,
     fabric_row_gather,
@@ -151,6 +153,7 @@ class TtMiMoMoE:
         self.router_scores = None
         self.fabric_gather = False  # set by the model: the block reductions all-gather over the fabric
         self.down_stream = None
+        self.fused_stream = None
         self.ids_buf = None
         self.prefill_experts = PrefillExperts(self)  # forward (prefill): the experts of T tokens
 
@@ -292,6 +295,10 @@ class TtMiMoMoE:
             )
             self.act_buf = self.down_stream.activation_buffer(self.plan)
             self.out_buf = self.down_stream.compact_output(self.plan)
+            # Deduplicated: gate|up and down in one launch, h exchanged between the bank cores' L1 (FusedStream).
+            self.fused_stream = None
+            if FUSED and self.gate_up_stream.dedup:
+                self.fused_stream = FusedStream(self.plan, self.gate_up_stream, self.down_stream)
             self.reduce_expand = ReduceExpand(
                 self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, rows
             )
@@ -347,6 +354,8 @@ class TtMiMoMoE:
 
         srcs = (x, scores, biased, token_mask)
         x_in, s_in, b_in, m_in = (dram(t) for t in srcs)
+        if self.fused_stream is not None:
+            return self._forward_decode_fused(srcs, (x_in, s_in, b_in, m_in), fused_router, residual, norm)
         act = self.gate_up_stream(x_in, s_in, b_in, m_in, self.w_gate_up, self.act_buf, self.ids_buf)
         for t, src in zip((x_in, s_in, b_in, m_in), srcs):
             if t is not src:
@@ -372,6 +381,35 @@ class TtMiMoMoE:
         # The row all-reduce as one fabric phase: gather every chip's compact output (chip order along the row, the
         # same on every chip), then ReduceExpand sums the copies in that order. The persistent compact output is
         # rewritten every call, so it is not deallocated.
+        gathered = plan.all_gather(out, dim=3)  # [1, 1, 32, tp * H / 8]
+        full = self.reduce_residual(gathered, residual, norm=norm)
+        if gathered is not self.out_buf:
+            gathered.deallocate(True)
+        return full
+
+    def _forward_decode_fused(self, srcs, ins, fused_router, residual, norm):
+        """_forward_decode_stream with FusedStream: routing, gate|up and down in one launch, then the same row
+        all-reduce (in the down launch's place, with ``norm`` and the fabric gather, the reduce launch runs it)."""
+        x_in, s_in, b_in, m_in = ins
+        args = (x_in, s_in, b_in, m_in, self.w_gate_up, self.w_down, self.out_buf)
+
+        def release():
+            for t, src in zip(ins, srcs):
+                if t is not src:
+                    t.deallocate(True)
+            if not fused_router:
+                srcs[1].deallocate(True)
+                srcs[2].deallocate(True)
+
+        plan = self.plan
+        if norm is not None and self.fabric_gather:
+            section = self.fused_stream(*args, signal=fabric_transport_noc(plan.mesh_device), launch=False)
+            pending = PendingCompact(section, self.out_buf, len(self.down_stream.cores))
+            out = self.reduce_residual(None, residual, norm=norm, compact=pending)
+            release()
+            return out
+        out = self.fused_stream(*args)
+        release()
         gathered = plan.all_gather(out, dim=3)  # [1, 1, 32, tp * H / 8]
         full = self.reduce_residual(gathered, residual, norm=norm)
         if gathered is not self.out_buf:
