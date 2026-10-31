@@ -639,9 +639,18 @@ __attribute__((noinline)) void quick_push() {
         return;
     }
 
-    SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
-    mark_time_at_index_inlined(wIndex, hash);
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    // The quick-push zone is recorded only if its START/END pair fits in this RISC's ring. Callers that reserve
+    // DISPATCH_HEADROOM_SIZE (NoC events, dispatch zones) always leave room for it, but the plain room check used by
+    // worker-kernel zones and records does not, so wIndex may already be at the end of the ring: writing the pair
+    // there overruns into the next RISC's ring (its chunk header) and corrupts that lane for the host. The data is
+    // still pushed, only this push's own zone is skipped.
+    if (wIndex + QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE <= PROFILER_L1_VECTOR_SIZE) {
+        SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+        mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_START));
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+        mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    }
 
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
@@ -649,9 +658,6 @@ __attribute__((noinline)) void quick_push() {
     profiler_data_buffer[myRiscID].data[ID_LH] =
         (profiler_data_buffer[myRiscID].data[ID_LH] & PROFILER_ID_TRACE_FIELD_MASK) |
         (((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) | (myRiscID & PROFILER_ID_RISC_MASK));
-
-    mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
@@ -724,15 +730,20 @@ template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATC
 struct profileScope {
     bool start_marked = false;
     inline __attribute__((always_inline)) profileScope() {
-#if defined(ARCH_QUASAR)
-        // Quasar is L1-only for now, once the L1 buffer fills, markers are dropped.
-        // The ~profileScope() writes the ZONE_END unconditionally, so the constructor reserves room
-        // for both the zone's start and end markers. Request (2 * PROFILER_L1_MARKER_UINT32_SIZE - 1)
-        // "additional" words.
-        if (bufferHasRoom<dispatch>(2 * PROFILER_L1_MARKER_UINT32_SIZE - 1)) {
-#else
-        if (bufferHasRoom<dispatch>()) {
-#endif
+        // ~profileScope() writes the ZONE_END unconditionally, so the constructor reserves room for both the zone's
+        // start and end markers: request (2 * PROFILER_L1_MARKER_UINT32_SIZE - 1) "additional" words. Checking for
+        // the start alone lets a zone open at the last slot of the ring and its end marker overrun into the next
+        // RISC's ring in L1 (stackSize only reserves the ends of zones that are already open).
+        constexpr uint32_t zone_words = 2 * PROFILER_L1_MARKER_UINT32_SIZE - 1;
+        if constexpr (dispatch == DoingDispatch::DISPATCH) {
+            // Dispatch rings are flushed by ~profileScope() once wIndex reaches the headroom. A zone that does not
+            // fit never gets there, so a ring sitting just below the threshold (e.g. at 494 after a 6-word record)
+            // would drop every following zone until some other writer flushes. Flush first, then re-check.
+            if (!bufferHasRoom<dispatch>(zone_words)) {
+                quick_push();
+            }
+        }
+        if (bufferHasRoom<dispatch>(zone_words)) {
             stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = true;
             mark_time_at_index_inlined(wIndex, timer_id);
@@ -837,7 +848,8 @@ __attribute__((noinline)) bool main_accumulate_begin(uint32_t timer_id) {
             stackSize = 0;
         }
     }
-    if (bufferHasRoom()) {
+    // main_accumulate_end writes the ZONE_END unconditionally: reserve room for both markers (see profileScope).
+    if (bufferHasRoom(2 * PROFILER_L1_MARKER_UINT32_SIZE - 1)) {
         stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
         mark_time_at_index_inlined(wIndex, get_id(timer_id, ZONE_START));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
