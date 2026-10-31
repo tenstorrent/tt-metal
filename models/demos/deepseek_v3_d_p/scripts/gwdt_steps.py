@@ -63,6 +63,7 @@ class Ctx:
     mode_co: bool
     tick: Callable[[], None] = lambda: None
     blocked_models: dict[str, str] = field(default_factory=dict)
+    missing_paths: dict[str, list[str]] = field(default_factory=dict)
     collected: list[str] | None = None
 
 
@@ -75,6 +76,7 @@ class Step:
     blocking: bool
     run: Callable[[Ctx, State], Result]
     collect: Callable[[Ctx], list[str]] | None = None
+    needs: list[str] = field(default_factory=list)
     state: State = field(default_factory=State)
 
 
@@ -299,7 +301,7 @@ def paths_step(models: list[str]) -> Step:
                     details.append(f"  {var:<27} = {env[var]}")
                 else:
                     details.append(f"  {var:<27} = {env[var]}   MISSING")
-                    ctx.blocked_models.setdefault(m, f"{var} missing")
+                    ctx.missing_paths.setdefault(m, []).append(var)
         if missing:
             return Result(Status.FAIL, f"{len(missing)} repo paths missing", details)
         return Result(Status.PASS if found == total else Status.WARN, f"{found}/{total} exist", details)
@@ -309,7 +311,7 @@ def paths_step(models: list[str]) -> Step:
 
 def collect_step(steps: list[Step]) -> Step:
     def run(ctx: Ctx, state: State) -> Result:
-        targets = [s for s in steps if s.collect and s.model not in ctx.blocked_models]
+        targets = [s for s in steps if s.collect and not missing_needs(s, ctx)]
         wanted = {s.key: s.collect(ctx) for s in targets}
         log = step_dir(ctx, "collect") / "collect.log"
         state.log = str(log)
@@ -476,6 +478,8 @@ def build_steps(models: list[str]) -> list[Step]:
     model_steps = [s for m in models for s in blocks[m]]
     model_steps += [stress_step("smoke", m, SMOKE_LOOPS, SMOKE_ENV, 2) for m in models]
     model_steps += [stress_step("soak", m, SOAK_LOOPS, SOAK_ENV, SOAK_ITERS) for m in models]
+    for s in model_steps:
+        s.needs = path_needs(s.group, s.model)
     hardware = [
         reset_gate(),
         smi_step(),
@@ -488,6 +492,21 @@ def build_steps(models: list[str]) -> list[Step]:
     return [paths_step(models), collect_step(hardware + model_steps)] + hardware + model_steps
 
 
+def path_needs(group: str, model: str) -> list[str]:
+    hf, ttnn_cache, trace = MODEL_PATH_VARS[model]
+    if group == "block-random":
+        # Random weights and input: only config.json from the HF model dir.
+        return [hf]
+    if group == "block" and model == "glm53":
+        # GLM block feeds random input, so no golden trace.
+        return [hf, ttnn_cache]
+    return [hf, ttnn_cache, trace]
+
+
+def missing_needs(step: Step, ctx: Ctx) -> list[str]:
+    return [v for v in step.needs if v in ctx.missing_paths.get(step.model, [])]
+
+
 def run_all(steps: list[Step], ctx: Ctx, skip: set[str], on_update: Callable[[Step], None]) -> None:
     gate_failed = None
     for i, step in enumerate(steps):
@@ -498,6 +517,8 @@ def run_all(steps: list[Step], ctx: Ctx, skip: set[str], on_update: Callable[[St
             s.result = Result(Status.PENDING, f"not run: gate {gate_failed} failed")
         elif step.model in ctx.blocked_models:
             s.result = Result(Status.PENDING, f"not run: {ctx.blocked_models[step.model]}")
+        elif missing := missing_needs(step, ctx):
+            s.result = Result(Status.PENDING, f"not run: {', '.join(missing)} missing")
         else:
             s.start, s.result = time.time(), Result(Status.RUN)
             on_update(step)

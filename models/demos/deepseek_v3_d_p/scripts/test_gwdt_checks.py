@@ -215,6 +215,26 @@ def test_run_all_model_fail_blocks_only_that_model():
     assert [s.state.result.status for s in steps] == [Status.FAIL, Status.PASS, Status.PENDING, Status.PASS]
 
 
+def test_run_all_missing_path_blocks_only_steps_that_need_it():
+    from gwdt_steps import run_all
+
+    steps, ctx = _steps(("r", "block-random", "m", Status.PASS), ("s", "smoke", "m", Status.PASS))
+    steps[0].needs, steps[1].needs = ["HF"], ["HF", "TRACE"]
+    ctx.missing_paths["m"] = ["TRACE"]
+    run_all(steps, ctx, set(), lambda s: None)
+    assert steps[0].state.result.status == Status.PASS
+    assert steps[1].state.result == Result(Status.PENDING, "not run: TRACE missing")
+
+
+def test_path_needs_block_random_only_needs_hf_config():
+    from gwdt_steps import path_needs
+
+    assert path_needs("block-random", "kimi_k2_7") == ["KIMI_K2_7_HF_MODEL"]
+    assert path_needs("block-random", "glm53") == ["GLM53_HF_MODEL"]
+    assert path_needs("block", "glm53") == ["GLM53_HF_MODEL", "TT_GLM53_PREFILL_TTNN_CACHE"]
+    assert "PREFILL_TRACE_DIR" in path_needs("smoke", "glm53")
+
+
 def test_run_all_skip_by_user():
     from gwdt_steps import run_all
 
