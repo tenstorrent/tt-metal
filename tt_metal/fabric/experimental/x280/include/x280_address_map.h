@@ -81,4 +81,16 @@ _Static_assert(
 #define X280_CLINT_BASE X280_ABI_U64(0x02000000)
 #define X280_MSIP_BASE X280_CLINT_BASE
 
+/* The System Port alias of the same DRAM tile: uncached for the X280, and over
+ * the NOC not coherent with the X280 caches (README § 4). */
+#define X280_SYSTEM_PORT_DDR_TILE_BASE X280_ABI_U64(0x30000000)
+
+/* Platform-level interrupt controller, and the MSI catcher: a NOC write of a
+ * non-zero u32 to X280_MSI_CATCHER_BASE at the tile's own (X, Y) pushes it into
+ * a 16-entry FIFO, which raises PLIC source X280_MSI_PLIC_SOURCE while it is
+ * not empty. */
+#define X280_PLIC_BASE X280_ABI_U64(0x0C000000)
+#define X280_MSI_CATCHER_BASE X280_ABI_U64(0x20060000)
+#define X280_MSI_PLIC_SOURCE X280_ABI_U32(6)
+
 #endif /* X280_ADDRESS_MAP_H */
