@@ -4,7 +4,8 @@
 """ttnn.experimental.moe_block.sparse_dispatch_2d on device.
 
 - test_dispatch: random rows and uniform routing on the system mesh (LoudBox 2x4 on FABRIC_2D, Galaxy 8x4 on
-  FABRIC_2D_TORUS_XY), bit-exact against the torch model of the result (sparse_dispatch_2d_inputs.expected_xbuf);
+  FABRIC_2D_TORUS_XY), bit-exact against the torch model of the result (sparse_dispatch_2d_inputs.assert_dispatched: the
+  destinations' rows; pass-through chips may keep the home's row);
   a second call on new buffers must hit the program cache and patch the addresses.
 - test_reference_case: bit-exact against the Python reference's saved outputs (dump_ref_sparse_dispatch_2d.py);
   runs only with $MOE_BLOCK_REFS set.
@@ -67,7 +68,7 @@ def _inputs(mesh_device, resources, width, seed):
     )
     xbuf_in = inputs.xbuf_inputs(R, C, S, width, gen)
     per_chip = {ch: {"xbuf_in": xbuf_in[ch], "route": route[ch]} for ch in route}
-    return S, per_chip, inputs.expected_xbuf(R, C, S, xbuf_in, route)
+    return S, per_chip, (xbuf_in, route)
 
 
 def _to_device(per_chip, mesh_device):
@@ -76,9 +77,10 @@ def _to_device(per_chip, mesh_device):
     return xbuf, route
 
 
-def _check(mesh_device, xbuf, expected):
-    got = {ch: {"xbuf": t} for ch, t in from_mesh(xbuf, tuple(mesh_device.shape)).items()}
-    assert_bit_exact(got, {ch: {"xbuf": t} for ch, t in expected.items()}, ["xbuf"])
+def _check(mesh_device, xbuf, model):
+    R, C = tuple(mesh_device.shape)
+    xbuf_in, route = model
+    inputs.assert_dispatched(from_mesh(xbuf, (R, C)), xbuf_in, route, R, C, CHUNK // (R * C))
 
 
 _MESH = _system_mesh()
@@ -96,19 +98,19 @@ WIDTHS = [3584, 6144]  # K3's latent, GLM-5.3's emb_dim
 def test_dispatch(mesh_device, width):
     resources = _resources(mesh_device, width)
     mb.ensure_sparse_dispatch_2d_resources(resources)
-    S, per_chip, expected = _inputs(mesh_device, resources, width, seed=1234)
+    S, per_chip, model = _inputs(mesh_device, resources, width, seed=1234)
     xbuf, route = _to_device(per_chip, mesh_device)
     out = mb.sparse_dispatch_2d(xbuf, route, resources)
     ttnn.synchronize_device(mesh_device)
-    _check(mesh_device, out, expected)
+    _check(mesh_device, out, model)
     entries = mesh_device.num_program_cache_entries()
 
     # (new buffers at other addresses (the first ones stay alive), other contents: a cache hit patching every address)
-    S, per_chip, expected = _inputs(mesh_device, resources, width, seed=99)
+    S, per_chip, model = _inputs(mesh_device, resources, width, seed=99)
     xbuf2, route2 = _to_device(per_chip, mesh_device)
     out = mb.sparse_dispatch_2d(xbuf2, route2, resources)
     ttnn.synchronize_device(mesh_device)
-    _check(mesh_device, out, expected)
+    _check(mesh_device, out, model)
     assert mesh_device.num_program_cache_entries() == entries, "the second call missed the program cache"
     resources.release()
 

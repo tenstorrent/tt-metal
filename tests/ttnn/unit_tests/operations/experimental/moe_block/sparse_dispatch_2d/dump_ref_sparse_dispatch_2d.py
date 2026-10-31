@@ -73,9 +73,8 @@ def run_case(name, root):
         ttnn.synchronize_device(mesh)
         ttnn.deallocate(man)
         out = from_mesh(xbuf, (R, C))
-        expected = inputs.expected_xbuf(R, C, S, xbuf_in, route)
+        inputs.assert_dispatched(out, xbuf_in, route, R, C, S, name)
         for ch in out:
-            assert torch.equal(out[ch].view(torch.int16), expected[ch].view(torch.int16)), f"{name}: chip {ch} != model"
             per_chip[ch]["xbuf"] = out[ch]
         d = save_case(
             OP,

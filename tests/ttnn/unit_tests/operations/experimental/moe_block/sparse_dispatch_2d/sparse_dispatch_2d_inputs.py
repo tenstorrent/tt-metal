@@ -104,6 +104,32 @@ def expected_xbuf(R, C, S, xbuf_in, route):
     return out
 
 
+def all_destinations(route, N):
+    """route with every chip a destination of every row (the masks only): expected_xbuf's home row in every slot."""
+    RW = 1 if N <= 16 else 2
+    full = (1 << N) - 1
+    out = {}
+    for ch, words in route.items():
+        w = words.clone().flatten()
+        if RW == 1:
+            w = (w & ~0xFFFF) | full
+        else:
+            w[0::2] = _i32(full)
+        out[ch] = w.reshape(words.shape)
+    return out
+
+
+def assert_dispatched(out, xbuf_in, route, R, C, S, what="dispatch"):
+    """out {(r, c): xbuf} against the model: every destination's row exactly; a chip a store-and-forward route passes
+    through may keep the home's row in that slot; every other row as it was."""
+    expected = expected_xbuf(R, C, S, xbuf_in, route)
+    homes = expected_xbuf(R, C, S, xbuf_in, all_destinations(route, R * C))
+    for ch in out:
+        o, e, h = (t[ch].view(torch.int16) for t in (out, expected, homes))
+        ok = (o == e).all(-1) | (o == h).all(-1)
+        assert torch.all(ok), f"{what}: chip {ch}: {int((~ok).sum())} rows != model"
+
+
 def fabric_payload(W):
     """The MoE block's fabric payload for rows of W bf16 (closeout_models.fabric_payload)."""
     return max(7232, (2 * W + 32 + 63) // 64 * 64)
