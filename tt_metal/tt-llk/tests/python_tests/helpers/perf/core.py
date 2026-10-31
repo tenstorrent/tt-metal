@@ -1003,6 +1003,28 @@ class PerfConfig(TestConfig):
 
         PerfConfig.TEST_COUNTER += 1
 
+        # Every Wormhole kernel ends with the pack TRISC as the last L1 port-3 requester (trisc.cpp), so every
+        # kernel starts from that arbiter state, except the first one on a core in this process: it follows
+        # whatever ran there before. The first test runs its first kernel once unrecorded so that one does too.
+        if (
+            PerfConfig.TEST_COUNTER == 1
+            and not TestConfig.TEST_TARGET.run_simulator
+            and os.environ.get("LLK_PORT3_FIRST", "1") != "0"
+        ):
+            templates, runtimes, run_type = self.run_configs[0]
+            self.current_run_type = run_type
+            if TestConfig.SPEED_OF_LIGHT:
+                self.templates = templates + runtimes
+                self.runtimes = []
+                self.compile_time_formats = True
+            else:
+                self.templates = templates
+                self.runtimes = runtimes
+            self.generate_variant_hash()
+            self.write_runtimes_to_L1()
+            self.run_elf_files()
+            self.wait_for_tensix_operations_finished()
+
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
             # We need to manually assign different modified templates here if the speed of light is set,
