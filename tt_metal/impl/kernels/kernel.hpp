@@ -275,7 +275,9 @@ public:
         named_runtime_arg_namespaces_ = namespaces;
     }
     const NamedCTArgNamespaces& named_ct_arg_namespaces() const { return named_ct_arg_namespaces_; }
-    void set_named_ct_arg_namespaces(const NamedCTArgNamespaces& namespaces) { named_ct_arg_namespaces_ = namespaces; }
+    void set_named_ct_arg_namespaces(NamedCTArgNamespaces namespaces) {
+        named_ct_arg_namespaces_ = std::move(namespaces);
+    }
     void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const override;
     void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const override;
 
