@@ -162,12 +162,15 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // Additional validation for Welford - it doesn't support rmsnorm
+    // Additional validation for Welford - it doesn't support rmsnorm or the 2D core grid
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
         TT_FATAL(
             !(program_config.use_welford && args.norm_type == LayerNormDistributedType::RMSNORM),
             "RMS norm is not compatible with Welford algorithm. Please disable use_welford flag.");
+        TT_FATAL(
+            !(program_config.use_welford && args.use_2d_core_grid.value_or(false)),
+            "Welford layernorm variation does not support 2D core grid.");
     }
 }
 
