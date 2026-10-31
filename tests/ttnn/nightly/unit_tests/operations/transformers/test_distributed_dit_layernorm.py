@@ -768,3 +768,19 @@ def test_dit_layernorm_pre_allgather_fp32_precision(device, offset):
         f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
         f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
     )
+
+
+@pytest.mark.parametrize("hidden_dim", [72, 100])
+def test_dit_layernorm_pre_allgather_non_tile_aligned_width(device, hidden_dim, reset_seeds):
+    # Stats (mean in tile column 0, variance in tile column 1) must be taken over the logical width only.
+    torch_input = torch.randn(1, 1, 37, hidden_dim) + 1.5
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    recip_tensor = create_recip_tensor_for_welford(device, hidden_dim)
+
+    stats = ttnn.to_torch(
+        ttnn.experimental.dit_layernorm_pre_allgather(tt_input, recip_tensor, dtype=ttnn.bfloat16)
+    ).float()
+
+    ref = torch_input.bfloat16().float()
+    torch.testing.assert_close(stats[..., 0], ref.mean(-1), rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(stats[..., TILE_SIZE], ref.var(-1, unbiased=False), rtol=2e-2, atol=2e-2)
