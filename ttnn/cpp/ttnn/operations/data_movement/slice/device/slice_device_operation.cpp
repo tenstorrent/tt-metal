@@ -92,6 +92,20 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     return start_offset;
 }
 
+tt::DataFormat get_slice_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch) {
+    const tt::DataFormat format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    // Quasar rejects UInt16 and UInt32 as DFB formats.
+    if (arch == tt::ARCH::QUASAR) {
+        if (format == tt::DataFormat::UInt16) {
+            return tt::DataFormat::RawUInt16;
+        }
+        if (format == tt::DataFormat::UInt32) {
+            return tt::DataFormat::RawUInt32;
+        }
+    }
+    return format;
+}
+
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
