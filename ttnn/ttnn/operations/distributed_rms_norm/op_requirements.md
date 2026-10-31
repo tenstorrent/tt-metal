@@ -206,7 +206,7 @@ reverse ready path, gated on the full landing exceeding `LANDING_FULL_MAX_BYTES`
 (prefill-32768 and the other DeepSeek configs still pass on the fast path). Focus case unchanged on the fast path:
 20.49 / 21.81 → 20.44 / 21.79 µs, `ccl_perf compare` null.
 
-### [ ] Refinement 5 — TRANSPORT: the per-call ready fence and the link count on the focus case
+### [x] Refinement 5 — TRANSPORT: the per-call ready fence and the link count on the focus case
 
 **Type**: perf
 
@@ -233,6 +233,16 @@ example's numbers, instead of re-deriving the fence cost. The headline still com
 **Done when**: the focus case's fastest chip is lower beyond the noise, the slowest chip is not higher, the spread
 (launch skew) is reported, the golden suite stays green (including `test_distributed_rms_norm_debug.py::test_repeat_rows`
 bit-identical repeats), and there is no regression across the guard set.
+
+**Outcome**: measured null on all three levers; nothing changes in production (two measurement knobs added, both off by
+default). Baseline 20.42 / 21.81 µs (fastest / slowest), spread 1.39 µs. (1) Fence-free bound: `DRMS_DEFER_FENCE`
+(fence waited after the sends) gives 20.46 / 21.74, `ccl_perf compare` null. Zones show the fence ends ≥ 2 µs before
+the first root publish on every chip, so the persistent double-buffered landing was not built: its upper bound is 0 and
+it would cost persistent L1 on every core. (2) Links: 1 link gives 20.56 / 22.47 (reject, slowest +0.66). So 2 links
+stay, and a shared fence is bounded by (1). (3) Port placement (`PORT_X0`): west-shifted (x0=2) gives 20.45 / 21.66
+(null). East edge gives 20.42 / 21.96 (reject). x0=0 cannot be timed because the port cores' profiler markers
+overflow. The exposed transport (~2 µs) is the send → relay → notify hop chain plus the root's collect/finalize, not
+synchronization. Next: Refinement 6 / the output write burst (Refinement 3's finding).
 
 ### [ ] Refinement 6 — Local-half headroom on the perf-flagged case (only if Refinements 3 and 5 leave it)
 

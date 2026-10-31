@@ -39,6 +39,12 @@
 #ifndef DRMS_ABLATE_EXCHANGE
 #define DRMS_ABLATE_EXCHANGE 0
 #endif
+// Measurement-only (host DRMS_DEFER_FENCE=1, never in production): wait for the ready fence after the sends instead of
+// before them. Unsafe (a peer may still be running the previous program); it bounds what a fence-free steady state
+// could save on the critical path (Refinement 5).
+#ifndef DRMS_DEFER_FENCE
+#define DRMS_DEFER_FENCE 0
+#endif
 
 using namespace tt::tt_fabric;
 
@@ -214,11 +220,16 @@ void kernel_main() {
             }
         };
         send_ready();
-        if (n_ready_wait > 0) {
-            DeviceZoneScopedN("prt_ready_wait");
-            noc_semaphore_wait_min(ready, n_ready_wait);
-            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - n_ready_wait);
-            noc_async_atomic_barrier();
+        auto ready_fence = [&]() {
+            if (n_ready_wait > 0) {
+                DeviceZoneScopedN("prt_ready_wait");
+                noc_semaphore_wait_min(ready, n_ready_wait);
+                noc_semaphore_inc(get_noc_addr(ready_addr), 0u - n_ready_wait);
+                noc_async_atomic_barrier();
+            }
+        };
+        if constexpr (!DRMS_DEFER_FENCE) {
+            ready_fence();
         }
         // One item: the segment at `src` to the item's destination port (same landing address), the destination
         // entry's arrival counter incremented with the last packet.
@@ -323,6 +334,9 @@ void kernel_main() {
                 }
                 poll_notify();
             }
+        }
+        if constexpr (DRMS_DEFER_FENCE) {
+            ready_fence();
         }
         {
             DeviceZoneScopedN("prt_close");

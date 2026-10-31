@@ -281,7 +281,7 @@ The ports run independently of this loop. At kernel start each port opens its fa
 | L9 **Precision under 16-bit DEST** | With `fp32_dest_acc_en = False` the device partial is packed from 16-bit DEST, so the fp32 record carries a 16-bit value. The cross-device sum then folds in 16-bit DEST. | keep an fp32 DEST for `collapse` / `finalize` only. Measure the precision matrix at W_global = 8192 (base L8 found 16-bit Σx² not binding up to W = 8192 on one chip). |
 
 **Stall-shadow check.**
-- **Ports.** The ready fence (≈ 5 µs measured, `fabric_ring_exchange/README.md` result 1) waits on the peer chips' launch. Everything local is independent of it: the reads of x, Σx², the in-device combine and the publication of wave 0 all run on the compute cores while the ports fence. A chip's launch skew is absorbed by its ports and never stalls its local work.
+- **Ports.** The ready fence (≈ 5 µs measured in isolation, `fabric_ring_exchange/README.md` result 1) waits on the peer chips' launch. Refinement 5 confirmed it on device: traced, the fence ends ≥ 2 µs before the first root publish on every chip (`prt_ready_wait` last end ≈ 13.2 µs vs `rt_publish` first start ≈ 14.5–15.5 µs), and deferring it after the sends (`DRMS_DEFER_FENCE`) is null. Everything local is independent of it: the reads of x, Σx², the in-device combine and the publication of wave 0 all run on the compute cores while the ports fence. A chip's launch skew is absorbed by its ports and never stalls its local work.
 - **Root waiting for its slots.** Independent work is scheduled into the window:
   1. the next waves' `square_accumulate` / `collapse` / `combine` / `publish`. The root reader is a non-blocking event loop, so wave w+1's gather and publish never wait behind wave w's collect (Dataflow Strategy).
   2. `scale_by_gamma` of chunk 0 of the block. This is legal because the two scalings commute, `x·γ·s = (x·γ)·s`. The base already orders γ first, so floating-point order is unchanged from the base.
@@ -348,6 +348,8 @@ Members' readers keep the base order: send the partials of every wave of the blo
 | Hook | Effect |
 |------|--------|
 | `DRMS_ABLATE_EXCHANGE` (host constant → define on ports and roots; 0 in production) | Ports skip the connection, fence and sends; each port copies its own slot into every peer slot locally and runs arrival/notify/re-arm as usual. Output is wrong, timing is valid. The exposed transport time is `t(op) − t(op, ablated)` on the fastest chip (`perf_measure.py`). |
+| `DRMS_DEFER_FENCE` (env → port define; never in production) | The ports wait for the ready fence after their sends instead of before them. Unsafe, fast path only. It is the upper bound of a fence-free steady state (Refinement 5: null on the focus case, the fence is hidden behind the local reads). |
+| `DRMS_PORT_X0` (env → host `PORT_X0`; unset = centred) | The first x of the port row (lamp L8). Refinement 5: west-shift null, east edge slower. |
 | Device zones | ports: `prt_conn`, `prt_ready_wait`, `prt_exchange`, `prt_close` (from `port.cpp`); roots: `rt_publish`, `rt_landed_wait`, `rt_collect`, `rt_distribute`; plus the base's per-stage zones. |
 
 ## Work Distribution

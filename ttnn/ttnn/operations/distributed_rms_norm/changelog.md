@@ -196,3 +196,36 @@
 - Issues encountered: None. Unit regression: acceptance 111/111, debug 6/6.
 - Tests added: `test_distributed_rms_norm_knobs.py::test_bounded_landing` (6 cases) and `::test_bounded_landing_ring`
   (4 cases). Both force the ring through `LANDING_FULL_MAX_BYTES = 0` and assert `K < num_waves`.
+
+## Refinement 5 — TRANSPORT: the per-call ready fence and the link count on the focus case
+- Date: 2026-10-31
+- What was done (perf, label **TRANSPORT**). Each lever was measured on the focus case (640×1792, Ring, 2 links)
+  with `perf_measure.py` (5 experiments) and `ccl_perf compare`.
+  - Baseline: 20.42 / 21.81 µs (fastest / slowest), spread 1.39 µs.
+  - Zones (`perf_zones.py`, last traced call). On every chip `prt_ready_wait` ends at 11.7–13.2 µs. The first root
+    publish starts at 14.5–15.5 µs and the first send at 16.9–18.1 µs. So the fence is fully hidden behind the
+    local reads. The ~5 µs fence of `fabric_ring_exchange` (README result 1) is an isolated exchange with no local
+    work to hide it.
+  1. **Fence-free steady state.** Bounded by `DRMS_DEFER_FENCE` (new measurement-only port define): the fence wait
+     moves after the sends, which is better than any real fence-free scheme. Result 20.46 / 21.74, spread 1.28: null.
+     The persistent double-buffered landing was **not built**. Its upper bound is 0, and it would bring back the
+     persistent L1 landing the verifier removed (fragmentation risk).
+  2. **Links.** `num_links = 1` on the same case gives 20.56 / 22.47 (spread 1.91): reject, slowest +0.66. Two links
+     halve each port's relay and notify chain, which matters more than the fence in the op. "One fence per port
+     pair" is bounded by lever 1 (null).
+  3. **Port placement (L8).** New host knob `PORT_X0`, env `DRMS_PORT_X0`; the default `None` = centred, unchanged.
+     - x0=2 (west-shifted): 20.45 / 21.66, null.
+     - East edge: 20.42 / 21.96, reject (slowest +0.15).
+     - x0=0: not measurable. The port cores' BRISC profiler markers overflow, and the harness then sees 539/600
+       programs.
+     Probe-based placement under the Ethernet cores was not pursued: the payload is latency-bound, not bandwidth-bound.
+  - Reused: the port kernel's fence code (now a `ready_fence` lambda, called at the same point unless the define
+    is set) and `place_ports`. Added: the `DRMS_DEFER_FENCE` define and the `PORT_X0` knob.
+- Finding (not a follow-up): the ~2 µs exposed transport is the hop-latency chain (send → relay → notify → collect),
+  not synchronization. The op's end is set by the output write burst (Refinement 3's finding).
+- Accuracy achieved: unchanged. Production kernels and plans are byte-identical in behaviour (defaults).
+- Golden test progress: unchanged. `perf_measure.py` checks the focus case against the golden reference on every
+  variant run.
+- Issues encountered: `generated/profiler/.logs/zone_src_locations.log` had built up 16-bit zone-hash collisions
+  across builds; deleting it fixed `perf_zones.py` (`Source location hashes are colliding`).
+- Tests added: none. Unit regression: acceptance 111/111, debug 6/6 (including `test_repeat_rows`), knobs 22/22.

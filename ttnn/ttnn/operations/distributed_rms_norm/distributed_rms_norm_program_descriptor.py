@@ -88,6 +88,9 @@ PORT_LANDING_MAX_BYTES = 512 * 1024
 # allows only for K >= waves per block; K >= 2 for the own-slot flush). Calls whose full landing fits keep the
 # credit-free layout (K = num_waves: the ring code is compiled out).
 LANDING_RING_WAVES = 4
+# Port placement (lamp L8, TRANSPORT): the first x of the port row (logical row 0). None = centred on the grid (the
+# ring-exchange placement). Refinement 5 measured west / east alternatives against it on the focus case.
+PORT_X0 = int(os.environ["DRMS_PORT_X0"]) if os.environ.get("DRMS_PORT_X0", "") != "" else None
 # The predicate: the credit-free layout is kept while the full landing fits this many bytes (tests lower it to force the
 # ring on small shapes).
 LANDING_FULL_MAX_BYTES = PORT_LANDING_MAX_BYTES
@@ -264,7 +267,7 @@ def place_ports(grid, num_links, busy):
     then nearest the grid's x-centre. Interleaved: (x0 + i, 0), x0 = grid.x // 2 - L (the ring-exchange placement).
     Returns {(direction, link): core}."""
     n = 2 * num_links
-    x0 = max(0, grid.x // 2 - num_links)
+    x0 = max(0, grid.x // 2 - num_links) if PORT_X0 is None else min(PORT_X0, max(0, grid.x - n))
     cand = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in busy]
     cand.sort(key=lambda xy: (xy[1], abs(xy[0] - (x0 + (n - 1) / 2.0)), xy[0]))
     if len(cand) < n:
@@ -765,10 +768,13 @@ def _pack(v):
 
 def _port_defines():
     """Measurement-only defines (never set in production: unset env -> no define, the production hash is unchanged).
-    DRMS_ABLATE_EXCHANGE=1: the ports skip the fabric (op_design.md -> Measurement hooks)."""
+    DRMS_ABLATE_EXCHANGE=1: the ports skip the fabric (op_design.md -> Measurement hooks).
+    DRMS_DEFER_FENCE=1: the ports wait for the ready fence after their sends instead of before them (UNSAFE, fast path
+    only: the upper bound of a fence-free steady state, Refinement 5)."""
     out = []
-    if os.environ.get("DRMS_ABLATE_EXCHANGE", "0") not in ("", "0"):
-        out.append(("DRMS_ABLATE_EXCHANGE", "1"))
+    for k in ("DRMS_ABLATE_EXCHANGE", "DRMS_DEFER_FENCE"):
+        if os.environ.get(k, "0") not in ("", "0"):
+            out.append((k, "1"))
     return out + _zone_defines()
 
 
