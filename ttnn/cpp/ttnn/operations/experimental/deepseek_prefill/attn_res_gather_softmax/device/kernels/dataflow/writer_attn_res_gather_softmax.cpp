@@ -127,15 +127,10 @@ void kernel_main() {
         }
     }
 
-    // Pass one: this rank's whole share, parked before anything blocks. Compute
-    // produces the two statistics of a run together, so they are written together.
-    for (uint32_t u = first_unit; u < first_unit + num_units; ++u) {
-        const auto [g, chunk] = Split::unit(u);
-        const uint32_t first_tile = Split::template first_tile<Wt>(u);
-
-        // The settled stream, parked before the statistics it feeds are announced: the
-        // caller carries it forward as the live stream. Compute packs the run before it
-        // reduces it, so this is the order the buffers fill in.
+    // The settled stream: the caller carries it forward as the live stream, and nothing in
+    // this read needs it in DRAM, so it goes out after the run's statistics — the exchange
+    // waits on those, and on nothing else this core writes.
+    auto park_total = [&](uint32_t first_tile) {
         if constexpr (fuse_add) {
             total_buf.wait_front(chunk_tiles);
             for (uint32_t k = 0; k < chunk_tiles; ++k) {
@@ -149,6 +144,13 @@ void kernel_main() {
             noc.async_write_barrier();
             total_buf.pop_front(chunk_tiles);
         }
+    };
+
+    // Pass one: this rank's whole share, parked before anything blocks. Compute
+    // produces the two statistics of a run together, so they are written together.
+    for (uint32_t u = first_unit; u < first_unit + num_units; ++u) {
+        const auto [g, chunk] = Split::unit(u);
+        const uint32_t first_tile = Split::template first_tile<Wt>(u);
 
         if constexpr (chunks_per_row > 1) {
             if (chunk != 0) {
@@ -164,6 +166,7 @@ void kernel_main() {
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(leader_x, leader_y, get_semaphore(chunk_sem_id)), 1);
                 local_stats_buf.pop_front(kStatsPerRow);
+                park_total(first_tile);
                 continue;
             }
             // The leader: hand compute the other chunks' pairs once they have all landed,
@@ -190,6 +193,7 @@ void kernel_main() {
         }
         noc.async_write_barrier();
         row_stats_buf.pop_front(kStatsPerRow);
+        park_total(first_tile);
     }
 
     // Only a core that parked rows has anything to announce, and the gather core counts
@@ -244,11 +248,14 @@ void kernel_main() {
         }
         cb_scalars.push_back(kScalars);
 
+        // Flushed rather than acknowledged: a tile only has to have left L1 for its slot to
+        // be reused, so the run's writes stay in flight back to back.
         for (uint32_t k = 0; k < chunk_tiles; ++k) {
             out_buf.wait_front(onetile);
             noc.async_write(out_buf, out_accessor, out_tile_bytes, {.offset_bytes = 0}, {.page_id = first_tile + k});
-            noc.async_write_barrier();
+            noc.async_writes_flushed();
             out_buf.pop_front(onetile);
         }
     }
+    noc.async_write_barrier();
 }
