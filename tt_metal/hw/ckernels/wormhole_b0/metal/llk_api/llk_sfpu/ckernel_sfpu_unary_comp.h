@@ -24,11 +24,13 @@ inline void calculate_unary_ne(std::uint32_t value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 1.0f;
-        v_if(v == s) { r = 0.0f; }
+        // Store the default, then overwrite the taken lanes under the predicate: two
+        // SFPSTOREs of the constant registers instead of two SFPMOVs and a store. `s == v`
+        // (not `v == s`) makes v the subtract's destination, so the compiler does not copy
+        // s first; EQ0 of the difference is the same either way.
+        sfpi::dst_reg[0] = 1.0f;
+        v_if(s == v) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
 
         sfpi::dst_reg++;
     }
@@ -44,11 +46,10 @@ inline void calculate_unary_eq(std::uint32_t value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 0.0f;
-        v_if(v == s) { r = 1.0f; }
+        // Same two-store form and operand order as unary_ne above.
+        sfpi::dst_reg[0] = 0.0f;
+        v_if(s == v) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
 
         sfpi::dst_reg++;
     }
@@ -64,11 +65,10 @@ inline void calculate_unary_gt(std::uint32_t value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 0.0f;
-        v_if(v > s) { r = 1.0f; }
+        // Default stored first, taken arm stored under the predicate (see unary_ne).
+        sfpi::dst_reg[0] = 0.0f;
+        v_if(v > s) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
 
         sfpi::dst_reg++;
     }
@@ -84,11 +84,10 @@ inline void calculate_unary_lt(std::uint32_t value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r = 0.0f;
-        v_if(v < s) { r = 1.0f; }
+        // Default stored first, taken arm stored under the predicate (see unary_ne).
+        sfpi::dst_reg[0] = 0.0f;
+        v_if(v < s) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
 
         sfpi::dst_reg++;
     }
@@ -108,11 +107,9 @@ inline void calculate_unary_ge(std::uint32_t value) {
         // the baseline's `v < s` on the *same* difference v - s, so LT0 and GTE0 partition
         // every operand pair including the zeros and the inf - inf NaN. Only le would have
         // had to flip the operand order to reach GTE0, which is why it keeps its compare.
-        sfpi::vFloat r = 0.0f;
-        v_if(v - s >= 0.0f) { r = 1.0f; }
+        sfpi::dst_reg[0] = 0.0f;
+        v_if(v - s >= 0.0f) { sfpi::dst_reg[0] = 1.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
 
         sfpi::dst_reg++;
     }
@@ -137,11 +134,9 @@ inline void calculate_unary_le(std::uint32_t value) {
         // unvalidated user scalar from ttnn.le, so -0.0 and +/-inf are reachable.
         // Keeping the baseline compare and dropping only the v_else saves the same
         // SFPCOMPC and is exact by construction.
-        sfpi::vFloat r = 1.0f;
-        v_if(v > s) { r = 0.0f; }
+        sfpi::dst_reg[0] = 1.0f;
+        v_if(v > s) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-
-        sfpi::dst_reg[0] = r;
 
         sfpi::dst_reg++;
     }

@@ -32,6 +32,11 @@ inline void calculate_logical_not() {
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
+    // The default is stored first and the taken arm stored under the predicate: two
+    // SFPSTOREs instead of two SFPMOVs and a store. The integer 1 is loaded once here
+    // rather than once per row (the float 1.0 is a constant register either way).
+    const vType zero = 0;
+    const vType one = 1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vType v = sfpi::dst_reg[0].mode<layout>();
@@ -39,10 +44,9 @@ inline void calculate_logical_not() {
             // v == 0 tests all 32 bits, so -0.0 (0x80000000) needs its sign cleared to count as zero.
             v = sfpi::setsgn(v, 0 /* sgn */);
         }
-        vType r = 0;
-        v_if(v == 0) { r = 1; }
+        sfpi::dst_reg[0].mode<layout>() = zero;
+        v_if(v == 0) { sfpi::dst_reg[0].mode<layout>() = one; }
         v_endif;
-        sfpi::dst_reg[0].mode<layout>() = r;
         sfpi::dst_reg++;
     }
 }
