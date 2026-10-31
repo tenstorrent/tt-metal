@@ -13,6 +13,9 @@
 //                   a partial sum of squares), then pass B.
 //   finalize (in DEST, fp32 SFPU):  rs = rsqrt(s * (1 / stats_width) + eps)
 //   pass B:  y = (x * rs[col bcast], FPU) [* gamma[row bcast], SFPU in DEST]  -> the output CB (its dtype).
+//   HAS_TWIN (bfp8_twin, P.21): also y rounded to bf16 in DEST (ties away from zero, the packer's bf16 rounding,
+//            DS41-103) into the free DEST half, packed to the bfloat8_b twin CB (bfp8_pack_precise: one rounding of
+//            bf16-exact values = ttnn.typecast(bf16 output, bfloat8_b)).
 
 #include <cstdint>
 
@@ -26,6 +29,25 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
+
+#ifdef TRISC_MATH
+#include "sfpi.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+namespace rms_twin {
+// DEST tile t -> tile t + OFF: the fp32 value rounded to bf16, ties away from zero (sign-magnitude: adding half an
+// ulp of the kept 16 bits rounds the magnitude of either sign), as the packer rounds fp32 -> bf16.
+template <uint32_t OFF>
+inline void round_bf16_away() {
+    for (int d = 0; d < 8; ++d) {
+        sfpi::vUInt u = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::dst_reg[0]));
+        u = u + sfpi::vUInt(0x8000);
+        u = u & sfpi::vUInt(0xFFFF0000u);
+        sfpi::dst_reg[OFF * 32] = sfpi::as<sfpi::vFloat>(u);
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace rms_twin
+#endif
 
 constexpr uint32_t MODE_LOCAL = 0;
 constexpr uint32_t MODE_STATS_OUT = 1;
@@ -47,6 +69,8 @@ void kernel_main() {
     constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(12);
     constexpr uint32_t INV_W_BITS = get_compile_time_arg_val(13);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_twin = get_compile_time_arg_val(15);
+    constexpr uint32_t HAS_TWIN = get_compile_time_arg_val(16);
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
 
@@ -144,10 +168,24 @@ void kernel_main() {
                     mul_binary_tile(i, BLK + i, i);
                 }
             }
+            if constexpr (HAS_TWIN) {
+                // (the gamma tiles in BLK + i are spent: the rounded copy goes there)
+                MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
+                for (uint32_t i = 0; i < BLK; ++i) {
+                    MATH((_llk_math_eltwise_unary_sfpu_params_(rms_twin::round_bf16_away<BLK>, i, VectorMode::RC)));
+                }
+                cb_reserve_back(cb_twin, BLK);
+            }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < BLK; ++i) {
                 pack_tile(i, cb_out);
+            }
+            if constexpr (HAS_TWIN) {
+                pack_reconfig_data_format(cb_out, cb_twin);
+                for (uint32_t i = 0; i < BLK; ++i) {
+                    pack_tile(BLK + i, cb_twin);
+                }
             }
             tile_regs_release();
             cb_pop_front(cb_x, BLK);
@@ -155,6 +193,9 @@ void kernel_main() {
                 cb_pop_front(cb_gamma, BLK);
             }
             cb_push_back(cb_out, BLK);
+            if constexpr (HAS_TWIN) {
+                cb_push_back(cb_twin, BLK);
+            }
         }
         cb_pop_front(cb_rs, 1);
     }

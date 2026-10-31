@@ -671,10 +671,13 @@ class MoEBlock(LightweightModule):
                 self.tail.w = tw
         self.layer = layer
 
-    def forward(self, x: ttnn.Tensor, chunk: ChunkSpan | None = None, layer: MoELayer | None = None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, chunk: ChunkSpan | None = None, layer: MoELayer | None = None, xq_ready: bool = False
+    ) -> ttnn.Tensor:
         """x: [1, 1, S/SP, H/TP] TILE, the residual as attention leaves it (MoEOptions.residual "owners": [1, 1, S/N, H],
         the chip's own tokens). Returns the same layout. chunk: which rows are real; None = all of them. layer: this
-        call's weights (MoELayer; None: the last used)."""
+        call's weights (MoELayer; None: the last used). xq_ready: x is input_buffers()[0] and the caller already wrote
+        input_buffers()[1] (the fused head's low-bit x) from it: the head skips its typecast (DeepSeek-V4.1 P.21)."""
         g, H = self.geometry, self.model.emb_dim
         assert tuple(x.shape) == self._x_shape(), (
             f"x {tuple(x.shape)}, expected {self._x_shape()} on each chip "
@@ -695,7 +698,7 @@ class MoEBlock(LightweightModule):
                 se, out = self.fused(xs, arena)
                 ttnn.deallocate(xs)
             else:
-                se, out = self.fused(x, arena)
+                se, out = self.fused(x, arena, xq_ready=xq_ready)
             self._mark("head")
             if self.keep_taps == "device":
                 self._taps = dict(rows_dev=out.pop("rows"))
@@ -982,6 +985,15 @@ class MoEBlock(LightweightModule):
         if "rows_dev" in self._taps:
             return dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(self._taps["rows_dev"])])
         return self._taps
+
+    def input_buffers(self) -> tuple:
+        """(input_buffer(), the fused head's persistent low-bit x or None). A caller that writes both (x, and the low-bit
+        x = typecast(x) bit for bit) passes forward(x, xq_ready=True); the head then reads them as they are."""
+        x = self.input_buffer()
+        xq = None
+        if self.fused is not None and self.options.residual != "owners":
+            xq = self.fused.xq
+        return x, xq
 
     def input_buffer(self) -> ttnn.Tensor:
         """A persistent x [1, 1, S/SP, H/TP] TILE: forward(input_buffer()) reads it in place (the fused head's own x -
@@ -1344,18 +1356,19 @@ class FusedHead:
         self.head.routing.outs = {k: blk.planner.outs[k] for k in ("counts", "regions", "token_index", "table", "plan")}
         self.head.state["key"] = None  # (the programs take the new tensors)
 
-    def __call__(self, x, arena=None):
+    def __call__(self, x, arena=None, xq_ready: bool = False):
         """x [1, 1, S/SP, H/TP] -> (the shared expert's output: [S/N, H] the owners' rows, or (latent) [S/SP, H/TP];
         the outputs: rows, xbuf, route (and latent)). The arena's L1 given back after. arena: (an L1 tensor holding the
         head's arena range, its bytes a core) - the block's one arena a forward: run in it, the caller frees it."""
         if int(x.buffer_address()) != int(self.x.buffer_address()):  # (MoEBlock.input_buffer(): read in place)
+            assert not xq_ready, "xq_ready needs x = MoEBlock.input_buffers()[0] (xq was written from it)"
             if self.sub_cores is None:
                 ttnn.copy(x, self.x)
             else:  # (max_grid: ttnn.copy takes no core grid; a same-dtype typecast is the same bf16 copy on them)
                 ttnn.typecast(x, self.x.dtype, output_tensor=self.x, sub_core_grids=self.sub_cores)
         if arena is not None:
             self.head.use_arena(*arena)
-        if self.xq is not None:
+        if self.xq is not None and not xq_ready:  # (xq_ready: the caller wrote xq from x, MoEBlock.input_buffers)
             ttnn.typecast(self.x, self.xq.dtype, output_tensor=self.xq, sub_core_grids=self.sub_cores)
         se = self.head.run(self.x, self.w, xq=self.xq)
         out = dict(self.head.outputs)

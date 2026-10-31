@@ -248,12 +248,24 @@ class TtMoEBlockLayer:
             hit = _BLOCKS[key] = (self.mesh, blk)
         return hit[1]
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def input_buffers(self):
+        """NORM_INTO_MOE=on (P.21): (the block's own x [1, 1, S/SP, H/TP] bf16, the fused head's bfloat8_b x or None),
+        pinned (tt/ccl.dealloc leaves them alone): ffn_norm writes x there (and xq from it: rms_norm bfp8_twin), then
+        __call__(x, xq_ready=xq is not None) reads them in place. None when the block has no persistent input."""
+        blk = self.block()
+        x, xq = blk.input_buffers()
+        for t in (x, xq):
+            if t is not None and id(t) not in ccl._KEEP:
+                ccl.pin(self.mesh, t)
+        return x, xq
+
+    def __call__(self, x: ttnn.Tensor, xq_ready: bool = False) -> ttnn.Tensor:
         """x: ffn_norm [1, 1, S/SP, H] TILE (MOE_HEAD=fused: [1, 1, S/SP, H/TP]; bf16, or fp32: cast here) ->
-        [1, 1, S/SP, H/TP] bf16 (GLUE_FOLD=off: fp32, as moe_add's output)."""
+        [1, 1, S/SP, H/TP] bf16 (GLUE_FOLD=off: fp32, as moe_add's output). xq_ready (NORM_INTO_MOE=on): x is
+        input_buffers()[0] and the norm wrote input_buffers()[1] from it."""
         assert x.layout == ttnn.TILE_LAYOUT
         xb = cast(x, ttnn.bfloat16)
-        y = self.block()(xb, layer=self.weights)
+        y = self.block()(xb, layer=self.weights, xq_ready=xq_ready)
         if xb is not x:
             dealloc(xb)
         if not self.fold:

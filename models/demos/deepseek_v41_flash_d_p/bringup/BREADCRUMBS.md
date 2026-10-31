@@ -4811,3 +4811,65 @@ overseer (P.20 revert, then the card-0 reset). The P.20 section above is the rej
   `DS41_STEADY_STATE=off BRINGUP_RESULTS_DIR=/tmp/x BRINGUP_RECORD_TASK=off BRINGUP_WALL_CLEAN=1 DS41_ENGRAM_TABLE=resident
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py` (after the
   BRINGUP_PROFILE_WALL=1 run).
+
+## P.21 perf (galaxy 8x4, attempt 2): CHEAP_BUNDLE (#9 HOST_GLUE, #7 NORM_INTO_MOE, #8 NORM_GEMM_DTYPE; #10 deferred)
+Attempt 1 left no changes in the tree. Owner pick: opportunities #9, #7, #8, #10 (report /scratch/dnijemcevic/opportunities/report.md).
+Each item has its own setting (tt/settings.py, default on, off = the path before P.21).
+- **HOST_GLUE (#9)**: `core/model_settings.Settings` gained `snapshot()` / `thaw()` / `refresh()`; with no snapshot, get() reads
+  the environment as before, so every other model is unchanged. TtDS41Model.__init__ thaws, then snapshots when HOST_GLUE=on, so
+  settings.get serves the load-time values with no os.environ read (~1500 calls a chunk). tt/mm_configs.py `_site_config`
+  memoizes each call site's program config while the settings are frozen. The key is (id(w), id(ckc), dtypes, batched, rule),
+  checked against the identity of w and ckc and against x.shape (DS41-88: ids alone can be reused). It is cleared when the
+  snapshot changes. tt/perf_flat_program_key.py calls settings.refresh() after its monkeypatch.setenv (DS41-185). 0 ops removed.
+  Host estimate from the report: ~4.7 ms (get) + ~3.9 ms (program_config) cum.
+- **NORM_INTO_MOE (#7)**: ffn_norm (column split, bf16, the fork) writes `MoEBlock.input_buffers()`: the fused head's
+  persistent x, plus its bfloat8_b xq through the new rms_norm option `bfp8_twin`. The block reads them in place:
+  `forward(x, xq_ready=True)` skips the head's bf16->bf16 copy and its bfp8 typecast, and asserts that x is its own buffer
+  when xq_ready is set. Both buffers are pinned (ccl.pin), so the block's `_free` leaves them alone. The bytes are the same
+  (bfp8_twin = typecast(bf16 out, bfp8) bit for bit, DS41-184). 2 ops a layer, 80 a chunk; DS41-180 measured these two
+  capped ops at 1.21 ms of device a chunk. moe_block.py changes: `input_buffers()`, `forward(xq_ready=)`,
+  `FusedHead.__call__(xq_ready=)`; the defaults are the old behaviour.
+- **NORM_GEMM_DTYPE (#8)**, ATTN_SP32 path only. A step's device readers come from block_steps (kv reads q_a's projection).
+  - attn_norm: tried bfloat8_b where q_a alone reads it (32 layers), then dropped. With dtype=bfp8 the norm leaves the fork's
+    default program for the split program's LOCAL mode, one core a row tile (5 cores for 160 rows): device_ms_attn_norm
+    went 2.6-3.9 -> 5.58 ms a chunk (p51200), against ~0.45 ms for the q_a typecasts it removed (DS41-186). attn_norm stays
+    bf16 + typecast.
+  - q_norm, in those 32 layers: gamma x 512^-0.5 folded in fp32 at load, writes bfloat8_b. attention._q_stock takes it as
+    wq_b's input (`q_prescaled`), so the q scale multiply goes.
+  - q_norm, in the 8 indexer layers: writes bf16 (the attention scales it as before) plus a bfp8_twin into one pinned
+    buffer (q_a._twin_buffer). The indexer reads that as wq_b's input (`qr_twin`), so its typecast goes.
+  - Both bfp8 norm outputs use the new fork option `pack_precise`: one rounding fp32 -> bfp8 instead of fp32 -> bf16 -> bfp8
+    (DS41-137). The twin is bit-identical to the typecast it replaces. 40 ops a chunk (32 q multiplies + 8 indexer typecasts).
+- **rms_norm fork** (split program; CHANGELOG "pack_precise and bfp8_twin"):
+  - pack_precise sets the compute config's bfp8_pack_precise, plus the define RMS_SPLIT_PACK_PRECISE so the binary gets its
+    own cache key.
+  - bfp8_twin: in pass B, an SFPU rounds y to bf16 ties-away into the free DEST half (gamma's slots; DEST block halved
+    without gamma). It is packed to CB c_8 (bfp8) and written at the same pages.
+  - tests/unit/test_rms_norm_ttnn_twin.py: 7 passed on the 8x4 (FABRIC_2D, 11 x 10 grid), bit-exact against the typecasts,
+    with negative controls and refusals. No fork regression suites were run (OV-25). Cores: max_grid, 110.
+- **TINY_KERNELS (#10) not done**: the compressor _pool and the engram _gate_math each need a new Python-built op on the
+  prepared path (OV-23).
+  - _pool: a reader that re-lays row pairs (2r, 2r+1) of the TILE input into even / odd tiles (64-byte face-row segments
+    via L1), then the SFPU max / exp / div / mul chain.
+  - _gate_math: a reader that moves columns 4-7 / 8-11 of the [R, 32] partials to columns 0-3 (word copies in L1), then
+    rsqrt / sqrt / sigmoid on the SFPU.
+  - It is not a fit for mhc_pre_xing_pack's engram mode: the gates need the TP-summed partials.
+  - Deferred: a kernel hang on the Galaxy costs a whole-box reset, and it is the smallest item in the bundle (~0.4 ms
+    device / ~8.5 ms host, report). Its setting is not added (no no-op switch).
+- measure --task P.21 with attn_norm bfp8 still in (code c5e0d552): every part rc 0. quick: all limits pass, wall 258.7 ms.
+  p51200: wall 253.7 ms, device 194.48 ms, host cProfile 270.3 ms, 2010 launches; P.18 new was 2282, though the runs
+  between differ. p512000: wall 286.5 ms, device 231.71 ms. Then attn_norm went back to bf16 (above); the final measure
+  is the next bullet.
+- **Final measure** (`measure --task P.21`, change on, code 8ff681ee, attn_norm bf16): rc 0 on every part.
+  - quick: every err_* within its limit (worst err_state_topk_idx_L08 at 0.903), min layer PCC 0.725 (L39),
+    host_transfers_per_layer 0; wall 321.9 ms with spread 487 (one outlier, the quick run's own).
+  - p51200: wall 254.1 ms, device total 190.79 ms (attn_norm 3.20, q_a 3.44, ffn_norm 3.43, experts 93.3), host cProfile
+    269.8 ms, 2042 launches.
+  - p512000: wall 270.7 ms, device 231.35 ms.
+  - Gate limits: wall < 434, device <= 260. The off side (all three switches off) is the orchestrator's A/B.
+- Earlier accuracy run, quick (change on, measure --part quick, code d7193162, before the clang-format / TINY_KERNELS-removal edits):
+  rc 0, every err_* within its limit (worst err_state_topk_idx_L08 at 0.902 of its limit; P.20's was 0.901). min layer
+  PCC 0.599 (L39). chunk_wall_ms 259.5 (spread 22.1). host_transfers_per_layer 0. Not profiled (brief: the orchestrator
+  measures off vs on at 51200 / 512000).
+- Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.21` (quick);
+  `scripts/run_safe_pytest.sh --mesh --run-all ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_twin.py`.

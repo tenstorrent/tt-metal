@@ -742,6 +742,8 @@ class TtWindowAttention:
         self.hpg = self.heads // self.groups  # heads per wo_a group
         self.ckc = attn_compute_config(mesh)  # wq_b, sparse_sdpa, wo_a, wo_b: ATTN_FIDELITY (P.7)
         self.scale = self.d**-0.5
+        # NORM_GEMM_DTYPE=on (P.21, tt/model.py): q_resid arrives as wq_b's bfloat8_b input with the scale folded in
+        self.q_prescaled = False
         assert self.heads % 32 == 0, f"sparse_sdpa needs a multiple of 32 heads per chip ({self.heads} after reshard)"
         self.o_sum = settings.get("ATTN_O_SUM")
         self.fold = settings.get("GLUE_FOLD") == "on"  # P.19: window-path glue (_table)
@@ -1169,12 +1171,16 @@ class TtWindowAttention:
         tails with the nope prepended (tt/rope.rope_stock)."""
         # GEMM_INPUTS (FIX.7): the scale's multiply writes wq_b's input in bfloat8_b (the reference's fp8 act quant)
         # HOST_ALLOC=on (P.15): xq and qb written into load-time outputs (tt/host_alloc.py), when their spec has one
-        xo = host_alloc.out(self.mesh, "attn.xq", q_resid.shape, gemm_dtype())
+        if self.q_prescaled and q_resid.dtype == gemm_dtype():
+            # NORM_GEMM_DTYPE=on (P.21): q_norm wrote q_resid x 512^-0.5 as wq_b's bfloat8_b input (one rounding)
+            xo = xq = q_resid
+        else:
+            xo = host_alloc.out(self.mesh, "attn.xq", q_resid.shape, gemm_dtype())
         if xo is None:
             xq = ttnn.multiply(
                 q_resid, self.scale, dtype=gemm_dtype(), memory_config=DRAM, sub_core_grids=sub_cores(q_resid)
             )
-        else:  # (the object itself: the op hands back a new wrapper of its buffer, DS41-149)
+        elif xo is not q_resid:  # (the object itself: the op hands back a new wrapper of its buffer, DS41-149)
             ttnn.multiply(
                 q_resid,
                 self.scale,
@@ -1193,7 +1199,8 @@ class TtWindowAttention:
             memory_config=DRAM,
             out=host_alloc.mm_out(self.mesh, "attn.qb", xq, self.wq_b, ttnn.bfloat16),
         )
-        dealloc(xq)
+        if xq is not q_resid:  # (the step's input: the block frees it)
+            dealloc(xq)
         qn, qr = ttnn.bringup.nlp_create_q_heads_split(
             qb, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM, max_grid=max_grid()
         )

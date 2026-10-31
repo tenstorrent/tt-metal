@@ -105,6 +105,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> rms_norm_with_residual_sum(
 // output's dtype.  None of them set -> rms_norm_full's program, unchanged.
 // `output_tensor` (P.16, both entries; default none = the op allocates its output): the op writes this tensor, whose
 // spec must be exactly the output spec it would allocate (checked on every call), never the input.
+// `pack_precise` / `bfp8_twin` (P.21, opt-in, split program): a bfloat8_b output packed in one rounding; a second,
+// preallocated bfloat8_b output = typecast(the bf16 output, bfloat8_b) bit for bit.
 ttnn::Tensor rms_norm_split_full(
     const ttnn::Tensor& input_tensor,
     double epsilon,
@@ -117,7 +119,9 @@ ttnn::Tensor rms_norm_split_full(
     const std::optional<std::pair<int64_t, int64_t>>& input_window,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    bool pack_precise = false,
+    const std::optional<ttnn::Tensor>& bfp8_twin = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn
 

@@ -44,6 +44,11 @@ struct RmsNormSplitParams {
     // the op runs on the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default
     // (none) = the whole grid. Hashed.
     std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
+    // Fork option pack_precise (deepseek_v41_flash_d_p P.21, NORM_GEMM_DTYPE): a bfloat8_b output is packed from the
+    // fp32 DEST in ONE rounding (the compute config's bfp8_pack_precise, as ttnn.typecast packs); default off = the
+    // packer's default bfp8 pack (rounds twice, DS41-137). Hashed, and a kernel define (ComputeKernel's config hash
+    // leaves the flag out). Only changes a bfloat8_b output (or the twin's).
+    bool pack_precise = false;
 };
 
 struct RmsNormSplitInputs {
@@ -51,6 +56,11 @@ struct RmsNormSplitInputs {
     std::optional<Tensor> weight;
     std::optional<Tensor> partial_stats;
     std::optional<Tensor> output;  // `output_tensor` (P.16, default absent = the op allocates)
+    // `bfp8_twin` (deepseek_v41_flash_d_p P.21, NORM_INTO_MOE; default absent = no second output): a preallocated
+    // bfloat8_b TILE interleaved tensor of the output's shape the op also writes: y rounded to bf16 as the bf16 output
+    // is (ties away, the packer's rounding), then packed to bfloat8_b in one rounding = ttnn.typecast(output,
+    // bfloat8_b) bit for bit. Needs a bfloat16 output, not stats_out.
+    std::optional<Tensor> twin;
 };
 
 struct RmsNormSplitProgramFactory {
@@ -92,5 +102,6 @@ ttnn::Tensor rms_norm_split(
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& partial_stats,
     const ttnn::operations::bringup::rms_norm_ttnn::RmsNormSplitParams& attrs,
-    const std::optional<ttnn::Tensor>& output = std::nullopt);
+    const std::optional<ttnn::Tensor>& output = std::nullopt,
+    const std::optional<ttnn::Tensor>& twin = std::nullopt);
 }  // namespace ttnn::prim::bringup
