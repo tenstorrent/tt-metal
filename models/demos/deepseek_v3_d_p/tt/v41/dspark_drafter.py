@@ -302,6 +302,7 @@ class TtDSparkDrafter:
         self.blocks = 1  # the staged standalone call's block count
         self.out = None  # the last call's output tensor (``read_ranks``)
         self._eager_out = None
+        self._pending = None  # a replay issued by ``run_blocks(wait=False)`` and not yet waited for
         self.last: dict = {}
         # V41_DECODE_INPUT_TIMING=1 (as the decoders): ``last["items"]`` holds the standalone call's host time per
         # item (ms): the inputs (``in.*``), the staging (``stage.*``), the call (``run.*``) and the readback
@@ -789,11 +790,14 @@ class TtDSparkDrafter:
         any host loop)."""
         return self.run_blocks([token])[0]
 
-    def run_blocks(self, tokens: list[int], read: bool = True) -> list[list[int]]:
+    def run_blocks(self, tokens: list[int], read: bool = True, wait: bool = True) -> list[list[int]]:
         """One draft call on the staged buffers (``host_inputs_blocks``: ``blocks`` blocks a rank) -> rank 0's
         blocks' drafts, five each (``tokens``: the blocks' first tokens, for the host loop). The capture is per
-        block count. ``read=False``: no readback; ``out`` is the call's output tensor (``read_ranks``)."""
+        block count. ``read=False``: no readback; ``out`` is the call's output tensor (``read_ranks``).
+        ``wait=False`` (a replay): return once the replay is issued, with the device still running it; ``wait``
+        then waits for it (the caller does host work in between)."""
         assert len(tokens) == self.blocks, (len(tokens), self.blocks)
+        assert self._pending is None, "a draft call is still running: call wait() first"
         blocks = self.blocks
         if self._eager_out is not None:  # the previous eager call's output, read by now
             ttnn.deallocate(self._eager_out)
@@ -825,11 +829,34 @@ class TtDSparkDrafter:
             t0 = time.time()
             controller.replay(blocking=False)
             tick("issue")
+            if not wait:
+                self._pending = (mode, blocks, t0, out, tokens, read, tick)
+                return None
             ttnn.synchronize_device(self.mesh_device)
             tick("device")
             t1 = time.time()
             drafts = self._read(out, tokens) if read else None
             self.out = out
+        self.last = {
+            "mode": mode,
+            "blocks": blocks,
+            "device_s": round(t1 - t0, 4),
+            "read_s": round(time.time() - t1, 4),
+        }
+        if self.input_timing:
+            self.last["items"] = self.items
+        return drafts
+
+    def wait(self) -> list[list[int]]:
+        """The end of a ``run_blocks(wait=False)``: wait for the replay, read if asked, set ``last``."""
+        assert self._pending is not None, "no draft call is running"
+        mode, blocks, t0, out, tokens, read, tick = self._pending
+        self._pending = None
+        ttnn.synchronize_device(self.mesh_device)
+        tick("device")
+        t1 = time.time()
+        drafts = self._read(out, tokens) if read else None
+        self.out = out
         self.last = {
             "mode": mode,
             "blocks": blocks,

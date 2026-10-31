@@ -220,6 +220,9 @@ class DeepseekV41ForCausalLM:
         # whose state the drafter's rings hold, per slot the next round's drafts and the round's tokens not yet
         # handed to the plugin
         self.spec_k = int(os.environ.get(SPEC, "0"))
+        # V41_SPEC_PREPARE_NEXT=1 (default): the multi-slot round builds the next step's position-dependent host
+        # inputs while its draft replay runs
+        self.spec_prepare_next = os.environ.get("V41_SPEC_PREPARE_NEXT", "1") == "1"
         self.spec_greedy_all = os.environ.get(SPEC_GREEDY_ALL, "0") == "1"
         self.spec_sampled = os.environ.get(SPEC_SAMPLED, "1") == "1"
         self.spec_rings_per_slot = os.environ.get(SPEC_RINGS, "one") == "slot"
@@ -822,7 +825,14 @@ class DeepseekV41ForCausalLM:
                 entries[r].append({"user": u, "token": SPEC_PAD, "position": RING - 1, "taps": []})
         t1 = time.time()
         drafter.stage(drafter.host_inputs_blocks(entries), tap32=decoder.taps)
-        drafter.run_blocks([e["token"] for e in entries[0]], read=False)
+        if self.spec_prepare_next and drafter.trace and n in drafter.captures:
+            # the next step's position half built while the draft replay runs: the next
+            # uniform step's slots are this one's unless a request joins or leaves in between (then it is rebuilt)
+            drafter.run_blocks([e["token"] for e in entries[0]], read=False, wait=False)
+            decoder.prepare_next(self._uniform_blocks({})[0])
+            drafter.wait()
+        else:
+            drafter.run_blocks([e["token"] for e in entries[0]], read=False)
         by_rank = drafter.read_ranks(drafter.out)
         for slot, i in rows.items():
             r, b = where[slot]

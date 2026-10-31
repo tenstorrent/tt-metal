@@ -4,40 +4,64 @@
 
 """DeepSeek-V4.1 single-token decode on the prefill state (harness; eager, or traced per position parity).
 
-``TtV41Decoder`` appends one token to a ``V41PrefillState`` that ``TtV41Transformer.prefill`` filled and returns the
-next-token logits, following the reference's ``start_pos > 0`` path (``inference/model.py``): the window ring, the
-compressor pooling at ``(start_pos + 1) % ratio == 0`` from the carried fp32 projections, the compressed row and index
-key written at ``start_pos // ratio`` with the group-first RoPE, the indexer over the ``(start_pos + 1) // ratio``
+``TtV41Decoder`` appends one token to a ``V41PrefillState`` that ``TtV41Transformer.prefill`` filled and
+returns the
+next-token logits, following the reference's ``start_pos > 0`` path (``inference/model.py``): the window ring,
+the
+compressor pooling at ``(start_pos + 1) % ratio == 0`` from the carried fp32 projections, the compressed row
+and index
+key written at ``start_pos // ratio`` with the group-first RoPE, the indexer over the ``(start_pos + 1) //
+ratio``
 visible rows, one sparse attention over the window and the selected rows.
 
-Layout. The token is replicated on every row of one 32-row tile and on every chip (SP ranks run the same tile; TP
-splits hidden and heads as in prefill), so every fused V4.1 op runs in whole tiles unchanged and no query split or
-head->sequence all-to-all is needed: ``q`` is all-gathered over TP, every chip attends with all heads, the output is
-partitioned back by group. The caches are already replicated on every chip in natural order (``cache.py``), so one
-token reads the whole context without a collective. The MoE runs on a second ``TtV41Moe`` built for ``MOE_ROWS`` rows
-per chip, sharing the expert tensors of the prefill block: 64 rows (the tile repeated) with the prefill routing setup,
+Layout. The token is replicated on every row of one 32-row tile and on every chip (SP ranks run the same tile;
+TP
+splits hidden and heads as in prefill), so every fused V4.1 op runs in whole tiles unchanged and no query
+split or
+head->sequence all-to-all is needed: ``q`` is all-gathered over TP, every chip attends with all heads, the
+output is
+partitioned back by group. The caches are already replicated on every chip in natural order (``cache.py``), so
+one
+token reads the whole context without a collective. The MoE runs on a second ``TtV41Moe`` built for
+``MOE_ROWS`` rows
+per chip, sharing the expert tensors of the prefill block: 64 rows (the tile repeated) with the prefill
+routing setup,
 which counts tokens in multiples of 64, or the tile's 32 with the decode routing of ``tt/v41/routing.py``
-(``V41_DECODE_ROUTING=1``: the gate's selection one core per row, the routing setup from one all-gathered index tile)
-and the decode MoE tail of ``tt/v41/moe_tail.py`` (``V41_DECODE_TAIL=1``: the combine's weighted sum on 80 cores).
+(``V41_DECODE_ROUTING=1``: the gate's selection one core per row, the routing setup from one all-gathered
+index tile)
+and the decode MoE tail of ``tt/v41/moe_tail.py`` (``V41_DECODE_TAIL=1``: the combine's weighted sum on 80
+cores).
 
-Fixed shapes. Every step runs the same device graph for its position parity, so it can be traced: the indexer scores
-the whole index-K cache (``-inf`` added to the columns not yet written, a mask row the host uploads per step) and
-selects ``INDEX_TOPK`` rows (sentinels where fewer are visible, after the window rows: the kernel wants the valid
-rows as one prefix), the window rows are a constant once the window is full, and the step's compressed row and index key go to the cache's last row (never reached by a decodable position;
-visible through the mask) and are copied to row ``start_pos // ratio`` by two small ops after the step. The per-step
+Fixed shapes. Every step runs the same device graph for its position parity, so it can be traced: the indexer
+scores
+the whole index-K cache (``-inf`` added to the columns not yet written, a mask row the host uploads per step)
+and
+selects ``INDEX_TOPK`` rows (sentinels where fewer are visible, after the window rows: the kernel wants the
+valid
+rows as one prefix), the window rows are a constant once the window is full, and the step's compressed row and
+index key go to the cache's last row (never reached by a decodable position;
+visible through the mask) and are copied to row ``start_pos // ratio`` by two small ops after the step. The
+per-step
 host inputs (token, RoPE rows, mask rows, Engram lookups) are copied into fixed device buffers.
 
-Tracing (``trace=True``). Steps run eagerly until ``warmup`` of them compiled the kernels and settled the persistent
-resources, then the next even position captures the even graph (ratio-2 compressors keep the token's projections as
-the carry) and the following odd position the odd graph (they pool and write the group's row); the captured step is
-replayed at once for its result and every later step replays its parity's capture with the host inputs refreshed. The
+Tracing (``trace=True``). Steps run eagerly until ``warmup`` of them compiled the kernels and settled the
+persistent
+resources, then the next even position captures the even graph (ratio-2 compressors keep the token's
+projections as
+the carry) and the following odd position the odd graph (they pool and write the group's row); the captured
+step is
+replayed at once for its result and every later step replays its parity's capture with the host inputs
+refreshed. The
 MoE's sub-device switches split each capture (``SubDeviceTraceController``), as in ``V41PrefillTrace``.
 
-State reuse: the window region of each KV tensor takes the layer's carry at rows [0, 128) and the token's row at 128,
+State reuse: the window region of each KV tensor takes the layer's carry at rows [0, 128) and the token's row
+at 128,
 so ``update_window_carry(layer, 1)`` is the ring shift; ``compressor_carry`` is consumed.
 
-Limits (asserted): text only; positions from ``SLIDING_WINDOW - 1`` to below ``max_seq_len - 32``; compressed rows up
-to the candidate source's block budget (``CANDIDATE_TOPK_BLOCKS * CANDIDATE_BLOCK_SIZE`` rows: shorter contexts
+Limits (asserted): text only; positions from ``SLIDING_WINDOW - 1`` to below ``max_seq_len - 32``; compressed
+rows up
+to the candidate source's block budget (``CANDIDATE_TOPK_BLOCKS * CANDIDATE_BLOCK_SIZE`` rows: shorter
+contexts
 select over the full row, as the reference).
 """
 
@@ -68,15 +92,18 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 ROWS = 32  # the decode tile: the token on every row (every fused V4.1 op works in whole tiles)
-# the decode routing (tt/v41/routing.py) runs the MoE on the tile itself; the prefill routing setup (masked_bincount)
+# the decode routing (tt/v41/routing.py) runs the MoE on the tile itself; the prefill routing setup
+# (masked_bincount)
 # wants a multiple of 64 tokens per chip, so the tile is repeated for it
 DECODE_ROUTING = os.environ.get("V41_DECODE_ROUTING", "0") == "1"
 # V41_DECODE_ROUTING_ROWS=64 keeps the repeated 64-row tile with the decode routing (a bisection knob)
 MOE_ROWS = int(os.environ.get("V41_DECODE_ROUTING_ROWS", ROWS)) if DECODE_ROUTING else 64
-# the decode MoE tail (tt/v41/moe_tail.py) sums the combine buffer's slots on 80 cores; it takes the 32-row tile
+# the decode MoE tail (tt/v41/moe_tail.py) sums the combine buffer's slots on 80 cores; it takes the 32-row
+# tile
 DECODE_TAIL = os.environ.get("V41_DECODE_TAIL", "0") == "1"
 assert not DECODE_TAIL or DECODE_ROUTING, "V41_DECODE_TAIL=1 needs V41_DECODE_ROUTING=1 (the 32-row MoE tile)"
-# the decode shared expert's partial summed before the tail's reduce-scatter instead of reduce-scattered itself
+# the decode shared expert's partial summed before the tail's reduce-scatter instead of reduce-scattered
+# itself
 # (tt/v41/moe_shared.py): ``rs`` with today's matmuls, ``ffn`` as one routed-expert FFN program, whose weights
 # V41_SHARED_IN_FFN_DTYPE=bfp4 copies to bfp4 (bfp8: the tensors as they are)
 assert SHARED_IN_FFN == "0" or DECODE_TAIL, "V41_SHARED_IN_FFN needs V41_DECODE_TAIL=1 (the decode tail's sum)"
@@ -115,15 +142,18 @@ class TtV41Decoder:
         warmup: int = 4,
     ):
         """``model``: the built prefill transformer whose blocks, head, Engram modules and states are reused.
-        ``weight_cache_path``: the device MoE cache the model was built from (the decode MoEs load their gate and
-        shared expert from it; the routed experts are the prefill blocks' tensors). ``trace``: capture the step per
+        ``weight_cache_path``: the device MoE cache the model was built from (the decode MoEs load their gate
+        and
+        shared expert from it; the routed experts are the prefill blocks' tensors). ``trace``: capture the
+        step per
         position parity after ``warmup`` eager steps and replay it (the device needs a trace region)."""
         assert weight_cache_path is not None, "the decode MoE is built from the device weight cache"
         self.model, self.mesh_device, self.config = model, model.mesh_device, model.config
         if routed_expert_weights_dtype is None:
             routed_expert_weights_dtype = model.routed_expert_weights_dtype  # the decode MoEs share its experts
         self.sp, self.tp = tuple(self.mesh_device.shape)
-        # a model with DSpark seeding decodes as any other: the drafter (tt/v41/dspark_drafter.py) is a separate
+        # a model with DSpark seeding decodes as any other: the drafter (tt/v41/dspark_drafter.py) is a
+        # separate
         # module with its own ring writes; the step itself reads nothing of it
         pre = torch.zeros(1, 1, ROWS, self.config.HC_MULT)
         pre[..., 0] = 1.0
@@ -136,22 +166,27 @@ class TtV41Decoder:
         self.trace, self.warmup = trace, warmup
         self.buffers = {}  # the fixed device input buffers, allocated by the first step
         self.window_rows = None  # sparse_sdpa index rows of the (full) window, a constant
-        # per state (keyed by id; a capture reads and writes that state's cache tensors): its captures by parity,
-        # how many eager steps it has run, and its compressor carry buffers (``prepare``); the Engram hash history
+        # per state (keyed by id; a capture reads and writes that state's cache tensors): its captures by
+        # parity,
+        # how many eager steps it has run, and its compressor carry buffers (``prepare``); the Engram hash
+        # history
         # is the state's ``engram_history``
         self.traces: dict[tuple[int, int], _Trace] = {}
         self.eager_steps: dict[int, int] = {}
         self.carries: dict[int, dict] = {}
         self.last = {}  # how the last step ran: mode (eager / capture / replay), device_s for replays
-        # V41_DECODE_INPUT_TIMING=1: ``last["items"]`` holds the host inputs' and the staging's time per item (ms)
+        # V41_DECODE_INPUT_TIMING=1: ``last["items"]`` holds the host inputs' and the staging's time per item
+        # (ms)
         self.input_timing = os.environ.get("V41_DECODE_INPUT_TIMING", "0") == "1"
         self.items: dict[str, float] = {}
         # V41_DECODE_STAGE_PROBE=1: a 128-byte copy before the step's staging, timed as
-        # ``stage.probe``: the served step's first host-to-device copy after the replay costs 1.7 to 2.0 ms against
+        # ``stage.probe``: the served step's first host-to-device copy after the replay costs 1.7 to 2.0 ms
+        # against
         # 0.1 in isolation; the probe says whether the cost is the first copy's whatever its size
         self.stage_probe = os.environ.get("V41_DECODE_STAGE_PROBE", "0")  # "1": before the staging; "pre": after
         # V41_DECODE_STAGE_BATCH=1: the step's host-to-device copies (the packed inputs, the
-        # Engram rows) issued as one ``ttnn.copy_host_to_device_tensors`` (one dispatch round: one wake-up of the
+        # Engram rows) issued as one ``ttnn.copy_host_to_device_tensors`` (one dispatch round: one wake-up of
+        # the
         # 32 per-device workers instead of one a copy)
         self.stage_batch = os.environ.get("V41_DECODE_STAGE_BATCH", "0") == "1"
         self.probe: tuple | None = None  # the replay's issue, before its sync (``issue_s`` then carries it)
@@ -167,11 +202,16 @@ class TtV41Decoder:
         )
 
     def _decode_moe(self, block, layer: int, root, dtype) -> TtV41Moe:
-        """A ``TtV41Moe`` for one 32-row tile per chip (``seq_len = ROWS * sp``), its routed experts the prefill
-        block's device tensors (``TtRoutedExpert`` loads them from the cache otherwise: a second copy per layer),
-        shared expert and dispatch in sequence (the overlap's sub-device switches would split the step's trace into
-        81 segments). Both are injected under ``mock.patch``: ``TtV41Moe.__init__``'s source is part of the weight
-        cache's key (``tests/v41/weight_cache.py``), so it cannot grow a parameter without invalidating the cache."""
+        """A ``TtV41Moe`` for one 32-row tile per chip (``seq_len = ROWS * sp``), its routed experts the
+        prefill
+        block's device tensors (``TtRoutedExpert`` loads them from the cache otherwise: a second copy per
+        layer),
+        shared expert and dispatch in sequence (the overlap's sub-device switches would split the step's trace
+        into
+        81 segments). Both are injected under ``mock.patch``: ``TtV41Moe.__init__``'s source is part of the
+        weight
+        cache's key (``tests/v41/weight_cache.py``), so it cannot grow a parameter without invalidating the
+        cache."""
         source = block.ffn.moe.routed_expert
         shared = (source.gate_projs, source.up_projs, source.down_projs)
         build_moe = TtPrefillBlock._build_moe
@@ -194,8 +234,10 @@ class TtV41Decoder:
                 routed_expert_weights_dtype=dtype,
                 weight_cache_path=root,
             )
-        # the shared expert's reduce-scatter intermediate is one buffer per mesh (TtCCL.get_shared_rs_intermediate),
-        # allocated by the prefill MoE for its Linear topology (forced under the overlap); the Ring path would want
+        # the shared expert's reduce-scatter intermediate is one buffer per mesh
+        # (TtCCL.get_shared_rs_intermediate),
+        # allocated by the prefill MoE for its Linear topology (forced under the overlap); the Ring path would
+        # want
         # one of the decode input's shape, so the decode shared expert keeps Linear
         moe.moe.shared_expert.topology = ttnn.Topology.Linear
         if DECODE_ROUTING:
@@ -210,7 +252,8 @@ class TtV41Decoder:
         """The real rows of the MoE tile under a padding config: every row here (the token is on every row)."""
         return None
 
-    # --- host inputs -> fixed device buffers -----------------------------------------------------------------
+    # --- host inputs -> fixed device buffers
+    # -----------------------------------------------------------------
     def _host_inputs(self, token: int, state: V41PrefillState, step: _Step) -> dict:
         """The step's host tensors (replicated, device layouts), keyed as the device buffers."""
         p, cfg, g = step.p, self.config, state.geometry
@@ -295,16 +338,17 @@ class TtV41Decoder:
             self.probe = (host, ttnn.to_device(host, self.mesh_device))
         ttnn.copy_host_to_device_tensor(*self.probe)
 
-    def _tick(self, prefix: str):
-        """A timer: ``tick(name)`` adds the time since the last tick to ``items[prefix.name]`` (ms) when
-        ``V41_DECODE_INPUT_TIMING`` is set; a no-op otherwise."""
+    def _tick(self, prefix: str, items: dict | None = None):
+        """A timer: ``tick(name)`` adds the time since the last tick to ``items[prefix.name]`` (ms; ``items``
+        default ``self.items``) when ``V41_DECODE_INPUT_TIMING`` is set; a no-op otherwise."""
         if not self.input_timing:
             return lambda name: None
         last = [time.perf_counter()]
 
         def tick(name):
             now = time.perf_counter()
-            self.items[f"{prefix}.{name}"] = round(self.items.get(f"{prefix}.{name}", 0.0) + 1e3 * (now - last[0]), 3)
+            d = self.items if items is None else items
+            d[f"{prefix}.{name}"] = round(d.get(f"{prefix}.{name}", 0.0) + 1e3 * (now - last[0]), 3)
             last[0] = now
 
         return tick
@@ -320,9 +364,12 @@ class TtV41Decoder:
 
     # --- one step ----------------------------------------------------------------------------------------
     def prepare(self, state: V41PrefillState) -> None:
-        """Allocate ``state``'s decode buffers: the compressor carry of every ratio-2 source as a fixed tensor the
-        even step writes (in the graph, ``ttnn.copy``) and the odd step reads. Every state a decoder will serve must
-        be prepared before its first capture: a tensor allocated after a capture may lie on that capture's freed
+        """Allocate ``state``'s decode buffers: the compressor carry of every ratio-2 source as a fixed tensor
+        the
+        even step writes (in the graph, ``ttnn.copy``) and the odd step reads. Every state a decoder will
+        serve must
+        be prepared before its first capture: a tensor allocated after a capture may lie on that capture's
+        freed
         intermediates, and a replay then overwrites it (a second slot's carry under the first slot's
         replays). ``decode`` prepares a state on its first step when nothing is captured yet."""
         key = id(state)
@@ -336,8 +383,10 @@ class TtV41Decoder:
         }
 
     def begin(self, tokens: torch.Tensor, state: V41PrefillState) -> None:
-        """Start decoding ``state`` after ``prefill(tokens)`` filled it: seeds its Engram hash history (the last
-        compressed ids) and moves the prefill's compressor carry (an odd prompt) into the state's carry buffers."""
+        """Start decoding ``state`` after ``prefill(tokens)`` filled it: seeds its Engram hash history (the
+        last
+        compressed ids) and moves the prefill's compressor carry (an odd prompt) into the state's carry
+        buffers."""
         if self.model.engram:
             hash_ = self.model.engram_hash
             n = hash_.layout.max_ngram_size - 1
@@ -351,7 +400,8 @@ class TtV41Decoder:
             state.compressor_carry[layer] = self.carries[id(state)][layer]
 
     def decode(self, token: int, state: V41PrefillState) -> torch.Tensor:
-        """Append ``token`` at position ``state.start`` -> fp32 logits ``[vocab]`` of the next position; the state
+        """Append ``token`` at position ``state.start`` -> fp32 logits ``[vocab]`` of the next position; the
+        state
         advances by one."""
         p = state.start
         g = state.geometry
@@ -396,8 +446,10 @@ class TtV41Decoder:
             ttnn.synchronize_device(self.mesh_device)
             t5 = time.time()
             out = self.model.head._tile_to_host(trace.logits, trace.sp_row)[0]
-            # device_s: replay issue to completion (the device's time per token plus the row copies); issue_s: the
-            # host's share of it (enqueuing the replay and the eager row copies); sync_s: waiting for the staging
+            # device_s: replay issue to completion (the device's time per token plus the row copies); issue_s:
+            # the
+            # host's share of it (enqueuing the replay and the eager row copies); sync_s: waiting for the
+            # staging
             self.last.update(
                 sync_s=round(t3 - t2, 4),
                 device_s=round(t5 - t3, 4),
@@ -467,10 +519,12 @@ class TtV41Decoder:
         return sum(t.controller.num_segments for t in self.traces.values())
 
     def _forward(self, state: V41PrefillState, step: _Step, on_block):
-        """The step's device graph on the staged buffers -> (the next position's logits row on device, (sp_row,
+        """The step's device graph on the staged buffers -> (the next position's logits row on device,
+        (sp_row,
         offset)); the state's caches and carries are updated in place."""
         model = self.model
-        # the mask rows on every row of the tile (an H-broadcast add masked only row 0; the query is the last row)
+        # the mask rows on every row of the tile (an H-broadcast add masked only row 0; the query is the last
+        # row)
         masks = {
             ratio: ttnn.to_layout(ttnn.concat([self.buffers[f"mask{ratio}"]] * ROWS, dim=2), ttnn.TILE_LAYOUT)
             for ratio in (1, 2)
@@ -494,7 +548,8 @@ class TtV41Decoder:
         return model.head.scored_rows(logits, offset, 1), (sp_row, 0)
 
     def _ffn(self, moe: TtV41Moe, h):
-        """The decode MoE on the tile repeated to MOE_ROWS rows (identical rows route identically) -> ROWS rows."""
+        """The decode MoE on the tile repeated to MOE_ROWS rows (identical rows route identically) -> ROWS
+        rows."""
         if MOE_ROWS == ROWS:
             return moe(h)
         out = moe(ttnn.concat([h] * (MOE_ROWS // ROWS), dim=2))
@@ -507,7 +562,8 @@ class TtV41Decoder:
 
     # --- attention ----------------------------------------------------------------------------------------
     def _attention(self, attn: TtV41Attention, x, state: V41PrefillState, step: _Step, masks: dict):
-        """``TtV41Attention.forward`` for one token (``x`` [1, 1, ROWS, hidden/tp] bf16, the token on every row);
+        """``TtV41Attention.forward`` for one token (``x`` [1, 1, ROWS, hidden/tp] bf16, the token on every
+        row);
         ``masks``: per ratio the additive index mask ``[1, 1, ROWS, W]`` of the step."""
         p, layer = step.p, attn.layer
         cos, sin = self.buffers["ropec" if attn.ratio else "rope0"]
@@ -569,7 +625,8 @@ class TtV41Decoder:
         return attn._o_proj(out)
 
     def _compress(self, compressor, x, state: V41PrefillState, layer: int, p: int):
-        """The reference ``Compressor`` at ``start_pos = p``: the latent of the group ``p`` completes, else None
+        """The reference ``Compressor`` at ``start_pos = p``: the latent of the group ``p`` completes, else
+        None
         (the token's fp32 projections kept as the carry)."""
         if compressor.ratio == 1:
             kv = compressor._project(x, compressor.wkv, ttnn.bfloat16)
@@ -593,7 +650,8 @@ class TtV41Decoder:
         return ttnn.rms_norm(ttnn.typecast(pooled, ttnn.bfloat16), weight=compressor.norm, epsilon=compressor.eps)
 
     def _rows(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        """A prefill carry row ``[1, 1, 1, d]`` -> ``[1, 1, ROWS, d]`` (the row on every row); decode carries pass."""
+        """A prefill carry row ``[1, 1, 1, d]`` -> ``[1, 1, ROWS, d]`` (the row on every row); decode carries
+        pass."""
         if t.shape[2] == ROWS:
             return t
         assert t.shape[2] == 1, tuple(t.shape)
@@ -601,8 +659,10 @@ class TtV41Decoder:
         return ttnn.to_layout(ttnn.concat([row] * ROWS, dim=2), ttnn.TILE_LAYOUT)
 
     def _index(self, indexer: TtV41Indexer, x, qr, index_k, mask, candidates):
-        """The indexer for one query over the whole index-K cache, ``mask`` ``[1, 1, ROWS, W]`` (-inf at the rows not
-        yet written) -> (top-k rows ``[1, 1, ROWS, INDEX_TOPK]`` uint32 row-major, the same selection on every row,
+        """The indexer for one query over the whole index-K cache, ``mask`` ``[1, 1, ROWS, W]`` (-inf at the
+        rows not
+        yet written) -> (top-k rows ``[1, 1, ROWS, INDEX_TOPK]`` uint32 row-major, the same selection on every
+        row,
         sentinels past the visible rows; published candidates or None)."""
         cfg = self.config
         width = index_k.shape[2]
@@ -617,7 +677,8 @@ class TtV41Decoder:
         q = indexer.qdq(indexer.rope(q, cos, sin))
         w = indexer.ccl.tp_all_reduce(ttnn.linear(x, indexer.weights_proj))
         k = ttnn.to_layout(index_k, ttnn.TILE_LAYOUT)
-        # the kernel's causal mask is t <= chunk_start + s (+ a per-chip offset): with chunk_start = width - 32 the
+        # the kernel's causal mask is t <= chunk_start + s (+ a per-chip offset): with chunk_start = width -
+        # 32 the
         # last row sees every column on every chip; the unwritten columns are masked here (zero keys score 0)
         score = indexer._score(q, k, w, chunk_start_idx=width - 32)  # [1, 1, ROWS, width] bf16 row-major
         score = ttnn.to_layout(ttnn.add(ttnn.to_layout(score, ttnn.TILE_LAYOUT), mask), ttnn.ROW_MAJOR_LAYOUT)
@@ -627,7 +688,8 @@ class TtV41Decoder:
 
     def _index_rows(self, compressed, window_base: int) -> ttnn.Tensor:
         """``sparse_sdpa`` index rows ``[1, 1, ROWS, K]`` uint32 row-major: the window rows, then the selected
-        compressed rows with their sentinel tail (none for a ratio-0 layer): the kernel wants the valid rows as one
+        compressed rows with their sentinel tail (none for a ratio-0 layer): the kernel wants the valid rows
+        as one
         prefix, and the window is full."""
         window = self._window_rows()
         if compressed is None:

@@ -3,41 +3,54 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The speculative round on the whole model at the production pool (speculative decode, device gate and the
-first measured round): one user from a real prompt, the DSpark drafter (``tt/v41/dspark_drafter.py``) proposing
+first measured round): one user from a real prompt, the DSpark drafter (``tt/v41/dspark_drafter.py``)
+proposing
 ``K`` tokens a round and the verify decoder (``tt/v41/spec_verify.py``) checking them as ``1 + K`` rows of one
 step, greedy.
 
-Phases, all on one model and one prefill of ``V41_VR_PROMPT`` tokens of real text (the rings seeded by the prefill):
+Phases, all on one model and one prefill of ``V41_VR_PROMPT`` tokens of real text (the rings seeded by the
+prefill):
 
 1. ``plain``: the slot joined, ``V41_VR_TOKENS`` greedy tokens one row a step (``K = 0``: the same graph), the
    text and the replayed step's wall and device time;
-2. for each ``K`` in ``V41_VR_KS``: the slot re-joined from the prefill state, rounds of draft + verify + accept +
+2. for each ``K`` in ``V41_VR_KS``: the slot re-joined from the prefill state, rounds of draft + verify +
+accept +
    commit until ``V41_VR_TOKENS`` tokens are committed; the committed text must equal the plain text token for
-   token (the serial-replay gate of ``spec_state``: a rejected row's writes must not reach a committed position),
-   the accepted drafts per round, the round's wall split (draft, verify, host) and the time per committed token.
+   token (the serial-replay gate of ``spec_state``: a rejected row's writes must not reach a committed
+   position),
+   the accepted drafts per round, the round's wall split (draft, verify, host) and the time per committed
+   token.
 
-``V41_VR_SEQ`` is the pool's capacity (the served 1,054,720 by default), ``V41_VR_OUT`` takes the JSON record, which
+``V41_VR_SEQ`` is the pool's capacity (the served 1,054,720 by default), ``V41_VR_OUT`` takes the JSON record,
+which
 also carries the DRAM a chip (allocated and free) after the model, the decoder and the drafter.
 
 ``V41_VR_FUSED=1`` (default): the drafter runs inside the verify step's capture on every accept outcome (one
 replay and one readback a round; the first round's drafts come from one standalone draft call after the join);
 ``0``: a standalone (traced) draft call before every verify step, the taps selected from the step's tile.
-``V41_VR_TEMP=T`` (default 0: greedy), ``V41_VR_TOPP`` (default 1.0) and ``V41_VR_TOPK`` (default 0: the device's
+``V41_VR_TEMP=T`` (default 0: greedy), ``V41_VR_TOPP`` (default 1.0) and ``V41_VR_TOPK`` (default 0: the
+device's
 32) sample the plain steps and the rounds with that triple on every live row (the match rule
 exact against sequential served sampling); the committed text then differs from the plain text by
-construction (``matches_plain`` is recorded, not asserted) and the record carries the acceptance under sampling.
+construction (``matches_plain`` is recorded, not asserted) and the record carries the acceptance under
+sampling.
 ``V41_VR_LIVE=n`` (default 1; first c32 measurement): ``n`` live slots in lockstep, all
 joined from the one prefill (the same prompt, so every slot drafts and accepts the same tokens), ``n / sp`` a
 mesh row at user indices ``0 .. n / sp - 1`` of the rank's ``V41_VR_USERS`` slots (``n < sp``: ``n`` slots of
 rank 0 alone, the c2 .. c4 regime); the MoE tile's real rows are
 ``V41_VR_USERS x (1 + Kmax)`` a rank (``TtV41VerifyDecoder(real_rows=)``: decoupled from
-the pool's slots, so the production 32-slot pool at ``V41_VR_SEQ`` serves 32 live slots; the earlier geometry realised the
+the pool's slots, so the production 32-slot pool at ``V41_VR_SEQ`` serves 32 live slots; the earlier geometry
+realised the
 rows through ``V41_VR_USERS=12 V41_VR_SEQ=348160``, a 96-slot pool at a third of the capacity, with the live
-slots at user indices ``0, 1 + Kmax, ..``) and a slot's ``1 + K`` rows are ``u (1 + Kmax) .. u (1 + Kmax) + K``;
-the drafter is not in the step's graph (``V41_VR_FUSED=0`` is forced: the fused call takes one live slot a rank)
+slots at user indices ``0, 1 + Kmax, ..``) and a slot's ``1 + K`` rows are ``u (1 + Kmax) .. u (1 + Kmax) +
+K``;
+the drafter is not in the step's graph (``V41_VR_FUSED=0`` is forced: the fused call takes one live slot a
+rank)
 but has a ring per slot (``TtDSparkDrafter(users=)``) and one standalone call after the
-step proposes for every live slot of a rank at once from its own ring (``run_blocks``; the taps of the accepted
-rows written first). The round's wall and device time are the step's over all the slots; the tokens a round are
+step proposes for every live slot of a rank at once from its own ring (``run_blocks``; the taps of the
+accepted
+rows written first). The round's wall and device time are the step's over all the slots; the tokens a round
+are
 one slot's. ``V41_VR_REAL_ROWS`` overrides the real rows (0: the slots are the real rows).
 """
 
@@ -93,9 +106,14 @@ def test_v41_verify_rows(mesh_device, device_params):
     live = int(os.environ.get("V41_VR_LIVE", 1))
     if live > 1:
         fused = False
-    # V41_VR_READ_RANKS=1: the standalone call read as the served round reads it (``run_blocks(read=False)`` then
+    # V41_VR_READ_RANKS=1: the standalone call read as the served round reads it (``run_blocks(read=False)``
+    # then
     # ``read_ranks``: every rank's blocks)
     read_ranks = os.environ.get("V41_VR_READ_RANKS", "0") == "1" and not fused
+    # V41_VR_PREPARE_NEXT=1 (with V41_VR_READ_RANKS=1): the next step's position-dependent inputs built while
+    # the
+    # draft replay runs, as the served round does
+    prepare_next = read_ranks and os.environ.get("V41_VR_PREPARE_NEXT", "1") == "1"
     temperature = float(os.environ.get("V41_VR_TEMP", 0))
     sampling = (
         {"k": int(os.environ.get("V41_VR_TOPK", 0)), "p": float(os.environ.get("V41_VR_TOPP", 1.0)), "t": temperature}
@@ -112,7 +130,7 @@ def test_v41_verify_rows(mesh_device, device_params):
     if live > 1 and real_rows is None:  # geometry: the slots are the real rows
         assert live % sp == 0 and (live // sp) * (1 + max(ks)) <= users, (live, sp, ks, users)
         slots = [r * users + u * (1 + max(ks)) for r in range(sp) for u in range(live // sp)]
-    elif live > 1 and live < sp:  # the c2 .. c4 regime: the live slots on rank 0 
+    elif live > 1 and live < sp:  # the c2 .. c4 regime: the live slots on rank 0
         assert live <= users and real_rows <= 32, (live, users, real_rows)
         slots = list(range(live))
     elif live > 1:
@@ -209,7 +227,8 @@ def test_v41_verify_rows(mesh_device, device_params):
         decoder.attach_drafter(drafter)
     elif live > 1:
         drafter.gather_sp = decoder.pool.gather_sp  # the served round's one readback (attach_drafter sets it there)
-        # the merged index selection's index pages for the live rows' layouts (attach_drafter builds the one-slot ones)
+        # the merged index selection's index pages for the live rows' layouts (attach_drafter builds the
+        # one-slot ones)
         decoder.prepare_merge(
             [
                 tuple(row for slot in rank0 for row in decoder.block_rows(slot % users, k, one_slot=False))
@@ -234,7 +253,8 @@ def test_v41_verify_rows(mesh_device, device_params):
     record["first_token"] = first
     assert state.dspark_rings is not None, "the prefill did not seed the drafter's rings"
     # V41_VR_TAPS=streams: the drafter's tap from the step's block outputs (eight eager ops a round); step
-    # (default): the step computes every row's tap in its graph and the drafter selects the accepted row's in its own
+    # (default): the step computes every row's tap in its graph and the drafter selects the accepted row's in
+    # its own
     taps_mode = os.environ.get("V41_VR_TAPS", "step")
     tap_layers = list(C.DSPARK_TARGET_LAYER_IDS)
     stream_layers = [l - 1 for l in tap_layers]  # a tap is the block input of its layer: the previous block's output
@@ -255,8 +275,10 @@ def test_v41_verify_rows(mesh_device, device_params):
         return [[{"user": u, "token": tok, "position": frontier - 1, "taps": taps} for u in draft_users]] * sp
 
     def step(block):
-        """The step over every live slot with the same block -> slot 0's argmaxes (every slot's must be the same:
-        the slots are in lockstep on one prompt; under sampling every slot draws its own and slot 0's are taken,
+        """The step over every live slot with the same block -> slot 0's argmaxes (every slot's must be the
+        same:
+        the slots are in lockstep on one prompt; under sampling every slot draws its own and slot 0's are
+        taken,
         the slots stay in lockstep because the block and the committed count are slot 0's for every slot)."""
         out = decoder.decode(
             {slot: list(block) for slot in slots},
@@ -330,7 +352,14 @@ def test_v41_verify_rows(mesh_device, device_params):
                     drafter.stage(inputs, tap32=decoder.taps if tap is not None else None)
                 t1 = time.time()
                 if read_ranks:  # the served round's readback: no read in the call, every rank read after it
-                    drafter.run_blocks([tok] * len(draft_users), read=False)
+                    if prepare_next and len(draft_users) in drafter.captures:
+                        # the served round's overlap: the next step's position half while
+                        # the draft replay runs
+                        drafter.run_blocks([tok] * len(draft_users), read=False, wait=False)
+                        decoder.prepare_next({slot: [0] * (1 + k) for slot in slots})
+                        drafter.wait()
+                    else:
+                        drafter.run_blocks([tok] * len(draft_users), read=False)
                     by_block = drafter.read_ranks(drafter.out)[0]
                 else:
                     by_block = drafter.run_blocks([tok] * len(draft_users))
