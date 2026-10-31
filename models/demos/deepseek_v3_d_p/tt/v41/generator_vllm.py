@@ -115,6 +115,11 @@ def _dram_bytes(mesh_device) -> int:
         return 0
 
 
+def _as_list(v) -> list:
+    """A per-row sampling parameter (a tensor, or a list under on-device sampling) as a list."""
+    return v.tolist() if hasattr(v, "tolist") else list(v)
+
+
 def _l1_probe(mesh_device, tag: str) -> None:
     """``TT_V41_L1_PROBE=1``: log main L1's allocation (per bank) and its block table under ``tag``, at the warm-up's
     stages. A program-cache entry first built inside a step (a collective's global semaphores: ``ttnn.all_gather``,
@@ -675,14 +680,18 @@ class DeepseekV41ForCausalLM:
         blocks, rows, sampling = {}, {}, {}
         speculating = False  # a live slot proposes this step (the drafter in the graph: the ``vd:`` variants)
         t0 = time.time()
+        # the rows' scalars as lists once (an element read of a tensor is microseconds, and the loop made eight a
+        # row)
+        keys, toks, poss = page_table[:, 0].tolist(), tokens.tolist(), positions.tolist()
+        temps, topks, topps = (_as_list(v) for v in (params.temperature, params.top_k, params.top_p))
         for i in range(tokens.shape[0]):
-            if int(page_table[i, 0]) == 0:
+            if keys[i] == 0:
                 continue
-            key = self._request_key(page_table, i)
+            key = keys[i]
             if key in self.pending:
                 self._join_pending(key)
             slot = self._slot_for_decode(key)
-            token, p = int(tokens[i, 0]), int(positions[i])
+            token, p = toks[i][0], int(poss[i])
             buffered = None if ragged else self.buffered.get(slot)
             if buffered:
                 # the plugin feeds back the token we handed it; the pool processed it in the last round and the
@@ -696,11 +705,11 @@ class DeepseekV41ForCausalLM:
             assert p == self.decoder.position(
                 slot
             ), f"row {i}: vLLM position {p}, slot {slot} at {self.decoder.position(slot)}"
-            temperature = float(params.temperature[i])
+            temperature = float(temps[i])
             greedy = temperature <= 0 or self.spec_greedy_all
             proposes = (self.spec_rings_per_slot or slot == self.ring_owner) and (greedy or self.spec_sampled)
             if ragged:
-                given = [int(t) for t in tokens[i, 1:].tolist() if t >= 0]
+                given = [int(t) for t in toks[i][1:] if t >= 0]
                 drafts = given if proposes else []
                 if given and not proposes:  # verified by nobody: the scheduler counts them rejected
                     logger.warning(f"DeepSeek-V4.1-Flash: slot {slot} runs plain; {len(given)} drafts dropped")
@@ -709,7 +718,7 @@ class DeepseekV41ForCausalLM:
             speculating = speculating or proposes
             blocks[slot] = [token] + drafts[: self.spec_k]
             rows[slot] = i
-            sampling[slot] = (int(params.top_k[i]), float(params.top_p[i]), 0.0 if greedy else temperature)
+            sampling[slot] = (int(topks[i]), float(topps[i]), 0.0 if greedy else temperature)
         if not blocks:
             return out
         if self.spec_rings_per_slot and len(blocks) > 1:
@@ -778,6 +787,8 @@ class DeepseekV41ForCausalLM:
         td = time.time()
         entries: list[list[dict]] = [[] for _ in range(self.sp)]
         where: dict[int, tuple[int, int]] = {}  # slot -> (rank, block index)
+        emitted_rows: list[list[int]] = []  # the ragged contract's rows, written to ``out`` at once below
+        accepted: list[int] = []
         for slot, i in rows.items():
             m = real[slot]
             block, argmax = uniform[slot][: 1 + m], result[slot][: 1 + m]
@@ -789,15 +800,19 @@ class DeepseekV41ForCausalLM:
             where[slot] = (r, len(entries[r]))
             entries[r].append({"user": u, "token": emitted[-1], "position": p + a, "taps": taps})
             if ragged:
-                out[i, : len(emitted)] = torch.tensor(emitted, dtype=torch.int32)
+                emitted_rows.append(emitted + [-1] * (1 + K - len(emitted)))
+                accepted.append(len(emitted) - 1)
                 self.spec_stats["emitted_steps"] = self.spec_stats.get("emitted_steps", 0) + len(emitted)
             else:
                 out[i] = self.handed[slot] = emitted[0]
                 self.buffered[slot] = list(emitted[1:])
+                accepted.append(len(emitted) - 1)
             if m:
                 self.spec_stats["rounds"] += 1
                 self.spec_stats["accepted"] += a
                 self.spec_stats["emitted"] += len(emitted)
+        if ragged:  # one tensor write for the 32 rows (32 small ones and 32 sums before)
+            out[torch.tensor(list(rows.values()), dtype=torch.int64)] = torch.tensor(emitted_rows, dtype=torch.int32)
         # one block count on every rank: the ranks short of blocks get dummies (no tap write, their drafts unread)
         n = max(len(e) for e in entries)
         for r in range(self.sp):
@@ -816,7 +831,6 @@ class DeepseekV41ForCausalLM:
                 self.last_drafts[i] = list(self.next_drafts[slot])
         t2 = time.time()
         last = decoder.last
-        accepted = [int((out[i] >= 0).sum()) - 1 if ragged else len(self.buffered[s]) for s, i in rows.items()]
         # the same line as the one-slot round's; the draft call's
         # own line after it
         logger.debug(
