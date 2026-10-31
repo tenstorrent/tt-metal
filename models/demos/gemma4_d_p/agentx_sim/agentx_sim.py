@@ -22,16 +22,22 @@ Workload (closed loop, like AIPerf's AgentX replay):
 Prefill:
 - Prefix cache keyed by (session, hash_id), 64-token blocks: infinite or LRU over a token capacity. Lookup at
   arrival, insert when the request's prefill finishes.
+- --cache slotN: tt-d-gen's N KV slots instead (SlotCache): a slot holds one prompt, a request waits for a slot and is
+  looked up when seated, and the engine evicts or truncates whole slots.
 - The request resumes at its cached depth rounded down to the chunk unit (--align chunk), to Gemma4's resume granularity
   (--align resume: a per-rank slab, unit / CP; Gemma4PrefillRuntime.resume_granularity), or exactly (--align exact).
   Its rows are padded up to whole units. A lane that starts off a unit boundary costs --mid-cost more (measured:
   +0.015 at 2048, +0.02 at 8192).
 - Each step runs budget / unit slots (unbatched: unit == budget). fcfs: admission order, a request keeps its slot until
   done; pack: the requests with the fewest rows left first, each taking every slot it still needs. A request's k slots
-  run as k unit-wide lanes (the 2k-lanes runtime).
+  run as k unit-wide lanes (the 2k-lanes runtime). rr (unbatched): tt-d-gen's scheduling, chunks queued round robin
+  over the seated requests up to --inject-depth ahead of the device and run one a step in queue order (silicon: 9, so
+  a newly seated request's first chunk waits behind the chunks already queued).
 - Step time is Model.step_s from cost_model.py (dense(M) + per-request attention at its own depth, calibrated on
   silicon; a config without its own fit is marked *), plus the scheduler's gap between steps, which advances the
-  clock but is not busy time.
+  clock but is not busy time. --chunk-overhead-ms adds to every step and --request-overhead-ms delays every request
+  on its way to the engine. Serving through tt-d-gen on silicon (tt-metal#60869), chunks ran at the calibrated step
+  time and each request took about 95 ms more: frontend, admission, and the handoff after its last chunk.
 
 TTFT is from send to prefill done (the decode's first token is not modelled).
 """
@@ -262,6 +268,63 @@ class PrefixCache:
             s.popitem(last=False)
 
 
+class SlotCache:
+    """tt-d-gen's prefill KV slots (prepare_admission, Evictor::choose_admission): each slot holds one prompt's blocks.
+
+    A request is looked up when it is seated: the longest prefix over every slot of its session wins. An idle holder
+    is remounted (cut back to the match) when every slot is in use or it loses no more than it keeps; a busy holder
+    gives nothing (no copy). Otherwise the request takes a free slot, else evicts the least recently used idle one.
+    The block holding the last prompt token is never reused."""
+
+    def __init__(self, n):
+        self.sess = [None] * n
+        self.blocks = [[] for _ in range(n)]
+        self.busy = [False] * n
+        self.used = [0] * n
+        self.tick = 0
+        self.evictions = 0
+
+    def can_seat(self):
+        return not all(self.busy)
+
+    def seat(self, sess, hashes, n_in):
+        """(cached tokens, slot) for a request seated now; can_seat() must be true."""
+        self.tick += 1
+        cap = (n_in - 1) // BLOCK
+        best, holders = 0, []
+        for i, s in enumerate(self.sess):
+            if s != sess:
+                continue
+            n = 0
+            for a, b in zip(self.blocks[i], hashes[:cap]):
+                if a != b:
+                    break
+                n += 1
+            if n > best:
+                best, holders = n, [i]
+            elif n and n == best:
+                holders.append(i)
+        full = None not in self.sess
+        worth = [i for i in holders if not self.busy[i] and (full or len(self.blocks[i]) - best <= best)]
+        if best and worth:
+            i = min(worth, key=self.used.__getitem__)
+            del self.blocks[i][best:]
+        else:
+            best = 0
+            if not full:
+                i = self.sess.index(None)
+            else:
+                i = min((i for i in range(len(self.sess)) if not self.busy[i]), key=self.used.__getitem__)
+                self.evictions += 1
+            self.sess[i], self.blocks[i] = sess, []
+        self.busy[i], self.used[i] = True, self.tick
+        return best * BLOCK, i
+
+    def release(self, slot, hashes):
+        """The slot's request finished its prefill: the slot holds its prompt and is idle."""
+        self.blocks[slot], self.busy[slot] = list(hashes), False
+
+
 # ---- simulation ----
 
 
@@ -281,6 +344,7 @@ def run(
     concurrency,
     *,
     cache_tokens=None,
+    slots=None,
     align="chunk",
     mid_cost=0.0,
     max_think_s=60.0,
@@ -289,12 +353,17 @@ def run(
     max_sessions=None,
     calibrated=True,
     max_seq_len=262144,
+    chunk_overhead_s=0.0,
+    request_overhead_s=0.0,
+    inject_depth=1,
 ):
     rng = random.Random(seed)
     order = list(range(len(sessions)))[:max_sessions]
-    slots = budget // C
-    cache = PrefixCache(cache_tokens)
-    ideal = PrefixCache(None) if cache_tokens is not None else None  # what an unlimited cache would hit
+    lanes = budget // C
+    slot_cache = SlotCache(slots) if slots else None
+    cache = None if slot_cache else PrefixCache(cache_tokens)
+    # what an unlimited cache would hit
+    ideal = PrefixCache(None) if slot_cache or cache_tokens is not None else None
 
     # flat node state, filled as sessions start
     N = sum(len(sessions[s]) for s in order)
@@ -330,7 +399,7 @@ def run(
         sess_done_t[s] = t
         for i, n in enumerate(nodes):
             if not n["deps"]:
-                heapq.heappush(arrivals, (t, nxt + i))
+                heapq.heappush(arrivals, (t + request_overhead_s, nxt + i))
         nxt += len(nodes)
 
     for _ in range(min(concurrency, len(order))):
@@ -342,14 +411,30 @@ def run(
     queue_rem = []  # pack: heap (remaining rows, seq, node)
     seq = 0
     req = {}  # node -> [Stat (done not yet known), rows computed so far]
+    waiting = collections.deque()  # (node, send) not yet seated: every KV slot is busy
+    slot_of = {}
+    rr = 0  # rr: index in queue_fcfs of the next request to queue a chunk for
+    injected = collections.deque()  # rr: chunks queued for the device, in order
+    queued = collections.Counter()  # rr: chunks per request in injected
     rows_total = 0
     steps = 0
     step_log = []  # (t_end, dt, rows)
 
-    def admit(g, send):
+    def admit(g, arrive):
+        """A request reaches the engine request_overhead_s after it is sent; with KV slots, it waits for one."""
+        send = arrive - request_overhead_s
+        if slot_cache and (waiting or not slot_cache.can_seat()):
+            waiting.append((g, send))
+        else:
+            seat(g, send)
+
+    def seat(g, send):
         nonlocal seq
         n = sessions[sess_of[g]][local_of[g]]
-        cached = cache.lookup(sess_of[g], n["hashes"])
+        if slot_cache:
+            cached, slot_of[g] = slot_cache.seat(sess_of[g], n["hashes"], n["in"])
+        else:
+            cached = cache.lookup(sess_of[g], n["hashes"])
         ideal_hit = ideal.lookup(sess_of[g], n["hashes"]) if ideal else cached
         cap = n["in"] - 1  # at least one token is computed
         start = min(cached, cap)
@@ -360,7 +445,7 @@ def run(
             start -= step
         need = math.ceil((n["in"] - start) / C) * C
         req[g] = [Stat(send, None, n["in"], cached, start, need, ideal_hit), 0]
-        if policy == "fcfs":
+        if policy in ("fcfs", "rr"):
             queue_fcfs.append(g)
         else:
             heapq.heappush(queue_rem, (need, seq, g))
@@ -370,9 +455,14 @@ def run(
         stats.append(req.pop(g)[0]._replace(done=t_done))
         s, i = sess_of[g], local_of[g]
         n = sessions[s][i]
-        cache.insert(s, n["hashes"])
         if ideal:
-            ideal.insert(s, n["hashes"])
+            ideal.insert(s, n["hashes"])  # before seating waiters, which look it up
+        if slot_cache:
+            slot_cache.release(slot_of.pop(g), n["hashes"])
+            while waiting and slot_cache.can_seat():
+                seat(*waiting.popleft())
+        else:
+            cache.insert(s, n["hashes"])
         resp = t_done + n["out"] / decode_tps
         sess_done_t[s] = max(sess_done_t[s], resp)
         for c in children[g]:
@@ -382,17 +472,21 @@ def run(
             if nleft[c] == 0:
                 cn = sessions[s][local_of[c]]
                 think = min(max(cn["t"] - rec_ready[c], 0.0), max_think_s)
-                heapq.heappush(arrivals, (ready[c] + think, c))
+                heapq.heappush(arrivals, (ready[c] + think + request_overhead_s, c))
         left_in_session[s] -= 1
         if left_in_session[s] == 0:
             heapq.heappush(freed, sess_done_t[s])  # the next session starts when this one's response ends
+
+    def unqueued(g):
+        """rr: g has rows left that no queued chunk covers."""
+        return req[g][1] + queued[g] * C < req[g][0].rows
 
     def release(until):
         # Start sessions in the order their predecessors' responses end, not the order their prefills end.
         while freed and freed[0] <= until:
             start_session(heapq.heappop(freed))
 
-    while arrivals or req or freed:
+    while arrivals or req or freed or waiting:
         release(t)
         while arrivals and arrivals[0][0] <= t:
             send, g = heapq.heappop(arrivals)
@@ -405,9 +499,23 @@ def run(
         # pick this step's pieces: [(node, units)]
         if policy == "fcfs":
             # admission order; a request keeps its slot until done (unbatched: one request, one chunk per step)
-            run_list = [(g, 1) for g in itertools.islice(queue_fcfs, slots)]
+            run_list = [(g, 1) for g in itertools.islice(queue_fcfs, lanes)]
+        elif policy == "rr":
+            # tt-d-gen: chunks are queued round robin over the seated requests, up to inject_depth ahead of the
+            # device, and run one a step in the order queued
+            while len(injected) < inject_depth:
+                n = len(queue_fcfs)
+                i = next(((rr + j) % n for j in range(n) if unqueued(queue_fcfs[(rr + j) % n])), None)
+                if i is None:
+                    break
+                injected.append(queue_fcfs[i])
+                queued[queue_fcfs[i]] += 1
+                rr = i + 1
+            g = injected.popleft()
+            queued[g] -= 1
+            run_list = [(g, 1)]
         else:
-            run_list, free = [], slots
+            run_list, free = [], lanes
             while queue_rem and free > 0:
                 rem, _, g = heapq.heappop(queue_rem)
                 take = min(free, rem // C)
@@ -417,6 +525,7 @@ def run(
         batch = [(C, req[g][0].start + req[g][1] + j * C) for g, k in run_list for j in range(k)]
         dt, gap = model.step_s(batch, C, budget, calibrated)
         dt *= 1 + mid_cost * sum(depth % C != 0 for _, depth in batch) / len(batch)
+        dt += chunk_overhead_s
         t += dt
         busy += dt
         steps += 1
@@ -432,7 +541,9 @@ def run(
             r[1] += k * C
             rows_total += k * C
             if r[1] >= r[0].rows:
-                if policy == "fcfs":
+                if policy == "rr" and queue_fcfs.index(g) < rr:
+                    rr -= 1
+                if policy in ("fcfs", "rr"):
                     queue_fcfs.remove(g)
                 finish(g, t)
             elif policy == "pack":
@@ -440,6 +551,7 @@ def run(
                 seq += 1
         t += gap  # the scheduler's time between steps: wall time, not busy
     out = summarize(stats, t, busy, steps, rows_total)
+    out["evictions"] = slot_cache.evictions if slot_cache else None
     out["_stats"] = stats  # not written to --json
     # Steady state: from the end of a short ramp to when the last session started (full concurrency until then).
     hi = t_fed or 0.0
@@ -529,13 +641,31 @@ def parse_config(cfg, model):
         C, budget = (int(x) for x in unit_budget.split("x"))
     except ValueError:
         raise SystemExit(f"bad --config {cfg!r}: want UNITxBUDGET:POLICY, e.g. 2048x8192:pack")
-    if policy not in ("fcfs", "pack"):
-        raise SystemExit(f"bad --config {cfg!r}: POLICY is fcfs or pack")
+    if policy not in ("fcfs", "pack", "rr"):
+        raise SystemExit(f"bad --config {cfg!r}: POLICY is fcfs, pack or rr")
+    if policy == "rr" and C != budget:
+        raise SystemExit(f"bad --config {cfg!r}: rr is unbatched, UNIT == BUDGET")
     if C not in units:
         raise SystemExit(f"bad --config {cfg!r}: UNIT must be a measured chunk size, one of {units}")
     if budget % C or not C <= budget <= max_budget:
         raise SystemExit(f"bad --config {cfg!r}: BUDGET must be a multiple of UNIT, at most {max_budget} tokens a step")
     return C, budget, policy
+
+
+def parse_cache(cache):
+    """inf, an LRU capacity in tokens, or slotN -> run()'s (cache_tokens, slots); SystemExit otherwise."""
+    try:
+        if cache == "inf":
+            return None, None
+        if cache.startswith("slot"):
+            n = int(cache[4:])
+            if n > 0:
+                return None, n
+        else:
+            return int(float(cache)), None
+    except ValueError:
+        pass
+    raise SystemExit(f"bad --cache {cache!r}: inf, a capacity in tokens (e.g. 20e6), or slotN (e.g. slot6)")
 
 
 def ttft_record(knobs, stats):
@@ -549,11 +679,13 @@ def ttft_record(knobs, stats):
 
 
 def run_config(job):
-    """One run of the grid, job = (UNITxBUDGET:POLICY, concurrency, cache, align, max_think_s, decode_tps); returns
-    its JSON record (the knobs, the metrics and the run's wall time), and its --ttft-out record when that is set."""
-    cfg, concurrency, cache, align, max_think_s, decode_tps = job
+    """One run of the grid, job = (UNITxBUDGET:POLICY, concurrency, cache, align, max_think_s, decode_tps,
+    chunk_overhead_ms, request_overhead_ms, inject_depth); returns its JSON record (the knobs, the metrics and the run's wall time),
+    and its --ttft-out record when that is set."""
+    cfg, concurrency, cache, align, max_think_s, decode_tps, chunk_ms, request_ms, inject_depth = job
     t0 = time.time()
     C, budget, policy = parse_config(cfg, G["model"])  # checked in main() before the workers fork
+    cache_tokens, slots = parse_cache(cache)
     r = run(
         G["model"],
         G["sessions"],
@@ -561,16 +693,28 @@ def run_config(job):
         budget,
         policy,
         concurrency,
-        cache_tokens=None if cache == "inf" else int(float(cache)),
+        cache_tokens=cache_tokens,
+        slots=slots,
         align=align,
         mid_cost=G["mid_cost"],
         max_think_s=max_think_s,
         decode_tps=decode_tps,
         seed=G["seed"],
         max_sessions=G["max_sessions"],
+        chunk_overhead_s=chunk_ms / 1e3,
+        request_overhead_s=request_ms / 1e3,
+        inject_depth=inject_depth,
     )
     knobs = dict(
-        config=cfg, concurrency=concurrency, cache=cache, align=align, max_think_s=max_think_s, mid_cost=G["mid_cost"]
+        config=cfg,
+        concurrency=concurrency,
+        cache=cache,
+        align=align,
+        max_think_s=max_think_s,
+        mid_cost=G["mid_cost"],
+        chunk_overhead_ms=chunk_ms,
+        request_overhead_ms=request_ms,
+        inject_depth=inject_depth,
     )
     record = {
         **knobs,
@@ -586,13 +730,24 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--traces", required=True)
     ap.add_argument("--data", default=DEFAULT_DATA)
-    ap.add_argument("--config", default="8192x8192:fcfs,2048x8192:pack", help="UNITxBUDGET:POLICY, POLICY fcfs or pack")
+    ap.add_argument(
+        "--config", default="8192x8192:fcfs,2048x8192:pack", help="UNITxBUDGET:POLICY, POLICY fcfs, pack or rr"
+    )
     ap.add_argument("--concurrency", default="32", help="sessions in flight")
-    ap.add_argument("--cache", default="inf", help="inf, or LRU capacity in tokens (e.g. 20e6)")
+    ap.add_argument(
+        "--cache", default="inf", help="inf, LRU capacity in tokens (e.g. 20e6), or slotN: tt-d-gen's N KV slots"
+    )
     ap.add_argument("--align", default="chunk", help="chunk, resume or exact")
     ap.add_argument("--mid-cost", type=float, default=0.0, help="extra step time of a lane that starts mid-chunk")
     ap.add_argument("--max-think-s", default="60")
     ap.add_argument("--decode-tps", default="100", help="per-request decode rate for the closed loop")
+    ap.add_argument("--chunk-overhead-ms", default="0", help="added to every step")
+    ap.add_argument(
+        "--request-overhead-ms", default="0", help="from send to reaching the engine (tt-d-gen on silicon: 95)"
+    )
+    ap.add_argument(
+        "--inject-depth", default="1", help="rr: chunks queued ahead of the device (tt-d-gen on silicon: 9)"
+    )
     ap.add_argument("--sessions", type=int, default=None, help="first N sessions only")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("-j", type=int, default=1, help="parallel runs")
@@ -605,9 +760,16 @@ def main():
     G.update(model=Model.load(a.data), mid_cost=a.mid_cost, seed=a.seed, max_sessions=a.sessions, ttft_out=a.ttft_out)
     for cfg in split(a.config):  # before the traces load and the workers fork
         parse_config(cfg, G["model"])
+    for cache in split(a.cache):
+        parse_cache(cache)
     for align in split(a.align):
         if align not in ("chunk", "resume", "exact"):
             ap.error(f"bad --align {align!r}: choose chunk, resume or exact")
+    if any(d < 1 for d in split(a.inject_depth, int)):
+        ap.error(f"bad --inject-depth {a.inject_depth!r}: each must be at least 1")
+    for name in ("chunk_overhead_ms", "request_overhead_ms"):
+        if any(ms < 0 for ms in split(getattr(a, name), float)):
+            ap.error(f"bad --{name.replace('_', '-')} {getattr(a, name)!r}: must not be negative")
     G["sessions"] = load_sessions(a.traces)
     jobs = list(
         itertools.product(
@@ -617,6 +779,9 @@ def main():
             split(a.align),
             split(a.max_think_s, float),
             split(a.decode_tps, float),
+            split(a.chunk_overhead_ms, float),
+            split(a.request_overhead_ms, float),
+            split(a.inject_depth, int),
         )
     )
     n_req = sum(map(len, G["sessions"][: a.sessions]))

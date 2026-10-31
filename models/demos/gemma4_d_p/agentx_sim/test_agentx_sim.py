@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks of the AgentX simulator: the prefix cache, the cache state a request sent mid-step sees, the
---config validation and the --ttft-out records. No device and no traces:
+"""Host-only checks of the AgentX simulator: the prefix and slot caches, the cache state a request sent mid-step sees,
+the schedulers, the --config / --cache validation and the --ttft-out records. No device and no traces:
 `pytest models/demos/gemma4_d_p/agentx_sim/test_agentx_sim.py`."""
 
 import json
@@ -12,7 +12,18 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from agentx_sim import BLOCK, PrefixCache, json_record, parse_config, parse_sessions, run, ttft_record  # noqa: E402
+from agentx_sim import (  # noqa: E402
+    BLOCK,
+    PrefixCache,
+    SlotCache,
+    json_record,
+    main,
+    parse_cache,
+    parse_config,
+    parse_sessions,
+    run,
+    ttft_record,
+)
 from cost_model import Model  # noqa: E402
 from plot_ttft_cdf import labels, load_runs  # noqa: E402
 
@@ -78,7 +89,9 @@ def test_align_rounds_the_resume_and_mid_chunk_steps_cost_more(align, start, bus
     assert res["busy_s"] == pytest.approx(busy)
 
 
-@pytest.mark.parametrize("cfg", ["2048x8192:pack", "8192x8192:fcfs", "16384x16384:fcfs", "1024x4096:fcfs"])
+@pytest.mark.parametrize(
+    "cfg", ["2048x8192:pack", "8192x8192:fcfs", "16384x16384:fcfs", "1024x4096:fcfs", "8192x8192:rr"]
+)
 def test_parse_config_accepts_measured_units(cfg):
     parse_config(cfg, Model.load())
 
@@ -91,6 +104,7 @@ def test_parse_config_accepts_measured_units(cfg):
         "2048x32768:pack",  # past the largest measured step
         "2048x8192:packed",  # unknown policy
         "2048:fcfs",  # no budget
+        "2048x8192:rr",  # rr is unbatched
     ],
 )
 def test_parse_config_rejects(cfg):
@@ -229,3 +243,113 @@ def test_ttft_out_records_each_request_and_filters_by_knob(tmp_path):
         "8k",
         "2k x4 lanes, shortest-first",
     ]
+
+
+def test_slot_cache_remounts_a_holder_when_every_slot_is_in_use():
+    cache = SlotCache(1)
+    assert cache.seat(0, [1, 2, 3], 3 * BLOCK + 1) == (0, 0)
+    cache.release(0, [1, 2, 3])
+    assert cache.seat(0, [1, 2, 9, 9], 4 * BLOCK + 1) == (2 * BLOCK, 0), "kept the shared prefix, lost the tail"
+    assert cache.blocks[0] == [1, 2]
+
+
+def test_slot_cache_seats_cold_rather_than_lose_more_than_it_keeps():
+    """With a slot free, a holder that would lose 4 blocks to keep 1 is left alone and still serves a later turn."""
+    cache = SlotCache(2)
+    cache.seat(0, [1, 2, 3, 4, 5], 5 * BLOCK + 1)
+    cache.release(0, [1, 2, 3, 4, 5])
+    assert cache.seat(0, [1, 9], 2 * BLOCK + 1) == (0, 1)
+    assert cache.seat(0, [1, 2, 3, 4, 5, 6], 6 * BLOCK + 1) == (5 * BLOCK, 0)
+
+
+def test_slot_cache_busy_holder_gives_nothing():
+    cache = SlotCache(2)
+    cache.seat(0, [1, 2], 2 * BLOCK + 1)  # still prefilling
+    assert cache.seat(0, [1, 2, 3], 3 * BLOCK + 1) == (0, 1)
+
+
+def test_slot_cache_evicts_the_least_recently_used_slot():
+    cache = SlotCache(2)
+    for sess in (0, 1):
+        _, slot = cache.seat(sess, [sess + 1], BLOCK + 1)
+        cache.release(slot, [sess + 1])
+    assert cache.seat(2, [3], BLOCK + 1) == (0, 0) and cache.evictions == 1
+    assert cache.seat(1, [2, 5], 2 * BLOCK) == (BLOCK, 1), "session 1's slot survived"
+
+
+def test_request_waits_for_a_slot_and_is_looked_up_when_seated():
+    """One slot, two requests of one session sent together: B waits for A's slot, then reuses A's two blocks. With
+    the token cache B is looked up at arrival, before A is inserted, and prefills all three chunks."""
+    session = [_node(2 * BLOCK, [1, 2]), _node(3 * BLOCK, [1, 2, 3])]
+    for slots, cached, chunks in ((1, 2 * BLOCK, 3), (None, 0, 5)):
+        res = run(_OneSecondSteps(), [session], BLOCK, BLOCK, "fcfs", 1, slots=slots)
+        b = _by_rows(res)[3 * BLOCK]
+        assert b.cached == cached and b.done == pytest.approx(b.send + chunks)
+        if slots:
+            assert b.ideal_hit == 2 * BLOCK, "the unlimited cache holds A before B is seated"
+    assert res["evictions"] is None
+
+
+def test_rr_interleaves_chunks_of_seated_requests():
+    """Two 2-chunk requests: session 1 is sent at 7.6 s, session 0 at 8.4 s, during session 1's first chunk. fcfs
+    finishes session 1 after 2 steps; rr alternates, so it takes 3."""
+    sessions = [[_node(2 * BLOCK, [1])], [_node(2 * BLOCK - 1, [2])]]
+    for policy, first_done in (("fcfs", 2.0), ("rr", 3.0)):
+        res = run(_OneSecondSteps(), sessions, BLOCK, BLOCK, policy, 2)
+        early, late = _by_rows(res)[2 * BLOCK - 1], _by_rows(res)[2 * BLOCK]
+        assert early.send < late.send < early.send + 1.0, "precondition: session 0 sent during the first step"
+        assert early.done == pytest.approx(early.send + first_done)
+        assert late.done == pytest.approx(early.send + 4.0)
+
+
+def test_overheads_add_to_every_step_and_delay_every_request():
+    res = run(
+        _OneSecondSteps(), [[_node(BLOCK, [1])]], BLOCK, BLOCK, "fcfs", 1, chunk_overhead_s=0.5, request_overhead_s=0.25
+    )
+    (stat,) = res["_stats"]
+    assert stat.done - stat.send == pytest.approx(1.75)
+    assert res["busy_s"] == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize("cache, parsed", [("inf", (None, None)), ("4e6", (4_000_000, None)), ("slot6", (None, 6))])
+def test_parse_cache(cache, parsed):
+    assert parse_cache(cache) == parsed
+
+
+@pytest.mark.parametrize("cache", ["slot", "slot0", "lru", "slotx"])
+def test_parse_cache_rejects(cache):
+    with pytest.raises(SystemExit, match="bad --cache"):
+        parse_cache(cache)
+
+
+@pytest.mark.parametrize(
+    "flag, value", [("--inject-depth", "9,0"), ("--chunk-overhead-ms", "-1"), ("--request-overhead-ms", "95,-5")]
+)
+def test_main_rejects_bad_knobs_before_loading_traces(monkeypatch, capsys, flag, value):
+    monkeypatch.setattr(sys, "argv", ["agentx_sim.py", "--traces", "/nonexistent", flag, value])
+    with pytest.raises(SystemExit):
+        main()
+    assert f"bad {flag}" in capsys.readouterr().err
+
+
+def test_rr_inject_depth_queues_a_new_requests_first_chunk_behind_queued_ones():
+    """A (4 chunks, sent at 7.6 s) is alone when it starts, so with 3 chunks queued ahead A's first three are queued
+    before B (1 chunk) arrives at 8.4 s: B runs after them, at step 4. With depth 1 B gets the next step."""
+    sessions = [[_node(BLOCK, [1])], [_node(4 * BLOCK, [2])]]
+    for depth, b_done in ((1, 2.0), (3, 4.0)):
+        res = run(_OneSecondSteps(), sessions, BLOCK, BLOCK, "rr", 2, inject_depth=depth)
+        a, b = _by_rows(res)[4 * BLOCK], _by_rows(res)[BLOCK]
+        assert a.send < b.send < a.send + 1.0, "precondition: B sent during A's first step"
+        assert b.done == pytest.approx(a.send + b_done)
+
+
+def test_rr_with_slots_and_overhead_seats_the_waiting_request_after_the_first_finishes():
+    """The tt-d-gen setup end to end: one slot, rr, request overhead. B waits for A's slot, keeps its own send time,
+    reuses A's blocks, and the run ends."""
+    session = [_node(2 * BLOCK, [1, 2]), _node(3 * BLOCK, [1, 2, 3])]
+    res = run(_OneSecondSteps(), [session], BLOCK, BLOCK, "rr", 1, slots=1, request_overhead_s=0.25, inject_depth=9)
+    a, b = _by_rows(res)[2 * BLOCK], _by_rows(res)[3 * BLOCK]
+    assert a.send == pytest.approx(b.send)
+    assert b.cached == 2 * BLOCK
+    assert a.done == pytest.approx(a.send + 0.25 + 2.0)
+    assert b.done == pytest.approx(a.done + 1.0)
