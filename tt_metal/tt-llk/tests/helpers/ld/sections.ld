@@ -65,6 +65,7 @@ SECTIONS
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
+    *(port3_text)
   } > REGION_CODE
   .fini :
   {
