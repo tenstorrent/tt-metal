@@ -1,24 +1,22 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+"""tt-blaze's decode Mcast -> Matmul -> Gather on a 4x2 or 8x4 grid of cores, through
+ttnn.experimental.generic_op.
 
-# SPDX-License-Identifier: Apache-2.0
+The multi-core version of test_generic_spec_op_mcast_matmul_gather.py: out[8, N] = a[8, 128] @ w[128, N] for
+NUM_ITERS tokens, 32 output columns per core, N = 32 * cores.
 
-"""tt-blaze's decode Mcast -> Matmul -> Gather on a 4x2 grid of cores, through ttnn.experimental.generic_op.
-
-The eight-core version of test_generic_spec_op_mcast_matmul_gather.py: out[8, 256] = a[8, 128] @ w[128, 256] for
-NUM_ITERS tokens, 32 output columns per core.
-
-- Core (0, 0) multicasts each token's in0 to the other seven cores. One rectangle cannot leave the sender out, so it
-  sends to two: row 0 without itself, and row 1 (on NoC 1 each rectangle starts at its far corner). It waits until all
-  seven receivers have reserved their in0 (mcast_ready counts to 7), and sets mcast_valid on both rectangles.
+- Core (0, 0) multicasts each token's in0 to every other core. One rectangle cannot leave the sender out, so it sends
+  to two: row 0 without itself, and rows 1 and up (on NoC 1 each rectangle starts at its far corner). It waits until
+  every receiver has reserved its in0 (mcast_ready counts to cores - 1), and sets mcast_valid on both rectangles.
 - Each core's 32 weight columns are per-core allocated and borrowed as in1, resident for every token.
 - Gather: core c writes its [8, 32] slice into slot c of core 0's gather region (the arena at GATHER_OFFSET, two slots
-  per arena page) and increments gather_valid on core 0, which waits for 7. Core 0 then writes the [8, 256] row out
-  and multicasts the next token number into gather_ready on the other cores, which each wait until it reaches their
-  token, so a slot is not overwritten before core 0 has read it.
+  per 1 KiB arena page) and increments gather_valid on core 0, which waits for cores - 1. Core 0 then writes the
+  [8, N] row out and multicasts the next token number into gather_ready on the other cores, which each wait until it
+  reaches their token, so a slot is not overwritten before core 0 has read it.
 
 Implicit sync is off on every data movement kernel. Each core runs two data movement kernels and one compute kernel.
 """
 
+import math
 import os
 
 import pytest
@@ -29,27 +27,18 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 E = ttnn.experimental
 
-GRID_X, GRID_Y = 4, 2
-CORES = [ttnn.CoreCoord(x, y) for y in range(GRID_Y) for x in range(GRID_X)]  # core index c = y * GRID_X + x
-NUM_CORES = len(CORES)
-GRID = ttnn.CoreRangeSet([ttnn.CoreRange(CORES[0], CORES[-1])])
-# The two multicast rectangles that cover every core but the sender (0, 0).
-RECTS = [
-    (ttnn.CoreCoord(1, 0), ttnn.CoreCoord(GRID_X - 1, 0)),
-    (ttnn.CoreCoord(0, 1), ttnn.CoreCoord(GRID_X - 1, GRID_Y - 1)),
-]
 M, K = 8, 128
 KT = K // 32
 N_PER_CORE = 32
-N = N_PER_CORE * NUM_CORES
 NUM_ITERS = 3
 TINY_TILE = ttnn.Tile([M, 32])
 TINY_BYTES = M * 32 * 2
 FULL_BYTES = 32 * 32 * 2
 ROW_WORDS = 256  # arena rows: 1 KiB of uint32
-ARENA_ROWS_PER_CORE = 16
+ROW_BYTES = ROW_WORDS * 4
 IN0_OFFSET = 0
-GATHER_OFFSET = 4 * 1024  # NUM_CORES slots of TINY_BYTES, two per arena page
+GATHER_OFFSET = 4 * 1024  # after in0 (KT tiny tiles); one TINY_BYTES slot per core, two per arena page
+SLOTS_PER_PAGE = ROW_BYTES // TINY_BYTES
 
 FEED_SOURCE = """
 #include "api/dataflow/dataflow_api.h"
@@ -263,25 +252,37 @@ def sharded(strategy, cores, shard_shape, per_core=False):
     return config
 
 
-def test_generic_spec_op_mcast_matmul_gather_4x2(hybrid_mesh_device):
+@pytest.mark.parametrize("grid_x, grid_y", [(4, 2), (8, 4)], ids=["4x2", "8x4"])
+def test_generic_spec_op_mcast_matmul_gather_grid(hybrid_mesh_device, grid_x, grid_y):
     if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") != "1":
         pytest.skip("The per-core borrowed weights DFB needs slow dispatch")
     mesh = hybrid_mesh_device
     grid_size = mesh.compute_with_storage_grid_size()
-    if grid_size.x < GRID_X or grid_size.y < GRID_Y:
-        pytest.skip(f"Needs a {GRID_X}x{GRID_Y} grid")
+    if grid_size.x < grid_x or grid_size.y < grid_y:
+        pytest.skip(f"Needs a {grid_x}x{grid_y} grid")
+    cores = [ttnn.CoreCoord(x, y) for y in range(grid_y) for x in range(grid_x)]  # core index c = y * grid_x + x
+    num_cores = len(cores)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[-1])])
+    # The two multicast rectangles that cover every core but the sender (0, 0).
+    rects = [
+        (ttnn.CoreCoord(1, 0), ttnn.CoreCoord(grid_x - 1, 0)),
+        (ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid_x - 1, grid_y - 1)),
+    ]
+    num_cols = N_PER_CORE * num_cores
+    gather_page = GATHER_OFFSET // ROW_BYTES
+    arena_rows_per_core = gather_page + math.ceil(num_cores / SLOTS_PER_PAGE)
     torch.manual_seed(0)
     torch_a = torch.randn(NUM_ITERS * M, K).bfloat16()
-    torch_w = (torch.randn(K, N) / 8).bfloat16()
+    torch_w = (torch.randn(K, num_cols) / 8).bfloat16()
     expected = torch_a.float() @ torch_w.float()
 
     # Fillers on the odd cores shift their per-core allocations, so the weight shards do not share one address.
     filler = to_mesh(
         mesh,
-        torch.zeros(K, 32 * (NUM_CORES // 2)).bfloat16(),
+        torch.zeros(K, 32 * (num_cores // 2)).bfloat16(),
         ttnn.bfloat16,
         ttnn.TILE_LAYOUT,
-        sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, CORES[1::2], (K, 32), per_core=True),
+        sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, cores[1::2], (K, 32), per_core=True),
     )
     tensors = {
         "a": to_mesh(
@@ -289,7 +290,7 @@ def test_generic_spec_op_mcast_matmul_gather_4x2(hybrid_mesh_device):
             torch_a,
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
-            sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, CORES[:1], (NUM_ITERS * M, K)),
+            sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, cores[:1], (NUM_ITERS * M, K)),
             TINY_TILE,
         ),
         "w": to_mesh(
@@ -297,30 +298,30 @@ def test_generic_spec_op_mcast_matmul_gather_4x2(hybrid_mesh_device):
             torch_w,
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
-            sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, CORES, (K, N_PER_CORE), per_core=True),
+            sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, cores, (K, N_PER_CORE), per_core=True),
         ),
         "arena": to_mesh(
             mesh,
-            torch.zeros(NUM_CORES * ARENA_ROWS_PER_CORE, ROW_WORDS, dtype=torch.int32),
+            torch.zeros(num_cores * arena_rows_per_core, ROW_WORDS, dtype=torch.int32),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
-            sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, CORES, (ARENA_ROWS_PER_CORE, ROW_WORDS)),
+            sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, cores, (arena_rows_per_core, ROW_WORDS)),
         ),
         "result": to_mesh(
             mesh,
-            torch.zeros(NUM_ITERS * M, N).bfloat16(),
+            torch.zeros(NUM_ITERS * M, num_cols).bfloat16(),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             ttnn.DRAM_MEMORY_CONFIG,
             TINY_TILE,
         ),
     }
-    w_addresses = {tensors["w"].experimental_per_core_buffer_address(ttnn.MeshCoordinate(0, 0), c) for c in CORES}
+    w_addresses = {tensors["w"].experimental_per_core_buffer_address(ttnn.MeshCoordinate(0, 0), c) for c in cores}
     assert len(w_addresses) > 1, w_addresses
 
-    noc = [mesh.worker_core_from_logical_core(c) for c in CORES]
+    noc = [mesh.worker_core_from_logical_core(c) for c in cores]
     rect_values = {}
-    for i, (lo, hi) in enumerate(RECTS):
+    for i, (lo, hi) in enumerate(rects):
         lo_noc, hi_noc = mesh.worker_core_from_logical_core(lo), mesh.worker_core_from_logical_core(hi)
         rect_values.update(
             {
@@ -331,14 +332,14 @@ def test_generic_spec_op_mcast_matmul_gather_4x2(hybrid_mesh_device):
                 f"r{i}_cores": (hi.x - lo.x + 1) * (hi.y - lo.y + 1),
             }
         )
-    assert sum(rect_values[f"r{i}_cores"] for i in range(len(RECTS))) == NUM_CORES - 1
+    assert sum(rect_values[f"r{i}_cores"] for i in range(len(rects))) == num_cores - 1
     rect_names = list(rect_values)
     sem_names = ("mcast_ready", "mcast_valid", "gather_ready", "gather_valid")
     feed_args = ["is_sender", "sender_x", "sender_y"] + rect_names
     gather_args = ["core_index", "root_x", "root_y"] + rect_names
     common = {"kt": KT, "num_iters": NUM_ITERS}
     spec = E.ProgramSpec(
-        name="mcast_matmul_gather_4x2",
+        name=f"mcast_matmul_gather_{grid_x}x{grid_y}",
         kernels=[
             E.KernelSpec(
                 unique_id="feed",
@@ -347,7 +348,7 @@ def test_generic_spec_op_mcast_matmul_gather_4x2(hybrid_mesh_device):
                 dfb_bindings=[E.producer_of("in0", "in0"), E.producer_of("in1", "in1")],
                 semaphore_bindings=[E.SemaphoreBinding(semaphore_spec_name=n, accessor_name=n) for n in sem_names[:2]],
                 tensor_bindings=[E.TensorBinding(tensor_parameter_name="a", accessor_name="a")],
-                compile_time_args={**common, "num_receivers": NUM_CORES - 1},
+                compile_time_args={**common, "num_receivers": num_cores - 1},
                 runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=feed_args),
             ),
             E.KernelSpec(
@@ -368,10 +369,10 @@ def test_generic_spec_op_mcast_matmul_gather_4x2(hybrid_mesh_device):
                 ],
                 compile_time_args={
                     "num_iters": NUM_ITERS,
-                    "num_cores": NUM_CORES,
+                    "num_cores": num_cores,
                     "gather_offset": GATHER_OFFSET,
-                    "gather_page": GATHER_OFFSET // (ROW_WORDS * 4),
-                    "slots_per_page": ROW_WORDS * 4 // TINY_BYTES,
+                    "gather_page": gather_page,
+                    "slots_per_page": SLOTS_PER_PAGE,
                 },
                 runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=gather_args),
             ),
@@ -401,19 +402,19 @@ def test_generic_spec_op_mcast_matmul_gather_4x2(hybrid_mesh_device):
                 tile_format_metadata=TINY_TILE,
             ),
         ],
-        semaphores=[E.SemaphoreSpec(unique_id=n, target_nodes=GRID) for n in sem_names],
+        semaphores=[E.SemaphoreSpec(unique_id=n, target_nodes=grid) for n in sem_names],
         tensor_parameters=[E.TensorParameter(unique_id=n, spec=t.spec) for n, t in tensors.items()],
-        work_units=[E.WorkUnitSpec(kernels=["feed", "matmul", "gather"], target_nodes=GRID)],
+        work_units=[E.WorkUnitSpec(kernels=["feed", "matmul", "gather"], target_nodes=grid)],
     )
-    every = lambda value: {c: value for c in CORES}  # noqa: E731
+    every = lambda value: {c: value for c in cores}  # noqa: E731
     feed_values = {
-        "is_sender": {c: int(i == 0) for i, c in enumerate(CORES)},
+        "is_sender": {c: int(i == 0) for i, c in enumerate(cores)},
         "sender_x": every(noc[0].x),
         "sender_y": every(noc[0].y),
         **{name: every(value) for name, value in rect_values.items()},
     }
     gather_values = {
-        "core_index": {c: i for i, c in enumerate(CORES)},
+        "core_index": {c: i for i, c in enumerate(cores)},
         "root_x": every(noc[0].x),
         "root_y": every(noc[0].y),
         **{name: every(value) for name, value in rect_values.items()},
