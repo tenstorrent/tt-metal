@@ -26,8 +26,8 @@ def read_codegen(path):
         for line in body.splitlines():
             if not re.match(INSTRUCTION_OR_RELOCATION_PATTERN, line):
                 continue
-            # Local branch destinations are already encoded in the instructions.
-            if "R_RISCV_BRANCH" in line:
+            # Local branch and jump destinations are already encoded in the instructions.
+            if "R_RISCV_BRANCH" in line or re.search(r"R_RISCV_JAL\s+\.L", line):
                 continue
             line = re.sub(OBJDUMP_ANNOTATION_PATTERN, "", line)
             code_lines.append(" ".join(line.split()))
