@@ -45,6 +45,22 @@ using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
 using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
 
+// Width-concat reads each input row directly into the concatenated output row.
+// Both the row size and its destination offset must satisfy that input's alignment.
+bool concat_rows_are_aligned(const std::vector<ttnn::Tensor>& tensors, int dim) {
+    uint64_t offset = 0;
+    for (const auto& tensor : tensors) {
+        TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "ttnn.concat: expected device storage");
+        const uint64_t bytes = static_cast<uint64_t>(tensor.padded_shape()[dim]) * tensor.element_size();
+        const auto alignment = tensor.buffer()->alignment();
+        if (bytes % alignment != 0 || offset % alignment != 0) {
+            return false;
+        }
+        offset += bytes;
+    }
+    return true;
+}
+
 // FIXME: this papers over an issue in pad, so we should probably move the
 // fix there.
 MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output_memory_config) {
@@ -191,23 +207,10 @@ MassagedConcat build_non_aligned_last_dim_concat(
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
-    auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
-        return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
-            auto storage_type = tensor.storage_type();
-            if (storage_type == ttnn::StorageType::DEVICE) {
-                return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
-            }
-            TT_THROW(
-                "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
-                " {}",
-                tensor.storage_type());
-        });
-    };
-
-    auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
+    auto predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int /*groups*/) -> bool {
         auto last_dim = tensors.front().logical_shape().rank() - 1;
         if (dim == last_dim) {
-            bool res = !dim_aligned(tensors, dim);
+            bool res = !concat_rows_are_aligned(tensors, dim);
             concat_db_print(res, "[DEBUG] alignment fixedup required");
             return res;
         }
@@ -225,10 +228,8 @@ MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig
             if (dim != 0) {
                 return false;
             }
-            bool res = std::any_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
-                return tensor.layout() == ttnn::ROW_MAJOR_LAYOUT and tensor.logical_shape().rank() == 1 and
-                       tensor.logical_shape()[0] * tensor.element_size() % tensor.buffer()->alignment() != 0;
-            });
+            bool res = tensors.front().layout() == ttnn::ROW_MAJOR_LAYOUT &&
+                       tensors.front().logical_shape().rank() == 1 && !concat_rows_are_aligned(tensors, dim);
             concat_db_print(res, "unsqueeze_squeeze_1D_concat required");
             return res;
         },
@@ -341,11 +342,7 @@ ttnn::Tensor concat_native(
                     });
             }
         } else if (first_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-            would_transpose =
-                std::any_of(input_tensors.begin(), input_tensors.end(), [dim, buf_align](const ttnn::Tensor& tensor) {
-                    return (static_cast<uint64_t>(tensor.logical_shape()[dim]) * tensor.element_size()) % buf_align !=
-                           0;
-                });
+            would_transpose = !ttnn::operations::data_movement::concat_rows_are_aligned(input_tensors, dim);
         }
 
         // Account for buffer alignment when estimating the post-transpose page size.
