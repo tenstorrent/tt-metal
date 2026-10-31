@@ -57,12 +57,40 @@ assert SPEC_SLOTS in (4, 8), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4 or 8"
 # Requests a pass drafts for: 1, 2 or 4 (MIMO_SPEC_GROUPS with MIMO_SPEC_SLOTS=8: a lane's requests, each in a draft
 # group of GROUP_SLOTS consecutive slots with its own drafter state; 2: c=8 over 4 lanes with 3 drafts each, 4: c=16
 # with 1 draft each, which one MTP layer drafts through the planned program, planned_drafts).
-DRAFT_GROUPS = int(os.environ.get("MIMO_SPEC_GROUPS", "1"))
-assert DRAFT_GROUPS == 1 or (
-    DRAFT_GROUPS in (2, 4) and SPEC_SLOTS == 8
-), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or 2 / 4 with MIMO_SPEC_SLOTS=8"
-GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
+# MIMO_SPEC_GROUPS=adaptive (with MIMO_SPEC_SLOTS=8): each pass picks its group width from its requests (pass_width):
+# groups of 4 slots (3 drafts each, every MTP layer) for up to ADAPTIVE_WIDE_ROWS requests, groups of 2 (1 draft) for
+# more. DRAFT_GROUPS and GROUP_SLOTS are then the most groups (4) and the widest group (4) a pass may have: the drafter
+# state (rings, stash slots, descriptions, chain blocks, result sections) is laid out for both, and a group's width
+# travels with it (its chain block's source word and its description's drafting word hold the width).
+_GROUPS = os.environ.get("MIMO_SPEC_GROUPS", "1")
+ADAPTIVE = _GROUPS == "adaptive"
+if ADAPTIVE:
+    assert SPEC_SLOTS == 8, "MIMO_SPEC_GROUPS=adaptive needs MIMO_SPEC_SLOTS=8"
+    DRAFT_GROUPS, GROUP_SLOTS = 4, 4
+else:
+    DRAFT_GROUPS = int(_GROUPS)
+    assert DRAFT_GROUPS == 1 or (
+        DRAFT_GROUPS in (2, 4) and SPEC_SLOTS == 8
+    ), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or 2 / 4 / adaptive with MIMO_SPEC_SLOTS=8"
+    GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
 MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and drafts fill one draft group
+WIDTHS = (2, 4) if ADAPTIVE else (GROUP_SLOTS,)  # the group widths a pass may use
+ADAPTIVE_WIDE_ROWS = int(os.environ.get("MIMO_SPEC_WIDE_ROWS", "2"))
+
+
+def pass_width(live_rows):
+    """The group width of a lane step with ``live_rows`` requests: GROUP_SLOTS, or with ADAPTIVE groups of 4 for up to
+    ADAPTIVE_WIDE_ROWS requests and of 2 for more."""
+    if not ADAPTIVE:
+        return GROUP_SLOTS
+    return 4 if live_rows <= ADAPTIVE_WIDE_ROWS else 2
+
+
+def width_drafts(width):
+    """Drafts per request in groups of ``width`` slots."""
+    return width - 1
+
+
 # K / V writes of a verify pass (and of an MTP pass): only one request's slots share cache tiles, and with draft groups
 # a request's slots are consecutive inside its group, so write k takes every slot j with j % SERIAL_WRITES == k: one
 # write per column of a group (2 or 4) instead of one per slot (serial_positions). MIMO_SERIAL_COLUMNS=0: per slot.
@@ -81,12 +109,14 @@ def planned_drafts(layers):
 @dataclass
 class VerifyPass:
     """One decode step of a lane: per slot the token, position (-1 idle) and the batch row whose page tables it reads
-    (None idle), and the (row, column) whose argmax each used slot answers."""
+    (None idle), and the (row, column) whose argmax each used slot answers. ``width``: its draft groups' slots (group g
+    holds slots g * width ..; SPEC_SLOTS without draft groups)."""
 
     tokens: list = field(default_factory=lambda: [0] * SPEC_SLOTS)
     positions: list = field(default_factory=lambda: [-1] * SPEC_SLOTS)
     table_rows: list = field(default_factory=lambda: [None] * SPEC_SLOTS)
     answers: list = field(default_factory=list)  # (slot, row, column)
+    width: int = GROUP_SLOTS
 
     @property
     def used(self):
@@ -118,12 +148,12 @@ def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SL
             options = range(slots // group_slots) if want is None else [want]
             p, g = next(((p, g) for p in passes for g in options if free(p, g)), (None, None))
             if p is None:
-                p, g = VerifyPass(), options[0]
+                p, g = VerifyPass(width=group_slots), options[0]
                 passes.append(p)
             first = g * group_slots
         else:
             if not passes or passes[-1].used + width > slots or (aligned and passes[-1].used > 0):
-                passes.append(VerifyPass())
+                passes.append(VerifyPass(width=group_slots))
             p = passes[-1]
             first = p.used
         for c in range(width):
@@ -155,6 +185,12 @@ class DraftSource:
     row: int
     slots: list
     group: int = 0
+    width: int = GROUP_SLOTS  # its draft group's slots: group g holds slots g * width .. (g + 1) * width - 1
+
+    @property
+    def anchor(self):
+        """The group's last slot: the planned MTP program's anchor (the draft's last row)."""
+        return (self.group + 1) * self.width - 1
 
 
 def draft_sources(passes, group_slots=GROUP_SLOTS):
@@ -170,7 +206,7 @@ def draft_sources(passes, group_slots=GROUP_SLOTS):
     out = []
     for row, cells in by_row.items():
         slots = [s for _, s in sorted(cells)]
-        out.append(DraftSource(row=row, slots=slots, group=slots[0] // group_slots))
+        out.append(DraftSource(row=row, slots=slots, group=slots[0] // group_slots, width=group_slots))
     return out
 
 

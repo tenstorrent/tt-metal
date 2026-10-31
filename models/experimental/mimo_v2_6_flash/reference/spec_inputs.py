@@ -45,14 +45,16 @@ inputs from it and the device stash. pack_mtp's idle upload has a zero row 0: it
 
 import torch
 
-from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, SERIAL_WRITES, SPEC_SLOTS, mtp_cache_position
+from .spec_decode import ADAPTIVE, DRAFT_GROUPS, GROUP_SLOTS, SERIAL_WRITES, SPEC_SLOTS, mtp_cache_position
 
 TILE = 32
 INT32_MAX = 2**31 - 1
-VERIFY_ROWS = 3  # tokens, positions, the chain row (reference/spec_chain.py)
+# tokens, positions, the chain row (reference/spec_chain.py); with ADAPTIVE draft groups the chain row's four blocks
+# fill it and the history's slots spill into a fourth row.
+VERIFY_ROWS = 4 if ADAPTIVE else 3
 MTP_ROWS = 7  # tokens; fill, step2, step3 cache positions; fill, step2, step3 RoPE indices
-# pack_mtp_layers' row g, draft group g's commit: drafting (0 / 1), m, A, the source's slots [GROUP_SLOTS] (-1 past m),
-# committed tokens [GROUP_SLOTS] (0 past m).
+# pack_mtp_layers' row g, draft group g's commit: drafting (0: idle, else the group's width in slots), m, A, the
+# source's slots [GROUP_SLOTS] (-1 past m), committed tokens [GROUP_SLOTS] (0 past m).
 DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS = 0, 1, 2, 3
 DESC_TOKENS = DESC_SLOTS + GROUP_SLOTS
 DESC_WORDS = DESC_TOKENS + GROUP_SLOTS
@@ -82,12 +84,16 @@ def slot_caps(max_batch, slots=SPEC_SLOTS, writes=SERIAL_WRITES):
 
 # ---------------------------------------------------------------------- uploads
 def pack_verify(tokens, positions, chain=None):
-    """tokens, positions [B] (-1 an idle slot), ``chain`` the chain row's B values (reference.spec_chain.chain_row;
-    None: zeros, no draft chains behind the pass) -> int32 [VERIFY_ROWS * B]."""
+    """tokens, positions [B] (-1 an idle slot), ``chain`` the chain row's values (reference.spec_chain.chain_row: B,
+    or (VERIFY_ROWS - 2) * B with the fourth row; None: zeros, no draft chains behind the pass) -> int32
+    [VERIFY_ROWS * B]."""
     assert tokens.numel() == positions.numel()
     assert int(positions.min()) >= -1, "positions are >= -1 (-1 an idle slot)"
-    chain = torch.zeros(positions.numel(), dtype=torch.int32) if chain is None else torch.as_tensor(chain)
-    assert chain.numel() == positions.numel()
+    b, rows = positions.numel(), VERIFY_ROWS - 2
+    chain = torch.zeros(rows * b, dtype=torch.int32) if chain is None else torch.as_tensor(chain).reshape(-1)
+    if chain.numel() < rows * b:
+        chain = torch.cat((chain.to(torch.int32), torch.zeros(rows * b - chain.numel(), dtype=torch.int32)))
+    assert chain.numel() == rows * b
     return torch.cat(
         (tokens.reshape(-1).to(torch.int32), positions.reshape(-1).to(torch.int32), chain.reshape(-1).to(torch.int32))
     )
@@ -116,7 +122,7 @@ def mtp_layers_row(max_batch, source=None, committed_tokens=None, committed_posi
         return row
     m = int(accepted)
     assert 1 <= m <= len(source.slots) <= GROUP_SLOTS, (m, source)
-    row[DESC_DRAFTING], row[DESC_COUNT], row[DESC_A] = 1, m, int(committed_positions[0]) - 1
+    row[DESC_DRAFTING], row[DESC_COUNT], row[DESC_A] = source.width, m, int(committed_positions[0]) - 1
     for c in range(GROUP_SLOTS):
         row[DESC_SLOTS + c] = source.slots[c] if c < m else -1
         row[DESC_TOKENS + c] = int(committed_tokens[c]) if c < m else 0

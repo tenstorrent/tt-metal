@@ -6,7 +6,10 @@
 // sections, one per writing mode).
 //
 // A pass's S slots form G draft groups of GS = S / G slots (G = 1: one group, the whole pass), each with at most one
-// request (its source) and its own drafter state; group g's request commits accept group g. Per group g:
+// request (its source) and its own drafter state; group g's request commits accept group g. With adaptive groups
+// (reference/spec_decode.py ADAPTIVE: G = 4 groups of up to GS = 4 slots over S = 8) a pass's groups are all of one
+// width w (2 or 4) that travels with them: the chain block's source word and the description's drafting word hold w,
+// and group g holds slots g * w .. g * w + w - 1 (otherwise w = GS). Per group g:
 // - the chain row's block at g * (4 + GS): source, columns n + 1, limit, the source's slots [GS] (-1 past its
 //   columns), relay; the MTP history's slots (kernels/mtp_history.cpp) follow the G blocks;
 // - the result page's status at status_at + 4 g (drafting, anchor, bonus, unused) and drafts section at
@@ -47,7 +50,8 @@
 // s: s; stash slot k: table_rows + k; idle slot j: table_rows + j, its own stash row) and layer-0 tokens (uint32
 // [1, B]); and, when a group drafts, the new stash page (the drafting groups' slots rewritten).
 //
-// Mode 4, the tokens step (before MTP pass `layer`, every layer): that pass's tokens, slot j of a group taking the
+// Mode 4, the tokens step (before MTP pass `layer`, every layer; the groups' widths from the descriptions, an idle
+// group's GS): that pass's tokens, slot j of a group taking the
 // layer-0 token of the group's slot j + layer, or past its last slot the group anchor's greedy token of an earlier
 // pass (a draft).
 //
@@ -114,10 +118,12 @@ void kernel_main() {
     constexpr uint32_t GS = S / G;                                  // a draft group's slots
     constexpr uint32_t cgw = 4 + GS;                                // a chain block's words
     constexpr uint32_t draft_words = 1 + D;                         // a group's drafts section
-    static_assert(G >= 1 && G * GS == S && D + 1 == GS && G * out_words <= accept_words);
+    static_assert(G >= 1 && (G * GS == S || (G == 4 && GS == 4 && S == 8)) && D + 1 == GS);
+    static_assert(G * out_words <= accept_words);
     static_assert(S <= B && B * 4 <= 1024 && mtp_rows == 7 && chain_row < verify_rows && G <= mtp_rows);
     static_assert(SR >= 1 && S % SR == 0 && GS % SR == 0);
-    static_assert(chain_relay == 3 + GS && G * cgw + S <= B && ctrl_drafts + D <= group_words);
+    // The history's slots follow the G chain blocks (in the upload's next row once the blocks fill this one).
+    static_assert(chain_relay == 3 + GS && G * cgw <= B && ctrl_drafts + D <= group_words);
     static_assert(G * group_words <= ctrl_words && 3 + 2 * GS <= B && 2 * S <= B && B <= table_rows);
     static_assert(layer < layers + (layers == 1) && (planned == 1 || drafter == 1 || G == 1));
     static_assert(planned <= 1 && (planned == 1 || layers == 1) && (drafter == 0 || planned == 0));
@@ -193,7 +199,8 @@ void kernel_main() {
             const int32_t* blk = chain + g * cgw;
             const uint32_t m = accept[g * out_words];
             const uint32_t columns = static_cast<uint32_t>(blk[1]);
-            if (blk[0] == 0 || m < 1 || m > columns || columns > GS) {
+            const uint32_t width = static_cast<uint32_t>(blk[0]);  // the group's slots (0: no source)
+            if (width == 0 || m < 1 || m > columns || columns > width || width > GS) {
                 continue;
             }
             const uint32_t* tokens = accept + g * out_words + 1;
@@ -218,14 +225,14 @@ void kernel_main() {
             } else if constexpr (planned == 1) {
                 // The description: drafting, m, A = P[slots[0]], the slots (-1 past m), the committed tokens.
                 volatile tt_l1_ptr int32_t* desc = mtp + g * B;
-                desc[0] = 1;
+                desc[0] = static_cast<int32_t>(width);
                 desc[1] = static_cast<int32_t>(m);
                 desc[2] = pos[blk[3]];
                 for (uint32_t c = 0; c < GS; ++c) {
                     desc[3 + c] = c < m ? blk[3 + c] : -1;
                     desc[3 + GS + c] = c < m ? static_cast<int32_t>(tokens[c]) : 0;
                 }
-                anchor = (g + 1) * GS - 1;
+                anchor = (g + 1) * width - 1;
             } else {
                 auto cache = [](int32_t t) -> int32_t { return t >= 0 ? static_cast<int32_t>(ring + t % ring) : -1; };
                 for (uint32_t c = 0; c < m; ++c) {
@@ -290,7 +297,8 @@ void kernel_main() {
                 const uint32_t flag = static_cast<uint32_t>(upload[g * dblock + 1]);
                 anchor = flag != 0 ? flag - 1 : kNone;
             } else if constexpr (planned == 1) {
-                anchor = upload[g * B] != 0 ? (g + 1) * GS - 1 : kNone;
+                const uint32_t width = static_cast<uint32_t>(upload[g * B]);
+                anchor = width != 0 ? (g + 1) * width - 1 : kNone;
             } else {
                 const int32_t* step2 = upload + 2 * B;
                 for (uint32_t s = 0; s < S; ++s) {
@@ -405,20 +413,26 @@ void kernel_main() {
         for (uint32_t g = 0; g < G; ++g) {
             const int32_t* desc = reinterpret_cast<const int32_t*>(desc_l1 + g * row_l1);
             const int32_t m = desc[1];
-            if (desc[0] == 0 || m < 1 || m > static_cast<int32_t>(GS)) {
+            const int32_t width = desc[0];  // the group's slots (0: idle)
+            if (width == 0 || m < 1 || m > width || width > static_cast<int32_t>(GS) ||
+                (g + 1) * static_cast<uint32_t>(width) > S) {
                 continue;
             }
             any = true;
             const int32_t a = desc[2];
-            const uint32_t lo = g * GS;
+            const uint32_t w = static_cast<uint32_t>(width);
+            const uint32_t lo = g * w;
+            // A group of 2 slots drafts one token (layer 0's): it re-runs no row, whatever the later passes compute.
+            const int32_t drafting =
+                static_cast<int32_t>(layers) < width - 1 ? static_cast<int32_t>(layers) : width - 1;
             // found[k]: the group's stash slot holding position a - 1 - k (consecutive from a - 1 down).
             uint32_t found[GS];
-            const int32_t want = static_cast<int32_t>(layers) - m;
+            const int32_t want = drafting - m;
             uint32_t r = 0;
             while (static_cast<int32_t>(r) < want) {
                 const int32_t q = a - 1 - static_cast<int32_t>(r);
                 uint32_t hit = kNone;
-                for (uint32_t k = lo; q >= 0 && k < lo + GS; ++k) {
+                for (uint32_t k = lo; q >= 0 && k < lo + w; ++k) {
                     if (stash[k] == q) {
                         hit = k;
                         break;
@@ -430,8 +444,8 @@ void kernel_main() {
                 found[r++] = hit;
             }
             const uint32_t rows = r + static_cast<uint32_t>(m);
-            const uint32_t first = lo + GS - rows;
-            for (uint32_t j = lo; j < lo + GS; ++j) {
+            const uint32_t first = lo + w - rows;
+            for (uint32_t j = lo; j < lo + w; ++j) {
                 fresh[j] = -1;
                 fresh[S + j] = 0;
             }
@@ -468,9 +482,14 @@ void kernel_main() {
         const uint32_t tokens_l1 = base;
         const uint32_t heads_l1 = tokens_l1 + row_l1;
         const uint32_t out_l1 = heads_l1 + layer * row_l1;
+        const uint32_t desc_l1 = out_l1 + row_l1;  // the descriptions' drafting words (each group's width)
         noc_async_read(dram_addr(get_arg_val<uint32_t>(0), row_bytes), tokens_l1, row_bytes);
         for (uint32_t k = 0; k < layer; ++k) {
             noc_async_read(dram_addr(get_arg_val<uint32_t>(2 + k), row_bytes), heads_l1 + k * row_l1, row_bytes);
+        }
+        const uint32_t mtp_addr = get_arg_val<uint32_t>(2 + layer);
+        for (uint32_t g = 0; g < G; ++g) {
+            noc_async_read(dram_addr(mtp_addr, mtp_bytes, g * row_bytes), desc_l1 + g * row_l1, row_bytes);
         }
         noc_async_read_barrier();
         const uint32_t* tokens0 = reinterpret_cast<const uint32_t*>(tokens_l1);
@@ -479,11 +498,13 @@ void kernel_main() {
             out[i] = 0;
         }
         for (uint32_t g = 0; g < G; ++g) {
-            const uint32_t lo = g * GS;
-            for (uint32_t j = 0; j < GS; ++j) {
+            const uint32_t drafting = reinterpret_cast<const uint32_t*>(desc_l1 + g * row_l1)[0];
+            const uint32_t w = drafting != 0 && drafting <= GS ? drafting : GS;  // an idle group: GS
+            const uint32_t lo = g * w;
+            for (uint32_t j = 0; j < w; ++j) {
                 const uint32_t x = j + layer;
-                out[lo + j] = x < GS ? tokens0[lo + x]
-                                     : reinterpret_cast<const uint32_t*>(heads_l1 + (x - GS) * row_l1)[lo + GS - 1];
+                out[lo + j] = x < w ? tokens0[lo + x]
+                                    : reinterpret_cast<const uint32_t*>(heads_l1 + (x - w) * row_l1)[lo + w - 1];
             }
         }
         noc_async_write(out_l1, dram_addr(get_arg_val<uint32_t>(1), row_bytes), row_bytes);

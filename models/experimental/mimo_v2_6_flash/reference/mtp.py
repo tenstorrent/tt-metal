@@ -200,7 +200,7 @@ class MtpProgramMirror:
         positions = torch.tensor([inputs["rope"][j] for j in used])
         self.outputs = []
         for i, (mtp_layer, history) in enumerate(zip(self.mtps, self.histories)):
-            tokens = inputs["tokens0"] if i == 0 else tokens_step(inputs["tokens0"], self.heads, i)
+            tokens = inputs["tokens0"] if i == 0 else tokens_step(inputs["tokens0"], self.heads, i, mtp)
             head = [0] * self.table_rows
             if used:
                 embeds = self.embedding[torch.tensor([tokens[j] for j in used])]

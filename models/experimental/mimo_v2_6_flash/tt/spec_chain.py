@@ -215,13 +215,14 @@ class SpecChain:
 
     def tokens(self, layer):
         """The tokens step of pass ``layer`` >= 1 (every layer): its tokens from the layer-0 tokens and the earlier
-        passes' heads."""
+        passes' heads, in each draft group's width (the descriptions' drafting words)."""
         li = self.layer_inputs
         assert 1 <= layer < MAX_DRAFTS
-        ins = [li.tokens[0], *self.heads[:layer]]
+        ins = [li.tokens[0], *self.heads[:layer], self.mtp]
         args = [li.tokens[0].buffer_address(), li.tokens[layer].buffer_address()]
-        args += [h.buffer_address() for h in self.heads[:layer]]
-        prog = self._program(TOKENS, args, (2 + layer) * _align64(self.max_batch * 4), layer=layer)
+        args += [h.buffer_address() for h in self.heads[:layer]] + [self.mtp.buffer_address()]
+        rows = 2 + layer + DRAFT_GROUPS
+        prog = self._program(TOKENS, args, rows * _align64(self.max_batch * 4), layer=layer)
         ttnn.generic_op([*ins, li.tokens[layer]], prog)
 
     def warm(self, ctrl=None):

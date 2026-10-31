@@ -147,17 +147,19 @@ def chain_row(max_batch, source=None, limit=0, relay=False, hslots=None):
     is declined at, ``relay`` the relay step writes the sources' tokens and positions from the lane's last result page
     (a chained verify), ``hslots`` each verify slot's request slot in the lane (None: no history write) for the history
     (reference/mtp_backfill.py)."""
-    assert max_batch >= CHAIN_HSLOTS + SPEC_SLOTS
+    words = (VERIFY_ROWS - CHAIN_ROW) * max_batch  # with ADAPTIVE groups the history's slots spill into a fourth row
+    assert words >= CHAIN_HSLOTS + SPEC_SLOTS and max_batch >= CHAIN_WORDS
     sources = _sources(source)
     assert sources or not relay, "the relay writes a source's columns"
-    row = [0] * max_batch
+    row = [0] * words
     for j, h in enumerate(hslots or []):
         row[CHAIN_HSLOTS + j] = 0 if h is None else int(h) + 1
     for src in sources:
-        assert 0 <= src.group < DRAFT_GROUPS and 1 <= len(src.slots) <= GROUP_SLOTS, src
+        assert 0 <= src.group < DRAFT_GROUPS and 1 <= len(src.slots) <= src.width <= GROUP_SLOTS, src
         at = src.group * CHAIN_GROUP_WORDS
         assert row[at + CHAIN_SOURCE] == 0, f"two sources in draft group {src.group}"
-        row[at + CHAIN_SOURCE], row[at + CHAIN_COLUMNS], row[at + CHAIN_LIMIT] = 1, len(src.slots), int(limit)
+        # The source word: the group's width (its slots g * width ..), 0 without a source.
+        row[at + CHAIN_SOURCE], row[at + CHAIN_COLUMNS], row[at + CHAIN_LIMIT] = src.width, len(src.slots), int(limit)
         for c in range(GROUP_SLOTS):
             row[at + CHAIN_SLOTS + c] = src.slots[c] if c < len(src.slots) else -1
         row[at + CHAIN_RELAY] = int(bool(relay))
@@ -180,18 +182,19 @@ def _header(verify, accept, argmax):
 
 
 def _commits(header, pos, chain, accept):
-    """The draft groups whose draft the chain step writes: [(group, m, slots, committed tokens, bonus)], each with a
-    source, 1 <= m <= its columns, and the bonus P[slots[m - 1]] + 1 below the limit."""
+    """The draft groups whose draft the chain step writes: [(group, m, slots, committed tokens, bonus, width)], each
+    with a source, 1 <= m <= its columns <= its width, and the bonus P[slots[m - 1]] + 1 below the limit."""
     out = []
     for g in range(DRAFT_GROUPS):
         blk = chain[g * CHAIN_GROUP_WORDS : (g + 1) * CHAIN_GROUP_WORDS]
-        m, columns = int(accept[g * OUT_WORDS]), blk[CHAIN_COLUMNS]
-        if blk[CHAIN_SOURCE] == 0 or not 1 <= m <= columns <= GROUP_SLOTS:
+        m, columns, width = int(accept[g * OUT_WORDS]), blk[CHAIN_COLUMNS], blk[CHAIN_SOURCE]
+        if width == 0 or not 1 <= m <= columns <= width <= GROUP_SLOTS:
             continue
         slots = blk[CHAIN_SLOTS : CHAIN_SLOTS + m]
         bonus = pos[slots[m - 1]] + 1
         if bonus < blk[CHAIN_LIMIT]:
-            out.append((g, m, slots, [int(t) for t in accept[g * OUT_WORDS + 1 : g * OUT_WORDS + 1 + m]], bonus))
+            committed = [int(t) for t in accept[g * OUT_WORDS + 1 : g * OUT_WORDS + 1 + m]]
+            out.append((g, m, slots, committed, bonus, width))
     return out
 
 
@@ -212,15 +215,15 @@ def chain_step(verify, accept, argmax, layers=1):
     # pack_mtp's idle draft: tokens 0, cache positions -1, RoPE indices 0 (pack_mtp_layers': zeros).
     mtp = [0] * b + [0 if planned else -1] * (3 * b) + [0] * ((MTP_ROWS - 4) * b)
     assert planned or DRAFT_GROUPS == 1, "the one-layer program drafts one request per lane"
-    for g, m, slots, tokens, bonus in _commits(header, pos, chain, accept):
+    for g, m, slots, tokens, bonus, width in _commits(header, pos, chain, accept):
         if planned:
             # pack_mtp_layers of the commit: committed position c at P[slots[c]] + 1, so A = P[slots[0]].
             d = g * b
-            mtp[d + DESC_DRAFTING], mtp[d + DESC_COUNT], mtp[d + DESC_A] = 1, m, pos[slots[0]]
+            mtp[d + DESC_DRAFTING], mtp[d + DESC_COUNT], mtp[d + DESC_A] = width, m, pos[slots[0]]
             for c in range(GROUP_SLOTS):
                 mtp[d + DESC_SLOTS + c] = slots[c] if c < m else -1
                 mtp[d + DESC_TOKENS + c] = tokens[c] if c < m else 0
-            _status(header, g, (g + 1) * GROUP_SLOTS - 1, bonus)
+            _status(header, g, (g + 1) * width - 1, bonus)
         else:
             # plan_mtp with committed position c at P[slots[c]] + 1: the fill writes column c's hidden at P[slots[c]].
             anchor = slots[m - 1]
@@ -278,7 +281,8 @@ def drafts_step(mtp, heads, layers=1):
     out = [0] * (RESULT_WORDS - DRAFTS_AT)
     for g in range(DRAFT_GROUPS):
         if planned_drafts(layers):
-            anchor = (g + 1) * GROUP_SLOTS - 1 if mtp[g * b + DESC_DRAFTING] != 0 else None
+            width = mtp[g * b + DESC_DRAFTING]
+            anchor = (g + 1) * width - 1 if width != 0 else None
         else:
             anchor = next((s for s in range(SPEC_SLOTS) if mtp[2 * b + s] >= 0), None)
         at = g * DRAFT_WORDS
@@ -312,21 +316,23 @@ def plan_step(mtp, stash, table_rows, layers=MAX_DRAFTS):
     new = list(stash)
     for g in range(DRAFT_GROUPS):
         desc = mtp[g * b : (g + 1) * b]
-        m = desc[DESC_COUNT]
-        if desc[DESC_DRAFTING] == 0 or not 1 <= m <= GROUP_SLOTS:
+        m, width = desc[DESC_COUNT], desc[DESC_DRAFTING]
+        if width == 0 or not 1 <= m <= width <= GROUP_SLOTS or (g + 1) * width > SPEC_SLOTS:
             continue
-        a, lo = desc[DESC_A], g * GROUP_SLOTS
+        a, lo = desc[DESC_A], g * width
+        # A group of 2 slots drafts one token (layer 0's): it re-runs no row, whatever the passes after it compute.
+        drafting = min(layers, width - 1)
 
-        def find(q, lo=lo):
-            stashed = stash[STASH_POSITIONS + lo : STASH_POSITIONS + lo + GROUP_SLOTS]
-            return next((lo + k for k in range(GROUP_SLOTS) if q >= 0 and stashed[k] == q), None)
+        def find(q, lo=lo, width=width):
+            stashed = stash[STASH_POSITIONS + lo : STASH_POSITIONS + lo + width]
+            return next((lo + k for k in range(width) if q >= 0 and stashed[k] == q), None)
 
         found = []
-        while len(found) < max(0, layers - m) and find(a - 1 - len(found)) is not None:
+        while len(found) < max(0, drafting - m) and find(a - 1 - len(found)) is not None:
             found.append(find(a - 1 - len(found)))
         r = len(found)
-        first = lo + GROUP_SLOTS - (r + m)
-        for j in range(lo, lo + GROUP_SLOTS):
+        first = lo + width - (r + m)
+        for j in range(lo, lo + width):
             new[STASH_POSITIONS + j], new[STASH_TOKENS + j] = -1, 0
         for t in range(r + m):
             j, q = first + t, a - r + t
@@ -341,17 +347,19 @@ def plan_step(mtp, stash, table_rows, layers=MAX_DRAFTS):
     return {"pos": pos, "rope": rope, "hidden": hidden, "tokens0": tokens0, "serial": serial}, new
 
 
-def tokens_step(tokens0, heads, layer):
+def tokens_step(tokens0, heads, layer, mtp=None):
     """The tokens step (mode 4) before pass ``layer``: its tokens [B], slot j of a draft group taking the layer-0
     token of the group's slot j + layer (past its last slot: the group anchor's greedy token of pass
-    j + layer - GROUP_SLOTS, a draft); 0 past the slots."""
+    j + layer - width, a draft); 0 past the slots. ``mtp``: the descriptions, each group's width its drafting word
+    (an idle group's 0 reads as GROUP_SLOTS); None: every group of GROUP_SLOTS slots."""
     b = len(tokens0)
     out = [0] * b
     for g in range(DRAFT_GROUPS):
-        lo, anchor = g * GROUP_SLOTS, (g + 1) * GROUP_SLOTS - 1
-        for j in range(GROUP_SLOTS):
+        width = (mtp[g * b + DESC_DRAFTING] if mtp is not None else 0) or GROUP_SLOTS
+        lo, anchor = g * width, (g + 1) * width - 1
+        for j in range(width):
             x = j + layer
-            out[lo + j] = tokens0[lo + x] if x < GROUP_SLOTS else heads[x - GROUP_SLOTS][anchor]
+            out[lo + j] = tokens0[lo + x] if x < width else heads[x - width][anchor]
     return out
 
 
@@ -426,7 +434,7 @@ def dflash_chain_step(verify, accept, argmax, layout):
     P[slots[c]], the last committed token at the bonus as the anchor, from slot slots[m - 1]; idle groups otherwise."""
     header, pos, chain = _header(verify, accept, argmax)
     drafts = []
-    for g, m, slots, tokens, bonus in _commits(header, pos, chain, accept):
+    for g, m, slots, tokens, bonus, _ in _commits(header, pos, chain, accept):
         context = [(s, pos[s]) for s in slots if 0 <= s < DFLASH_TILE and pos[s] >= 0]
         drafts.append((g, context, tokens[m - 1], bonus, slots[m - 1]))
         _status(header, g, slots[m - 1], bonus)
@@ -549,7 +557,7 @@ def chained_draft(result, source, positions=None, layers=1):
     if not chain.drafting or chain.draft_anchor != chain.anchor:
         return None
     count, tokens, _ = result.accept[source.group]
-    last = (source.group + 1) * GROUP_SLOTS - 1
+    last = source.anchor
     anchor = last if planned_drafts(layers) else (source.slots[count - 1] if 1 <= count <= len(source.slots) else None)
     if not 1 <= count <= len(source.slots) or anchor != chain.anchor:
         raise RuntimeError(f"row {source.row}: the chain drafted at slot {chain.anchor} after {count} tokens")

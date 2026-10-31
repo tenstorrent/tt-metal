@@ -57,7 +57,7 @@ import torch
 import ttnn
 
 from ..reference.kv_pair_split import NO_KEY_LSE
-from ..reference.spec_decode import GROUP_SLOTS, SPEC_SLOTS
+from ..reference.spec_decode import ADAPTIVE, GROUP_SLOTS, SPEC_SLOTS, WIDTHS
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
@@ -93,7 +93,7 @@ PAIR_SPLIT_OPS = all(
 # On by default for groups of 2 slots, off for 4 (MIMO_VERIFY_GROUPED=1 / 0 overrides; packed, groups of 4 win from
 # ~32K and lose 0.2 ms a step at 8K); the adapter then packs a verify's requests one per group of GROUP_SLOTS slots
 # (verify_grouped()).
-VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 else "0") == "1"
+VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 or ADAPTIVE else "0") == "1"
 GROUPED_VERIFY_OPS = "spec_multi_pos_tiles" in (
     ttnn.transformer.paged_flash_multi_latent_attention_decode.__doc__ or ""
 )
@@ -122,21 +122,26 @@ VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "0") == "1"
 
 
 def verify_variants():
-    """The leading-group counts the verify is captured for (the last is every group); [None] without grouping."""
+    """The verifies captured, (group width, leading groups attended) each (the widest last: every group of
+    GROUP_SLOTS slots); [None] without grouping. A pass's group width is GROUP_SLOTS, or with adaptive draft groups
+    (reference/spec_decode.py ADAPTIVE) 2 or 4."""
     if not verify_grouped():
         return [None]
-    groups = SPEC_SLOTS // GROUP_SLOTS
-    if not VERIFY_VARIANTS:
-        return [groups]
-    return [n for n in (1, 2, 4, 8) if n < groups] + [groups]
+    out = []
+    for width in WIDTHS:
+        groups = SPEC_SLOTS // width
+        counts = [n for n in (1, 2, 4, 8) if n < groups] if VERIFY_VARIANTS else []
+        out += [(width, n) for n in counts + [groups]]
+    return out
 
 
-def verify_variant(used_groups):
-    """The narrowest captured verify (verify_variants) attending groups 0 .. ``used_groups`` - 1."""
+def verify_variant(used_groups, width=GROUP_SLOTS):
+    """The narrowest captured verify (verify_variants) in groups of ``width`` slots attending groups 0 ..
+    ``used_groups`` - 1."""
     variants = verify_variants()
     if variants == [None]:
         return None
-    return next(n for n in variants if n >= max(1, used_groups))
+    return next(v for v in variants if v[0] == width and v[1] >= max(1, used_groups))
 
 
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
@@ -1236,9 +1241,9 @@ class TtMiMoAttention:
         the same views. ``used`` (a verify variant, verify_variants): attend only groups 0 .. used - 1, on all the
         cores; the other slots' output is 0 and their lse NO_KEY_LSE, as for an idle group."""
         k_cache, v_cache = kv_cache
-        cands = GROUP_SLOTS
+        cands = GROUP_SLOTS if used is None else used[0]
         all_slots = SPEC_SLOTS
-        groups = all_slots // cands if used is None else used
+        groups = all_slots // cands if used is None else used[1]
         slots = groups * cands
         nh, dk, width = q.shape[-2], q.shape[-1], table.shape[-1]
         packed = GROUPED_PACKED_OPS and cands % 2 == 0 and 2 * nh == TILE

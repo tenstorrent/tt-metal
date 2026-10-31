@@ -7,7 +7,8 @@ contexts differ: the op splits its cores evenly over the groups, so the longest 
 
 - grouped: one call over every group (each group's share of the 8 x 8 grid);
 - active: one call over the groups with a request (attention.verify_variants);
-- sequential: one call per request, each on the whole grid (64 cores).
+- sequential: one call per request, each on the whole grid (64 cores);
+- grouped / active on the device's full compute grid instead of 8 x 8 (MIMO_SDPA_FULL_GRID).
 
 MiMo's shapes: 16 heads, K 192 / V 128, BFP8 caches in 64-token blocks, ``--cands`` candidates per request. Prints
 one ``SDPA_BALANCE`` line.
@@ -145,14 +146,46 @@ def main():
                 )
             return outs
 
+        full = device.compute_with_storage_grid_size()
+        full = (full.x, full.y)
+
+        def grouped_full():
+            return mla(
+                q_all,
+                k_cache,
+                v_cache,
+                page_table_tensor=t_all,
+                cur_pos_tensor=p_all,
+                program_config=program(groups, grid=full),
+                **common,
+            )
+
+        def active_full():
+            return mla(
+                q_act,
+                k_cache,
+                v_cache,
+                page_table_tensor=t_act,
+                cur_pos_tensor=p_act,
+                program_config=program(len(live), grid=full),
+                **common,
+            )
+
         res = {
             name: timed(device, fn, a.iters)
-            for name, fn in [("grouped", grouped), ("active", active), ("sequential", sequential)]
+            for name, fn in [
+                ("grouped", grouped),
+                ("active", active),
+                ("sequential", sequential),
+                ("grouped_full", grouped_full),
+                ("active_full", active_full),
+            ]
         }
         kv_gb = sum(ctx) * (DK + DV) * 1088 / 1024 / 1e9
         print(
             f"SDPA_BALANCE ctx {a.ctx} cands {cands}: grouped {res['grouped']:.3f} ms, active {res['active']:.3f} ms, "
-            f"sequential {res['sequential']:.3f} ms (KV {kv_gb:.3f} GB: {kv_gb / min(res.values()) * 1e3:.0f} GB/s at "
+            f"sequential {res['sequential']:.3f} ms, on the {full[0]}x{full[1]} grid grouped {res['grouped_full']:.3f} ms "
+            f"active {res['active_full']:.3f} ms (KV {kv_gb:.3f} GB: {kv_gb / min(res.values()) * 1e3:.0f} GB/s at "
             f"the best)",
             flush=True,
         )

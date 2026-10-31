@@ -70,6 +70,7 @@ from ..reference.spec_decode import (
     MAX_DRAFTS,
     SERIAL_WRITES,
     SPEC_SLOTS,
+    WIDTHS,
     mtp_table_row,
     planned_drafts,
 )
@@ -196,12 +197,18 @@ class TtMiMoMTP:
         row, blocks = mtp_table_row(m.block_size)
         for layer in self.layers:
             layer.kv_cache = layer.block.attn.allocate_kv_cache(DRAFT_GROUPS * blocks, m.block_size, m.kv_dtype)
-        table = torch.zeros(m.max_batch, len(row), dtype=torch.int32)
-        for g in range(DRAFT_GROUPS):  # draft group g's slots read and write its own ring
-            group_row = mtp_table_row(m.block_size, group=g)[0]
-            table[g * GROUP_SLOTS : (g + 1) * GROUP_SLOTS] = torch.tensor(group_row, dtype=torch.int32)
+        # Per group width (reference.spec_decode.WIDTHS): draft group g's slots g * width .. read and write its own
+        # ring. The page table holds one width's (set_width).
+        self.tables = {}
+        for width in WIDTHS:
+            table = torch.zeros(m.max_batch, len(row), dtype=torch.int32)
+            for g in range(SPEC_SLOTS // width):
+                group_row = mtp_table_row(m.block_size, group=g)[0]
+                table[g * width : (g + 1) * width] = torch.tensor(group_row, dtype=torch.int32)
+            self.tables[width] = table
+        self.width = WIDTHS[-1]
         self.page_table = ttnn.from_torch(
-            table,
+            self.tables[self.width],
             device=m.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -489,14 +496,26 @@ class TtMiMoMTP:
                 "the plugin's trace_mode 'all' or 'decode_only', with enable_model_warmup)"
             )
 
+    def set_width(self, width):
+        """Draft groups of ``width`` slots from the next draft on: the page table maps group g's slots g * width ..
+        to ring g (copied in queue order when the width changes)."""
+        assert width in self.tables, f"group width {width} not in {sorted(self.tables)}"
+        if width == self.width:
+            return
+        host = ttnn.from_torch(
+            self.tables[width], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
+        )
+        ttnn.copy_host_to_device_tensor(host, self.page_table)
+        self.width = width
+
     def enqueue_backfill(self, slot, a, group=0):
         """Fill every layer's ring of draft group ``group`` from the history of the request in lane ``slot`` before a
         draft whose first row is at ``a`` (non-blocking; enqueue the draft right after it): the window
         a - MTP_WINDOW + 1 .. a - 1, and with every layer the stash rows a - 2, a - 1 the draft then re-runs (those of
         them its commit leaves stale), in the group's stash slots."""
         self._require_trace()  # captured with the draft trace (capture_trace)
-        assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS and 0 <= group < DRAFT_GROUPS
-        self.history.upload_backfill(slot, a, group)
+        assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS and 0 <= group < SPEC_SLOTS // self.width
+        self.history.upload_backfill(slot, a, group, self.width)
         ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)
 
     def enqueue(self, tokens, plan):

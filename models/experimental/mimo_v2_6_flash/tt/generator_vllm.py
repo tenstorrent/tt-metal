@@ -129,17 +129,21 @@ from ..reference.config import MiMoConfig
 from ..reference.sample_verify import commit_pass, pass_inputs
 from ..reference.spec_chain import chain_row, chained_draft
 from ..reference.spec_decode import (
+    ADAPTIVE,
+    ADAPTIVE_WIDE_ROWS,
     DRAFT_GROUPS,
     GROUP_SLOTS,
     MAX_DRAFTS,
+    WIDTHS,
     SPEC_SLOTS,
     DraftSource,
     draft_sources,
     plan_mtp,
+    pass_width,
     plan_verify_passes,
     planned_drafts,
 )
-from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant
+from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant, verify_variants
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
@@ -489,9 +493,12 @@ class MiMoV2ForCausalLM:
         self.dflash_ring = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
         # Per lane: each draft group's request (its lane slot; ``_draft_groups``), and the step each slot last ran in.
         self.group_owners = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
+        # Per lane: the width of its draft groups (reference.spec_decode.pass_width; ``_set_width``).
+        self.lane_width = [WIDTHS[-1]] * self.dp
         self.slot_seen = [{} for _ in range(self.dp)]
         self._steps = 0
         self.chain_stats["dflash_resets"] = 0
+        self.chain_stats["width_changes"] = 0
         # Per lane and slot: where the slot's last prefill chunk ended (a chunk starting there continues its request).
         self.prefill_ends = [{} for _ in range(self.dp)]
 
@@ -594,6 +601,11 @@ class MiMoV2ForCausalLM:
             accept_modes=("argmax_ids", "logits", "fused_sample"),
             drafter_state="internal",
             supports_narrow_decode=True,
+            # Adaptive draft groups: 3 drafts per request in groups of 4 slots for up to ADAPTIVE_WIDE_ROWS requests,
+            # 1 in groups of 2 for more (reference.spec_decode.pass_width).
+            k_by_rows=((ADAPTIVE_WIDE_ROWS, k), (max(max_num_seqs, ADAPTIVE_WIDE_ROWS + 1), 1))
+            if ADAPTIVE and k > 1
+            else (),
         )
 
     @classmethod
@@ -1081,9 +1093,13 @@ class MiMoV2ForCausalLM:
             handles.append((lane, last - first, handle))
             live = [s for s in range(last - first) if active[s]]
             self._seen(lane, live)
-            groups = self._draft_groups(lane, live, compact=True) if len(live) <= DRAFT_GROUPS else {}
+            width = self._set_width(lane, len(live))
+            fits = len(live) <= SPEC_SLOTS // width
+            groups = self._draft_groups(lane, live, compact=True, width=width) if fits else {}
             if live and all(groups.get(s) is not None for s in live):
-                self.spec_sources[lane] = [DraftSource(row=first + s, slots=[s], group=groups[s]) for s in live]
+                self.spec_sources[lane] = [
+                    DraftSource(row=first + s, slots=[s], group=groups[s], width=width) for s in live
+                ]
                 self.source_positions[lane] = {first + s: int(pos[s]) + 1 for s in live}
         out = {"rows": rows, "handles": handles, "tokens": on_device}
         if TIMING:
@@ -1206,18 +1222,26 @@ class MiMoV2ForCausalLM:
             ]
             live = [r - first for r, *_ in active]
             self._seen(lane, live)
+            # The pass's group width (adaptive draft groups: from its request count); a row whose drafts came from a
+            # wider step verifies the first width - 1 of them (the rest count as rejected).
+            width = self._set_width(lane, len(live))
+            active = [(r, tok, pos, min(n, width - 1)) for r, tok, pos, n in active]
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
                 # A pass the host builds may move its requests into the lowest groups (the narrowest verify
                 # variant); a relayed row keeps its group, whose result page the relay step reads.
                 compact = not any(first <= r < last for r in relayed)
                 groups = {
-                    first + s: g for s, g in self._draft_groups(lane, live, compact=compact).items() if g is not None
+                    first + s: g
+                    for s, g in self._draft_groups(lane, live, compact=compact, width=width).items()
+                    if g is not None
                 }
             # The grouped verify attention scans each group's KV once: one request per group (verify_grouped).
-            passes = plan_verify_passes(active, groups=groups, aligned=KV_PAIR_SPLIT and verify_grouped())
+            passes = plan_verify_passes(
+                active, groups=groups, group_slots=width, aligned=KV_PAIR_SPLIT and verify_grouped()
+            )
             lanes.append(passes)
-            lane_sources = sources[lane] = draft_sources(passes)
+            lane_sources = sources[lane] = draft_sources(passes, group_slots=width)
             # The draft sources run one pass: its chain row goes with it, a block per source.
             chained = accept and SPEC_CHAIN and bool(lane_sources) and self._drafter(lane) is not None
             chained = chained and model.rope_tables is not None
@@ -1509,9 +1533,9 @@ class MiMoV2ForCausalLM:
         self._verify_tables_s += time.perf_counter() - t
         chain = None if chain is None else torch.tensor(chain, dtype=torch.int32)
         # The narrowest verify variant that attends every group the pass uses (the widest is the default replay).
-        used = 1 + max((s // GROUP_SLOTS for s, p in enumerate(vp.positions) if p >= 0), default=0)
-        variant = verify_variant(used)
-        narrow = {"groups": variant} if variant is not None and variant != verify_variant(DRAFT_GROUPS) else {}
+        used = 1 + max((s // vp.width for s, p in enumerate(vp.positions) if p >= 0), default=0)
+        variant = verify_variant(used, vp.width)
+        narrow = {"groups": variant} if variant is not None and variant != verify_variants()[-1] else {}
         return model.verify_enqueue(tok, pos, chain, accept=accept, **narrow)
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
@@ -1563,7 +1587,7 @@ class MiMoV2ForCausalLM:
                 hit = hit and chained.matches(committed_tokens[r].tolist(), committed_positions[r].tolist(), m)
                 if hit:
                     drafts[r] = torch.tensor(chained.drafts[:num_drafts], dtype=torch.int32)
-                    valid[r] = num_drafts
+                    valid[r] = min(num_drafts, source.width - 1)
                     hits += 1
                     if not self.chain_check:
                         continue
@@ -1623,7 +1647,7 @@ class MiMoV2ForCausalLM:
             self.mtp_ring[lane][source.group] = (slot, int(positions[m - 1]) - 1)
         if mtp.multi:
             mtp.enqueue_layers(commits)
-            return [(source.group + 1) * GROUP_SLOTS - 1 for source, *_ in commits]
+            return [source.anchor for source, *_ in commits]
         assert len(commits) == 1, "one MTP layer drafts for one request"
         ((source, tokens, positions, m),) = commits
         plan = plan_mtp(source, positions, m)
@@ -1633,7 +1657,23 @@ class MiMoV2ForCausalLM:
         mtp.enqueue(slot_tokens, plan)
         return [plan.anchor]
 
-    def _draft_groups(self, lane, slots, prompt=False, compact=False):
+    def _set_width(self, lane, live):
+        """The draft-group width of the lane's next pass, for ``live`` requests (reference.spec_decode.pass_width). A
+        change empties every group (the requests take groups again; their MTP rings and stash backfill before their
+        next draft) and points the MTP drafter's page table at the new groups."""
+        width = pass_width(live)
+        if width != self.lane_width[lane]:
+            self.lane_width[lane] = width
+            self.group_owners[lane] = [None] * DRAFT_GROUPS
+            self.mtp_ring[lane] = [None] * DRAFT_GROUPS
+            self.dflash_ring[lane] = [None] * DRAFT_GROUPS
+            mtp = self.models[lane].mtp
+            if mtp is not None and hasattr(mtp, "set_width"):
+                mtp.set_width(width)
+            self.chain_stats["width_changes"] += 1
+        return width
+
+    def _draft_groups(self, lane, slots, prompt=False, compact=False, width=None):
         """{slot: draft group} of the requests in lane ``slots`` (a step's live slots, or a prompt's slot): a request
         keeps its group while it runs, so its drafter state (rings, stash) stays its own. A slot without one takes a
         group no live slot owns: the lowest unowned one, else the one whose request ran least recently; None when
@@ -1644,25 +1684,28 @@ class MiMoV2ForCausalLM:
         group: always 0."""
         if DRAFT_GROUPS == 1:
             return {s: 0 for s in slots}
+        width = self.lane_width[lane] if width is None else width
+        count = SPEC_SLOTS // width  # the pass's groups at this width
         owners, seen = self.group_owners[lane], self.slot_seen[lane]
         out = {}
         for s in slots:
-            if s in owners:
+            if s in owners[:count]:
                 out[s] = owners.index(s)
                 continue
             taken = set(slots) if not prompt else {s}
-            free = [g for g in range(DRAFT_GROUPS) if owners[g] is None or owners[g] not in taken]
+            free = [g for g in range(count) if owners[g] is None or owners[g] not in taken]
             if not free:
                 out[s] = None
                 continue
             g = min(free, key=lambda g: (owners[g] is not None, g if owners[g] is None else seen.get(owners[g], -1)))
             owners[g], out[s] = s, g
             self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None  # another request's rows
-        if compact and not prompt and len(slots) <= DRAFT_GROUPS:
-            width = verify_variant(len(slots))
-            while width is not None and max(out.values()) >= width:
+        variant = verify_variant(len(slots), width) if compact and not prompt and 0 < len(slots) <= count else None
+        if variant is not None and None not in out.values():
+            attended = variant[1]
+            while max(out.values()) >= attended:
                 s = max(out, key=out.get)
-                g = min(g for g in range(width) if owners[g] is None or owners[g] not in slots)
+                g = min(g for g in range(attended) if owners[g] is None or owners[g] not in slots)
                 owners[out[s]] = None
                 owners[g], out[s] = s, g
                 self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None
@@ -1764,7 +1807,7 @@ class MiMoV2ForCausalLM:
                     continue
                 if chained.matches(committed_tokens[r].tolist(), committed_positions[r].tolist(), int(counts[r])):
                     drafts[r] = torch.tensor(chained.drafts[:num_drafts], dtype=torch.int32)
-                    valid[r] = num_drafts
+                    valid[r] = min(num_drafts, source.width - 1)
                     hits += 1
         self.chain_stats["chained"] += hits
         if TIMING:

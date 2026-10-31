@@ -13,7 +13,8 @@
 // request's slot (the chain row's word chain_hslots + j, slot + 1; 0 none).
 // Mode 2, a write list (prefill): per entry (source row, entry, position, token); source -1 invalidates the entry,
 // -2 skips it.
-// Mode 3, the backfill plan (backfill trace): from the upload (drafting, slot, A, draft group g) and the page, the fill
+// Mode 3, the backfill plan (backfill trace): from the upload (drafting: 0 idle, else the draft groups' width w; slot,
+// A, draft group g) and the page, the fill
 // of draft group g's whole
 // ring from S0 = floor(max(0, A - W + 1) / block) * block (W the MTP window, H >= W + S - 1: the window before a
 // verify pass at A and the pass's rows): row r at position q = S0 + r takes history entry slot * H + q % H when the
@@ -21,7 +22,8 @@
 // holds at q + i + 1 (else 0; past A a verify pass's, committed in every row the draft does not re-run); the fill's
 // page table row (ring blocks from S0's, then the scratch blocks); with every layer the stash rows A - 2, A - 1
 // (positions, layer-0 tokens, hidden rows copied into the stash's hidden buffer) when the history holds them and their
-// tokens, in group g's last two stash slots (its other slots emptied; a group's ring and scratch blocks start at
+// tokens, in group g's last two stash slots g * w + w - 2, g * w + w - 1 (its other slots emptied; a group's ring and
+// scratch blocks start at
 // g * table_words). Idle: group 0's scratch blocks, the stash left alone.
 
 #include <cstdint>
@@ -54,7 +56,10 @@ void kernel_main() {
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(11);
     constexpr uint32_t W = get_compile_time_arg_val(12);   // the MTP layers' SWA window
     constexpr uint32_t GS = get_compile_time_arg_val(13);  // a draft group's slots (its stash slots)
-    static_assert(S <= B && chain_hslots + S <= B && N % block == 0 && 2 * (N / block) <= table_words);
+    // The history's slots may spill past the chain row (adaptive draft groups: reference/spec_inputs.py VERIFY_ROWS).
+    constexpr uint32_t verify_rows = chain_row + 1 + (chain_hslots + S + B - 1) / B - 1;
+    static_assert(S <= B && chain_hslots + S <= (verify_rows - chain_row) * B && N % block == 0);
+    static_assert(2 * (N / block) <= table_words);
     static_assert(GS >= 2 && S % GS == 0);
     static_assert(W + S - 1 <= H && W + block <= N);
     constexpr uint32_t page_bytes = 2 * S * H * 4;
@@ -95,7 +100,7 @@ void kernel_main() {
                 }
             }
         } else if constexpr (mode == 1) {
-            constexpr uint32_t verify_bytes = (chain_row + 1) * B * 4;
+            constexpr uint32_t verify_bytes = verify_rows * B * 4;
             noc_async_read(dram_addr(get_arg_val<uint32_t>(3), verify_bytes), in_l1, verify_bytes);
             noc_async_read_barrier();
             const int32_t* tokens = reinterpret_cast<const int32_t*>(in_l1);
@@ -169,7 +174,8 @@ void kernel_main() {
         if (drafting) {
             const uint32_t slot = static_cast<uint32_t>(upload[1]);
             const int32_t a = upload[2];
-            const uint32_t first = static_cast<uint32_t>(upload[3]) * GS;  // the group's stash slots
+            const uint32_t w = upload[0] <= static_cast<int32_t>(GS) ? static_cast<uint32_t>(upload[0]) : GS;
+            const uint32_t first = static_cast<uint32_t>(upload[3]) * w;  // the group's stash slots
             const int32_t blocks = upload[3] * static_cast<int32_t>(table_words);
             const int32_t lo = a - static_cast<int32_t>(W) + 1 > 0 ? a - static_cast<int32_t>(W) + 1 : 0;
             const int32_t s0 = lo / static_cast<int32_t>(block) * static_cast<int32_t>(block);
@@ -196,12 +202,12 @@ void kernel_main() {
             if constexpr (layers > 1) {
                 // The group's stash slots: its last two hold rows A - 2, A - 1 when the history holds them and their
                 // layer-0 tokens; their hidden rows go to those slots' stash hidden rows.
-                for (uint32_t k = first; k < first + GS; ++k) {
+                for (uint32_t k = first; k < first + w; ++k) {
                     stash[k] = -1;
                     stash[S + k] = 0;
                 }
-                for (uint32_t k = first + GS - 2; k < first + GS; ++k) {
-                    const int32_t q = a - static_cast<int32_t>(first + GS - k);
+                for (uint32_t k = first + w - 2; k < first + w; ++k) {
+                    const int32_t q = a - static_cast<int32_t>(first + w - k);
                     if (held(q) && held(q + 1)) {
                         stash[k] = q;
                         stash[S + k] = token(q + 1);

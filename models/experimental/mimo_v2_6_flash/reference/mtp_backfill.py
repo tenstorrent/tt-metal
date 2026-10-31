@@ -150,12 +150,13 @@ def pack_writes(writes, entries):
 
 
 # ---------------------------------------------------------------------- the backfill
-def backfill_row(max_batch, slot=None, a=None, group=0):
+def backfill_row(max_batch, slot=None, a=None, group=0, width=GROUP_SLOTS):
     """The backfill upload's int32 values [max_batch]: the request in lane slot ``slot``, the draft's first row at
-    ``a``, into draft group ``group``'s ring and stash slots; None: idle."""
+    ``a``, into draft group ``group``'s ring and stash slots (groups of ``width`` slots: the drafting word); None:
+    idle."""
     row = [0] * max_batch
     if slot is not None:
-        row[BACKFILL_DRAFTING], row[BACKFILL_SLOT], row[BACKFILL_A] = 1, int(slot), int(a)
+        row[BACKFILL_DRAFTING], row[BACKFILL_SLOT], row[BACKFILL_A] = int(width), int(slot), int(a)
         row[BACKFILL_GROUP] = int(group)
     return row
 
@@ -209,7 +210,8 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
     from .spec_chain import STASH_POSITIONS, STASH_TOKENS
 
     new = list(stash)
-    first, last = group * GROUP_SLOTS, (group + 1) * GROUP_SLOTS - 1
+    width = upload[BACKFILL_DRAFTING] if 0 < upload[BACKFILL_DRAFTING] <= GROUP_SLOTS else GROUP_SLOTS
+    first, last = group * width, (group + 1) * width - 1
     for k in range(first, last + 1):
         new[STASH_POSITIONS + k], new[STASH_TOKENS + k] = -1, 0
     for k, q in ((last - 1, a - 2), (last, a - 1)):
