@@ -107,6 +107,196 @@ def test_didt_bad_devices():
     assert didt_bad_devices(log) == {17: 2}
 
 
+LOGURU = "2026-10-31 03:12:44.123 | {} | {} - {}\n"
+
+
+def test_run_to_run_bad_devices():
+    from gwdt_checks import run_to_run_bad_devices
+
+    where = "tests.didt.test_matmul_run_to_run_determinism:test_matmul_run_to_run_determinism:172"
+    log = "".join(
+        LOGURU.format("WARNING ", where, m)
+        for m in (
+            "  cores= 16 (4x4 at 5,7): shard 21 (device id 14), logical core (6, 8) -> physical (7,9): "
+            "run-to-run NOT deterministic, 40 elements",
+            "  cores=110 (11x10 at 0,0): shard 21 (device id 14), logical core (6, 8) -> physical (7,9): "
+            "run-to-run NOT deterministic, 12 elements",
+            "  cores=110 (11x10 at 0,0): shard 18 (device id 23), logical core (5, 8) -> physical (6,9): "
+            "run-to-run NOT deterministic, 3 elements",
+        )
+    ) + LOGURU.format("INFO    ", where, "  cores=110: stable vs-shard0 offsets on shards [3] (not ND)")
+    assert run_to_run_bad_devices(log) == {
+        14: {"shard 21 core (6, 8) phys (7,9)": 52},
+        23: {"shard 18 core (5, 8) phys (6,9)": 3},
+    }
+
+
+def test_sweep_bad_devices_and_skipped_windows():
+    from gwdt_checks import sweep_bad_devices, sweep_skipped_windows
+
+    where = "tests.didt.scratch_core_sweep:test_core_sweep:108"
+    log = (
+        LOGURU.format("WARNING ", where, "  window 11x10 at (0,0): device 21 NOT deterministic, 96 elements")
+        + LOGURU.format("INFO    ", where, "skipped windows: 0 -> []")
+        + LOGURU.format("SUCCESS ", where, "mode=grid: 1 (device,window) ND hits; devices=[21]")
+    )
+    assert sweep_bad_devices(log) == {21: 96}
+    assert sweep_skipped_windows(log) == 0
+    assert sweep_skipped_windows(LOGURU.format("INFO    ", where, "skipped windows: 1 -> [((0, 0), 'TT_THROW')]")) == 1
+    assert sweep_skipped_windows("=== 1 failed in 9s ===") is None
+
+
+def _write_ack_log(chips, hung):
+    where = "__main__:scan_all_chips:274"
+    lines = [LOGURU.format("INFO    ", where, "scanning 32 chips, dispatch watchdog=30s, logs under /tmp/x")]
+    for c in chips:
+        if c in hung:
+            why = f"HUNG chip {c} (runtime id 0): BusDeviceFunction=0000:c3:00.0 /dev/tenstorrent/{c} T3:N3"
+            lines.append(LOGURU.format("ERROR   ", where, f"chip {c} FAIL: {why}"))
+            lines.append(LOGURU.format("ERROR   ", where, f"  cat /tmp/x/chip{c}/pytest.log"))
+        else:
+            lines.append(LOGURU.format("SUCCESS ", where, f"chip {c} PASS"))
+    end = f"hung chips: {sorted(hung)} -- reset before re-running" if hung else f"all {len(chips)} chips passed"
+    return "".join(lines) + LOGURU.format("INFO    ", where, end)
+
+
+def test_write_ack_result():
+    from gwdt_checks import write_ack_result
+
+    assert write_ack_result(_write_ack_log(range(32), set())) == Result(Status.PASS, "no hang on 32/32 chips")
+    r = write_ack_result(_write_ack_log([19, 3, 0], {19, 3}))
+    assert r.status == Status.FAIL
+    assert r.reason == "hang on 2/3 chips"
+    assert r.details == [
+        "chip 3: hang BusDeviceFunction=0000:c3:00.0 /dev/tenstorrent/3 T3:N3",
+        "chip 19: hang BusDeviceFunction=0000:c3:00.0 /dev/tenstorrent/19 T3:N3",
+    ]
+    crash = "Traceback (most recent call last):\nFileNotFoundError: [Errno 2] No such file\n"
+    assert write_ack_result(crash) == Result(Status.FAIL, "FileNotFoundError: [Errno 2] No such file")
+
+
+MATMUL_KEYS = [
+    "matmul:minimal",
+    "matmul:ff1",
+    "matmul:duty-cycle",
+    "matmul:run-to-run",
+    "matmul:core-sweep",
+    "matmul:mcast-ack",
+]
+
+
+def test_matmul_runs_replace_didt_after_the_gates():
+    from gwdt_steps import build_steps
+
+    keys = [s.key for s in build_steps(["glm53"])]
+    assert "didt" not in keys
+    first = keys.index("matmul:minimal")
+    assert keys[first - 1] == "mla-soak"
+    assert keys[first : first + len(MATMUL_KEYS)] == MATMUL_KEYS
+    assert keys[first + len(MATMUL_KEYS)] == "block:glm53"
+
+
+def test_matmul_commands(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, build_steps
+
+    seen = {}
+    calls = _fake_sh(monkeypatch, 0, lambda cmd, log, env: seen.setdefault(cmd, env))
+    steps = {s.key: s for s in build_steps(["glm53"])}
+    cmds = {}
+    for key in MATMUL_KEYS:
+        calls.clear()
+        steps[key].run(Ctx(tmp_path, tmp_path, False), State())
+        assert calls[0] == "tt-smi -glx_reset_auto" and calls[2] == "tt-smi -s --snapshot_no_tty"
+        cmds[key] = calls[1]
+    assert cmds == {
+        "matmul:minimal": "pytest -vs -rA 'tests/didt/test_minimal_matmul.py::test_minimal_matmul"
+        "[blackhole-bf16_HiFi2-galaxy]' '--didt-workload-iterations=1000' '--determinism-check-interval=50' "
+        "'--timeout' '1200'",
+        "matmul:ff1": "pytest -vs -rA 'tests/didt/test_ff1_matmul.py::test_ff1_matmul[blackhole-galaxy-without_gelu]' "
+        "'--didt-workload-iterations=2000' '--determinism-check-interval=25' '--timeout' '1800'",
+        "matmul:duty-cycle": "pytest -vs -rA 'tests/didt/test_duty_cycle.py::test_duty_cycle"
+        "[blackhole-duty-5-rep-1000x-all]' '--didt-workload-iterations=10' '--determinism-check-interval=1' "
+        "'--timeout' '1800'",
+        "matmul:run-to-run": "pytest -vs -rA 'tests/didt/test_matmul_run_to_run_determinism.py"
+        "::test_matmul_run_to_run_determinism[blackhole-galaxy]' '-p' 'no:randomly' '--timeout=0'",
+        "matmul:core-sweep": "pytest -vs -rA 'tests/didt/scratch_core_sweep.py::test_core_sweep[blackhole-galaxy]' "
+        "'-p' 'no:randomly' '--timeout=0'",
+        "matmul:mcast-ack": "python tests/didt/test_mm_mcast_write_ack_failure.py",
+    }
+    assert seen[cmds["matmul:duty-cycle"]]["TT_MESH_GRAPH_DESC_PATH"] == (
+        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+    )
+    assert seen[cmds["matmul:core-sweep"]].items() >= {"TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": "11x10"}.items()
+    assert "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" in seen[cmds["matmul:run-to-run"]]
+    assert seen[cmds["matmul:mcast-ack"]] == {"TMPDIR": str(tmp_path / "matmul" / "mcast-ack")}
+
+
+def test_matmul_nd_details_per_device(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, build_steps
+
+    def write(cmd, log, env):
+        if "test_minimal_matmul" in cmd:
+            log.write_text(
+                "Number of non-deterministic outputs on device 17 is 2\n"
+                "FAILED tests/didt/test_minimal_matmul.py::x - assert False\n=== 1 failed in 9s ===\n"
+            )
+
+    _fake_sh(monkeypatch, 0, write)
+    step = next(s for s in build_steps(["glm53"]) if s.key == "matmul:minimal")
+    r = step.run(Ctx(tmp_path, tmp_path, False), State())
+    assert r.status == Status.FAIL
+    assert r.details == ["device 17: 2 non-deterministic outputs"]
+
+
+def test_core_sweep_skipped_window_fails(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, build_steps
+
+    def write(cmd, log, env):
+        if "scratch_core_sweep" in cmd:
+            log.write_text("skipped windows: 1 -> [((0, 0), 'TT_THROW')]\n=== 1 passed in 9s ===\n")
+
+    _fake_sh(monkeypatch, 0, write)
+    step = next(s for s in build_steps(["glm53"]) if s.key == "matmul:core-sweep")
+    r = step.run(Ctx(tmp_path, tmp_path, False), State())
+    assert r == Result(Status.FAIL, "11x10 window did not run, skipped windows: 1")
+
+
+def test_run_all_matmul_fail_blocks_nothing():
+    from gwdt_steps import run_all
+
+    steps, ctx = _steps(
+        ("m1", "matmul", None, Status.FAIL), ("m2", "matmul", None, Status.HANG), ("b", "block", "m", Status.PASS)
+    )
+    run_all(steps, ctx, set(), lambda s: None)
+    assert [s.state.result.status for s in steps] == [Status.FAIL, Status.HANG, Status.PASS]
+
+
+def test_matmul_nd_layout(tmp_path, monkeypatch):
+    import json
+    import re
+
+    from galaxy_workload_deployment_test import Screen
+    from gwdt_steps import Step
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    ok = Step("matmul:minimal", "matmul minimal", "matmul", None, True, None)
+    ok.state.result = Result(Status.PASS, "1 passed")
+    bad = Step("matmul:duty-cycle", "matmul duty-cycle", "matmul", None, True, None)
+    bad.state.result = Result(Status.FAIL, "assert False", ["device 17: 2 non-deterministic outputs"])
+    block = Step("block:kimi_k2_7", "block K2.7", "block", "kimi_k2_7", True, None)
+    screen = Screen([ok, bad, block], ["hdr"], tmp_path / "status.json", {})
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in screen.lines()]
+    m = lines.index("MATMUL ND")
+    run, failed, dev = lines[m + 1 : m + 4]
+    assert run.startswith("   minimal ") and failed.startswith("   duty-cycle ") and dev.startswith("     device 17 ")
+    assert run.index("PASS") == failed.index("FAIL") == dev.index("FAIL")
+    assert dev.endswith("2 non-deterministic outputs")
+    assert lines[m + 4 : m + 6] == ["", "MODELS"]
+    screen.write_status()
+    rows = {s["key"]: s for s in json.loads((tmp_path / "status.json").read_text())["steps"]}
+    assert rows["matmul:duty-cycle"]["details"] == ["device 17: 2 non-deterministic outputs"]
+
+
 def test_fabric_results():
     log = "PASSED x.py::test_fabric_opens[FABRIC_2D]\n" "FAILED x.py::test_fabric_opens[FABRIC_2D_TORUS_XY] - E\n"
     assert fabric_results(log) == {"FABRIC_2D": True, "FABRIC_2D_TORUS_XY": False}
@@ -138,8 +328,8 @@ def test_screen_has_no_ansi_when_not_tty(tmp_path, monkeypatch, capsys):
     from gwdt_steps import Step
 
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
-    step = Step("didt", "didt", "gate", None, True, lambda ctx, state: Result(Status.PASS))
-    step.state.result = Result(Status.FAIL, "device 17: 2 non-deterministic outputs")
+    step = Step("matmul:minimal", "matmul minimal", "matmul", None, True, lambda ctx, state: Result(Status.PASS))
+    step.state.result = Result(Status.FAIL, "assert False", ["device 17: 2 non-deterministic outputs"])
     screen = Screen([step], ["hdr"], tmp_path / "status.json", {})
     screen.update(step)
     screen.done = True

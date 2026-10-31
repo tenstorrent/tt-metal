@@ -206,6 +206,50 @@ def didt_bad_devices(log_text: str) -> dict[int, int]:
     return {int(d): int(k) for d, k in found if int(k) > 0}
 
 
+def run_to_run_bad_devices(log_text: str) -> dict[int, dict[str, int]]:
+    """tests/didt/test_matmul_run_to_run_determinism.py: differing elements per device id and shard / core, summed
+    over the windows."""
+    bad: dict[int, dict[str, int]] = {}
+    found = re.findall(
+        r"shard (\d+) \(device id (\d+)\), logical core (\(\d+, \d+\)) -> physical (\(\d+,\d+\)): "
+        r"run-to-run NOT deterministic, (\d+) elements",
+        log_text,
+    )
+    for shard, dev, logical, physical, n in found:
+        per = bad.setdefault(int(dev), {})
+        where = f"shard {shard} core {logical} phys {physical}"
+        per[where] = per.get(where, 0) + int(n)
+    return bad
+
+
+def sweep_bad_devices(log_text: str) -> dict[int, int]:
+    """tests/didt/scratch_core_sweep.py: differing elements per device id, summed over the windows."""
+    bad: dict[int, int] = {}
+    for dev, n in re.findall(r"device (\d+) NOT deterministic, (\d+) elements", log_text):
+        bad[int(dev)] = bad.get(int(dev), 0) + int(n)
+    return bad
+
+
+def sweep_skipped_windows(log_text: str) -> int | None:
+    """Windows the sweep caught an exception on: it skips them and still passes."""
+    found = re.findall(r"skipped windows: (\d+) ->", log_text)
+    return int(found[-1]) if found else None
+
+
+def write_ack_result(log_text: str) -> Result:
+    """tests/didt/test_mm_mcast_write_ack_failure.py run as a script, a hang check with no output compare: one
+    `chip N PASS` or `chip N FAIL: why` line per chip, `why` naming the card when the chip's own log does."""
+    passed = re.findall(r"chip (\d+) PASS$", log_text, re.MULTILINE)
+    failed = sorted(re.findall(r"chip (\d+) FAIL: (.*)$", log_text, re.MULTILINE), key=lambda f: int(f[0]))
+    total = len(passed) + len(failed)
+    if failed:
+        details = [f"chip {c}: " + re.sub(r"^HUNG chip \d+ \(runtime id \d+\): ", "hang ", why) for c, why in failed]
+        return Result(Status.FAIL, f"hang on {len(failed)}/{total} chips", details)
+    if not re.search(r"all \d+ chips passed", log_text):
+        return Result(Status.FAIL, _first(r"^(\w+(?:Error|Exception): .*)$", log_text) or "no result")
+    return Result(Status.PASS, f"no hang on {total}/{total} chips")
+
+
 def mla_determinism_reps(log_text: str) -> int | None:
     found = re.findall(r"Chunked prefill determinism: (\d+) reps", log_text)
     return int(found[-1]) if found else None
