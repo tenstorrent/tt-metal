@@ -908,6 +908,12 @@ jobs:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
     runs-on: ubuntu-latest
+    # One run per PR at a time: the summary rewrite carries the ping record
+    # forward from the comment it read, so an overlapping run could drop an
+    # entry another run had just appended.
+    concurrency:
+      group: codeowners-post-comment-${{ needs.find-pr.outputs.pr-number }}
+      cancel-in-progress: false
     steps:
       - name: Checkout scripts
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -1341,6 +1347,14 @@ jobs:
           TEMP_JSON_FILE=$(mktemp)
           COMMENT_FILE=$(mktemp)
           echo "$COMMENT" > "$COMMENT_FILE"
+          # The summary is regenerated from scratch, so copy the hidden
+          # codeowners-ping-record block across from the comment it replaces.
+          if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
+            OLD_COMMENT_FILE=$(mktemp)
+            echo "$ALL_COMMENTS" | jq -r --argjson id "$EXISTING_COMMENT_ID" '.[] | select(.id == $id) | .body' > "$OLD_COMMENT_FILE"
+            python3 .github/scripts/codeowners_ping_record.py carry "$COMMENT_FILE" "$OLD_COMMENT_FILE"
+            rm -f "$OLD_COMMENT_FILE"
+          fi
           jq -n --rawfile body "$COMMENT_FILE" '{"body": $body}' > "$TEMP_JSON_FILE"
           rm -f "$COMMENT_FILE"
 
@@ -1984,6 +1998,8 @@ jobs:
           SLACK_USERS_FILE: ${{ runner.temp }}/slack_users.json
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
           GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          # Per-rule record of this selection; appended to the PR once Slack accepts the ping.
+          PING_RECORD_FILE: ${{ runner.temp }}/ping_record.json
         run: |
           python3 .github/scripts/select_owners_to_ping.py
       - name: Send notifications
@@ -2470,6 +2486,14 @@ jobs:
               echo "✅ Successfully sent Slack notification to channel $SLACK_CHANNEL (message ts: $SLACK_TS)"
               echo "📋 Notified users: $SELECTED_OWNERS"
               echo "📋 Notified groups: $SELECTED_SLACK_GROUPS"
+
+              # Record who was pinged in a hidden block on the CodeOwners bot
+              # comment, for the follow-up reminder. Best effort: never fails the step.
+              PR_NUMBER="$PR_NUMBER" \
+              PING_RECORD_FILE="${RUNNER_TEMP}/ping_record.json" \
+              GITHUB_TOKEN="${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              GITHUB_REPOSITORY="${{ github.repository }}" \
+                python3 .github/scripts/codeowners_ping_record.py append || true
             else
               SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
               echo "❌ Failed to send Slack notification: $SLACK_ERROR"
