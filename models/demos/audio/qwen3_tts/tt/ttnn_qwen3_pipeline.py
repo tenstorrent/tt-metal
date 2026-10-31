@@ -30,6 +30,7 @@ clone the codec and speaker encoders. On host: tokenising, embedding gathers, th
 """
 
 import time
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -554,15 +555,41 @@ def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
     return torch.cat([head, body, voice], dim=1), prompt_ids
 
 
+@dataclass
+class TalkerRequest:
+    """One utterance between frames: where the talker writes next, its last hidden state on
+    device, and the text track still to feed (`None` once the whole text is in the prompt)."""
+
+    position: int
+    last: ttnn.Tensor
+    feed: "StreamingText | None" = None
+
+
 class Qwen3TTSPipeline:
     """The three device blocks plus the host loop that drives them.
+
+    The loop is three calls a caller can also drive one frame at a time: `start` prefills a
+    prompt, `codec_logits` scores codebook 0 of the next frame, and `predict` then
+    `feed_back` complete that frame and advance the talker past it.
 
     The talker's cache is sized on construction, so `max_frames` is fixed for the life of
     the instance; ask for what you need up front. Each `generate` prefills eagerly and
     then captures the two step traces, since the two cannot coexist.
     """
 
-    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None, profile=False, predictor_on_device=True):
+    def __init__(
+        self,
+        device,
+        max_frames=DEFAULT_MAX_FRAMES,
+        seed=None,
+        profile=False,
+        kv_cache=None,
+        codec=True,
+        predictor_on_device=True,
+    ):
+        """`kv_cache` hands the talker a paged cache the caller owns (see
+        `TtTalkerCachedDecoder`). `codec=False` skips the codec decoder, for a caller that only
+        wants frames: the `generate*` methods need it, `codes` and the frame steps do not."""
         self.device = device
         self.max_frames = max_frames
         # Charges each block of the frame loop separately, and syncs the device between them
@@ -578,9 +605,11 @@ class Qwen3TTSPipeline:
         # tokenizer will hand back plus every frame plus the warmup slot past both.
         self.prompt_room = self.talker_config.get("max_position_embeddings", 2048)
         room = min(self.prompt_room, 512) + max_frames + 8
-        self.talker = TtTalkerCachedDecoder(device, preprocess_cached_talker_parameters(device), max_seq=room)
+        self.talker = TtTalkerCachedDecoder(
+            device, preprocess_cached_talker_parameters(device), max_seq=room, kv_cache=kv_cache
+        )
         self.predictor = TtCodePredictorCachedDecoder(device, preprocess_cached_predictor_parameters(device))
-        self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device))
+        self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device)) if codec else None
         self.codec_head = ttnn.from_torch(
             self.tables.codec_head.t().contiguous(),
             dtype=ttnn.bfloat16,
@@ -707,6 +736,8 @@ class Qwen3TTSPipeline:
         dropped, so this drops it, which costs about 0.1 s. Both traces come down first: a trace
         built from dropped programs hangs.
         """
+        if self.codec is None:
+            raise RuntimeError("this pipeline was built with codec=False, so it decodes no waveforms")
         frames = codes.shape[-1]
         if self.codec.program_room_needed(frames):
             self.release()
@@ -723,8 +754,11 @@ class Qwen3TTSPipeline:
         self.last_timings["codec_padded_frames"] = self.codec.padded_frames(frames)
         return waveform
 
-    def _decode_frames(self, embeddings, limit, on_frame=None, feed=None):
-        """Prefill the prompt, then sample frames until end of speech. Returns codes [T, 16].
+    def start(self, embeddings, limit, feed=None):
+        """Prefill a prompt `[1, P, hidden]` and capture the step traces.
+
+        Returns the request, ready for `codec_logits`, and the prefill's timings. `limit` is
+        the most frames the caller will step; the cache must hold the prompt and all of them.
 
         A prefill is eager work, and eager work beside a live trace is what hangs the
         device, so every utterance releases both traces, prefills, then captures again.
@@ -742,7 +776,10 @@ class Qwen3TTSPipeline:
             embeddings = torch.cat([embeddings, filler], dim=1)
 
         self.release()
-        self.talker.reset()
+        if self.talker.owns_cache:
+            # A caller-owned cache holds other requests' blocks; this one's are all rewritten
+            # before they are read.
+            self.talker.reset()
         started = time.time()
         hidden = self.talker.prefill(embeddings)
         last = ttnn.slice(hidden, [0, prompt - 1, 0], [1, prompt, hidden.shape[2]])
@@ -752,6 +789,41 @@ class Qwen3TTSPipeline:
         started = time.time()
         self._capture()
         timings["capture_s"] = time.time() - started
+        return TalkerRequest(position=prompt, last=last, feed=feed), timings
+
+    def codec_logits(self, request, watch=None):
+        """Codebook-0 logits for the request's next frame, a host row with every control id
+        except end-of-speech at `-inf`: the talker may never emit one."""
+        # HiFi4, fp32 logits: ttnn's defaults cost 0.035-0.081 of sampling distance to fp32.
+        logits = ttnn.linear(
+            request.last, self.codec_head, compute_kernel_config=self.talker.compute_config, dtype=ttnn.float32
+        )
+        row = ttnn.to_torch(logits).float().reshape(-1)
+        ttnn.deallocate(logits)  # released before the next trace runs, or it aliases trace memory
+        row[self._control_ids] = -float("inf")
+        if watch is not None:
+            watch.split("codec_head")
+        return row
+
+    def predict(self, request, first, pick=None, watch=None):
+        """Codebooks 1 to 15 of the frame whose codebook 0 is `first`. Returns all 16."""
+        return [int(first)] + list(
+            self.predictor.generate(request.last, first, pick=pick, watch=watch, generator=self.generator)
+        )
+
+    def feed_back(self, request, frame, watch=None):
+        """Step the talker over a completed frame, so the request is ready for the next."""
+        embedding = self._frame_embedding(frame, request.feed)
+        if watch is not None:
+            watch.split("embed")
+        request.last = self.talker.step(embedding, request.position)
+        request.position += 1
+        if watch is not None:
+            watch.split("talker")
+
+    def _decode_frames(self, embeddings, limit, on_frame=None, feed=None):
+        """Prefill the prompt, then sample frames until end of speech. Returns codes [T, 16]."""
+        request, timings = self.start(embeddings, limit, feed)
 
         inner = self._inner_pick()
         penalty = self.generation.get("repetition_penalty", 1.0)
@@ -759,29 +831,19 @@ class Qwen3TTSPipeline:
         watch = Stopwatch(self.device, strict=self.profile)
         started = time.time()
         for step in range(limit):
-            # HiFi4, fp32 logits: ttnn's defaults cost 0.035-0.081 of sampling distance to fp32.
-            logits = ttnn.linear(
-                last, self.codec_head, compute_kernel_config=self.talker.compute_config, dtype=ttnn.float32
-            )
-            row = ttnn.to_torch(logits).float().reshape(-1)
-            ttnn.deallocate(logits)  # released before the next trace runs, or it aliases trace memory
-            watch.split("codec_head")
+            row = self.codec_logits(request, watch)
             first = self._pick(row, seen=seen, penalty=penalty, emitted=len(frames))
             watch.split("sample")
             if first == self.eos:
                 break
             seen.append(first)
 
-            rest = self.predictor.generate(last, first, pick=inner, watch=watch, generator=self.generator)
-            frame = [first] + list(rest)
+            frame = self.predict(request, first, inner, watch)
             frames.append(frame)
             if on_frame is not None:
                 on_frame(step, frame)
             watch.restart()
-            embedding = self._frame_embedding(frame, feed)
-            watch.split("embed")
-            last = self.talker.step(embedding, prompt + step)
-            watch.split("talker")
+            self.feed_back(request, frame, watch)
 
         timings["decode_s"] = time.time() - started
         timings["blocks"] = watch.totals

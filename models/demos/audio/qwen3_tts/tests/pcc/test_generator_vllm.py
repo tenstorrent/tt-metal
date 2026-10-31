@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""The vLLM talker stage, driven the way the TT vLLM plugin drives it.
+
+No vLLM here: the test plays the plugin. It allocates the KV cache through the adapter,
+prefills from a vLLM-Omni `additional_information` payload with the request on scattered
+blocks, then feeds codebook 0 back one decode at a time and pops each frame.
+
+Judged against the pipeline's own frame steps on the same codebook-0 sequence and the same
+code-predictor seed: the logits and every frame must match exactly. Codebook 0 is forced to
+each step's top id, so vLLM's sampler is not needed and both runs see the same inputs.
+
+Run:
+    pytest -svv models/demos/audio/qwen3_tts/tests/pcc/test_generator_vllm.py
+"""
+
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from models.demos.audio.qwen3_tts import stage_inputs
+from models.demos.audio.qwen3_tts.tests.reference_helpers import synthetic_voiced_clip
+from models.demos.audio.qwen3_tts.tt.generator_vllm import Qwen3TTSTalkerForConditionalGeneration
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline, build_streaming_clone_prefill
+
+DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
+
+TEXT = "This voice was cloned on Tenstorrent hardware."
+REFERENCE_TEXT = "Good morning. This sentence is being spoken by a language model."
+CLIP_SECONDS = 2.0
+SAMPLE_RATE = 24000
+MAX_MODEL_LEN = 512
+BLOCK_SIZE = 64
+NUM_BLOCKS = 24
+STEPS = 12
+SEED = 0
+
+
+def _payload():
+    clip = synthetic_voiced_clip(seconds=CLIP_SECONDS)
+    return {
+        "task_type": ["Base"],
+        "text": [TEXT],
+        "language": ["English"],
+        "ref_text": [REFERENCE_TEXT],
+        "ref_audio": [[clip.tolist(), SAMPLE_RATE]],
+    }
+
+
+def _top(row):
+    return int(row.reshape(-1).argmax())
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_the_stage_reproduces_the_pipelines_frames(device, expect_error):
+    info = _payload()
+
+    # The reference: the pipeline's frame steps on its own contiguous cache.
+    pipeline = Qwen3TTSPipeline(device, max_frames=MAX_MODEL_LEN, codec=False)
+    reference = stage_inputs.clone_reference(info, device)
+    # The length vLLM-Omni's estimate gives this payload: the builder's own, unfitted.
+    prompt_len = build_streaming_clone_prefill(TEXT, reference, "English", pipeline.tables)[0].shape[1]
+    embeddings, feed = stage_inputs.build_stage_prefill(info, reference, prompt_len, pipeline.tables)
+    pipeline.reseed(SEED)
+    request, _ = pipeline.start(embeddings, MAX_MODEL_LEN - prompt_len, feed)
+    inner = pipeline._inner_pick()
+    expected_logits, expected_frames, firsts = [], [], []
+    for _ in range(STEPS):
+        row = pipeline.codec_logits(request)
+        row[0] = -float("inf")
+        expected_logits.append(row.clone())
+        firsts.append(_top(row))
+        frame = pipeline.predict(request, firsts[-1], inner)
+        expected_frames.append(frame)
+        pipeline.feed_back(request, frame)
+    pipeline.release()
+    del pipeline, request
+
+    # The stage, as the plugin calls it, with the request on scattered blocks.
+    stage = Qwen3TTSTalkerForConditionalGeneration.initialize_vllm_model(
+        SimpleNamespace(_name_or_path=""), device, 1, max_seq_len=MAX_MODEL_LEN
+    )
+    config = stage.model_capabilities
+    assert config["supports_stage_inputs"] and config["supports_stage_outputs"]
+    kv_cache = stage.allocate_kv_cache((NUM_BLOCKS, 8, BLOCK_SIZE, 128), torch.bfloat16, 28)
+    blocks = torch.randperm(NUM_BLOCKS - 1, generator=torch.Generator().manual_seed(1))[: MAX_MODEL_LEN // BLOCK_SIZE]
+    page_table = (blocks + 1).to(torch.int32).reshape(1, -1)  # block 0 is vLLM's null block
+    stage.pipeline.reseed(SEED)
+
+    logits, rope_deltas = stage.prefill_forward(
+        tokens=torch.ones(1, prompt_len, dtype=torch.int32),
+        start_pos=torch.zeros(1, dtype=torch.int32),
+        prompt_lens=torch.tensor([prompt_len]),
+        page_table=page_table,
+        kv_cache=kv_cache,
+        empty_slots=[0],
+        stage_inputs=[info],
+    )
+    assert rope_deltas.tolist() == [0], "M-RoPE's three axes agree, so no position delta"
+    assert stage.pop_stage_outputs() == [], "prefill completes no frame"
+    for step in range(STEPS):
+        assert tuple(logits.shape) == (1, 1, expected_logits[step].numel())
+        difference = float((logits.reshape(-1) - expected_logits[step]).abs().nan_to_num(posinf=0, neginf=0).max())
+        assert difference == 0.0, f"step {step} logits differ by {difference:.3e}"
+        assert int(logits.reshape(-1).argmax()) == firsts[step]
+        logits = stage.decode_forward(
+            tokens=torch.tensor([[firsts[step]]], dtype=torch.int32),
+            start_pos=torch.tensor([prompt_len + step], dtype=torch.int32),
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
+        (frame,) = stage.pop_stage_outputs()
+        assert frame.tolist() == expected_frames[step], f"frame {step} differs"
+    print(f"{STEPS} frames through the stage, identical to the pipeline's; prompt {prompt_len} positions")
+
+    with expect_error(ValueError, "decode at position"):
+        stage.decode_forward(
+            tokens=torch.tensor([[firsts[0]]], dtype=torch.int32),
+            start_pos=torch.tensor([prompt_len], dtype=torch.int32),
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
+    stage.release_request(0)
+    stage.release_persistent_capture()
