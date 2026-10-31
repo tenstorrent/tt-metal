@@ -92,6 +92,17 @@ constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) 
 // re-established as static_asserts on the operand geometry NTTPs, firing at the user's call site.
 // -----------------------------------------------------------------------------------------------------
 
+// Face counts a tile may carry (is_legal_tile_shape): a single face, one face row or column, the full 2x2 grid.
+// Named so the geometry predicates below read as face counts rather than bare literals.
+constexpr std::uint8_t ONE_FACE = 1;
+constexpr std::uint8_t TWO_FACES = 2;
+constexpr std::uint8_t FOUR_FACES = MAX_NUM_FACES;
+// A tile that is a single face row (or column) wide / tall, and the full two-face row (or column).
+constexpr std::uint8_t ONE_FACE_ROW = 1;
+constexpr std::uint8_t TWO_FACE_ROWS = MAX_NUM_FACES_R_DIM;
+constexpr std::uint8_t ONE_FACE_COLUMN = 1;
+constexpr std::uint8_t TWO_FACE_COLUMNS = MAX_NUM_FACES_C_DIM;
+
 /**
  * (internal) True iff the tile shape is one the HW can address: face_r_dim in {1,2,4,8,16}, face_c_dim == 16
  * (always 16 in hardware), the face grid within HW limits (num_faces_r_dim / num_faces_c_dim each in {1,2},
@@ -104,10 +115,10 @@ constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) 
 constexpr bool is_legal_tile_shape(TensorShape s) {
     const bool fr =
         (s.face_r_dim == 1 || s.face_r_dim == 2 || s.face_r_dim == 4 || s.face_r_dim == 8 || s.face_r_dim == 16);
-    const bool grid =
-        (s.num_faces_r_dim == 1 || s.num_faces_r_dim == 2) && (s.num_faces_c_dim == 1 || s.num_faces_c_dim == 2);
+    const bool grid = (s.num_faces_r_dim == ONE_FACE_ROW || s.num_faces_r_dim == TWO_FACE_ROWS) &&
+                      (s.num_faces_c_dim == ONE_FACE_COLUMN || s.num_faces_c_dim == TWO_FACE_COLUMNS);
     const std::uint8_t nf = s.total_num_faces();
-    return fr && (s.face_c_dim == 16) && grid && (nf == 1 || nf == 2 || nf == 4);
+    return fr && (s.face_c_dim == FACE_C_DIM) && grid && (nf == ONE_FACE || nf == TWO_FACES || nf == FOUR_FACES);
 }
 
 /**
@@ -137,6 +148,14 @@ constexpr bool is_unpack_to_dest() {
 constexpr bool is_block_float_format(DataFormat f) { return IS_BFP_FORMAT(static_cast<std::uint32_t>(f)); }
 
 /**
+ * (internal) True iff `f` is an 8-bit L1 format (Int8/UInt8/Fp8_e4m3/Lf8). The tilize datapath treats these
+ * specially: the unpacker reads them face by face through its own addressing sequence, and the packer leaves its
+ * tilize program for the default one (8-bit datums need no row un-swizzle), which has no face-height limit.
+ * Typed wrapper over IS_8BIT_FORMAT.
+ */
+constexpr bool is_8bit_format(DataFormat f) { return IS_8BIT_FORMAT(static_cast<std::uint32_t>(f)); }
+
+/**
  * (internal) True iff the tile has fewer than 32 rows (partial tile height). For block-float formats a
  * partial-height tile does not flow correctly through the BH compute datapath; use with is_block_float_format
  * to reject that combination at compile time.
@@ -144,12 +163,69 @@ constexpr bool is_block_float_format(DataFormat f) { return IS_BFP_FORMAT(static
 constexpr bool is_partial_height(TensorShape s) { return s.total_row_dim() < TILE_R_DIM; }
 
 /**
- * (internal) True iff two operands carry the same tile geometry (a two-input op requires matching shapes).
- * Used by the binary-op static_asserts. `a`, `b`: the two tile geometries to compare.
+ * (internal) True iff two operands carry the same tile geometry (a two-input op requires matching shapes, and
+ * tilize keeps the geometry). Used by the binary-op and tilize static_asserts. `a`, `b`: the two tile geometries
+ * to compare.
  */
 constexpr bool same_tile_shape(TensorShape a, TensorShape b) {
     return a.face_r_dim == b.face_r_dim && a.face_c_dim == b.face_c_dim && a.num_faces_r_dim == b.num_faces_r_dim &&
            a.num_faces_c_dim == b.num_faces_c_dim;
+}
+
+/**
+ * (internal) True iff the Blackhole tilize datapath has unpack and pack programs for an input tile of format
+ * `in_format` and geometry `in` tilized into an output tile of geometry `out`:
+ *   - the output geometry must equal the input geometry: tilize keeps the tile shape, the pack program is built
+ *     from `out` and emits two faces per pass, so a two-face input into a one-face output overruns the next output
+ *     slot and a four-face input into a two-face output drops the bottom face pair;
+ *   - the input must be two faces wide (2 or 4 faces): there is no single-face tilize program, and no narrow
+ *     (single face column) one for any format -- the non-8-bit unpack program has no narrow form and the pack
+ *     program always takes face 0 from the even and face 1 from the odd DEST rows of a two-face-wide row, while the
+ *     8-bit unpack sequence addresses face 1 as the right-hand neighbour of face 0;
+ *   - for a non-8-bit input, a tile with faces shorter than 16 rows must have exactly two faces: the pack program
+ *     advances to the second face pair by a fixed two-full-face (32-row) DEST stride, so with four short faces the
+ *     second pair is packed from stale DEST rows (the data sits at 2 * face_r_dim). An 8-bit input switches the
+ *     packer to its default program, which has no such limit.
+ * Of these only the single-face tile, the 8-bit narrow tile and the one-row four-face tile are runtime LLK_ASSERTs
+ * in the LLK (compiled out of production builds); the others are not checked at all. The tilize ops assert this at
+ * compile time.
+ */
+constexpr bool is_supported_tilize_operands(DataFormat in_format, TensorShape in, TensorShape out) {
+    const bool geometry_kept = same_tile_shape(in, out);
+    const std::uint8_t nf = in.total_num_faces();
+    const bool face_count_ok = (nf == TWO_FACES || nf == FOUR_FACES);
+    const bool width_ok = in.num_faces_c_dim == TWO_FACE_COLUMNS;
+    const bool pack_face_height_ok =
+        is_8bit_format(in_format) || out.face_r_dim == FACE_R_DIM || out.total_num_faces() == TWO_FACES;
+    return geometry_kept && face_count_ok && width_ok && pack_face_height_ok;
+}
+
+/**
+ * (internal) True iff the Blackhole matmul LLK has unpack + math programs for the operand pair (`in0` -> SrcB,
+ * `in1` -> SrcA). The math programs are selected from the operands' TOTAL dimensions and assume the face grid
+ * behind them, so both are checked:
+ *   - the inner dimension must match (in0 columns == in1 rows);
+ *   - in0 must be K == 32 wide (any legal 1..32-row height, tiny tiles included) or the 32x16 tile -- a 16-column
+ *     in0 with fewer than 32 rows (16x16 and its sub-16-row forms) has no math program and would run the default
+ *     32x32 one over faces it does not have;
+ *   - an in0 with faces shorter than 16 rows must be a single face row: an in0 shorter than 32 rows is unpacked
+ *     face by face, two faces per tile, and the math treats a 16-row in0 as two 16-row faces (a {8,16,2,2} in0
+ *     would have half its faces unread);
+ *   - in1 must be 32x32, 32x16 or 16x32 with full-height (16-row) faces: a 16x32 in1 is likewise unpacked as two
+ *     faces, which the math program takes as two 16-row faces.
+ * This is the LLK's own matmul TensorShape validator, ckernel::validate_matmul_tensor_shapes_ (tt-llk
+ * common/tensor_shape.h; SrcB = in0 is its first argument, SrcA = in1 its second), minus the one pair it lists
+ * that Blackhole has no program for: 16x16 by 16x16, which the Blackhole LLK rejects only with a runtime
+ * LLK_ASSERT. Over every legal tile shape pair that is the only pair on which the two differ (the id-free matmul
+ * compile-limits test kernel enumerates them). The LLK's own guards are runtime LLK_ASSERTs that production
+ * builds compile out:
+ * that pair, transpose with a 32x16 in1 (its address pattern has no transpose form; `transpose` is a runtime
+ * argument, so that one stays a runtime check), and the throttled program's 32x32-by-32x32-only rule
+ * (compile-time in llk_math_matmul_init, where the throttle level and fidelity are template arguments).
+ */
+constexpr bool is_supported_matmul_operand_pair(TensorShape in0, TensorShape in1) {
+    const bool both_single_face = in0.total_num_faces() == ONE_FACE && in1.total_num_faces() == ONE_FACE;
+    return validate_matmul_tensor_shapes_(in0, in1) && !both_single_face;
 }
 
 }  // namespace experimental
