@@ -580,6 +580,7 @@ tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gdn_*.py @ten
 tests/ttnn/unit_tests/operations/transformers/gdn_decode_test_utils.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/nightly/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
+tests/ttnn/unit_tests/operations/transformers/fused_recurrent_gdn_goldens.json @tenstorrent/cse-developer-ttnn @iwroszTT
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise
