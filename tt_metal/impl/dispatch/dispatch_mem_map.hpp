@@ -47,9 +47,9 @@ public:
 
     uint32_t prefetch_q_entry_size_bytes() const;
 
-    // True on Quasar when the prefetcher polls fetch queue entries through its cache. Entries then carry a per-lap
-    // phase bit and are never cleared, and the prefetcher invalidates queue lines itself to see new host writes.
-    // Only enabled on the RTL simulator so far, so ttsim and silicon poll uncached.
+    // True on Quasar non-ETH cores, where the prefetcher polls fetch queue entries through its cache. Entries then
+    // carry a per-lap phase bit and are never cleared, and the prefetcher invalidates queue lines itself to see new
+    // host writes.
     bool prefetch_q_cached() const;
 
     // DM core cache line size. No line of the cached fetch queue may hold other data.
