@@ -459,6 +459,16 @@ and OSL 4096: per user B=8 c8 vs B=4 c4 128 48.5 / 73.0, 1024 47.2 / 64.9, 8192 
 
 Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `costA.json`, `dec1k.json`; runs: baseA32 / baseA34 / baseA44 hang, base34 cost, toplin / linB / linC linear, lk1ring / lkB links=1; scripts hold.sh, drive3.sh, drive4.sh).
 
+## 8.18 APC and images: repeated image prompts (bugfix, plugin side)
+
+**Problem.** A repeated image prompt returned a wrong answer on a vLLM prefix-cache hit: the image placeholder tokens of the cached blocks were recomputed without pixels, because the model refuses image snapshots. The v3b image is affected too.
+
+**Fix** (vllm-tt-plugin, commit d965ac6 on `ssinghal/dsv4p1-b8-final-plugin`; test `tests/test_mm_prefix_cache_skip.py`): `process_inputs_tt` sets `skip_reading_prefix_cache=True` for requests with multimodal features, so they never read vLLM's prefix cache. `TT_MM_PREFIX_CACHE=1` restores the old behaviour. Text-only prompts keep their prefix hits (checked: `cached_second` 4096, TTFT cold 6.37 s vs hit 4.25 s).
+
+**Cost.** Image prompts get no prefix-cache hit.
+
+**Evidence** (`dsv4-logs/apc_img/res/`, device regression client `tests/serving_apc_image_repeat.py`, 33 repeat runs over the image cases): v3b image 17 of 33 repeats wrong (15 of the wrong ones with cached blocks > 0); with the plugin fix 33 of 33 right, 0 cached. Mixed stress (`tests/serving_mixed_image_batch.py`, image prompts alongside long text prompts, 150 requests): v3b and fix both pass (the v3b run did not reproduce a failure there). The catalog is unchanged.
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
