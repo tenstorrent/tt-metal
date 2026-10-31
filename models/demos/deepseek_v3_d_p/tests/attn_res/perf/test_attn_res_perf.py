@@ -90,13 +90,14 @@ _WALL_SAMPLES = 30
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _GALAXY = "SP8xTP4"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), the traced median of runs
-# 41209975005, 41209981451 and 41209987401. Traced and untraced share
-# the reference and the band: production prefill runs untraced, and the untraced walk is held to the traced time.
-# Galaxies off the pool can sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41209975005,
+# 41209981451 and 41209987401. Production prefill runs untraced, so untraced is held to the traced reference where
+# it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
+# its own reference and, following the host CPU, a wider band. Galaxies off the pool can sit outside the band; run
+# them with ATTN_RES_PERF_REPORT_ONLY=1.
 _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 435.0, "ordinary": 119.0},
-    "untraced": {"boundary": 435.0, "ordinary": 119.0},
+    "untraced": {"boundary": 435.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
@@ -105,7 +106,10 @@ _PERF_REFERENCE_E2E_US = {
 }
 # LoudBox SP2xTP4 has no CI references yet: it reports but is not gated.
 _REPORT_ONLY_LAYOUTS = ("SP2xTP4",)
-_MARGIN = {"traced": 0.05, "untraced": 0.05}
+_MARGIN = {
+    "traced": {"boundary": 0.05, "ordinary": 0.05},
+    "untraced": {"boundary": 0.05, "ordinary": 0.10},
+}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
 
@@ -137,8 +141,8 @@ def _assert_within_margin(what: str, measured_us: float, reference_us: float, ma
 def test_attn_res_performance_uses_two_sided_margin(mode, monkeypatch, expect_error) -> None:
     # The Galaxy gate needs no ATTN_RES_PERF_SKU opt-in.
     monkeypatch.delenv("ATTN_RES_PERF_SKU", raising=False)
-    margin = _MARGIN[mode]
     for layer, reference_us in _perf_reference_e2e_us(_GALAXY, mode).items():
+        margin = _MARGIN[mode][layer]
         _assert_within_margin(layer, reference_us * (1 - 0.99 * margin), reference_us, margin)
         _assert_within_margin(layer, reference_us * (1 + 0.99 * margin), reference_us, margin)
         with expect_error(AssertionError, "outside performance range"):
@@ -367,7 +371,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     _log_ops("boundary", median_layers[0])
     _log_ops("ordinary", median_layers[1])
 
-    margin = _MARGIN[mode]
+    margins = _MARGIN[mode]
     fabric = ttnn.get_fabric_config().name
     logger.info(
         f"AttnRes layers {LAYER}-{LAYER + ORDINARY_LAYERS} (S = {INHERITED_SNAPSHOTS} -> {INHERITED_SNAPSHOTS + 1}), "
@@ -377,7 +381,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     for name, label in zip(LAYERS, (f"layer {LAYER}", f"mean of {LAYER + 1}-{LAYER + ORDINARY_LAYERS}")):
         line = f"  {name:8s} ({label}) e2e {e2e_us[name]:9.1f} us"
         if references is not None:
-            reference = references[name]
+            reference, margin = references[name], margins[name]
             within_band[name] = abs(e2e_us[name] - reference) <= reference * margin
             line += f"   ref {reference:9.1f} ±{margin:.0%}  {'ok' if within_band[name] else 'OUT OF BAND'}"
         logger.info(line)
@@ -402,7 +406,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
         "wall_us": walls,
         "device_samples_us": [us for us, _ in per_sample],
         "reference_e2e_us": references,
-        "margin_pct": margin * 100.0,
+        "margin_pct": {name: margin * 100.0 for name, margin in margins.items()},
     }
     print("ATTN_RES_PERF=" + json.dumps(result, sort_keys=True))
     tp_wrapped = layout != _GALAXY or tp_axis_is_wrapped(mesh_device)
@@ -419,4 +423,4 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     if not tp_wrapped:
         pytest.skip(f"TP axis not wrapped: the {layout} references assume the TP ring")
     for name in LAYERS:
-        _assert_within_margin(f"{layout} {mode} {name} layer e2e", e2e_us[name], references[name], margin)
+        _assert_within_margin(f"{layout} {mode} {name} layer e2e", e2e_us[name], references[name], margins[name])
