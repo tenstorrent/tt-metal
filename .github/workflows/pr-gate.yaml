@@ -466,6 +466,41 @@ jobs:
       enable-kernel-ccache: true
     secrets: inherit
 
+  build-train-smoke-image:
+    needs: [asan-build, build-docker-images, find-changed-files]
+    if: ${{
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.tt-train-changed == 'true'
+      }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-ml
+
+  # tt-train C++ smoke tests from the tt-ml-validation package (tests/pipeline_reorg/train_pr_gate_tests.yaml).
+  train-smoke-tests:
+    needs: [asan-build, find-changed-files, build-train-smoke-image]
+    # Do not use !failure() or success() since a failed image build must still let train smoke use the artifact.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.tt-train-changed == 'true')
+      }}
+    uses: ./.github/workflows/tt-train-tests.yaml
+    secrets: inherit
+    with:
+      test-category: pr_gate
+      enabled-skus: ALL_SKUS_IN_TESTS
+      prebuilt-image: ${{ needs.build-train-smoke-image.outputs.image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
   model-charts-sync:
@@ -700,6 +735,7 @@ jobs:
       - ttnn-smoke-tests
       - runtime-examples
       - ttnn-examples
+      - train-smoke-tests
       - code-analysis
       - model-charts-sync
       - build-docs
@@ -723,6 +759,7 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests
+            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests,
+            train-smoke-tests
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
