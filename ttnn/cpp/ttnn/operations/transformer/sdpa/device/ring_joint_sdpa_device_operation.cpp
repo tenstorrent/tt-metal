@@ -335,16 +335,11 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             "logical_n={}",
             kv_actual_isl,
             args.logical_n);
-        if (args.circular_kv_cache) {
-            // Circular sliding KV: logical_n legitimately exceeds the physical capacity — the cache
-            // keeps only the newest chunk-group slabs (chunk group g in local slab g % n_slabs).
-            // Whole slabs are already required by the rotation checks; the per-dispatch alignment
-            // (logical_n on a ring-group boundary, one group per chunk) by the chunked sliding block.
-            TT_FATAL(
-                tensor_args.kv_slab_count() >= 2,
-                "circular_kv_cache needs >= 2 slabs (current chunk + predecessor window slab). Got {}",
-                tensor_args.kv_slab_count());
-        } else {
+        // Circular sliding KV: logical_n legitimately exceeds the physical capacity — the cache
+        // keeps only the newest chunk-group slabs (chunk group g in local slab g % n_slabs).
+        // The per-dispatch alignment (logical_n on a ring-group boundary, one group per chunk) is
+        // checked by the chunked sliding block.
+        if (!args.circular_kv_cache) {
             TT_FATAL(
                 args.logical_n <= cache_capacity,
                 "KV-pad-aware rotation logical_n exceeds physical K/V cache capacity. Got logical_n={}, "
@@ -766,13 +761,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // slab-major addressing and would read garbage from a wrapped cache.
         TT_FATAL(
             args.has_sliding_window() && is_chunked, "circular_kv_cache requires chunked sliding-window attention");
-        // Metadata halo addressing supports only unbounded caches.
-        TT_FATAL(!tensor_args.has_metadata(), "circular_kv_cache does not support the trace-safe metadata path");
         TT_FATAL(
             has_kv_pad_rotation,
-            "circular_kv_cache requires kv_actual_isl (KV-pad rotation): the wrap position is "
-            "derived from the true absolute logical_n/kv_actual_isl");
-        // The slab-count check lives in validate_runtime_patched_scalars (hash-invariant shapes).
+            "circular_kv_cache requires kv_actual_isl or kv_actual_isl_tensor (KV-pad rotation): the wrap "
+            "position is derived from the true absolute kv_actual_isl");
+        // On the metadata path the device checks each kv_actual_isl for chunk-group alignment.
+        TT_FATAL(
+            tensor_args.kv_slab_count() >= 2,
+            "circular_kv_cache needs >= 2 slabs (current chunk + predecessor window slab). Got {}",
+            tensor_args.kv_slab_count());
     }
 
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");

@@ -3237,6 +3237,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
     }
+    writer_kernel.named_compile_time_args.emplace_back("circular_kv_slab_count", circular_kv_slab_count);
     // Padded multicast slots exist only under the same conditions that let static_mcast_q_count exceed q_per_core
     // (or with the rotated Q split); without them the compute kernel drops its padded-slot drain loop.
     const bool padded_q_slots_enabled =
@@ -3694,6 +3695,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 .kv_cache_layer_idx = args.kv_cache_layer_idx,
                 .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
                 .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
+                .circular_kv_slab_count = chunked_sliding_halo_layout.circular_kv_slab_count,
                 .source_device = transport_rank,
             };
             log_debug(

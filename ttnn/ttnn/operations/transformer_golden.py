@@ -1322,6 +1322,10 @@ def _ring_joint_golden(
             )
             for cache in (input_tensor_k, input_tensor_v)
         )
+        if kv_actual_isl_tensor is not None:
+            # On the metadata path the device derives the end of the chunk from kv_actual_isl_tensor, so the
+            # host logical_n is only a placeholder.
+            logical_n = actual_kv_length + input_tensor_q.shape[-2]
 
     logical_n = int(_scalar(logical_n, input_tensor_k.shape[-2]))
     if logical_n < 0:
