@@ -8,12 +8,22 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
+#include <mutex>
+#include <ranges>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/program_fingerprint.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -252,6 +262,60 @@ void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_vie
         operation_name,
         input_index,
         tensor.memory_config());
+}
+
+void verify_cached_mesh_workload(
+    std::string_view operation_name,
+    uint64_t program_hash,
+    bool fatal,
+    tt::tt_metal::distributed::MeshWorkload& cached,
+    tt::tt_metal::distributed::MeshWorkload& rebuilt) {
+    namespace fingerprint = tt::tt_metal::experimental::program_fingerprint;
+    const auto cached_lines = fingerprint::describe(cached);
+    const auto rebuilt_lines = fingerprint::describe(rebuilt);
+    const auto [cached_it, rebuilt_it] =
+        std::mismatch(cached_lines.begin(), cached_lines.end(), rebuilt_lines.begin(), rebuilt_lines.end());
+    if (cached_it == cached_lines.end() && rebuilt_it == rebuilt_lines.end()) {
+        return;
+    }
+    const auto index = std::distance(cached_lines.begin(), cached_it);
+    const std::string cached_line = cached_it == cached_lines.end() ? std::string{"<none>"} : *cached_it;
+    const std::string rebuilt_line = rebuilt_it == rebuilt_lines.end() ? std::string{"<none>"} : *rebuilt_it;
+    if (!fatal) {
+        static std::mutex reported_mutex;
+        static std::unordered_set<uint64_t> reported_hashes;
+        const std::lock_guard lock(reported_mutex);
+        if (!reported_hashes.insert(program_hash).second) {
+            return;
+        }
+        log_warning(
+            tt::LogOp,
+            "Device operation \"{}\": program cache hit differs from a rebuild (program hash {:x}). First difference "
+            "at element {}:\n  cached:  {}\n  rebuilt: {}",
+            operation_name,
+            program_hash,
+            index,
+            cached_line,
+            rebuilt_line);
+        return;
+    }
+    TT_THROW(
+        "Device operation \"{}\": program cache hit returned a program that differs from the one its factory builds "
+        "for these inputs, so the op's program hash leaves out an input the factory reads. First difference at "
+        "element {}:\n  cached:  {}\n  rebuilt: {}",
+        operation_name,
+        index,
+        cached_line,
+        rebuilt_line);
+}
+
+bool can_verify_cache_hit(tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    if (tt::tt_metal::GraphTracker::instance().is_enabled()) {
+        return false;
+    }
+    const auto queues = std::views::iota(uint8_t{0}, mesh_device.num_hw_cqs());
+    return std::ranges::none_of(
+        queues, [&](uint8_t cq_id) { return mesh_device.mesh_command_queue(cq_id).trace_id().has_value(); });
 }
 
 }  // namespace ttnn::device_operation::detail

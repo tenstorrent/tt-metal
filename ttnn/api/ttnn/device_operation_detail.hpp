@@ -24,6 +24,7 @@ class TensorTopology;
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshWorkload;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn::device_operation::detail {
@@ -83,5 +84,24 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  * therefore still drop the per-core bit unnoticed; tracked in #51482.
  */
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
+
+/**
+ * Backs ttnn::CONFIG's verify_program_cache_hits. When `rebuilt`, a workload just created by the op's factory for
+ * this invocation, differs from the `cached` one the hit would dispatch: throws if `fatal`, otherwise logs the first
+ * differing element once per `program_hash` and returns. The message names that element, which points at the input
+ * the op's program hash leaves out.
+ */
+void verify_cached_mesh_workload(
+    std::string_view operation_name,
+    uint64_t program_hash,
+    bool fatal,
+    tt::tt_metal::distributed::MeshWorkload& cached,
+    tt::tt_metal::distributed::MeshWorkload& rebuilt);
+
+/**
+ * Whether a cache hit on `mesh_device` may be verified now. Not while a graph is being captured or a trace is being
+ * recorded on any of its command queues: the rebuild runs the op's factory, whose allocations would be recorded.
+ */
+bool can_verify_cache_hit(tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 }  // namespace ttnn::device_operation::detail
