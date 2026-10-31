@@ -517,6 +517,9 @@ class ttKDA:
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
             memory_config=self.qkv_memory_config,
+            # FP32 DST accumulates the four taps in FP32; BF16 DST biases q/k/v by about one BF16 ulp where taps
+            # cancel large activations (tt_metal_tracker-g1b.5.19).
+            compute_kernel_config=self.kda_compute_config,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(
