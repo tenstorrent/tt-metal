@@ -51,7 +51,7 @@ if is_blackhole():
     ACTIVATION_FLOOR = {"sigmoid": 1e-3, "sqrtsoftplus": 1e-30}
 else:
     ACTIVATION_RTOL = {"sigmoid": 2e-3, "sqrtsoftplus": 3e-3}
-    ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-5.0, 16.0)}
+    ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-8.0, 16.0)}
     ACTIVATION_FLOOR = {"sigmoid": 1e-3, "sqrtsoftplus": 1e-3}
 MIN_STRICT_FRACTION = 0.5
 

@@ -72,6 +72,7 @@ from helpers.test_variant_parameters import (
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
+    SFPU_SOFTPLUS_PARAMS,
     STABLE_SORT,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -1056,6 +1057,51 @@ def test_eltwise_unary_sfpu_polygamma_order(
     )
 
 
+# beta 1 / threshold 20 is the unit-beta loop with no threshold predicate
+# (threshold >= 16). The other three are the remaining bf16 loops.
+_SOFTPLUS_PARAMS = [
+    pytest.param(1.0, 20.0, id="unit_beta"),
+    pytest.param(2.0, 20.0, id="beta2"),
+    pytest.param(-1.0, 20.0, id="beta_neg"),
+    pytest.param(1.0, 5.0, id="threshold5"),
+]
+
+
+@pytest.mark.parametrize("softplus_beta,softplus_threshold", _SOFTPLUS_PARAMS)
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_softplus_params(
+    formats: InputOutputFormat,
+    softplus_beta: float,
+    softplus_threshold: float,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """One calculate_softplus loop per pair. The golden uses the same beta and threshold."""
+    _skip_bh_unless_fp32(formats, dest_acc)
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already"
+        )
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Softplus,
+        FastMode.No,
+        input_dimensions,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-40.0, high=40.0),
+        custom_atol=0.0,
+        custom_rtol=(1.1e-3 if formats.output_format == DataFormat.Float32 else 0.02),
+        softplus_beta=softplus_beta,
+        softplus_threshold=softplus_threshold,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1341,6 +1387,8 @@ def eltwise_unary_sfpu(
     relu_min_int_threshold=None,
     relu_max_threshold=None,
     polygamma_order=None,
+    softplus_beta=None,
+    softplus_threshold=None,
     twos_complement=False,
     gate_on_step_budget=False,
     *,
@@ -1454,6 +1502,14 @@ def eltwise_unary_sfpu(
                 else {"relu_max_threshold": relu_max_threshold}
             ),
             **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
+            **(
+                {}
+                if softplus_beta is None
+                else {
+                    "softplus_beta": softplus_beta,
+                    "softplus_threshold": softplus_threshold,
+                }
+            ),
         )
 
     configuration = build_eltwise_unary_sfpu_config(
@@ -1473,6 +1529,8 @@ def eltwise_unary_sfpu(
         relu_min_int_threshold=relu_min_int_threshold,
         relu_max_threshold=relu_max_threshold,
         polygamma_order=polygamma_order,
+        softplus_beta=softplus_beta,
+        softplus_threshold=softplus_threshold,
         twos_complement=twos_complement,
         clamp_negative=clamp_negative,
         iterations=iterations,
@@ -1549,6 +1607,8 @@ def build_eltwise_unary_sfpu_config(
     relu_min_int_threshold=None,
     relu_max_threshold=None,
     polygamma_order=None,
+    softplus_beta=None,
+    softplus_threshold=None,
     twos_complement=False,
     clamp_negative=True,
     iterations=32,
@@ -1602,6 +1662,16 @@ def build_eltwise_unary_sfpu_config(
                 []
                 if polygamma_order is None
                 else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
+            ),
+            *(
+                []
+                if softplus_beta is None
+                else [
+                    SFPU_SOFTPLUS_PARAMS(
+                        softplus_beta=softplus_beta,
+                        softplus_threshold=softplus_threshold,
+                    )
+                ]
             ),
         ],
         "runtimes": [

@@ -2560,6 +2560,8 @@ class UnarySFPUGolden:
         polygamma_order: int = 1,
         dropout_probability: int = 0,
         dropout_scale: float = DROPOUT_SCALE,
+        softplus_beta: float = SOFTPLUS_BETA,
+        softplus_threshold: float = SOFTPLUS_THRESHOLD,
     ):
         self.data_format = data_format
         self.dst_format = data_format
@@ -2568,6 +2570,9 @@ class UnarySFPUGolden:
         self._int_shift_amount = shift_amount
         # Mirrors the SFPU_POLYGAMMA_ORDER template parameter; only polygamma reads it.
         self._polygamma_order = polygamma_order
+        # Mirrors SFPU_SOFTPLUS_PARAMS; only softplus reads them.
+        self._SOFTPLUS_BETA = softplus_beta
+        self._SOFTPLUS_THRESHOLD = softplus_threshold
         # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
         # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
         self._relu_min_int_threshold = relu_min_int_threshold

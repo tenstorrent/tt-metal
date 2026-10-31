@@ -92,6 +92,13 @@
 #include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
+#ifndef SOFTPLUS_TEST_BETA
+#define SOFTPLUS_TEST_BETA       0x3f800000u /* beta = 1.0f */
+#define SOFTPLUS_TEST_BETA_RECIP 0x3f800000u /* 1/beta = 1.0f */
+#endif
+#ifndef SOFTPLUS_TEST_THRESHOLD
+#define SOFTPLUS_TEST_THRESHOLD 0x41a00000u /* threshold = 20.0f */
+#endif
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt.h"
@@ -1625,9 +1632,9 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x3f800000u /* beta = 1.0f */,
-            0x3f800000u /* 1/beta = 1.0f */,
-            0x41a00000u /* threshold = 20.0f */);
+            SOFTPLUS_TEST_BETA,
+            SOFTPLUS_TEST_BETA_RECIP,
+            SOFTPLUS_TEST_THRESHOLD);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
