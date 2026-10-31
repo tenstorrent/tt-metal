@@ -1501,21 +1501,22 @@ std::vector<Tensor> digamma_bw(
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(grad, ttnn::polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
+    Tensor input_is_zero = ttnn::eqz(input, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         -t_inf,
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
         grad_a,
         output_mem_config);
@@ -1543,15 +1544,16 @@ std::vector<Tensor> polygamma_bw(
         t_nan,
         grad_a,
         output_mem_config);
+    Tensor input_is_zero = ttnn::eqz(input, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         (-std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         (std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);
