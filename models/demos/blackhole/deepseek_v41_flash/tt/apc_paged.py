@@ -203,6 +203,7 @@ class BlockIndex:
         free_users=None,
         halo_thin=1,
         strict_spans=False,
+        strict_zone_equal=False,
     ):
         if chunk % page:
             raise ValueError(f"chunk {chunk} is not a multiple of the page {page}")
@@ -211,6 +212,9 @@ class BlockIndex:
         self.zone, self.margin, self.signature = int(zone), int(margin), signature
         self.ttl, self.clock, self._free_users_fn = float(ttl_s), clock, free_users
         self.halo_thin, self.strict_spans = max(1, int(halo_thin)), bool(strict_spans)
+        self.strict_zone_equal = bool(
+            strict_zone_equal
+        )  # halo B valid only if b_zone == p0_new (exact), instead of b_zone <= p0_new
         self.caps = dict(pages=int(pages_per_row), key=int(key_slots), a=int(halo_a), b=int(halo_b))
         self._lock = threading.RLock()
         self._events = []
@@ -363,9 +367,16 @@ class BlockIndex:
                 break
             cur.append(blk)
             s = i * self.chunk
-            if blk.halo_a >= 0 and (s <= p0 or (blk.halo_b >= 0 and blk.b_zone <= p0)) and self._boundary_ok(s, spans):
+            if (
+                blk.halo_a >= 0
+                and (s <= p0 or (blk.halo_b >= 0 and self._b_ok(blk, p0)))
+                and self._boundary_ok(s, spans)
+            ):
                 best, path = s, list(cur)
         return best, path
+
+    def _b_ok(self, blk, p0):
+        return blk.b_zone == p0 if self.strict_zone_equal else blk.b_zone <= p0
 
     def _boundary_ok(self, b, spans):
         if not (self.strict_spans and spans):

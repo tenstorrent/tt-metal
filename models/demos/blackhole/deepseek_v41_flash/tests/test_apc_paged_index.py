@@ -195,6 +195,24 @@ def test_halo_b_valid_only_if_its_zone_start_is_not_after_the_new_prompts():
     assert p.hit_tokens == 5632 and p.halo_b == -1
 
 
+@pytest.mark.parametrize("strict", [False, True])
+def test_strict_zone_equal_flag_both_ways(strict):
+    # donor e = 6000, zone 1024: p0 = 4608, halo B on blocks 10 (5120) and 11 (5632) with b_zone 4608
+    idx = mk(zone=1024, halo_a=16, halo_b=8, key_slots=64, pages_per_row=400, strict_zone_equal=strict)
+    t = toks(170, 6000)
+    run(idx, "a", t)
+    # same zone start (p0 = 4608): B is valid past p0 under both rules
+    same = np.concatenate([t[:5700], toks(171, 300)])  # e = 6000
+    assert AP.zone_start(6000, 1024) == 4608 and idx.peek(same, 6000)[0] == 5632
+    # later zone start (e = 6200: p0 = 5120): s = 5632 > p0 needs B with b_zone 4608 < 5120: valid for <=, not for ==
+    later = np.concatenate([t[:5700], toks(172, 500)])
+    assert AP.zone_start(6200, 1024) == 5120
+    assert idx.peek(later, 6200)[0] == (5120 if strict else 5632)
+    # earlier zone start (p0 = 4096): invalid under both
+    earlier = t[:5500]
+    assert idx.peek(earlier, 5500)[0] == 4096
+
+
 def test_dup_commit_replaces_halo_b_written_with_a_later_zone_start():
     idx = mk(rows=1, zone=1024, halo_a=16, halo_b=8, key_slots=64, pages_per_row=400)
     base = toks(160, 4096)
