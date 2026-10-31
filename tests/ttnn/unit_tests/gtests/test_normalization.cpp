@@ -38,6 +38,7 @@
 #include "ttnn/operations/normalization/groupnorm/groupnorm.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_post_all_gather.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_pre_all_gather.hpp"
 #include "ttnn/operations/normalization/rmsnorm/rmsnorm.hpp"
 #include "ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.hpp"
@@ -864,6 +865,46 @@ TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford) {
         ttnn::layer_norm_pre_all_gather(x, DataType::BFLOAT16, std::nullopt, std::nullopt, cfg, std::nullopt, recip);
     auto out =
         ttnn::layer_norm_post_all_gather(x, stats, 1e-6f, std::nullopt, std::nullopt, std::nullopt, std::nullopt, cfg);
+    detail::expect_close(detail::to_float_vector(out), x_data, 0.0f, 0.03f);
+}
+
+TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford2DGridMultiRow) {
+    // The public LayerNorm wrapper does not expose use_2d_core_grid, so call the primitive directly.
+    // H=512 gives two rows to each X core on an 8x8 Wormhole grid. Alternating the sign phase by row
+    // makes every neighboring tile row distinct, so a missing global-row stride cannot be masked.
+    auto& device = *device_;
+    constexpr uint32_t H = 512;
+    constexpr uint32_t W = 256;
+    const ttnn::Shape shape({1, 1, H, W});
+    std::vector<float> x_data(H * W);
+    for (uint32_t row = 0; row < H; ++row) {
+        for (uint32_t col = 0; col < W; ++col) {
+            x_data[row * W + col] = ((row + col) % 2 == 0) ? 1.0f : -1.0f;
+        }
+    }
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+
+    const auto grid = device.compute_with_storage_grid_size();
+    const CoreRangeSet full_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    const auto recip = detail::norm_welford_recip_lut(device, full_grid, W);
+    const ttnn::prim::LayerNormProgramConfig cfg = ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true};
+    auto stats =
+        ttnn::layer_norm_pre_all_gather(x, DataType::BFLOAT16, std::nullopt, std::nullopt, cfg, std::nullopt, recip);
+    const auto compute_config = init_device_compute_kernel_config(
+        device.arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
+    auto out = ttnn::prim::layer_norm_post_all_gather(
+        x,
+        stats,
+        ttnn::prim::LayerNormDistributedType::LAYERNORM,
+        1e-6f,
+        std::nullopt,
+        std::nullopt,
+        x.memory_config(),
+        compute_config,
+        std::nullopt,
+        /*use_2d_core_grid=*/true,
+        cfg);
+
     detail::expect_close(detail::to_float_vector(out), x_data, 0.0f, 0.03f);
 }
 
