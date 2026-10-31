@@ -166,6 +166,19 @@ class SpecDecoder(SpecVerifier):
         self._force_key = (
             torch.full((rows * U,), -1.0).numpy().tobytes()
         )  # (DSV41_HOSTOPT_FORCE) what the device buffer holds
+        # per-row cap of the accept count (grammar masks, M2: a row whose offer the plugin cut at the first grammar-illegal draft must not accept the filler beyond it): only with DSV41_STRUCTURED_SPEC=1
+        self.cap = None
+        if struct_mask_on():
+            self._cap_big = 99.0
+            self.cap = ttnn.from_torch(
+                torch.full((rows * U, 1), self._cap_big),
+                device=md,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self._row_map,
+            )
+            self._cap_key = None
 
     def set_force(self, value):
         """Host: force m (accepted drafts) for the next replays; ``value`` a scalar (all users) or a [B] tensor (one per user, global order). value < 0 = normal operation."""
@@ -187,6 +200,28 @@ class SpecDecoder(SpecVerifier):
             mesh_mapper=self._row_map,
         )
         ttnn.copy_host_to_device_tensor(host, self.force)
+
+    def set_cap(self, value=None):
+        """Host: cap of the accept count per runner row ([B] list / tensor, global order; None = no cap), uploaded only when it changes."""
+        if self.cap is None:
+            return
+        rows = self.md.shape[0]
+        v = (
+            torch.full((rows * self.U,), self._cap_big)
+            if value is None
+            else torch.as_tensor(value, dtype=torch.float32).reshape(-1)
+        )
+        key = v.numpy().tobytes()
+        if key == self._cap_key:
+            return
+        self._cap_key = key
+        host = ttnn.from_torch(
+            v.reshape(rows * self.U, 1).contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._row_map,
+        )
+        ttnn.copy_host_to_device_tensor(host, self.cap)
 
     def _tap(self, x):
         m = ttnn.mean(x, dim=2, keepdim=True)  # [T,1,1,D] fp32 mean over the 4 streams
@@ -446,6 +481,8 @@ class SpecDecoder(SpecVerifier):
             self.keff is not None
         ):  # padded verify block (rows beyond keff are filler on the T=16/32 fast paths): never accept more than keff drafts
             mcount = ttnn.minimum(mcount, float(self.keff))
+        if self.cap is not None:
+            mcount = ttnn.minimum(mcount, self.cap)
         mcount = ttnn.where(ttnn.ge(self.force, 0.0), self.force, mcount)
         onehot = ttnn.eq(
             ttnn.repeat(mcount, [1, n]), ttnn.repeat(self.arange_n, [U, 1])

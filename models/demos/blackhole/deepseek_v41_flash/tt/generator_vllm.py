@@ -1917,6 +1917,17 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 self.spec_stats["masked_rounds"] = self.spec_stats.get("masked_rounds", 0) + 1
         t0 = time.perf_counter()
         runner.sample_cfg = cfg  # None = greedy rows (the traced sampler then holds / gets greedy parameters)
+        if (
+            getattr(runner.dec, "cap", None) is not None
+        ):  # a row whose offer was cut (0 < nv < kv): never accept the filler beyond its valid drafts (no reseed of the drafter afterwards)
+            cut = [(x[3], int(nv_l[x[0]])) for x in rows if 0 < int(nv_l[x[0]]) < kv]
+            if cut:
+                cap = torch.full((B,), 99.0)
+                for r_, nv_ in cut:
+                    cap[r_] = float(nv_)
+                runner.accept_cap = cap
+            else:
+                runner.accept_cap = None
         runner.grammar_packed = gpk  # None = the unmasked rounds; else the masked trace S (DSV41_STRUCTURED_SPEC=1)
         try:
             a, mm, d = runner._round(X, base, force)

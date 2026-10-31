@@ -273,6 +273,9 @@ class SpecRunner:
         # drawn ids), instead of the single trace; the persistent buffers are allocated here, before any trace
         self.pack_mono = self.pack_b = None
         self.tid_sm = None  # masked trace S (grammar bias before the sampler), only with DSV41_STRUCTURED_SPEC=1
+        self.accept_cap = (
+            None  # [B] per-row cap of the accept count of the NEXT round (a row whose offer was cut), or None
+        )
         self.grammar_packed = (
             None  # int32 [B * n, 4040] (tt/grammar_mask.permute_to_runner layout) for the NEXT round, or None
         )
@@ -398,6 +401,7 @@ class SpecRunner:
         self._ensure(base)
         self._use(base)
         self.dec.set_force(-1 if force is None else force)
+        self.dec.set_cap(self.accept_cap)  # (no-op without DSV41_STRUCTURED_SPEC)
         self._feed(X, base)
         gp = self.grammar_packed
         if gp is not None:
