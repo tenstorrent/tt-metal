@@ -526,7 +526,6 @@ inline void _gmg_copy_topk_run()
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + from_hi);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_lo);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_hi);
-    TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + to_lo);
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + to_hi);
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + to_lo);
@@ -550,7 +549,6 @@ inline void _gmg_place_field_from_interm()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPLOAD(p_sfpu::LREG0, mode, ADDR_MOD_3, interm_offset + src_lo);
     TTI_SFPLOAD(p_sfpu::LREG1, mode, ADDR_MOD_3, interm_offset + src_hi);
-    TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, mode, ADDR_MOD_3, region + dst_lo);
     TTI_SFPSTORE(p_sfpu::LREG1, mode, ADDR_MOD_3, region + dst_hi);
 }
