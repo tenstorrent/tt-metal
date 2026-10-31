@@ -159,6 +159,29 @@ TEST(MeshDeviceInitTest, DestroyAfterCloseDoesNotTerminateOnPersistentL1Seals) {
     EXPECT_NO_THROW(mesh.reset());
 }
 
+// A submesh shares its parent's devices, so closing the parent closes the submeshes that are still open. One left
+// open kept the devices open past the parent's close, then closed them when it was freed, under whichever mesh had
+// been opened on them since.
+TEST(MeshDeviceInitTest, CloseClosesOpenSubmeshes) {
+    auto mesh = create_unit_mesh_for_close_tests();
+    auto submesh = mesh->create_submesh(MeshShape(1, 1));
+    auto nested_submesh = submesh->create_submesh(MeshShape(1, 1));
+
+    mesh->close();
+    EXPECT_FALSE(submesh->is_initialized());
+    EXPECT_FALSE(nested_submesh->is_initialized());
+}
+
+// The submesh holds the only reference to its parent here. Closing the parent closes the submesh, which drops that
+// reference, so close() must keep the parent alive until it returns.
+TEST(MeshDeviceInitTest, CloseThroughTheReferenceASubmeshHolds) {
+    auto submesh = create_unit_mesh_for_close_tests()->create_submesh(MeshShape(1, 1));
+
+    submesh->get_parent_mesh()->close();
+    EXPECT_FALSE(submesh->is_initialized());
+    EXPECT_EQ(submesh->get_parent_mesh(), nullptr);
+}
+
 using MeshDevice2x4Test = MeshDevice2x4Fixture;
 using MeshDeviceTest = GenericMeshDeviceFixture;
 
