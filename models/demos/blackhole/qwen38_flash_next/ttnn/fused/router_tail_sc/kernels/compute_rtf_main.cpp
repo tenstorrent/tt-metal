@@ -38,6 +38,36 @@
 #define FRT_EXP_LIVE 1
 #endif
 
+// QWEN38_RTF_ROWTRIM_ITERS (host: QWEN38_RTF_ROWTRIM=1): the final division and the fp32 -> bf16 typecast run that many
+// SFPU iterations per face in VectorMode::R (faces 0 and 1, rows 0..3 at all 16 columns of a face) instead of the
+// wrappers' 8 iterations in RC (all four faces).  Only row 0 (columns 0..9) is read: the writer sends row 0 of
+// cb_scores. Undefined: the wrappers div_binary_tile / typecast_tile, unchanged.
+#ifdef QWEN38_RTF_ROWTRIM_ITERS
+// div_binary_tile<true>'s expansion with VectorMode::R and the iteration define
+ALWI void div_binary_tile_rows(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        true,
+        calculate_sfpu_binary_div,
+        (APPROX, ckernel::BinaryOp::DIV, QWEN38_RTF_ROWTRIM_ITERS /* ITERATIONS */, true),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::R)));
+}
+
+// typecast_tile<Float32, Float16_b, true>'s expansion with VectorMode::R and the iteration define
+ALWI void typecast_fp32_bf16_tile_rows(uint32_t idst) {
+    MATH((SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        true,
+        calculate_typecast_fp32_to_fp16b,
+        (APPROX, QWEN38_RTF_ROWTRIM_ITERS /* ITERATIONS */),
+        idst,
+        VectorMode::R)));
+}
+#endif
+
 void kernel_main() {
     const uint32_t token_mask = get_arg_val<uint32_t>(1);
     const uint32_t live_pairs = exp_live_pairs(token_mask);
@@ -206,9 +236,15 @@ void kernel_main() {
         reconfig_data_format_srca(cb_pad_div, cb_sums);
         copy_init(cb_sums);
         copy_tile(cb_sums, 0, 1);
+#ifdef QWEN38_RTF_ROWTRIM_ITERS
+        div_binary_tile_rows(0, 1, 0);
+        typecast_tile_init<static_cast<uint32_t>(DataFormat::Float32), static_cast<uint32_t>(DataFormat::Float16_b)>();
+        typecast_fp32_bf16_tile_rows(0);
+#else
         div_binary_tile(0, 1, 0);
         typecast_tile_init<static_cast<uint32_t>(DataFormat::Float32), static_cast<uint32_t>(DataFormat::Float16_b)>();
         typecast_tile<static_cast<uint32_t>(DataFormat::Float32), static_cast<uint32_t>(DataFormat::Float16_b)>(0);
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_scores);

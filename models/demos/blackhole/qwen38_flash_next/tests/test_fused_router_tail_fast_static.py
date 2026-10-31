@@ -95,6 +95,9 @@ def test_fast_compute_main_is_the_sort_core_one_plus_switches():
     # the same code with the two switches' #if lines removed
     stripped = re.sub(r"#if !RTF_(NOSTART|NOTOKEN)\n(.*?)#endif\n", r"\2", fast, flags=re.S)
     stripped = re.sub(r"#ifndef RTF_\w+\n#define RTF_\w+ 0[^\n]*\n#endif\n", "", stripped)
+    # QWEN38_RTF_ROWTRIM: the helper block goes, the call site keeps its #else branch (the wrappers)
+    stripped = re.sub(r"#ifdef QWEN38_RTF_ROWTRIM_ITERS\n(?:(?!#else).)*?#endif\n", "", stripped, flags=re.S)
+    stripped = re.sub(r"#ifdef QWEN38_RTF_ROWTRIM_ITERS\n.*?#else\n(.*?)#endif\n", r"\1", stripped, flags=re.S)
     assert _code(base.split("#include", 1)[1]) == _code(stripped.split("#include", 1)[1])
 
 

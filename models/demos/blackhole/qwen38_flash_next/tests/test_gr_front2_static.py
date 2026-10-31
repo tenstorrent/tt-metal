@@ -25,9 +25,22 @@ def _text(name):
 def test_sources_exist_and_default_kernels_untouched():
     for name in NEW:
         assert (KERNELS / name).is_file()
-    for name in ("down_streams_compute.cpp", "mcast_reader2.cpp", "mcast_writer3.cpp", "stats_u_recip_compute.cpp"):
+    for name in ("down_streams_compute.cpp", "mcast_reader2.cpp", "mcast_writer3.cpp"):
         path = (KERNELS / name).relative_to(REPO)
         assert subprocess.run(["git", "diff", "--quiet", "HEAD", "--", str(path)], cwd=REPO).returncode == 0, name
+
+
+def test_stats_u_recip_kernel_is_head_plus_the_rowtrim_define():
+    """QWEN38_FRONT_ROWTRIM adds a helper and one call-site switch; with both removed the kernel is HEAD's text."""
+
+    import re
+
+    path = (KERNELS / "stats_u_recip_compute.cpp").relative_to(REPO)
+    head = subprocess.run(["git", "show", f"HEAD:{path}"], cwd=REPO, capture_output=True, text=True, check=True).stdout
+    text = (KERNELS / "stats_u_recip_compute.cpp").read_text()
+    text = re.sub(r"// QWEN38_FRONT_ROWTRIM_ITERS.*?#endif\n\n", "", text, count=1, flags=re.S)
+    text = re.sub(r"#ifdef QWEN38_FRONT_ROWTRIM_ITERS\n.*?#else\n(.*?)#endif\n", r"\1", text, count=1, flags=re.S)
+    assert text == head
 
 
 def test_flag_off_is_the_default_front():

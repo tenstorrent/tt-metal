@@ -51,6 +51,10 @@ FAST_KERNELS = {
 }
 SORT_PASS_MASK = 1  # the sort pass that holds token 0 (rt.PASS_TOKENS[0])
 SORT_CORES = 2
+ROWTRIM_ENV = (
+    "QWEN38_RTF_ROWTRIM"  # default "1"; "0" off; "1": core A's division and typecast run ROWTRIM_ITERATIONS per face
+)
+ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); the wrappers run 8 in RC
 SEMAPHORES = 1  # ids sem_base .. sem_base + 0: B -> A "index tile arrived"
 
 
@@ -60,6 +64,16 @@ def enabled(rows: int, environ=os.environ) -> bool:
     return (
         environ.get(SORTCORE_ENV, "1") == "1" and rows == 1 and rt.lanes_enabled(environ)
     )  # default on (x36 A/B -0.65 ms)
+
+
+def rowtrim_defines(environ=os.environ) -> list[tuple[str, str]]:
+    """Core A's compute defines with ``QWEN38_RTF_ROWTRIM=1`` (default); ``two_core_parts`` serves rows == 1 only (row 0 is
+    the one live row the writer reads), so the SFPU division and typecast run ``ROWTRIM_ITERATIONS`` iterations per face.
+    """
+
+    if environ.get(ROWTRIM_ENV, "1") == "1":
+        return [("QWEN38_RTF_ROWTRIM_ITERS", str(ROWTRIM_ITERATIONS))]
+    return []
 
 
 def fast_opts(environ=os.environ) -> tuple[str, ...]:
@@ -263,7 +277,7 @@ def two_core_parts(
         [],
         [(core_a, [SORT_PASS_MASK, 1])],
         compute_config,
-        defines=[*rt._compute_defines(), *define("nostart", "notoken")],
+        defines=[*rt._compute_defines(), *define("nostart", "notoken"), *rowtrim_defines()],
     )
     reader_sort = kernel(
         kernels_of["reader_sort"],

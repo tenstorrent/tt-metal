@@ -58,7 +58,18 @@ MCAST_READER3 = fp.kernel_source(NAME, "mcast_reader4.cpp")
 CB_UPACK, CB_UPACK_IN = 26, 27  # the norm core's packed u chunks; the workers' landing buffer of the four cores' chunks
 UNPACK_SEM = 7  # program-local, on the transport cores: BRISC -> NCRISC "the data landed, unpack your sources"
 MAX_ROWS = 16
+ROWTRIM_ENV = "QWEN38_FRONT_ROWTRIM"  # default "1"; "0" off; "1" with rows <= ROWTRIM_MAX_ROWS: the norm core's rsqrt runs 2 iterations per face
+ROWTRIM_MAX_ROWS = 4
+ROWTRIM_ITERATIONS = 2  # rows 0..3 of faces 0 and 1 (both column parities); rsqrt_tile runs 8 in RC
 _STATE3: dict = {}
+
+
+def rowtrim_defines(rows: int) -> list[tuple[str, str]]:
+    """The norm core's compute define with ``QWEN38_FRONT_ROWTRIM=1`` (default) and ``rows <= 4``; empty otherwise (the kernel is as before)."""
+
+    if os.environ.get(ROWTRIM_ENV, "1") == "1" and 1 <= rows <= ROWTRIM_MAX_ROWS:
+        return [("QWEN38_FRONT_ROWTRIM_ITERS", str(ROWTRIM_ITERATIONS))]
+    return []
 
 
 def fits(rows: int) -> bool:
@@ -369,6 +380,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
         STATS_U_RECIP,
         p_set,
         [HT, ST, U_BLOCK, CB_U, CB_SSCALER, CB_X2, CB_SOUT, CB_RECIP_OUT, CB_NOUT],
+        defines=rowtrim_defines(rows),
         fp32_dest=True,
     )
     receiver = _mcast_reader3(

@@ -34,6 +34,23 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "../../kernels/zones.h"
 
+// QWEN38_FRONT_ROWTRIM_ITERS (host: QWEN38_FRONT_ROWTRIM=1 and rows <= 4): the rsqrt runs that many SFPU iterations per
+// face in VectorMode::R (faces 0 and 1, rows 0..3 at all 16 columns of a face) instead of rsqrt_tile's 8 iterations in
+// RC (all four faces).  Rows >= 4 of the recip tile reach only dead rows (the workers multiply rows of the u partials,
+// which are zero past the valid rows).  Undefined: rsqrt_tile, unchanged.
+#ifdef QWEN38_FRONT_ROWTRIM_ITERS
+// rsqrt_tile<RsqrtMode::Default, true>'s expansion with VectorMode::R and the iteration define
+ALWI void rsqrt_tile_rows(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        true,
+        calculate_rsqrt,
+        (APPROX, QWEN38_FRONT_ROWTRIM_ITERS /* ITERATIONS */, true, false /* FAST_APPROX */),
+        idst,
+        VectorMode::R));
+}
+#endif
+
 ALWI void ACQ() {
     tile_regs_acquire();
     tile_regs_wait();
@@ -161,7 +178,11 @@ void kernel_main() {
             ACQ();
             add_tiles(c_var, c_eps, 0, 0, 0);
             rsqrt_tile_init();
+#ifdef QWEN38_FRONT_ROWTRIM_ITERS
+            rsqrt_tile_rows(0);
+#else
             rsqrt_tile(0);
+#endif
             pack_tile(0, c_recip);
             pack_tile(0, c_recip_out);
             REL();
