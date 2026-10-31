@@ -48,6 +48,8 @@ constexpr auto report_deadline = std::chrono::seconds(30);
 // ECC_CTRL after firmware arms the halt.
 constexpr uint32_t armed_ecc_ctrl = static_cast<uint32_t>(EccView::L1_COUNTS) | ECC_CTRL_L1_DBE_IRQ_EN;
 
+}  // namespace
+
 class L1EccHaltTest : public MeshDispatchFixture {
 protected:
     void SetUp() override {
@@ -104,8 +106,6 @@ protected:
                                               .create<dev_msgs::l1_ecc_halt_msg_t>();
     tt_cxy_pair test_target_{0, CoreCoord{}};
 };
-
-}  // namespace
 
 TEST_F(L1EccHaltTest, EmulatedHaltIsReported) {
     record_.view().reason() = L1_ECC_HALT_REASON_UNEXPECTED;
