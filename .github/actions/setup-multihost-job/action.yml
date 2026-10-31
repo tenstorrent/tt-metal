@@ -188,7 +188,9 @@ runs:
           exit 1
         fi
         echo "Running ttop-recovery with cluster validation: $CLUSTER_VALIDATION"
-        ttop-recovery \
+        # exec: a cancelled or timed-out job signals only this step's own process, and ttop-recovery
+        # has to receive it to file the attempt in flight as cancelled.
+        exec ttop-recovery \
           "$CLUSTER_VALIDATION" \
           "$MAX_RECOVERY_ATTEMPTS" \
           "$CABLING_DESCRIPTOR_PATH" \
