@@ -3,13 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the prefill TTNN weight cache for one decoder layer (or a range) and compare it with the Weka cache.
+"""Build the prefill TTNN weight cache for one decoder layer (or a range) from the HF weights.
 
 Runs on a mock 8x4 Blackhole Galaxy (no chips needed), writes only under --out-root (in $HOME), reads the
-Weka cache and the HF weights read-only, prints a per-stage time profile and writes a JSON report.
+HF weights read-only, prints a per-stage time profile and writes a JSON report. --compare also checks each
+layer against a reference cache (read-only); --remove deletes the built files after each layer.
 
-    python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model kimi_k2_7 --layers 5
-    python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model glm_5_3 --layers 0-10
+    python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model kimi_k2_7 --layers 0-9
+    python models/demos/deepseek_v3_d_p/scripts/layer_ttnn_cache.py --model glm_5_3 --layers 0-10 --compare --remove
 
 Exit codes: 0 all PASS, 1 DIFF, 2 guard or usage error, 3 build FAIL, 4 Weka changed, 130 Ctrl-C.
 """
@@ -174,9 +175,12 @@ def parse_args(argv=None):
     p.add_argument("--model", required=True, choices=sorted(MODELS), help="Registry key of the model")
     p.add_argument("--layers", required=True, help="N, A-B (inclusive) or A,B,C")
     p.add_argument("--out-root", default="~/ttnn-layer-cache", help="Output root; must be under $HOME, not on Weka")
-    p.add_argument("--weka-cache", default=None, help="Reference cache root (read only); default from the adapter")
+    p.add_argument("--compare", action="store_true", help="Check each built layer against the reference cache")
+    p.add_argument(
+        "--weka-cache", default=None, help="Reference cache root for --compare (read only); default from the adapter"
+    )
     p.add_argument("--hf-model", default=None, help="HF checkpoint dir (read only); default from the adapter")
-    p.add_argument("--keep", action="store_true", help="Keep the built files (default: delete after validation)")
+    p.add_argument("--remove", action="store_true", help="Delete each layer's built files once it is done")
     p.add_argument(
         "--min-free-gb", type=float, default=40, help="Free GiB that must remain on the output fs after a layer"
     )
@@ -557,6 +561,8 @@ def format_profile(layer: dict) -> str:
             lines.append(f"{row:<18}{t:>8}{layer['files_built']:>8}{layer['bytes_built']:>16,}")
         elif row == "check_complete":
             lines.append(f"{row:<18}{t:>8}   {'ok' if layer['check_complete'] else 'INCOMPLETE'}")
+        elif row.startswith("validate.") and not layer.get("compared", True):
+            lines.append(f"{row:<18}{'-':>8}   not compared (--compare)")
         elif row == "validate.fileset":
             fs = layer["fileset"]
             lines.append(
@@ -618,7 +624,7 @@ class Ctx:
     layers: list
     out: Path
     out_cache: Path
-    weka_dir: Path
+    weka_dir: Path | None
     hf_model: Path
     mounts: list
     weka_bytes: dict = field(default_factory=dict)
@@ -639,10 +645,12 @@ def guard_phase(args) -> Ctx:
     check_env_paths(os.environ, mounts)
 
     m = MODELS[args.model]
-    weka_root = args.weka_cache or os.environ.get(m["ttnn_cache_env"]) or m["ttnn_cache_default"]
-    weka_dir = Path(weka_root).expanduser() / f"{args.model}_bh_32dev" / "8x4"
-    if not weka_dir.is_dir():
-        raise GuardError(f"Weka cache dir missing: {weka_dir}")
+    weka_dir = None
+    if args.compare:
+        weka_root = args.weka_cache or os.environ.get(m["ttnn_cache_env"]) or m["ttnn_cache_default"]
+        weka_dir = Path(weka_root).expanduser() / f"{args.model}_bh_32dev" / "8x4"
+        if not weka_dir.is_dir():
+            raise GuardError(f"reference cache dir missing: {weka_dir}")
     hf_model = Path(args.hf_model or os.environ.get(m["env_var"]) or m["hf_model_default"]).expanduser()
     if not (hf_model / "model.safetensors.index.json").is_file():
         raise GuardError(f"no model.safetensors.index.json in {hf_model}")
@@ -653,18 +661,19 @@ def guard_phase(args) -> Ctx:
         raise GuardError(str(e)) from None
 
     out_cache = out / args.model / f"{args.model}_bh_32dev" / "8x4"
-    if out_cache.resolve() == weka_dir.resolve():
-        raise GuardError(f"output dir and reference dir are the same: {out_cache}")
     weka_bytes = {}
-    for n in layers:
-        files = layer_files(weka_dir, n)
-        if not files:
-            raise GuardError(f"no layer_{n}. files in {weka_dir}")
-        weka_bytes[n] = sum(files.values())
+    if weka_dir is not None:
+        if out_cache.resolve() == weka_dir.resolve():
+            raise GuardError(f"output dir and reference dir are the same: {out_cache}")
+        for n in layers:
+            files = layer_files(weka_dir, n)
+            if not files:
+                raise GuardError(f"no layer_{n}. files in {weka_dir}")
+            weka_bytes[n] = sum(files.values())
     dirty = [n for n in layers if layer_files(out_cache, n)]
     if dirty:
         raise GuardError(f"out not clean: {out_cache} already holds files for layers {dirty}")
-    needed = sum(weka_bytes.values()) if args.keep else max(weka_bytes.values())
+    needed = max(weka_bytes.values(), default=0) if args.remove else sum(weka_bytes.values())
     _disk_check(out_cache, needed, args.min_free_gb)
     return Ctx(args, args.model, layers, out, out_cache, weka_dir, hf_model, mounts, weka_bytes)
 
@@ -730,6 +739,7 @@ def _new_layer_report(ctx: Ctx, n: int, weka: dict) -> dict:
         "files_built": 0,
         "bytes_built": 0,
         "weka_bytes": sum(weka.values()),
+        "compared": ctx.weka_dir is not None,
         "check_complete": False,
         "fileset": {"common": 0, "missing_on_weka": [], "weka_only": []},
         "content": {s: 0 for s in STATUSES},
@@ -769,7 +779,7 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
 
     ttnn = rt.ttnn
     stages = rep["stages"]
-    before = weka_snapshot(ctx.weka_dir, n)
+    before = weka_snapshot(ctx.weka_dir, n) if ctx.weka_dir else None
     layer_sd = layer_dequant = state_dict = None
     try:
         try:
@@ -838,8 +848,9 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
 
         with _timed(stages, "validate.fileset"):
             built = layer_files(ctx.out_cache, n)
-            weka = layer_files(ctx.weka_dir, n)
+            weka = layer_files(ctx.weka_dir, n) if ctx.weka_dir else built
             fs = split_fileset(built, weka)
+        rep["has_indexer"] = rep["has_indexer"] or any(".mla.indexer_" in name for name in built)
         rep["fileset"] = {"common": len(fs.common), "missing_on_weka": fs.missing_on_weka, "weka_only": fs.weka_only}
         rep["files_built"], rep["bytes_built"] = len(built), sum(built.values())
         for name, size in built.items():
@@ -849,7 +860,7 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
 
         results = {}
         with _timed(stages, "validate.content"):
-            for name in fs.common:
+            for name in fs.common if ctx.weka_dir else ():
                 results[name] = compare_tensorbin(ctx.out_cache / name, ctx.weka_dir / name, tensor_meta)
         rep["files"] = {name: {"status": r.status, "detail": r.detail} for name, r in results.items()}
         rep["content"] = {s: sum(r.status == s for r in results.values()) for s in STATUSES}
@@ -864,13 +875,13 @@ def build_one_layer(ctx: Ctx, rt: Runtime, n: int, rep: dict) -> None:
         rep["verdict"] = "FAIL"
         raise
     finally:
-        changed = snapshot_diff(before, weka_snapshot(ctx.weka_dir, n))
+        changed = snapshot_diff(before, weka_snapshot(ctx.weka_dir, n)) if ctx.weka_dir else []
         if changed:
             rt.weka_changed += [f"layer_{n}: {line}" for line in changed]
             for line in changed:
                 print(f"WEKA CHANGED: {line}", flush=True)
         with _timed(stages, "cleanup"):
-            if not ctx.args.keep:
+            if ctx.args.remove:
                 for name in layer_files(ctx.out_cache, n):
                     os.remove(ctx.out_cache / name)
                     rep["deleted_files"] += 1
@@ -942,7 +953,7 @@ def run_phase(ctx: Ctx) -> int:
         "started_utc": _utc_now(),
         "finished_utc": None,
         "out_dir": str(ctx.out_cache),
-        "weka_dir": str(ctx.weka_dir),
+        "weka_dir": str(ctx.weka_dir) if ctx.weka_dir else None,
         "hf_model": str(ctx.hf_model),
         "startup_s": None,
         "exit_code": None,
@@ -986,9 +997,9 @@ def run_phase(ctx: Ctx) -> int:
         reports_dir.mkdir(parents=True, exist_ok=True)
         try:
             for i, n in enumerate(ctx.layers):
-                if not ctx.args.keep:
-                    _disk_check(ctx.out_cache, ctx.weka_bytes[n], ctx.args.min_free_gb)
-                rep = _new_layer_report(ctx, n, layer_files(ctx.weka_dir, n))
+                if ctx.args.remove or not ctx.weka_dir:
+                    _disk_check(ctx.out_cache, ctx.weka_bytes.get(n, 0), ctx.args.min_free_gb)
+                rep = _new_layer_report(ctx, n, layer_files(ctx.weka_dir, n) if ctx.weka_dir else {})
                 rep["stages"]["startup"]["time_s"] = rt.startup_s if i == 0 else None
                 report["per_layer"].append(rep)
                 try:
