@@ -2848,3 +2848,23 @@ def test_unary_chain_rejects_bitcast_with_other_ops(device, bitcast_first, expec
     chain = [bitcast, relu] if bitcast_first else [relu, bitcast]
     with expect_error(RuntimeError, "BITCAST cannot share a chain with other ops"):
         ttnn.unary_chain(x, chain)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_silu_mish_non_finite(device, dtype):
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    x_torch = torch.tensor(
+        [[-float("inf"), -100.0, -1.0, 0.0, 1.0, 100.0, float("inf"), float("nan")]],
+        dtype=torch_dtype,
+    )
+    x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for ttnn_op, torch_op in (
+        (ttnn.silu, torch.nn.functional.silu),
+        (ttnn.mish, torch.nn.functional.mish),
+    ):
+        y_tt = ttnn.to_torch(ttnn_op(x_tt))
+        y_ref = torch_op(x_torch)
+        assert y_tt[0, 0].item() == y_ref[0, 0].item()
+        assert y_tt[0, 6].item() == y_ref[0, 6].item()
+        assert torch.isnan(y_tt[0, 7])
