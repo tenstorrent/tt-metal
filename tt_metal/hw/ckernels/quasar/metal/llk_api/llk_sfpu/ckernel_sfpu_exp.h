@@ -11,6 +11,7 @@
 
 #include "ckernel.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_dest.h"
 #include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
@@ -319,11 +320,15 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-/**
- * @brief EXP over a Dest span.
- *
- * The fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE; otherwise the HW LUT.
- */
+/** @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE. */
+template <
+    bool APPROXIMATION_MODE,
+    bool EN_32BIT_DEST,
+    sfpi::DataLayout LAYOUT = dest_float_layout<EN_32BIT_DEST>,
+    int ITERATIONS = SFPU_ITERATIONS>
+using ExpDest = DestUnary<ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>, LAYOUT, ITERATIONS>;
+
+/** @brief EXP over a Dest span; macro-path entry, same code as @ref ExpDest. */
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
@@ -336,13 +341,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     LLK_ASSERT(
         exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
         "Scaling is not supported in the current version of exp on Quasar.");
-    using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
-    using Algo = ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_operands<Algo, 1 /*ITERATIONS*/>(Operand{}, Operand{});
-        sfpi::dst_reg++;
-    }
+    ExpDest<APPROXIMATION_MODE, EN_32BIT_DEST, dest_float_layout<EN_32BIT_DEST>, ITERATIONS>::calculate();
 }
 
 template <

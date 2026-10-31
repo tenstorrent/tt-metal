@@ -68,16 +68,16 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     return sfpi::as<sfpi::vFloat>(bits);
 }
 
-/** @brief Dest store policy that rounds to bf16 (RNE) before SFPSTORE when ROUND_TO_BF16. */
-template <bool ROUND_TO_BF16>
-struct DestBf16RneFormat : SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat> {
+/** @brief Dest store policy: rounds to bf16 (RNE) before SFPSTORE when ROUND_TO_BF16; LAYOUT is the store format. */
+template <bool ROUND_TO_BF16, sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default>
+struct DestBf16RneFormat : SfpiFormat<LAYOUT, sfpi::vFloat> {
     template <SfpuReg REG>
     sfpi_inline static void store(int index, sfpi::vFloat value) {
         static_assert(REG == SfpuReg::Dest, "bf16 RNE store policy is Dest-only");
         if constexpr (ROUND_TO_BF16) {
             value = float32_to_bf16_rne(value);
         }
-        SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>::template store<REG>(index, value);
+        SfpiFormat<LAYOUT, sfpi::vFloat>::template store<REG>(index, value);
     }
 };
 
