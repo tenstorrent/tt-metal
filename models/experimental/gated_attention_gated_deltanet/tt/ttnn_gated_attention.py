@@ -586,6 +586,22 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(gate)
 
     # Output projection
-    attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    # 2c (QWEN36_1C_OPROJ_1D): the 110-core 1D mcast config with the activation in L1. Measured on
+    # this shape: 137.3 us today (DRAM activation, auto config) -> 102.2 us, and the L1 placement on
+    # its own changes nothing (137.7), so the config is what buys the time.
+    if _os.environ.get("QWEN36_1C_OPROJ_1D") == "1" and T <= ttnn.TILE_SIZE:
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        _grid = device.compute_with_storage_grid_size()
+        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.linear(
+            attn_output,
+            o_proj_weight,
+            compute_kernel_config=ckc,
+            program_config=_tpc.create_matmul_1d_decode_progcfg(1, attn_output.shape[-1], o_proj_weight.shape[-1], 110, grid_w=_grid.x),
+            memory_config=memory_config,
+        )
+    else:
+        attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
 
     return attn_output, new_key, new_value
