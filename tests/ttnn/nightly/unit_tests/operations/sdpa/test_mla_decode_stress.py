@@ -50,7 +50,7 @@ def create_replicated_q_shard_spec(device, batch, nh, d, num_cores_per_head=4):
 
 
 @pytest.mark.parametrize("batch", [4])
-@pytest.mark.parametrize("seq_len", [1 * 1024])
+@pytest.mark.parametrize("seq_len", [1 * 1024, 8 * 1024])
 @pytest.mark.parametrize("nh", [128])
 @pytest.mark.parametrize("nkv", [1])
 @pytest.mark.parametrize("kv_lora_rank", [512])

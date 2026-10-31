@@ -767,12 +767,18 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t reducer_semaphore_id = 0;
     const uint32_t output_semaphore_id = 1;
     const uint32_t k_mcast_semaphore_id = 2;
+    const uint32_t k_mcast_ready_semaphore_id = 3;
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = reducer_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = output_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = k_mcast_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = k_mcast_ready_semaphore_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = core_grid,
+        .initial_value = 0});
 
     // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
@@ -818,6 +824,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         Bmask,
         capacity_t,
         spec_multi_pos_tiles,
+        k_mcast_ready_semaphore_id,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -982,6 +989,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
                 mcast_x = phys_start.x;
                 mcast_y0 = phys_start.y;
                 mcast_y1 = phys_end.y;
+            } else if (!do_k_mcast) {
+                auto sender = device->worker_core_from_logical_core(
+                    CoreCoord{core.x, core.y - (core.y % q_heads_parallel_factor)});
+                mcast_x = sender.x;
+                mcast_y0 = sender.y;
             }
         } else {
             cur_head = (i % num_cores_per_batch) / num_cores_per_head;
