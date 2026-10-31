@@ -144,13 +144,32 @@ public:
     // the token type is how the host marks the binding as a relay at compile time.
     // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
     // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
-    DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
-        if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
-            experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
-        }
-#endif
+#ifdef ARCH_QUASAR
+    DataflowBuffer(RelayDFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        align_relay_to_prefetcher_pipe(token);
     }
+    // DataflowBuffer<> (UNKNOWN) accepts any relay token.
+    template <
+        dfb::AccessPattern TokPap,
+        dfb::AccessPattern TokCap,
+        bool Agnostic = !pattern_known,
+        std::enable_if_t<Agnostic, int> = 0>
+    DataflowBuffer(RelayDFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        align_relay_to_prefetcher_pipe(token);
+    }
+    // A known pair rejects any other pair's relay token.
+    template <
+        dfb::AccessPattern TokPap,
+        dfb::AccessPattern TokCap,
+        bool Known = pattern_known,
+        std::enable_if_t<Known && !(TokPap == Pap && TokCap == Cap), int> = 0>
+    DataflowBuffer(RelayDFBBindingToken<TokPap, TokCap>) = delete;
+#else
+    template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
+    DataflowBuffer(RelayDFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        align_relay_to_prefetcher_pipe(token);
+    }
+#endif
 
     // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
@@ -471,6 +490,17 @@ private:
 #endif
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
+
+    // On a TRISC, set this thread's counters to the PrefetcherPipe's saved position.
+    template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
+    void align_relay_to_prefetcher_pipe([[maybe_unused]] RelayDFBBindingToken<TokPap, TokCap> token) {
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
+        if (token.prefetcher_pipe_id() != RelayDFBBindingToken<TokPap, TokCap>::NO_PREFETCHER_PIPE) {
+            experimental::align_local_dfb_to_prefetcher_pipe_slot(
+                logical_dfb_id_, token.prefetcher_pipe_id(), get_consumer_share());
+        }
+#endif
+    }
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     static constexpr uint32_t L1_UNCACHED_OFFSET = MEM_L1_UNCACHED_BASE;

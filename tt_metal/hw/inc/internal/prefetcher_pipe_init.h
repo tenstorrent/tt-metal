@@ -138,6 +138,49 @@ FORCE_INLINE uint32_t prefetcher_pipe_relay_pages_per_entry(uint32_t relay_dfb_i
     return pipe_entry_size / page_size;
 }
 
+#ifdef ARCH_QUASAR
+// How far apart a relay counter's operations start. Each operation covers `per_op` entries and then
+// the counter jumps, so operation starts repeat every (per_op - 1) * stride + jump. On a STRIDED
+// ring that is just the stride. `share` is this thread's entries per operation; when one operation
+// is split across the thread's counters, each counter takes a slice of it.
+FORCE_INLINE uint32_t
+relay_counter_period(const LocalDFBInterface& local, uint32_t share, uint32_t stride, uint32_t jump) {
+    const uint32_t per_op = local.split_tc != 0 ? share / local.num_tcs_to_rr : share;
+    return (per_op - 1u) * stride + jump;
+}
+
+// The first operation start at or after `cursor`, for a counter that starts at `base` and repeats
+// every `period`. Units are whatever the caller uses (entries on TRISC, bytes on DM).
+FORCE_INLINE uint32_t relay_counter_next(uint32_t base, uint32_t cursor, uint32_t period) {
+    if (cursor <= base) {
+        return base;
+    }
+    return base + ((cursor - base + period - 1u) / period) * period;
+}
+
+#if !defined(COMPILE_FOR_TRISC)
+// Re-paging a bound relay (set_receiver_entry_size) keeps its block layout: byte values (counter
+// bases, stride, jump) scale with the new page size, entry counts stay the same. Each counter's
+// window is one ring length from its base, so the window is moved, not scaled.
+FORCE_INLINE void rescale_relay_counter_geometry(
+    LocalDFBInterface& local,
+    uint32_t ring_start,
+    uint32_t ring_bytes,
+    uint32_t old_entry_size,
+    uint32_t new_entry_size) {
+    ASSERT(old_entry_size != 0);
+    auto scale = [&](uint32_t bytes) { return (bytes / old_entry_size) * new_entry_size; };
+    local.stride_size = scale(local.stride_size);
+    local.jump = scale(local.jump);
+    for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
+        DFBTCSlot& slot = local.tc_slots[t];
+        slot.base_addr = ring_start + scale(slot.base_addr - ring_start);
+        slot.limit = slot.base_addr + ring_bytes;
+    }
+}
+#endif
+#endif  // ARCH_QUASAR
+
 #ifndef ARCH_QUASAR
 
 // Point a relay's local CB at a PrefetcherPipe's ring window [fifo_start_addr, fifo_limit_addr) with
@@ -174,7 +217,7 @@ FORCE_INLINE void set_local_relay_cb_to_pipe_window(
 // Not a public compute API (TRISC kernels consume via DataflowBuffer /
 // RelayDFBBindingToken after this snap).
 FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
-    uint32_t relay_dfb_id, uint32_t config_page_addr, uint32_t entry_size) {
+    uint32_t relay_dfb_id, uint32_t config_page_addr, uint32_t entry_size, uint32_t share) {
     ASSERT(config_page_addr != 0);
     ASSERT(entry_size != 0);
     ASSERT(entry_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
@@ -210,21 +253,27 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     ASSERT(local.stride_size_tiles != 0);
     local.stride_size = static_cast<uint16_t>(local.entry_size * local.stride_size_tiles);
     local.num_entries = static_cast<uint16_t>(window_entries);
-    const uint8_t stride = local.stride_size_tiles;
+    // A BLOCKED relay moves whole blocks, so the checkpoint lands on a block boundary.
+    ASSERT(local.block_size <= 1 || cursor_entry % local.block_size == 0);
+    // cursor_entry is measured from the ring start, but this thread's entry indices start at its own
+    // first counter window, which the host placed first_entry entries into the ring. Convert the
+    // cursor to that index space first. Counter bases are in tile units here, like entry_size.
+    const uint32_t first_entry = (local.tc_slots[0].base_addr - (fifo_start_addr >> cb_addr_shift)) / local.entry_size;
+    ASSERT(first_entry < window_entries);
+    const uint32_t local_cursor = cursor_entry > first_entry ? cursor_entry - first_entry : 0u;
+    const uint32_t local_window = window_entries - first_entry;
+    // Move each counter to its first operation at or after the checkpoint; the earliest one goes next.
+    const uint32_t period = relay_counter_period(local, share, local.stride_size_tiles, local.jump);
+    uint32_t first_next = 0xFFFFFFFFu;
     local.tc_idx = 0;
     for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
         DFBTCSlot& slot = local.tc_slots[t];
-        uint32_t idx = slot.base_entry_idx;
-        if (cursor_entry > idx) {
-            const uint32_t delta = cursor_entry - idx;
-            idx = idx + ((delta + stride - 1) / stride) * stride;
-        }
-        if (idx >= local.num_entries) {
-            idx = slot.base_entry_idx;
-        }
-        if (idx == cursor_entry) {
+        const uint32_t next = relay_counter_next(slot.base_entry_idx, local_cursor, period);
+        if (next < first_next) {
+            first_next = next;
             local.tc_idx = t;
         }
+        const uint32_t idx = next < local_window ? next : slot.base_entry_idx;
         slot.cursor_entry_idx = static_cast<uint16_t>(idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
@@ -262,6 +311,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     // TRISC MATH owns no relay state; the DM path works in byte pointers rather than entry indices.
     (void)window_entries;
     (void)cursor_entry;
+    (void)share;
 #else
     // Launch-time snap: only the window and cursor move. The relay keeps the page firmware set from its
     // config, one pipe entry or a whole fraction of one.
@@ -273,6 +323,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
         next_fifo_rd_ptr,
         entry_size,
         local.fifo_page_size << cb_addr_shift);
+    (void)share;
 #endif
 }
 
@@ -281,7 +332,8 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
 // the token bakes prefetcher_pipe_id at compile time, so this indexes the dense
 // launch-msg persistent region directly and snaps the borrowed local iface to the
 // durable checkpoint using this launch's [config_page_addr, entry_size] from the slot.
-FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id, uint32_t prefetcher_pipe_id) {
+FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(
+    uint32_t relay_dfb_id, uint32_t prefetcher_pipe_id, uint32_t share) {
     const uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     const auto* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
     const auto& kernel_config = launch_msg->kernel_config;
@@ -297,10 +349,11 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id,
         region + REMOTE_DFB_REGION_HEADER_WORDS + prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
     const uint32_t config_page_addr = load_prefetcher_pipe_config_word(slot, 0);
     const uint32_t entry_size = load_prefetcher_pipe_config_word(slot, 1);
-    // Host must have registered this local DFB as the relay for this persistent slot
-    // (DFBAdvancedOptions::prefetcher_pipe_relays); catches a mismatched token.
-    ASSERT(load_prefetcher_pipe_config_word(slot, 2) == relay_dfb_id);
-    align_local_dfb_to_prefetcher_pipe_checkpoint(relay_dfb_id, config_page_addr, entry_size);
+    // The host registered this DFB as the slot's relay (DFBAdvancedOptions::prefetcher_pipe_relays);
+    // a mismatched token fails here. The slot word also holds the lane count, so compare only the
+    // relay-id byte.
+    ASSERT(prefetcher_pipe_slot_relay_id(load_prefetcher_pipe_config_word(slot, 2)) == relay_dfb_id);
+    align_local_dfb_to_prefetcher_pipe_checkpoint(relay_dfb_id, config_page_addr, entry_size, share);
 }
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
@@ -310,9 +363,9 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id,
 // set_receiver_entry_size() so a mid-kernel page-size change does not leave the
 // local CB/DFB on the old stride. No NOC — copies from the receiver iface.
 // relay_pages_per_entry (see prefetcher_pipe_relay_pages_per_entry) sets the relay's page to
-// the pipe entry divided by it.
+// the pipe entry divided by it. `share` is how many relay entries this thread pushes at a time.
 FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
-    uint32_t relay_dfb_id, const CrossNodeReceiverDFBInterface& iface, uint32_t relay_pages_per_entry) {
+    uint32_t relay_dfb_id, const CrossNodeReceiverDFBInterface& iface, uint32_t relay_pages_per_entry, uint32_t share) {
 #ifdef ARCH_QUASAR
     LocalDFBInterface& local = get_local_dfb_interface(relay_dfb_id);
     ASSERT(local.num_tcs_to_rr >= 1);
@@ -328,10 +381,13 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     // entry, so they cannot follow a mid-kernel change of it.
     ASSERT(local.num_tcs_to_rr == 1 || prefetcher_pipe_relay_page_size(relay_dfb_id) == relay_entry_size);
     // DM: ptrs are raw bytes; entry_size field is address units (shift 0 → bytes).
+    const uint32_t old_entry_size = local.entry_size;
     local.entry_size = relay_entry_size;
     local.num_entries = static_cast<uint16_t>(ring_bytes / relay_entry_size);
     local.tc_idx = 0;
-    if (local.num_tcs_to_rr == 1) {
+    const bool is_plain_ring = local.num_tcs_to_rr == 1 && local.block_size <= 1 &&
+                               local.stride_size == old_entry_size && local.jump == old_entry_size;
+    if (is_plain_ring) {
         local.stride_size = relay_entry_size;
         local.jump = local.stride_size;  // plain ring: the DM cursor jump equals the stride
         DFBTCSlot& slot = local.tc_slots[0];
@@ -339,25 +395,25 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
         slot.limit = iface.fifo_limit_page_aligned;
         slot.ptr = iface.fifo_rd_ptr;
     } else {
-        // Snap each TC to the first relay entry it owns at or after the cursor; the TC that owns the
-        // cursor's entry takes the next push.
+        if (relay_entry_size != old_entry_size) {
+            // A re-page must keep this relay's layout, so scale its byte values instead of
+            // resetting it to a plain ring.
+            rescale_relay_counter_geometry(local, iface.fifo_start_addr, ring_bytes, old_entry_size, relay_entry_size);
+        }
+        // Move each counter to its first operation at or after the cursor; the earliest one takes
+        // the next push.
         ASSERT(local.stride_size != 0);
         ASSERT(local.stride_size % relay_entry_size == 0);
+        const uint32_t period = relay_counter_period(local, share, local.stride_size, local.jump);
+        uint32_t first_next = 0xFFFFFFFFu;
         for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
             DFBTCSlot& slot = local.tc_slots[t];
-            uint32_t ptr = slot.base_addr;
-            if (iface.fifo_rd_ptr > slot.base_addr) {
-                const uint32_t delta = iface.fifo_rd_ptr - slot.base_addr;
-                const uint32_t aligned = ((delta + local.stride_size - 1) / local.stride_size) * local.stride_size;
-                ptr = slot.base_addr + aligned;
-                if (ptr >= slot.limit) {
-                    ptr = slot.base_addr;
-                }
-            }
-            if (ptr == iface.fifo_rd_ptr) {
+            const uint32_t next = relay_counter_next(slot.base_addr, iface.fifo_rd_ptr, period);
+            if (next < first_next) {
+                first_next = next;
                 local.tc_idx = t;
             }
-            slot.ptr = ptr;
+            slot.ptr = next < slot.limit ? next : slot.base_addr;
         }
     }
 #else
@@ -370,6 +426,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
         iface.fifo_rd_ptr,
         iface.fifo_page_size,
         iface.fifo_page_size / relay_pages_per_entry);
+    (void)share;
 #endif
 }
 

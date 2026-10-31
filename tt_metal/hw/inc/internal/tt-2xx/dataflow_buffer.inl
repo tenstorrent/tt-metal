@@ -459,14 +459,13 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
 }
 
 #if !defined(COMPILE_FOR_TRISC)
-template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
-inline void DataflowBuffer<Pap, Cap>::wait_relay_consumer_caught_up() const {
+inline void dfb_dm_wait_relay_consumer_caught_up(const LocalDFBInterface& local) {
     // Same posted==acked drain as finish()'s DM path; scoped for PrefetcherPipe relay handoff.
     bool all_acked = false;
     while (!all_acked) {
         all_acked = true;
-        for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-            const dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+        for (uint8_t i = 0; i < local.num_tcs_to_rr; i++) {
+            const dfb::PackedTileCounter packed_tc = local.tc_slots[i].packed_tile_counter;
             const uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             const uint8_t tc_id = dfb::get_counter_id(packed_tc);
             if (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) !=
@@ -475,6 +474,11 @@ inline void DataflowBuffer<Pap, Cap>::wait_relay_consumer_caught_up() const {
             }
         }
     }
+}
+
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline void DataflowBuffer<Pap, Cap>::wait_relay_consumer_caught_up() const {
+    dfb_dm_wait_relay_consumer_caught_up(local_dfb_interface_);
 }
 #endif
 
