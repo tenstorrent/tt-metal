@@ -94,8 +94,18 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
-    llk_profiler::reset();
+    // RC memset knock-out ac2 = a + c2: staggered clear (math, then pack), then the pack TRISC makes one L1 load in
+    // the action of the final barrier.
+    llk_profiler::reset_state();
+#if !defined(LLK_TRISC_PACK)
+    llk_profiler::clear_buffer();
+#endif
     llk_profiler::sync_threads();
+#if defined(LLK_TRISC_PACK)
+    llk_profiler::clear_buffer();
+#endif
+    llk_barrier::rendezvous(
+        llk_barrier::is_action_thread(), [] { (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(mailboxes_start)); });
 #endif
 
     {
