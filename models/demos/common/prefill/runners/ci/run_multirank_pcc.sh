@@ -197,6 +197,13 @@ if [ -n "${VARIANT}" ]; then
   EXPECTED_TPS=""
 fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
+# TEMPORARY (K2.7 SC4 D2D hang, PR #61481): forward the hang probe and lease-order switches to the
+# ranks. The probe writes under TRIAGE_OUTPUT_DIR, which the leg uploads.
+if [ -n "${PREFILL_HANG_PROBE_SECS:-}" ]; then
+  RUNNER_ENV+=" export PREFILL_HANG_PROBE_SECS=${PREFILL_HANG_PROBE_SECS}; \
+      export PREFILL_HANG_PROBE_DIR='${TRIAGE_OUTPUT_DIR:-${EVIDENCE_DIR}}/hang_probe';"
+fi
+[ -z "${PREFILL_LEASE_ORDER:-}" ] || RUNNER_ENV+=" export PREFILL_LEASE_ORDER=${PREFILL_LEASE_ORDER};"
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then

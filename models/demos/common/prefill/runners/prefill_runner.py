@@ -621,6 +621,7 @@ def _forward_send_warmup(runtime, outbound: D2DBoundary, rank: int) -> None:
 def _lease_reclaim(inbound: D2DBoundary, outbound: D2DBoundary) -> None:
     # Fence the graph's fabric ops: the receivers are done with this chunk's receive and the senders
     # with the previous forward.
+    _HANG_PROBE.note(f"reclaim in={len(inbound.channels())} out={len(outbound.channels())}")
     for service in inbound.channels() + outbound.channels():
         service.wait_for_fabric_links()
 
@@ -628,8 +629,116 @@ def _lease_reclaim(inbound: D2DBoundary, outbound: D2DBoundary) -> None:
 def _lease_grant_receive(inbound: D2DBoundary) -> None:
     # Grant the next receive. Senders are granted only after a send: an unused grant stays pending,
     # and the next reclaim's wait on it would never return.
+    _HANG_PROBE.note("grant-recv")
     if inbound.activation is not None:
         inbound.activation.release_fabric_links()
+
+
+# TEMPORARY (K2.7 SC4 D2D hang, PR #61481 / blaze run 41143279419): remove once the hang is understood.
+# PREFILL_LEASE_ORDER picks the lease order under test:
+#   new     the order above (716b4c32ce6)
+#   fenced  new, but the next receive is granted only once the activation sender is done, as GLM's
+#           index send already does (_d2d_send_indices waits on the activation sender)
+#   old     before 716b4c32ce6: reclaim every link and grant the receive at the top of each iteration
+LEASE_ORDER = os.environ.get("PREFILL_LEASE_ORDER", "new")
+assert LEASE_ORDER in ("new", "fenced", "old"), f"PREFILL_LEASE_ORDER={LEASE_ORDER!r}"
+# PREFILL_HANG_PROBE_SECS > 0 arms a per-rank watchdog once the first real chunk is received: after that
+# many seconds without loop progress it dumps every Python thread's stack and the recent loop / lease
+# events, runs tt-triage on this host into PREFILL_HANG_PROBE_DIR, and then exits the rank.
+HANG_PROBE_SECS = float(os.environ.get("PREFILL_HANG_PROBE_SECS", 0))
+HANG_PROBE_DIR = os.environ.get("PREFILL_HANG_PROBE_DIR", "/tmp/prefill_hang_probe")
+
+
+class _HangProbe:
+    def __init__(self):
+        import collections
+        import threading
+
+        self.events = collections.deque(maxlen=80)
+        self.lock = threading.Lock()
+        self.last = time.monotonic()
+        self.rank = None
+        self.armed = False
+        self.thread = None
+
+    def note(self, what: str) -> None:
+        if not HANG_PROBE_SECS:
+            return
+        with self.lock:
+            self.events.append(f"{time.time():.3f} {what}")
+            self.last = time.monotonic()
+
+    def start(self, rank: int) -> None:
+        if not HANG_PROBE_SECS or self.thread is not None:
+            return
+        import threading
+
+        self.rank = rank
+        self.thread = threading.Thread(target=self._watch, name="hang-probe", daemon=True)
+        self.thread.start()
+        logger.info(f"[pp rank {rank}] [hang-probe] {HANG_PROBE_SECS:.0f}s stall watchdog, lease order {LEASE_ORDER}")
+
+    def arm(self) -> None:
+        if HANG_PROBE_SECS and not self.armed:
+            self.armed = True
+            self.note("armed")
+
+    def _watch(self) -> None:
+        while True:
+            time.sleep(10)
+            with self.lock:
+                stalled = time.monotonic() - self.last
+            if self.armed and stalled > HANG_PROBE_SECS:
+                self._fire(stalled)
+                return
+
+    def _fire(self, stalled: float) -> None:
+        import faulthandler
+        import socket
+        import subprocess
+        import sys
+
+        host = socket.gethostname()
+        out = os.path.join(HANG_PROBE_DIR, f"{host}-rank{self.rank}")
+        os.makedirs(out, exist_ok=True)
+        with self.lock:
+            events = list(self.events)
+        head = f"[pp rank {self.rank}] [hang-probe] STALL {stalled:.0f}s on {host} (lease order {LEASE_ORDER})"
+        print(head, file=sys.stderr, flush=True)
+        for e in events:
+            print(f"[pp rank {self.rank}] [hang-probe] event {e}", file=sys.stderr, flush=True)
+        with open(os.path.join(out, "events.txt"), "w") as fh:
+            fh.write(head + "\n" + "\n".join(events) + "\n")
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        with open(os.path.join(out, "py_stacks.txt"), "w") as fh:
+            faulthandler.dump_traceback(file=fh, all_threads=True)
+        home = os.environ.get("TT_METAL_HOME", os.getcwd())
+        py = "/opt/venv/bin/python3" if os.path.exists("/opt/venv/bin/python3") else sys.executable
+        cmd = [
+            py,
+            os.path.join(home, "tools", "tt-triage.py"),
+            "--disable-progress",
+            f"--triage-summary-path={out}/triage_summary.txt",
+            f"--llm-output-path={out}/triage_llm_output.txt",
+        ]
+        print(f"[pp rank {self.rank}] [hang-probe] tt-triage -> {out}", file=sys.stderr, flush=True)
+        try:
+            with open(os.path.join(out, "triage_output.txt"), "w") as fh:
+                subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, timeout=900, check=False)
+            with open(os.path.join(out, "triage_summary.txt")) as fh:
+                for line in fh.read().splitlines()[:150]:
+                    print(f"[pp rank {self.rank}] [hang-probe] triage {line}", file=sys.stderr, flush=True)
+        except Exception as e:  # noqa: BLE001 -- report whatever triage did, then exit regardless
+            print(f"[pp rank {self.rank}] [hang-probe] triage failed: {e!r}", file=sys.stderr, flush=True)
+        # A second stack dump shows whether the host thread moved while triage ran.
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        # Give the other ranks' probes time to finish their own triage before mpirun tears the job down.
+        time.sleep(120)
+        print(f"[pp rank {self.rank}] [hang-probe] exiting the rank", file=sys.stderr, flush=True)
+        os._exit(3)
+
+
+_HANG_PROBE = _HangProbe()
 
 
 class SocketBuffers:
@@ -956,9 +1065,15 @@ def run_request_loop(
                 runtime.indexer_indices_shape() if outbound.indices is not None else None,
             )
 
-    _lease_grant_receive(inbound)  # fill: grant the first receive
+    _HANG_PROBE.start(rank)
+    if LEASE_ORDER != "old":
+        _lease_grant_receive(inbound)  # fill: grant the first receive
     while not _shutdown:
         inp = mtp_tokens = None
+        if LEASE_ORDER == "old":
+            _lease_reclaim(inbound, outbound)
+            _lease_grant_receive(inbound)
+        _HANG_PROBE.note(f"recv c={c}")
         try:
             if cfg.is_first_rank:
                 inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
@@ -987,8 +1102,10 @@ def run_request_loop(
             _lease_reclaim(D2DBoundary(), outbound)
             forward_shutdown()
             raise
+        _HANG_PROBE.note(f"received c={c} [{meta['actual_start']},{meta['actual_end']})")
         indices = _d2d_recv_indices(inbound.activation, inbound.indices) if inbound.indices is not None else None
-        _lease_reclaim(inbound, outbound)
+        if LEASE_ORDER != "old":
+            _lease_reclaim(inbound, outbound)
         if _is_shutdown_sentinel(meta):
             # Drain: no inbound grant, as nothing follows the sentinel.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} forwards; exiting request loop")
@@ -1015,8 +1132,11 @@ def run_request_loop(
             before_first_chunk()
             before_first_chunk = None
         if warmup:
-            _lease_grant_receive(inbound)  # nothing was sent, so only the next receive is granted
+            if LEASE_ORDER != "old":
+                _lease_grant_receive(inbound)  # nothing was sent, so only the next receive is granted
             continue
+        _HANG_PROBE.arm()
+        _HANG_PROBE.note(f"compute c={c}")
         try:
             t = _compute_and_send(
                 runtime,
@@ -1037,7 +1157,12 @@ def run_request_loop(
             # already took the senders' links back, so the sentinel goes out without another one.
             forward_shutdown()
             raise
-        _lease_grant_receive(inbound)
+        _HANG_PROBE.note(f"sent c={c}")
+        if LEASE_ORDER == "fenced" and outbound.activation is not None:
+            _HANG_PROBE.note("fence-send")
+            outbound.activation.wait_for_fabric_links()
+        if LEASE_ORDER != "old":
+            _lease_grant_receive(inbound)
         if first is None:
             first = t
         c += 1
