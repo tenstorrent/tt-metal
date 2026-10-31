@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 import ttnn
+from loguru import logger
 
 from .. import program as fp
 
@@ -20,10 +21,12 @@ PLEKV_FLAG = "QWEN38_MM2_PLEKV"  # default "1": the PLE key+value merged linear 
 # (K, N) shapes whose readers sit on the DRAM banks' optimal NOC0 workers when QWEN38_MM2_OPTIMAL is "1" (the default)
 OPTIMAL_SHAPES = frozenset({(2560, 2304)})  # the QSA merged projection
 BALANCE_FLAG = (
-    "QWEN38_MM2_BALANCE"  # default "0": the K blocks of a column spread over all banks (equal bytes per bank)
+    "QWEN38_MM2_BALANCE"  # default "1": the K blocks of a column spread over all banks (equal bytes per bank)
 )
 # (K, N) shapes laid out balanced while QWEN38_MM2_BALANCE is "1" (the other shapes already have equal bytes per bank).
-# Off by default: the reader placement follows the first die's bank workers; e2e -62 us on one 8-chip group, +25 us on another.
+# The readers sit on cores chosen for ALL dies of the mesh (die_hops / robust_assign): the dies harvest different Tensix columns,
+# and a placement next to the first die's banks was -62 us/token on one 8-chip group and +25 us on another; the robust one is
+# -59 / -71 / -68 us/token on three groups.
 BALANCE_SHAPES = frozenset(
     {(2560, 2112)}
 )  # GDN in-proj: gate_up gains nothing (kernel fixed cost), the others are even
@@ -37,7 +40,7 @@ def enabled() -> bool:
 
 
 def balance_enabled(k: int | None = None, n: int | None = None) -> bool:
-    return os.environ.get(BALANCE_FLAG, "0") == "1" and (k is None or (k, n) in BALANCE_SHAPES)
+    return os.environ.get(BALANCE_FLAG, "1") == "1" and (k is None or (k, n) in BALANCE_SHAPES)
 
 
 def plekv_enabled() -> bool:
@@ -65,6 +68,52 @@ def bank_workers(mesh) -> list:
                 best = (east, workers)
         cached = _WORKERS[key] = (mesh, best[1])
     return list(cached[1])
+
+
+_HOPS: dict = {}
+
+
+def die_hops(mesh, bank: int, core) -> list:
+    """NOC0 hops of the read data from DRAM bank ``bank`` to the logical worker ``core`` on EVERY die of ``mesh``.  Each die has its
+    own harvested Tensix columns, so one logical core is near the bank on one die and a torus wrap away on another.  The bank's
+    optimal NOC0 worker of that die sits one hop from the bank's DRAM port on the same row (die_hops = 1 + worker -> core hops).
+    """
+    key = (id(mesh), bank, tuple(core))
+    hit = _HOPS.get(key)
+    if hit is None or hit[0] is not mesh:
+        exp = ttnn._ttnn.multi_device.experimental
+        out = []
+        for r in range(mesh.shape[0]):
+            for c in range(mesh.shape[1]):
+                coord = ttnn.MeshCoordinate(r, c)
+                w = mesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0, coord)[bank]
+                out.append(
+                    1 + int(exp.get_worker_noc_hop_distance(mesh, coord, w, ttnn.CoreCoord(*core), ttnn.NOC.NOC_0))
+                )
+        hit = _HOPS[key] = (mesh, out)
+    return hit[1]
+
+
+def robust_assign(mesh, cores, banks):
+    """Group -> core assignment good on all dies: ``banks[i]`` = home bank of group i, ``cores`` = the free candidate cores (as many as
+    groups, or more).  Smallest worst hop count over all readers and dies first, then the smallest sum of hops over readers and dies
+    (optimal assignment).  Returns ``({group: (x, y)}, worst_hops, total_hops)``."""
+    import numpy as np
+    from scipy.optimize import linear_sum_assignment
+
+    hops = [[die_hops(mesh, b, c) for c in cores] for b in banks]
+    worst = np.array([[max(h) for h in row] for row in hops])
+    total = np.array([[sum(h) for h in row] for row in hops])
+    for limit in sorted(set(worst.flatten().tolist())):
+        cost = np.where(worst <= limit, total, 10**9)
+        rows, cols = linear_sum_assignment(cost)
+        if cost[rows, cols].max() < 10**9:
+            return (
+                {int(i): tuple(cores[j]) for i, j in zip(rows, cols)},
+                int(limit),
+                int(cost[rows, cols].sum()),
+            )
+    raise RuntimeError("robust_assign: no assignment")
 
 
 def row_placement(mesh, per_bank, exclude=(), per_bank_list=None):
@@ -353,9 +402,11 @@ def _plan(mesh, groups, act_cores, exclude, place="rect"):
             placed.append((core, g[0], seen[g[0]]))
             assign[i] = core
             seen[g[0]] += 1
-    elif (
-        place == "rect"
-    ):  # study: ONE rectangle (one range per CB / kernel / semaphore), each group on the nearest free core
+    elif place in (
+        "rect",
+        "rect_robust",
+    ):  # ONE rectangle (one range per CB / kernel / semaphore); rect_robust: each group's core
+        # is chosen for all dies (robust_assign), rect: the nearest free core to the first die's bank workers (study)
         grid0 = mesh.compute_with_storage_grid_size()
         rect = None
         for w, h in sorted(
@@ -373,7 +424,13 @@ def _plan(mesh, groups, act_cores, exclude, place="rect"):
             except RuntimeError:
                 continue
         rect_cores_ = placement.rectangle_cores(rect)
-        a_, _ = m1._assign(rect_cores_, groups, list(range(BANKS)), m1.bank_workers(mesh))
+        if place == "rect_robust":
+            a_, worst, total = robust_assign(mesh, rect_cores_, [g[0] for g in groups])
+            logger.info(
+                f"mm_stream2 robust placement: worst {worst} hops, total {total} hops over {len(groups)} readers x dies"
+            )
+        else:
+            a_, _ = m1._assign(rect_cores_, groups, list(range(BANKS)), m1.bank_workers(mesh))
         for i, g in enumerate(groups):
             core = ttnn.CoreCoord(*a_[i])
             placed.append((core, g[0], seen[g[0]]))
@@ -452,6 +509,8 @@ def mm_stream2_program(
         }
     live = set(map(tuple, exclude)) | out_cores | set(map(tuple, act_cores))
     plan_groups = [(home[i], *g[1:]) for i, g in enumerate(groups)] if balance else groups
+    if balance and place == "rect":
+        place = "rect_robust"  # the first-die placement of a balanced layout is not reachable
     assign, vcs, hub_cc, merged, ranges = _plan(mesh, plan_groups, act_cores, live, place)
     cores_used = {(c.x, c.y) for c in assign.values()} | {(hub_cc.x, hub_cc.y)}
     if cores_used & live:
