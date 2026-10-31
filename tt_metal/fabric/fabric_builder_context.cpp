@@ -113,7 +113,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
     };
 
     // Always have MESH routers
-    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
+    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 ||
+                                      intermesh_vc_config_.intermesh_vc_disabled;
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
@@ -123,9 +124,10 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     // A Z-facing intermesh boundary introduces the boundary family (5 VC0 / 4 VC1) and mesh routers
     // on the same chips (4 VC0 / 4 VC1 when non-express); enumerate both. VC1 is required because
-    // the boundary shape is defined by its from-boundary VC1 fanout.
+    // the boundary shape is defined by its from-boundary VC1 fanout (on VC0 with intermesh_vc_disabled).
     const bool has_intermesh_z_boundary =
-        intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
+        (intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.intermesh_vc_disabled) &&
+        fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
         const auto boundary_chip = chip_with_z(EdgeCapability::INTERMESH);
         possible_shapes.push_back(router_vc_shape(
@@ -380,6 +382,18 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
+
+            if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc() && needs_mesh_pass_through) {
+                log_warning(
+                    tt::LogFabric, "TT_METAL_FABRIC_DISABLE_INTERMESH_VC is ignored: mesh pass-through needs VC1");
+            } else if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc()) {
+                config = IntermeshVCConfig::disabled();
+                config.mode = IntermeshVCMode::FULL_MESH;
+                config.intermesh_vc_disabled = true;
+                log_info(
+                    tt::LogFabric,
+                    "Intermesh VC disabled (TT_METAL_FABRIC_DISABLE_INTERMESH_VC): inter-mesh traffic lands on VC0");
+            }
         }
     }
 
@@ -396,6 +410,5 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     return config;
 }
-
 
 }  // namespace tt::tt_fabric

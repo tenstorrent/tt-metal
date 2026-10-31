@@ -557,6 +557,12 @@ tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::Mes
     return control_plane.get_fabric_context().get_fabric_topology();
 }
 
+bool is_intermesh_vc_disabled(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& fabric_context = mesh_device.impl().metal_env().get_control_plane().get_fabric_context();
+    return fabric_context.has_builder_context() &&
+           fabric_context.get_builder_context().get_intermesh_vc_config().intermesh_vc_disabled;
+}
+
 FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
 void SetFabricConfig(

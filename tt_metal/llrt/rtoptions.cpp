@@ -259,6 +259,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
     TT_METAL_FABRIC_OPT_LEVEL,               // Override fabric kernel compiler optimization level
+    TT_METAL_FABRIC_DISABLE_INTERMESH_VC,    // Carry inter-mesh traffic on VC0, with no VC1
     TT_TOPOLOGY_SOLVER_ENGINE,               // sat|dfs: topology mapping backend (fabric)
 
     // ========================================
@@ -1950,6 +1951,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
         }
+
+        // TT_METAL_FABRIC_DISABLE_INTERMESH_VC: carry inter-mesh traffic on VC0 (no VC1) and turn on
+        // the D2D stream relay. Only safe if inter-mesh traffic cannot form a buffer cycle. Default: 0
+        case EnvVarID::TT_METAL_FABRIC_DISABLE_INTERMESH_VC:
+            this->disable_fabric_intermesh_vc = is_env_enabled(value);
+            break;
 
         // TT_TOPOLOGY_SOLVER_ENGINE
         // If set to sat/1/true/yes, topology mapping uses the SAT backend when solver_engine is Auto (same rule as
