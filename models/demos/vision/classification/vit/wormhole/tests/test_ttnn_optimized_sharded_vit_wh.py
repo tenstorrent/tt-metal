@@ -33,6 +33,7 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
     torch_output, *_ = model.vit.embeddings.patch_embeddings(torch_pixel_values)
 
     parameters = preprocess_model_parameters(
+        model_name=model_name,
         initialize_model=lambda: model,
         device=device,
         custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
@@ -113,6 +114,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     )
 
     parameters = preprocess_model_parameters(
+        model_name=model_name,
         initialize_model=lambda: model,
         device=device,
         custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
@@ -172,6 +174,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     torch_output, *_ = model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
+        model_name=model_name,
         initialize_model=lambda: model,
         device=device,
         custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
@@ -222,11 +225,14 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     if hasattr(modeling_vit, "ViTIntermediate"):  # transformers < 5
         model = modeling_vit.ViTIntermediate(config).eval()
         torch_output = model(torch_hidden_states)
-        parameters = preprocess_model_parameters(initialize_model=lambda: model.to(torch.bfloat16), device=device)
+        parameters = preprocess_model_parameters(
+            model_name=model_name, initialize_model=lambda: model.to(torch.bfloat16), device=device
+        )
     else:  # transformers >= 5: ViTIntermediate folded into ViTMLP (fc1 + activation)
         model = modeling_vit.ViTMLP(config).eval()
         torch_output = model.activation_fn(model.fc1(torch_hidden_states))
         parameters = preprocess_model_parameters(
+            model_name=model_name,
             initialize_model=lambda: model,
             device=device,
             custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
@@ -260,11 +266,12 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
     if hasattr(modeling_vit, "ViTOutput"):  # transformers < 5
         model = modeling_vit.ViTOutput(config).eval()
         torch_output = model(torch_intermediate, torch_residual)
-        parameters = preprocess_model_parameters(initialize_model=lambda: model, device=device)
+        parameters = preprocess_model_parameters(model_name=model_name, initialize_model=lambda: model, device=device)
     else:  # transformers >= 5: ViTOutput folded into ViTMLP.fc2 (residual now added by ViTLayer)
         model = modeling_vit.ViTMLP(config).eval()
         torch_output = model.fc2(torch_intermediate) + torch_residual
         parameters = preprocess_model_parameters(
+            model_name=model_name,
             initialize_model=lambda: model,
             device=device,
             custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
@@ -314,6 +321,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     torch_output = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
 
     parameters = preprocess_model_parameters(
+        model_name=model_name,
         initialize_model=lambda: model,
         custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
         device=device,
@@ -380,6 +388,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
         torch_output = hidden
 
     parameters = preprocess_model_parameters(
+        model_name=model_name,
         initialize_model=lambda: model,
         custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
         device=device,
@@ -440,6 +449,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     )
 
     parameters = preprocess_model_parameters(
+        model_name=model_name,
         initialize_model=lambda: model,
         device=device,
         custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
