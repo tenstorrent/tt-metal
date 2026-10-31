@@ -468,3 +468,64 @@ def test_paged_fused_update_cache_rejects_mixed_dtypes(cache_dtypes, input_dtype
 
     with expect_error(RuntimeError, error):
         ttnn.experimental.paged_fused_update_cache(caches[0], inputs[0], caches[1], inputs[1], update_idxs=[5])
+
+
+def _bf16_neighbours(x):
+    bits = x.contiguous().view(torch.int32)
+    toward_zero = bits & -65536
+    away_from_zero = torch.where(bits == toward_zero, toward_zero, toward_zero + 65536)
+    return toward_zero.view(torch.float32), away_from_zero.view(torch.float32)
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+@pytest.mark.parametrize("use_index_tensor", [False, True])
+def test_paged_fused_update_cache_full_precision_values(
+    layout, input_dtype, cache_dtype, fp32_dest_acc_en, use_index_tensor, device
+):
+    num_users, num_heads, seq_len, head_dim = 2, 8, 64, 128
+    torch.manual_seed(0)
+    cache = torch.randn(num_users, num_heads, seq_len, head_dim)
+    caches = [ttnn.from_torch(c, dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=device) for c in (cache, -cache)]
+    expected = [ttnn.to_torch(c).float() for c in caches]
+
+    padded_heads = num_heads if layout == ttnn.ROW_MAJOR_LAYOUT else 32
+    inputs, values = [], []
+    for row in range(2):
+        x = torch.zeros(1, num_users, padded_heads, head_dim)
+        x[:, :, :num_heads] = torch.randn(1, num_users, num_heads, head_dim)
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, row), ttnn.CoreCoord(num_users - 1, row))})
+        shard_spec = ttnn.ShardSpec(grid, [padded_heads, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+        memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        x_tt = ttnn.Tensor(x, input_dtype).to(layout).to(device, memory_config)
+        inputs.append(x_tt)
+        values.append(ttnn.to_torch(x_tt).float()[0, :, :num_heads])
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=fp32_dest_acc_en)
+    updated = torch.zeros(num_users, num_heads, seq_len, head_dim, dtype=torch.bool)
+    entries_before = device.num_program_cache_entries()
+    for idxs in ([5, 38], [37, 6]):
+        kwargs = (
+            {"update_idxs_tensor": ttnn.Tensor(torch.tensor(idxs), ttnn.int32).to(device)}
+            if use_index_tensor
+            else {"update_idxs": idxs}
+        )
+        ttnn.experimental.paged_fused_update_cache(
+            caches[0], inputs[0], caches[1], inputs[1], compute_kernel_config=compute_kernel_config, **kwargs
+        )
+        for user, idx in enumerate(idxs):
+            updated[user, :, idx, :] = True
+            for k in range(2):
+                expected[k][user, :, idx, :] = values[k][user]
+
+        for k in range(2):
+            got = ttnn.to_torch(caches[k]).float()
+            assert torch.equal(got[~updated], expected[k][~updated]), f"cache{k + 1}: untouched values changed"
+            if cache_dtype == ttnn.bfloat16 and input_dtype == ttnn.float32:
+                low, high = _bf16_neighbours(expected[k][updated])
+                assert torch.all((got[updated] == low) | (got[updated] == high)), f"cache{k + 1}: update not rounded"
+            else:
+                assert torch.equal(got[updated], expected[k][updated]), f"cache{k + 1}: update not exact"
+    assert device.num_program_cache_entries() - entries_before == 1

@@ -64,6 +64,9 @@ void kernel_main() {
     // the resident shard is already the untilized input. Which of the two inputs this instance serves
     // is structural, one writer per input shard grid.
     DataflowBuffer dfb_untilized_input(dfb::untilized_input);
+#ifdef CONVERT_INPUT
+    DataflowBuffer dfb_converted_input(dfb::converted_input);
+#endif
 #ifdef USE_INDEX_TENSOR
     DataflowBuffer dfb_index(dfb::index);
 #endif
@@ -143,6 +146,10 @@ void kernel_main() {
         dfb_untilized_cache2.reserve_back(Wt);
 
         uint32_t cache_l1_write_addr = dfb_untilized_cache.get_read_ptr() + cache_tile_offset_B;
+#ifdef CONVERT_INPUT
+        dfb_converted_input.wait_front(1);
+        input_l1_read_addr = dfb_converted_input.get_read_ptr();
+#endif
         noc.async_read(
             local_src,
             CoreLocalMem<uint32_t>(cache_l1_write_addr),
@@ -150,6 +157,9 @@ void kernel_main() {
             {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = input_l1_read_addr},
             {});
         noc.async_read_barrier();
+#ifdef CONVERT_INPUT
+        dfb_converted_input.pop_front(1);
+#endif
         dfb_untilized_cache2.push_back(Wt);
         dfb_untilized_cache.pop_front(Wt);  // NEW
 
