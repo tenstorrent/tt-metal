@@ -34,9 +34,11 @@ def assert_tensor_linked_to_its_allocation(graph):
 
 
 @requires_hybrid_allocator
-def test_graph_capture_links_per_core_tensor_to_its_allocation(device):
+def test_graph_capture_links_per_core_tensor_to_its_allocation(per_core_mesh_device):
     """A per-core allocated tensor has no backing buffer. Graph capture must still link it to the buffer node its
     allocation was recorded under."""
+    # Uses the function-scoped mesh fixture: the module-scoped `device` would stay open and prevent the tests below
+    # from opening a multi-device mesh.
     core = ttnn.CoreCoord(0, 0)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), [1, 64], ttnn.ShardOrientation.ROW_MAJOR
@@ -47,7 +49,12 @@ def test_graph_capture_links_per_core_tensor_to_its_allocation(device):
 
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     tensor = ttnn.from_torch(
-        data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+        data,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=per_core_mesh_device,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
     )
     # Passing the tensor to an operation records it as a tensor node.
     ttnn.from_device(tensor)
