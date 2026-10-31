@@ -604,6 +604,18 @@
       '
     )
 
+    glm_sparse_kv_push() (
+      export MESH_DEVICE=TG
+      # ttnn.experimental.sparse_push_plan + sparse_kv_push on the 8x4 TorusXY mesh: op checks against a host
+      # reference, then the real GLM-5.3 1M top-k push (L14/L62) against the dense gather.
+      timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
+        python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
+        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
+      '
+    )
+
     glm_prefill_block() (
       export MESH_DEVICE=TG
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
@@ -640,21 +652,23 @@
       '
     )
 
-    echo "===== [1/4] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
+    echo "===== [1/5] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
     glm_dsa_mla || exit $?
-    echo "===== [2/4] (GLM-5.3-744B) prefill block accuracy 5k ====="
+    echo "===== [2/5] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
+    glm_sparse_kv_push || exit $?
+    echo "===== [3/5] (GLM-5.3-744B) prefill block accuracy 5k ====="
     glm_prefill_block || exit $?
-    echo "===== [3/4] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
+    echo "===== [4/5] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
     glm_mtp || exit $?
-    echo "===== [4/4] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
+    echo "===== [5/5] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
     glm_moe || exit $?
-    echo "===== all 4 sections passed ====="
+    echo "===== all 5 sections passed ====="
   test_type: glm_components_suite
-  test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe]
+  test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe, sparse_kv_push]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 157
+      timeout: 177
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
@@ -2315,6 +2329,7 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_perf

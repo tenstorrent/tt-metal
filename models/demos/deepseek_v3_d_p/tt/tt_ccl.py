@@ -72,6 +72,8 @@ def clear_tt_ccl_cache():
     """Release registered sparse-MLA managers, then clear the cache (for testing)."""
     for tt_ccl in _tt_ccl_cache.values():
         tt_ccl.release_sparse_mla_overlap_manager()
+        if tt_ccl.sparse_kv_push_planner is not None:
+            tt_ccl.sparse_kv_push_planner.release()
     _tt_ccl_cache.clear()
 
 
@@ -182,6 +184,8 @@ class TT_CCL:
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+
+        self.sparse_kv_push_planner = None  # SparseKvPushPlanner, created on first use
 
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
@@ -481,6 +485,16 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_sparse_kv_push_planner(self, links: int):
+        """The sparse KVPE push planner; layers run serially and share it."""
+        if self.sparse_kv_push_planner is None:
+            # Imported here: the tt.mla package imports this module.
+            from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
+
+            self.sparse_kv_push_planner = SparseKvPushPlanner(self.mesh_device, links)
+        assert self.sparse_kv_push_planner.links == links, "every MLA layer must use one push link count"
+        return self.sparse_kv_push_planner
 
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
         """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.

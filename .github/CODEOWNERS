@@ -462,6 +462,8 @@ ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/ @cglagovichTT @jonathansuTT
 ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/**/CMakeLists.txt @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement
 ttnn/cpp/ttnn/operations/experimental/slice_write/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/ @tenstorrent/metalium-developers-ds-prefill
+ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/topk_large_indices/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/ @tenstorrent/metallium-maintainers-llama-models
@@ -572,6 +574,7 @@ tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-ma
 tests/ttnn/unit_tests/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
 tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/experimental/test_attn_res_*.py @tenstorrent/metalium-developers-ds-prefill
+tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT

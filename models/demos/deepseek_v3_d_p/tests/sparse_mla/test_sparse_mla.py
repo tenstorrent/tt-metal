@@ -1025,7 +1025,10 @@ def test_sparse_mla_indexer_reuse_chunked(
 ):
     """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
     produce the SAME output as computing them itself — validates the MLA return + accept path. Same
-    weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit."""
+    weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit.
+    On an 8x4 TorusXY mesh run B receives its KV rows through the sparse KV push (sparse_kv_push.py) where run A
+    gathers the whole prefix, so this also checks the push against the gather. The CI leg runs fabric2d, where both
+    runs gather; the push is checked in CI by test_sparse_sdpa_kv_push.py."""
     config = config_only
     config.max_seq_len = seq_len
     weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
