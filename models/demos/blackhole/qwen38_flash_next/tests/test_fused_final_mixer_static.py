@@ -37,18 +37,24 @@ def _in0_block_w(k: int, num_cores: int) -> int:
     return next(width for width in range(8, 0, -1) if k_tiles_per_core % width == 0)
 
 
-def test_registered_bitwise_opt_in():
+def test_registered_bitwise_default_on_off_tp4_only():
     entry = fused.kernel("final_mixer")
     assert entry.tolerance == fused.BITWISE and entry.gate is None
-    assert entry.default_on is ("final_mixer" in fused.DEFAULT_ON)  # opt-in until its timing pin; the list decides
+    assert entry.default_on is ("final_mixer" in fused.DEFAULT_ON)  # the TP=4 list decides; TP=4 stays opt-in
+    assert "final_mixer" not in fused.DEFAULT_ON and fused.TP8_DEFAULT_ON == {"final_mixer"}
     assert entry.fused is fm.final_mixer_fused and entry.composed is fm.final_mixer_composed
-    assert fused.resolve("final_mixer", {}) is fm.final_mixer_composed
+    default = fm.final_mixer_composed if fm.TP_SIZE == 4 else fm.final_mixer_fused
+    assert fused.resolve("final_mixer", {}) is default
     assert fused.resolve("final_mixer", {fused.ENV: "final_mixer"}) is fm.final_mixer_fused
+    assert fused.resolve("final_mixer", {fused.OFF_ENV: "final_mixer"}) is fm.final_mixer_composed
 
 
 def test_spills_follow_the_dram_sharded_matmul_rule():
-    assert fm.DOWN_SPILL == _in0_block_w(2560, 5) == gr.DOWN_SPILL == 8
-    assert fm.UP_SPILL == _in0_block_w(320, 2) == 5 and gr.UP_SPILL == _in0_block_w(384, 2) == 6
+    if fm.TP_SIZE == 4:
+        assert fm.DOWN_SPILL == _in0_block_w(2560, 5) == gr.DOWN_SPILL == 8
+        assert fm.UP_SPILL == _in0_block_w(320, 2) == 5 and gr.UP_SPILL == _in0_block_w(384, 2) == 6
+    else:  # TP=8: the chain's fp32 partial reload is exact, so the programs accumulate in one pass (device test)
+        assert fm.DOWN_SPILL == fm.UP_SPILL == 0 and _in0_block_w(1280, 5) == 8
     assert fm.RANK_TILES == 10 and fm.RANK == 320
 
 
@@ -108,7 +114,8 @@ def test_merged_programs_are_f2s_multicast_programs_with_the_mixers_shapes():
     assert fm.merged_enabled({}) is True and fm.merged_enabled({fm.MERGED_ENV: "0"}) is False
     assert fm.merged_enabled({fm.MERGED_ENV: "1"}) is True
     assert fm.DOWN_GRID[0] * fm.DOWN_GRID[1] == fm.RANK_TILES == 10
-    assert fm.GATE_GRID[0] * fm.GATE_GRID[1] == fm.HIDDEN_TILES == 20 and fm.GATE_GRID == (5, 4)  # F2's gate grid
+    assert fm.GATE_GRID[0] * fm.GATE_GRID[1] == fm.HIDDEN_TILES == fm.LOCAL_HIDDEN // 32
+    assert fm.GATE_GRID == (5, fm.HIDDEN_TILES // 5)  # F2's gate grid: 5x4 at TP=4, 5x2 at TP=8
     assert fm.LOW_RANK_CORES * fm.LOW_RANK_TILES_PER_CORE == fm.RANK_TILES and fm.LOW_RANK_CORES <= fm.GATE_GRID[0]
     assert fm.BRANCHES <= fm.DOWN_GRID[0]  # the producer row sits above the consumers' columns
     nd = _flat(inspect.getsource(fm.normalize_down))
@@ -121,7 +128,7 @@ def test_merged_programs_are_f2s_multicast_programs_with_the_mixers_shapes():
         "semaphores=[fp.semaphore_descriptor(0, all_set)]",
     ):
         assert pin in nd and pin in f2_nd, pin
-    assert "[FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fp32_dest=True)" in nd
+    assert "[FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fidelity=fidelity, fp32_dest=True)" in nd
     assert "gr.NORM" in nd and "gr.DOWN" in nd and "gr._rectangle(mesh, *DOWN_GRID, rows_above=BRANCHES)" in nd
     assert 'gr.avg_scaler("chain")' in nd and "[scaler_bits, gr._bits(gr.EPS)]" in nd
     lg = _flat(inspect.getsource(fm.low_rank_gate))

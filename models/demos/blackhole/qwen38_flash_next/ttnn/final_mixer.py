@@ -312,9 +312,9 @@ class Qwen38TTNNFinalMixer:
         # sum) bind at construction; the pinned chain below stays the class body.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
 
-        if fused_kernels.enabled("final_mixer") and weights.weight_dtype != ttnn.bfloat16:
+        if fused_kernels.enabled("final_mixer") and weights.weight_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
             raise ValueError(
-                "QWEN38_FUSED=final_mixer streams BF16 mixer weights through BF16 circular buffers; "
+                "QWEN38_FUSED=final_mixer streams BF16 or BFP8 mixer weights (HiFi4 / HiFi2 like the chain); "
                 f"these final mixer weights are {weights.weight_dtype}"
             )
         if fused_kernels.enabled("final_mixer"):

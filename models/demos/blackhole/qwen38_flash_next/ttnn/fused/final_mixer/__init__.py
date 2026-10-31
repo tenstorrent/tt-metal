@@ -36,21 +36,49 @@ TP_SIZE, TP_AXIS, BRANCHES = gr.TP_SIZE, gr.TP_AXIS, gr.BRANCHES
 LOCAL_HIDDEN, FLAT_WIDTH, FLAT_TILES, HIDDEN_TILES = gr.LOCAL_HIDDEN, gr.FLAT_WIDTH, gr.FLAT_TILES, gr.HIDDEN_TILES
 RANK = 320
 RANK_TILES = RANK // fp.TILE  # 10
-DOWN_SPILL = 8  # dram_sharded_matmul_configs(K=2560, N=320, num_cores=5): 16 K tiles per core -> in0_block_w 8 (gr_read's down too)
+DOWN_SPILL = (
+    8 if TP_SIZE == 4 else 0
+)  # TP=4: dram_sharded_matmul_configs(K=2560, N=320, num_cores=5): 16 K tiles per core -> in0_block_w 8 (gr_read's down
+# too).  TP=8 (K=1280: 8 tiles per core, five blocks): the chain's fp32 partial reload is exact, so its result is the
+# single-pass K-order accumulation (tests/test_fused_final_mixer_tp8_device.py: spill 8 differs, no spill is bit equal)
 UP_SPILL = (
-    5  # dram_sharded_matmul_configs(K=320, N=2560, num_cores=2): 5 K tiles per core -> in0_block_w 5 (gr_read's up: 6)
-)
+    5 if TP_SIZE == 4 else 0
+)  # TP=4: dram_sharded_matmul_configs(K=320, N=2560, num_cores=2): 5 K tiles per core -> in0_block_w 5 (gr_read's up:
+# 6).  TP=8 (N=1280): as DOWN_SPILL, the chain's partial reload is exact; the test shows spill 5 differs, none is bit equal
 BF16, FP32, TILE_BF16, TILE_FP32 = gr.BF16, gr.FP32, gr.TILE_BF16, gr.TILE_FP32
 LOW_RANK_CORES = 5  # the merged low_rank_gate's row cores: RANK_TILES / 2 stacked tiles each (one 5-wide producer row)
 LOW_RANK_TILES_PER_CORE = RANK_TILES // LOW_RANK_CORES  # 2
 DOWN_GRID = (5, 2)  # the merged normalize_down's consumers: one down column tile each (RANK_TILES = 10)
-GATE_GRID = (5, 4)  # the merged low_rank_gate's consumers: one output column tile each (HIDDEN_TILES = 20), F2's grid
+GATE_GRID = (
+    gr.GATE_WIDTH,
+    gr.GATE_HEIGHT,
+)  # the merged low_rank_gate's consumers: one output column tile each (HIDDEN_TILES: 20 at TP=4 -> 5x4, 10 at TP=8 -> 5x2)
+WEIGHT_DTYPES = (
+    BF16,
+    ttnn.bfloat8_b,
+)  # the mixer's down / up weights: BF16, or the default BFP8 (HiFi2 like the chain)
 MERGED_ENV = "QWEN38_FUSED_FINAL_MIXER_MERGED"  # "0": the split form (normalize, down, low_rank, gate as four programs)
 LOWRANK_COMPUTE = fp.kernel_source(NAME, "lowrank_reduce_compute.cpp")
 LOWRANK_READER = fp.kernel_source(NAME, "lowrank_reduce_reader.cpp")
 LOWRANK_WRITER = fp.kernel_source(NAME, "lowrank_reduce_writer.cpp")
 _ZERO_FP32: dict[int, object] = {}
 _NORM_ROWS: dict[int, object] = {}
+
+
+def weight_dtype_of(weight):
+    """The weight's dtype if the programs stream it (BF16 or BFP8), and its tile bytes and the chain's matmul fidelity."""
+
+    if weight.dtype not in WEIGHT_DTYPES:
+        raise ValueError(f"final mixer weights must be BF16 or BFP8, got {weight.dtype}")
+    from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import dense_math_fidelity_name
+
+    return weight.dtype, fp.TILE_BYTES[weight.dtype], getattr(ttnn.MathFidelity, dense_math_fidelity_name(weight.dtype))
+
+
+def _expect_weight(weight, shape, label):
+    if tuple(int(v) for v in weight.shape) != shape or weight.layout != ttnn.TILE_LAYOUT:
+        raise ValueError(f"{label} must be TILE {shape}, got {tuple(weight.shape)} {weight.layout}")
+    return weight_dtype_of(weight)
 
 
 def _mixer_module():
@@ -109,7 +137,7 @@ def down(normalized, weight):
 
     rows = fp.rows_of(normalized)
     gr._expect(normalized, (1, 1, rows, FLAT_WIDTH), BF16, "final mixer normalized row")
-    gr._expect(weight, (1, 1, FLAT_WIDTH, RANK), BF16, "final mixer down")
+    wdt, wbytes, fidelity = _expect_weight(weight, (1, 1, FLAT_WIDTH, RANK), "final mixer down")
     mesh = normalized.device()
     out = fp.allocate((1, 1, rows, RANK), FP32, ttnn.TILE_LAYOUT, mesh)
     n_tiles = gr._tiles_wide(weight)
@@ -118,7 +146,7 @@ def down(normalized, weight):
     cores = fp.core_set(work)
     cbs = [
         fp.cb_descriptor(0, BF16, TILE_BF16, FLAT_TILES, cores),
-        fp.cb_descriptor(1, BF16, TILE_BF16, 2 * blk, cores),
+        fp.cb_descriptor(1, wdt, wbytes, 2 * blk, cores),
         fp.cb_descriptor(2, FP32, TILE_FP32, 1, cores),
         fp.cb_descriptor(16, FP32, TILE_FP32, 1, cores),
     ]
@@ -140,7 +168,9 @@ def down(normalized, weight):
             for w in work
         ],
     )
-    compute = fp.compute_kernel(gr.DOWN, cores, [FLAT_TILES, blk, 0, 1, 16, DOWN_SPILL, 2], fp32_dest=True)
+    compute = fp.compute_kernel(
+        gr.DOWN, cores, [FLAT_TILES, blk, 0, 1, 16, DOWN_SPILL, 2], fidelity=fidelity, fp32_dest=True
+    )
     writer = gr._writer(cores, [(out, 16)], [(w.core, [(1, w.start, 1, 1)]) for w in work])
     # the weight once (each core its column), the normalized row once per core, the fp32 partial out; the matmul
     meta = fp.program_meta(
@@ -207,7 +237,7 @@ def gate(low_rank_row, normalized, up):
     rows = fp.rows_of(low_rank_row)
     gr._expect(low_rank_row, (1, 1, rows, RANK), BF16, "final mixer low-rank row")
     gr._expect(normalized, (1, 1, rows, FLAT_WIDTH), BF16, "final mixer normalized row")
-    gr._expect(up, (1, 1, RANK, FLAT_WIDTH), BF16, "final mixer up")
+    wdt, wbytes, fidelity = _expect_weight(up, (1, 1, RANK, FLAT_WIDTH), "final mixer up")
     mesh = low_rank_row.device()
     out = fp.allocate((1, 1, rows, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
     n_tiles = gr._tiles_wide(up)
@@ -215,7 +245,7 @@ def gate(low_rank_row, normalized, up):
     cores = fp.core_set(work)
     cbs = [
         fp.cb_descriptor(0, BF16, TILE_BF16, RANK_TILES, cores),
-        fp.cb_descriptor(1, BF16, TILE_BF16, BRANCHES * RANK_TILES, cores),
+        fp.cb_descriptor(1, wdt, wbytes, BRANCHES * RANK_TILES, cores),
         fp.cb_descriptor(2, BF16, TILE_BF16, BRANCHES, cores),
         fp.cb_descriptor(3, BF16, TILE_BF16, 1, cores),
         fp.cb_descriptor(4, BF16, TILE_BF16, BRANCHES, cores),
@@ -247,6 +277,7 @@ def gate(low_rank_row, normalized, up):
         gr.GATE,
         cores,
         [RANK_TILES, BRANCHES, 0, 1, 2, 3, 4, 5, 6, 16, UP_SPILL, 7],
+        fidelity=fidelity,
         fp32_dest=True,
         unpack_to_dest_fp32=(2, 4, 5),
     )
@@ -283,7 +314,7 @@ def normalize_down(residual, gathered_stats, norm_scale, weight):
     rows = gr.residual_rows(residual)
     gr._expect(gathered_stats, (1, BRANCHES, rows, fp.TILE * gr.STATS_TILES), BF16, "final mixer gathered stats")
     gr._expect(norm_scale, (1, BRANCHES, fp.TILE, LOCAL_HIDDEN), FP32, "final mixer norm_scale rows")
-    gr._expect(weight, (1, 1, FLAT_WIDTH, RANK), BF16, "final mixer down")
+    wdt, wbytes, fidelity = _expect_weight(weight, (1, 1, FLAT_WIDTH, RANK), "final mixer down")
     mesh = residual.device()
     normalized = fp.allocate((1, 1, rows, FLAT_WIDTH), BF16, ttnn.TILE_LAYOUT, mesh)
     partial = fp.allocate((1, 1, rows, RANK), FP32, ttnn.TILE_LAYOUT, mesh)
@@ -303,7 +334,7 @@ def normalize_down(residual, gathered_stats, norm_scale, weight):
         fp.cb_descriptor(7, BF16, TILE_BF16, HIDDEN_TILES, p_set),
         fp.cb_descriptor(16, BF16, TILE_BF16, HIDDEN_TILES, p_set),
         fp.cb_descriptor(8, BF16, TILE_BF16, FLAT_TILES, all_set),
-        fp.cb_descriptor(9, BF16, TILE_BF16, FLAT_TILES, w_set),
+        fp.cb_descriptor(9, wdt, wbytes, FLAT_TILES, w_set),
         fp.cb_descriptor(10, FP32, TILE_FP32, 1, w_set),
         fp.cb_descriptor(17, FP32, TILE_FP32, 1, w_set),
     ]
@@ -317,8 +348,8 @@ def normalize_down(residual, gathered_stats, norm_scale, weight):
                 (
                     [
                         gr._stream(gathered_stats, 1, gr.STATS_TILES, b * gr.STATS_TILES, 1, 0, gr.STATS_TILES),
-                        gr._stream(residual, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, 4),
-                        gr._stream(norm_scale, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, 4),
+                        gr._stream(residual, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, gr.ROW_BATCH),
+                        gr._stream(norm_scale, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, gr.ROW_BATCH),
                     ],
                     [scaler_bits, gr._bits(gr.EPS)],
                 ),
@@ -327,7 +358,7 @@ def normalize_down(residual, gathered_stats, norm_scale, weight):
         ],
     )
     norm = fp.compute_kernel(
-        gr.NORM, p_set, [HIDDEN_TILES, gr.STATS_TILES, 4, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
+        gr.NORM, p_set, [HIDDEN_TILES, gr.STATS_TILES, gr.ROW_BATCH, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
     )
     sender = gr._mcast_writer(
         p_set,
@@ -345,7 +376,9 @@ def normalize_down(residual, gathered_stats, norm_scale, weight):
         recv_tiles=FLAT_TILES,
         senders=BRANCHES,
     )
-    down_k = fp.compute_kernel(gr.DOWN, w_set, [FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fp32_dest=True)
+    down_k = fp.compute_kernel(
+        gr.DOWN, w_set, [FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fidelity=fidelity, fp32_dest=True
+    )
     writer = gr._writer(w_set, [(partial, 17)], [(core, [(1, w, 1, 1)]) for w, core in enumerate(workers)])
     # the norm operands and the weight once, the normalized row and the partial out; the normalized row multicast
     # into the down cores' CB (L1); the norm's four passes per element, then the down matmul
@@ -383,7 +416,7 @@ def low_rank_gate(gathered_partials, normalized, up):
         raise ValueError(f"final mixer gathered partials must be fp32 TILE [4, 1, 1, {RANK}], got {shape}")
     rows = 1
     gr._expect(normalized, (1, 1, rows, FLAT_WIDTH), BF16, "final mixer normalized row")
-    gr._expect(up, (1, 1, RANK, FLAT_WIDTH), BF16, "final mixer up")
+    wdt, wbytes, fidelity = _expect_weight(up, (1, 1, RANK, FLAT_WIDTH), "final mixer up")
     mesh = gathered_partials.device()
     zero = zero_tile(mesh)
     block = fp.allocate((1, 1, rows, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
@@ -399,7 +432,7 @@ def low_rank_gate(gathered_partials, normalized, up):
         fp.cb_descriptor(3, BF16, TILE_BF16, t, p_set),
         fp.cb_descriptor(16, BF16, TILE_BF16, t, p_set),
         fp.cb_descriptor(8, BF16, TILE_BF16, RANK_TILES, all_set),
-        fp.cb_descriptor(9, BF16, TILE_BF16, BRANCHES * RANK_TILES, w_set),
+        fp.cb_descriptor(9, wdt, wbytes, BRANCHES * RANK_TILES, w_set),
         fp.cb_descriptor(10, BF16, TILE_BF16, BRANCHES, w_set),
         fp.cb_descriptor(11, BF16, TILE_BF16, 1, w_set),
         fp.cb_descriptor(12, BF16, TILE_BF16, BRANCHES, w_set),
@@ -448,6 +481,7 @@ def low_rank_gate(gathered_partials, normalized, up):
         gr.GATE,
         w_set,
         [RANK_TILES, BRANCHES, 8, 9, 10, 11, 12, 13, 14, 18, UP_SPILL, 15],
+        fidelity=fidelity,
         fp32_dest=True,
         unpack_to_dest_fp32=(10, 12, 13),
     )

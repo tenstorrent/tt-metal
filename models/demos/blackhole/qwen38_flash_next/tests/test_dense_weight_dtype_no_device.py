@@ -198,7 +198,9 @@ def test_final_mixer_lm_head_and_mtp_linears_run_the_weight_fidelity() -> None:
         final_mixer_module, ("self.weights.down", "self.weights.up"), "weight_compute_config", 4, calls=("ttnn.linear",)
     )
     mixer = inspect.getsource(final_mixer_module.Qwen38TTNNFinalMixer.__init__)
-    assert 'fused_kernels.enabled("final_mixer") and weights.weight_dtype != ttnn.bfloat16' in mixer
+    assert (
+        'fused_kernels.enabled("final_mixer") and weights.weight_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b)' in mixer
+    )
     loader = inspect.getsource(final_mixer_module.Qwen38TTNNFinalMixerWeights.from_checkpoint)
     assert '"down-dram-sharded.bf16" if weight_dtype == ttnn.bfloat16 else f"down-dram-sharded.{weight_tag}"' in loader
     head = inspect.getsource(embedding_module.Qwen38TTNNLMHead.__call__)
