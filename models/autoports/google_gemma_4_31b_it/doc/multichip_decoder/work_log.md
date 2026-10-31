@@ -59,3 +59,11 @@ Headline whole-layer device times: sliding 11422.54 us prefill / 484.77 us decod
 Independent `$stage-review` returned **clean-pass**, with no required work, in `stage_review.md`. The initial findings and their disposition remain in `stage_review_initial.md` and this work log. Final metadata is now validated.
 
 Repository commit hooks applied formatting, import ordering and unused-import removal at checkpoint time. `formatting_bridge.json` bridges measured and final file hashes: every changed Python file has an identical non-import AST. The hook initially removed HF model/revision reexports consumed by the profile harness. The repository autoflake configuration also removes same-name reexports, so the final profile harness imports the identical pinned constants directly from the optimized baseline. Full harness import and exact-value checks pass without device access; its non-import AST is also unchanged. No numerical or execution-path change was introduced.
+
+## Local checkpoint
+
+- Repository: `/home/mvasiljevic/tt-metal-gemma4-31b-pipeline` (tt-metal).
+- Branch: `mvasiljevic/gemma4-31b-fresh-pipeline-v0811`.
+- Stage implementation/evidence commit: `ef5ac1a0237b6313b43976051720daa46dd59a5f`.
+- All repository pre-commit hooks passed. Independent review remains clean-pass after the documented import/formatting bridge.
+- This execution checkout has no remote; nothing was pushed. This follow-up records the checkpoint SHA.
