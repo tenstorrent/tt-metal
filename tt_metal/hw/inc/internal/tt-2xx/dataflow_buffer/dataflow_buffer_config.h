@@ -23,7 +23,7 @@ static_assert(DFB_TXN_ID_BASE > USER_TXN_ID_MAX);
 namespace dfb {
 
 constexpr uint8_t NUM_DFBS = 32;
-// Compute TRISCs (pack and unpack) store only the active logical DFBs in a compact local array and
+// Compute TRISCs (pack, unpack and the SFPU thread) store only the active logical DFBs in a compact local array and
 // draw tile-counter slots from a shared pool, so common one-TC DFBs do not each reserve the six-slot
 // worst case. The host checks both limits per Neo.
 constexpr uint8_t MAX_ACTIVE_DFBS_TRISC = 24;

@@ -19,7 +19,7 @@
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
 #include "api/circular_buffer_constants.h"
@@ -67,7 +67,7 @@ std::uint8_t my_logical_y_ __attribute__((used));
 std::uint8_t my_relative_x_ __attribute__((used));
 std::uint8_t my_relative_y_ __attribute__((used));
 
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
 thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
 thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS] __attribute__((used));
@@ -244,13 +244,13 @@ extern "C" std::uint32_t _start1() {
 
             uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
             std::uint32_t tt_l1_ptr* dfb_l1_base =
                 (std::uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
             std::uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
             const DfbPackerRemapperRange packer_rmp = setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #else
-            // Math/SFPU TRISCs set up no DFBs, so there is no packer remapper window to clear.
+            // Math TRISC sets up no DFBs, so there is no packer remapper window to clear.
             const DfbPackerRemapperRange packer_rmp{};
 #endif
 

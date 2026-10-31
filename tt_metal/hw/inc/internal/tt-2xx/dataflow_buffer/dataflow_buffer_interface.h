@@ -33,7 +33,7 @@ extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-// Compute-thread slot (pack and unpack). ring_size is uint32 L1-aligned units so a DFB can span
+// Compute-thread slot (pack, unpack and the SFPU thread). ring_size is uint32 L1-aligned units so a DFB can span
 // full Quasar L1 (~4 MB). cursor_entry_idx is the write cursor on pack and the read cursor on
 // unpack; its byte offset is not stored but derived (advances in lockstep with stride_size /
 // stride_size_tiles).
@@ -101,7 +101,7 @@ struct LocalDFBInterface {
     uint16_t jump;
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC / SFPU thread) size is incorrect");
 #else
 struct LocalDFBInterface {
     uint32_t entry_size;
