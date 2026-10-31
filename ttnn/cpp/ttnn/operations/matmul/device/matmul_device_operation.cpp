@@ -222,6 +222,10 @@ void validate_matmul_optional_tensors(
             optional_output_tensor_shape,
             computed_shape);
         TT_FATAL(
+            optional_output_tensor_c->layout() == Layout::TILE,
+            "Optional output tensor must be in TILE layout, got {}",
+            optional_output_tensor_c->layout());
+        TT_FATAL(
             optional_output_tensor_c->dtype() == attributes.output_dtype.value(),
             "Type mismatch between optional output tensor {} & output tensor {}",
             optional_output_tensor_c->dtype(),
