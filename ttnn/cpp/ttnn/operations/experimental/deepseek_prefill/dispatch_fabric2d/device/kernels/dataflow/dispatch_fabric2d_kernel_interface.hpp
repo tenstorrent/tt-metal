@@ -27,7 +27,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 struct L1Layout {
     uint32_t pkt_hdr_signal;
-    uint32_t drain_sink;
     uint32_t queue;          // queue_depth tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_queue;  // one prebuilt packet header per entry
     // The reader's scratch: its copy of the routing tables and its routing index. No other chip
@@ -92,6 +91,12 @@ constexpr uint32_t index_risc_sem(uint32_t risc) { return 1u + risc; }
 constexpr uint32_t INDEX_SEMAPHORES = 1u + INDEX_RISCS;
 constexpr uint32_t kRiscCounted = 1;
 constexpr uint32_t kRiscFilled = 2;
+
+// Program semaphore on every stream core: each sender of the chip raises it on every stream core once its
+// share of the metadata output is zeroed. Nothing may write the metadata output until it reaches the stream
+// count.
+constexpr uint32_t kSemMetaCleared = INDEX_SEMAPHORES;
+constexpr uint32_t PROGRAM_SEMAPHORES = INDEX_SEMAPHORES + 1u;
 
 // Size of the fwd_meta after each token in a queue entry. The token size is the output page's aligned
 // size, a multiple of the DRAM alignment, so adding 64 keeps every entry DRAM-aligned and makes an entry
