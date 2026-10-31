@@ -9,8 +9,13 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_rm_stride.hpp"
+
+#ifndef ROW_BCAST_CACHE
+#define ROW_BCAST_CACHE 0
+#endif
 
 void kernel_main() {
     uint32_t index = 0;
@@ -50,6 +55,9 @@ void kernel_main() {
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
     Noc noc;
+#if ROW_BCAST_CACHE
+    UnicastEndpoint self_ep;
+#endif
     CircularBuffer cb_src(cb_id_src);
     CircularBuffer cb_src_b(cb_id_src_b);
 
@@ -90,6 +98,23 @@ void kernel_main() {
     const uint32_t s_nd_b = (bND == 1) ? 0 : bD * bN * bC * bHt;
 
     const uint32_t row_blocks_per_channel = (outHt + rows_per_tile - 1) / rows_per_tile;
+
+#if ROW_BCAST_CACHE
+    // The broadcast operand is one page per (nd, d, n, c) that every row block of this core re-reads. Fetch it once
+    // into a dedicated CB and serve the per-chunk tiles from L1, so the cores do not all hit one DRAM bank per row.
+    CircularBuffer cb_row_cache(tt::CBIndex::c_7);
+    const uint32_t row_cache_addr = cb_row_cache.get_write_ptr();
+#if SRC_BCAST
+    const uint32_t bcast_page_size = page_size_a;
+    const uint32_t bcast_s_h = s_h_a;
+#else
+    const uint32_t bcast_page_size = page_size_b;
+    const uint32_t bcast_s_h = s_h_b;
+#endif
+    const bool use_row_cache = (bcast_s_h == 0) && (bcast_page_size <= ROW_BCAST_CACHE_BYTES);
+    uint32_t cached_page = 0xFFFFFFFFu;
+    const uint8_t noc_id = noc.get_noc_id();
+#endif
 
     uint32_t tmp = current_block_start;
     uint32_t start_th = (tmp % row_blocks_per_channel) * rows_per_tile;
@@ -145,12 +170,36 @@ void kernel_main() {
                             const uint32_t l1_write_addr_src_b = cb_src_b.get_write_ptr();
 
 #if SRC_BCAST
-                            noc.async_read(
-                                src,
-                                CoreLocalMem<uint32_t>(l1_write_addr_src),
-                                chunk.read_len_a,
-                                {.page_id = row_block_a, .offset_bytes = chunk.offset_a},
-                                {});
+#if ROW_BCAST_CACHE
+                            if (use_row_cache) {
+                                if (cached_page != row_block_a) {
+                                    noc.async_read(
+                                        src,
+                                        CoreLocalMem<uint32_t>(row_cache_addr),
+                                        page_size_a,
+                                        {.page_id = row_block_a},
+                                        {});
+                                    noc.async_read_barrier();
+                                    cached_page = row_block_a;
+                                }
+                                noc.async_read(
+                                    self_ep,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_src),
+                                    chunk.read_len_a,
+                                    {.noc_x = my_x[noc_id],
+                                     .noc_y = my_y[noc_id],
+                                     .addr = row_cache_addr + chunk.offset_a},
+                                    {});
+                            } else
+#endif
+                            {
+                                noc.async_read(
+                                    src,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_src),
+                                    chunk.read_len_a,
+                                    {.page_id = row_block_a, .offset_bytes = chunk.offset_a},
+                                    {});
+                            }
 
                             uint32_t curr_l1_b = l1_write_addr_src_b;
                             for (uint32_t k = 0; k < limit; ++k) {
@@ -178,12 +227,36 @@ void kernel_main() {
                                 curr_l1_a += chunk.bytes_a;
                             }
 
-                            noc.async_read(
-                                src_b,
-                                CoreLocalMem<uint32_t>(l1_write_addr_src_b),
-                                chunk.read_len_b,
-                                {.page_id = row_block_b, .offset_bytes = chunk.offset_b},
-                                {});
+#if ROW_BCAST_CACHE
+                            if (use_row_cache) {
+                                if (cached_page != row_block_b) {
+                                    noc.async_read(
+                                        src_b,
+                                        CoreLocalMem<uint32_t>(row_cache_addr),
+                                        page_size_b,
+                                        {.page_id = row_block_b},
+                                        {});
+                                    noc.async_read_barrier();
+                                    cached_page = row_block_b;
+                                }
+                                noc.async_read(
+                                    self_ep,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_src_b),
+                                    chunk.read_len_b,
+                                    {.noc_x = my_x[noc_id],
+                                     .noc_y = my_y[noc_id],
+                                     .addr = row_cache_addr + chunk.offset_b},
+                                    {});
+                            } else
+#endif
+                            {
+                                noc.async_read(
+                                    src_b,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_src_b),
+                                    chunk.read_len_b,
+                                    {.page_id = row_block_b, .offset_bytes = chunk.offset_b},
+                                    {});
+                            }
 
                             noc.async_read_barrier();
                             FILL_TILE_WITH_FIRST_ROW_RM_B(l1_write_addr_src_b, chunk.elements, limit);
