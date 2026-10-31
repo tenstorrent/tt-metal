@@ -1787,6 +1787,35 @@ def test_pad_rank_gt4_use_multicore(device, shape, padding, use_multicore):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("pad_value", [3.0, -1.5, 8.0])
+def test_pad_rm_sharded_width_only_bfloat16_value(device, pad_value):
+    input_shape, pad_to_shape = (1, 1, 12, 8), (1, 1, 12, 64)
+    core_grid = ttnn.CoreGrid(x=2, y=6)
+    if device.core_grid.x < core_grid.x or device.core_grid.y < core_grid.y:
+        pytest.skip("core grid for this test is not compatible with the device")
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    mem_config = ttnn.create_sharded_memory_config(input_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.HEIGHT)
+    tt_input = ttnn.interleaved_to_sharded(
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        mem_config,
+        keep_l1_aligned=True,
+    )
+    tt_output = ttnn.to_torch(
+        ttnn.to_memory_config(ttnn.pad(tt_input, pad_to_shape, (0, 0, 0, 0), pad_value), ttnn.L1_MEMORY_CONFIG)
+    )
+
+    expected = torch.nn.functional.pad(torch_input_tensor, (0, pad_to_shape[-1] - input_shape[-1]), value=pad_value)
+    assert torch.equal(tt_output, expected)
+
+
+def test_pad_tile_rank1(device):
+    torch_input_tensor = torch.rand(40, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(ttnn.pad(tt_input, [(0, 24)], 2.0))
+    assert torch.equal(tt_output, torch.nn.functional.pad(torch_input_tensor, (0, 24), value=2.0))
+
+
 # --- Codegen-path coverage ---
 #
 # ttnn.pad routes gate-supported TILE cases to codegen and offers no way to ask for a path, so the
