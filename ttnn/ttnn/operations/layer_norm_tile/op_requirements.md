@@ -44,10 +44,13 @@ selected from the verifier's measurements (`verification_report.md`, "Performanc
 **Measurement protocol**: `scripts/run_safe_pytest.sh --run-all --profile
 tests/ttnn/unit_tests/operations/layer_norm_tile/test_layer_norm_tile_perf.py`. Read `DEVICE KERNEL DURATION
 [ns]`. Each case dispatches twice; take the min per case, then the median over at least 3 invocations of the
-file. Run-to-run spread is 3-10%, worst on the 248/256 tile-row residual cases. The **guard set** is that
-file's matrix: 5 shapes (32 / 64 / 128 / 248 / 256 tile-rows) x {tile_dram, rm_l1} x {no residual, residual}
-x {default, fp32_acc_off, lofi}. It covers both affine reader paths, both intermediate formats, the
-single-block and multi-block paths, and aligned and non-aligned S.
+file. Run-to-run spread is 3-10%. R = 64 with residual is bimodal (~26 or ~33 us with unchanged code), so do
+not claim a win or a regression on that cell from fewer than 5 invocations. The **guard set** is that file's
+matrix: 5 shapes (32 / 64 / 128 / 248 / 256 tile-rows) x {tile_dram, rm_l1} x {no residual, residual} x
+{default, fp32_acc_off, lofi}. It covers both affine paths, both intermediate formats, both residual
+producers (reader at R = 32, writer at R >= 64), the split-NoC x path (rm_l1, no residual, R >= 128), and
+aligned and non-aligned S. Stage attribution: `test_layer_norm_tile_ablation.py --profile`
+(`LAYER_NORM_ABLATE_*` defines; see its docstring).
 
 ### [x] Phase 0 - Core Implementation
 
@@ -56,90 +59,175 @@ single-block and multi-block paths, and aligned and non-aligned S.
 - **SUPPORTED shape-derived axes**: alignment = {tile_aligned, h_non_aligned}
 - **SUPPORTED op-specific axes**: fp32_dest_acc_en = {True, False}; residual = {none, present}; affine_layout = {TILE, ROW_MAJOR, mixed}; memory_layout = {INTERLEAVED} (L1 or DRAM buffer)
 - **EXCLUSIONS**: none
-- **Regime**: `row_resident`. Tile-rows are split over the full grid (`split_work_to_cores(..., row_wise=True)`) with the whole W resident. Block = the whole per-core assignment when it fits `block_height_cap(1)`; otherwise multi-block with `input_depth = 2`. Input, residual and output each cross the NoC once. The writer fetches gamma/beta row 0 once per core.
-- **Cores**: multi-core, `min(R, 110)` on Blackhole p100a, with `R = B * ceil(S/32)`
+- **Regime**: `row_resident`:
+  - Tile-rows are split over the full grid (`split_work_to_cores(..., row_wise=True)`), with the whole W resident.
+  - The compute block is one tile-row (`BLOCK_HEIGHT_MAX = 1`). The reader runs ahead up to `input_depth <= INPUT_DEPTH_MAX = 4` tile-rows.
+  - From `R >= RESIDUAL_SPLIT_MIN_TILE_ROWS (64)` the residual stream is fetched by the writer RISC on NoC1; below that, by the reader beside x.
+  - Without residual, with gamma/beta in L1, cores owning >= 2 tile-rows alternate x reads over NoC0 / NoC1 (`DM_DYNAMIC_NOC`).
+  - The writer fetches gamma/beta row 0 once per core.
+  - Input, residual and output each cross the NoC once.
+- **Cores**: multi-core, `min(R, 110)` on Blackhole p100a, `R = B * ceil(S/32)`
 - **Compute config**: `default_compute_kernel_config()` = HiFi4, `fp32_dest_acc_en=True`; `math_fidelity` / `math_approx_mode` passed through ungated
-- **Golden baseline**: no golden suite exists. Acceptance 80/80 (prod + `--dev`), extended 12/12 (prod + `--dev`), precision baseline 16/16, perf guard set 60/60
-- **Device time (default config, rm_l1, no residual / residual)**: R=32 14.1 / 17.7 us; R=64 21.1 / 29.0 us; R=128 33.3 / 59.8 us; R=248 54.9 / 93.6 us; R=256 60.2 / 96.5 us
+- **Golden baseline**: no golden suite exists. Local: 232/232 (acceptance 80, extended 12, precision 16, perf 60, ablation 64). Acceptance + extended 92/92 under `--dev`.
+- **Device time** (default config, median of 3, us; rm_l1 nores / rm_l1 res / tile_dram nores / tile_dram res):
+
+  | R (tile-rows) | rm_l1 nores | rm_l1 res | tile_dram nores | tile_dram res |
+  |---|---|---|---|---|
+  | 32 | 14.0 | 17.6 | 14.0 | 17.9 |
+  | 64 | 19.2 | ~26-33 (bimodal) | 19.8 | ~27-35 (bimodal) |
+  | 128 | 31.5 | 37.2 | 33.6 | 41.1 |
+  | 248 | 40.3 | 53.1 | 47.2 | 54.4 |
+  | 256 | 41.0 | 59.6 | 49.7 | 57.3 |
+
+- **Pre-queue perf work**: the first queue's Refinement 2 levers (a) "balance the two NoCs" and (d) "Overlap lamp" landed in Phase 0 (implementer, after the first verifier pass): R=128 res 59.8 -> 37.2 us, R=256 res 96.5 -> 59.6 us, R=256 nores 60.2 -> 41.0 us. The queue below is re-filed against that baseline.
 
 ### [ ] Refinement 1 - `w_split_combine`: split W across cores with a cross-core statistic combine
 
 **Type**: perf
 
-**Goal**: build the design's deferred `w_split_combine` regime (`op_design.md`, Regimes / Traffic ranking rank 3-4). Every contract shape under-fills the 110-core grid or is ragged on it:
+**Goal**: build the design's deferred `w_split_combine` regime (`op_design.md`, Regimes / Traffic ranking rank 3-4) for the shapes where `row_resident` under-fills or raggedly fills the 110-core grid:
 - `B*S = 1024` gives R = 32: 32 cores busy, 78 idle.
-- `B*S = 2048` gives R = 64: 64 cores busy.
+- `B*S = 2048` gives R = 64: 46 cores idle.
 - `B*S = 4096` gives R = 128: 18 cores carry 2 tile-rows and set the makespan.
 
-At R = 32 the op is compute-bound: about 11 us of the 14 us per tile-row is compute, and the DM-only stub floor is 2.8 us without the affine fetch.
+At R = 32 the op is compute-bound. Stage ablation: `compute_only` 10.2 of 13.9 us, `reads_only` at the 2.6 us floor. Net compute is about 7.6 us per 24-tile row (9.4 us with residual).
 
 Split each tile-row's W across `k` cores (`k` a divisor of `Wt = 24`), optionally grouping `g` tile-rows per core, so `(R/g) * k` fills the grid. Examples:
 - R = 32: `g=1, k=3` gives 96 cores, each core a 1 x 8-tile block.
-- R = 64: `g=2, k=3` gives 96 cores, each core 2 x 8 tiles.
-- R = 128: `g=4, k=3` gives 96 cores, each core 4 x 8 tiles. The makespan drops from 2 rows to 4/3 row-equivalents.
+- R = 64: `g=2, k=3` gives 96 cores, each 2 x 8 tiles.
+- R = 128: `g=4, k=3` gives 96 cores, each 4 x 8 tiles; the makespan drops from 2 rows to 4/3 row-equivalents.
 
-Each core reduces its slice to col-0 partials. Two combine rounds per block (row-sum partials for the mean, then centered sum-of-squares partials) give every core of a `k`-group the full-row statistic. `1/W` stays the logical W, never the slice width. Each core then normalizes its resident slice against its own gamma/beta slice.
+Each core reduces its slice to col-0 partials. Two combine rounds per block (row-sum partials for the mean, then centered sum-of-squares partials) give every core of a `k`-group the full-row statistic. `1/W` stays the logical W, never the slice width. Each core then normalizes its slice against its own gamma/beta slice.
 
 Relevant `ttnn/ttnn/operations/examples/master.md` entries:
-- `width_split` (the occupancy evidence).
-- `tensix_all_reduce`. For a 1-D line with a tiny payload, root reduce plus one multicast back is the recommended shape. The design's alternative is a unicast all-gather where every core computes the combine.
-- `tensix_all_reduce_compute` (FPU `acc_to_dest` combine in fp32 DEST).
-- `mcast_topology` (transport through `ttnn.Mcast` + `McastArgs`, never raw multicast + semaphores).
-- `noc_placement` (keep a group's `k` cores adjacent, in one grid row).
+- `width_split`.
+- `tensix_all_reduce`: root reduce plus one multicast back for a 1-D line with a tiny payload. The design's alternative is a unicast all-gather where every core combines.
+- `tensix_all_reduce_compute`: FPU `acc_to_dest` combine in fp32 DEST.
+- `mcast_topology`: transport through `ttnn.Mcast` + `McastArgs`, never raw multicast + semaphores.
+- `noc_placement`: keep a group's `k` cores adjacent, in one grid row.
 
 No SUPPORTED change.
 
-**Verifier notes**: scheme-change (a dependent axis cut across cores), so it stands alone. It goes first because Refinements 2 and 3 tune per-core shapes that this regime redefines. The design gated this regime on a `row_resident` precision baseline. That baseline now exists: fp32 DEST PCC 0.999998 / rel-RMS 0.19%, bf16 DEST PCC 0.99999 / rel-RMS 0.52%. The combine only reorders the two sums.
+**Verifier notes**: scheme-change (a dependent axis cut across cores), so it stands alone. It goes first because every later refinement tunes the per-core block this one redefines.
 
-`k`, `g` and the regime choice are new `derive_blocking()` knobs with one source of truth (CT/RT args derived from them; no restated literals). Regime selection stays one `generic_op` dispatch per call. Every CB that spans W (`cb_input_tiles`, `cb_residual_tiles`, the `work` group, `cb_gamma_rows`, `cb_beta_rows`, `cb_output_tiles`) must scale with the slice width, not `Wt`. `_cb_plan()` is the single place to change that.
+The precision gate the design put on this regime is met: fp32 DEST PCC 0.999998 / rel-RMS 0.19%, bf16 DEST PCC 0.99999 / rel-RMS 0.52%. The combine only reorders the two sums.
 
-Keep the stall-shadow rows from the design:
+Knobs and sizing:
+- `k`, `g` and the regime choice are new `derive_blocking()` knobs with one source of truth. Selection stays one `generic_op` dispatch per call.
+- Every CB that spans W (`cb_input_tiles`, `cb_residual_tiles`, the `work` group, `cb_gamma_rows`, `cb_beta_rows`, `cb_output_tiles`) scales with the slice width through `_cb_plan()`.
+
+Keep the Phase 0 NoC decisions working in the new regime, or re-measure them per regime:
+- The residual on the writer RISC / NoC1 from `RESIDUAL_SPLIT_MIN_TILE_ROWS`.
+- The per-core x NoC split from `X_NOC_SPLIT_MIN_CORE_ROWS`.
+- Reader run-ahead `input_depth`.
+- `block_height = 1` for compute.
+
+The combine's rendezvous adds a cross-core dependency on NoC traffic, so DM placement matters more than in Phase 0. Keep the stall-shadow rows from the design:
 - The writer fetches only its gamma/beta slice.
 - The next tile-row's local partial runs while a combine is in flight.
 
-Pick `(g, k)` per R by measurement. If a shape class does not win, keep it on `row_resident` and record why in the regime table. Update `l1_ledger.md` with the new partial / receive CBs and the cross-core traffic of `2 (k-1) T_acc` per core per tile-row. Add acceptance cases pinned to the new regime: aligned and non-aligned S, residual on and off, both affine forms, `fp32_dest_acc_en` on and off.
+Pick `(g, k)` per R by measurement. A shape class that does not win stays on `row_resident`, with the reason recorded in the regime table. Update `l1_ledger.md` with the new partial / receive CBs and the cross-core traffic of `2 (k-1) T_acc` per core per tile-row. Add acceptance cases pinned to the new regime: aligned and non-aligned S, residual on and off, both affine forms, `fp32_dest_acc_en` on and off.
 
-**Done when**: device-ns improves (median of 3) on `(32, 1, 32, 768)` and `(2, 1, 512, 768)`, with and without residual, both affine forms, at the default config. Any R = 64 / 128 shape moved to the new regime also improves. No regression across the guard set. All layer_norm_tile tests are green, with precision-baseline PCC and rel-RMS within 10% of the Phase 0 numbers.
+**Done when**:
+- Device-ns improves (median of 3) on `(32, 1, 32, 768)` and `(2, 1, 512, 768)`, with and without residual, both affine forms, at the default config.
+- Any R = 64 / 128 shape moved to the new regime also improves (R = 64 residual judged over >= 5 invocations).
+- No regression across the guard set.
+- All layer_norm_tile tests green.
+- Precision-baseline PCC and rel-RMS within 10% of the Phase 0 numbers.
 
-### [ ] Refinement 2 - Raise NoC throughput on the data-movement-bound shapes
-
-**Type**: perf
-
-**Goal**: the 128+ tile-row shapes, and every residual shape, are bound by data movement, not compute. Evidence:
-- The implementer's DM-only stub (compute stubbed, affine fetch removed) runs `(8, 1, 512, 768)` at 15.5 us without residual and 37.9 us with residual. The full op takes 33.3 / 59.8 us.
-- Adding the residual costs +26 us at R = 128 but only +3.6 us at R = 32 (rm_l1).
-
-All input and residual reads go through one reader RISC on NoC0, which carries 2/3 of the bytes when a residual is present. NoC1 carries only the output writes. Aggregate throughput on the residual case is about 500 GB/s, against about 810 GB/s without residual.
-
-Levers (T2 knob-turns on the existing block surface; each to be measured):
-- (a) **Balance the two NoCs.** Move one stream (the residual, or half of each tile-row's reads) onto the writer RISC / NoC1 (`split_reader`). Verifier ablation: issuing NoC1 reads from the NCRISC reader fails in the default dedicated-NoC mode, so this needs either the second RISC or dynamic-NoC mode.
-- (b) **Bank stagger.** Rotate each core's start column in its tile-row walk (`bank_stagger`). Row `g` starts on bank `24g mod 110`, which takes only 55 distinct values, so pairs of cores start on the same bank.
-- (c) **Barrier batching / transaction ids** across the input and residual streams (`trid_double_issue`, `double_buffer`).
-- (d) **The design's "Overlap" lamp**, per regime. Verifier ablation (`block_height=1, input_depth=2` forced) with residual: +3% at R=128 (59.0 -> 57.3 us), +7% at R=248 (101.2 -> 93.9 us) and +3% at R=256 (97.5 -> 94.5 us). Without residual it is neutral at R=128/248 but -19% at R=256 (56.0 -> 66.6 us). So the choice must be a regime-dependent knob, not a global flip.
-
-Target: `(8, 1, 512, 768)` and `(256, 1, 16, 768)` with residual, both affine forms, default config. Relevant `master.md` entries: `split_reader`, `noc_placement`, `bank_stagger`, `trid_double_issue`, `double_buffer`. No SUPPORTED change.
-
-**Verifier notes**: T2, several levers per phase. It follows Refinement 1 because the per-core block shape (`g x Wt/k`) changes there, and the same NoC levers must cover both regimes. Folded L1-ledger finding: on the residual path, `cb_input_tiles` and `cb_residual_tiles` are sized to the whole block (`input_depth * block_height * Wt`) while their consumer-side live set is one tile (`add_residual_block` streams them). The ledger's stated reason is whole-block reader run-ahead. Co-tune that window with levers (c)/(d) and record the measured choice in `l1_ledger.md`. Every new chunk, depth or stagger value is a `derive_blocking()` knob with one source.
-
-**Done when**: device-ns improves (median of 3) on both target shapes for both affine forms at the default config. No regression across the guard set, including no-residual R = 256 and DRAM-interleaved input. All layer_norm_tile tests green.
-
-### [ ] Refinement 3 - Trim the per-tile-row compute chain
+### [ ] Refinement 2 - `affine_mcast`: fetch gamma/beta once and multicast them
 
 **Type**: perf
 
-**Goal**: lower the per-tile-row compute cost (about 11 us at R = 32), which is the floor for every shape once Refinements 1 and 2 have spread and overlapped data movement. Levers, each measured:
-- (a) **Format reconfig.** Drop the helpers' data-format reconfig at phase boundaries where formats provably do not change (`compute_block_size`, "second lever", up to 1.19x). `center` -> `sumsq` -> `normalize` -> `scale` all read and write `T_acc` CBs. `mean_block`/`rstd_block` pass `INPUT_AND_OUTPUT` explicitly.
-- (b) **SFPU scope.** Scope the `rstd_block` post-op SFPU work (`mul_unary_tile`, `add_unary_tile`, `rsqrt_tile`) to column 0 of the stat tile (`sfpu_tile_scope`, `c_skip`, ~1.9x on the SFPU call). It is one tile per tile-row, so measure before keeping it.
-- (c) **Residual add cost.** The add is 24 tiles per tile-row, yet residual costs +3.6 to +4.8 us at R = 32. Attribute that between the reader and the add phase before choosing a lever.
+**Goal**: build the design's deferred `affine_mcast` regime row. One injector reads each gamma/beta row-0 slice once and multicasts it into `cb_gamma_rows` / `cb_beta_rows` on every core that needs it (`ttnn.Mcast` + `McastArgs`). This replaces today's per-core fetch, where every active core reads the same 24 TILE pages.
+
+With TILE gamma/beta in DRAM, the fetch is no longer off the critical path:
+- It costs time directly: R=128 res, tile_dram 41.1 vs rm_l1 37.2 us.
+- It is why `split_x_nocs` is gated on `affine_in_l1`. Dynamic-NoC mode slows the writer's DRAM fetch (+5 us, implementer), so DRAM-affine shapes lose the x NoC split: R=248 nores 47.2 vs 40.3 us, R=256 nores 49.7 vs 41.0 us.
+
+Target: `(256, 1, 16, 768)` and `(124, 1, 33, 768)` without residual, and `(8, 1, 512, 768)` with residual, all with tile_dram affine at the default config.
+
+Expected end state:
+- The tile_dram cells close on the rm_l1 cells.
+- The `affine_in_l1` gate on `split_x_nocs` is lifted, or re-justified by measurement.
+
+Relevant `master.md` entries:
+- `shared_input_reuse` (read once, broadcast).
+- `mcast_topology` (transport and topology).
+- `noc_placement`.
+
+No SUPPORTED change.
+
+**Verifier notes**: reuse multicast, a new dataflow topology (one injector plus a broadcast), so it stands alone (T3). It follows Refinement 1 because `w_split_combine` changes which gamma/beta slice each core needs (`Wt/k` tiles per `k`-group position), and the mcast topology must be built on that final slice map.
+
+Re-measure the tile_dram vs rm_l1 gap after Refinement 1 lands. The per-core DRAM fetch shrinks by `k` there, which may close part of it. If the gap on all three target cells is then within run-to-run noise, record the measurement and close this refinement with no code change.
+
+Validate by building the variant and measuring device-ns, not by a remove-the-fetch ablation, which under-shows a broadcast's value. The mcast rendezvous must not land on the R = 32 critical path: gamma/beta are first needed at `scale_block`, and the stall-shadow rule from the design holds. Record the measured choice and the new affine traffic in `l1_ledger.md`.
+
+**Done when**:
+- Device-ns improves (median of 3) on the three target cells (tile_dram, default config).
+- No regression across the guard set, including the rm_l1 cells and R = 32.
+- All layer_norm_tile tests green.
+- Alternatively, the post-Refinement-1 gap measures within noise and is recorded as such.
+
+### [ ] Refinement 3 - Overlap the first-row reads with compute on multi-row cores
+
+**Type**: perf
+
+**Goal**: on cores that own several tile-rows, reads and compute still largely serialize. Stage ablation (rm_l1, default config):
+
+| Shape | `full` (us) | `reads_only` (us) | `compute_only` (us) | Overlapped ideal |
+|---|---|---|---|---|
+| R=128, no residual | 30.5 | 10.7 | 19.8 | ~20 us |
+| R=256, no residual | 39.4 | 14.4 | 29.3 | ~29 us |
+| R=256, residual | 55.6 | 31.6 | 34.3 | ~35 us |
+
+Compute cannot start `mean_block` until a whole 24-tile row has landed, and every core issues its first row at the same moment, so the first-row arrival is set by grid-wide contention.
+
+Target: `(8, 1, 512, 768)` and `(256, 1, 16, 768)`, with and without residual, both affine forms, at the default config.
+
+Levers (T2, each measured; the implementer picks):
+- **Finer reader->compute handoff on the first row.** Push sub-row chunks so the first compute phase starts on landed tiles. It needs a compute-side wait granularity below one row: `mean_block` must keep x resident for `center_block`.
+- **Bank stagger.** Rotate each core's start column in its row walk (`bank_stagger`), so the first wave does not pile onto the same banks.
+- **Transaction-id barriers.** Keep the next row's reads on the wire across the current row's barrier (`trid_double_issue`). Co-tune with `input_depth`.
+- **The R=64 residual bimodality** (~26 vs ~33 us with unchanged code). Attribute it with the ablation harness before choosing a lever; a placement- or bank-dependent stall is the likely cause.
+
+Relevant `master.md` entries: `double_buffer`, `trid_double_issue`, `bank_stagger`, `split_reader`, `noc_placement`.
+
+No SUPPORTED change.
+
+**Verifier notes**: T2 knob and transfer-shape levers on the existing block surface, so several fit one phase. It follows Refinements 1 and 2 because both change which cores read what (per-core block shape, affine traffic, the dynamic-NoC gate). Gate on headroom: re-run the ablation first. If `full` is within ~10% of `max(reads_only, compute_only)` on the targets after Refinements 1-2, record that and close with no change.
+
+Every new chunk size, stagger or trid depth is a `derive_blocking()` knob with one source. The L1 ledger's `cb_input_tiles` / `cb_residual_tiles` run-ahead window (`input_depth` rows vs a consumer live set of 1 row / 1 tile) is co-tuned here; record the measured choice in `l1_ledger.md`.
+
+**Done when**:
+- Device-ns improves (median of 3) on both target shapes, both residual modes, both affine forms, at the default config.
+- No regression across the guard set; the R=64 residual cell is judged over >= 5 invocations.
+- All layer_norm_tile tests green.
+
+### [ ] Refinement 4 - Trim the per-tile-row compute chain
+
+**Type**: perf
+
+**Goal**: lower the per-tile-row compute cost: net ~7.6 us per 24-tile row without residual, ~9.4 us with residual (stage ablation, R=32). It is the floor for every shape once Refinements 1-3 have spread and overlapped data movement, and it is the whole cost at R=32.
+
+Levers, each measured:
+- (a) **Format reconfig.** Drop the helpers' data-format reconfig at phase boundaries where formats provably do not change (`compute_block_size`, "second lever", up to 1.19x). `center` -> `sumsq` -> `normalize` -> `scale` all read and write `T_acc` CBs. `mean_block` / `rstd_block` pass `INPUT_AND_OUTPUT` explicitly.
+- (b) **SFPU scope.** Scope the `rstd_block` post-op SFPU work (`mul_unary_tile`, `add_unary_tile`, `rsqrt_tile`) to column 0 of the stat tile (`sfpu_tile_scope`, `c_skip`). It is one tile per tile-row, so measure before keeping it.
+- (c) **Residual add cost.** The add is 24 tiles per tile-row, yet residual adds ~1.8 us of compute at R=32 (`compute_only` 12.0 vs 10.2). Attribute it before choosing a lever (`add` init/reconfig vs `cb_xsum` round trip).
 - (d) **SFPU init hoisting.** Hoist the `binop_with_scalar_tile_init` / `rsqrt_tile_init` re-inits out of the per-output post-op where the helper contract allows.
 
 Reference points:
-- LoFi saves 1.6 us at R = 32 (12%), so fidelity is a minor term.
-- `fp32_dest_acc_en=False` saves 0.2-2.3 us, mostly within run-to-run noise.
+- LoFi saves 1.7 us at R=32 (12%), so fidelity is a minor term.
+- `fp32_dest_acc_en=False` is within noise.
 - Do **not** fuse normalize/scale/shift through FPU DEST-reuse: `compute_fusion` measures that as a 0.82x loss for FPU-after-FPU.
 
 Target: `(32, 1, 32, 768)` and `(16, 1, 128, 768)`, with and without residual, both affine forms, default and `fp32_acc_off`. No SUPPORTED change.
 
-**Verifier notes**: compute-local T1/T2 levers, independent of the topology, so it goes last and blocks nothing. Lever (a) is legal only where the format is genuinely constant across the boundary. `cb_input_tiles` / `cb_residual_tiles` -> `T_acc` transitions must keep their reconfig. Precision must not move: (a) and (b) change only MMIO / lane scope.
+**Verifier notes**: compute-local T1/T2 levers, independent of the topology, so it goes last and blocks nothing. Lever (a) is legal only where the format is genuinely constant across the boundary; `cb_input_tiles` / `cb_residual_tiles` -> `T_acc` transitions keep their reconfig. Precision must not move: (a), (b) and (d) change only MMIO / lane scope / init placement.
 
-**Done when**: device-ns improves (median of 3) on the target shapes at both configs. No regression across the guard set. Precision-baseline PCC and rel-RMS unchanged within 2%. All layer_norm_tile tests green.
+**Done when**:
+- Device-ns improves (median of 3) on the target shapes at both configs (R = 64 residual over >= 5 invocations).
+- No regression across the guard set.
+- Precision-baseline PCC and rel-RMS unchanged within 2%.
+- All layer_norm_tile tests green.

@@ -29,9 +29,6 @@ RESIDUAL_SPLIT_MIN_TILE_ROWS = 64
 # gamma/beta fetch (8x1x512 tile_dram: 33.0 -> 38.0 us with no core splitting), so it is gated on both
 # affine tensors living in L1.
 X_NOC_SPLIT_MIN_CORE_ROWS = 2
-# Under dynamic NoC, fetch gamma/beta on NoC0 instead of the writer's NoC1. Parked off: measured slower
-# (8x1x512 res tile_dram 41.5 -> 51.4 us with the residual path also switched to dynamic mode).
-AFFINE_FETCH_ON_NOC0 = False
 OUTPUT_DEPTH = 2
 
 CB_INPUT_TILES = 0
@@ -65,17 +62,16 @@ class Blocking:
     residual_on_writer: bool
     # x tiles alternate NoC0 / NoC1 from the reader.
     split_x_nocs: bool
-
-    @property
-    def dynamic_noc(self):
-        """Both DM kernels run DM_DYNAMIC_NOC (the reader issues on both NoCs)."""
-        return self.split_x_nocs
-
     # {allocation: (pages, page_bytes)} from _cb_plan
     cb_plan: dict
     all_cores: object
     # ((core, start_row, num_blocks, last_block_extent), ...)
     assignment: tuple
+
+    @property
+    def dynamic_noc(self):
+        """Both DM kernels run DM_DYNAMIC_NOC (the reader issues on both NoCs)."""
+        return self.split_x_nocs
 
 
 def _float_bits(value):
@@ -219,7 +215,7 @@ def create_program_descriptor(
         if has_residual
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
-    residual_on_writer = has_residual and blocking.residual_on_writer
+    residual_on_writer = blocking.residual_on_writer
     reader_ct_args = [
         CB_INPUT_TILES,
         Wt,
@@ -244,7 +240,6 @@ def create_program_descriptor(
     ]
     writer_ct_args.extend(_affine_ct_args(gamma))
     writer_ct_args.extend(_affine_ct_args(beta))
-    writer_ct_args.append(int(blocking.dynamic_noc and AFFINE_FETCH_ON_NOC0))
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())

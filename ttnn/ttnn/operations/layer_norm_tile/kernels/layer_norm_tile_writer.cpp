@@ -30,7 +30,7 @@ constexpr uint32_t TILE_SPAN_BYTES = FACE_BYTES + CHUNK_BYTES;
 constexpr uint32_t CHUNK_ELEMS = 2 * FACE_ROW_BYTES / ELEM_BYTES;  // 32 elements: one tile-column
 
 // Issues the reads for one tensor's row-0 tiles; the caller owns the barrier so gamma and beta share one.
-template <bool is_row_major, uint32_t stick_elems, uint8_t noc, typename Accessor, typename Rows>
+template <bool is_row_major, uint32_t stick_elems, typename Accessor, typename Rows>
 FORCE_INLINE void issue_affine_reads(const Accessor& accessor, Rows& rows, uint32_t tensor_w_tiles) {
     const uint32_t tile_bytes = rows.get_tile_size();
     rows.reserve_back(tensor_w_tiles);
@@ -40,12 +40,11 @@ FORCE_INLINE void issue_affine_reads(const Accessor& accessor, Rows& rows, uint3
         if constexpr (is_row_major) {
             const uint32_t first_elem = col * CHUNK_ELEMS;
             noc_async_read(
-                accessor.get_noc_addr(first_elem / stick_elems, (first_elem % stick_elems) * ELEM_BYTES, noc),
+                accessor.get_noc_addr(first_elem / stick_elems, (first_elem % stick_elems) * ELEM_BYTES),
                 tile_addr,
-                CHUNK_BYTES,
-                noc);
+                CHUNK_BYTES);
         } else {
-            noc_async_read(accessor.get_noc_addr(col, 0, noc), tile_addr, TILE_SPAN_BYTES, noc);
+            noc_async_read(accessor.get_noc_addr(col), tile_addr, TILE_SPAN_BYTES);
         }
     }
 }
@@ -87,10 +86,7 @@ void kernel_main() {
     constexpr bool beta_is_rm = get_compile_time_arg_val(12) != 0;
     constexpr uint32_t beta_stick_elems = get_compile_time_arg_val(13);
     constexpr uint32_t beta_page_bytes = get_compile_time_arg_val(14);
-    // NoC for the gamma/beta fetch: NoC0 (needs DM_DYNAMIC_NOC) when NoC1 carries input traffic, since
-    // DRAM reads on a loaded NoC1 land late enough to stall scale_block.
-    constexpr uint8_t affine_noc = get_compile_time_arg_val(15) != 0 ? 0 : noc_index;
-    constexpr auto output_args = TensorAccessorArgs<16>();
+    constexpr auto output_args = TensorAccessorArgs<15>();
     constexpr auto gamma_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
@@ -140,9 +136,9 @@ void kernel_main() {
     const auto beta_accessor = TensorAccessor(beta_args, beta_addr, beta_page_bytes);
     DataflowBuffer gamma_rows(cb_gamma_rows);
     DataflowBuffer beta_rows(cb_beta_rows);
-    issue_affine_reads<gamma_is_rm, gamma_stick_elems, affine_noc>(gamma_accessor, gamma_rows, tensor_w_tiles);
-    issue_affine_reads<beta_is_rm, beta_stick_elems, affine_noc>(beta_accessor, beta_rows, tensor_w_tiles);
-    noc_async_read_barrier(affine_noc);
+    issue_affine_reads<gamma_is_rm, gamma_stick_elems>(gamma_accessor, gamma_rows, tensor_w_tiles);
+    issue_affine_reads<beta_is_rm, beta_stick_elems>(beta_accessor, beta_rows, tensor_w_tiles);
+    noc_async_read_barrier();
     if constexpr (gamma_is_rm || beta_is_rm) {
         issue_face1_copies<gamma_is_rm>(noc, gamma_rows, tensor_w_tiles);
         issue_face1_copies<beta_is_rm>(noc, beta_rows, tensor_w_tiles);

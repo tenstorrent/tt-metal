@@ -28,11 +28,11 @@ Allocations: 7 with residual (`cb_input_tiles`, `cb_residual_tiles`, `cb_gamma_r
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `Wt = tensor_w_tiles` | 24 in the contract domain; hard bound `Wt <= 38` (fp32 DEST + residual) / `<= 47` (fp32, no residual) | `alignment` axis rejects `W % 32 != 0`; `derive_blocking()` returns `None` (typed `UnsupportedAxisValue`) when `block_height_cap(INPUT_DEPTH_MAX) < 1`, which is `Wt * (4 T_in + 2 T_in (1 + HAS_RESIDUAL) + T_acc) + T_acc > CB_L1_BUDGET_BYTES` |
+| `Wt = tensor_w_tiles` | 24 in the contract domain; hard bound `Wt <= 47` (fp32 DEST + residual), `<= 54` (fp32, no residual; bf16 DEST + residual), `<= 63` (bf16 DEST, no residual) | `alignment` axis rejects `W % 32 != 0`; `derive_blocking()` returns `None` (typed `UnsupportedAxisValue`) when `block_height_cap(1) < 1`, i.e. `Wt * ((2 + OUTPUT_DEPTH) T_in + T_in (1 + HAS_RESIDUAL) + T_acc) + T_acc > CB_L1_BUDGET_BYTES`; `input_depth` is then lowered until `block_height_cap(input_depth) >= block_height` |
 | `block_height` | `1 <= block_height <= min(max_core_rows_tiles, BLOCK_HEIGHT_MAX, block_height_cap(1))` | `derive_blocking()`; `None` (typed refusal) when `block_height_cap(1) < 1` |
 | `block_rows` | `1 <= block_rows <= block_height` | per-block runtime extent (`last_block_extent` on the final block) |
 | `input_depth` | `1 .. INPUT_DEPTH_MAX (4)` | `min(ceil(max_core_rows_tiles / block_height), INPUT_DEPTH_MAX)`, lowered until `block_height_cap(input_depth) >= block_height` |
-| `BLOCK_HEIGHT_MAX` | 1 | host constant: compute granularity, decoupled from run-ahead (`input_depth`) |
+| `BLOCK_HEIGHT_MAX` | 1 | host constant: compute granularity, decoupled from run-ahead (`input_depth`). Departs from the design's whole-assignment default by measurement (verifier sweep, rm_l1, default config, median of 3, `block_height` 1 vs 2: R=128 res 35.9 vs 40.0 us, R=256 nores 40.4 vs 46.6 us, R=256 res 54.6 vs 70.2 us): compute starts on the first landed tile-row instead of the whole assignment. |
 | `RESIDUAL_SPLIT_MIN_TILE_ROWS` | 64 | host constant: residual stream moves to the writer RISC / NoC1 from this tile-row count (measured) |
 | `HAS_RESIDUAL` | `{0, 1}` | `residual_input_tensor is not None` |
 | `OUTPUT_DEPTH` | 2 | host constant |
@@ -79,7 +79,9 @@ At the example shape the residual split moves NoC0 from 12 MiB of reads to 6 MiB
 
 > Cheapest-traffic split considered: `tile_rows` across cores (`row_resident`) - delta 0 bytes per tier.
 > Implemented: `tile_rows` across cores. It is also the cheapest-traffic split. The only above-minimum
-> term is the per-core affine-row fetch (`affine_mcast`, deferred: the fetch runs on the writer during
-> the reader's block-0 fetch and compute's pre-affine phases, so it is off the critical path). The
-> `w_split_combine` regime adds traffic (+2 (k-1) T_acc per core per tile-row) and is deferred for the
-> occupancy reason stated in the regime table, not for traffic.
+> term is the per-core affine-row fetch (`affine_mcast`). It is off the critical path for RM gamma/beta
+> in L1, but not for TILE gamma/beta in DRAM: every active core reads the same 24 DRAM pages, which (a)
+> costs 3.9 us at R=128 with residual (tile_dram 41.1 vs rm_l1 37.2 us) and (b) is why the no-residual
+> NoC0/NoC1 x split is gated off for DRAM affine (R=256: 49.7 vs 41.0 us). Queued as a perf refinement in
+> `op_requirements.md`. The `w_split_combine` regime adds traffic (+2 (k-1) T_acc per core per tile-row)
+> and is queued for occupancy, not traffic.
