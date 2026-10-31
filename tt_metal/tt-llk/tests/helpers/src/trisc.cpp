@@ -94,7 +94,8 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
-    llk_profiler::reset();
+    // RC memset knock-out b0h: no device clear at all; the host zeroes the profiler buffers over NoC before each kernel.
+    llk_profiler::reset_state();
     llk_profiler::sync_threads();
 #endif
 
