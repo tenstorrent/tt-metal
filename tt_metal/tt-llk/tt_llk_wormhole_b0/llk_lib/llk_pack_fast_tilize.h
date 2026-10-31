@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_fast_tilize_common.h"
 #include "llk_pack.h"
 
 using namespace ckernel;
@@ -108,7 +109,7 @@ inline void _llk_pack_fast_tilize_mop_config_()
  * @param use_32bit_dest: True to read dest as 32-bit data (set when the unpack source format is TF32).
  * @param pack_dst_format: Destination (L1) data format.
  * @param unit_dim: Number of tiles processed per iteration, valid values = <1, 2, 3>
- * @param num_faces: Faces per tile, valid values = <2, 4>
+ * @param num_faces: Faces per tile, valid values = <2, 4>; 2 (16x32 tiny tiles) only together with unit_dim 2.
  * @param l1_tile_elements: Number of datums per output tile, used to size the per-tile L1 offset.
  * @note On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ and on the math thread with @ref _llk_math_fast_tilize_init_ (same unit_dim).
  * @note Pair with @ref _llk_pack_fast_tilize_uninit_ after the matching @ref _llk_pack_fast_tilize_block_ execute calls.
@@ -122,8 +123,9 @@ inline void _llk_pack_fast_tilize_init_(
     const std::uint32_t l1_tile_elements = TILE_C_DIM * TILE_R_DIM)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
+    LLK_ASSERT(fast_tilize_unit_supports_faces(unit_dim, num_faces), FAST_TILIZE_TINY_TILE_UNIT_DIM_MSG);
     LLK_ASSERT(
-        pack_dst_format == to_underlying(DataFormat::Float16_b) || pack_dst_format == to_underlying(DataFormat::Float32) || num_faces == 4,
+        num_faces == TILE_NUM_FACES || fast_tilize_tiny_tile_format_supported(pack_dst_format),
         "16x32 tiny tiles are only supported with float16_b or float32 output formats");
     // instead of using the actual is_fp32_dest_acc_en flag dest 32 bit mode is enabled if unpack_dst_format is TF32
     // this is due to a hw quirk with MOVA2D and MOVB2D
@@ -260,7 +262,7 @@ inline void _llk_pack_fast_tilize_uninit_(
  * @param address: L1 destination base address (16B-aligned, typically the start of the tile row).
  * @param unit_dim: Number of tiles processed per unit, valid values = <1, 2, 3>
  * @param num_units: Number of units to pack in this call.
- * @param num_faces: Faces per tile, valid values = <2, 4>
+ * @param num_faces: Faces per tile, valid values = <2, 4>; 2 (16x32 tiny tiles) only together with unit_dim 2.
  * @note Call @ref _llk_pack_fast_tilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_fast_tilize_uninit_ once all fast-tilize-pack calls are complete.
  * @note On the math thread, @ref _llk_math_fast_tilize_block_ must have written the split top/bottom-half faces into dest.
@@ -269,6 +271,7 @@ inline void _llk_pack_fast_tilize_block_(
     const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
+    LLK_ASSERT(fast_tilize_unit_supports_faces(unit_dim, num_faces), FAST_TILIZE_TINY_TILE_UNIT_DIM_MSG);
     // use false here so that the 31st bit of the address remains set as the offset addresses for the other packers continue to be used
     // while the address for the first packer is manipulated using ADDDMAREG and REG2FLOP
     program_packer_destination(address, false);

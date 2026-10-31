@@ -6,20 +6,19 @@
 
 #include <cstdint>
 
+#include "experimental/llk_fast_tilize_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 
 // ============================================================================
 // BH Fast-Tilize Math
 //
-// Modified A2D datacopy for fast-tilize's SrcA layout (8 data rows + 8 gap rows).
-// MOVA2D MOV_8_ROWS with srca_incr=16, dest_incr=16 copies data rows while
-// preserving the gap layout. 4 MOVA2D per dvalid = 32 data rows.
+// Modified A2D datacopy for fast-tilize: MOVA2D MOV_8_ROWS with srca_incr=8 reads
+// SrcA contiguously, and dest_incr=16 leaves 8 gap rows after every 8 data rows in
+// DEST (the stride the packer reads). 8 MOVA2D per dvalid = 64 SrcA rows (8 tensor
+// rows of 4 tiles).
 //
-// Accumulates 8 dvalids into one DEST half-bank (512 rows for bf16):
-//   dvalid 0: DEST rows 0-7, 16-23, 32-39, 48-55
-//   dvalid 1: DEST rows 64-71, 80-87, 96-103, 112-119
-//   ...
-//   dvalid 7: DEST rows 448-455, 464-471, 480-487, 496-503
+// Accumulates 4 dvalids into one DEST half-bank (512 rows for bf16):
+//   dvalid k: DEST rows 128k + {0-7, 16-23, ..., 112-119} (8 data groups of 8 rows)
 // Total: 32 data groups x 8 rows x 16 cols = 4096 datums = 4 tiles.
 // Pack then reads 4 tiles from the DEST half using DST_ACCESS_STRIDED_MODE.
 // ============================================================================
@@ -65,15 +64,27 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
     tmp.program();
 }
 
-// One call = one row-chunk (one MOP run). num_units loop removed; block
-// height is always 1 and chunk iteration is in the caller.
+/**
+ * @brief Copy one row-chunk (one 4-tile unit) from SrcA into DEST (one MOP run).
+ *
+ * Block height is always 1 and chunk iteration is in the caller. The MOP is hardwired to 4 dvalids (one
+ * 4-tile unit) per run at the Tile32x32 DEST stride, so only 32x32 tiles are supported.
+ *
+ * @tparam is_fp32_dest_acc_en: Unused.
+ * @param dst_index: Tile index in DEST to write the unit to.
+ * @param unpack_dst_format: Unused; the DEST view is fixed to 16 bit by @ref _llk_math_fast_tilize_init_.
+ * @param unit_dim: Unused; every unit consumes 4 dvalids regardless of its tile count.
+ * @param num_faces: Faces per tile; must be 4 (32x32 tiles only).
+ * @note Call @ref _llk_math_fast_tilize_init_ before this function and @ref _llk_math_fast_tilize_uninit_ after the last chunk.
+ */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_fast_tilize_block_(
     const std::uint32_t dst_index,
     [[maybe_unused]] const std::uint32_t unpack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
-    [[maybe_unused]] const std::uint32_t num_faces = 4)
+    const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 4, "Blackhole fast tilize supports 32x32 tiles only");
     // Use SrcRegs (not DestReg) - DestReg sends a hardware mailbox to the unpack
     // thread, but fast-tilize unpack uses counter-based addressing and never reads
     // the mailbox. After ~4 unread writes the mailbox FIFO fills and math RISC-V
