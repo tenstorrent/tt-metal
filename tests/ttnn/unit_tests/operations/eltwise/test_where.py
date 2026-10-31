@@ -480,6 +480,69 @@ def test_where_ttt_bf16_inputs_fp32_output(device, c_shape):
     assert torch.equal(ttnn.to_torch(out), torch.where(C.bool(), T.float(), F.float()))
 
 
+@pytest.mark.parametrize(
+    "ttnn_dtype, scalar",
+    [
+        (ttnn.int32, 16777217),
+        (ttnn.int32, 123456789),
+        (ttnn.int32, -2147483647),
+        (ttnn.int32, -2147483648),
+        (ttnn.int32, 2147483647),
+        (ttnn.uint32, 16777217),
+        (ttnn.uint32, 3000000001),
+        (ttnn.uint32, 4294967295),
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TSS"])
+def test_where_int_scalar_beyond_float32_precision(device, ttnn_dtype, scalar, variant):
+    shape = (1, 1, 32, 64)
+    torch_c = torch.tensor([[1, 0] * (shape[-1] // 2)] * shape[-2], dtype=torch.int32).reshape(shape)
+    torch_t = torch.arange(shape[-2] * shape[-1], dtype=torch.int64).reshape(shape)
+    tt_c = ttnn.from_torch(torch_c, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(torch_t, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if variant == "TTS":
+        result = ttnn.where(tt_c, tt_t, scalar)
+        golden = torch.where(torch_c.bool(), torch_t, scalar)
+    elif variant == "TST":
+        result = ttnn.where(tt_c, scalar, tt_t)
+        golden = torch.where(torch_c.bool(), scalar, torch_t)
+    else:
+        result = ttnn.where(tt_c, scalar, 7)
+        golden = torch.where(torch_c.bool(), scalar, 7)
+
+    assert result.dtype == ttnn_dtype
+    result = ttnn.to_torch(result).to(torch.int64)
+    if ttnn_dtype == ttnn.uint32:
+        result = result & 0xFFFFFFFF
+    assert torch.equal(result, golden.to(torch.int64))
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype, scalar",
+    [
+        (ttnn.int32, 2147483648),
+        (ttnn.int32, -2147483649),
+        (ttnn.uint32, -1),
+        (ttnn.uint32, 4294967296),
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+def test_where_rejects_int_scalar_out_of_range(device, expect_error, ttnn_dtype, scalar, variant):
+    shape = (1, 1, 32, 32)
+    tt_c = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_t = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        if variant == "TTS":
+            ttnn.where(tt_c, tt_t, scalar)
+        else:
+            ttnn.where(tt_c, scalar, tt_t)
+
+
 @pytest.mark.parametrize("c_dtype", [ttnn.bfloat16, ttnn.float32], ids=["c_bf16", "c_fp32"])
 @pytest.mark.parametrize(
     "c_shape", [(1, 1, 64, 128), (1, 1, 64, 1), (1, 1, 1, 1)], ids=["no_bcast", "col_bcast", "scalar_bcast"]
