@@ -132,10 +132,19 @@ private:
     DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
+    // A sub-device manager switch made during trace capture. record_end encodes the programs before it under
+    // from_manager_id and writes the switch (drain, reset the workers, set up the new manager) into the trace.
+    struct SubDeviceManagerSwitch {
+        SubDeviceManagerId from_manager_id;
+        std::vector<uint32_t> workers_per_sub_device;
+        std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping;
+    };
+
     struct MeshTraceNode {
         std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
         bool multicast_go_signals{false};
         SubDeviceId sub_device_id;
+        std::optional<SubDeviceManagerSwitch> sub_device_manager_switch;
     };
 
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads

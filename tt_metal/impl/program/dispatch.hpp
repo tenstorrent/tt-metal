@@ -242,6 +242,18 @@ void write_program_command_sequence(
     bool stall_before_program,
     bool send_binary = true);
 
+// write_program_command_sequence for a traced program whose config may go out before something its launch waits for
+// (the caller places the config where nothing still running uses it): writes the preamble, runtime args, config and
+// binary, then calls before_launch (which writes its own commands, such as a sub-device manager switch), then the
+// stall (when stall_first), the launch and the go messages.
+void write_program_command_sequence_around(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall_first,
+    bool send_binary,
+    const std::function<void()>& before_launch);
+
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(

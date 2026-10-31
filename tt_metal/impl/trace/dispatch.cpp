@@ -109,7 +109,8 @@ void issue_trace_commands(
             metal_ctx.hal().make_go_msg_u32(
                 dev_msgs::RUN_MSG_REPLAY_TRACE, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-            desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
+            (desc.num_traced_programs_needing_go_signal_multicast || desc.reset_launch_msg_at_start) &&
+                    mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             worker_launch_message_buffer_state[index].get_mcast_wptr(),
@@ -122,7 +123,7 @@ void issue_trace_commands(
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         auto index = *id;
         uint32_t expected_num_workers = expected_num_workers_completed[index];
-        if (desc.num_traced_programs_needing_go_signal_multicast) {
+        if (desc.num_traced_programs_needing_go_signal_multicast || desc.reset_launch_msg_at_start) {
             expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
 
@@ -195,7 +196,7 @@ void update_worker_state_post_trace_execution(
         // Update the wptr on host to match state. If the trace doesn't execute on a
         // class of worker (unicast or multicast), it doesn't reset or modify the
         // state for those workers.
-        if (desc.num_traced_programs_needing_go_signal_multicast) {
+        if (desc.num_traced_programs_needing_go_signal_multicast || desc.reset_launch_msg_at_start) {
             worker_launch_message_buffer_state[index].set_mcast_wptr(
                 desc.num_traced_programs_needing_go_signal_multicast);
         }
