@@ -186,10 +186,11 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
         group_shared_matmul(attention_weights, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
-    ttml::autograd::GradFunction grad =
-        [scale, query, key, value, attention_weights, out, mask, groups]() {
-            constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
-            auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
+    ttml::autograd::GradFunction grad = [scale, query, key, value, attention_weights, out, mask, groups]() {
+        constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
+        auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
+        // dL_dQ and dL_dK share the softmax backward; dL_dV does not need it.
+        if (ttml::autograd::any_requires_grad(query, key)) {
             // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
             ttnn::Tensor dL_dattention_weights =
                 group_shared_matmul(dL_dout, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/true);
@@ -208,18 +209,26 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
             dL_dscaled_dot = ttnn::multiply(
                 dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);  // [B,H,S,S]
 
-            // dL_dQ = dL_dscaled_dot @ key
-            ttnn::Tensor dL_dQ =
-                group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
+            if (query->get_requires_grad()) {
+                // dL_dQ = dL_dscaled_dot @ key
+                ttnn::Tensor dL_dQ =
+                    group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
+                query->add_grad(dL_dQ);
+            }
 
-            // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
-            ttnn::Tensor dL_dK = ttnn_fixed::matmul(
-                dL_dscaled_dot,
-                query->get_value(),
-                /*transpose_a=*/true,
-                /*transpose_b=*/false);
-            dL_dK = sum_over_groups(dL_dK, groups);  // no-op when groups == heads
+            if (key->get_requires_grad()) {
+                // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
+                ttnn::Tensor dL_dK = ttnn_fixed::matmul(
+                    dL_dscaled_dot,
+                    query->get_value(),
+                    /*transpose_a=*/true,
+                    /*transpose_b=*/false);
+                dL_dK = sum_over_groups(dL_dK, groups);  // no-op when groups == heads
+                key->add_grad(dL_dK);
+            }
+        }
 
+        if (value->get_requires_grad()) {
             // dL_dV = Σ_g [attention_weights^T @ dL_dout]
             ttnn::Tensor dL_dV = ttnn_fixed::matmul(
                 attention_weights,
@@ -227,11 +236,9 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
                 /*transpose_a=*/true,
                 /*transpose_b=*/false);
             dL_dV = sum_over_groups(dL_dV, groups);  // no-op when groups == heads
-
-            query->add_grad(dL_dQ);
-            key->add_grad(dL_dK);
             value->add_grad(dL_dV);
-        };
+        }
+    };
 
     out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
@@ -280,9 +287,9 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto out = ttml::autograd::create_tensor(attn_output);
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
-    // With a gate, sdpa_bw writes grad_gate into Y (attn_output): the Q reader reads each row of Y into L1 before
-    // that row's dG is written. After backward, out holds dG as its value. Single backward only: a second gated
-    // pass (retain_graph=true) throws.
+    // When the gate requires grad, sdpa_bw writes grad_gate into Y (attn_output): the Q reader reads each row of Y
+    // into L1 before that row's dG is written. After backward, out holds dG as its value. Single backward only: a
+    // second pass after Y was overwritten (retain_graph=true) throws. With a frozen gate, Y is left intact.
     ttml::autograd::GradFunction grad = [query,
                                          key,
                                          value,
@@ -293,13 +300,20 @@ autograd::TensorPtr scaled_dot_product_attention(
                                          intermediates,
                                          dropout_probability,
                                          gate_ptr]() mutable {
+        const bool compute_grad_q = query->get_requires_grad();
+        const bool compute_grad_k = key->get_requires_grad();
+        const bool compute_grad_v = value->get_requires_grad();
+        const bool compute_grad_gate = gate_ptr ? gate_ptr->get_requires_grad() : false;
+        if (!autograd::any_requires_grad(query, key, value, gate_ptr)) {
+            return;
+        }
         if (!saved_attn_output.has_value()) {
             throw std::runtime_error(
                 "scaled_dot_product_attention: backward ran twice with a gate. The first pass overwrote the "
                 "forward output, so retain_graph=true is not supported for the gated op.");
         }
         const ttnn::Tensor attn_output = saved_attn_output.value();
-        if (gate_ptr) {
+        if (compute_grad_gate) {
             saved_attn_output.reset();  // consumed: this pass overwrites Y with dG
         }
 
@@ -321,12 +335,20 @@ autograd::TensorPtr scaled_dot_product_attention(
             mask_tensor,
             dropout_probability,
             gate_ptr ? std::make_optional(gate_ptr->get_value()) : std::nullopt,
-            /*preallocated_grad_gate=*/gate_ptr ? std::make_optional(attn_output) : std::nullopt);
+            /*preallocated_grad_gate=*/compute_grad_gate ? std::make_optional(attn_output) : std::nullopt,
+            ttml::metal::SDPABackwardGrads{
+                .query = compute_grad_q, .key = compute_grad_k, .value = compute_grad_v, .gate = compute_grad_gate});
 
-        query->add_grad(dL_dQ);
-        key->add_grad(dL_dK);
-        value->add_grad(dL_dV);
-        if (gate_ptr && dL_dGate.has_value()) {
+        if (compute_grad_q) {
+            query->add_grad(dL_dQ.value());
+        }
+        if (compute_grad_k) {
+            key->add_grad(dL_dK.value());
+        }
+        if (compute_grad_v) {
+            value->add_grad(dL_dV.value());
+        }
+        if (compute_grad_gate && dL_dGate.has_value()) {
             gate_ptr->add_grad(dL_dGate.value());
         }
     };
@@ -365,9 +387,17 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     ttml::autograd::GradFunction grad =
         [scale, query, key, value, qk_t, qk_scaled, attention_weights, attention_qkv, out, mask]() {
             auto grad_output = out->get_grad();
-            // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-            auto grad_v =
-                ttnn_fixed::matmul(attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
+            if (value->get_requires_grad()) {
+                // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
+                auto grad_v =
+                    ttnn_fixed::matmul(attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
+                value->add_grad(grad_v);
+            }
+
+            // grad_q and grad_k share the sigmoid backward; grad_v does not need it.
+            if (!ttml::autograd::any_requires_grad(query, key)) {
+                return;
+            }
             auto grad_attention_weights =
                 ttnn_fixed::matmul(grad_output, value->get_value(), /* transpose_a */ false, /* transpose_b */ true);
             auto grad_scaled_dot =
@@ -380,23 +410,25 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
                 grad_scaled_dot = ttnn::where(mask.value()->get_value(), grad_scaled_dot, /* other */ 0.0F);
             }
 
-            auto grad_q = ttnn_fixed::matmul(
-                grad_scaled_dot,
-                key->get_value(),
-                /* transpose_a */ false,
-                /* transpose_b */ false);
-            grad_q = ttnn::multiply(grad_q, scale);
+            if (query->get_requires_grad()) {
+                auto grad_q = ttnn_fixed::matmul(
+                    grad_scaled_dot,
+                    key->get_value(),
+                    /* transpose_a */ false,
+                    /* transpose_b */ false);
+                grad_q = ttnn::multiply(grad_q, scale);
+                query->add_grad(grad_q);
+            }
 
-            auto grad_k = ttnn_fixed::matmul(
-                grad_scaled_dot,
-                query->get_value(),
-                /* transpose_a */ true,
-                /* transpose_b */ false);
-            grad_k = ttnn::multiply(grad_k, scale);
-
-            query->add_grad(grad_q);
-            key->add_grad(grad_k);
-            value->add_grad(grad_v);
+            if (key->get_requires_grad()) {
+                auto grad_k = ttnn_fixed::matmul(
+                    grad_scaled_dot,
+                    query->get_value(),
+                    /* transpose_a */ true,
+                    /* transpose_b */ false);
+                grad_k = ttnn::multiply(grad_k, scale);
+                key->add_grad(grad_k);
+            }
         };
 
     out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));

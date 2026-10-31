@@ -6,6 +6,10 @@
 
 #include <bit>
 #include <cstdint>
+#include <initializer_list>
+#include <map>
+#include <string>
+#include <string_view>
 #include <tt-metalium/allocator.hpp>
 #include <type_traits>
 
@@ -64,6 +68,21 @@ inline tt::tt_metal::CBHandle create_circular_buffer(
 
     auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
     return cb_handle;
+}
+
+/**
+ *   The entries of `defines` named in `keys`. A kernel given only the defines it reads is not compiled again for a
+ *   flag it ignores.
+ */
+inline std::map<std::string, std::string> select_defines(
+    const std::map<std::string, std::string>& defines, std::initializer_list<std::string_view> keys) {
+    std::map<std::string, std::string> selected;
+    for (const auto key : keys) {
+        if (const auto it = defines.find(std::string(key)); it != defines.end()) {
+            selected.insert(*it);
+        }
+    }
+    return selected;
 }
 
 /**

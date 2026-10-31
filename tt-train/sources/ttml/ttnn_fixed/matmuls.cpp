@@ -32,50 +32,35 @@ ttnn::Tensor matmul(
         /* optional_output_tensor */ std::move(output_tensor));
 }
 
-std::pair<ttnn::Tensor, ttnn::Tensor> matmul_backward(
-    const ttnn::Tensor& a, const ttnn::Tensor& b, const ttnn::Tensor& out_grad, bool transpose_a, bool transpose_b) {
-    auto a_shape = a.logical_shape();
-    auto b_shape = b.logical_shape();
-    auto grad_shape = out_grad.logical_shape();
+std::pair<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> matmul_backward(
+    const ttnn::Tensor& a,
+    const ttnn::Tensor& b,
+    const ttnn::Tensor& out_grad,
+    bool transpose_a,
+    bool transpose_b,
+    MatmulBackwardGrads grads) {
+    // Flatten dL/dout by its own last dim: with transpose_a, a's rows are op(a)'s columns, not dL/dout's rows.
+    const uint32_t grad_cols = out_grad.logical_shape()[-1];
+    const auto flat_grad =
+        ttnn::reshape(out_grad, ttnn::Shape({static_cast<uint32_t>(out_grad.logical_volume() / grad_cols), grad_cols}));
 
-    auto volume_without_features_a = a.logical_volume() / static_cast<uint64_t>(a.logical_shape()[-1]);
-    auto reshaped_a =
-        ttnn::reshape(a, ttnn::Shape({static_cast<uint32_t>(volume_without_features_a), a.logical_shape()[-1]}));
-    auto reshaped_grad = ttnn::reshape(
-        out_grad, ttnn::Shape({static_cast<uint32_t>(volume_without_features_a), out_grad.logical_shape()[-1]}));
-
-    ttnn::Tensor reshaped_a_grad;
-    ttnn::Tensor reshaped_b_grad;
-
-    if (!transpose_a) {
-        // A was used as is.
-        // grad_A = reshaped_grad * ( (transpose_b ? B^T : B) )^T.
-        // If transpose_b is false: (B)^T = B^T, if true: (B^T)^T = B.
-        reshaped_a_grad = ttnn_fixed::matmul(reshaped_grad, b, false, !transpose_b);
-    } else {
-        // A was transposed in the forward pass (i.e. we used A^T).
-        // Compute dA_eff = reshaped_grad * ( (transpose_b ? B^T : B) )^T.
-        // Then grad_A = (dA_eff)^T = ( (transpose_b ? B^T : B) ) * reshaped_grad^T.
-        if (!transpose_b)
-            reshaped_a_grad = ttnn_fixed::matmul(b, reshaped_grad, false, true);  // B as is, reshaped_grad transposed.
-        else
-            reshaped_a_grad =
-                ttnn_fixed::matmul(b, reshaped_grad, true, true);  // B transposed, reshaped_grad transposed.
+    std::optional<ttnn::Tensor> a_grad;
+    if (grads.a) {
+        // dA_eff = dL/dout @ op(b)^T. With transpose_a, a holds A^T, so dA = dA_eff^T = op(b) @ (dL/dout)^T.
+        const auto flat_a_grad = transpose_a ? ttnn_fixed::matmul(b, flat_grad, transpose_b, true)
+                                             : ttnn_fixed::matmul(flat_grad, b, false, !transpose_b);
+        a_grad = ttnn::reshape(flat_a_grad, a.logical_shape());
     }
 
-    if (!transpose_b) {
-        // B was used as is.
-        // grad_B = ( (transpose_a ? A^T : A) )^T * d_out.
-        // If transpose_a is false: (A)^T = A^T, if true: (A^T)^T = A.
-        reshaped_b_grad = ttnn_fixed::matmul(reshaped_a, reshaped_grad, !transpose_a, false);
-    } else {
-        // B was transposed in the forward pass (i.e. we used B^T).
-        // Compute dB_eff = ( (transpose_a ? A^T : A) )^T * d_out,
-        // then grad_B = (dB_eff)^T = d_out^T * (transpose_a ? A^T : A).
-        reshaped_b_grad = ttnn_fixed::matmul(reshaped_grad, reshaped_a, true, transpose_a);
+    std::optional<ttnn::Tensor> b_grad;
+    if (grads.b) {
+        const uint32_t a_cols = a.logical_shape()[-1];
+        const auto flat_a = ttnn::reshape(a, ttnn::Shape({static_cast<uint32_t>(a.logical_volume() / a_cols), a_cols}));
+        // dB_eff = op(a)^T @ dL/dout. With transpose_b, b holds B^T, so dB = dB_eff^T = (dL/dout)^T @ op(a).
+        const auto flat_b_grad = transpose_b ? ttnn_fixed::matmul(flat_grad, flat_a, true, transpose_a)
+                                             : ttnn_fixed::matmul(flat_a, flat_grad, !transpose_a, false);
+        b_grad = ttnn::reshape(flat_b_grad, b.logical_shape());
     }
-    auto a_grad = ttnn::reshape(reshaped_a_grad, a_shape);
-    auto b_grad = ttnn::reshape(reshaped_b_grad, b_shape);
     return {a_grad, b_grad};
 }
 }  // namespace ttml::ttnn_fixed

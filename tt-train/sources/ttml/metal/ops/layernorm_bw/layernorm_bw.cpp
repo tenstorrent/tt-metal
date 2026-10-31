@@ -14,14 +14,10 @@ std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
-    const ttnn::Tensor& dL_dout_tensor) {
-    // Call the device operation
-    // Returns: [dx, dgamma_components, dbeta_components]
-    auto result = ttnn::prim::ttml_layernorm_bw(input_tensor, gamma_tensor, mean_tensor, rstd_tensor, dL_dout_tensor);
-
+    const ttnn::Tensor& dL_dout_tensor,
+    const LayerNormBackwardGrads& grads) {
     // dL_dgamma and dL_dbeta require sum over batches so we cannot perform this sum in the kernel.
-    // Instead we return the components and reduce them here.
-
+    // Instead we reduce their components here.
     auto reduction_with_reshape_to2D = [](const ttnn::Tensor& tensor) {
         return ttnn::reshape(
             ttnn::sum(
@@ -36,10 +32,29 @@ std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
                 /*compute_kernel_config */ core::ComputeKernelConfig::precise()),
             ttnn::Shape({1, 1, 1, tensor.logical_shape()[3]}));
     };
+
+    TT_FATAL(
+        grads.input || grads.gamma || grads.beta,
+        "layernorm_bw: at least one of grads.input, grads.gamma and grads.beta must be set");
+
+    // Call the device operation for dx and dgamma only
+    // Returns: [dx, dgamma_components]; a skipped grad is nullopt
+    std::vector<std::optional<ttnn::Tensor>> result(2U);
+    if (grads.input || grads.gamma) {
+        result = ttnn::prim::ttml_layernorm_bw(
+            input_tensor,
+            gamma_tensor,
+            mean_tensor,
+            rstd_tensor,
+            dL_dout_tensor,
+            {.grad_input = grads.input, .grad_gamma = grads.gamma});
+    }
+
     return {
         result[0],  // dx - already complete
-        reduction_with_reshape_to2D(result[1]),
-        reduction_with_reshape_to2D(result[2])};
+        grads.gamma ? std::make_optional(reduction_with_reshape_to2D(result[1].value())) : std::nullopt,
+        // dL_dbeta is the row sum of dL_dout itself, so it needs no kernel output.
+        grads.beta ? std::make_optional(reduction_with_reshape_to2D(dL_dout_tensor)) : std::nullopt};
 }
 
 }  // namespace ttml::metal

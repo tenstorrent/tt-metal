@@ -9,10 +9,20 @@
 
 namespace ttml::metal::ops::sdpa_bw::device::q {
 
+// Which outputs to produce. The gate outputs default off because they need a gate.
+struct SDPABackwardQOutputs {
+    bool grad_query{true};
+    bool u_scaler{true};
+    bool grad_gate{false};
+    bool gated_grad_output{false};
+};
+
 struct SDPABackwardQParams {
     AttentionMaskType mask_type{AttentionMaskType::Arbitrary};
     float dropout_probability{0.0F};
     bool has_gate{false};
+    // Ring SDPA builds these params with only the mask type and dropout set and relies on the defaults.
+    SDPABackwardQOutputs outputs{};
 };
 
 struct SDPABackwardQInputs {
@@ -37,13 +47,16 @@ struct SDPABackwardQInputs {
 using operation_attributes_t = SDPABackwardQParams;
 using tensor_args_t = SDPABackwardQInputs;
 
-// [grad_Q, u_scaler, grad_gate, gated_grad_output]
-using tensor_return_value_t =
-    std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>>;
+// [grad_Q, u_scaler, grad_gate, gated_grad_output]; an output is nullopt when its outputs flag is false.
+using tensor_return_value_t = std::tuple<
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>>;
 
 using spec_return_value_t = std::tuple<
-    tt::tt_metal::TensorSpec,
-    tt::tt_metal::TensorSpec,
+    std::optional<tt::tt_metal::TensorSpec>,
+    std::optional<tt::tt_metal::TensorSpec>,
     std::optional<tt::tt_metal::TensorSpec>,
     std::optional<tt::tt_metal::TensorSpec>>;
 

@@ -99,10 +99,24 @@ autograd::TensorPtr layernorm(
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta_opt]() {
-        auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
-        tensor->add_grad(res[0].value());
-        gamma->add_grad(res[1].value());
-        if (beta_opt.has_value()) {
+        if (!autograd::any_requires_grad(tensor, gamma, beta_opt.value_or(nullptr))) {
+            return;
+        }
+        const bool beta_requires_grad = beta_opt.has_value() && beta_opt.value()->get_requires_grad();
+        auto res = ttml::metal::layernorm_bw(
+            tensor->get_value(),
+            gamma->get_value(),
+            mean,
+            rstd,
+            out->get_grad(),
+            {.input = tensor->get_requires_grad(), .gamma = gamma->get_requires_grad(), .beta = beta_requires_grad});
+        if (tensor->get_requires_grad()) {
+            tensor->add_grad(res[0].value());
+        }
+        if (gamma->get_requires_grad()) {
+            gamma->add_grad(res[1].value());
+        }
+        if (beta_requires_grad) {
             beta_opt.value()->add_grad(res[2].value());
         }
     };
@@ -157,55 +171,62 @@ autograd::TensorPtr composite_layernorm(
     autograd::GradFunction grad = [tensor, out, gamma, beta_opt, mean, rstd]() {
         auto dout = out->get_grad();
 
-        // recalculate normalized tensor to save memory and avoid storing it
-        auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
+        if (autograd::any_requires_grad(tensor, gamma)) {
+            // recalculate normalized tensor to save memory and avoid storing it
+            auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
 
-        auto dgamma = ttnn::moreh_sum(
-            ttnn::multiply(dout, normalized_tensor),
-            /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output */ std::nullopt,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+            if (gamma->get_requires_grad()) {
+                auto dgamma = ttnn::moreh_sum(
+                    ttnn::multiply(dout, normalized_tensor),
+                    /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
+                    /* keep_dim */ true,
+                    /* output */ std::nullopt,
+                    /* output_mem_config */ std::nullopt,
+                    /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+                gamma->add_grad(dgamma);
+            }
 
-        auto dtensor_normalized = ttnn::multiply(dout, gamma->get_value());
+            if (tensor->get_requires_grad()) {
+                auto dtensor_normalized = ttnn::multiply(dout, gamma->get_value());
 
-        // dtensor = (dnorm - dnorm.mean(-1, keepdim=True) - norm * (dnorm * norm).mean(-1, keepdim=True)) * rstd
+                // dtensor = (dnorm - dnorm.mean(-1, keepdim=True) - norm * (dnorm * norm).mean(-1, keepdim=True))
+                //           * rstd
 
-        // dnorm.mean(-1, keepdim=True)
-        auto dnorm_shape = dtensor_normalized.logical_shape();
-        auto shape = ttnn::Shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
-        auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
-        ttnn::moreh_mean(
-            dtensor_normalized,
-            /* dim */ 3,
-            /* keep_dim */ true,
-            /* divisor */ std::nullopt,
-            /* output */ dnorm_mean,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+                // dnorm.mean(-1, keepdim=True)
+                auto dnorm_shape = dtensor_normalized.logical_shape();
+                auto shape = ttnn::Shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
+                auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
+                ttnn::moreh_mean(
+                    dtensor_normalized,
+                    /* dim */ 3,
+                    /* keep_dim */ true,
+                    /* divisor */ std::nullopt,
+                    /* output */ dnorm_mean,
+                    /* output_mem_config */ std::nullopt,
+                    /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-        // dnorm.mean(-1, keepdim=True)
-        auto dnorm_norm = ttnn::multiply(dtensor_normalized, normalized_tensor);
-        auto dnorm_norm_mean = core::zeros_like(dnorm_mean);
-        ttnn::moreh_mean(
-            dnorm_norm,
-            /* dim */ 3,
-            /* keep_dim */ true,
-            /* divisor */ std::nullopt,
-            /* output */ dnorm_norm_mean,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+                // dnorm.mean(-1, keepdim=True)
+                auto dnorm_norm = ttnn::multiply(dtensor_normalized, normalized_tensor);
+                auto dnorm_norm_mean = core::zeros_like(dnorm_mean);
+                ttnn::moreh_mean(
+                    dnorm_norm,
+                    /* dim */ 3,
+                    /* keep_dim */ true,
+                    /* divisor */ std::nullopt,
+                    /* output */ dnorm_norm_mean,
+                    /* output_mem_config */ std::nullopt,
+                    /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-        // norm * (dnorm * norm).mean(-1, keepdim=True)
-        auto norm_dnorm_norm_mean = ttnn::multiply(normalized_tensor, dnorm_norm_mean);
-        auto dtensor = ttnn::subtract(ttnn::subtract(dtensor_normalized, dnorm_mean), norm_dnorm_norm_mean);
-        dtensor = ttnn::multiply(dtensor, rstd);
+                // norm * (dnorm * norm).mean(-1, keepdim=True)
+                auto norm_dnorm_norm_mean = ttnn::multiply(normalized_tensor, dnorm_norm_mean);
+                auto dtensor = ttnn::subtract(ttnn::subtract(dtensor_normalized, dnorm_mean), norm_dnorm_norm_mean);
+                dtensor = ttnn::multiply(dtensor, rstd);
 
-        tensor->add_grad(dtensor);
-        gamma->add_grad(dgamma);
+                tensor->add_grad(dtensor);
+            }
+        }
 
-        if (beta_opt.has_value()) {
+        if (beta_opt.has_value() && beta_opt.value()->get_requires_grad()) {
             auto dbeta = ttnn::moreh_sum(
                 dout,
                 /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
