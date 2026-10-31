@@ -15,8 +15,10 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
@@ -76,13 +78,22 @@ autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_b
 }
 
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
-    auto log_softmax = ttnn_fixed::log_softmax(tensor->get_value(), dim);
-    auto out = autograd::create_tensor(log_softmax);
-    autograd::GradFunction grad = [tensor, out, dim]() {
-        auto softmax = ttnn::exp(out->get_value());
-        auto sum_grad_over_dim = ttnn_fixed::sum_over_dim(out->get_grad(), dim);
-        auto grad = ttnn::subtract(out->get_grad(), ttnn::multiply(softmax, sum_grad_over_dim));
-        tensor->add_grad(grad);
+    const auto& input = tensor->get_value(autograd::PreferredPrecision::NATIVE);
+    auto context = ttnn_fixed::log_softmax_with_context(input, dim);
+    const auto dtype = input.dtype();
+    auto out = autograd::create_tensor(ttnn::typecast(context.log_probabilities, dtype));
+    const auto rank = static_cast<int>(input.logical_shape().rank());
+    dim = dim < 0 ? dim + rank : dim;
+    autograd::GradFunction grad = [tensor, out, dim, dtype, context]() {
+        auto upstream = ttnn::typecast(out->get_grad(), ttnn::DataType::FLOAT32);
+        auto softmax = ttnn::exp(context.log_probabilities);
+        auto sum_grad = ttnn_fixed::sum_ttnn(upstream, dim, /* keep_dim */ true);
+        auto others = ttnn::where(context.max_mask, 0.F, ttnn::subtract(upstream, ttnn::multiply(softmax, sum_grad)));
+        // Eq. (7): reconstruct the maximum's gradient from the other entries,
+        // rather than subtracting nearly equal values at the dominant class.
+        auto max_grad = ttnn::neg(ttnn_fixed::sum_ttnn(others, dim, /* keep_dim */ true));
+        auto input_grad = ttnn::where(context.max_mask, max_grad, others);
+        tensor->add_grad(ttnn::typecast(input_grad, dtype));
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
