@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "topk_router_gpt_device_operation.hpp"
 
 #include <tt-metalium/math.hpp>
@@ -114,11 +115,11 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     const auto padded_shape = ttnn::Shape({32, attrs.k});
 
     // Preserve the caller's logical B while allocating all 32 rows in the RM backing buffer.
-    const auto idx_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+    const auto idx_layout = tt::tt_metal::internal::tensor_layout_from_padded_shape(
         DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm, logical_shape, padded_shape);
     auto idx_spec = tt::tt_metal::TensorSpec(logical_shape, idx_layout);
 
-    const auto wgt_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+    const auto wgt_layout = tt::tt_metal::internal::tensor_layout_from_padded_shape(
         DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm, logical_shape, padded_shape);
     auto wgt_spec = tt::tt_metal::TensorSpec(logical_shape, wgt_layout);
 

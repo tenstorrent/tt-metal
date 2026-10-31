@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "rms_allgather_device_operation.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -250,7 +251,7 @@ tt::tt_metal::TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             args.dtype.value_or(input_tensor.dtype()),
             PageConfig(Layout::TILE),
             mem_config,
@@ -324,8 +325,8 @@ ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms
     bool use_noc1_only) {
     using OperationType = ttnn::experimental::prim::RMSAllGatherDeviceOperation;
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
+    auto kernel_config_val = init_device_compute_kernel_config(
+        arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 

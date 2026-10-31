@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "unary_backward_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -219,7 +220,7 @@ UnaryBackwardDeviceOperation::spec_return_value_t UnaryBackwardDeviceOperation::
     // than the page count written into it, and the writer would run past its end.
     return TensorSpec(
         tensor_args.input.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             output_dtype,
             PageConfig(tensor_args.input.layout()),
             args.output_memory_config,

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
@@ -108,7 +109,7 @@ tt::tt_metal::TensorSpec ShardedToInterleavedDeviceOperation::compute_output_spe
     // inter-stick byte overlap and data corruption.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             args.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
             args.output_mem_config,

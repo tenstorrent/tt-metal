@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 
 #include <cmath>
@@ -119,7 +120,7 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             input.dtype(),
             tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
             operation_attributes.memory_config,
