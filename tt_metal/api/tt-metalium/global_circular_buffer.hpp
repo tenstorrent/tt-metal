@@ -25,6 +25,7 @@ class Program;
 class IDevice;
 
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -36,13 +37,20 @@ class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
-    // `cq_id` is the command queue used for the config write.
+    // The config write goes through command queue 0.
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1,
-        uint8_t cq_id = 0);
+        BufferType buffer_type = BufferType::L1);
+
+    // The config write goes through `mesh_cq`, which must belong to `device`.
+    GlobalCircularBuffer(
+        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        uint32_t size,
+        BufferType buffer_type = BufferType::L1);
 
     GlobalCircularBuffer(const GlobalCircularBuffer& other);
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);
@@ -78,15 +86,23 @@ private:
  * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
  * @param size Size of the global circular buffer per core in bytes.
  * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
- * @param cq_id Command queue used for the config write.
- * @return The allocated global circular buffer.
+ * @return The allocated global circular buffer. The config write goes through command queue 0.
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1,
-    uint8_t cq_id = 0);
+    BufferType buffer_type = BufferType::L1);
+
+/**
+ * @brief Same as above, but the config write goes through `mesh_cq`, which must belong to `device`.
+ */
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    distributed::MeshCommandQueue& mesh_cq,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type = BufferType::L1);
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the

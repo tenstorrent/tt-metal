@@ -19,6 +19,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
@@ -56,6 +57,20 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
                 *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
             std::exception);
     }
+}
+
+// Runs in both fast and slow dispatch.
+TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBufferWithExplicitQueue) {
+    CoreRangeSet receivers(CoreRange({1, 1}, {1, 1}));
+    auto mesh_device = devices_[0];
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), receivers}};
+    auto global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device,
+        mesh_device->mesh_command_queue(0),
+        sender_receiver_core_mapping,
+        3200,
+        tt::tt_metal::BufferType::L1);
+    distributed::Synchronize(*mesh_device, std::nullopt);
 }
 
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {

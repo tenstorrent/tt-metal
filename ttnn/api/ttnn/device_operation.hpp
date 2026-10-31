@@ -216,9 +216,10 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
+        // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly. The queue is only
+        // resolved here (Inspector enabled), never on the graph-capture path below.
         auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
-            mesh_device, ttnn::core::get_current_command_queue_id_for_thread().get());
+            mesh_device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()));
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }

@@ -14,6 +14,7 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal::distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
@@ -25,11 +26,10 @@ bool IsEnabled();
 // Whether tensor spec capture is enabled on op dispatch (checks rtoptions).
 bool ShouldCaptureTensorSpecs();
 
-// Returns the current mesh trace id of command queue `cq_id` of `mesh_device` if fast dispatch is enabled;
-// otherwise nullopt. The queue is only looked up with fast dispatch, so `cq_id` is not validated on slow dispatch.
+// Returns the current mesh trace id of `mesh_cq` if fast dispatch is enabled; otherwise nullopt.
 // Fetching the trace id is only supported on fast dispatch and would throw on slow dispatch.
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, uint8_t cq_id);
+    tt::tt_metal::distributed::MeshCommandQueue& mesh_cq);
 
 // Emit a debug entry for a mesh workload execution, capturing the operation name and tensor specs.
 void EmitMeshWorkloadDebugEntry(
