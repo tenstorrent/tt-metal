@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "tt-metalium/experimental/fabric/fabric.hpp"
@@ -62,6 +63,27 @@ tt::tt_fabric::FabricConfig infer_fabric_config_from_mgd(const std::string& mgd_
     return tt::tt_fabric::FabricConfig::FABRIC_2D;
 }
 
+// The Blackhole default payload (4352 B) is sized for Bfp8_b tiles and fits only two bf16 tiles.
+// 10240 B makes tt-train's bf16 collectives faster. See https://github.com/tenstorrent/tt-metal/issues/60375.
+tt::tt_fabric::FabricRouterConfig make_fabric_router_config() {
+    tt::tt_fabric::FabricRouterConfig router_config{};
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE) {
+        router_config.max_packet_payload_size_bytes = 10240U;
+    }
+    return router_config;
+}
+
+void set_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
+    tt::tt_fabric::SetFabricConfig(
+        fabric_config,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        /* num_routing_planes */ std::nullopt,
+        tt::tt_fabric::FabricTensixConfig::DISABLED,
+        tt::tt_fabric::FabricUDMMode::DISABLED,
+        tt::tt_fabric::FabricManagerMode::DEFAULT,
+        make_fabric_router_config());
+}
+
 }  // namespace
 
 std::optional<std::string> get_mgd_path(uint32_t num_devices) {
@@ -101,11 +123,10 @@ void enable_fabric(uint32_t num_devices) {
     if (mgd_path.has_value()) {
         // Infer the fabric config from the MGD's dim_types (LINE vs RING per axis)
         // This automatically selects FABRIC_2D, FABRIC_2D_TORUS_X, FABRIC_2D_TORUS_Y, or FABRIC_2D_TORUS_XY
-        auto fabric_config = infer_fabric_config_from_mgd(mgd_path.value());
-        tt::tt_fabric::SetFabricConfig(fabric_config);
+        set_fabric_config(infer_fabric_config_from_mgd(mgd_path.value()));
     } else {
         // No MGD available, use default FABRIC_2D
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        set_fabric_config(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 }
 
