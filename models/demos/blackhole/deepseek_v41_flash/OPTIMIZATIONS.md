@@ -493,6 +493,18 @@ Logs: `dsv4-logs/hang2/` (`srv/<run>/server_full.log`, `res/<run>/drive.log`, `c
 
 **Catalog.** `DSV41_APC_GRID: "512"` in all deepseek_v41 entries (B=4, B=8, B=16; text and vision).
 
+## 8.21 Structured outputs on the ordinary decode path (plugin; M0)
+
+**What is served.** `tool_choice` required / named, `strict: true`, `response_format` `json_schema` / `json_object`, and guided regex / choice / grammar. They run on the ordinary (non-speculative) decode path: while a structured request is live the whole batch decodes without speculation (`VLLM_TT_STRUCTURED_NARROW`, default on; refused without it). After a plain step that has a row a verify cannot certify there is no draft proposal (drafter-replay fix). The masked-verify pass-through for structured rows exists but is off (`VLLM_TT_STRUCTURED_SPEC`, default OFF).
+
+**Pre-stream validation** (`VLLM_TT_PRESTREAM_VALIDATE`, default on): a streaming request with an unsupported combination (logprobs, min_tokens, bad_words) is refused with HTTP 400 before its first event. **Behaviour change:** the stream headers go out after the first output, not before.
+
+**Measured.** 28 of 28 matrix cells valid; a structured request decodes at about 11 tok/s; plain users drop from 101.5 to 41.8 tok/s while one structured request is live (no speculation for the whole batch).
+
+**Pending.** M1 (masked verify: per-request k=0 with an on-device mask) and M2. The model-side host helpers for M1 are on this branch but inert: `tt/grammar_mask.py`, `tests/test_grammar_mask_cpu.py`, interface note `STRUCTURED_SPEC_INTERFACE.md`.
+
+**Catalog.** No env change (the switches default as above).
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
